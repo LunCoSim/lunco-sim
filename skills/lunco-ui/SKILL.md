@@ -235,6 +235,13 @@ path, not a raw `KeyCode` or an assumption that an isolated USD preview has a
 local avatar. `CancelIntent` suppresses the action while egui owns keyboard
 focus, preserving text-field editing.
 
+Avatar presentation has one wall-clock interaction cadence. Free-avatar port
+writes, locomotion, and camera look application belong to
+`lunco_time::InteractionSchedule`, not `FixedUpdate` or a direct `Update` pose
+writer. Render-frame pointer input may be buffered before that schedule, but
+the interaction step must consume it once alongside movement so pause and
+simulation rate changes cannot split orientation from translation.
+
 For authored UI workflows, use the controller's `InjectWindowInput` command and
 the Rhai helpers in `prelude/input.rhai`. They enqueue typed key, pointer, and
 scroll events through the same Bevy aggregate `WindowEvent` and typed input

@@ -150,6 +150,13 @@ pub struct ScriptedPolicyRegistry {
     usd_hooks: HashMap<String, Arc<lunco_hooks::RegisteredHook>>,
     usd_bindings: HashMap<String, lunco_hooks::HookPolicyBinding>,
     active_twin: Option<lunco_workspace::TwinId>,
+    /// Revision of the committed effective policy layer.
+    ///
+    /// This is deliberately separate from `lunco_hooks::generation()`: hook
+    /// compilation/replacement is an implementation detail while the source
+    /// admission policy needs one stable transaction boundary. Consumers use
+    /// this revision to react once to the resulting layer, not once per hook.
+    pub(crate) revision: u64,
 }
 
 #[derive(Default)]
@@ -158,6 +165,7 @@ struct StartupInstallState {
     installed: Vec<String>,
     failed: Vec<String>,
     attempted: HashSet<String>,
+    reused: HashSet<String>,
 }
 
 fn policy_value(loaded: &lunco_assets_runtime::scripting::LoadedPolicy) -> HookValue {
@@ -190,6 +198,9 @@ fn startup_operation_result(id: &str, ok: bool, error: Option<&str>) -> Dynamic 
 
 fn cleanup_startup_installations(state: &StartupInstallState, journal: Option<&JournalResource>) {
     for definition in &state.definitions {
+        if state.reused.contains(&definition.seam) {
+            continue;
+        }
         retract_policy(&definition.seam, journal);
     }
 }
@@ -877,8 +888,9 @@ pub fn apply_twin_policy_commands(world: &mut World) {
 
 fn all_policy_ids(registry: &ScriptedPolicyRegistry) -> HashSet<String> {
     registry
-        .application_policies
+        .policies
         .iter()
+        .chain(&registry.application_policies)
         .chain(&registry.twin_policies)
         .chain(&registry.usd_policies)
         .map(|definition| definition.seam.clone())
@@ -890,30 +902,34 @@ fn all_policy_ids(registry: &ScriptedPolicyRegistry) -> HashSet<String> {
         .collect()
 }
 
-fn register_layer_hook(
+fn layer_hook(
+    registry: &ScriptedPolicyRegistry,
     id: &str,
-    hooks: &HashMap<String, Arc<lunco_hooks::RegisteredHook>>,
-    bindings: &HashMap<String, lunco_hooks::HookPolicyBinding>,
-) {
-    let Some(hook) = hooks.get(id) else {
-        return;
-    };
-    lunco_hooks::register(copy_registered_hook(hook));
-    if let Some(binding) = bindings.get(id) {
-        lunco_hooks::bind_policy(id.to_owned(), binding.clone());
+) -> Option<(
+    Arc<lunco_hooks::RegisteredHook>,
+    Option<lunco_hooks::HookPolicyBinding>,
+)> {
+    if registry.usd_scope_ids.contains(id) {
+        return registry
+            .usd_hooks
+            .get(id)
+            .map(|hook| (Arc::clone(hook), registry.usd_bindings.get(id).cloned()));
     }
+    if registry.twin_scope_ids.contains(id) {
+        return registry
+            .twin_hooks
+            .get(id)
+            .map(|hook| (Arc::clone(hook), registry.twin_bindings.get(id).cloned()));
+    }
+    registry.application_hooks.get(id).map(|hook| {
+        (
+            Arc::clone(hook),
+            registry.application_bindings.get(id).cloned(),
+        )
+    })
 }
 
-fn rebuild_active_policy_registry(
-    registry: &mut ScriptedPolicyRegistry,
-    journal: Option<&JournalResource>,
-) {
-    let ids = all_policy_ids(registry);
-    for id in &ids {
-        lunco_hooks::unregister(id);
-        lunco_hooks::unbind_policy(id);
-    }
-
+fn effective_policy_definitions(registry: &ScriptedPolicyRegistry) -> BTreeMap<String, PolicyDef> {
     let mut active = BTreeMap::new();
     for definition in &registry.application_policies {
         if !registry.twin_scope_ids.contains(&definition.seam)
@@ -930,19 +946,50 @@ fn rebuild_active_policy_registry(
     for definition in &registry.usd_policies {
         active.insert(definition.seam.clone(), definition.clone());
     }
-    registry.policies = active.into_values().collect();
+    active
+}
 
-    for id in &ids {
-        if registry.usd_scope_ids.contains(id) {
-            register_layer_hook(id, &registry.usd_hooks, &registry.usd_bindings);
-        } else if registry.twin_scope_ids.contains(id) {
-            register_layer_hook(id, &registry.twin_hooks, &registry.twin_bindings);
+fn rebuild_active_policy_registry(
+    registry: &mut ScriptedPolicyRegistry,
+    journal: Option<&JournalResource>,
+) {
+    let ids = all_policy_ids(registry);
+    let active = effective_policy_definitions(registry);
+    registry.policies = active.values().cloned().collect();
+
+    // Reconcile only the seams whose effective implementation changed. A
+    // Twin load commonly shadows the application layer with the same policy
+    // set; tearing down and rebuilding every hook here used to create one
+    // asset-admission wave per intermediate registry generation.
+    for id in ids {
+        let Some(_definition) = active.get(&id) else {
+            lunco_hooks::unregister(&id);
+            lunco_hooks::unbind_policy(&id);
+            continue;
+        };
+        let desired = layer_hook(registry, &id);
+        let current = lunco_hooks::get(&id);
+        let same_registration = desired
+            .as_ref()
+            .zip(current.as_ref())
+            .is_some_and(|(desired, current)| Arc::ptr_eq(&desired.0, current));
+        if !same_registration {
+            if let Some((hook, _)) = desired.as_ref() {
+                lunco_hooks::register(copy_registered_hook(hook));
+            }
+        }
+        if let Some((_, binding)) = desired {
+            if let Some(binding) = binding {
+                lunco_hooks::bind_policy(id, binding);
+            } else {
+                lunco_hooks::unbind_policy(&id);
+            }
         } else {
-            register_layer_hook(
-                id,
-                &registry.application_hooks,
-                &registry.application_bindings,
-            );
+            // An installed definition without its layer registration is an
+            // invalid internal state; do not retain a lower-layer hook under
+            // a higher-layer policy name.
+            lunco_hooks::unregister(&id);
+            lunco_hooks::unbind_policy(&id);
         }
     }
 
@@ -979,10 +1026,12 @@ fn run_startup_policy(
     startup: lunco_assets_runtime::scripting::LoadedStartup,
     loaded: &[lunco_assets_runtime::scripting::LoadedPolicy],
     journal: Option<&JournalResource>,
+    reusable: &HashMap<String, PolicyDef>,
 ) -> Result<StartupInstallState, String> {
     let state = Arc::new(Mutex::new(StartupInstallState::default()));
     let callback_state = Arc::clone(&state);
     let callback_journal = journal.cloned();
+    let reusable = reusable.clone();
     let startup_hook = lunco_hooks_rhai::RhaiHook::compile_with(
         &startup.source,
         startup.spec.entry.clone(),
@@ -1002,11 +1051,19 @@ fn run_startup_policy(
                         source: source.to_string(),
                         deterministic,
                     };
-                    let result = apply_policy(&definition, callback_journal.as_ref());
                     let mut state = callback_state
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     state.attempted.insert(definition.seam.clone());
+                    if reusable.get(&definition.seam) == Some(&definition)
+                        && lunco_hooks::get(&definition.seam).is_some()
+                    {
+                        state.installed.push(definition.seam.clone());
+                        state.reused.insert(definition.seam.clone());
+                        state.definitions.push(definition);
+                        return startup_operation_result(id.as_str(), true, None);
+                    }
+                    let result = apply_policy(&definition, callback_journal.as_ref());
                     match result {
                         Ok(()) => {
                             lunco_hooks::bind_policy(
@@ -1021,8 +1078,6 @@ fn run_startup_policy(
                             startup_operation_result(id.as_str(), true, None)
                         }
                         Err(error) => {
-                            lunco_hooks::unregister(&definition.seam);
-                            lunco_hooks::unbind_policy(&definition.seam);
                             state.failed.push(format!("{}: {error}", definition.seam));
                             startup_operation_result(id.as_str(), false, Some(error.as_str()))
                         }
@@ -1127,6 +1182,7 @@ pub fn project_policies(
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> Vec<String> {
+    let previous = registry.policies.clone();
     let desired = desired
         .into_iter()
         .fold(BTreeMap::new(), |mut policies, policy| {
@@ -1164,6 +1220,9 @@ pub fn project_policies(
         .filter_map(|policy| lunco_hooks::get(&policy.seam).map(|hook| (policy.seam.clone(), hook)))
         .collect();
     rebuild_active_policy_registry(registry, journal);
+    if registry.policies != previous {
+        registry.revision = registry.revision.wrapping_add(1);
+    }
     failures
 }
 
@@ -1226,20 +1285,24 @@ fn report_for_application_policies(
         .filter(|policy| policy.spec.required)
         .map(|policy| policy.spec.hook.clone())
         .collect::<HashSet<_>>();
-    let application_run =
-        match run_startup_policy(application_startup, &application_loaded, journal) {
-            Ok(run) => run,
-            Err(error) => {
-                let report = PolicyLoadReport {
-                    scope,
-                    error: Some(error),
-                    ..Default::default()
-                };
-                registry.application_status = report.clone();
-                registry.status = report.clone();
-                return report;
-            }
-        };
+    let application_run = match run_startup_policy(
+        application_startup,
+        &application_loaded,
+        journal,
+        &HashMap::new(),
+    ) {
+        Ok(run) => run,
+        Err(error) => {
+            let report = PolicyLoadReport {
+                scope,
+                error: Some(error),
+                ..Default::default()
+            };
+            registry.application_status = report.clone();
+            registry.status = report.clone();
+            return report;
+        }
+    };
     let StartupInstallState {
         definitions,
         installed,
@@ -1338,7 +1401,12 @@ fn report_for_twin_policies(
         registry.status = report.clone();
         return report;
     };
-    let run = run_startup_policy(startup, &twin.policies, journal);
+    let reusable = registry
+        .policies
+        .iter()
+        .map(|definition| (definition.seam.clone(), definition.clone()))
+        .collect::<HashMap<_, _>>();
+    let run = run_startup_policy(startup, &twin.policies, journal, &reusable);
     let (installed, failed, error, definitions) = match run {
         Ok(run) => {
             registry.twin_hooks = run
@@ -1445,11 +1513,22 @@ pub fn load_application_policies(
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> PolicyLoadReport {
+    let previous = registry.policies.clone();
     let bundle = match lunco_assets_runtime::scripting::active_policy_bundle() {
         Ok(bundle) => bundle,
-        Err(error) => return report_load_error("application", error, registry, journal),
+        Err(error) => {
+            let report = report_load_error("application", error, registry, journal);
+            if registry.policies != previous {
+                registry.revision = registry.revision.wrapping_add(1);
+            }
+            return report;
+        }
     };
-    report_for_application_policies("application", bundle, registry, journal)
+    let report = report_for_application_policies("application", bundle, registry, journal);
+    if registry.policies != previous {
+        registry.revision = registry.revision.wrapping_add(1);
+    }
+    report
 }
 
 /// Load only the active Twin's optional policy layer.
@@ -1458,15 +1537,27 @@ pub fn load_twin_policies(
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> PolicyLoadReport {
+    let previous = registry.policies.clone();
     let twin = match lunco_assets_runtime::scripting::twin_policy_set(root) {
         Ok(twin) => twin,
-        Err(error) => return report_load_error("Twin", error, registry, journal),
+        Err(error) => {
+            let report = report_load_error("Twin", error, registry, journal);
+            if registry.policies != previous {
+                registry.revision = registry.revision.wrapping_add(1);
+            }
+            return report;
+        }
     };
     let twin = twin.map(|mut twin| {
         twin.policies = coalesce_loaded_policies(twin.policies);
         twin
     });
-    report_for_twin_policies(format!("Twin {}", root.display()), twin, registry, journal)
+    let report =
+        report_for_twin_policies(format!("Twin {}", root.display()), twin, registry, journal);
+    if registry.policies != previous {
+        registry.revision = registry.revision.wrapping_add(1);
+    }
+    report
 }
 
 /// Startup system for the application policy set.

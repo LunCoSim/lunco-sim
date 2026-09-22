@@ -85,7 +85,10 @@ settings. The application manifest installs both from
 `assets/scripting/policy/render_quality_profiles.rhai`; Rust validates map
 shape, types, bounds, and shadow allocation before installing the catalog in
 `Startup`. An active Twin can replace either hook through its policy manifest,
-and a changed hook generation causes the catalog to be resolved again.
+and a changed committed policy revision causes the catalog to be resolved
+again. Replacing several hooks in one policy transaction therefore produces
+one catalog/source admission pass, rather than one pass per low-level hook
+registration.
 
 Both rendering hooks are deterministic, required, and installable. The render
 owner keeps the stable ids and typed field contract; Rhai owns all profile

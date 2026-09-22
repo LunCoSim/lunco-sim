@@ -6,9 +6,9 @@ use lunco_camera_core::{
     CameraZoomInput, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
     SurfaceRelativeMode,
 };
-use lunco_camera_runtime::{CameraInputSettings, body_orbit_look_scale};
+use lunco_camera_runtime::{body_orbit_look_scale, CameraInputSettings};
 use lunco_celestial::CelestialBody;
-use lunco_celestial_spatial_core::{LocalGravityField, surface_axes_in_grid};
+use lunco_celestial_spatial_core::{surface_axes_in_grid, LocalGravityField};
 use lunco_control_core::commands::ReleaseControlSource;
 use lunco_control_core::{IntentAnalogState, IntentState, UserIntent};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
@@ -17,12 +17,14 @@ use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 // ─── Intent & Input ──────────────────────────────────────────────────────────
 
 /// Captures the avatar's mouse **look** delta (and forwards zoom) into
-/// `IntentAnalogState` for the camera behaviour systems.
+/// `IntentAnalogState` for the interaction-step camera behaviour system.
 ///
 /// Movement (forward/side/up) is NO LONGER read here: it now flows through the
 /// shared port path (leafwing `ActionState` → `ControlBinding` → `SetPorts` →
 /// FSW `forward`/`side`/`up` → `apply_fly`), exactly like a vessel. This system
-/// keeps only the look axis, which stays mouse-direct until the P2 camera decouple.
+/// keeps only the look axis. It accumulates render-frame input because a render
+/// frame may not contain an interaction step; the consumer drains it exactly
+/// once alongside movement.
 pub(crate) fn capture_avatar_intent(
     mut q_avatar: Query<
         (Entity, &IntentState, &mut IntentAnalogState),
@@ -39,15 +41,16 @@ pub(crate) fn capture_avatar_intent(
     let pointer_captured = egui_focus.wants_pointer || drag_mode.is_some_and(|drag| drag.active);
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
-        let mut delta = Vec2::ZERO;
-        if !pointer_captured {
+        if pointer_captured {
+            // Do not carry a scene gesture across a UI handoff.
+            analog.look_delta = Vec2::ZERO;
+        } else {
             let d = intent_state.axis_pair(&UserIntent::Look);
             if d.length_squared() > 0.00001 {
-                delta = d * 10.0;
+                analog.look_delta += d * 10.0;
             }
         }
 
-        analog.look_delta = delta;
         analog.timestamp = world.as_ref().map(|w| w.epoch_jd).unwrap_or_default();
 
         commands.entity(entity).trigger(|e| {
@@ -92,18 +95,19 @@ pub(crate) fn collect_camera_zoom(
     }
 }
 
-/// Applies look deltas from `IntentAnalogState` to whichever behavior
+/// Applies and drains look deltas from `IntentAnalogState` to whichever behavior
 /// component is currently active on the avatar.
 ///
-/// When CTRL is held (momentary free-flight overlay), look deltas are
-/// applied directly to the Transform rotation since the behavior systems
+/// This runs on [`lunco_time::InteractionSchedule`] before the generic camera
+/// pose writers. When CTRL is held (momentary free-flight overlay), look deltas
+/// are applied directly to the Transform rotation since the behavior systems
 /// (SpringArmCamera/OrbitCamera) are skipped during this time.
 ///
 /// In surface mode, CTRL+look applies yaw around `local_up` and pitch around
 /// the yawed-right axis, matching the surface-relative camera orientation.
 pub(crate) fn avatar_behavior_input_system(
-    q_avatar: Query<
-        (&IntentAnalogState, Option<&SurfaceRelativeMode>),
+    mut q_avatar: Query<
+        (Entity, &mut IntentAnalogState, Option<&SurfaceRelativeMode>),
         (With<Embodiment>, With<LocalEmbodiment>),
     >,
     mut q_spring: Query<
@@ -160,7 +164,7 @@ pub(crate) fn avatar_behavior_input_system(
     if drag_mode.is_some_and(|drag| drag.active) {
         return;
     }
-    let Some((analog, surface_mode)) = q_avatar.single().ok() else {
+    let Some((entity, mut analog, surface_mode)) = q_avatar.single_mut().ok() else {
         return;
     };
     let look_delta = analog.look_delta;
@@ -222,6 +226,12 @@ pub(crate) fn avatar_behavior_input_system(
             (sc.heading, sc.pitch) = look_angles(sc.heading, sc.pitch, look_delta, &settings, 1.0);
         }
     }
+
+    // The interaction step owns application of the buffered pointer delta.
+    // Clearing it here prevents multiple interaction steps in one render frame
+    // from replaying the same input.
+    analog.look_delta = Vec2::ZERO;
+    analog.entity = entity;
 }
 
 /// Apply one semantic Look intent to a camera's yaw/pitch state.

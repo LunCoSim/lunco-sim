@@ -25,9 +25,17 @@ impl Plugin for AvatarInputPlugin {
         }
         lunco_control_core::ensure_control_plugin(app);
         app.add_systems(Update, collect_camera_zoom);
+        // Input collection follows Bevy's render-frame device update, but the
+        // avatar pose writer belongs to the same wall-clock interaction step as
+        // free-flight movement. `capture_avatar_intent` accumulates pointer
+        // motion until that step consumes it, so orientation no longer runs on
+        // a separate Update cadence from movement or simulation time.
+        app.add_systems(Update, capture_avatar_intent);
         app.add_systems(
-            Update,
-            (capture_avatar_intent, avatar_behavior_input_system).chain(),
+            lunco_time::InteractionSchedule,
+            avatar_behavior_input_system
+                .after(lunco_control_core::InteractionControlSet)
+                .before(lunco_camera_core::CameraUpdateSet),
         );
         app.add_systems(
             Update,

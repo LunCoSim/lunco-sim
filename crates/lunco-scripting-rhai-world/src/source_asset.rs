@@ -8,7 +8,7 @@
 #[cfg(feature = "rhai")]
 use bevy::asset::AssetPath;
 #[cfg(feature = "rhai")]
-use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
+use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 #[cfg(feature = "rhai")]
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
@@ -124,7 +124,10 @@ pub struct BuiltinRhaiAssets {
     pub(crate) prepared_revision: u64,
     pub(crate) prepared_asset_revision: u64,
     manifest_revision: u64,
-    policy_generation: u64,
+    /// Committed effective policy revision used for source admission. This is
+    /// not the low-level hook registry generation: one policy transaction may
+    /// replace many hooks, but it must admit assets only once.
+    policy_revision: u64,
 }
 
 /// Monotonic asset-event revision consumed by the application-level prelude
@@ -143,6 +146,7 @@ pub struct RhaiSourceAssetRevision(pub(crate) u64);
 fn request_builtin_rhai_assets(
     manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
     asset_server: Option<Res<AssetServer>>,
+    policy: Option<Res<crate::policy::ScriptedPolicyRegistry>>,
     mut builtins: ResMut<BuiltinRhaiAssets>,
 ) {
     let Some(manifest) = manifest else {
@@ -156,16 +160,16 @@ fn request_builtin_rhai_assets(
         return;
     };
 
-    let policy_generation = lunco_hooks::generation();
+    let policy_revision = policy.as_deref().map_or(0, |policy| policy.revision);
     let manifest_revision = manifest.revision();
     if builtins.admission_revision != 0
         && builtins.manifest_revision == manifest_revision
-        && builtins.policy_generation == policy_generation
+        && builtins.policy_revision == policy_revision
     {
         return;
     }
     builtins.manifest_revision = manifest_revision;
-    builtins.policy_generation = policy_generation;
+    builtins.policy_revision = policy_revision;
     builtins.admission_revision = builtins.admission_revision.wrapping_add(1);
 
     // The manifest is only an inventory. The authored policy owns the

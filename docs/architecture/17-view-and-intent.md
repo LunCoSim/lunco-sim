@@ -288,6 +288,14 @@ or networking adapter may read device state only when it is itself the
 specialized owner of that interaction, and it must publish the same typed
 intent/command surface rather than leaking devices downstream.
 
+The local avatar has one presentation clock. `drive_self_drivers`, free-flight
+locomotion, and camera look application run in `lunco_time::InteractionSchedule`,
+which is a wall-clock cadence independent of simulation pause and rate. Device
+look deltas may be collected during the render frame, but they are accumulated
+until that interaction step and drained there beside movement. They must not be
+applied directly from `Update`, or movement and orientation acquire different
+cadences and can diverge when the simulation clock is paused or rate-scaled.
+
 ### 6.6 Scriptable camera composition
 
 The camera architecture is intended to let Rhai compose many camera styles
