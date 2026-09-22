@@ -95,7 +95,7 @@ catalog's labels still use `display_channel_label`.
 | Channel declaration | `lunco_telemetry_core::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`. A declaration on a prim with its own sampled port may omit `lunco:telemetry:target` and self-target; otherwise its optional target relationship names exactly one composed measured prim. Missing, multiple, or unresolved targets are runtime diagnostics and USD lint errors. Referenced component relationships stay on the stable assembly prim, while a variant deactivates an absent realization through standard USD `active` authoring. |
 | Sampling | `lunco-telemetry::sample_parameters` — reflection-driven, exclusive `&mut World`, `FixedUpdate` |
 | **Rate** | Per-channel `rate_hz` in the channel's bound simulation clock; `FIXED_HZ` is the execution ceiling |
-| Transport | `SampledParameter` (pull/continuous) and `TelemetryEvent` (push/discrete) — Bevy events |
+| Transport | `SampledParameter` (pull/continuous) and `TelemetryEvent` (push/discrete) — Bevy events; both carry the simulation seconds and fixed tick used to correlate records |
 | Subscription | `lunco_api::subscription` with explicit name/severity/rate filtering |
 | Retention | `lunco_signal::SignalRegistry` scalar histories, with per-channel retention and deadband |
 | Unsubscribe | `UnsubscribeTelemetry` owns subscription lifecycle explicitly |
@@ -112,6 +112,15 @@ runtime errors into the telemetry bus. `lunco-telemetry` owns sampling cadence,
 settings, retention, and query/history integration. The dependency direction is
 deliberate: `lunco-core` emits generic facts and does not depend on telemetry;
 the telemetry crates consume those facts.
+
+Every event and continuous sample is stamped at the shared `SimTick` boundary
+from `MissionClock`. `timestamp` is the derived TDB epoch for calendar labels;
+`sim_secs` is the precise plotting/differencing timebase and `sim_tick` is the
+integer correlation key. Producers may run in `Update`, `FixedUpdate`, or an
+observer, but telemetry never derives time from render cadence or a wall-clock
+accumulator. Parameter collection runs after the runtime's tick-advance set;
+physics collection runs after the physics step, and Modelica collection uses the
+solver's landed simulation time.
 
 ---
 
@@ -228,7 +237,8 @@ Three lanes, and they are not interchangeable:
 2. **Retention → `SignalRegistry::push_scalar`.** Per-channel `ScalarHistory` ring buffer;
    this is what a plot reads, and what "how much history to store" means. **Scalars only** —
    `TelemetryValue::{Bool, String}` cannot enter a `ScalarHistory`.
-3. **Discrete/eventful → `TelemetryEvent`.** The existing push bus, with `Severity`. Bool and
+3. **Discrete/eventful → `TelemetryEvent`.** The existing push bus, with `Severity` and the
+   authoritative `sim_secs`/`sim_tick` stamp. Bool and
    String channels belong here, not in the ring buffer. *(This asymmetry is real and must be
    stated, not papered over: a `String` channel has no plot.)*
 
@@ -494,9 +504,10 @@ prove it isn't a test first.
 ### The clock contract
 
 Telemetry is a fixed-clock subsystem and therefore requires `lunco_time::TimePlugin`.
-`WorldTime` supplies the absolute epoch and the resolved domain tree supplies each channel's
-simulation time. A missing time resource is an integration error; falling back to a different
-clock would make pause, warp, and replay semantics depend on how the host assembled the app.
+`MissionClock(SimTick)` supplies the authoritative epoch and simulation seconds for the
+default channel domain; an authored `TimeBinding` reads the same shared resolved domain tree.
+A missing time resource is an integration error; falling back to a different clock would make
+pause, warp, and replay semantics depend on how the host assembled the app.
 
 Runtime projections use the same contract at their owning boundaries:
 

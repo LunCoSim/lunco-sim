@@ -4,7 +4,7 @@
 //! consumers, scripting, and the sampling engine. Sampling policy and retained
 //! history remain in `lunco-telemetry`.
 
-use bevy::prelude::{App, Commands, On, Plugin};
+use bevy::prelude::{App, Commands, On, Plugin, Res, warn_once};
 
 pub mod telemetry;
 pub use telemetry::*;
@@ -19,7 +19,12 @@ pub struct LunCoTelemetryCorePlugin;
 
 impl Plugin for LunCoTelemetryCorePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(LunCoLogPlugin)
+        app.add_observer(stamp_telemetry_event)
+            // Stamp every producer's event at the shared simulation boundary
+            // before API, status, logging, or scripting observers consume it.
+            // Producers may run in Update, FixedUpdate, or an observer; the
+            // event still carries one authoritative SimTick/MissionClock pair.
+            .add_plugins(LunCoLogPlugin)
             .add_observer(project_command_occurrence)
             .add_observer(project_runtime_error)
             .add_observer(project_subsystem_state)
@@ -29,6 +34,26 @@ impl Plugin for LunCoTelemetryCorePlugin {
             .register_type::<Parameter>()
             .register_type::<SampledParameter>();
     }
+}
+
+fn stamp_telemetry_event(
+    mut trigger: On<TelemetryEvent>,
+    tick: Option<Res<lunco_core_runtime::SimTick>>,
+    mission_clock: Option<Res<lunco_time::MissionClock>>,
+) {
+    let (Some(tick), Some(mission_clock)) = (tick, mission_clock) else {
+        return;
+    };
+    let epoch_jd = mission_clock.epoch_jd(tick.0);
+    let sim_secs = mission_clock.sim_secs(tick.0);
+    if !epoch_jd.is_finite() || !sim_secs.is_finite() {
+        warn_once!("telemetry: event clock is non-finite; event rejected");
+        return;
+    }
+    let event = trigger.event_mut();
+    event.timestamp = epoch_jd;
+    event.sim_secs = sim_secs;
+    event.sim_tick = tick.0;
 }
 
 fn project_command_occurrence(trigger: On<lunco_core::CommandOccurred>, mut commands: Commands) {
@@ -50,6 +75,8 @@ fn project_subsystem_state(trigger: On<lunco_core::SubsystemStateChanged>, mut c
         severity: telemetry::Severity::Info,
         data: telemetry::TelemetryValue::Bool(event.on),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }
 
@@ -90,5 +117,34 @@ mod tests {
         assert_eq!(events[0].name, "cmd:SetValue");
         assert_eq!(events[1].name, "load-failed");
         assert_eq!(events[2].name, "subsystem:thermal");
+    }
+
+    #[test]
+    fn stamps_events_from_the_authoritative_simulation_clock() {
+        let mut app = App::new();
+        app.insert_resource(lunco_core_runtime::SimTick(17))
+            .insert_resource(lunco_time::MissionClock::anchored(2_451_545.25, 0))
+            .add_plugins(LunCoTelemetryCorePlugin)
+            .init_resource::<Seen>()
+            .add_observer(capture_event);
+
+        app.world_mut().trigger(TelemetryEvent {
+            name: "sim.edge".into(),
+            source: 7,
+            severity: telemetry::Severity::Info,
+            data: telemetry::TelemetryValue::Bool(true),
+            timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
+        });
+        app.world_mut().flush();
+
+        let event = &app.world().resource::<Seen>().0[0];
+        assert_eq!(
+            event.timestamp,
+            2_451_545.25 + (17.0 / 60.0) / lunco_time::SECS_PER_DAY
+        );
+        assert_eq!(event.sim_secs, 17.0 / 60.0);
+        assert_eq!(event.sim_tick, 17);
     }
 }

@@ -55,6 +55,8 @@ fn report_inspector_error(world: &mut World, message: impl Into<String>) {
         severity: lunco_telemetry_core::Severity::Error,
         data: lunco_telemetry_core::TelemetryValue::String(message),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }
 
@@ -1282,6 +1284,8 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                                             .to_string(),
                                     ),
                                     timestamp: 0.0,
+                                    sim_secs: 0.0,
+                                    sim_tick: 0,
                                 });
                                 return;
                             };

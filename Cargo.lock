@@ -9599,6 +9599,8 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-core-runtime",
+ "lunco-time",
  "serde",
 ]
 

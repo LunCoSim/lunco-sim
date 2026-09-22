@@ -40,13 +40,13 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
-#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm, terrain_apply_sun_visibility, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
+#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
 //!@ui      micro_scale       8 80        "Regolith micro scale (/m)"
 //!@default micro_scale       35
-//!@ui      micro_bump        0 0.05      "Regolith micro-normal strength"
+//!@ui      micro_bump        0 0.05      "Regolith micro-relief amplitude (m)"
 //!@default micro_bump        0.015
 //!@ui      micro_albedo      0 0.2       "Regolith micro-albedo strength"
 //!@default micro_albedo      0.045
@@ -324,12 +324,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * map_weight_tone);
 #endif
 
-    // Apply the close-range grain after authored/derived albedo selection. A
-    // full-weight authored raster replaces the base colour above, so applying
-    // this before map selection would erase the grain on the production DEM path.
-    if (micro_fade > 0.0 && micro_albedo > 0.0) {
+    // Procedural colour grain belongs to the procedural material. A measured
+    // orthophoto already owns the albedo frequencies it resolves; layering an
+    // unrelated noise field over it adds false colour and temporal shimmer.
+    if (micro_fade > 0.0 && micro_albedo > 0.0 && procedural_albedo_weight > 0.0) {
         albedo *= 1.0 + (micro_h - 0.5) * micro_albedo * micro_fade;
     }
+
+    // Keep the high-frequency normal detail stable as it leaves the pixel
+    // footprint. Its unresolved slope variance becomes GGX roughness instead
+    // of vanishing at the anti-aliasing fade.
+    roughness = filter_detail_roughness(roughness, micro_bump, micro_scale, micro_fade);
 
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh[in.instance_index].flags;
@@ -351,27 +356,33 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             pbr_input.N, normalize(sw), pbr_input.V,
             mat.surge_amp, mat.surge_width, mat.photometry_gain);
     }
-    pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
+    pbr_input.material.base_color = vec4(albedo, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
     pbr_input.material.metallic = 0.0;
     pbr_input.material.reflectance = vec3(0.5);
 
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
+    var sun_vis = 1.0;
+    var march_blend = 0.0;
 
 #ifdef VERTEX_UVS_A
     let csm_far = mat.csm_far;
-    var march_blend = 1.0;
+    march_blend = 1.0;
     if (csm_far > 0.0) {
         march_blend = smoothstep(csm_far, csm_far * 1.1, dist);
     }
     if (march_blend > 0.0) {
-        let sun_vis = sun_visibility_resolved(
+        sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
-        color = terrain_apply_sun_visibility(
-            pbr_input, color, mat.sun_dir_world, sun_vis, march_blend);
     }
+#endif
+
+    color = terrain_apply_sun_response(
+        pbr_input, color, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+
+#ifdef VERTEX_UVS_A
     // ── Overlay plane (UNLIT, doc 18 §4): the mineral/classification drape
     // composites over the LIT result — after PBR, after the sun march, after
     // shadow fill — and is never multiplied by any of them. Same composite

@@ -494,6 +494,8 @@ fn project_intent_edge(
         severity: lunco_telemetry_core::Severity::Info,
         data: TelemetryValue::Map(data),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }
 

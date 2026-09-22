@@ -161,7 +161,7 @@ runtime prim or caching an entity id.
 - **`LoadScene` path must be root-qualified** — use `lunco://scenes/luncosim/lander_ops.usda` for a shipped asset or `twin://<name>/…` for an opened Twin. Use `OpenFile` for a filesystem path.
 - **Spawn `entry_id` must be in the catalog** — an unknown id logs `unknown entry '…'` and no-ops. List first with `list_bundled`.
 - **Empty spawn path / root_prim → the `defaultPrim` sentinel**: an empty path means "the stage's default prim". A stage without `defaultPrim` is an invalid scene mount and fails visibly.
-- **Spawns land ON the terrain surface.** Placement samples the terrain **height oracle** (analytic, so it works even before a streamed/CDLOD collider tile bakes) — a spawn over un-baked terrain rests on the ground instead of free-falling. The GUI click path terrain-fits the asset's composed `UsdPhysics` collision footprint (slope-aligned, and it considers a physics obstacle under the chassis). An asset without a `defaultPrim` or collision footprint is rejected visibly; placement never invents dimensions or a lift. The API `SpawnEntity` path uses the explicit position supplied by the caller, so pass a real Y.
+- **Spawns land ON the terrain surface.** Placement samples the terrain **height oracle** (analytic, so it works even before a streamed/CDLOD collider tile bakes) — a spawn over un-baked terrain rests on the ground instead of free-falling. The GUI click path terrain-fits the asset's composed `UsdPhysics` collision footprint (slope-aligned, and it considers a physics obstacle under the chassis). An asset without a `defaultPrim` or collision footprint is rejected visibly; placement never invents dimensions or a lift. The API `SpawnEntity` path uses the explicit position supplied by the caller, so pass a real Y. On admission, the physics owner validates the authored pose against the live terrain using the collider's support geometry for convex shapes; a persisted pose that now overlaps after terrain changes remains held and must be repaired through `TransformEntity` or removed through `DeleteEntity`.
 - **One spawn = one entity.** In a single-player (`Standalone`) session a `SpawnEntity` instantiates exactly one rover; it is not also re-projected from the document (that path is suppressed to avoid a double-instantiation / vanish-on-reload).
 - **Gizmo / selection frame:** on a static-USD select, the selectable root is tagged `SelectableRoot` in the **world frame** — not `GridAnchor`. If the gizmo grabs the wrong thing or the wrong frame, that tag is why.
 - **Never `SetDocumentSource` for live scene building** — it replaces the whole source and cancels in-flight work. Submit typed scene commands (`SpawnEntity`/`MoveEntity`/`TransformEntity`/`SetObjectProperty`), and let their handlers lower the intent through the existing USD operation path.
@@ -170,6 +170,11 @@ runtime prim or caching an entity id.
 
 ## Anti-patterns
 
+- ❌ Writing or patching `.usd`, `.usda`, or `.usdc` source text directly, even
+  for a temporary preview. Open the exact document, inspect its authored layer
+  and edit target, submit schema-aware commands or typed `ApplyUsdOp(s)`, save,
+  and inspect the result. If the authoring API is missing a needed operation,
+  extend that API before changing the scene.
 - ❌ Passing a bare or absolute filesystem path to `LoadScene`.
 - ❌ Guessing an `entry_id` instead of `list_bundled`.
 - ❌ `SetDocumentSource` to build a scene incrementally — use the typed scene commands and their USD operation path.

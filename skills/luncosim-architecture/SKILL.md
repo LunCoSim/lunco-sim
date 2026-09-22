@@ -28,9 +28,11 @@ or compatibility shim because the first search was incomplete.
 
 For Avian-backed physics, keep one numeric admission contract at
 `lunco-physics::avian_backend`. The BigSpace bridge owns lifecycle admission of
-f64 poses and collider AABBs before the Avian step, `GridSpatialQuery` reuses
-the converted-ray predicate, and USD projection reuses shape/AABB and leaf
-structure predicates before ECS insertion. A failed live invariant raises the
+f64 poses and collider support geometry before the Avian step, `GridSpatialQuery`
+reuses the converted-ray predicate, and USD projection reuses shape/AABB and
+leaf structure predicates before ECS insertion. Convex colliders are checked by
+their actual support points; composite or non-convex shapes use the conservative
+AABB boundary. A failed live invariant raises the
 shared scene-scoped runtime fault and gates the remaining nested physics
 phases. Do not turn these checks into per-call query fallbacks or lint-only
 warnings.

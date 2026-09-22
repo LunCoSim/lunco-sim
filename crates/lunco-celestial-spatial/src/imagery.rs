@@ -299,6 +299,8 @@ pub(crate) fn adopt_authored_body_albedo(
                     request.dataset_key, request.naif_id
                 )),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
             continue;
         }
@@ -484,6 +486,8 @@ pub(crate) fn bind_dataset_body_imagery(
                     request.dataset_key, request.naif_id
                 )),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
             continue;
         }

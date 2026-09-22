@@ -24,7 +24,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
-#import lunco::terrain::terrain_apply_sun_visibility
+#import lunco::terrain::terrain_apply_sun_response
 
 // Dynamic, self-describing parameters (reflected from this file). Only the
 // albedo is author-settable; the rest are engine-filled by the horizon system.
@@ -88,10 +88,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.N = pbr_input.world_normal;
     pbr_input.V = pbr_functions::calculate_view(in.world_position, pbr_input.is_orthographic);
     // Lunar regolith photometry (Lommel-Seeliger + opposition surge); see
-    // lunar_brdf.wgsl. Pre-multiplies base_color so bevy's Lambert completes it.
-    // World-space to-sun comes from the engine (the CPU-picked canonical sun),
-    // not directional_lights[0] — the earthshine fill light can shuffle that.
-    // Guarded: zero until the engine fills it (unwired terrain / first frame).
+    // lunar_brdf.wgsl. The shared response applies it only to the engine-picked
+    // Sun contribution, leaving fill and environment light untouched.
     var lunar_k = 1.0;
     let sw = mat.sun_dir_world;
     if (dot(sw, sw) > 0.25) {
@@ -99,29 +97,32 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             pbr_input.N, normalize(sw), pbr_input.V,
             mat.surge_amp, mat.surge_width, mat.photometry_gain);
     }
-    pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
+    pbr_input.material.base_color = vec4(albedo, 1.0);
     pbr_input.material.perceptual_roughness = 0.95;
     pbr_input.material.metallic = 0.0;
     pbr_input.material.reflectance = vec3(0.5);
 
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
+    var sun_vis = 1.0;
+    var march_blend = 0.0;
 
 #ifdef VERTEX_UVS_A
     let csm_far = mat.csm_far;
-    var march_blend = 1.0;
+    march_blend = 1.0;
     if (csm_far > 0.0) {
         let cam_d = distance(view.world_position, in.world_position.xyz);
         march_blend = smoothstep(csm_far, csm_far * 1.1, cam_d);
     }
     if (march_blend > 0.0) {
-        let vis = sun_visibility_resolved(
+        sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
-        color = terrain_apply_sun_visibility(
-            pbr_input, color, mat.sun_dir_world, vis, march_blend);
     }
 #endif
+
+    color = terrain_apply_sun_response(
+        pbr_input, color, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
     return color;

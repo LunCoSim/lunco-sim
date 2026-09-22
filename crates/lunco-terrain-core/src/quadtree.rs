@@ -59,6 +59,17 @@ impl Square {
     pub fn side(&self) -> f64 {
         2.0 * self.half
     }
+
+    /// Whether this square in the XZ plane intersects
+    /// `[min_x, min_z, max_x, max_z]`. Touching edges count as overlap so
+    /// adjacent sampled products do not leave a seam along a dirty boundary.
+    pub fn overlaps_aabb(&self, bounds: [f64; 4]) -> bool {
+        let [min_x, min_z, max_x, max_z] = bounds;
+        self.center[0] - self.half <= max_x
+            && self.center[0] + self.half >= min_x
+            && self.center[1] - self.half <= max_z
+            && self.center[1] + self.half >= min_z
+    }
 }
 
 /// Stable address of a quadtree node. `depth` 0 is the root (one node covering the

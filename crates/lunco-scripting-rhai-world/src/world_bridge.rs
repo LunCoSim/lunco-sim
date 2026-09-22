@@ -3994,6 +3994,8 @@ mod tests {
             severity: Severity::Info,
             data: TelemetryValue::Map(value),
             timestamp: 12.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
         };
         let built = lunco_scripting_bridge_core::build_event(&super::RhaiBuilder, &event)
             .try_cast::<Map>()
@@ -4052,6 +4054,8 @@ mod tests {
             severity: Severity::Error,
             data: TelemetryValue::String("x".repeat(128 * 1024)),
             timestamp: 12.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
         };
         let full = lunco_scripting_bridge_core::build_event(&super::RhaiBuilder, &event);
         let mut limited = rhai::Engine::new();
@@ -4092,6 +4096,8 @@ mod tests {
                     severity: Severity::Info,
                     data: TelemetryValue::Bool(true),
                     timestamp: 0.0,
+                    sim_secs: 0.0,
+                    sim_tick: 0,
                 },
             );
         }

@@ -19,23 +19,24 @@
 }
 
 #ifdef LUNCO_NOISE_2D
-#import lunco::noise::fbm2d
+#import lunco::noise::{fbm2d, fbm2d_gradient}
 #else
-#import lunco::noise::fbm_rot
+#import lunco::noise::{fbm_rot, fbm_rot_gradient}
 #endif
 
 // Footprint fade thresholds, in screen pixels per noise period.
 //
 // A layer fades out once its period shrinks below `AA_CUT_PX`, because value-noise
 // detail finer than ~5 px stops reading as relief and starts reading as shimmer.
-// This is ALSO the cost knob: `bump_layer` runs a full FBM (3 taps x N octaves) on
-// every fragment where the fade is > 0, so the cut radius — not the ramp width —
-// sets the size of the expensive disc around the camera.
+// The fade filters shading detail below its visible pixel footprint. `bump_layer`
+// uses one analytic-gradient FBM evaluation per layer; unresolved normal energy
+// moves into the shared roughness response instead of disappearing abruptly.
 //
 // The baked normal/AO/tone maps take over past the near field, which makes this
 // tight anti-aliasing ramp safe for both static and streamed terrain materials.
 const AA_CUT_PX: f32 = 5.0;
 const AA_RAMP_PX: f32 = 7.0;
+const BUMP_MAX_SLOPE: f32 = 0.65;
 
 /// Remap `x` from [lo, hi] to [0, 1], clamped. LINEAR on purpose — every terrain
 /// shader's bump strengths and albedo ramps are authored against this response,
@@ -143,28 +144,29 @@ fn terrain_surface_occlusion(
     return clamp(occlusion, 0.0, 1.0);
 }
 
-/// Apply the heightfield visibility to the engine-selected Sun contribution.
+/// Apply lunar photometry and heightfield visibility to the engine-selected
+/// Sun contribution only.
 ///
 /// Bevy's `apply_pbr_lighting` returns the sum of direct and indirect light.
-/// Multiplying that completed result by terrain visibility erases authored
-/// albedo and earthshine whenever the Sun is below a local horizon. Rebuild
-/// only the same standard directional-light term here, including Bevy's
-/// native CSM shadow, and replace that term with its horizon-visible value.
-/// Ambient, environment, and other authored lights remain untouched.
+/// Applying the lunar response to `base_color` would also scale earthshine,
+/// environment fill, and every other light. Rebuild the canonical Sun term,
+/// including Bevy's native CSM shadow, and replace only that term. Ambient,
+/// environment, and other authored lights remain untouched.
 ///
 /// The CPU writes `sun_dir_world` from the structural Sun selection used by the
 /// rest of the renderer. Matching that direction in Bevy's flat light buffer
 /// keeps the fill light out of the terrain self-shadow term without assuming a
 /// directional-light array index.
-fn terrain_apply_sun_visibility(
+fn terrain_apply_sun_response(
     pbr_input: pbr_types::PbrInput,
     color: vec4<f32>,
     sun_dir_world: vec3<f32>,
+    lunar_factor: f32,
     visibility: f32,
     blend: f32,
 ) -> vec4<f32> {
     let sun_length_sq = dot(sun_dir_world, sun_dir_world);
-    if (sun_length_sq < 0.25 || blend <= 0.0) {
+    if (sun_length_sq < 0.25) {
         return color;
     }
 
@@ -258,9 +260,12 @@ fn terrain_apply_sun_visibility(
     // heightfield-occluded portion; otherwise a deep shadow subtracts a term
     // larger than the native PBR contribution and clamps the terrain to black.
     let sun_radiance = max(sun_direct * view.exposure, vec3<f32>(0.0));
-    let attenuation = clamp(blend, 0.0, 1.0)
-        * (1.0 - clamp(visibility, 0.0, 1.0));
-    return vec4(max(color.rgb - sun_radiance * attenuation, vec3<f32>(0.0)), color.a);
+    let terrain_visibility = mix(1.0, clamp(visibility, 0.0, 1.0), clamp(blend, 0.0, 1.0));
+    let sun_response = clamp(lunar_factor, 0.0, 8.0) * terrain_visibility;
+    return vec4(max(
+        color.rgb + sun_radiance * (sun_response - 1.0),
+        vec3<f32>(0.0),
+    ), color.a);
 }
 
 /// Decode the normal-map convention shared by the DEM baker and terrain
@@ -326,33 +331,75 @@ fn layer_height(p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: 
 #endif
 }
 
+/// Value and gradient of one ramped FBM layer at terrain-stable position `p`.
+/// The gradient is with respect to the input position in inverse metres.
+fn layer_gradient(
+    p: vec3<f32>, scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32,
+) -> vec4<f32> {
+    var raw_height = 0.0;
+    var raw_gradient = vec3<f32>(0.0);
+#ifdef LUNCO_NOISE_2D
+    let sample = fbm2d_gradient(p.xz * scale, oct(octaves), gain);
+    raw_height = sample.x;
+    raw_gradient = vec3(sample.y, 0.0, sample.z) * scale;
+#else
+    let sample = fbm_rot_gradient(p * scale, oct(octaves), gain);
+    raw_height = sample.x;
+    raw_gradient = sample.yzw * scale;
+#endif
+    let height = ramp(raw_height, lo, hi);
+    var gradient = vec3<f32>(0.0);
+    if (raw_height > lo && raw_height < hi) {
+        gradient = raw_gradient / (hi - lo);
+    }
+    return vec4(height, gradient);
+}
+
+/// Fold unresolved bump variance into the GGX roughness width. `resolved` is
+/// the footprint fade used by the matching geometric-normal perturbation, so
+/// normal energy transitions continuously from explicit shading into the
+/// filtered material response as the camera moves away.
+fn filter_detail_roughness(
+    perceptual_roughness: f32, amplitude_m: f32, scale_per_m: f32, resolved: f32,
+) -> f32 {
+    let unresolved = 1.0 - clamp(resolved, 0.0, 1.0);
+    let unresolved_rms_slope = 0.5 * amplitude_m * scale_per_m * sqrt(unresolved);
+    let alpha = clamp(perceptual_roughness, 0.05, 1.0);
+    let alpha_sq = alpha * alpha;
+    let filtered_alpha_sq = alpha_sq * alpha_sq
+        + unresolved_rms_slope * unresolved_rms_slope;
+    return sqrt(min(sqrt(filtered_alpha_sq), 1.0));
+}
+
 /// Perturb shading normal `n` by the gradient of one noise layer, and report that
 /// layer's height through `out_h` so the caller can reuse it for albedo/roughness
 /// without paying for a second FBM.
 ///
-/// Finite-differenced along the surface tangent frame rather than an analytic
-/// derivative: the two agree to within the eps used here, and the FD form stays
-/// correct if the noise function underneath is swapped.
+/// Uses the shared analytic gradient, so one noise-stack evaluation supplies
+/// both the height and its shading slope. Projecting onto the tangent plane
+/// keeps the perturbation perpendicular to the current surface normal.
 fn bump_layer(
     n: vec3<f32>, p: vec3<f32>,
     scale: f32, octaves: i32, gain: f32, lo: f32, hi: f32,
     strength: f32, out_h: ptr<function, f32>,
 ) -> vec3<f32> {
-    var up = vec3(0.0, 1.0, 0.0);
-    if (abs(n.y) > 0.99) { up = vec3(1.0, 0.0, 0.0); }
-    let t = normalize(cross(up, n));
-    let b = cross(n, t);
-    let eps = 0.5 / scale;
-
-    let h0 = layer_height(p, scale, octaves, gain, lo, hi);
-    let ht = layer_height(p + t * eps, scale, octaves, gain, lo, hi);
-    let hb = layer_height(p + b * eps, scale, octaves, gain, lo, hi);
-    *out_h = h0;
-
-    let grad = (ht - h0) * t + (hb - h0) * b;
-    let perturbed = n - strength * grad / eps;
-    // A large `strength` can flip or annihilate the normal; fall back rather than
-    // emit a NaN or an inward-facing normal that would read as a black speckle.
+    let sample = layer_gradient(p, scale, octaves, gain, lo, hi);
+    *out_h = sample.x;
+    var surface_gradient = sample.yzw;
+#ifdef VERTEX_UVS_A
+    // UV-backed terrain detail uses a planar DEM-local xz parameterization.
+    // Do not add the unused 3D noise derivative along the constant local-y axis.
+    surface_gradient.y = 0.0;
+#endif
+    let tangent_gradient = surface_gradient - n * dot(n, surface_gradient);
+    let bump_slope = strength * tangent_gradient;
+    // Smoothly saturate steep micro-relief slopes. Returning the base normal
+    // only where a gradient crossed the hemisphere boundary made the noise
+    // field break into visible patches under grazing light.
+    let slope_scale = inverseSqrt(
+        1.0 + dot(bump_slope, bump_slope) / (BUMP_MAX_SLOPE * BUMP_MAX_SLOPE),
+    );
+    let perturbed = n - bump_slope * slope_scale;
     if (length(perturbed) < 1e-3 || dot(perturbed, n) <= 0.0) {
         return n;
     }

@@ -26,6 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use avian3d::parry::math::Pose;
 use avian3d::prelude::{
     Collider, ColliderAabb, ColliderDisabled, ColliderOf, ColliderTransform, CollisionLayers,
     Position, RayHitData, RayHits, RigidBody, Rotation, Sensor, SimpleCollider, SpatialQueryFilter,
@@ -42,6 +43,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::band::SurfaceBand;
 use crate::oracle::{DemHeightField, SurfaceOracle};
+use crate::surface_change::TerrainSurfaceChange;
 use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Square};
 
 /// Smallest and largest supported collider-ring quadtree depth.
@@ -177,7 +179,10 @@ pub struct ColliderTiles {
     /// a resident tile is never re-baked by the wanted-set diff, so without this
     /// tether the rover keeps driving the PRE-swap surface (visibly floating
     /// above every crater the recompose added).
-    oracle_key: u64,
+    oracle_key: Option<u64>,
+    /// Revision of the last committed surface change this ring fully observed.
+    /// A skipped revision widens the next dirty region to the complete terrain.
+    surface_revision: u64,
     /// The canonical-depth assembly-ring nodes last frame (sorted). The cheap
     /// gate: when no physics footprint crossed a node boundary the wanted set
     /// is unchanged by construction, so with nothing stale and nothing baking
@@ -292,18 +297,6 @@ pub fn invalidate_ring_on_retune(
             tiles.stale.insert(coord);
         }
     }
-}
-
-/// Per-frame: maintain the collider ring around dynamic bodies for each terrain.
-/// The edited region + the oracle version it belongs to, handed from
-/// `finish_dem_restamp` so [`update_collider_ring`] re-bakes ONLY the ring tiles the
-/// edit touched. `bounds` = `[min_x, min_z, max_x, max_z]` terrain-local metres;
-/// `None` = whole terrain. `oracle_key` matches the swap it describes (so a stale
-/// region can't scope the wrong oracle). Consumed once applied.
-#[derive(Component)]
-pub struct ColliderDirtyRegion {
-    pub bounds: Option<[f64; 4]>,
-    pub oracle_key: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -851,14 +844,6 @@ pub(crate) fn update_physics_support_cache(
     }
 }
 
-/// Whether a node's world [`Square`] overlaps an `[min_x, min_z, max_x, max_z]` box.
-fn square_overlaps_aabb(s: Square, a: [f64; 4]) -> bool {
-    s.center[0] - s.half <= a[2]
-        && s.center[0] + s.half >= a[0]
-        && s.center[1] - s.half <= a[3]
-        && s.center[1] + s.half >= a[1]
-}
-
 /// Return the X/Z footprint of one dynamic body in Avian's world frame.
 ///
 /// `ColliderAabb` is the authoritative broad-phase geometry, so this remains
@@ -1014,7 +999,7 @@ fn push_assembly_ring_nodes(
     }
 }
 
-pub fn update_collider_ring(
+pub(crate) fn update_collider_ring(
     mut commands: Commands,
     cache: Res<PhysicsSupportCache>,
     mut terrains: Query<(
@@ -1023,7 +1008,7 @@ pub fn update_collider_ring(
         &TerrainColliderRing,
         &mut ColliderTiles,
         &mut PendingColliderBakes,
-        Option<&ColliderDirtyRegion>,
+        Option<&TerrainSurfaceChange>,
     )>,
     mut ring_nodes: Local<Vec<QuadCoord>>,
     mut wanted: Local<HashSet<QuadCoord>>,
@@ -1048,7 +1033,7 @@ pub fn update_collider_ring(
     #[cfg(not(target_arch = "wasm32"))]
     let mut bake_budget: usize = usize::MAX;
 
-    for (terrain, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
+    for (terrain, hf, ring, mut tiles, mut pending, surface_change) in &mut terrains {
         let Some((grid_entity, grid)) =
             lunco_spatial::coords::ancestor_grid(terrain, &parents, &grids)
         else {
@@ -1093,17 +1078,17 @@ pub fn update_collider_ring(
         // despawn+respawn the whole ring (the broadphase-churn physics spike on a burst).
         // A whole-terrain change (`None`) invalidates the whole ring, as before.
         let oracle_key = oracle.surface_key();
-        let oracle_swapped = tiles.oracle_key != oracle_key;
+        let oracle_swapped = tiles.oracle_key != Some(oracle_key);
         if oracle_swapped {
-            let dirty = dirty_region
-                .filter(|d| d.oracle_key == oracle_key)
-                .and_then(|d| d.bounds);
+            let dirty = surface_change.and_then(|change| {
+                change.bounds_since(tiles.surface_revision, tiles.oracle_key, oracle_key)
+            });
             let t = &mut *tiles;
             // Mark — don't despawn. A stale tile keeps supporting the rover until
             // its replacement collider is baked and swapped in place (below).
             for coord in t.map.keys() {
                 let hit = match dirty {
-                    Some(aabb) => square_overlaps_aabb(qt.region(*coord), aabb),
+                    Some(aabb) => qt.region(*coord).overlaps_aabb(aabb),
                     None => true,
                 };
                 if hit {
@@ -1112,11 +1097,13 @@ pub fn update_collider_ring(
             }
             // In-flight bakes for touched tiles sampled the OLD oracle — drop them.
             pending.0.retain(|coord, _| match dirty {
-                Some(aabb) => !square_overlaps_aabb(qt.region(*coord), aabb),
+                Some(aabb) => !qt.region(*coord).overlaps_aabb(aabb),
                 None => false,
             });
-            t.oracle_key = oracle_key;
-            commands.entity(terrain).try_remove::<ColliderDirtyRegion>();
+            t.oracle_key = Some(oracle_key);
+            t.surface_revision = surface_change
+                .filter(|change| change.surface_key == oracle_key)
+                .map_or(0, |change| change.revision);
         }
 
         // Each assembly's canonical-depth footprint plus one tile of build-ahead.
@@ -1506,6 +1493,38 @@ struct InitialCollider {
     position: DVec3,
     rotation: DQuat,
     layers: CollisionLayers,
+}
+
+/// Return actual support points of a convex collider in a handful of directions
+/// around the terrain normal. An AABB corner is only a broad-phase bound: on a
+/// sloped surface it can lie below the terrain while the collider itself is
+/// airborne. Admission must measure the authored shape, not that inflated box.
+fn collider_terrain_support_points(
+    collider: &InitialCollider,
+    terrain_up: DVec3,
+) -> Option<Vec<DVec3>> {
+    let support = collider.collider.shape_scaled().as_support_map()?;
+    let up = terrain_up.try_normalize()?;
+    let tangent = if up.x.abs() < 0.8 {
+        up.cross(DVec3::X).normalize()
+    } else {
+        up.cross(DVec3::Z).normalize()
+    };
+    let bitangent = up.cross(tangent).normalize();
+    let directions = [
+        -up,
+        (-up + tangent * 0.5).normalize(),
+        (-up - tangent * 0.5).normalize(),
+        (-up + bitangent * 0.5).normalize(),
+        (-up - bitangent * 0.5).normalize(),
+    ];
+    let pose = Pose::from_parts(collider.position, collider.rotation);
+    Some(
+        directions
+            .into_iter()
+            .map(|direction| support.support_point(&pose, direction))
+            .collect(),
+    )
 }
 
 #[derive(Debug)]
@@ -2065,12 +2084,33 @@ pub fn validate_initial_physics_poses(
                 continue;
             }
             for &m in &members {
+                let mut sampled_shape = false;
+                let mut requires_aabb_fallback = false;
+                for initial in initial_colliders.iter().filter(|initial| initial.body == m) {
+                    let Some(points) =
+                        collider_terrain_support_points(initial, terrain_up.unwrap_or(DVec3::Y))
+                    else {
+                        requires_aabb_fallback = true;
+                        continue;
+                    };
+                    sampled_shape = true;
+                    for point in points {
+                        let Some((local, surface)) = sample_height(point) else {
+                            continue;
+                        };
+                        over_terrain = true;
+                        rigid_penetration = rigid_penetration.max(surface - local.y);
+                    }
+                }
+                if sampled_shape && !requires_aabb_fallback {
+                    continue;
+                }
                 let Some((aabb_min, aabb_max)) = collider_bounds.get(&m).copied() else {
                     continue;
                 };
-                // A ColliderAabb is expressed in the same physics frame as
-                // Position. Test all corners in the terrain frame; using only
-                // its global-Y lower corner is wrong for a rotated terrain.
+                // Composite or non-convex shapes do not expose a support map.
+                // Keep the conservative fallback for those shapes; convex
+                // colliders use their actual support points above.
                 for &x in &[aabb_min.x, aabb_max.x] {
                     for &y in &[aabb_min.y, aabb_max.y] {
                         for &z in &[aabb_min.z, aabb_max.z] {

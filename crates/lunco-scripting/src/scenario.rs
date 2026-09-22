@@ -89,7 +89,7 @@ pub fn close_scenarios_for_scene_transition(
     gate.enabled = false;
     arm.0 = false;
     if let Some(mut inbox) = inbox {
-        inbox.clear();
+        inbox.reset();
     }
 }
 
@@ -705,7 +705,14 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // allocation for the next render/control event burst.
         let mut events: Vec<TelemetryEvent> = world
             .get_resource_mut::<ScriptEventInbox>()
-            .map(|mut inbox| std::mem::take(&mut inbox.pending))
+            .map(|mut inbox| {
+                if inbox.faulted {
+                    inbox.pending.clear();
+                    Vec::new()
+                } else {
+                    std::mem::take(&mut inbox.pending)
+                }
+            })
             .unwrap_or_default();
 
         // Run if there's work OR a tracked entity vanished (needs on_stop).
@@ -961,18 +968,20 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
 /// The producer clock is not necessarily the fixed simulation clock: UI and
 /// interaction events can arrive on `Update` while a causal participant holds
 /// the fixed schedule. A bound is therefore required even though the driver
-/// normally drains the inbox every pass. Exceeding it is a simulation fault,
-/// not a reason to discard mission events silently.
+/// normally drains the inbox every pass. Exceeding it latches a visible
+/// scene-scoped diagnostic and holds event delivery until the next scene.
 pub const SCRIPT_EVENT_INBOX_CAPACITY: usize = 4096;
 
 /// Pass-delayed inbox of `TelemetryEvent`s destined for scenario `on_event`
 /// hooks. An observer ([`collect_script_events`]) clones every fired event here;
 /// the driver drains it at the start of the next driver pass (the next fixed
 /// simulation pass while running, or the next `Update` pass while paused).
+/// Every event already carries the `SimTick` at which its producer ran, so the
+/// pass boundary is simulation-time based rather than render-time based.
 /// Delivery remains deterministic and language-neutral: order never depends on
 /// system scheduling. If producers outrun the driver, the inbox refuses new
-/// events and requests a loud application exit rather than growing until the
-/// simulation becomes progressively slower or drops a control edge.
+/// events and records the owning runtime diagnostic rather than growing until
+/// the simulation becomes progressively slower or crashing the process.
 #[derive(Resource, Debug)]
 pub struct ScriptEventInbox {
     /// Events awaiting delivery on the next driver pass.
@@ -981,6 +990,9 @@ pub struct ScriptEventInbox {
     pub overflowed: bool,
     /// Number of events refused after the boundary was crossed.
     pub dropped: u64,
+    /// Whether delivery is held after an overflow. The scene transition owner
+    /// clears this before the replacement scene starts.
+    pub faulted: bool,
 }
 
 impl Default for ScriptEventInbox {
@@ -989,6 +1001,7 @@ impl Default for ScriptEventInbox {
             pending: Vec::with_capacity(SCRIPT_EVENT_INBOX_CAPACITY),
             overflowed: false,
             dropped: 0,
+            faulted: false,
         }
     }
 }
@@ -1004,16 +1017,24 @@ impl ScriptEventInbox {
     /// Enqueue one event while preserving FIFO order.
     ///
     /// `false` is an explicit overflow signal. The caller owns the policy for
-    /// surfacing it (the runtime observer terminates the app); no event is
-    /// silently evicted from the front of the queue.
+    /// surfacing it; no event is silently evicted from the front of the queue.
     pub fn enqueue(&mut self, event: TelemetryEvent) -> bool {
-        if self.pending.len() >= SCRIPT_EVENT_INBOX_CAPACITY {
+        if self.faulted || self.pending.len() >= SCRIPT_EVENT_INBOX_CAPACITY {
             self.overflowed = true;
             self.dropped = self.dropped.saturating_add(1);
             return false;
         }
         self.pending.push(event);
         true
+    }
+
+    /// Clear pending events and the latched collection fault at a scene
+    /// replacement boundary.
+    pub fn reset(&mut self) {
+        self.pending.clear();
+        self.overflowed = false;
+        self.dropped = 0;
+        self.faulted = false;
     }
 }
 
@@ -1031,29 +1052,52 @@ pub fn collect_script_events(
     trigger: On<TelemetryEvent>,
     gate: Res<ScenarioExecutionGate>,
     mut inbox: ResMut<ScriptEventInbox>,
-    mut commands: Commands,
+    diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
+    // Scenario hooks cannot observe events while the scene readiness gate is
+    // closed. Do not accumulate producer traffic during that hold: the fixed
+    // and paused scenario passes are deliberately disabled until every
+    // participant is admitted, so accepting events here would only fill the
+    // bounded inbox before startup completes.
     if !gate.enabled {
         return;
     }
     if inbox.enqueue(trigger.event().clone()) {
         return;
     }
-    // Send the terminal signal only once. The first rejected event is enough
+    // Surface the terminal signal only once. The first rejected event is enough
     // to identify the fault; additional events are counted without producing a
-    // second message or another log line.
+    // second message or another log line. The affected event stream is held and
+    // the owning diagnostics plane exposes a recoverable scene-scoped verdict.
     if inbox.dropped == 1 {
+        inbox.pending.clear();
+        inbox.faulted = true;
         error!(
-            "[scripting] telemetry event inbox overflowed at {} events; refusing further events and stopping the application",
+            "[scripting] telemetry event inbox overflowed at {} events; event delivery is held until the next scene",
             SCRIPT_EVENT_INBOX_CAPACITY
         );
-        commands.write_message(AppExit::error());
+        if let Some(mut diagnostics) = diagnostics {
+            diagnostics.replace_producer(
+                "scripting-telemetry",
+                [lunco_core::RuntimeDiagnostic {
+                    code: "telemetry-event-overflow".into(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "scripting-telemetry".into(),
+                    subject: "scenario-event-inbox".into(),
+                    message: format!(
+                        "{} telemetry events exceeded the fixed inbox capacity; event delivery is held until the next scene",
+                        SCRIPT_EVENT_INBOX_CAPACITY
+                    ),
+                }],
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{ScriptEventInbox, SCRIPT_EVENT_INBOX_CAPACITY};
+    use bevy::prelude::App;
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
     fn event(index: usize) -> TelemetryEvent {
@@ -1063,6 +1107,8 @@ mod tests {
             severity: Severity::Info,
             data: TelemetryValue::F64(index as f64),
             timestamp: index as f64,
+            sim_secs: 0.0,
+            sim_tick: 0,
         }
     }
 
@@ -1077,5 +1123,28 @@ mod tests {
         assert!(inbox.overflowed);
         assert_eq!(inbox.dropped, 1);
         assert_eq!(inbox.pending[0].name, "event:0");
+    }
+
+    #[test]
+    fn collector_latches_a_diagnostic_without_exiting_the_app() {
+        let mut app = App::new();
+        app.init_resource::<super::ScenarioExecutionGate>()
+            .init_resource::<ScriptEventInbox>()
+            .init_resource::<lunco_core::RuntimeDiagnostics>()
+            .add_observer(super::collect_script_events);
+
+        for index in 0..=SCRIPT_EVENT_INBOX_CAPACITY {
+            app.world_mut().trigger(event(index));
+        }
+
+        let inbox = app.world().resource::<ScriptEventInbox>();
+        assert!(inbox.faulted);
+        assert!(inbox.pending.is_empty());
+        assert_eq!(inbox.dropped, 1);
+        let diagnostics = app.world().resource::<lunco_core::RuntimeDiagnostics>();
+        assert!(diagnostics
+            .findings
+            .iter()
+            .any(|finding| finding.code == "telemetry-event-overflow"));
     }
 }

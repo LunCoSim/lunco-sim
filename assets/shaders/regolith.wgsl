@@ -47,7 +47,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::regolith_factor
-#import lunco::terrain::{aa_fade, bump_layer, layer_height, ramp, surface_fbm, terrain_apply_sun_visibility, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
+#import lunco::terrain::{aa_fade, bump_layer, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_apply_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position}
 
 // Dynamic, self-describing parameters — the engine reflects this `Material`
 // struct (field names → offsets) and the `//!@` annotations (UI ranges,
@@ -57,15 +57,15 @@
 //!@default albedo            0.13,0.13,0.13
 //!@ui      macro_clump_scale 1 20        "Macro clump scale (/m)"
 //!@default macro_clump_scale 8
-//!@ui      macro_bump        0 0.3       "Macro bump strength"
+//!@ui      macro_bump        0 0.3       "Macro bump amplitude (m)"
 //!@default macro_bump        0.06
 //!@ui      mid_scale         0.02 1      "Mid hummock scale (/m)"
 //!@default mid_scale         0.15
-//!@ui      mid_bump          0 1.5       "Mid hummock strength"
+//!@ui      mid_bump          0 1.5       "Mid hummock amplitude (m)"
 //!@default mid_bump          0.6
 //!@ui      fine_scale        50 400      "Fine grain scale (/m)"
 //!@default fine_scale        180
-//!@ui      fine_bump         0 0.1       "Fine grain strength"
+//!@ui      fine_bump         0 0.1       "Fine grain amplitude (m)"
 //!@default fine_bump         0.025
 //!@ui      rough_mix         0 1         "Roughness mix"
 //!@default rough_mix         0.35
@@ -208,7 +208,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Roughness: macro ramp mixed 35% toward white (Blender Mix fac 0.35),
     // relaxing to its mean where the layer has faded out.
     let macro_rough = mix(0.5, macro_h, macro_fade);
-    let roughness = clamp(mix(macro_rough, 1.0, rough_mix), 0.05, 1.0);
+    var roughness = clamp(mix(macro_rough, 1.0, rough_mix), 0.05, 1.0);
+    roughness = filter_detail_roughness(roughness, mid_bump, mid_scale, mid_fade);
+    roughness = filter_detail_roughness(roughness, macro_bump, macro_scale, macro_fade);
+    roughness = filter_detail_roughness(roughness, fine_bump, fine_scale, fine_fade);
 
     // Full scene lighting: real sun direction, shadow maps, ambient.
     var pbr_input = pbr_types::pbr_input_new();
@@ -220,20 +223,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
     pbr_input.N = n;
     pbr_input.V = pbr_functions::calculate_view(in.world_position, pbr_input.is_orthographic);
-    // Lunar regolith photometry: reshape the sun diffuse from Lambert to
-    // Lommel-Seeliger + opposition surge (retroreflective backscatter). The
-    // factor pre-multiplies base_color; bevy's built-in Lambert (·μ₀) then
-    // completes the response. World-space to-sun comes from the engine (the
-    // CPU-picked canonical sun), NOT directional_lights[0] — the earthshine
-    // fill light can shuffle that.
+    // Lunar regolith photometry reshapes only the canonical Sun contribution.
+    // Applying it to base colour would also scale earthshine and authored fill.
     //
-    // No shader-side fallback. Every consumer is engine-filled: heightfield
-    // terrain by `wire_terrain_materials`, everything else (landing pad disc,
-    // ground plate) by `wire_sun_for_non_terrain_materials`. This used to guess
-    // the brightest directional light when the uniform was unset, which was
-    // exact only while that light WAS the sun and silently wrong otherwise.
-    // A still-zero uniform now means the wiring is broken; leaving the BRDF
-    // disengaged (flat Lambert) makes that visible instead of plausible.
+    // The uniform is engine-filled from the structural scene Sun selection:
+    // terrain by `wire_terrain_materials`, other regolith materials by
+    // `wire_sun_for_non_terrain_materials`.
     let sw = mat.sun_dir_world;
     var lunar_k = 1.0;
     if (dot(sw, sw) > 0.25) {
@@ -241,7 +236,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
             pbr_input.N, normalize(sw), pbr_input.V,
             mat.surge_amp, mat.surge_width, mat.photometry_gain);
     }
-    pbr_input.material.base_color = vec4(albedo * lunar_k, 1.0);
+    pbr_input.material.base_color = vec4(albedo, 1.0);
     pbr_input.material.perceptual_roughness = roughness;
     pbr_input.material.metallic = 0.0;
     pbr_input.material.reflectance = vec3(0.5);
@@ -259,15 +254,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     if (csm_far > 0.0) {
         march_blend = smoothstep(csm_far, csm_far * 1.1, dist);
     }
+    var sun_vis = 1.0;
     if (march_blend > 0.0) {
-        let sun_vis = sun_visibility_resolved(
+        sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
             height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
             mat.horizon_march_steps, mat.hf_size, mat.hf_res);
-        color = terrain_apply_sun_visibility(
-            pbr_input, color, mat.sun_dir_world, sun_vis, march_blend);
     }
+#else
+    let sun_vis = 1.0;
+    let march_blend = 0.0;
 #endif
+
+    color = terrain_apply_sun_response(
+        pbr_input, color, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
     return color;

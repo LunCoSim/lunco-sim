@@ -84,6 +84,7 @@ The full catalogue with trigger phrases is in
 | [`apps/`](apps/README.md) | Per-binary guides: flags, controls, workflows |
 | [`tutorials/`](tutorials/README.md) | Build-something-real walkthroughs (and how the in-app lessons work) |
 | [`reviews/`](reviews/) | Standing known issues (`open-*.md`) and dated audit reports |
+| [`research/lunar-surface-rendering.md`](research/lunar-surface-rendering.md) | External research on lunar terrain data, reflectance, detail, and real-time rendering |
 | [`releases/`](releases/README.md) | Commit-derived nightly changelists and release-note snapshots |
 | [`numeric-experiments/`](numeric-experiments/README.md) | Solver/numerics investigations with reproducible setups |
 | [`../specs/`](../specs/README.md) | Feature contracts, with an Implemented/Partial/Not-built index |

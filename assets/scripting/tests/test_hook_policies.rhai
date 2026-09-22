@@ -134,7 +134,10 @@ checks.push(t_true(high_profile.ok == true
         && high_profile.value.len() == 69
         && high_profile.value.directional_shadow_map_size == 4096
         && high_profile.value.directional_cascades == 4
+        && high_profile.value.shadow_first_cascade_far_bound == 30.0
         && high_profile.value.shadow_maximum_distance == 3000.0
+        && high_profile.value.terrain_lod_max_depth == 9
+        && high_profile.value.terrain_lod_tile_budget == 1024
         && high_profile.value.horizon_march_steps == 96,
     "High shadow quality uses the authored high-detail values"));
 let missing_profile = invoke_hook("render.quality_profile", ["turbo"]);

@@ -42,6 +42,14 @@ pub const SECS_PER_TICK: f64 = 1.0 / FIXED_HZ;
 #[reflect(Resource)]
 pub struct SimTick(pub u64);
 
+/// Fixed-update ordering anchor for the authoritative simulation tick.
+///
+/// Consumers that record or publish state keyed by simulation time must run
+/// after this set.  That makes the tick boundary explicit instead of relying
+/// on incidental system insertion order.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SimTickSet;
+
 impl SimTick {
     /// Signed tick distance `self - other`, wrapping-safe.
     pub fn wrapping_diff(self, other: SimTick) -> i64 {
@@ -96,7 +104,8 @@ impl Plugin for LunCoCoreRuntimePlugin {
             ),
         );
         subsystems::build_subsystems(app);
-        app.add_systems(FixedUpdate, advance_sim_tick);
+        app.configure_sets(FixedUpdate, SimTickSet)
+            .add_systems(FixedUpdate, advance_sim_tick.in_set(SimTickSet));
         app.init_resource::<RollbackInProgress>();
     }
 }

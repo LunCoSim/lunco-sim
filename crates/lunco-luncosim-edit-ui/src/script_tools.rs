@@ -673,5 +673,7 @@ pub(crate) fn on_scene_pointer_event(
         severity: lunco_telemetry_core::Severity::Info,
         data: context,
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     });
 }

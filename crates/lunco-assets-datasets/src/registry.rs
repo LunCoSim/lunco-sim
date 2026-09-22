@@ -253,6 +253,8 @@ pub fn dataset_failed(detail: impl Into<String>) -> lunco_telemetry_core::Teleme
         severity: lunco_telemetry_core::Severity::Error,
         data: lunco_telemetry_core::TelemetryValue::String(detail.into()),
         timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
     }
 }
 
@@ -315,6 +317,35 @@ impl DatasetRegistry {
                     continue;
                 }
             };
+            let output_path = if let Some(process) = &spec.process {
+                let twin_root = match &scope {
+                    DatasetScope::Twin { root, .. } => Some(root.as_path()),
+                    DatasetScope::Engine => None,
+                };
+                let output_path = match process_output_path(
+                    process,
+                    Some(&scope.cache_root(spec.shared)),
+                    twin_root,
+                ) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        self.record_failure(format!(
+                            "dataset '{key}' in scope '{}' has an invalid processed output: {error}",
+                            scope.label()
+                        ));
+                        continue;
+                    }
+                };
+                Some(output_path)
+            } else {
+                None
+            };
+            if let Some(conflict) =
+                self.process_output_conflict(&key, &path, output_path.as_deref())
+            {
+                self.record_failure(conflict);
+                continue;
+            }
             let state = if scope
                 .read_roots()
                 .iter()
@@ -339,6 +370,80 @@ impl DatasetRegistry {
             added += 1;
         }
         added
+    }
+
+    fn process_output_conflict(
+        &self,
+        key: &str,
+        source_path: &Path,
+        output_path: Option<&Path>,
+    ) -> Option<String> {
+        if let Some(output_path) = output_path {
+            if paths_overlap(source_path, output_path) {
+                return Some(format!(
+                    "dataset '{key}' process output {} overlaps its downloaded source {}",
+                    output_path.display(),
+                    source_path.display()
+                ));
+            }
+        }
+
+        for entry in &self.entries {
+            let entry_output = if let Some(process) = &entry.spec.process {
+                let twin_root = match &entry.scope {
+                    DatasetScope::Twin { root, .. } => Some(root.as_path()),
+                    DatasetScope::Engine => None,
+                };
+                match process_output_path(
+                    process,
+                    Some(&entry.scope.cache_root(entry.spec.shared)),
+                    twin_root,
+                ) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        return Some(format!(
+                            "dataset '{}' has an invalid process output while checking dataset '{key}': {error}",
+                            entry.key
+                        ));
+                    }
+                }
+            } else {
+                None
+            };
+
+            if let Some(output_path) = output_path {
+                if paths_overlap(output_path, &entry.path) {
+                    return Some(format!(
+                        "dataset '{key}' process output {} overlaps dataset '{}' source {}",
+                        output_path.display(),
+                        entry.key,
+                        entry.path.display()
+                    ));
+                }
+            }
+
+            if let Some(entry_output) = entry_output {
+                if let Some(output_path) = output_path {
+                    if paths_overlap(output_path, &entry_output) {
+                        return Some(format!(
+                            "dataset '{key}' process output {} overlaps dataset '{}' process output {}",
+                            output_path.display(),
+                            entry.key,
+                            entry_output.display()
+                        ));
+                    }
+                }
+                if paths_overlap(source_path, &entry_output) {
+                    return Some(format!(
+                        "dataset '{key}' source {} overlaps dataset '{}' process output {}",
+                        source_path.display(),
+                        entry.key,
+                        entry_output.display()
+                    ));
+                }
+            }
+        }
+        None
     }
 
     /// Scan and register an opened Twin's `Assets.toml`.
@@ -565,6 +670,10 @@ impl DatasetRegistry {
     }
 }
 
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
+}
+
 /// Build the stable registry id for a scoped manifest entry.
 pub fn dataset_id(scope: &DatasetScope, group: &str, key: &str) -> String {
     match scope {
@@ -687,5 +796,41 @@ dest = "ephemeris/demo.csv"
         assert!(registry
             .declared_artifact(&scope, Path::new("ephemeris/demo.csv"))
             .is_some());
+    }
+
+    #[test]
+    fn overlapping_process_outputs_are_rejected_during_registration() {
+        let manifest = r#"
+[base_dem]
+name = "Base elevation"
+url = "https://example.invalid/dem.tif"
+
+[base_dem.process]
+kind = "dem"
+output_root = "cache"
+output = "terrain/site"
+
+[detail_albedo]
+name = "Material albedo"
+url = "https://example.invalid/albedo.tif"
+
+[detail_albedo.process]
+kind = "albedo"
+output_root = "cache"
+output = "terrain/site/materials/textures/albedo.png"
+"#;
+        let scope = DatasetScope::Twin {
+            name: "school".into(),
+            root: PathBuf::from("/twins/school"),
+        };
+        let mut registry = DatasetRegistry::default();
+
+        assert_eq!(registry.register_scoped(manifest, "school", scope), 1);
+        assert_eq!(registry.entries().len(), 1);
+        assert_eq!(registry.entries()[0].key, "base_dem");
+        let failures = registry.take_pending_failures();
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].contains("detail_albedo"));
+        assert!(failures[0].contains("overlaps dataset 'base_dem' process output"));
     }
 }

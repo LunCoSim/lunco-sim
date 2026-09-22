@@ -164,7 +164,7 @@ fn render_quality_profile(id) {
             horizon_march_steps: 96,
             horizon_cache_samples_per_axis: 3,
             shadow_minimum_distance: 0.1,
-            shadow_first_cascade_far_bound: 80.0,
+            shadow_first_cascade_far_bound: 30.0,
             shadow_maximum_distance: 3000.0,
             shadow_cascade_overlap: 0.1,
             shadow_depth_bias: 0.03,
@@ -201,14 +201,18 @@ fn render_quality_profile(id) {
             terrain_rock_mesh_cube_count: 8,
             terrain_rock_lod_start_distance: 4000.0,
             terrain_rock_lod_fade_distance: 800.0,
-            terrain_lod_tile_resolution: 49,
+            terrain_lod_tile_resolution: 65,
             terrain_lod_cinematic_resolution: 2049,
             terrain_lod_pixel_error: 2.0,
-            terrain_lod_max_depth: 8,
+            terrain_lod_max_depth: 9,
             terrain_lod_probe_resolution: 9,
             terrain_lod_bakes_per_frame: 24,
             terrain_lod_max_inflight_bakes: 64,
-            terrain_lod_tile_budget: 768,
+            // Keep the high profile's 65² vertex tiles close and crisp without
+            // admitting a thousand draw tiles plus hidden parent fallbacks at
+            // startup. That resident set exceeded the GPU budget on the Apollo
+            // scene and caused device loss before physics admission completed.
+            terrain_lod_tile_budget: 256,
             terrain_lod_cover_edits_per_frame: 64,
             terrain_lod_hysteresis_ratio: 1.30,
             terrain_lod_morph_start_ratio: 0.55,

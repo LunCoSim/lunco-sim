@@ -188,12 +188,10 @@ impl Plugin for TerrainSurfacePlugin {
             Update,
             (
                 // AFTER the restamp swap: `finish_dem_restamp` writes the new
-                // `DemHeightField` immediately (Mut) but hands the bounded
-                // `ColliderDirtyRegion` over via deferred commands. Unordered,
-                // the ring could observe the new oracle key with no region in
-                // sight and fall back to invalidating the WHOLE ring on every
-                // edit; the `.after` also inserts the sync point that makes the
-                // region visible the same frame.
+                // `DemHeightField` immediately and publishes its shared
+                // `TerrainSurfaceChange` via deferred commands. The sync point
+                // makes the matching surface key and dirty bounds visible
+                // before the ring chooses bounded or full invalidation.
                 crate::collider_ring::update_collider_ring
                     .after(crate::terrain::finish_dem_restamp)
                     .after(crate::collider_ring::update_physics_support_cache),

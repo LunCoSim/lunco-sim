@@ -224,7 +224,20 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
         let end = optional_f64(params, "end", f64::INFINITY, "QueryTelemetryHistory")?;
         let limit = optional_limit(params, "limit", "QueryTelemetryHistory")?;
 
-        let epoch_jd = world.resource::<lunco_time::WorldTime>().epoch_jd;
+        // The query label must use the same authoritative mapping as samples and
+        // events. `WorldTime` is a derived frame view; `MissionClock(SimTick)`
+        // remains correct even when several fixed steps have completed since the
+        // last rendered frame.
+        let tick = world.resource::<lunco_core_runtime::SimTick>().0;
+        let epoch_jd = world
+            .resource::<lunco_time::MissionClock>()
+            .epoch_jd(tick);
+        if !epoch_jd.is_finite() {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "telemetry history clock is non-finite",
+            ));
+        }
 
         let signals = world.resource::<SignalRegistry>();
         let history = signals
@@ -582,7 +595,11 @@ mod tests {
     #[test]
     fn archived_api_channel_keeps_its_key_and_history() {
         let mut world = World::new();
-        world.insert_resource(lunco_time::WorldTime::default());
+        world.insert_resource(lunco_core_runtime::SimTick(720));
+        world.insert_resource(lunco_time::MissionClock::anchored(
+            lunco_time::J2000_JD,
+            0,
+        ));
         let entity = world.spawn(GlobalEntityId::from_raw(42)).id();
         let signal = SignalRef::new(entity, "motor_current");
         let mut registry = SignalRegistry::default();
@@ -614,6 +631,10 @@ mod tests {
         };
         assert_eq!(samples[0].get("t").and_then(ApiValue::as_f64), Some(12.0));
         assert_eq!(samples[0].get("v").and_then(ApiValue::as_f64), Some(3.5));
+        assert_eq!(
+            data.get("epoch_jd").and_then(ApiValue::as_f64),
+            Some(lunco_time::J2000_JD + 12.0 / lunco_time::SECS_PER_DAY)
+        );
 
         let recording = ExportTelemetryRecordingProvider
             .execute(&world, &api_value!({ "keys": ["api/42:motor_current"] }));

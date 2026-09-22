@@ -778,6 +778,8 @@ fn link_event(name: &str, (a, b): (u64, u64), jd: f64) -> TelemetryEvent {
         severity: Severity::Info,
         data: TelemetryValue::String(format!("{a}-{b}")),
         timestamp: jd,
+        sim_secs: 0.0,
+        sim_tick: 0,
     }
 }
 

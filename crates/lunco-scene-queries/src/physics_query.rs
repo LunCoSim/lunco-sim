@@ -15,8 +15,11 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::{api_param_u64, ApiQueryError, ApiQueryResult};
 use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
-use lunco_core::{GlobalEntityId, PhysicsStatePending, PhysicsStateReady};
+use lunco_core::{
+    GlobalEntityId, PhysicsPoseAuthoritative, PhysicsStatePending, PhysicsStateReady,
+};
 use lunco_physics::{
+    PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsPoseSeeded,
     PhysicsSupportFootprint, PhysicsSupportState, PhysicsWheelContact, PhysicsWheelRaycastFilter,
 };
 use lunco_usd_avian_contracts::ShouldBeDynamic;
@@ -179,6 +182,10 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
         let ready = world.get::<PhysicsStateReady>(entity).is_some();
         let pending = world.get::<PhysicsStatePending>(entity).is_some();
         let admission_requested = world.get::<ShouldBeDynamic>(entity).is_some();
+        let initialization_pending = world.get::<PhysicsInitializationPending>(entity).is_some();
+        let initialization_invalid = world.get::<PhysicsInitializationInvalid>(entity).is_some();
+        let pose_seeded = world.get::<PhysicsPoseSeeded>(entity).is_some();
+        let pose_authoritative = world.get::<PhysicsPoseAuthoritative>(entity).is_some();
         let disabled = world
             .get::<avian3d::prelude::RigidBodyDisabled>(entity)
             .is_some();
@@ -337,6 +344,10 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_state_ready": ready,
             "physics_state_pending": pending,
             "physics_admission_requested": admission_requested,
+            "physics_initialization_pending": initialization_pending,
+            "physics_initialization_invalid": initialization_invalid,
+            "physics_pose_seeded": pose_seeded,
+            "physics_pose_authoritative": pose_authoritative,
             "rigid_body_disabled": disabled,
             "collider_present": collider,
             "mass_kg": mass.map(|mass| mass.value()),
@@ -370,6 +381,10 @@ pub fn register(app: &mut App) {
     world.register_component::<Sleeping>();
     world.register_component::<PhysicsStateReady>();
     world.register_component::<PhysicsStatePending>();
+    world.register_component::<PhysicsInitializationPending>();
+    world.register_component::<PhysicsInitializationInvalid>();
+    world.register_component::<PhysicsPoseSeeded>();
+    world.register_component::<PhysicsPoseAuthoritative>();
     world.register_component::<ShouldBeDynamic>();
     world.register_component::<avian3d::prelude::RigidBodyDisabled>();
     world.register_component::<avian3d::prelude::Collider>();

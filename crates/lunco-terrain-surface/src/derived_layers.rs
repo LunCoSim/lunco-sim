@@ -26,8 +26,8 @@
 //! that *do* render derive byte-identical textures with nothing to transfer.
 //!
 //! Live edits: a brush/reseed swaps the `DemHeightField` Arc →
-//! [`mark_derived_stale`] drops the published maps and, after a short quiescence
-//! debounce (so a stroke burst coalesces into one bake), the whole chain re-runs.
+//! [`mark_derived_stale`] retains maps only for a bounded edit from their exact
+//! source oracle, then after a short quiescence debounce the whole chain re-runs.
 //!
 //! Flow: [`mark_derived_stale`] → [`start_derived_bakes`] (one async task per
 //! terrain) → [`finish_derived_bakes`] (upload as `Image`s + publish
@@ -56,6 +56,7 @@ use crate::band::SurfaceBand;
 use crate::oracle::DemHeightField;
 use crate::oracle::SurfaceOracle;
 use crate::stream_viz::TerrainLodViz;
+use crate::surface_change::TerrainSurfaceChange;
 use crate::terrain::DemVisualTargetRes;
 
 /// Visual products derived from a ready DEM. The terrain surface and physics
@@ -89,12 +90,14 @@ fn raster_texel_size_m(half_extent: f64, res: usize) -> f64 {
 
 /// The published derived maps for a terrain — GPU handles every terrain render
 /// path binds from. `surface` packs R=roughness G=AO B=rockDensity A=unused;
-/// `normal` packs the DEM-local ENU meso normal in RGB and the albedo scalar in A. Removed
-/// (and re-baked) when the surface changes.
+/// `normal` packs the DEM-local ENU meso normal in RGB and the albedo scalar in A.
+/// The source key decides whether maps can remain live during a bounded re-bake.
 #[derive(Component, Clone)]
 pub struct TerrainDerivedMaps {
     pub surface: Handle<Image>,
     pub normal: Handle<Image>,
+    /// Oracle content the published maps were baked from.
+    pub surface_key: u64,
     /// Texels per side, retained for diagnostics and static-material reporting.
     pub res: usize,
     /// Physical spacing between adjacent level-zero texel centres in terrain
@@ -316,42 +319,38 @@ fn mip_maps(maps: DerivedMaps) -> DerivedMipped {
     }
 }
 
-/// Set by `finish_dem_restamp` alongside the collider ring's dirty region:
-/// whether the surface change that swapped the `DemHeightField` was a BOUNDED
-/// edit (a brush stroke / placed crater) or whole-terrain (spec change, reseed,
-/// load). Consumed by [`mark_derived_stale`].
-#[derive(Component)]
-pub struct DerivedDirtyRegion {
-    pub bounded: bool,
-}
-
 /// A surface re-compose swapped the `DemHeightField` Arc: arm the re-bake
-/// debounce. For a BOUNDED edit (see [`DerivedDirtyRegion`]) the published maps
-/// stay live while the fresh bake runs — they are correct everywhere except the
-/// edit's footprint, and dropping them popped the whole far field to the
-/// procedural fallback for the entire bake. A whole-terrain change still drops
-/// them (globally wrong maps are worse than the fallback).
+/// debounce. For a bounded change in the shared [`TerrainSurfaceChange`] the
+/// published maps stay live while the fresh bake runs — they are correct
+/// everywhere except the edit's footprint. A whole-terrain or unrecognized
+/// change drops them because globally stale maps are worse than the fallback.
 fn mark_derived_stale(
     mut commands: Commands,
     time: Res<Time>,
     changed: Query<
-        (Entity, Option<&DerivedDirtyRegion>, Has<TerrainDerivedMaps>),
+        (
+            Entity,
+            &DemHeightField,
+            Option<&TerrainSurfaceChange>,
+            Option<&TerrainDerivedMaps>,
+        ),
         Changed<DemHeightField>,
     >,
 ) {
-    for (entity, region, has_maps) in &changed {
-        if !has_maps {
+    for (entity, height_field, surface_change, maps) in &changed {
+        let Some(maps) = maps else {
             continue;
-        }
-        let bounded = region.is_some_and(|r| r.bounded);
+        };
+        let bounded = surface_change.is_some_and(|change| {
+            change.is_bounded_from(maps.surface_key, height_field.0.surface_key())
+        });
         let mut e = commands.entity(entity);
         if !bounded {
             e.try_remove::<TerrainDerivedMaps>();
         }
-        e.try_remove::<DerivedDirtyRegion>()
-            .try_insert(DerivedMapsStale {
-                since: time.elapsed_secs_f64(),
-            });
+        e.try_insert(DerivedMapsStale {
+            since: time.elapsed_secs_f64(),
+        });
     }
 }
 
@@ -766,6 +765,7 @@ fn finish_derived_bakes(
             .try_insert(TerrainDerivedMaps {
                 surface,
                 normal,
+                surface_key: hf.0.surface_key(),
                 res,
                 texel_size_m,
             });
@@ -783,7 +783,6 @@ fn cancel_derived_bakes_on_scene_teardown(
         Or<(
             With<DerivedBakeTask>,
             With<DerivedMapsStale>,
-            With<DerivedDirtyRegion>,
             With<TerrainDerivedMaps>,
             With<TerrainAuthoredMaps>,
         )>,
@@ -794,7 +793,6 @@ fn cancel_derived_bakes_on_scene_teardown(
         commands.entity(entity).try_remove::<(
             DerivedBakeTask,
             DerivedMapsStale,
-            DerivedDirtyRegion,
             TerrainDerivedMaps,
             TerrainAuthoredMaps,
         )>();
@@ -906,10 +904,9 @@ pub(crate) fn register(app: &mut App) {
         )
             .chain()
             // The `.after` inserts the sync point that makes `finish_dem_restamp`'s
-            // deferred `DerivedDirtyRegion` insert visible in the same frame as its
+            // deferred `TerrainSurfaceChange` visible in the same frame as its
             // (immediate) `DemHeightField` swap — unordered, `mark_derived_stale`
-            // could see the swap without the bounded flag and needlessly drop the
-            // published maps (the far-field pop this flag exists to prevent).
+            // could otherwise treat a bounded edit as a full-surface change.
             .after(crate::terrain::finish_dem_restamp),
     );
 }

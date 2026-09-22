@@ -912,6 +912,8 @@ mod tests {
                 "/twins/apollo15/terrain: no ground was created".to_string(),
             ),
             timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
         });
 
         let bus = app.world().resource::<StatusBus>();
@@ -989,6 +991,8 @@ mod tests {
                 severity,
                 data: TelemetryValue::I64(42),
                 timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
             });
         }
 

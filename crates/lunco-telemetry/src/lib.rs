@@ -523,7 +523,11 @@ impl Plugin for LunCoTelemetryPlugin {
                 // until one is authored.
                 sample_parameters_system.run_if(any_with_component::<Parameter>),
             )
-                .chain(),
+                .chain()
+                // Sampling reads the state produced by this fixed step and
+                // therefore keys it to the tick advanced by the shared runtime
+                // clock, never to the render/update cadence.
+                .after(lunco_core_runtime::SimTickSet),
         );
     }
 }
@@ -658,6 +662,16 @@ fn sample_parameters(world: &mut World) {
     // precise timebase (see `SampledParameter::sim_secs`). Both come from the
     // unified mission-time spine installed above.
     let world_time = *world.resource::<WorldTime>();
+    let sim_tick = world.resource::<lunco_core_runtime::SimTick>().0;
+    let mission_clock = *world.resource::<lunco_time::MissionClock>();
+    let epoch_jd = mission_clock.epoch_jd(sim_tick);
+    if !epoch_jd.is_finite() {
+        warn_once!(
+            "telemetry: MissionClock produced a non-finite epoch at SimTick {}; sampling is skipped until the clock is repaired",
+            sim_tick
+        );
+        return;
+    }
     // The sampling plan: which entities to visit. Rebuilt ONLY when the channel
     // set changed (see `mark_sampling_plan_dirty`) — steady state pays a Vec
     // walk, not a query + per-channel `Parameter` clone. The plan is taken OUT
@@ -730,8 +744,21 @@ fn sample_parameters(world: &mut World) {
         }
         let binding = entity_ref.get::<TimeBinding>();
 
-        // The channel's OWN time. This is the whole clock-binding feature.
-        let t = domain_time(resolved_domains, binding, &world_time);
+        // The unbound channel is keyed directly to the completed fixed tick;
+        // `WorldTime` was derived in `PreUpdate` and can lag when Bevy runs
+        // several fixed steps in one rendered frame. Bound channels retain
+        // their authored domain semantics through the shared resolver.
+        let t = match binding {
+            None => mission_clock.sim_secs(sim_tick),
+            Some(_) => domain_time(resolved_domains, binding, &world_time),
+        };
+        if !t.is_finite() {
+            warn_once!(
+                "telemetry: channel '{}' resolved a non-finite simulation time; sampling is skipped until its clock is repaired",
+                param.name
+            );
+            continue;
+        }
 
         // Due check BEFORE any clone or read: a not-due channel costs two
         // component lookups and nothing else.
@@ -790,8 +817,9 @@ fn sample_parameters(world: &mut World) {
             name: param.name.clone(),
             value,
             unit: param.unit.clone(),
-            timestamp: world_time.epoch_jd,
+            timestamp: epoch_jd,
             sim_secs: t,
+            sim_tick,
             // The MEASURED entity, not the channel entity — "whose value is this" is what
             // a subscriber needs to tell two rovers' `motor_current` apart.
             source: measured,
@@ -2257,5 +2285,9 @@ mod tests {
             dt > 0.0 && dt < 1.0,
             "consecutive samples must be separated by a real, positive Δt, got {dt}"
         );
+        assert!(seen.windows(2).all(|samples| {
+            samples[1].sim_tick > samples[0].sim_tick
+                && samples[1].sim_secs > samples[0].sim_secs
+        }));
     }
 }

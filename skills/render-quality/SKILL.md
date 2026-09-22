@@ -11,6 +11,17 @@ and the target scene's composed USD before changing a shader or asset. The
 authored USD Material/Shader network and its assets own visual intent; the
 runtime binder projects that intent to Bevy.
 
+Make authored scene and material edits through the USD document tools: open the
+exact source, inspect the composed value and edit target, apply typed
+`ApplyUsdOp(s)` (or the owning schema-aware command), save, and read back. Do
+not patch `.usd*` text directly, including for visual test scenes. When an
+authoring operation is missing, add it at the owning USD API before changing
+the scene.
+
+For lunar-specific terrain data, regolith reflectance, multiscale detail, and
+LOD approaches, consult the source-linked
+[`lunar surface rendering research note`](../../docs/research/lunar-surface-rendering.md).
+
 ## Diagnose in order
 
 1. Confirm the terrain prim, `material:binding`, Material surface connection,
@@ -29,6 +40,17 @@ runtime binder projects that intent to Bevy.
    and `primvars:doNotCastShadows` before changing material brightness. A
    renderer fallback that silently removes shadows is a failure to surface,
    not a quality setting to hide.
+   For close terrain breakup, inspect the High profile's first-cascade bound
+   separately from its maximum shadow distance. Keep sub-DEM synthetic crater
+   geometry within the terrain tile's resolved sampling; measured orthophoto
+   albedo and footprint-filtered shader detail provide stable close texture.
+   Compare `TerrainLodStatus.focus_wanted` with `focus_resident`: a fully
+   resident cover can still leave the active camera outside the DEM crop, where
+   the near-field detail floor cannot refine the viewed ground. Verify the
+   camera's terrain-local position against the authored DEM window before
+   raising LOD budgets. For the `overzoom` layer, density zero disables
+   synthetic craterlets and leaves only FBM relief; choose feature radii and
+   density with High tile spacing in mind.
    Treat packed surface-map AO as indirect-light visibility: it belongs in
    Bevy's PBR diffuse-occlusion input, not in authored albedo or direct-sun
    multiplication. If broad terrain colour patches match a low-frequency AO
@@ -60,10 +82,31 @@ BigSpace owns `GlobalTransform` propagation. Camera pose changes refresh the
 direction even when CelestialTime is paused. Continuous renderer data stays in
 Rust; author the background and material binding in USD.
 
+## High-profile near detail
+
+Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
+`budget_refused` before changing the High LOD. A resident count close to the
+budget does not by itself prove that detail was refused. High currently uses
+depth 9 with a 256-tile budget and 65 vertices per tile (about 3 cm per
+interval at the deepest level over a 1 km crop). The shared terrain kernel
+evaluates bump gradients analytically and transfers unresolved slope variance
+into roughness. Apply lunar
+photometry to the engine-selected Sun contribution only; putting it in
+`base_color` also changes fill and earthshine.
+
+For live terrain changes, trace the committed `TerrainSurfaceChange` record
+from the replaced `SurfaceOracle` into the shared visual invalidator, collider
+ring, static-collider debounce, and derived maps. Bounded reuse requires the
+consumer's cached source key to match the record's previous key; the collider
+ring also requires the immediately preceding revision. Reject static-collider
+jobs whose oracle key is stale. Keep visual and physics sampling bands and
+caches independent.
+
 Use `inspect-simulation`, `record-video`, or the API screenshot surface for
-visual evidence. Preserve authored shadow maps, terrain resolution, BigSpace,
-and physics settings. If an asset is missing, report the owning cache or
-manifest error visibly instead of adding a procedural fallback.
+visual evidence. Preserve authored DEM resolution, shadow ranges, BigSpace,
+and physics settings while tuning render LOD through its quality profile. If an
+asset is missing, report the owning cache or manifest error visibly instead of
+adding a procedural fallback.
 
 For CPU-built RGBA8 mip chains, preserve the role-aware filtering above while
 using the GPU texture extent rule `max(1, floor(size / 2))` independently on

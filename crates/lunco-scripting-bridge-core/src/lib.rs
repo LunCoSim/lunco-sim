@@ -1429,24 +1429,24 @@ pub fn hash_str(s: &str) -> u64 {
 /// was in scope.
 pub fn emit(name: &str, value: TelemetryValue) -> bool {
     with_world(|world| {
-        let timestamp = world
-            .get_resource::<lunco_time::WorldTime>()
-            .map(|w| w.epoch_jd)
-            .unwrap_or(0.0);
         world.trigger(TelemetryEvent {
             name: name.to_string(),
             // The emitter = the script whose hook is running (set by rng_begin).
             source: current_self(),
             severity: Severity::Info,
             data: value,
-            timestamp,
+            // The telemetry core stamps this event from MissionClock at the
+            // current SimTick before any subscriber observes it.
+            timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
         });
     })
     .is_some()
 }
 
-/// Build the `{ name, value, severity, timestamp }` event value passed to an
-/// `on_event` hook, native to the backend.
+/// Build the `{ name, value, severity, timestamp, sim_secs, sim_tick }` event
+/// value passed to an `on_event` hook, native to the backend.
 pub fn build_event<B: ValueBuilder>(b: &B, ev: &TelemetryEvent) -> B::Value {
     b.map(vec![
         ("name".to_string(), b.string(&ev.name)),
@@ -1459,6 +1459,8 @@ pub fn build_event<B: ValueBuilder>(b: &B, ev: &TelemetryEvent) -> B::Value {
             b.string(&format!("{:?}", ev.severity)),
         ),
         ("timestamp".to_string(), b.float(ev.timestamp)),
+        ("sim_secs".to_string(), b.float(ev.sim_secs)),
+        ("sim_tick".to_string(), b.int(ev.sim_tick as i64)),
     ])
 }
 
