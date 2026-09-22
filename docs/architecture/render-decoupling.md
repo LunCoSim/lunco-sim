@@ -111,7 +111,7 @@ whose dependency closure can express the contract:
 | `lunco-scripting-rhai-runtime` | Rhai commands, tools, timelines, and source assets; composes the world package | render/UI dependencies or a second scripting lifecycle |
 | `lunco-usd-queries` | UI-free document/query providers | egui defaults or workbench state |
 | `lunco-doc-bevy` | ECS document/journal lifecycle | presentation widgets (its egui bridge is opt-in) |
-| `lunco-render-*` | GPU composition and render-recovery policy | simulation state or USD topology |
+| `lunco-render-*` | GPU composition, render-recovery policy, and the concrete USD prim contour pass | simulation state or USD topology |
 | `lunco-api-contracts` | pure serialized API envelopes | ECS, Bevy, HTTP, or command-specific behavior |
 | `lunco-api-client` | generic native API endpoint and HTTP request/response mechanics | Rhai evaluation, ECS access, or simulator policy |
 | `lunco-rhai-repl` | terminal input/output adapter for `RunRhai` | HTTP framing or a second Rhai engine |

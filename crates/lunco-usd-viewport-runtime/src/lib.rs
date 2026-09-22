@@ -71,8 +71,9 @@ use lunco_render::{
 };
 use lunco_settings::AppSettingsExt;
 use lunco_usd_bevy_scene::{
-    UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
-    UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision, is_preview_entity,
+    UsdPreviewOnly, UsdPrimDisplayMode, UsdPrimPath, UsdSceneAwaitingStage,
+    UsdSceneGeometryPending, UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued,
+    UsdStageRevision, UsdVisualMeshTarget, is_preview_entity,
 };
 use lunco_usd_bevy_stage::{UsdStageAsset, is_descendant_or_self};
 use lunco_usd_viewport_core::{
@@ -80,10 +81,11 @@ use lunco_usd_viewport_core::{
     ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView, FrameUsdPreviewSelection,
     FrameUsdPreviewView, OpenUsdPreview, OpenUsdPreviewView, OrbitCamera, PanUsdPreviewView,
     ResetUsdPreviewView, SaveUsdInspectionPreset, SetUsdPreviewProjection, SetUsdPreviewTextLayer,
-    SetUsdPreviewViewMode, UsdInspectionPreset, UsdInspectionSettings, UsdPreviewExplodeAction,
-    UsdPreviewExplodeState, UsdPreviewExplodedPart, UsdPreviewId, UsdPreviewProjection,
-    UsdPreviewSession, UsdPreviewView, UsdPreviewViewId, UsdPreviewViewMeasured,
-    UsdViewportMeasured, UsdViewportOrbitInput, UsdViewportState, ZoomUsdPreviewView,
+    SetUsdPreviewViewMode, SetUsdPrimDisplayMode, UsdInspectionPreset, UsdInspectionSettings,
+    UsdPreviewExplodeAction, UsdPreviewExplodeState, UsdPreviewExplodedPart, UsdPreviewId,
+    UsdPreviewProjection, UsdPreviewSession, UsdPreviewView, UsdPreviewViewId,
+    UsdPreviewViewMeasured, UsdPrimDisplayModes, UsdViewportMeasured, UsdViewportOrbitInput,
+    UsdViewportState, ZoomUsdPreviewView,
 };
 #[cfg(test)]
 use lunco_usd_viewport_core::{UsdPreviewTextLayer, UsdPreviewViewMode};
@@ -226,6 +228,7 @@ pub struct UsdViewportPlugin;
 impl Plugin for UsdViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UsdViewportState>();
+        app.init_resource::<UsdPrimDisplayModes>();
         app.register_settings_section::<UsdInspectionSettings>();
         app.init_resource::<PendingUsdPreviewTextReads>();
         app.init_resource::<UsdPreviewRenderTargets>();
@@ -234,6 +237,7 @@ impl Plugin for UsdViewportPlugin {
         app.init_resource::<RenderingQualitySettings>();
         app.add_observer(on_twin_closed_for_viewport);
         app.add_observer(on_doc_closed_for_viewport);
+        app.add_observer(on_set_usd_prim_display_mode);
         app.add_observer(on_doc_changed_for_preview_text);
         app.add_observer(on_usd_document_ready);
         app.add_observer(on_viewport_measured);
@@ -245,6 +249,9 @@ impl Plugin for UsdViewportPlugin {
                 reset_preview_view_visibility,
                 drain_preview_view_closes,
                 propagate_preview_render_layer,
+                sync_usd_prim_display_mode_intents
+                    .run_if(prim_display_mode_inputs_changed)
+                    .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),
                 frame_preview_views,
                 resize_viewport_image,
                 drain_pending_usd_preview_text_reads,
@@ -254,6 +261,94 @@ impl Plugin for UsdViewportPlugin {
             ),
         );
         register_all_commands(app);
+    }
+}
+
+/// Admit a transient display override only for an open preview and a valid
+/// absolute prim path. The UI sends this typed event; no authored USD layer is
+/// touched because the modes are editor presentation state.
+fn on_set_usd_prim_display_mode(
+    trigger: On<SetUsdPrimDisplayMode>,
+    viewport: Res<UsdViewportState>,
+    mut modes: ResMut<UsdPrimDisplayModes>,
+) {
+    let request = trigger.event();
+    if viewport.session(request.preview).is_none() {
+        warn!(
+            "ignoring display mode for closed USD preview {}",
+            request.preview.0
+        );
+        return;
+    }
+    let valid_prim_path = request.path.trim() == request.path
+        && !request.path.is_empty()
+        && request.path.starts_with('/')
+        && SdfPath::new(&request.path).is_ok_and(|path| {
+            !path.is_abs_root()
+                && !path.is_property_path()
+                && !path.is_prim_variant_selection_path()
+        });
+    if !valid_prim_path {
+        warn!("ignoring invalid USD prim display path `{}`", request.path);
+        return;
+    }
+    modes.set(request.preview, request.path.clone(), request.mode);
+}
+
+/// Wake the intent projector when a mode changes or a preview prim/visual
+/// target appears. It remains idle while the camera or unrelated scene state
+/// changes.
+fn prim_display_mode_inputs_changed(
+    modes: Res<UsdPrimDisplayModes>,
+    changed_paths: Query<(), Or<(Added<UsdPrimPath>, Changed<UsdPrimPath>)>>,
+    changed_targets: Query<(), Or<(Added<UsdVisualMeshTarget>, Changed<UsdVisualMeshTarget>)>>,
+) -> bool {
+    modes.is_changed() || !changed_paths.is_empty() || !changed_targets.is_empty()
+}
+
+/// Project the nearest preview display override onto each prim's actual render
+/// target. The logical prim may own a detached visual child, so the intent must
+/// follow [`UsdVisualMeshTarget`] rather than hiding the physics/authoring node.
+fn sync_usd_prim_display_mode_intents(
+    modes: Res<UsdPrimDisplayModes>,
+    viewport: Res<UsdViewportState>,
+    parents: Query<&ChildOf>,
+    target_modes: Query<Option<&UsdPrimDisplayMode>>,
+    prims: Query<(Entity, &UsdPrimPath, Option<&UsdVisualMeshTarget>)>,
+    mut commands: Commands,
+) {
+    let sessions: Vec<_> = viewport
+        .sessions()
+        .map(|session| {
+            (
+                session.id(),
+                session.scene_root(),
+                session.stage_handle().id(),
+            )
+        })
+        .collect();
+
+    for (entity, path, visual_target) in &prims {
+        let Some((preview, _root, _)) = sessions.iter().find(|(_, root, stage)| {
+            *stage == path.stage_handle.id() && is_preview_entity(entity, *root, &parents)
+        }) else {
+            continue;
+        };
+        let target = visual_target.map_or(entity, |target| target.0);
+        let desired = modes.effective(*preview, &path.path);
+        let current = target_modes.get(target).ok().flatten().copied();
+        if current == desired {
+            continue;
+        }
+        let mut entity_commands = commands.entity(target);
+        match desired {
+            Some(mode) => {
+                entity_commands.try_insert(mode);
+            }
+            None => {
+                entity_commands.try_remove::<UsdPrimDisplayMode>();
+            }
+        }
     }
 }
 
@@ -2772,6 +2867,9 @@ fn remove_preview_session(world: &mut World, preview: UsdPreviewId) -> Option<Do
         pending.tasks.retain(|read| read.preview != preview);
     }
     let (session, views) = world.resource_mut::<UsdViewportState>().remove(preview)?;
+    world
+        .resource_mut::<UsdPrimDisplayModes>()
+        .remove_preview(preview);
     let doc = session.doc;
     if let Ok(mut entity) = world.get_entity_mut(session.scene_root) {
         entity.despawn_related::<Children>();

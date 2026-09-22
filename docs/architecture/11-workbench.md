@@ -530,8 +530,8 @@ navigation actions.
 hierarchy rows rendered by workbench panels. It provides the common disclosure
 control, full-width row allocation, persistent expansion identity, and
 indented child body. USD prim/stage browsers, entity trees, telemetry trees,
-Modelica package/class trees, Twin folders, and library paths all use this
-contract.
+the Ports entity browser, Modelica package/class trees, Twin folders, and
+library paths all use this contract.
 
 Domain crates continue to own their view models, filtering, authoritative
 identities, selection, loading, and typed actions. A domain renderer supplies
@@ -540,6 +540,14 @@ second `CollapsingHeader`/`CollapsingState` tree path. Search may force a branch
 open for the current frame, while ordinary expansion remains persistent UI
 state. Settings groups and non-hierarchical detail accordions are not tree
 rows and remain local to their owning panel.
+
+The Editor Prims panel uses the same full-width selectable row as Entities. Its
+right edge carries three transient preview controls per prim: Visible,
+Invisible, and Contour. A click emits the typed `SetUsdPrimDisplayMode` event
+for the focused `UsdPreviewId`; it never authors USD `visibility`. The viewport
+projects the nearest path override onto the prim's concrete visual target,
+including detached visual children, while the render binder owns the contour
+wireframe pass and surface-material restoration.
 
 ### Panels as Document Views
 

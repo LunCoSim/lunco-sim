@@ -33,9 +33,24 @@ pub use shader_look::ShaderLookCache;
 pub use shader_material::*;
 
 use bevy::light::NotShadowCaster;
-use bevy::pbr::{MeshMaterial3d, StandardMaterial};
+use bevy::pbr::{wireframe::Wireframe, MeshMaterial3d, StandardMaterial};
 use bevy::prelude::*;
+use bevy::render::RenderApp;
 use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
+use lunco_usd_bevy_scene::UsdPrimDisplayMode;
+
+/// Render-only state retained while a prim has a display override.
+///
+/// The original visibility is kept for all three modes so removing an
+/// override returns to the composed USD presentation. Surface handles are
+/// retained only while the contour pass has replaced them.
+#[derive(Component, Debug, Clone)]
+struct UsdPrimDisplayState {
+    authored_visibility: Visibility,
+    standard: Option<Handle<StandardMaterial>>,
+    shader: Option<Handle<ShaderMaterial>>,
+    contour: bool,
+}
 
 /// Startup-only rendering policy selected by the desktop binary.
 ///
@@ -132,6 +147,16 @@ impl Plugin for LuncoRenderPlugin {
                     // projector runs in `PreUpdate`. See `lunco_render::LookRebind`.
                     .in_set(lunco_render::LookRebind),
             );
+        // The wireframe pass is a render concern. Keeping it here avoids
+        // pulling `bevy_pbr` into the render-free USD scene and viewport crates.
+        // Minimal render-free unit compositions still use this plugin for the
+        // material binder, so only install the GPU pass when RenderApp exists.
+        if app.get_sub_app(RenderApp).is_some() {
+            app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default())
+                // Run after scene projection, animation, and authored visibility
+                // updates have settled for the frame.
+                .add_systems(PostUpdate, apply_usd_prim_display_modes);
+        }
         scene_camera::build(app);
         // Shadow filtering is a render policy, not a workbench concern. Attach it
         // when a camera enters the render graph so windowed and offscreen captures
@@ -163,6 +188,137 @@ impl Plugin for LuncoRenderPlugin {
         // Connectivity beams: runtime-spawned mesh, authored look, local Transform (no
         // gizmo, no GlobalTransform, no jitter). This is the only connectivity visual.
         link_beams::build(app);
+    }
+}
+
+/// Apply the USD prim display intent at the concrete render boundary.
+///
+/// `Contour` deliberately removes either concrete surface material before
+/// adding Bevy's wireframe marker. That makes the wire pass the only draw for
+/// the mesh, including custom shader surfaces; the original handle is retained
+/// on the entity and restored when the mode changes.
+fn apply_usd_prim_display_modes(
+    mut commands: Commands,
+    mut active: Query<(
+        Entity,
+        &UsdPrimDisplayMode,
+        &mut Visibility,
+        Has<Mesh3d>,
+        Option<&MeshMaterial3d<StandardMaterial>>,
+        Option<&MeshMaterial3d<ShaderMaterial>>,
+        Option<&mut UsdPrimDisplayState>,
+    )>,
+    mut restored: Query<
+        (Entity, &UsdPrimDisplayState, &mut Visibility),
+        Without<UsdPrimDisplayMode>,
+    >,
+) {
+    for (entity, mode, mut visibility, has_mesh, standard, shader, state) in &mut active {
+        let Some(mut state) = state else {
+            let mut new_state = UsdPrimDisplayState {
+                authored_visibility: *visibility,
+                standard: None,
+                shader: None,
+                contour: false,
+            };
+            match mode {
+                UsdPrimDisplayMode::Visible => *visibility = Visibility::Visible,
+                UsdPrimDisplayMode::Invisible => *visibility = Visibility::Hidden,
+                UsdPrimDisplayMode::Contour => {
+                    *visibility = Visibility::Visible;
+                    if has_mesh {
+                        new_state.standard = standard.map(|material| material.0.clone());
+                        new_state.shader = shader.map(|material| material.0.clone());
+                        new_state.contour = true;
+                        commands
+                            .entity(entity)
+                            .try_remove::<MeshMaterial3d<StandardMaterial>>()
+                            .try_remove::<MeshMaterial3d<ShaderMaterial>>()
+                            .try_insert(Wireframe);
+                    }
+                }
+            }
+            commands.entity(entity).try_insert(new_state);
+            continue;
+        };
+
+        match mode {
+            UsdPrimDisplayMode::Contour => {
+                *visibility = Visibility::Visible;
+                if has_mesh && !state.contour {
+                    state.standard = standard.map(|material| material.0.clone());
+                    state.shader = shader.map(|material| material.0.clone());
+                    state.contour = true;
+                    commands
+                        .entity(entity)
+                        .try_remove::<MeshMaterial3d<StandardMaterial>>()
+                        .try_remove::<MeshMaterial3d<ShaderMaterial>>()
+                        .try_insert(Wireframe);
+                } else if has_mesh {
+                    // A mesh refresh may have rebound a new surface material
+                    // while the override stayed active. Retain that latest
+                    // handle so returning to Visible restores the new look.
+                    if let Some(material) = standard {
+                        state.standard = Some(material.0.clone());
+                        state.shader = None;
+                    }
+                    if let Some(material) = shader {
+                        state.shader = Some(material.0.clone());
+                        state.standard = None;
+                    }
+                    commands
+                        .entity(entity)
+                        .try_remove::<MeshMaterial3d<StandardMaterial>>()
+                        .try_remove::<MeshMaterial3d<ShaderMaterial>>()
+                        .try_insert(Wireframe);
+                }
+            }
+            UsdPrimDisplayMode::Visible | UsdPrimDisplayMode::Invisible => {
+                if state.contour {
+                    if let Some(material) = &state.standard {
+                        commands
+                            .entity(entity)
+                            .try_insert(MeshMaterial3d(material.clone()));
+                    }
+                    if let Some(material) = &state.shader {
+                        commands
+                            .entity(entity)
+                            .try_insert(MeshMaterial3d(material.clone()));
+                    }
+                    commands.entity(entity).try_remove::<Wireframe>();
+                    state.contour = false;
+                }
+                *visibility = if matches!(mode, UsdPrimDisplayMode::Visible) {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
+            }
+        }
+    }
+
+    // A mode inherited from a parent can disappear from a target when the
+    // authored projection rebuilds its hierarchy. Restore the original
+    // composed visibility and any retained contour material before dropping
+    // the render-only bookkeeping.
+    for (entity, state, mut visibility) in &mut restored {
+        if state.contour {
+            if let Some(material) = &state.standard {
+                commands
+                    .entity(entity)
+                    .try_insert(MeshMaterial3d(material.clone()));
+            }
+            if let Some(material) = &state.shader {
+                commands
+                    .entity(entity)
+                    .try_insert(MeshMaterial3d(material.clone()));
+            }
+        }
+        *visibility = state.authored_visibility;
+        commands
+            .entity(entity)
+            .try_remove::<Wireframe>()
+            .try_remove::<UsdPrimDisplayState>();
     }
 }
 

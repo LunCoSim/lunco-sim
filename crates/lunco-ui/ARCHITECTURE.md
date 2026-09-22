@@ -7,7 +7,14 @@
 Hierarchy-row presentation is owned by `lunco-workbench-widgets::tree`, not by this
 widget crate. Domain panels use that shared `branch`/`leaf` contract for
 disclosure controls, row width, expansion state, and indentation while keeping
-their view-model reads and typed actions local.
+their view-model reads and typed actions local. This includes the Ports entity
+browser; raw `CollapsingHeader`/`CollapsingState` is reserved for non-tree
+sections.
+
+The Editor Prims row follows the Entities selectable-row allocation and places
+its transient Visible, Invisible, and Contour controls in the trailing region.
+Those controls emit a typed preview display event; they do not mutate ECS
+render state directly.
 
 ## What lunco-ui Provides
 

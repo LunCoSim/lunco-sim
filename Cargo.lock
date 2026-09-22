@@ -9010,6 +9010,7 @@ dependencies = [
  "lunco-render",
  "lunco-spatial",
  "lunco-terrain-surface",
+ "lunco-usd-bevy-scene",
  "lunco-viewport-core",
 ]
 

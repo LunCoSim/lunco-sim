@@ -204,7 +204,10 @@ impl Plugin for LunCoSimUiPlugin {
             .add_observer(dataset_provisioning::on_dataset_scope_ready)
             .add_observer(dataset_provisioning::on_dataset_scope_removed)
             .add_systems(Update, dataset_provisioning::poll_dataset_provisioning);
-        app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default())
+        // `lunco_render_bevy::LuncoRenderPlugin` owns the wireframe pass used by
+        // per-prim contour display. Keep it at the render boundary so this UI
+        // composition does not install a duplicate Bevy plugin.
+        app
             // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)

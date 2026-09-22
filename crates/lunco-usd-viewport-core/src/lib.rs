@@ -14,7 +14,7 @@ use bevy::prelude::{
 use lunco_core::Command;
 use lunco_doc::DocumentId;
 use lunco_settings::SettingsSection;
-use lunco_usd_bevy_scene::{UsdPrimPath, is_preview_entity};
+use lunco_usd_bevy_scene::{UsdPrimDisplayMode, UsdPrimPath, is_preview_entity};
 use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_usd_document::document::LayerId;
 use lunco_viewport_core::PanelRect;
@@ -615,6 +615,48 @@ pub struct UsdViewportState {
     next_view_id: u64,
 }
 
+/// Transient display overrides keyed by preview session and absolute prim path.
+///
+/// The map is deliberately separate from [`UsdViewportState`]: presentation
+/// overrides are disposable editor state, while the session registry owns the
+/// document and camera lifecycle. The render-free scene projection consumes the
+/// effective mode through [`UsdPrimDisplayMode`] components.
+#[derive(Resource, Default, Debug)]
+pub struct UsdPrimDisplayModes {
+    modes: HashMap<UsdPreviewId, HashMap<String, UsdPrimDisplayMode>>,
+}
+
+impl UsdPrimDisplayModes {
+    /// Return the exact override for one prim, if one was selected.
+    pub fn get(&self, preview: UsdPreviewId, path: &str) -> Option<UsdPrimDisplayMode> {
+        self.modes.get(&preview)?.get(path).copied()
+    }
+
+    /// Return the nearest ancestor override, including an exact match.
+    pub fn effective(&self, preview: UsdPreviewId, path: &str) -> Option<UsdPrimDisplayMode> {
+        let mut candidate = path;
+        loop {
+            if let Some(mode) = self.get(preview, candidate) {
+                return Some(mode);
+            }
+            candidate = candidate.rsplit_once('/')?.0;
+            if candidate.is_empty() {
+                return None;
+            }
+        }
+    }
+
+    /// Set one transient override.
+    pub fn set(&mut self, preview: UsdPreviewId, path: String, mode: UsdPrimDisplayMode) {
+        self.modes.entry(preview).or_default().insert(path, mode);
+    }
+
+    /// Remove all overrides belonging to a closed preview.
+    pub fn remove_preview(&mut self, preview: UsdPreviewId) {
+        self.modes.remove(&preview);
+    }
+}
+
 /// Measurement emitted by a rendered USD viewport surface after layout.
 #[derive(bevy::ecs::event::Event, Debug, Clone, Copy)]
 pub struct UsdViewportMeasured {
@@ -669,6 +711,17 @@ pub struct UsdViewportOrbitInput {
     pub viewport_size: Vec2,
     /// Scroll delta used for zoom.
     pub scroll_y: f32,
+}
+
+/// Changes one transient USD prim display mode in an editor preview.
+#[derive(bevy::ecs::event::Event, Debug, Clone)]
+pub struct SetUsdPrimDisplayMode {
+    /// Preview session containing the prim.
+    pub preview: UsdPreviewId,
+    /// Absolute composed USD prim path.
+    pub path: String,
+    /// New transient presentation mode.
+    pub mode: UsdPrimDisplayMode,
 }
 
 /// Resolve preview pointer buttons into the shared camera interaction policy.

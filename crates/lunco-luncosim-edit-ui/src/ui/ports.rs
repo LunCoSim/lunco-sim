@@ -474,10 +474,17 @@ impl PortPanel {
                     let index = collapsed_indices[row_index];
                     let entity = &view.entities[index];
                     let title = format!("{}  ({})", entity.label, matching_counts[index]);
-                    let response = egui::CollapsingHeader::new(title)
-                        .default_open(false)
-                        .show(ui, |_| {});
-                    if response.body_returned.is_some() {
+                    if lunco_workbench_widgets::tree::branch(
+                        ui,
+                        ui.make_persistent_id(("port_entity", entity.entity)),
+                        false,
+                        None,
+                        |ui| {
+                            ui.add(egui::Label::new(title).sense(egui::Sense::click()))
+                                .clicked()
+                        },
+                        |_| {},
+                    ) {
                         next_expanded.insert(entity.entity);
                     }
                 }
@@ -499,9 +506,16 @@ impl PortPanel {
         default_open: bool,
     ) -> bool {
         let title = format!("{}  ({matching_count})", entity.label);
-        let response = egui::CollapsingHeader::new(title)
-            .default_open(default_open)
-            .show(ui, |ui| {
+        lunco_workbench_widgets::tree::branch(
+            ui,
+            ui.make_persistent_id(("port_entity", entity.entity)),
+            default_open,
+            None,
+            |ui| {
+                ui.add(egui::Label::new(title).sense(egui::Sense::click()))
+                    .clicked()
+            },
+            |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.small(format!("entity {:?}", entity.entity));
                     if let Some(api_id) = entity.api_id {
@@ -525,8 +539,8 @@ impl PortPanel {
                             ui.end_row();
                         }
                     });
-            });
-        response.body_returned.is_some()
+            },
+        )
     }
 }
 

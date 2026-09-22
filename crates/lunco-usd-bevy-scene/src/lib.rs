@@ -192,6 +192,20 @@ pub struct UsdVisualMeshTarget(pub Entity);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdVisualShaderBound;
 
+/// Presentation override for one USD prim in an editor preview.
+///
+/// This is transient viewport intent. It does not author USD `visibility` and
+/// is absent when the prim should use its composed authored presentation.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsdPrimDisplayMode {
+    /// Force the prim's render target to draw normally.
+    Visible,
+    /// Hide the prim's render target.
+    Invisible,
+    /// Draw the render target as a wire contour without its surface material.
+    Contour,
+}
+
 /// Marks a scene prim whose stage has not finished loading.
 ///
 /// This is a scene-lifecycle fact rather than a visual implementation detail:

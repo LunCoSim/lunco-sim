@@ -181,7 +181,15 @@ hierarchy remain visible together. The prim tree consumes the full width of its
 pane and uses immediate structural collapse rendering; do not add a nested
 auto-shrinking scroll region or animated body that can paint stale outlines
 over neighbouring rows.
-paint the session selected by the focused `UsdPreviewViewId`. Views share that
+All hierarchy rows use `lunco_workbench_widgets::tree::{branch, leaf}`;
+the Ports entity browser follows the same contract as the Twin, Entity, USD,
+Modelica, library, and telemetry trees. Raw `CollapsingHeader` is for non-tree
+sections, not a second tree implementation. The Prims rows reuse the Entities
+selectable-row presentation and expose preview-scoped Visible, Invisible, and
+Contour controls at the trailing edge. Those controls dispatch
+`SetUsdPrimDisplayMode`; the viewport projects the typed intent and the render
+binder owns wireframe rendering.
+The viewport panel paints the session selected by the focused `UsdPreviewViewId`. Views share that
 session projection while keeping independent camera/render-target state. The
 viewport applies `UsdPreviewRenderBudget` to visible view targets (2048 px per
 axis, 4,194,304 pixels per view, and 8,388,608 visible pixels per frame by

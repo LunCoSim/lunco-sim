@@ -904,7 +904,10 @@ fn select_label(
         None => "Click to select · Shift+Click to multiselect · double-click to focus".to_owned(),
     };
     let resp = ui
-        .selectable_label(selected.entities.contains(&entity), label)
+        .add_sized(
+            [ui.available_width(), ui.spacing().interact_size.y],
+            egui::Button::selectable(selected.entities.contains(&entity), label),
+        )
         .on_hover_text(hint);
 
     let shift_held = ui.input(|i| i.modifiers.shift);

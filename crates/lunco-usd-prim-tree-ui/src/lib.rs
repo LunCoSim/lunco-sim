@@ -28,10 +28,11 @@ use egui;
 use lunco_camera_core::camera_display_labels;
 use lunco_render::SceneCamera;
 use lunco_scene_selection::{SelectEntityTarget, SelectionIntent};
-use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_scene::is_preview_entity;
+use lunco_usd_bevy_scene::{is_preview_entity, UsdPrimDisplayMode, UsdPrimPath};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
-use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_core::{
+    SetUsdPrimDisplayMode, UsdPreviewId, UsdPrimDisplayModes, UsdViewportState,
+};
 use lunco_workbench_core::view_model::ViewModelAppExt;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt};
 use openusd::sdf::Path as SdfPath;
@@ -323,15 +324,17 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         .unwrap_or_default();
 
     let mut to_select: Option<Entity> = None;
+    let mut to_display_mode: Option<(String, UsdPrimDisplayMode)> = None;
     let primary = selected.primary();
 
-    {
+    let focused_preview = {
         let Some(viewport) = ctx.resource::<UsdViewportState>() else {
             return;
         };
-        let Some(focused_preview) = viewport.focused_preview_id() else {
+        let Some(preview) = viewport.focused_preview_id() else {
             return;
         };
+        let display_modes = ctx.resource::<UsdPrimDisplayModes>();
         let Some(view) = ctx
             .resource::<UsdPrimTreeView>()
             .and_then(|views| views.focused(viewport))
@@ -342,8 +345,8 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             ui.label(egui::RichText::new("No USD scene loaded.").weak());
             return;
         }
-        let scroll_id = ui.make_persistent_id(("usd_prim_tree_scroll", focused_preview.0));
-        let selection_id = ui.make_persistent_id(("usd_prim_tree_selection", focused_preview.0));
+        let scroll_id = ui.make_persistent_id(("usd_prim_tree_scroll", preview.0));
+        let selection_id = ui.make_persistent_id(("usd_prim_tree_selection", preview.0));
         let selection_changed = ui
             .ctx()
             .data(|data| data.get_temp::<Vec<Entity>>(selection_id))
@@ -370,19 +373,30 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                         reveal_path.as_deref(),
                         selection_changed,
                         &mut to_select,
+                        &mut to_display_mode,
+                        preview,
+                        display_modes,
                         0,
                     );
                 }
             });
         ui.ctx()
             .data_mut(|data| data.insert_temp(selection_id, selected.entities.clone()));
-    }
+        preview
+    };
 
     // Route selection through the shared `apply_selection` (keyed by Entity).
     if let Some(entity) = to_select {
         ctx.trigger(SelectEntityTarget {
             target: entity,
             intent: SelectionIntent::Replace,
+        });
+    }
+    if let Some((path, mode)) = to_display_mode {
+        ctx.trigger(SetUsdPrimDisplayMode {
+            preview: focused_preview,
+            path,
+            mode,
         });
     }
 }
@@ -399,6 +413,9 @@ fn render_prim_node(
     reveal_path: Option<&str>,
     selection_changed: bool,
     to_select: &mut Option<Entity>,
+    to_display_mode: &mut Option<(String, UsdPrimDisplayMode)>,
+    preview: UsdPreviewId,
+    display_modes: Option<&UsdPrimDisplayModes>,
     depth: usize,
 ) {
     let Some(node) = view.nodes.get(key) else {
@@ -416,6 +433,10 @@ fn render_prim_node(
                 primary,
                 selection_changed,
                 to_select,
+                to_display_mode,
+                preview,
+                display_modes,
+                key,
             )
         });
         return;
@@ -428,6 +449,8 @@ fn render_prim_node(
     let id = ui.make_persistent_id(("usd_prim_tree", key));
     let open = reveal_path.is_some_and(|path| is_path_or_descendant(path, key));
     let mut header_select = None;
+    let mut header_display_mode = None;
+    let mut body_display_mode = None;
     lunco_workbench_widgets::tree::branch(
         ui,
         id,
@@ -442,6 +465,10 @@ fn render_prim_node(
                 primary,
                 selection_changed,
                 &mut header_select,
+                &mut header_display_mode,
+                preview,
+                display_modes,
+                key,
             )
         },
         |ui| {
@@ -455,6 +482,9 @@ fn render_prim_node(
                     reveal_path,
                     selection_changed,
                     to_select,
+                    &mut body_display_mode,
+                    preview,
+                    display_modes,
                     depth + 1,
                 );
             }
@@ -462,6 +492,9 @@ fn render_prim_node(
     );
     if header_select.is_some() {
         *to_select = header_select;
+    }
+    if let Some(mode) = header_display_mode.or(body_display_mode) {
+        *to_display_mode = Some(mode);
     }
 }
 
@@ -475,41 +508,68 @@ fn prim_select_label(
     primary: Option<Entity>,
     selection_changed: bool,
     to_select: &mut Option<Entity>,
+    to_display_mode: &mut Option<(String, UsdPrimDisplayMode)>,
+    preview: UsdPreviewId,
+    display_modes: Option<&UsdPrimDisplayModes>,
+    path: &str,
 ) -> bool {
-    match node.entity {
-        Some(entity) => {
-            let hint = if node.type_name.is_empty() {
-                "Click to select".to_string()
-            } else {
-                format!("{}  ·  click to select", node.type_name)
-            };
-            let hint = node
-                .camera_identity
-                .as_deref()
-                .map(|identity| format!("{identity}  ·  {hint}"))
-                .unwrap_or(hint);
-            let resp = ui
-                .add_sized(
-                    [ui.available_width(), ui.spacing().interact_size.y],
-                    egui::Button::selectable(selected.entities.contains(&entity), label),
-                )
-                .on_hover_text(hint);
-            if selection_changed && primary == Some(entity) {
-                resp.scroll_to_me(Some(egui::Align::Center));
+    let mut selected_clicked = false;
+    let current_mode = display_modes
+        .and_then(|modes| modes.effective(preview, path))
+        .unwrap_or(UsdPrimDisplayMode::Visible);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let controls_width = ui.spacing().interact_size.x * 3.0 + ui.spacing().item_spacing.x * 2.0;
+        let label_width = (ui.available_width() - controls_width).max(0.0);
+        match node.entity {
+            Some(entity) => {
+                let hint = if node.type_name.is_empty() {
+                    "Click to select".to_string()
+                } else {
+                    format!("{}  ·  click to select", node.type_name)
+                };
+                let hint = node
+                    .camera_identity
+                    .as_deref()
+                    .map(|identity| format!("{identity}  ·  {hint}"))
+                    .unwrap_or(hint);
+                let resp = ui
+                    .add_sized(
+                        [label_width, ui.spacing().interact_size.y],
+                        egui::Button::selectable(selected.entities.contains(&entity), label),
+                    )
+                    .on_hover_text(hint);
+                if selection_changed && primary == Some(entity) {
+                    resp.scroll_to_me(Some(egui::Align::Center));
+                }
+                if resp.clicked() {
+                    *to_select = Some(entity);
+                    selected_clicked = true;
+                }
             }
-            if resp.clicked() {
-                *to_select = Some(entity);
+            None => {
+                ui.add_sized(
+                    [label_width, ui.spacing().interact_size.y],
+                    egui::Label::new(egui::RichText::new(label).weak()),
+                );
             }
-            resp.clicked()
         }
-        None => {
-            let resp = ui.add_sized(
-                [ui.available_width(), ui.spacing().interact_size.y],
-                egui::Label::new(egui::RichText::new(label).weak()),
-            );
-            resp.clicked()
-        }
-    }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            for (mode, glyph, description) in [
+                (UsdPrimDisplayMode::Contour, "◇", "Only contour visible"),
+                (UsdPrimDisplayMode::Invisible, "⊘", "Invisible"),
+                (UsdPrimDisplayMode::Visible, "◉", "Visible"),
+            ] {
+                let response = ui
+                    .selectable_label(current_mode == mode, glyph)
+                    .on_hover_text(description);
+                if response.clicked() {
+                    *to_display_mode = Some((path.to_owned(), mode));
+                }
+            }
+        });
+    });
+    selected_clicked
 }
 
 /// Return whether `path` is the node or a descendant of `node`.

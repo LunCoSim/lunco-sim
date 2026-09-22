@@ -32,6 +32,7 @@ lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 # fills) — see `lunco-usd-bevy-light::light`.
 bevy = { workspace = true, features = ["bevy_pbr", "bevy_mesh", "bevy_light", "bevy_image", "bevy_post_process", "bevy_anti_alias", "tonemapping_luts", "area_light_luts", "bevy_text", "bevy_sprite_render", "default_font", "bevy_gizmos", "bevy_gizmos_render", "zstd_rust"] }
 lunco-render = { path = "../lunco-render" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 # Discover WGSL import modules from the shared runtime manifest instead of
 # embedding a list of shader filenames in the render boundary.
 # `ShaderLook` (the custom-shader intent) + `ShaderMaterial` (the thing it binds

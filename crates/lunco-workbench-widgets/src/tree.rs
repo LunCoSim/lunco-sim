@@ -8,7 +8,7 @@
 
 use egui;
 
-/// Render one standard workbench tree branch.
+/// Render one standard workbench tree branch and return whether it is open.
 ///
 /// `add_header` paints the branch contents after the shared disclosure
 /// control and returns whether its label was clicked. A label click toggles
@@ -19,6 +19,10 @@ use egui;
 /// When `open` is `Some`, the branch is controlled for this frame (useful for
 /// active search results) and cannot be closed by a user click until the
 /// caller stops supplying the forced value.
+///
+/// The returned state lets a virtualized panel render a branch header in one
+/// pass and its body in another without introducing a second disclosure
+/// implementation.
 pub fn branch(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -26,7 +30,7 @@ pub fn branch(
     open: Option<bool>,
     add_header: impl FnOnce(&mut egui::Ui) -> bool,
     add_body: impl FnOnce(&mut egui::Ui),
-) {
+) -> bool {
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         id,
@@ -59,6 +63,7 @@ pub fn branch(
         });
     }
     state.store(ui.ctx());
+    state.is_open()
 }
 
 /// Render one full-width leaf row using the same horizontal allocation as a
