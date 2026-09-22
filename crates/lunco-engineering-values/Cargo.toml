@@ -1,0 +1,12 @@
+[package]
+name = "lunco-engineering-values"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Dependency-light UCUM/SI engineering quantities shared by domain adapters"
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

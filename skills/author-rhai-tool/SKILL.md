@@ -103,6 +103,29 @@ stringified or changed into `null`. Rhai's built-in scalar math (`sin`, `cos`,
 `exp`, `sqrt`, `atan(x, y)`, and related functions) is already Rust-backed, so do
 not shadow those names in a tool.
 
+For reusable mechanical/CAD policy, compose
+`assets/scripting/tools/mechanical_relations.rhai` instead of adding a
+vehicle-specific checker. Pass native vectors and an explicit tolerance; keep
+the returned residual/evidence record attached to the caller's SysML
+requirement or verification identity. The library covers distance,
+coincidence, plane distance, under/clearance, parallel/perpendicular,
+collinear/coplanar, mirroring, and plane/axis symmetry, and remains reloadable
+Rhai policy.
+
+Use the shared Rust boundary functions for dynamic values: `f64_from` for the
+permissive numeric edge, `f64_only` for settings that must be authored as f64,
+and `array_is`/`map_is`/`string_is` plus native vector predicates for shape
+checks. Use `sysml_model_is`, `sysml_quantity_is`, and `sysml_enum_is` for
+SysML wrapper values. Do not compare `type_of(value)` strings for ordinary
+numeric, array, map, string, or SysML-wrapper dispatch. Keep semantic strings
+for paths, qualified names, relation labels, and enum literals only.
+
+Resolve a numerical profile from `numerical_settings.rhai` once per report or
+solve. Keep length, angle, scalar, time, and solver tolerances as distinct
+fields. A tool may use a runtime numerical setting for algorithm policy, but a
+normative requirement tolerance must remain sourced from SysML and appear in
+the evidence.
+
 ### Generic parameter edits
 
 Use `assembly_builder::parameter_plan(edit_target, path, parameters)` for a

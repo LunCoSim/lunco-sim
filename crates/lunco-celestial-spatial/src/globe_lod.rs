@@ -360,7 +360,7 @@ impl GlobeHandoff {
 
 /// The cube-sphere tiles currently resident for a body, keyed by quadtree node.
 #[derive(Component, Default)]
-pub struct GlobeTiles {
+pub(crate) struct GlobeTiles {
     /// Live tiles, including temporary coarse cover while desired replacements
     /// stream in.
     pub resident: HashMap<TileCoord, Entity>,

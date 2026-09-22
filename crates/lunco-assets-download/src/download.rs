@@ -1163,7 +1163,12 @@ mod tests {
         assert!(lunco_storage::read_directory_sync(root.path())
             .expect("list install root")
             .iter()
-            .all(|entry| !entry.display_name().starts_with(".lunco-install-backup-")));
+            .all(|entry| {
+                entry
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_none_or(|name| !name.starts_with(".lunco-install-backup-"))
+            }));
     }
 
     #[test]

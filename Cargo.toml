@@ -11,6 +11,7 @@ members = [
     "crates/lunco-spatial",
     "crates/lunco-core-session",
     "crates/lunco-hash",
+    "crates/lunco-engineering-values",
     "crates/lunco-geotiff",
     "crates/lunco-precompute",
     "crates/lunco-time",

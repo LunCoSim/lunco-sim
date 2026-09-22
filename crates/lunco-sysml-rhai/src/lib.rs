@@ -308,6 +308,15 @@ pub fn semantic_snapshot_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
 /// or quaternion type family.
 pub fn register_sysml_types(engine: &mut Engine) {
     engine
+        .register_fn("sysml_model_is", |value: Dynamic| {
+            value.try_cast::<SysmlModelValue>().is_some()
+        })
+        .register_fn("sysml_quantity_is", |value: Dynamic| {
+            value.try_cast::<SysmlQuantityValue>().is_some()
+        })
+        .register_fn("sysml_enum_is", |value: Dynamic| {
+            value.try_cast::<SysmlEnumValue>().is_some()
+        })
         .register_type_with_name::<SysmlElementHandle>("SysmlElementHandle")
         .register_get("element_id", |handle: &mut SysmlElementHandle| {
             handle.element_id as i64

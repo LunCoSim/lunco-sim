@@ -947,7 +947,11 @@ fn model() {
     sysml_model("twin://" + name)
 }
 
-/// Select only the typed values needed by a requirement-policy pass.
+/// Select only typed values for a value-only policy pass.
+///
+/// This projection intentionally has no requirement/verification identity
+/// tables. It is safe for numeric/model-building reads, but must not be used
+/// to emit requirement-linked evidence; use source_with_selection() for that.
 fn source_with_attributes(names) {
     // Numeric/typed consumers do not need the Twin-wide requirement and
     // verification registries. Keep this projection proportional to the

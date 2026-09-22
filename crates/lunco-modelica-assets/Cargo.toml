@@ -22,6 +22,7 @@ path = "src/bin/modelica_library_parse_bench.rs"
 # library/bin surface, so the archive/indexer toolchain stays out of web builds.
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-modelica-compiler = { path = "../lunco-modelica-compiler" }
 lunco-modelica-core = { path = "../lunco-modelica-core" }
 lunco-modelica-library = { path = "../lunco-modelica-library" }
