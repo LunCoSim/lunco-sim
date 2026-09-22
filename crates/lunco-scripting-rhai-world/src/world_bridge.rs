@@ -64,6 +64,7 @@ use rhai::{AST, Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext}
 use lunco_doc::Diagnostic;
 use lunco_hooks::HookValue;
 use lunco_scripting::doc::ScriptLanguage;
+use lunco_scripting::scenario::ScenarioRuntime;
 use lunco_scripting_bridge_core as bridge_core;
 use lunco_scripting_bridge_core::ValueBuilder;
 use lunco_scripting_bridge_spatial as spatial_bridge;
@@ -2839,6 +2840,14 @@ pub fn prepare_builtin_rhai_assets(
             },
         );
     }
+
+    // Tool assets can finish loading in a later Update than the prelude.  The
+    // scenario driver may therefore already own a base engine whose static
+    // modules predate the newly admitted standard tools.  Rebind that engine at
+    // the same asset boundary so the next lifecycle hook sees one complete
+    // application library.  `maintain` is revision-gated and is a no-op when
+    // the visible tool registry did not change.
+    driver.runtime.maintain();
 
     if prelude_handles.is_empty() {
         let message = "asset classification produced no Rhai prelude sources".to_string();
