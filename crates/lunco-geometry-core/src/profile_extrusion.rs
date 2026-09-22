@@ -1,9 +1,11 @@
 //! Convex polygon extrusion with explicit right-handed, outward face topology.
 
 use bevy_math::{DVec2, DVec3};
+use bevy_reflect::Reflect;
+use serde::{Deserialize, Serialize};
 
 /// A supported 2D profile plane in LunCoSim's right-handed Y-up frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 pub enum ProfilePlane {
     /// Profile coordinates are X/Y; extrusion is along +Z.
     XY,

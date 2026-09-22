@@ -7706,6 +7706,8 @@ name = "lunco-geometry-core"
 version = "0.1.0"
 dependencies = [
  "bevy_math",
+ "bevy_reflect",
+ "serde",
 ]
 
 [[package]]
@@ -10241,6 +10243,7 @@ dependencies = [
  "bevy",
  "lunco-assets-path",
  "lunco-doc",
+ "lunco-geometry-core",
  "lunco-twin-journal",
  "lunco-usd-authoring",
  "lunco-usd-compose",

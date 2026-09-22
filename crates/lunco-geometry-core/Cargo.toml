@@ -7,6 +7,8 @@ description = "Precision-preserving geometry kernels shared by authored tools an
 
 [dependencies]
 bevy_math = { workspace = true }
+bevy_reflect = { workspace = true }
+serde = { workspace = true }
 
 [lints]
 workspace = true

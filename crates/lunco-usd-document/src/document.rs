@@ -93,6 +93,7 @@ use bevy::reflect::Reflect;
 use lunco_doc::{
     Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin, ForkableDocument,
 };
+use lunco_geometry_core::profile_extrusion::ProfilePlane;
 use lunco_usd_authoring::author::{
     self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
 };
@@ -434,6 +435,50 @@ pub enum UsdOp {
         /// Whether the generated render mesh should be marked as collidable.
         collision_enabled: bool,
     },
+    /// Generate a closed prism from a typed 2D profile at the USD authoring
+    /// boundary. Rust owns winding, normals, and serialization exactly as it
+    /// does for [`UsdOp::RevolveProfileMesh`].
+    ExtrudeProfileMesh {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the existing Mesh prim to populate.
+        path: String,
+        /// Closed profile in the plane selected by `plane`.
+        profile: Vec<[f64; 2]>,
+        /// Positive extrusion length.
+        length: f64,
+        /// Profile plane and extrusion direction.
+        plane: ProfilePlane,
+        /// Constant display colour written as `primvars:displayColor`.
+        display_color: [f64; 3],
+        /// Whether the generated render mesh should be marked as collidable.
+        collision_enabled: bool,
+    },
+    /// Generate a closed tapered rectangular beam between two typed datums.
+    /// This is useful for struts, yokes, rails, and gussets without moving
+    /// mesh topology or face-orientation logic into a scripting language.
+    TaperedBeamMesh {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the existing Mesh prim to populate.
+        path: String,
+        /// Centreline start datum.
+        start: [f64; 3],
+        /// Centreline end datum.
+        end: [f64; 3],
+        /// Transverse width direction; Rust normalizes it.
+        width_axis: [f64; 3],
+        /// Half-width at the start datum.
+        start_half_width: f64,
+        /// Half-width at the end datum.
+        end_half_width: f64,
+        /// Full thickness along the derived depth direction.
+        thickness: f64,
+        /// Constant display colour written as `primvars:displayColor`.
+        display_color: [f64; 3],
+        /// Whether the generated render mesh should be marked as collidable.
+        collision_enabled: bool,
+    },
     /// Author one **time sample** of an attribute on the prim at `path` —
     /// the keyframe primitive. Creates the attribute if absent (just like
     /// [`UsdOp::SetAttribute`]) and writes `value` at stage time `time`
@@ -696,6 +741,8 @@ impl UsdOp {
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
             | Self::RevolveProfileMesh { edit_target, .. }
+            | Self::ExtrudeProfileMesh { edit_target, .. }
+            | Self::TaperedBeamMesh { edit_target, .. }
             | Self::SetTimeSample { edit_target, .. }
             | Self::RemoveTimeSample { edit_target, .. }
             | Self::SetRelationship { edit_target, .. }
@@ -736,6 +783,8 @@ impl UsdOp {
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
             | Self::RevolveProfileMesh { edit_target, .. }
+            | Self::ExtrudeProfileMesh { edit_target, .. }
+            | Self::TaperedBeamMesh { edit_target, .. }
             | Self::SetTimeSample { edit_target, .. }
             | Self::RemoveTimeSample { edit_target, .. }
             | Self::SetRelationship { edit_target, .. }
@@ -776,6 +825,8 @@ impl UsdOp {
             | Self::SetScale { path, .. }
             | Self::SetAttribute { path, .. }
             | Self::RevolveProfileMesh { path, .. }
+            | Self::ExtrudeProfileMesh { path, .. }
+            | Self::TaperedBeamMesh { path, .. }
             | Self::SetTimeSample { path, .. }
             | Self::RemoveTimeSample { path, .. }
             | Self::SetRelationship { path, .. }
@@ -1537,10 +1588,7 @@ impl UsdDocument {
     /// prim. Returns the parsed [`SdfPath`].
     fn require_prim_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
         let sdf = parse_prim_path(path)?;
-        if prim_in(&self.base, &sdf)
-            || prim_in(&self.runtime, &sdf)
-            || prim_in(&self.view, &sdf)
-        {
+        if prim_in(&self.base, &sdf) || prim_in(&self.runtime, &sdf) || prim_in(&self.view, &sdf) {
             Ok(sdf)
         } else {
             Err(DocumentError::ValidationFailed(format!(
@@ -1920,6 +1968,8 @@ impl Document for UsdDocument {
             | UsdOp::SetScale { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
             | UsdOp::RevolveProfileMesh { edit_target, .. }
+            | UsdOp::ExtrudeProfileMesh { edit_target, .. }
+            | UsdOp::TaperedBeamMesh { edit_target, .. }
             | UsdOp::SetTimeSample { edit_target, .. }
             | UsdOp::RemoveTimeSample { edit_target, .. }
             | UsdOp::SetRelationship { edit_target, .. }
@@ -2608,11 +2658,21 @@ impl Document for UsdDocument {
                 Ok(inverse)
             }
 
-            UsdOp::RevolveProfileMesh { path, .. } => Err(DocumentError::ValidationFailed(
-                format!(
+            UsdOp::RevolveProfileMesh { path, .. } => {
+                Err(DocumentError::ValidationFailed(format!(
                     "RevolveProfileMesh at `{path}` must be expanded by the USD command owner before document apply"
-                ),
-            )),
+                )))
+            }
+
+            UsdOp::ExtrudeProfileMesh { path, .. } => {
+                Err(DocumentError::ValidationFailed(format!(
+                    "ExtrudeProfileMesh at `{path}` must be expanded by the USD command owner before document apply"
+                )))
+            }
+
+            UsdOp::TaperedBeamMesh { path, .. } => Err(DocumentError::ValidationFailed(format!(
+                "TaperedBeamMesh at `{path}` must be expanded by the USD command owner before document apply"
+            ))),
 
             UsdOp::SetTimeSample {
                 path,
