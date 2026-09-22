@@ -273,11 +273,14 @@ deferred layout requests before deferred tab requests so a request that changes
 both the perspective and the active tab is applied in authored order.
 
 UI projection plugins that read shell-owned workbench resources install
-`WorkbenchPlugin` when it is not already present. The application tutorial menu
-is one such projection: it reads authored catalog data, publishes generic
-`RunScenarioAsset` commands, and relies on `WorkbenchSnapshot` only for normal
-shell geometry. Lesson lifecycle and scene composition remain outside the
-workbench.
+`WorkbenchPlugin` when it is not already present. An authored Rhai policy can
+return generic workbench-menu trees; the application adapter publishes them as
+`ScriptUiRequest::WorkbenchMenus`, and the shell renders each provider's
+replaceable contribution. Repeated labels from providers share one top-level
+menu. Selected leaf actions route through the Rhai tool registry. The tutorial
+policy uses this host to project its catalog and launch lessons through the
+generic `RunScenarioAsset` command. `WorkbenchSnapshot` supplies normal shell
+geometry; lesson lifecycle and scene composition remain outside the workbench.
 
 Panel landmarks use the registered panel id as their canonical anchor:
 `panel.<id>`. The Workbench publishes that exact rect for both docked and
@@ -723,8 +726,8 @@ state — are listed with their owner but remain lifecycle-controlled.
 Settings submenus are content-sized in both axes, capped at 640 logical px in
 width and 24 interaction rows in height. They become vertically scrollable
 only when their registered controls exceed that height; the submenu itself
-does not reserve unused popup space. A bounded custom menu uses the shared
-`lunco_workbench::menu_popup_max_width` helper with the egui content viewport,
+does not reserve unused popup space. A bounded Rhai-contributed menu uses the
+shared `lunco_workbench::menu_popup_max_width` helper with the egui content viewport,
 then fixes the popup width before laying out wrapped rows; this prevents long
 labels from replacing the viewport-safe width with an intrinsic content width.
 

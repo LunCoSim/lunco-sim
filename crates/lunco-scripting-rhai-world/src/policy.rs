@@ -30,6 +30,9 @@ pub const MERGE_SEAM: &str = "journal.merge.order";
 /// `install_manifest_policy` bootstrap binding.
 pub const APPLICATION_STARTUP_HOOK: &str = "application.startup";
 
+/// Generic application asset lifecycle policy for authored asset consumers.
+pub const APPLICATION_ASSET_HOOK: &str = "application.asset.lifecycle";
+
 /// The generic lifecycle seam for the active Twin. The application startup
 /// policy installs the default implementation; a Twin startup policy may
 /// replace it for that Twin's authored lifecycle behavior.
@@ -44,6 +47,17 @@ lunco_hooks::declare_hook! {
     deterministic: false,
     required: false,
     installable: false,
+}
+
+lunco_hooks::declare_hook! {
+    id: APPLICATION_ASSET_HOOK,
+    owner: "lunco-assets-runtime",
+    description: "Project a changed application or Twin text asset into authored application UI contributions.",
+    signature: [event: String, ctx: Map],
+    output: Map,
+    deterministic: false,
+    required: false,
+    installable: true,
 }
 
 lunco_hooks::declare_hook! {
@@ -335,6 +349,374 @@ fn invoke_twin_lifecycle_context(event: &str, context: HookValue) -> LifecyclePo
             }
         }
     }
+}
+
+/// Notify the installed application policy that one JSON asset scope is loading.
+pub fn handle_application_json_scope_loading(
+    trigger: On<lunco_assets_runtime::JsonAssetScopeLoading>,
+    mut commands: Commands,
+) {
+    let scope = trigger.event();
+    let provider = match asset_menu_provider(scope.twin_id, scope.twin_name.as_deref()) {
+        Ok(provider) => provider,
+        Err(error) => {
+            warn!("[application-assets] invalid JSON scope: {error}");
+            return;
+        }
+    };
+    apply_application_asset_policy(
+        "json_scope_loading",
+        &provider,
+        scope.twin_id,
+        scope.twin_name.clone(),
+        scope.asset_root_uri.clone(),
+        HookValue::map([("has_json_assets", HookValue::Bool(scope.asset_count != 0))]),
+        &mut commands,
+    );
+}
+
+/// Deliver a complete generic JSON asset snapshot to the installed application
+/// policy, replacing that scope's complete menu contribution.
+pub fn handle_application_json_scope_changed(
+    trigger: On<lunco_assets_runtime::JsonAssetScopeChanged>,
+    mut commands: Commands,
+) {
+    let scope = trigger.event();
+    let provider = match asset_menu_provider(scope.twin_id, scope.twin_name.as_deref()) {
+        Ok(provider) => provider,
+        Err(error) => {
+            warn!("[application-assets] invalid JSON scope: {error}");
+            return;
+        }
+    };
+    let assets = HookValue::Array(
+        scope
+            .assets
+            .iter()
+            .map(|asset| {
+                HookValue::map([
+                    ("asset_uri", HookValue::str(asset.asset_uri.clone())),
+                    (
+                        "text",
+                        asset
+                            .text
+                            .as_ref()
+                            .map_or(HookValue::Unit, |text| HookValue::str(text.clone())),
+                    ),
+                    (
+                        "error",
+                        asset
+                            .error
+                            .as_ref()
+                            .map_or(HookValue::Unit, |error| HookValue::str(error.clone())),
+                    ),
+                ])
+            })
+            .collect(),
+    );
+    apply_application_asset_policy(
+        "json_scope_changed",
+        &provider,
+        scope.twin_id,
+        scope.twin_name.clone(),
+        scope.asset_root_uri.clone(),
+        assets,
+        &mut commands,
+    );
+}
+
+fn asset_menu_provider(
+    twin_id: Option<lunco_workspace::TwinId>,
+    twin_name: Option<&str>,
+) -> Result<String, &'static str> {
+    match (twin_id, twin_name) {
+        (None, None) => Ok("application:json-assets".to_owned()),
+        (Some(_), Some(name)) if !name.is_empty() => Ok(format!("twin:{name}:json-assets")),
+        (Some(_), _) => Err("Twin JSON scope is missing its asset authority"),
+        (None, Some(_)) => Err("application JSON scope cannot have a Twin authority"),
+    }
+}
+
+fn apply_application_asset_policy(
+    event: &str,
+    provider: &str,
+    twin_id: Option<lunco_workspace::TwinId>,
+    twin_name: Option<String>,
+    asset_root_uri: String,
+    payload: HookValue,
+    commands: &mut Commands,
+) {
+    let context = HookValue::map([
+        ("provider", HookValue::str(provider.to_owned())),
+        (
+            "scope",
+            HookValue::str(if twin_id.is_some() {
+                "twin"
+            } else {
+                "application"
+            }),
+        ),
+        (
+            "twin_id",
+            twin_id.map_or(HookValue::Unit, |twin| {
+                HookValue::str(twin.raw().to_string())
+            }),
+        ),
+        (
+            "twin_name",
+            twin_name.map_or(HookValue::Unit, |name| HookValue::str(name)),
+        ),
+        ("asset_root_uri", HookValue::str(asset_root_uri)),
+        ("payload", payload),
+    ]);
+    let result = lunco_hooks::invoke(
+        APPLICATION_ASSET_HOOK,
+        &[HookValue::str(event.to_owned()), context],
+    );
+    let menus = match result {
+        None => Ok(Vec::new()),
+        Some(Ok(value @ HookValue::Map(_))) => parse_script_workbench_menus(&value),
+        Some(Ok(value)) => Err(format!(
+            "asset lifecycle policy returned {}, expected map",
+            value.type_name()
+        )),
+        Some(Err(error)) => Err(error.to_string()),
+    };
+    let menus = match menus {
+        Ok(menus) => menus,
+        Err(error) => {
+            warn!("[application-assets] `{provider}` policy failed: {error}");
+            Vec::new()
+        }
+    };
+    commands.trigger(
+        lunco_scripting_rhai_core::ui_bridge::ScriptUiRequest::WorkbenchMenus {
+            provider: provider.to_owned(),
+            twin_id: twin_id.map(lunco_workspace::TwinId::raw),
+            menus,
+        },
+    );
+}
+
+fn parse_script_workbench_menus(
+    value: &HookValue,
+) -> Result<Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>, String> {
+    use lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu;
+
+    let menus = match value.get("menus") {
+        Some(HookValue::Array(menus)) => menus,
+        Some(other) => {
+            return Err(format!(
+                "`menus` must be an array, got {}",
+                other.type_name()
+            ))
+        }
+        None => return Err("result has no `menus` array".into()),
+    };
+    if menus.len() > 32 {
+        return Err("one policy result may contribute at most 32 top-level menus".into());
+    }
+    let mut labels = HashSet::new();
+    menus
+        .iter()
+        .enumerate()
+        .map(|(index, menu)| {
+            let fields = hook_map(menu, &format!("menus[{index}]"))?;
+            let label = hook_string(fields, "label", &format!("menus[{index}]"))?;
+            if label.trim().is_empty() {
+                return Err(format!("menus[{index}].label must not be empty"));
+            }
+            if !labels.insert(label.clone()) {
+                return Err(format!("duplicate top-level menu label `{label}`"));
+            }
+            let entries = match hook_field(fields, "items") {
+                Some(HookValue::Array(items)) => items,
+                Some(other) => {
+                    return Err(format!(
+                        "menus[{index}].items must be an array, got {}",
+                        other.type_name()
+                    ));
+                }
+                None => return Err(format!("menus[{index}] has no `items` array")),
+            };
+            let mut count = 0;
+            let items = entries
+                .iter()
+                .enumerate()
+                .map(|(entry_index, item)| {
+                    parse_script_workbench_item(
+                        item,
+                        &format!("menus[{index}].items[{entry_index}]"),
+                        0,
+                        &mut count,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ScriptWorkbenchMenu { label, items })
+        })
+        .collect()
+}
+
+fn parse_script_workbench_item(
+    value: &HookValue,
+    path: &str,
+    depth: usize,
+    count: &mut usize,
+) -> Result<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenuItem, String> {
+    use lunco_scripting_rhai_core::ui_bridge::{
+        ScriptWorkbenchMenuAction, ScriptWorkbenchMenuItem,
+    };
+
+    if depth > 8 {
+        return Err(format!("{path} exceeds the maximum menu depth of 8"));
+    }
+    *count += 1;
+    if *count > 512 {
+        return Err("one policy result may contribute at most 512 menu items".into());
+    }
+    let fields = hook_map(value, path)?;
+    let label = hook_string(fields, "label", path)?;
+    if label.trim().is_empty() {
+        return Err(format!("{path}.label must not be empty"));
+    }
+    let tooltip = match hook_field(fields, "tooltip") {
+        None | Some(HookValue::Unit) => None,
+        Some(HookValue::Str(value)) => Some(value.clone()),
+        Some(other) => {
+            return Err(format!(
+                "{path}.tooltip must be a string, got {}",
+                other.type_name()
+            ))
+        }
+    };
+    let enabled = match hook_field(fields, "enabled") {
+        None => true,
+        Some(HookValue::Bool(enabled)) => *enabled,
+        Some(other) => {
+            return Err(format!(
+                "{path}.enabled must be boolean, got {}",
+                other.type_name()
+            ))
+        }
+    };
+    let children = match hook_field(fields, "children") {
+        None => Vec::new(),
+        Some(HookValue::Array(children)) => children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| {
+                parse_script_workbench_item(
+                    child,
+                    &format!("{path}.children[{index}]"),
+                    depth + 1,
+                    count,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(other) => {
+            return Err(format!(
+                "{path}.children must be an array, got {}",
+                other.type_name()
+            ));
+        }
+    };
+    let tool = hook_field(fields, "tool").and_then(HookValue::as_str);
+    let hook = hook_field(fields, "hook").and_then(HookValue::as_str);
+    let action = match (tool, hook) {
+        (Some(tool), Some(hook)) if children.is_empty() => {
+            if tool.trim().is_empty() || hook.trim().is_empty() {
+                return Err(format!("{path} tool and hook must not be empty"));
+            }
+            let args = match hook_field(fields, "args") {
+                None => lunco_telemetry_core::TelemetryValue::Map(BTreeMap::new()),
+                Some(HookValue::Map(args)) => {
+                    let mut result = BTreeMap::new();
+                    for (key, value) in args {
+                        result.insert(
+                            key.clone(),
+                            hook_to_telemetry(value, &format!("{path}.args.{key}"))?,
+                        );
+                    }
+                    lunco_telemetry_core::TelemetryValue::Map(result)
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "{path}.args must be a map, got {}",
+                        other.type_name()
+                    ))
+                }
+            };
+            Some(ScriptWorkbenchMenuAction {
+                tool: tool.to_owned(),
+                hook: hook.to_owned(),
+                args,
+            })
+        }
+        (None, None) if !children.is_empty() => None,
+        (None, None) if !enabled => None,
+        (Some(_), Some(_)) => return Err(format!("{path} cannot combine an action with children")),
+        (None, None) => return Err(format!("{path} needs an action or children")),
+        _ => return Err(format!("{path} must provide both `tool` and `hook`")),
+    };
+    Ok(ScriptWorkbenchMenuItem {
+        label,
+        tooltip,
+        enabled,
+        action,
+        children,
+    })
+}
+
+fn hook_map<'a>(value: &'a HookValue, path: &str) -> Result<&'a [(String, HookValue)], String> {
+    match value {
+        HookValue::Map(fields) => Ok(fields),
+        other => Err(format!("{path} must be a map, got {}", other.type_name())),
+    }
+}
+
+fn hook_field<'a>(fields: &'a [(String, HookValue)], key: &str) -> Option<&'a HookValue> {
+    fields
+        .iter()
+        .find_map(|(name, value)| (name == key).then_some(value))
+}
+
+fn hook_string(fields: &[(String, HookValue)], key: &str, path: &str) -> Result<String, String> {
+    hook_field(fields, key)
+        .and_then(HookValue::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{path}.{key} must be a string"))
+}
+
+fn hook_to_telemetry(
+    value: &HookValue,
+    path: &str,
+) -> Result<lunco_telemetry_core::TelemetryValue, String> {
+    use lunco_telemetry_core::TelemetryValue;
+    Ok(match value {
+        HookValue::Int(value) => TelemetryValue::I64(*value),
+        HookValue::Float(value) => TelemetryValue::F64(*value),
+        HookValue::Bool(value) => TelemetryValue::Bool(*value),
+        HookValue::Str(value) => TelemetryValue::String(value.clone()),
+        HookValue::Array(values) => TelemetryValue::Array(
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| hook_to_telemetry(value, &format!("{path}[{index}]")))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        HookValue::Map(fields) => {
+            let mut result = BTreeMap::new();
+            for (key, value) in fields {
+                result.insert(
+                    key.clone(),
+                    hook_to_telemetry(value, &format!("{path}.{key}"))?,
+                );
+            }
+            TelemetryValue::Map(result)
+        }
+        HookValue::Unit => return Err(format!("{path} cannot contain JSON null in a menu action")),
+        HookValue::Bytes(_) => return Err(format!("{path} cannot contain bytes in a menu action")),
+    })
 }
 
 /// Deliver the mounted Twin's typed manifest and file index to Rhai. The

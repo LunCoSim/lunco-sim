@@ -417,10 +417,12 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `detach_joint(id)` | bool | detach an entity through the generic `DetachJoint` command; ordinary entities use normal removal, while joint entities release their rigid link through the solver lifecycle |
 | `notify(msg)` / `notify_kind(msg, kind)` | () | send a HUD notification; `kind` is `"info"` / `"warn"` / `"error"` |
 
-JSON appears **only** at the `cmd`/`query` params seam (that's the API's own
-contract). Both directions are native: `get`/`get_setting` build rhai values
-straight from reflect, and `set`/`set_setting` write rhai values straight back —
-no JSON round-trip on the read or write path.
+Reflected world state stays native: `get`/`get_setting` build Rhai values
+straight from reflect, and `set`/`set_setting` write Rhai values straight back,
+with no JSON round-trip on that path. The world-bound runtime and Rhai policy
+hooks also register `parse_json(text)` for authored JSON text assets; it returns
+native maps, arrays, scalars, or `()` for JSON null, and reports malformed JSON
+or integers outside Rhai's signed integer range as errors.
 
 Rhai's standard scalar math (`sin`, `cos`, `exp`, `sqrt`, `atan(x, y)`, and related
 functions) is already implemented with Rust `f64` operations; do not shadow it

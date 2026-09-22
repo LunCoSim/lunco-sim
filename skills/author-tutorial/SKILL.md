@@ -10,9 +10,11 @@ description: >
 # Author an authored lesson
 
 A lesson is a file-backed Rhai scenario with optional standard USD scene
-content. The application menu is the Rust-owned presentation entry point. The
-lesson itself does not need a Rust type, registry, lifecycle owner, or custom
-USD schema.
+content. The application Rhai policy reads generic JSON asset snapshots,
+selects the tutorial catalog, and builds the workbench menu. The shared Rust
+asset and UI layers know only text assets, JSON values, and generic menu trees.
+The lesson does not need a Rust type, registry, lifecycle owner, or custom USD
+schema.
 
 Read [`author-scenario`](../author-scenario/SKILL.md) first, then use
 [`assets/tutorials/README.md`](../../assets/tutorials/README.md) and the
@@ -36,7 +38,10 @@ examples under `assets/tutorials/`.
 ```
 
 The `track` value determines the submenu containing the lesson. Reuse an
-existing track when the lesson belongs to that learning path.
+existing track when the lesson belongs to that learning path. The Rhai policy
+at `assets/scripting/policy/tutorial_catalog_menu.rhai` discovers the unique
+marked catalog from generic asset-scope events and uses the shared `parse_json`
+function; do not add tutorial-specific Rust loading or menu code.
 
 The menu submits the generic `RunScenarioAsset` command. It uses
 `ScenarioReloadPolicy::Restart` for a predictable fresh start. Other apps can

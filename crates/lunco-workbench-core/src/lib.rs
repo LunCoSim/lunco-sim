@@ -24,8 +24,8 @@ pub mod presentation;
 
 pub use build_identity::BuildIdentity;
 pub use menu::{
-    CustomMenu, MenuCallback, MenuCtx, MenuIntents, SettingsSubmenu, UndoProbe, UndoProbeCtx,
-    WorkbenchMenuRegistry,
+    CustomMenu, MenuCallback, MenuCtx, MenuIntents, ScriptedMenu, SettingsSubmenu, UndoProbe,
+    UndoProbeCtx, WorkbenchMenuRegistry,
 };
 pub use panel::{
     InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelIntents, PanelMenuGroup,

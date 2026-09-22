@@ -12,7 +12,7 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{PrimaryEguiContext, egui};
+use bevy_egui::{egui, PrimaryEguiContext};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress, Tags,
@@ -1228,7 +1228,7 @@ fn sync_runtime_ui_manifest(
         state.candidates = catalog
             .entries()
             .iter()
-            .filter(|entry| entry.asset_path.ends_with(".json"))
+            .filter(|entry| entry.twin_id.is_none() && entry.asset_path.ends_with(".json"))
             .map(|entry| (entry.asset_path.clone(), entry.handle.clone()))
             .collect();
         state.scan_started = true;

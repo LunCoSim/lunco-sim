@@ -32,9 +32,8 @@ mod rhai_editor_panel;
 mod rhai_repl_panel;
 /// Explicit production-harness injection for the Scenarios menu failure path.
 mod scenario_fixture;
-/// Application-owned tutorial catalog menu. Tutorial behavior itself remains
-/// authored Rhai and is launched through the generic scripting command.
-mod tutorial_menu;
+/// Generic workbench host for application menus contributed by Rhai policies.
+mod scripted_menus;
 /// Typed intent emitted by the authored terrain-progress surface.
 #[derive(Event, Clone, Debug)]
 struct DismissTerrainOverlay;
@@ -259,7 +258,6 @@ impl Plugin for LunCoSimUiPlugin {
             // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name
             // `bevy_pbr` — and adding it a second time panics Bevy.
             // See docs/architecture/render-decoupling.md.
-            .add_plugins(tutorial_menu::TutorialMenuPlugin)
             // Rover panels. ONE closure: Bevy keys plugin uniqueness by type-name,
             // and every `|app| {…}` in this `build` shares the name `{{closure}}` — a
             // second one panics ("plugin already added"). So all app-level panel
@@ -268,6 +266,8 @@ impl Plugin for LunCoSimUiPlugin {
                 use lunco_workbench_core::WorkbenchPanelAppExt;
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_dismiss_terrain_overlay)
+                    .add_observer(scripted_menus::on_script_ui_request)
+                    .add_observer(scripted_menus::clear_scripted_menus_on_twin_closed)
                     .add_observer(dataset_provisioning::on_set_missing_asset_prompt_suppressed);
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);

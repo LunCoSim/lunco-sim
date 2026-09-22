@@ -21,10 +21,11 @@ pub mod text_asset;
 #[cfg(not(target_arch = "wasm32"))]
 pub use asset_read::read_asset_text;
 pub use asset_sources::{
-    TwinAssetMounted, TwinRootsPlugin, register_lunco_asset_sources, register_lunco_asset_types,
+    register_lunco_asset_sources, register_lunco_asset_types, TwinAssetMounted, TwinRootsPlugin,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use lunco_assets_core::closure::{transitive_file_closure, transitive_file_closure_with};
 pub use text_asset::{
-    TextAsset, TextAssetCatalog, TextAssetEntry, TextAssetLoader, TextAssetPlugin,
+    JsonAssetRecord, JsonAssetScopeChanged, JsonAssetScopeLoading, TextAsset, TextAssetCatalog,
+    TextAssetEntry, TextAssetLoader, TextAssetPlugin,
 };

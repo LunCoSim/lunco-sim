@@ -234,6 +234,9 @@ pub(crate) fn sync_program_contracts(
     let mut pending = false;
     let mut manifests = Vec::new();
     for entry in text_catalog.entries() {
+        if entry.twin_id.is_some() {
+            continue;
+        }
         let Some(asset) = text_assets.get(&entry.handle) else {
             if !asset_server
                 .get_load_state(entry.handle.id())

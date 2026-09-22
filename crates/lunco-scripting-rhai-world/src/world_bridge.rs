@@ -951,6 +951,8 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
 
+    lunco_hooks_rhai::register_json(&mut engine);
+
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
 
     // Replace rhai's default file-reading resolver before anything can import.

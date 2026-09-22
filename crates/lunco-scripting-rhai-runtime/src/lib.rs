@@ -54,6 +54,9 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             PreStartup,
             lunco_scripting_rhai_world::policy::load_application_policies_on_startup,
         )
+        .add_observer(dispatch_workbench_menu_action)
+        .add_observer(lunco_scripting_rhai_world::policy::handle_application_json_scope_loading)
+        .add_observer(lunco_scripting_rhai_world::policy::handle_application_json_scope_changed)
         .add_observer(lunco_scripting_rhai_world::policy::sync_policies_on_twin_added)
         .add_observer(lunco_scripting_rhai_world::policy::plan_twin_asset_loading)
         .add_observer(lunco_scripting_rhai_world::policy::wind_down_policies_on_twin_closed)
@@ -124,6 +127,26 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         commands::register_all_commands(app);
         commands::register_command_policies(app);
     }
+}
+
+#[cfg(feature = "rhai")]
+fn dispatch_workbench_menu_action(
+    trigger: On<lunco_scripting_rhai_core::ui_bridge::ScriptUiRequest>,
+    mut commands: Commands,
+) {
+    let lunco_scripting_rhai_core::ui_bridge::ScriptUiRequest::WorkbenchMenuAction {
+        tool,
+        hook,
+        args,
+    } = trigger.event()
+    else {
+        return;
+    };
+    commands.trigger(commands::RunRhaiToolHook {
+        tool: tool.clone(),
+        hook: hook.clone(),
+        args: args.clone(),
+    });
 }
 
 /// Stop and close scripts owned by the outgoing USD scene before its entities
