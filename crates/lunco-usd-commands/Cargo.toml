@@ -6,6 +6,7 @@ license.workspace = true
 description = "Headless USD document and authoring command surface"
 
 [dependencies]
+lunco-geometry-core = { path = "../lunco-geometry-core" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
