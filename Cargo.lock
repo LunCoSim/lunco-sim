@@ -10177,6 +10177,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-geometry-core",
  "lunco-port-core",
  "lunco-storage",
  "lunco-twin",

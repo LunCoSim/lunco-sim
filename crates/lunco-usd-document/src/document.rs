@@ -410,6 +410,30 @@ pub enum UsdOp {
         /// USD-compliant literal. See the variant doc for the split.
         value: String,
     },
+    /// Generate a mesh from a typed 2D profile of revolution at the USD
+    /// authoring boundary.
+    ///
+    /// This is an authoring intent, not a persisted parametric schema. Rhai
+    /// supplies the small, typed design profile and Rust performs tessellation
+    /// before the document sees the ordinary USD mesh attributes. Keeping the
+    /// intent in the command contract prevents callers from moving a large
+    /// tessellated point/index payload through Rhai or hand-written USDA
+    /// literals. The command owner must expand this variant before applying it
+    /// to a document; `UsdDocument::apply` rejects an unexpanded intent.
+    RevolveProfileMesh {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the existing Mesh prim to populate.
+        path: String,
+        /// Closed `(radius, height)` profile in the prim's local frame.
+        profile: Vec<[f64; 2]>,
+        /// Angular tessellation count. Rust validates the supported range.
+        angular_segments: u16,
+        /// Constant display colour written as `primvars:displayColor`.
+        display_color: [f64; 3],
+        /// Whether the generated render mesh should be marked as collidable.
+        collision_enabled: bool,
+    },
     /// Author one **time sample** of an attribute on the prim at `path` —
     /// the keyframe primitive. Creates the attribute if absent (just like
     /// [`UsdOp::SetAttribute`]) and writes `value` at stage time `time`
@@ -671,6 +695,7 @@ impl UsdOp {
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
+            | Self::RevolveProfileMesh { edit_target, .. }
             | Self::SetTimeSample { edit_target, .. }
             | Self::RemoveTimeSample { edit_target, .. }
             | Self::SetRelationship { edit_target, .. }
@@ -710,6 +735,7 @@ impl UsdOp {
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
+            | Self::RevolveProfileMesh { edit_target, .. }
             | Self::SetTimeSample { edit_target, .. }
             | Self::RemoveTimeSample { edit_target, .. }
             | Self::SetRelationship { edit_target, .. }
@@ -749,6 +775,7 @@ impl UsdOp {
             | Self::SetRotate { path, .. }
             | Self::SetScale { path, .. }
             | Self::SetAttribute { path, .. }
+            | Self::RevolveProfileMesh { path, .. }
             | Self::SetTimeSample { path, .. }
             | Self::RemoveTimeSample { path, .. }
             | Self::SetRelationship { path, .. }
@@ -1892,6 +1919,7 @@ impl Document for UsdDocument {
             | UsdOp::SetRotate { edit_target, .. }
             | UsdOp::SetScale { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
+            | UsdOp::RevolveProfileMesh { edit_target, .. }
             | UsdOp::SetTimeSample { edit_target, .. }
             | UsdOp::RemoveTimeSample { edit_target, .. }
             | UsdOp::SetRelationship { edit_target, .. }
@@ -2579,6 +2607,12 @@ impl Document for UsdDocument {
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
             }
+
+            UsdOp::RevolveProfileMesh { path, .. } => Err(DocumentError::ValidationFailed(
+                format!(
+                    "RevolveProfileMesh at `{path}` must be expanded by the USD command owner before document apply"
+                ),
+            )),
 
             UsdOp::SetTimeSample {
                 path,

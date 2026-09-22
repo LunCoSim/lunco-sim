@@ -30,6 +30,7 @@ use lunco_usd_document::document::UsdDocument;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use bevy::math::DVec2;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_api::executor::{finish_command_result, DeferredCommandAppExt, PendingApiRequest};
@@ -1243,7 +1244,6 @@ fn on_apply_usd_ops(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let total = command.ops.len();
         let outcome = match apply_ops_as_change_set_result(
             world,
             command.doc_id,
@@ -1251,14 +1251,10 @@ fn on_apply_usd_ops(
             command.ops,
             command.parent_gen,
         ) {
-            Ok((ack, applied)) if applied == total => {
+            Ok((ack, _)) => {
                 claim_user_document_if_projected(world, command.doc_id);
                 Ok(ack)
             }
-            Ok((_, applied)) => Err(format!(
-                "USD document {} applied {applied}/{total} operations",
-                command.doc_id
-            )),
             Err(error) => Err(error),
         };
         if let Err(error) = &outcome {
@@ -1341,18 +1337,38 @@ fn on_apply_usd_op(
     commands.queue(move |world: &mut World| {
         let paths_for_error = paths.clone();
         refresh_authoring_recipe(world, doc);
-        let result = match validate_live_attribute_types(world, doc, std::slice::from_ref(&op)) {
-            Ok(()) => world
-                .resource_mut::<DocumentRegistry<UsdDocument>>()
-                .apply_mutation(
-                    doc,
-                    match parent_gen {
-                        Some(parent) => lunco_doc::Mutation::local_against(parent, op),
-                        None => lunco_doc::Mutation::local(op),
-                    },
-                )
-                .map_err(|reject| lunco_doc::DocumentError::Internal(reject.to_string())),
+        let result = match expand_usd_geometry_ops(vec![op]) {
             Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
+            Ok(mut expanded) if expanded.len() == 1 => {
+                let expanded_op = expanded.remove(0);
+                match validate_live_attribute_types(world, doc, std::slice::from_ref(&expanded_op))
+                {
+                    Ok(()) => world
+                        .resource_mut::<DocumentRegistry<UsdDocument>>()
+                        .apply_mutation(
+                            doc,
+                            match parent_gen {
+                                Some(parent) => {
+                                    lunco_doc::Mutation::local_against(parent, expanded_op)
+                                }
+                                None => lunco_doc::Mutation::local(expanded_op),
+                            },
+                        )
+                        .map_err(|reject| {
+                            lunco_doc::DocumentError::Internal(reject.to_string())
+                        }),
+                    Err(error) => Err(lunco_doc::DocumentError::ValidationFailed(error)),
+                }
+            }
+            Ok(expanded) => apply_ops_as_change_set_result(
+                world,
+                doc,
+                "Apply procedural USD geometry",
+                expanded,
+                parent_gen,
+            )
+            .map(|(ack, _)| ack)
+            .map_err(lunco_doc::DocumentError::Internal),
         };
         let outcome = result
             .map(|mut ack| {
@@ -1547,6 +1563,152 @@ fn usd_ack_data(
     })
 }
 
+/// Lower procedural geometry intents to ordinary USD mesh attributes.
+///
+/// The command boundary is the deliberate place where a compact typed design
+/// description becomes a potentially large USDA value. Rhai therefore carries
+/// only the profile and policy, while this Rust adapter reuses the shared f64
+/// geometry kernel and serializes the result once for USD persistence. Keeping
+/// this lowering here also means proposals, direct commands, and Editor batches
+/// all use the same tessellation and topology path.
+fn expand_usd_geometry_ops(ops: Vec<UsdOp>) -> Result<Vec<UsdOp>, String> {
+    let mut expanded = Vec::with_capacity(ops.len());
+    for op in ops {
+        let UsdOp::RevolveProfileMesh {
+            edit_target,
+            path,
+            profile,
+            angular_segments,
+            display_color,
+            collision_enabled,
+        } = op
+        else {
+            expanded.push(op);
+            continue;
+        };
+
+        if display_color.iter().any(|value| !value.is_finite()) {
+            return Err(format!(
+                "RevolveProfileMesh `{path}` display color must be finite"
+            ));
+        }
+        let profile = profile
+            .into_iter()
+            .map(|[radius, height]| DVec2::new(radius, height))
+            .collect::<Vec<_>>();
+        let mesh = lunco_geometry_core::profile_revolution::revolve_profile(
+            &profile,
+            angular_segments,
+        )
+        .map_err(|error| format!("RevolveProfileMesh `{path}` profile is invalid: {error}"))?;
+
+        let attributes = [
+            (
+                "points",
+                "point3f[]",
+                usd_point3_array(mesh.points().iter().map(|point| {
+                    [point.x, point.y, point.z]
+                })),
+            ),
+            (
+                "faceVertexCounts",
+                "int[]",
+                usd_int_array(mesh.face_vertex_counts().iter().copied()),
+            ),
+            (
+                "faceVertexIndices",
+                "int[]",
+                usd_int_array(mesh.face_vertex_indices().iter().copied()),
+            ),
+            (
+                "normals",
+                "normal3f[]",
+                usd_point3_array(mesh.face_varying_normals().iter().map(|normal| {
+                    [normal.x, normal.y, normal.z]
+                })),
+            ),
+            (
+                "orientation",
+                "token",
+                "\"rightHanded\"".to_owned(),
+            ),
+            (
+                "subdivisionScheme",
+                "token",
+                "\"none\"".to_owned(),
+            ),
+            ("doubleSided", "bool", "false".to_owned()),
+            ("purpose", "token", "\"render\"".to_owned()),
+            (
+                "physics:collisionEnabled",
+                "bool",
+                collision_enabled.to_string(),
+            ),
+            (
+                "primvars:displayColor",
+                "color3f[]",
+                usd_point3_array(std::iter::once(display_color)),
+            ),
+        ];
+        expanded.extend(attributes.into_iter().map(|(name, type_name, value)| {
+            UsdOp::SetAttribute {
+                edit_target: edit_target.clone(),
+                path: path.clone(),
+                name: name.to_owned(),
+                type_name: type_name.to_owned(),
+                value,
+            }
+        }));
+    }
+    Ok(expanded)
+}
+
+fn usd_number(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_owned();
+    }
+    let mut text = format!("{value:.12}");
+    if let Some(dot) = text.find('.') {
+        let trimmed = text.trim_end_matches('0');
+        text = if trimmed.ends_with('.') {
+            trimmed[..dot].to_owned()
+        } else {
+            trimmed.to_owned()
+        };
+    }
+    text
+}
+
+fn usd_point3_array(values: impl IntoIterator<Item = [f64; 3]>) -> String {
+    let mut result = String::from("[");
+    for (index, [x, y, z]) in values.into_iter().enumerate() {
+        if index != 0 {
+            result.push_str(", ");
+        }
+        result.push('(');
+        result.push_str(&usd_number(x));
+        result.push_str(", ");
+        result.push_str(&usd_number(y));
+        result.push_str(", ");
+        result.push_str(&usd_number(z));
+        result.push(')');
+    }
+    result.push(']');
+    result
+}
+
+fn usd_int_array(values: impl IntoIterator<Item = i32>) -> String {
+    let mut result = String::from("[");
+    for (index, value) in values.into_iter().enumerate() {
+        if index != 0 {
+            result.push_str(", ");
+        }
+        result.push_str(&value.to_string());
+    }
+    result.push(']');
+    result
+}
+
 fn apply_ops_as_change_set_result(
     world: &mut World,
     doc: DocumentId,
@@ -1554,6 +1716,7 @@ fn apply_ops_as_change_set_result(
     ops: Vec<UsdOp>,
     parent_gen: Option<u64>,
 ) -> Result<(Ack, usize), String> {
+    let ops = expand_usd_geometry_ops(ops)?;
     if ops.iter().any(|op| op.edit_target().is_view()) {
         return Err("the disposable view layer only accepts ApplyUsdTransientOps".to_string());
     }
@@ -1607,7 +1770,7 @@ fn apply_transient_ops_result(
     _label: String,
     ops: Vec<UsdOp>,
 ) -> Result<(Ack, usize), String> {
-    let ops = ops
+    let ops = expand_usd_geometry_ops(ops)?
         .into_iter()
         .map(|op| op.with_edit_target(LayerId::view()))
         .collect::<Vec<_>>();
@@ -1919,7 +2082,13 @@ pub(crate) fn apply_ops_as_change_set(
     label: impl Into<String>,
     ops: Vec<UsdOp>,
 ) -> (usize, usize) {
-    let total = ops.len();
+    let total = match expand_usd_geometry_ops(ops.clone()) {
+        Ok(expanded) => expanded.len(),
+        Err(error) => {
+            bevy::log::warn!("[usd] {error}");
+            return (0, 1);
+        }
+    };
     let applied = match apply_ops_as_change_set_result(world, doc, label, ops, None) {
         Ok(_) => total,
         Err(error) => {
