@@ -88,7 +88,8 @@ fn lesson_menu_item(lesson, source_asset, scene_asset) {
     let args = #{};
     args.source_asset = source_asset;
     args.scene_asset = scene_asset;
-    args.reload_policy = "restart";
+    // Rhai command reflection uses the typed enum variant spelling.
+    args.reload_policy = "Restart";
     let item = #{};
     item.label = lesson["title"] + "  ·  " + lesson["difficulty"];
     item.tooltip = lesson["blurb"];

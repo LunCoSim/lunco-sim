@@ -1165,7 +1165,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Entity` |   |
+| `target` | `Option < Entity >` |  Scenario host. Omitted uses the active `WorldRoot`. |
 | `source_asset` | `String` |  Root-qualified script asset (`lunco://...` or `twin://...`). |
 | `params` | `ScenarioParameters` |  Optional typed scenario parameters. Rhai receives them as the explicit  `ctx` argument of lifecycle/program hooks. Omitted → `{}`. |
 | `scene_asset` | `String` |  Optional scene asset to request before the scenario starts. The scene  transition remains owned by the USD scene command layer; this field  only composes the generic scenario-launch request with that lifecycle. |

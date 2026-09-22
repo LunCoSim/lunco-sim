@@ -315,9 +315,9 @@ fn on_run_rhai_tool_hook(
 /// recompiles in place (state reset) instead of leaking documents.
 #[cfg(feature = "rhai")]
 // `reflect_default` registers `ReflectDefault` (+ the manual `Default` below) so
-// the reflect deserializer fills a missing `params` from the empty object —
-// callers keep working when they omit the field. (Can't use
-// `#[Command(default)]`: it *derives* Default, which `Entity` doesn't implement.)
+// the reflect deserializer can construct commands with omitted optional fields.
+// `#[Command(default)]` is not used because these commands have an explicit
+// semantic default for their host and scenario lifecycle.
 #[Command(reflect_default)]
 pub struct RunScenario {
     #[authz_target]
@@ -337,15 +337,19 @@ pub struct RunScenario {
     pub reload_policy: ScenarioReloadPolicy,
 }
 
-/// Attach a file-backed Rhai scenario to an entity. The asset is loaded through
-/// the normal Bevy asset graph, so imports, Twin ownership, wasm, and hot reload
-/// use the same path as USD-authored scenarios. This is the generic launch seam
-/// for authored flows; no domain-specific catalog or host is required.
+/// Attach a file-backed Rhai scenario to a scenario host. The asset is loaded
+/// through the normal Bevy asset graph, so imports, Twin ownership, wasm, and
+/// hot reload use the same path as USD-authored scenarios. This is the generic
+/// launch seam for authored flows; no domain-specific catalog or host is
+/// required.
 #[cfg(feature = "rhai")]
 #[Command(reflect_default)]
 pub struct RunScenarioAsset {
     #[authz_target]
-    pub target: Entity,
+    /// Scenario host. Omitted requests use the active `WorldRoot`.
+    #[serde(default)]
+    #[reflect(default)]
+    pub target: Option<Entity>,
     /// Root-qualified script asset (`lunco://...` or `twin://...`).
     pub source_asset: String,
     /// Optional typed scenario parameters. Rhai receives them as the explicit
@@ -369,7 +373,7 @@ pub struct RunScenarioAsset {
 impl Default for RunScenarioAsset {
     fn default() -> Self {
         Self {
-            target: Entity::PLACEHOLDER,
+            target: None,
             source_asset: String::new(),
             params: ScenarioParameters::default(),
             scene_asset: String::new(),
@@ -401,7 +405,7 @@ fn on_run_scenario(
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
-    let target = resolve_scenario_target(cmd.target, &entities, &world_root)?;
+    let target = resolve_scenario_target(Some(cmd.target), &entities, &world_root)?;
     let (doc_id_raw, generation) = attach_rhai_scenario(
         target,
         cmd.source.clone(),
@@ -469,15 +473,17 @@ fn on_run_scenario_asset(
 
 #[cfg(feature = "rhai")]
 fn resolve_scenario_target(
-    requested: Entity,
+    requested: Option<Entity>,
     entities: &Query<Entity>,
     world_root: &Query<Entity, With<lunco_spatial::WorldRoot>>,
 ) -> Result<Entity, String> {
-    if requested != Entity::PLACEHOLDER {
-        if entities.get(requested).is_ok() {
-            return Ok(requested);
+    if let Some(requested) = requested {
+        if requested != Entity::PLACEHOLDER {
+            if entities.get(requested).is_ok() {
+                return Ok(requested);
+            }
+            return Err(format!("scenario target {requested:?} does not exist"));
         }
-        return Err(format!("scenario target {requested:?} does not exist"));
     }
     world_root
         .iter()
@@ -1425,6 +1431,33 @@ mod tests {
             &lunco_api::ApiEntityRegistry::default(),
         )
         .expect("typed structured timeline parameters deserialize");
+    }
+
+    #[test]
+    fn run_scenario_asset_reflection_accepts_omitted_host() {
+        use bevy::prelude::{App, AppTypeRegistry};
+        use lunco_api_core::api_value;
+
+        let mut app = App::new();
+        super::__register_on_run_scenario_asset(&mut app);
+        let registry = app.world().resource::<AppTypeRegistry>().read();
+        let registration = registry
+            .get_with_short_type_path("RunScenarioAsset")
+            .expect("RunScenarioAsset is reflected");
+        let params = api_value!({
+            "source_asset": "lunco://tutorials/sandbox/first_drive.rhai",
+            "scene_asset": "lunco://tutorials/sandbox/first_drive.usda",
+            "reload_policy": "Restart"
+        });
+
+        lunco_api::executor::validate_command_params_value(
+            "RunScenarioAsset",
+            &params,
+            registration,
+            &registry,
+            &lunco_api::ApiEntityRegistry::default(),
+        )
+        .expect("tutorial launch may omit its default WorldRoot host");
     }
 
     #[test]

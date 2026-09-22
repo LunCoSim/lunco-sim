@@ -12,7 +12,7 @@ use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 #[cfg(feature = "rhai")]
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Raw text of a `.rhai` file — the file-backed twin of
 /// [`lunco_core::EmbeddedScenarioSource`] (inline `info:sourceCode`). Lets a scene
@@ -98,11 +98,11 @@ fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, an
         })
 }
 
-/// Handles for application-owned Rhai sources discovered from the runtime
-/// asset manifest. Keeping the handles alive makes the Bevy asset graph retain
-/// the sources and lets the scripting runtime install edits without a compiled
-/// snapshot. The manifest's extension is the only Rust-side selection rule;
-/// source roles are decided by authored policy.
+/// Handles for application-owned Rhai sources selected by the authored startup
+/// classification policy from the runtime asset manifest. Keeping the handles
+/// alive makes the Bevy asset graph retain the sources and lets the scripting
+/// runtime install edits without a compiled snapshot. The manifest supplies
+/// candidates; the policy decides which sources belong to the startup runtime.
 #[cfg(feature = "rhai")]
 #[derive(Resource, Default)]
 pub struct BuiltinRhaiAssets {
@@ -110,9 +110,11 @@ pub struct BuiltinRhaiAssets {
     pub(crate) processed: HashMap<String, (String, u64)>,
 }
 
-/// Discover and request every authored Rhai source from the authoritative asset
-/// manifest. This also works when the manifest arrives asynchronously on wasm;
-/// no directory scan or compiled file list is required.
+/// Discover authored Rhai candidates from the authoritative asset manifest and
+/// request only sources that the startup classification policy admits. This
+/// also works when the manifest arrives asynchronously on wasm; no directory
+/// scan or compiled file list is required. Explicit scenario and scene loads
+/// retain their own asset ownership path and are not admitted here implicitly.
 #[cfg(feature = "rhai")]
 fn request_builtin_rhai_assets(
     manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
@@ -130,16 +132,41 @@ fn request_builtin_rhai_assets(
         return;
     };
 
-    for rel in manifest.rels().iter().filter(|rel| rel.ends_with(".rhai")) {
+    // The manifest is only an inventory. The authored policy owns the
+    // extension and path decision, so this loop does not grow a Rust-side
+    // allow-list as new source classes are authored.
+    let mut admitted_ids = BTreeSet::new();
+    for rel in manifest.rels() {
         let rel = rel.clone();
-        if !rel.ends_with(".rhai") {
+        let admitted = match crate::tool_libs::classify_source(&rel) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(error) => {
+                // Keep the candidate alive so `prepare_builtin_rhai_assets`
+                // reports the typed classification failure and closes the
+                // runtime. A malformed policy result must not disappear as
+                // if the source had been intentionally ignored.
+                warn_once!("[rhai] startup source classification rejected `{rel}`: {error}");
+                true
+            }
+        };
+        if !admitted {
             continue;
         }
+        admitted_ids.insert(rel.clone());
         builtins
             .handles
             .entry(rel.clone())
             .or_insert_with(|| asset_server.load::<RhaiSource>(rel.clone()));
     }
+
+    // Policy replacement is a real lifecycle change: release built-in handles
+    // that the new policy no longer admits. Explicit scenario handles are
+    // owned by their requesting entities and are unaffected by this pruning.
+    builtins.handles.retain(|rel, _| admitted_ids.contains(rel));
+    builtins
+        .processed
+        .retain(|rel, _| admitted_ids.contains(rel));
 }
 
 /// Publish every loaded `.rhai` asset into the registry that backs `import`.

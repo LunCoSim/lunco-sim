@@ -23,8 +23,10 @@ Read the focused contract when implementing one:
 ## Choose the tool's home
 
 - Put a reusable engine/editor policy in `assets/scripting/tools/<name>.rhai`.
-  The built-in source is scanned and embedded by the normal asset path; it is
-  still a Rhai tool, not a Rust vehicle implementation.
+  The authored `scripting.source.classify` startup policy admits this source
+  as a callable library; it is still a Rhai tool, not a Rust vehicle
+  implementation. Other `.rhai` files, including tests and scenarios, are
+  loaded only by an explicit scene/runtime request or the CLI test path.
 - Put a Twin-specific builder, component lint, or requirement helper in
   `<twin>/tools/<name>.rhai`. It is persisted with that Twin and must not leak
   into unrelated Twins.

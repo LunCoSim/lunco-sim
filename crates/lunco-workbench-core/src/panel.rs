@@ -5,6 +5,8 @@ use std::sync::{Mutex, OnceLock};
 
 use bevy::prelude::{Component, Entity, Resource, World};
 use egui::{Color32, CornerRadius, Frame, Margin, Ui};
+
+use crate::trigger_or_defer;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Stable identifier for a panel or instance-panel kind.
@@ -108,7 +110,7 @@ where
     for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
 {
     fn apply(self: Box<Self>, world: &mut World) {
-        world.trigger(self.0);
+        trigger_or_defer(world, self.0);
     }
 }
 

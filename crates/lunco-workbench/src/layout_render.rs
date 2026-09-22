@@ -1,13 +1,14 @@
 //! Workbench layout composition and dock rendering.
 
 use super::*;
+use lunco_workbench_core::trigger_or_defer;
 
 pub(super) fn render_layout(
     ctx: &egui::Context,
     layout: &mut WorkbenchLayout,
     world: &mut World,
     theme: &lunco_theme::Theme,
-    menus: &mut WorkbenchMenuRegistry,
+    menus: &WorkbenchMenuRegistry,
 ) {
     // ── Clean capture ───────────────────────────────────────────────
     // A frame the offline recorder is capturing is a FILM frame: the whole
@@ -210,7 +211,7 @@ pub(super) fn render_layout(
             }
         }
         if drag_resp.double_clicked() {
-            world.trigger(lunco_workbench_window::MaximizeWindow { maximized: None });
+            trigger_or_defer(world, lunco_workbench_window::MaximizeWindow { maximized: None });
         }
 
         // Window title — read straight off the primary Bevy window so the
@@ -286,7 +287,7 @@ pub(super) fn render_layout(
                 // default-resolution path through `EditorIntent`.
                 ui.menu_button("New", |ui| {
                     if ui.button("Twin…").clicked() {
-                        world.trigger(lunco_workspace::open::CreateTwin {
+                        trigger_or_defer(world, lunco_workspace::open::CreateTwin {
                             path: String::new(),
                             name: String::new(),
                             default_scene: String::new(),
@@ -329,7 +330,7 @@ pub(super) fn render_layout(
                                 None => response,
                             };
                             if response.clicked() {
-                                world.trigger(lunco_doc_bevy::NewDocument { kind });
+                                trigger_or_defer(world, lunco_doc_bevy::NewDocument { kind });
                                 ui.close();
                             }
                         }
@@ -339,7 +340,7 @@ pub(super) fn render_layout(
 
                 // -- Open ---------------------------------------------
                 if ui.button("Open File…\tCtrl+O").clicked() {
-                    world.trigger(lunco_workbench_file_ops::ShowOpenFilePicker {});
+                    trigger_or_defer(world, lunco_workbench_file_ops::ShowOpenFilePicker {});
                     ui.close();
                 }
                 // Open Folder + Recents are native-only for now.
@@ -363,7 +364,7 @@ pub(super) fn render_layout(
                     // explicit Twin semantics, but isn't worth a
                     // separate menu entry.
                     if ui.button("Open Folder/Twin…").clicked() {
-                        world.trigger(lunco_workbench_file_ops::ShowOpenFolderPicker {});
+                        trigger_or_defer(world, lunco_workbench_file_ops::ShowOpenFolderPicker {});
                         ui.close();
                     }
 
@@ -393,7 +394,7 @@ pub(super) fn render_layout(
                                     .on_hover_text(path.display().to_string())
                                     .clicked()
                                 {
-                                    world.trigger(lunco_workspace::open::OpenTwin {
+                                    trigger_or_defer(world, lunco_workspace::open::OpenTwin {
                                         path: path.display().to_string(),
                                     });
                                     ui.close();
@@ -415,7 +416,7 @@ pub(super) fn render_layout(
                                     .on_hover_text(path.display().to_string())
                                     .clicked()
                                 {
-                                    world.trigger(lunco_doc_bevy::OpenFile {
+                                    trigger_or_defer(world, lunco_doc_bevy::OpenFile {
                                         path: path.display().to_string(),
                                     });
                                     ui.close();
@@ -435,7 +436,7 @@ pub(super) fn render_layout(
                 if menu_item(ui, has_active, "Save", "Ctrl+S", "No document open")
                     .clicked()
                 {
-                    world.trigger(lunco_doc_bevy::EditorIntent::Save);
+                    trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Save);
                     ui.close();
                 }
                 if menu_item(
@@ -447,15 +448,15 @@ pub(super) fn render_layout(
                 )
                 .clicked()
                 {
-                    world.trigger(lunco_doc_bevy::EditorIntent::SaveAs);
+                    trigger_or_defer(world, lunco_doc_bevy::EditorIntent::SaveAs);
                     ui.close();
                 }
                 if ui.button("Save All").clicked() {
-                    world.trigger(lunco_workbench_file_ops::SaveAll {});
+                    trigger_or_defer(world, lunco_workbench_file_ops::SaveAll {});
                     ui.close();
                 }
                 if ui.button("Save as Twin…").clicked() {
-                    world.trigger(lunco_workbench_file_ops::SaveAsTwin {
+                    trigger_or_defer(world, lunco_workbench_file_ops::SaveAsTwin {
                         folder: String::new(),
                     });
                     ui.close();
@@ -483,26 +484,24 @@ pub(super) fn render_layout(
                         )
                         .clicked()
                     {
-                        world.trigger(lunco_workbench_file_ops::CopyShareLink {});
+                        trigger_or_defer(world, lunco_workbench_file_ops::CopyShareLink {});
                         ui.close();
                     }
                     ui.separator();
                 }
 
-                let callbacks = std::mem::take(&mut menus.file_menu);
-                if !callbacks.is_empty() {
-                    for cb in &callbacks {
+                if !menus.file_menu.is_empty() {
+                    for cb in &menus.file_menu {
                         run_menu_callback(ui, world, cb.as_ref());
                     }
                     ui.separator();
                 }
-                menus.file_menu = callbacks;
 
                 // -- Close --------------------------------------------
                 if menu_item(ui, has_active, "Close", "Ctrl+W", "No document open")
                     .clicked()
                 {
-                    world.trigger(lunco_doc_bevy::EditorIntent::Close);
+                    trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Close);
                     ui.close();
                 }
             });
@@ -760,7 +759,7 @@ pub(super) fn render_layout(
                 let btn_resp = icon_button_sized(ui, icon, hover, titlebar_control_size);
                 anchor_rects.push(("toolbar.run".to_owned(), btn_resp.rect));
                 if btn_resp.clicked() {
-                    world.trigger(lunco_time::SetTimeTransport {
+                    trigger_or_defer(world, lunco_time::SetTimeTransport {
                         playing: Some(paused),
                         ..default()
                     });
@@ -788,7 +787,7 @@ pub(super) fn render_layout(
                         icon_button_sized(ui, UiIcon::Close, "Close", titlebar_control_size);
                     anchor_rects.push(("window.close".to_owned(), close_response.rect));
                     if close_response.clicked() {
-                        world.trigger(lunco_workbench_window::CloseWindow {});
+                        trigger_or_defer(world, lunco_workbench_window::CloseWindow {});
                     }
                     let max_icon = if is_max {
                         UiIcon::Restore
@@ -800,7 +799,7 @@ pub(super) fn render_layout(
                         icon_button_sized(ui, max_icon, max_hover, titlebar_control_size);
                     anchor_rects.push(("window.maximize".to_owned(), maximize_response.rect));
                     if maximize_response.clicked() {
-                        world.trigger(lunco_workbench_window::MaximizeWindow { maximized: None });
+                        trigger_or_defer(world, lunco_workbench_window::MaximizeWindow { maximized: None });
                     }
                     let minimize_response = icon_button_sized(
                         ui,
@@ -810,7 +809,7 @@ pub(super) fn render_layout(
                     );
                     anchor_rects.push(("window.minimize".to_owned(), minimize_response.rect));
                     if minimize_response.clicked() {
-                        world.trigger(lunco_workbench_window::MinimizeWindow {});
+                        trigger_or_defer(world, lunco_workbench_window::MinimizeWindow {});
                     }
                     ui.separator();
                 }

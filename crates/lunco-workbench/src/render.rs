@@ -4,6 +4,7 @@
 //! egui dock, menus, status presentation, and graphics/settings rendering.
 
 use super::*;
+use lunco_workbench_core::{trigger_or_defer, DeferredWorldTriggers};
 use lunco_workbench_perf_ui::{frame_history, frame_ms_stats, PerfHudSettings, PerfStats};
 
 #[derive(Resource)]
@@ -55,13 +56,19 @@ pub(crate) fn render_workbench(world: &mut World) {
         }
     }
 
-    let Some(mut layout) = world.remove_resource::<WorkbenchLayout>() else {
+    if !world.contains_resource::<WorkbenchLayout>()
+        || !world.contains_resource::<WorkbenchMenuRegistry>()
+    {
         return;
-    };
-    let Some(mut menus) = world.remove_resource::<WorkbenchMenuRegistry>() else {
-        world.insert_resource(layout);
-        return;
-    };
+    }
+
+    // Panel and menu callbacks need mutable access to both their owner state
+    // and the rest of the world. The private dock state is the only resource
+    // scoped out for that split; the menu registry stays installed in the
+    // world and is snapshotted below. Typed events emitted by callbacks are
+    // queued until the layout scope ends, so observers never see a transiently
+    // missing workbench resource.
+    world.insert_resource(DeferredWorldTriggers::default());
 
     // Clear stale anchor rects at the start of each frame; menu /
     // panel writers refresh them as they render.
@@ -135,10 +142,19 @@ pub(crate) fn render_workbench(world: &mut World) {
         Arc::clone(&cache.theme)
     };
 
-    layout_render::render_layout(&ctx, &mut layout, world, &theme, &mut menus);
+    // The menu registry is persistent shell state. Clone its callback handles
+    // for this frame instead of extracting the resource from the world. A
+    // render pass may borrow the dock state exclusively, while observers must
+    // still see the installed menu registry.
+    let menus = world.resource::<WorkbenchMenuRegistry>().clone();
+    world.resource_scope(|world, mut layout: Mut<WorkbenchLayout>| {
+        layout_render::render_layout(&ctx, &mut layout, world, &theme, &menus);
+    });
 
-    world.insert_resource(layout);
-    world.insert_resource(menus);
+    let deferred = world
+        .remove_resource::<DeferredWorldTriggers>()
+        .expect("workbench render queue was installed above");
+    deferred.apply(world);
     // No scene-pointer gate is computed here: scene picking is bevy_picking-driven
     // and egui occlusion is handled by bevy_egui's picking backend.
 }
@@ -532,8 +548,8 @@ where
 }
 
 /// Run one contributed menu callback behind the capability-limited
-/// [`MenuCtx`], then apply its typed intent while the workbench layout is
-/// still temporarily removed from the world.
+/// [`MenuCtx`], then apply its typed intent. Observer triggers are deferred by
+/// the active render queue until the workbench layout has been restored.
 pub(crate) fn run_menu_callback(
     ui: &mut egui::Ui,
     world: &mut World,
@@ -635,7 +651,7 @@ pub(crate) fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
             };
             ui.label(format!("{state} -> {}", status.endpoint));
             if ui.button("Disconnect").clicked() {
-                world.trigger(NetDisconnectRequest);
+                trigger_or_defer(world, NetDisconnectRequest);
                 ui.close();
             }
         }
@@ -680,10 +696,13 @@ pub(crate) fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
                 .on_disabled_hover_text("Enter a server address first")
                 .clicked()
             {
-                world.trigger(NetConnectRequest {
-                    address: address.clone(),
-                    digest: digest.clone(),
-                });
+                trigger_or_defer(
+                    world,
+                    NetConnectRequest {
+                        address: address.clone(),
+                        digest: digest.clone(),
+                    },
+                );
                 ui.close();
             }
             ui.data_mut(|d| d.insert_temp(id, address));
@@ -697,7 +716,7 @@ pub(crate) fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
 pub(crate) fn render_edit_menu(
     ui: &mut egui::Ui,
     world: &mut World,
-    menus: &mut WorkbenchMenuRegistry,
+    menus: &WorkbenchMenuRegistry,
 ) {
     let has_active = world
         .resource::<WorkspaceResource>()
@@ -724,25 +743,23 @@ pub(crate) fn render_edit_menu(
         "No document open"
     };
     if menu_item(ui, can_undo, "Undo", "Ctrl+Z", undo_hint).clicked() {
-        world.trigger(lunco_doc_bevy::EditorIntent::Undo);
+        trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Undo);
         ui.close();
     }
     if menu_item(ui, can_redo, "Redo", "Ctrl+Shift+Z", redo_hint).clicked() {
-        world.trigger(lunco_doc_bevy::EditorIntent::Redo);
+        trigger_or_defer(world, lunco_doc_bevy::EditorIntent::Redo);
         ui.close();
     }
 
     // Domain plugins (e.g. the Modelica code editor) contribute Cut/Copy/
     // Paste/Select-All here via `register_edit_menu`. The capability-limited
     // MenuCtx keeps the command path shared with the direct menu.
-    let callbacks = std::mem::take(&mut menus.edit_menu);
-    if !callbacks.is_empty() {
+    if !menus.edit_menu.is_empty() {
         ui.separator();
-        for cb in &callbacks {
+        for cb in &menus.edit_menu {
             run_menu_callback(ui, world, cb.as_ref());
         }
     }
-    menus.edit_menu = callbacks;
 }
 
 /// Render Settings in either its direct top-level menu or the compact
@@ -751,7 +768,7 @@ pub(crate) fn render_edit_menu(
 pub(crate) fn render_settings_menu(
     ui: &mut egui::Ui,
     world: &mut World,
-    menus: &mut WorkbenchMenuRegistry,
+    menus: &WorkbenchMenuRegistry,
 ) {
     ui.label(egui::RichText::new("Theme").weak().small());
     let mut theme = world.resource_mut::<lunco_theme::Theme>();
@@ -769,8 +786,7 @@ pub(crate) fn render_settings_menu(
 
     // Feature areas stay discoverable without forcing the root Settings menu
     // to contain every row or fill the viewport.
-    let submenus = std::mem::take(&mut menus.settings_submenus);
-    for (label, callbacks) in &submenus {
+    for (label, callbacks) in &menus.settings_submenus {
         ui.menu_button(label, |ui| {
             let max_width = settings_submenu_max_width(ui.ctx().content_rect().width());
             let max_height = ui.spacing().interact_size.y * 24.0;
@@ -788,7 +804,6 @@ pub(crate) fn render_settings_menu(
                 });
         });
     }
-    menus.settings_submenus = submenus;
 }
 
 /// Render Help in either its direct top-level menu or the compact overflow
@@ -796,7 +811,7 @@ pub(crate) fn render_settings_menu(
 pub(crate) fn render_help_menu(
     ui: &mut egui::Ui,
     world: &mut World,
-    menus: &mut WorkbenchMenuRegistry,
+    menus: &WorkbenchMenuRegistry,
 ) {
     if let Some(identity) = world.get_resource::<lunco_workbench_core::BuildIdentity>() {
         ui.label(format!(
@@ -814,14 +829,12 @@ pub(crate) fn render_help_menu(
             );
         }
     }
-    let callbacks = std::mem::take(&mut menus.help_menu);
-    if !callbacks.is_empty() {
+    if !menus.help_menu.is_empty() {
         ui.separator();
-        for cb in &callbacks {
+        for cb in &menus.help_menu {
             run_menu_callback(ui, world, cb.as_ref());
         }
     }
-    menus.help_menu = callbacks;
 }
 
 /// Render Time in either its direct top-level menu or the compact overflow
@@ -829,7 +842,7 @@ pub(crate) fn render_help_menu(
 pub(crate) fn render_time_menu(
     ui: &mut egui::Ui,
     world: &mut World,
-    menus: &mut WorkbenchMenuRegistry,
+    menus: &WorkbenchMenuRegistry,
 ) {
     ui.label(egui::RichText::new("Simulation rate").weak().small());
     let (paused, rate) = world
@@ -849,10 +862,13 @@ pub(crate) fn render_time_menu(
                 .on_hover_text("Run the simulation (physics included) at this rate")
                 .clicked()
             {
-                world.trigger(lunco_time::SetTimeTransport {
-                    playing: Some(true),
-                    rate: Some(m),
-                });
+                trigger_or_defer(
+                    world,
+                    lunco_time::SetTimeTransport {
+                        playing: Some(true),
+                        rate: Some(m),
+                    },
+                );
             }
         }
     });
@@ -868,27 +884,24 @@ pub(crate) fn render_time_menu(
             .on_hover_text("Live transport is bounded to 64x; higher rates are rejected.");
     }
 
-    let callbacks = std::mem::take(&mut menus.time_menu);
-    if !callbacks.is_empty() {
+    if !menus.time_menu.is_empty() {
         ui.separator();
-        for cb in &callbacks {
+        for cb in &menus.time_menu {
             run_menu_callback(ui, world, cb.as_ref());
         }
     }
-    menus.time_menu = callbacks;
 }
 
 /// Render registered custom menus without creating a second callback path.
 pub(crate) fn render_custom_menus(
     ui: &mut egui::Ui,
     world: &mut World,
-    menus: &mut WorkbenchMenuRegistry,
+    menus: &WorkbenchMenuRegistry,
     mut anchors: Option<&mut Vec<(String, egui::Rect)>>,
 ) {
-    let custom_menus = std::mem::take(&mut menus.custom_menus);
-    let scripted_menus = std::mem::take(&mut menus.scripted_menus);
-    for (name, cb) in &custom_menus {
-        let mut contributions = scripted_menus
+    for (name, cb) in &menus.custom_menus {
+        let mut contributions = menus
+            .scripted_menus
             .iter()
             .filter(|contribution| contribution.label == *name)
             .collect::<Vec<_>>();
@@ -904,16 +917,20 @@ pub(crate) fn render_custom_menus(
         }
     }
     let mut rendered_script_labels = Vec::new();
-    for menu in &scripted_menus {
+    for menu in &menus.scripted_menus {
         if rendered_script_labels.contains(&menu.label)
-            || custom_menus.iter().any(|(name, _)| name == &menu.label)
+            || menus
+                .custom_menus
+                .iter()
+                .any(|(name, _)| name == &menu.label)
         {
             continue;
         }
         rendered_script_labels.push(menu.label.clone());
         let label = menu.label.clone();
         let response = ui.menu_button(&label, |ui| {
-            let mut contributions = scripted_menus
+            let mut contributions = menus
+                .scripted_menus
                 .iter()
                 .filter(|contribution| contribution.label == label)
                 .collect::<Vec<_>>();
@@ -926,8 +943,6 @@ pub(crate) fn render_custom_menus(
             anchors.push((label, response.response.rect));
         }
     }
-    menus.custom_menus = custom_menus;
-    menus.scripted_menus = scripted_menus;
 }
 
 /// The title-bar policy is based on measured widget widths and the same
@@ -1286,7 +1301,7 @@ pub(crate) fn render_status_bar_inner(
                 .filter(|event| event.level == StatusLevel::Attention)
                 .map(|event| event.source)
             {
-                world.trigger(StatusBarAction { source });
+                trigger_or_defer(world, StatusBarAction { source });
             } else {
                 unreachable!("attention status button rendered without an attention event");
             }
@@ -1432,7 +1447,7 @@ pub(crate) fn render_status_bar_inner(
                         }
                     });
                 if let Some(source) = popup_attention_source {
-                    world.trigger(StatusBarAction { source });
+                    trigger_or_defer(world, StatusBarAction { source });
                 }
             });
     });

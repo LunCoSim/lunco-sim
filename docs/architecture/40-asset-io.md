@@ -154,8 +154,10 @@ Bevy dependencies. That is required because Rhai resolves imports synchronously
 while the scenario is running. The owning scenario handle is not published to
 the runtime until Bevy reports its recursive dependency graph ready, so a
 referenced scenario loads only itself and its imports. Application-owned Rhai
-sources are discovered from the runtime manifest; the authored tool-activation
-policy decides which of those sources become callable libraries.
+sources are discovered from the runtime manifest, then the authored
+`scripting.source.classify` startup policy admits only prelude and tool sources
+to the built-in runtime. Scenario, test, and other authored sources stay
+demand-loaded through an explicit scene/runtime request or the CLI test path.
 
 ## Allow-list
 

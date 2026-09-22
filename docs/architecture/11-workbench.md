@@ -261,16 +261,28 @@ transport or trigger the typed data without linking `egui_dock`.
 ### 3.3 Render-time resource ownership
 
 `WorkbenchLayout` is a private resource in the concrete shell and the owner of
-the dock tree, but `render_workbench` removes
-that resource for the duration of the egui pass. Panel renderers and observers
-must therefore emit typed navigation requests (`ActivatePerspective`,
-`OpenTab`, `FocusPanel`, and related commands); they must not read or mutate
-`WorkbenchLayout` from a render-time callback. The shell publishes the current
-layout as the `lunco_workbench_core::WorkbenchSnapshot` resource after
-deferred layout and tab requests are applied. Domain systems that need layout
-facts read that snapshot, never the dock resource. The workbench drains
-deferred layout requests before deferred tab requests so a request that changes
-both the perspective and the active tab is applied in authored order.
+the dock tree. `render_workbench` scopes only that resource out of the `World`
+for the duration of the egui pass so callbacks can borrow their owner state and
+the rest of the world. `WorkbenchMenuRegistry` is persistent shell state: its
+callback handles are cloned into a frame snapshot while the authoritative
+registry stays installed, so layout resets cannot erase or hide contributed
+menus. `World::resource_scope` restores the layout during normal return and
+unwinding. Panel renderers and observers must therefore emit typed navigation
+requests (`ActivatePerspective`, `OpenTab`, `FocusPanel`, and related
+commands); they must not read or mutate `WorkbenchLayout` from a render-time
+callback. The shell publishes the current layout as the
+`lunco_workbench_core::WorkbenchSnapshot` resource after deferred layout and
+tab requests are applied. Domain systems that need layout facts read that
+snapshot, never the dock resource. The workbench drains deferred layout
+requests before deferred tab requests so a request that changes both the
+perspective and the active tab is applied in authored order.
+
+Typed trigger intents from `PanelCtx` and `MenuCtx`, plus shell menu actions,
+are held in the `lunco_workbench_core::DeferredWorldTriggers` render queue and
+applied after the scoped layout is back in the `World`. This includes Rhai menu
+actions and event chains they start, so observers never receive a transiently
+missing `WorkbenchLayout`; the menu registry remains available throughout the
+pass.
 
 UI projection plugins that read shell-owned workbench resources install
 `WorkbenchPlugin` when it is not already present. An authored Rhai policy can

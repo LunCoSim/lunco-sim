@@ -1,7 +1,55 @@
 //! Capability-limited contexts and registration storage for contributed menus.
 
+use std::sync::Arc;
+
 use bevy::prelude::{Component, Entity, Resource, World};
 use egui::Ui;
+
+/// Events emitted while an egui pass owns the concrete workbench layout.
+///
+/// The shell scopes its private dock state out of the [`World`] so it can pass
+/// that state alongside the world to panel and menu callbacks. Triggering an
+/// observer in that scope would make an otherwise valid `Res`/`ResMut` fail
+/// validation. The menu registry remains installed and is snapshotted for the
+/// frame; the renderer installs this queue for the duration of the pass and
+/// drains it after the layout is restored.
+#[derive(Resource, Default)]
+pub struct DeferredWorldTriggers {
+    triggers: Vec<Box<dyn FnOnce(&mut World) + Send + Sync>>,
+}
+
+impl DeferredWorldTriggers {
+    /// Defer one typed observer event until the owning render scope ends.
+    pub fn push<E>(&mut self, event: E)
+    where
+        E: bevy::ecs::event::Event,
+        for<'a> E::Trigger<'a>: Default,
+    {
+        self.triggers
+            .push(Box::new(move |world| world.trigger(event)));
+    }
+
+    /// Run queued events in the order in which the callbacks emitted them.
+    pub fn apply(self, world: &mut World) {
+        for trigger in self.triggers {
+            trigger(world);
+        }
+    }
+}
+
+/// Trigger an observer immediately, unless a render pass has installed the
+/// deferred queue that protects temporarily scoped owner state.
+pub fn trigger_or_defer<E>(world: &mut World, event: E)
+where
+    E: bevy::ecs::event::Event,
+    for<'a> E::Trigger<'a>: Default,
+{
+    if let Some(mut deferred) = world.get_resource_mut::<DeferredWorldTriggers>() {
+        deferred.push(event);
+    } else {
+        world.trigger(event);
+    }
+}
 
 trait MenuIntent: Send {
     fn apply(self: Box<Self>, world: &mut World);
@@ -24,7 +72,7 @@ where
     for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
 {
     fn apply(self: Box<Self>, world: &mut World) {
-        world.trigger(self.0);
+        trigger_or_defer(world, self.0);
     }
 }
 
@@ -116,16 +164,16 @@ impl<'w> UndoProbeCtx<'w> {
 }
 
 /// Callback accepted by a workbench menu contribution.
-pub type MenuCallback = Box<dyn Fn(&mut Ui, &mut MenuCtx) + Send + Sync>;
+pub type MenuCallback = Arc<dyn Fn(&mut Ui, &mut MenuCtx) + Send + Sync>;
 /// Grouped settings-menu contributions.
 pub type SettingsSubmenu = (String, Vec<MenuCallback>);
 /// A contributed top-level menu and its callback.
 pub type CustomMenu = (String, MenuCallback);
 /// Callback that reports undo/redo availability for a domain.
-pub type UndoProbe = Box<dyn Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync>;
+pub type UndoProbe = Arc<dyn Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync>;
 
 /// Registry of menu contributions owned by the workbench contract layer.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct WorkbenchMenuRegistry {
     /// Settings submenus grouped by their label.
     pub settings_submenus: Vec<SettingsSubmenu>,
@@ -146,6 +194,7 @@ pub struct WorkbenchMenuRegistry {
 }
 
 /// One callback owned by a replaceable script menu contribution.
+#[derive(Clone)]
 pub struct ScriptedMenu {
     /// Stable provider key that owns this contribution.
     pub provider: String,
@@ -199,10 +248,10 @@ impl WorkbenchMenuRegistry {
             .iter_mut()
             .find(|(existing, _)| existing == &label)
         {
-            callbacks.push(Box::new(callback));
+            callbacks.push(Arc::new(callback));
         } else {
             self.settings_submenus
-                .push((label, vec![Box::new(callback)]));
+                .push((label, vec![Arc::new(callback)]));
         }
     }
 
@@ -211,7 +260,7 @@ impl WorkbenchMenuRegistry {
     where
         F: Fn(&mut Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
-        self.edit_menu.push(Box::new(callback));
+        self.edit_menu.push(Arc::new(callback));
     }
 
     /// Register an undo/redo availability probe.
@@ -219,7 +268,7 @@ impl WorkbenchMenuRegistry {
     where
         F: Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync + 'static,
     {
-        self.undo_probes.push(Box::new(probe));
+        self.undo_probes.push(Arc::new(probe));
     }
 
     /// Register a Help-menu contribution.
@@ -227,7 +276,7 @@ impl WorkbenchMenuRegistry {
     where
         F: Fn(&mut Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
-        self.help_menu.push(Box::new(callback));
+        self.help_menu.push(Arc::new(callback));
     }
 
     /// Register a File-menu contribution.
@@ -235,7 +284,7 @@ impl WorkbenchMenuRegistry {
     where
         F: Fn(&mut Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
-        self.file_menu.push(Box::new(callback));
+        self.file_menu.push(Arc::new(callback));
     }
 
     /// Register a Time-menu contribution.
@@ -243,7 +292,7 @@ impl WorkbenchMenuRegistry {
     where
         F: Fn(&mut Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
-        self.time_menu.push(Box::new(callback));
+        self.time_menu.push(Arc::new(callback));
     }
 
     /// Register a custom top-level menu.
@@ -251,6 +300,44 @@ impl WorkbenchMenuRegistry {
     where
         F: Fn(&mut Ui, &mut MenuCtx) + Send + Sync + 'static,
     {
-        self.custom_menus.push((name.into(), Box::new(callback)));
+        self.custom_menus.push((name.into(), Arc::new(callback)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::prelude::{App, On};
+
+    #[derive(bevy::prelude::Event)]
+    struct RenderIntent;
+
+    #[derive(bevy::prelude::Resource)]
+    struct LayoutOwner;
+
+    #[test]
+    fn deferred_trigger_runs_after_the_scoped_owner_is_restored() {
+        let mut app = App::new();
+        app.world_mut().insert_resource(LayoutOwner);
+        app.world_mut()
+            .insert_resource(WorkbenchMenuRegistry::default());
+        app.add_observer(
+            |_: On<RenderIntent>,
+             _layout: bevy::prelude::Res<LayoutOwner>,
+             _menus: bevy::prelude::Res<WorkbenchMenuRegistry>| {},
+        );
+
+        // This models World::resource_scope: the owner is absent while the
+        // render callback emits its intent, then present before observers run.
+        assert!(app.world_mut().remove_resource::<LayoutOwner>().is_some());
+        app.world_mut()
+            .insert_resource(DeferredWorldTriggers::default());
+        trigger_or_defer(app.world_mut(), RenderIntent);
+        let deferred = app
+            .world_mut()
+            .remove_resource::<DeferredWorldTriggers>()
+            .expect("render queue remains owned by the pass");
+        app.world_mut().insert_resource(LayoutOwner);
+        deferred.apply(app.world_mut());
     }
 }

@@ -119,6 +119,14 @@ the shared vector `UiIcon::Check` and `UiIcon::Pending` with accessible status
 text; do not render status words or font-dependent glyphs as a second status
 system.
 
+The workbench scopes only its private mutable layout out of the `World` while
+painting. The authoritative `WorkbenchMenuRegistry` remains installed and is
+read through an immutable frame snapshot, so layout resets do not clear menu
+contributions. `PanelCtx` and `MenuCtx` trigger intents, together with shell
+menu actions, go through `DeferredWorldTriggers` and are applied after the
+egui pass restores the layout; do not call observer events directly from a
+render callback when a typed context can queue the intent.
+
 For Twin-browser work, use `lunco_workbench_browser::BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by
 human-readable names/paths, retain matching ancestors, and emit the existing

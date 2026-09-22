@@ -20,10 +20,10 @@ assets/tutorials/
 The catalog is presentation data. Each entry names a `source_asset`, may name a
 `scene_asset`, and belongs to a `track`; the application presents each track as
 a submenu and keeps the entries in authored order. Both assets are resolved
-through the asset system. The menu uses `reload_policy: "restart"` so selecting
-a lesson always gets a fresh scenario start after its requested scene is
-composed. Other applications can reuse the same generic command with their own
-catalog or no menu at all.
+through the asset system. The menu uses the reflected
+`ScenarioReloadPolicy::Restart` value so selecting a lesson always gets a
+fresh scenario start after its requested scene is composed. Other applications
+can reuse the same generic command with their own catalog or no menu at all.
 
 An opened Twin may contribute the same catalog shape in any JSON asset under
 its root, provided it carries `kind = "lunco.tutorial-catalog.v1"`. The shared
@@ -48,7 +48,8 @@ scene from the previous lesson.
 Scene ownership remains with the USD scene command layer. `RunScenarioAsset`
 submits a `SceneTransitionIntent`; USD resolves and composes the scene, then
 the generic scenario driver waits for the scene/readiness lifecycle before
-starting the script.
+starting the script. The command uses the active `WorldRoot` when a catalog
+entry omits a host target.
 
 Use USD's existing composition vocabulary in scene assets: `subLayers`,
 `references`, `payloads`, `UsdPhysics`, and `UsdLux`. A scene that depends on

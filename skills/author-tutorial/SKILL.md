@@ -44,8 +44,9 @@ marked catalog from generic asset-scope events and uses the shared `parse_json`
 function; do not add tutorial-specific Rust loading or menu code.
 
 The menu submits the generic `RunScenarioAsset` command. It uses
-`ScenarioReloadPolicy::Restart` for a predictable fresh start. Other apps can
-reuse the command without importing tutorial code.
+`ScenarioReloadPolicy::Restart` for a predictable fresh start and lets the
+command resolve an omitted host target to the active `WorldRoot`. Other apps
+can reuse the command without importing tutorial code.
 
 ## Rhai contract
 

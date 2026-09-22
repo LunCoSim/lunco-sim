@@ -47,8 +47,9 @@ USD prim and does not require a tutorial-specific schema.
 
 The application menu dispatches `RunScenarioAsset`:
 
-- `target` selects the scenario host; `Entity::PLACEHOLDER` resolves to the
-  stable `WorldRoot` for a convenient application default;
+- `target` optionally selects the scenario host; when omitted (or set to
+  `Entity::PLACEHOLDER`) the command resolves the stable `WorldRoot` as the
+  application default;
 - `source_asset` names a Rhai asset through the normal asset graph;
 - `params` carries optional scenario parameters;
 - `scene_asset` optionally submits a `SceneTransitionIntent` to the USD scene

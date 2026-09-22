@@ -557,9 +557,24 @@ pub fn authz_target_gid_value(
     else {
         return Ok(None);
     };
-    let value = params
-        .get(field.name())
-        .ok_or_else(|| format!("authorization target field '{}' is missing", field.name()))?;
+    let Some(value) = params.get(field.name()) else {
+        // An optional authorization target is an intentionally unscoped command
+        // request. The command handler remains responsible for resolving its
+        // semantic default (for example, a WorldRoot host).
+        if matches!(reg.get_type_info(field.type_id()), Some(TypeInfo::Enum(info)) if info.variant("None").is_some())
+        {
+            return Ok(None);
+        }
+        return Err(format!(
+            "authorization target field '{}' is missing",
+            field.name()
+        ));
+    };
+    if matches!(value, ApiValue::Unit)
+        && matches!(reg.get_type_info(field.type_id()), Some(TypeInfo::Enum(info)) if info.variant("None").is_some())
+    {
+        return Ok(None);
+    }
     api_value_u64(value).map(Some).ok_or_else(|| {
         format!(
             "authorization target field '{}' must be an unsigned ID",

@@ -1,5 +1,7 @@
 //! Generic egui host for application menus contributed by Rhai.
 
+use std::sync::Arc;
+
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_scripting_rhai_core::ui_bridge::{ScriptUiRequest, ScriptWorkbenchMenuItem};
@@ -49,7 +51,7 @@ pub(crate) fn on_script_ui_request(
         .map(|menu| {
             let label = menu.label.clone();
             let items = menu.items.clone();
-            let callback: MenuCallback = Box::new(move |ui, ctx| {
+            let callback: MenuCallback = Arc::new(move |ui, ctx| {
                 draw_items(ui, ctx, &items);
             });
             (label, callback)

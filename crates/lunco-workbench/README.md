@@ -56,6 +56,12 @@ generic anchor and render-set contracts but does not install guided behavior.
 `WorkbenchMenuRegistry` also stores replaceable script contributions by
 provider. The shell groups contributions with the same label into one menu;
 application adapters own the Rhai event bridge and leaf-action dispatch.
+During the egui pass the shell scopes only its private mutable layout out of
+the `World`; the authoritative menu registry stays installed and is cloned into
+an immutable frame snapshot. Typed panel and menu trigger intents are
+collected by `DeferredWorldTriggers` and applied after the layout is restored.
+This keeps observer resource validation valid for actions emitted by rendered
+UI while preserving menu contributions across layout resets.
 
 | Type | Role |
 |------|------|

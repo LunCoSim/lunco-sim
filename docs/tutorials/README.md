@@ -24,9 +24,11 @@ by track in authored order, and returns generic workbench menu data. The
 workbench renders the contribution and sends a selected item through the
 `tutorials` Rhai tool in `assets/scripting/tools/tutorials.rhai`. The tool
 submits `RunScenarioAsset` with a script, optional scene, parameters, and
-`ScenarioReloadPolicy::Restart`. The command does not open a layer itself:
+`ScenarioReloadPolicy::Restart`. The Rhai menu payload uses the reflected
+`Restart` variant. The command does not open a layer itself:
 it submits a `SceneTransitionIntent`, USD composes the requested scene, and the
 generic scenario driver starts after the scene/readiness lifecycle completes.
+An omitted host target resolves to the active `WorldRoot`.
 
 The Rust menu host validates and renders generic menu trees and dispatches
 actions through the Rhai tool registry. A contribution is replaced by provider
