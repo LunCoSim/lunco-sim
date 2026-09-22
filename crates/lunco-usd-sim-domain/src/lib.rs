@@ -1811,9 +1811,12 @@ mod tests {
         lunco_hooks_rhai::register_rhai_hook(
             "synth.acausal-network",
             "synthesize",
-            lunco_assets_runtime::scripting::policy("synth_acausal_network")
-                .expect("shipped synthesis policy")
+            lunco_assets_runtime::scripting::active_policy_set()
+                .expect("shipped synthesis policies")
+                .into_iter()
+                .find(|policy| policy.spec.source == "synth_acausal_network.rhai")
                 .expect("synthesis policy source exists")
+                .source
                 .as_str(),
             true,
         )
@@ -2318,9 +2321,12 @@ def Scope "Rig"
         lunco_hooks_rhai::register_rhai_hook(
             "synth.actuator-wrench",
             "synthesize",
-            lunco_assets_runtime::scripting::policy("synth_actuator_wrench")
-                .expect("shipped actuator policy")
+            lunco_assets_runtime::scripting::active_policy_set()
+                .expect("shipped synthesis policies")
+                .into_iter()
+                .find(|policy| policy.spec.source == "synth_actuator_wrench.rhai")
                 .expect("actuator policy source exists")
+                .source
                 .as_str(),
             true,
         )

@@ -5,15 +5,15 @@
 // evaluates caller-supplied requirements. It is deliberately independent of
 // vehicles, routes, Twin names, and a custom measurement schema.
 
+import "engineering_units" as engineering_units;
+import "mechanical_relations" as mechanical_relations;
+
 fn query_ok(record) {
     record != () && record.ok != false
 }
 
 fn unit_scale(units) {
-    if units == "m" { return 1.0; }
-    if units == "cm" { return 0.01; }
-    if units == "mm" { return 0.001; }
-    ()
+    engineering_units::linear_scale(units)
 }
 
 fn unavailable(subject, kind, message, source) {
@@ -29,16 +29,14 @@ fn unavailable(subject, kind, message, source) {
 
 fn distance3(a, b) {
     if a == () || b == () { return (); }
-    if type_of(a) != "Vec3" && (type_of(a) != "array" || a.len() != 3) { return (); }
-    if type_of(b) != "Vec3" && (type_of(b) != "array" || b.len() != 3) { return (); }
+    if !vec3_is_finite(a) || !vec3_is_finite(b) { return (); }
     vlen(vsub(vec3_from(a), vec3_from(b)))
 }
 
 fn verdict(actual, expected, tolerance) {
-    if actual == () || expected == () || tolerance == () {
-        return "unavailable";
-    }
-    if (actual - expected).abs() <= tolerance { "passed" } else { "failed" }
+    let relation = mechanical_relations::equal(actual, expected, tolerance);
+    if relation == () { return "unavailable"; }
+    relation.status
 }
 
 fn distance_requirement(doc, spec) {
@@ -79,6 +77,82 @@ fn distance_requirement(doc, spec) {
         method: "QueryUsdPrims.world_position",
         source: "USD",
     }
+}
+
+fn _axis_value(value, axis) {
+    if !vec3_is_finite(value) { return (); }
+    if axis == "x" { return vcomponent(value, 0); }
+    if axis == "y" { return vcomponent(value, 1); }
+    if axis == "z" { return vcomponent(value, 2); }
+    ()
+}
+
+/// Check a point against a plane using only native typed vectors. The plane
+/// normal and expected distance are authored by the caller; Rust does not
+/// choose an axis or a tolerance.
+fn plane_distance_requirement(doc, spec) {
+    let point_path = spec.point;
+    let plane_path = spec.plane;
+    let units = if spec.units != () { spec.units } else { "m" };
+    let scale = unit_scale(units);
+    let subject = point_path + " ↔ plane " + plane_path;
+    if scale == () {
+        return unavailable(subject, "plane_distance", "unsupported units: " + units, "Rhai");
+    }
+    let records = query("QueryUsdPrims", #{doc_id: doc, paths: [point_path, plane_path]});
+    if !query_ok(records) || records.records == () || records.records.len() != 2 {
+        return unavailable(subject, "plane_distance", "point or plane subject is unavailable", "QueryUsdPrims");
+    }
+    let normal = if spec.normal != () { vec3_from(spec.normal) } else { vec3(0.0, 1.0, 0.0) };
+    if !vec3_is_valid(normal) {
+        return unavailable(subject, "plane_distance", "plane normal is invalid", "Rhai");
+    }
+    let point = records.records[0].world_position;
+    let plane = records.records[1].world_position;
+    if !vec3_is_finite(point) || !vec3_is_finite(plane) {
+        return unavailable(subject, "plane_distance", "point or plane position is invalid", "QueryUsdPrims");
+    }
+    let actual = mechanical_relations::plane_signed_distance(point, plane, normal) / scale;
+    let expected = if spec.expected != () { spec.expected } else { 0.0 };
+    let tolerance = if spec.tolerance != () { spec.tolerance } else { 0.0 };
+    let status = verdict(actual, expected, tolerance);
+    #{ok: status == "passed", status: status, kind: "plane_distance",
+      subject: subject, point: point_path, plane: plane_path, frame: "canonical_stage",
+      units: units, actual: actual, expected: expected, tolerance: tolerance,
+      normal: normal, method: "QueryUsdPrims.world_position", source: "USD+Rhai"}
+}
+
+/// Check that one authored subject is below another along an explicitly
+/// selected axis. This is a reusable relation policy, not a Griffin rule.
+fn under_requirement(doc, spec) {
+    let child_path = spec.child;
+    let parent_path = spec.parent;
+    let axis = if spec.axis != () { spec.axis } else { "y" };
+    let units = if spec.units != () { spec.units } else { "m" };
+    let scale = unit_scale(units);
+    let subject = child_path + " under " + parent_path + " along " + axis;
+    if scale == () {
+        return unavailable(subject, "under", "unsupported units: " + units, "Rhai");
+    }
+    let records = query("QueryUsdPrims", #{doc_id: doc, paths: [child_path, parent_path]});
+    if !query_ok(records) || records.records == () || records.records.len() != 2 {
+        return unavailable(subject, "under", "child or parent subject is unavailable", "QueryUsdPrims");
+    }
+    let child = _axis_value(records.records[0].world_position, axis);
+    let parent = _axis_value(records.records[1].world_position, axis);
+    if child == () || parent == () {
+        return unavailable(subject, "under", "axis is invalid or position is unavailable", "QueryUsdPrims");
+    }
+    let minimum = if spec.minimum != () { spec.minimum } else { 0.0 };
+    let tolerance = if spec.tolerance != () { spec.tolerance } else { 0.0 };
+    let actual = mechanical_relations::axis_delta(
+        records.records[1].world_position, records.records[0].world_position, axis) / scale;
+    let relation = mechanical_relations::at_least(actual, minimum, tolerance);
+    let status = if relation == () { "unavailable" } else { relation.status };
+    #{ok: status == "passed", status: status, kind: "under", subject: subject,
+      child: child_path, parent: parent_path, axis: axis, frame: "canonical_stage",
+      units: units, actual: actual, minimum: minimum, tolerance: tolerance,
+      method: "QueryUsdPrims.world_position", source: "USD+Rhai"}
 }
 
 fn bounds_requirement(doc, spec) {
@@ -129,6 +203,8 @@ fn evaluate_requirement(doc, spec) {
         return unavailable("<missing requirement>", "unknown", "requirement kind is required", "Rhai");
     }
     if spec.kind == "distance" { return distance_requirement(doc, spec); }
+    if spec.kind == "plane_distance" { return plane_distance_requirement(doc, spec); }
+    if spec.kind == "under" { return under_requirement(doc, spec); }
     if spec.kind == "extent" { return bounds_requirement(doc, spec); }
     unavailable("<unknown requirement>", spec.kind, "unsupported requirement kind", "Rhai")
 }

@@ -6,6 +6,7 @@ license.workspace = true
 description = "Reusable authored USD data, metadata, and stage-convention contracts"
 
 [dependencies]
+lunco-engineering-values = { path = "../lunco-engineering-values" }
 bevy = { workspace = true }
 openusd = { workspace = true }
 serde = { workspace = true }

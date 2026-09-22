@@ -218,13 +218,39 @@ is needed before constructing additional evidence.
 Unit-bearing vector components are preserved as arrays of native `Quantity`
 values. A geometry policy must validate the declared quantity kind, fixed
 cardinality, and each component's unit before lowering them to the shared
-`Vec3`; never read only `number_value` and drop unit metadata. The current
-SysML-to-Modelica geometry adapter accepts `LengthValue[3]` in metres and
-reports other units as unsupported rather than guessing a conversion.
+`Vec3`; never read only `number_value` and drop unit metadata. The shared
+`lunco-engineering-values` seam performs dimension-safe conversion, while the
+authored `engineering_units.rhai` catalog selects the supported UCUM-compatible
+symbols. The current SysML-to-Modelica geometry adapter accepts a bounded
+`LengthValue[3]` catalog and converts compatible entries to metres; it is not a
+full UCUM parser and must fail closed for unsupported units.
 Other physical-property quantities, including material properties, need the
 same unit-preserving treatment. Do not reuse the geometry-only length adapter,
 strip units, or assume an unimplemented material projection; capability-check
 the property kind and consumer before generating a model.
+
+For CAD/mechanical intent, keep the requirement and tolerance in SysML, then
+call the reloadable `assets/scripting/tools/mechanical_relations.rhai` policy
+with resolved native values. Its generic vocabulary includes distance,
+coincidence, signed plane distance, under/clearance, parallelism,
+perpendicularity, collinearity, coplanarity, mirroring, and plane/axis
+symmetry. It returns residual/evidence records and knows neither Griffin names
+nor USD paths. Do not add a product-specific relation predicate to Rust; add a
+generic Rust numeric primitive only when the operation is shared, hot, and
+not expressible safely with the Rhai standard math surface.
+
+`source_with_attributes()` is a bounded value projection and intentionally does
+not carry requirement/verification identity tables. Use
+`source_with_selection()` when evidence must retain source-linked requirement
+or verification identities. Identity and source revision remain Rust-owned;
+the Rhai observer owns the selected relation and verdict policy.
+
+Keep normative requirement tolerances in SysML evidence. Runtime settings such
+as `numerics.comparison.length_abs_m` and
+`numerics.solver.residual_abs` are algorithm/solver policy, resolved once per
+operation from the active Twin and passed through the call graph. They must not
+silently replace a SysML acceptance tolerance or collapse different physical
+dimensions into one epsilon.
 
 It does not provide a full SysML/KerML execution engine. Parsed generic
 elements, references, constraints, and relationships are source facts, not a

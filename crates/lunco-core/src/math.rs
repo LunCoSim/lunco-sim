@@ -28,12 +28,16 @@ impl DTransform {
         if !translation.is_finite() || !rotation.is_finite() || !scale.is_finite() {
             return None;
         }
-        if rotation.length_squared() < 1.0e-24 {
+        if rotation.length_squared() == 0.0 {
+            return None;
+        }
+        let rotation = rotation.normalize();
+        if !rotation.is_finite() {
             return None;
         }
         Some(Self {
             translation,
-            rotation: rotation.normalize(),
+            rotation,
             scale,
         })
     }
@@ -43,7 +47,7 @@ impl DTransform {
         self.translation.is_finite()
             && self.rotation.is_finite()
             && self.scale.is_finite()
-            && self.rotation.length_squared() >= 1.0e-24
+            && self.rotation.length_squared() > 0.0
     }
 
     /// Compose `self` with a child-local pose without lowering to `f32`.

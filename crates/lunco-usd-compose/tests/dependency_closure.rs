@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
-use lunco_assets_core::{
-    asset_path::normalize, transitive_file_closure, transitive_file_closure_with,
-};
+use lunco_assets_core::{transitive_file_closure, transitive_file_closure_with};
+use lunco_assets_path::normalize;
 use lunco_usd_compose::{compose_file_to_stage_with_roots, is_usd_layer, layer_dependency_arcs};
 
 #[test]

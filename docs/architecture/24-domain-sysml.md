@@ -126,14 +126,14 @@ boundary, never the SysML requirement representation.
 
 Unit-bearing coordinates remain arrays of typed scalar `Quantity` values in
 the generic SysML-to-Rhai bridge. A geometry policy may lower a
-`LengthValue[3]` to `DVec3` only after it verifies each component's unit; the
-current Modelica geometry adapter accepts metres and does not infer unit
-conversion. This keeps numeric vectors and dimensioned positions distinct.
-Rhai receives one native `SysmlType` value instead of duplicate hand-built
-type maps. Unit suffixes are still retained as authored symbols; resolving unit
-definitions, dimensional compatibility, and conversion factors is an explicit
-remaining generic feature, so the adapter must not silently convert or drop
-them.
+`LengthValue[3]` to `DVec3` only after it resolves and validates each
+component's unit through the authored UCUM-compatible catalog and the native
+quantity seam. The current Modelica geometry adapter performs that explicit
+conversion to canonical metres; it never infers a unit from a bare number.
+This keeps numeric vectors and dimensioned positions distinct. Rhai receives
+one native `SysmlType` value instead of duplicate hand-built type maps. Unit
+suffixes remain authored symbols and unresolved symbols fail the adapter; no
+conversion is silently guessed or dropped.
 
 The parser and source projection retain the declared elements and resolved
 relationships from the selected files. The specialized typed records cover
@@ -185,7 +185,10 @@ returned count, and `has_more`, and each page carries the same source revision
 that Rhai must verify while assembling a larger result. Rhai runtime tools that
 need native SysML/Rhai values may use `sysml_analysis(path)` for a deliberately
 bounded source, then select attributes, relationships, and constraints in
-Rhai. For Twin-scale sources, use selected `AnalyzeSysml` pages or
+Rhai. `source_with_attributes()` is value-only and intentionally omits
+requirement/verification identity tables; any observer that emits
+requirement-linked evidence must use `source_with_selection()` with explicit
+identity selectors. For Twin-scale sources, use selected `AnalyzeSysml` pages or
 `sysml_requirements::source()`, which pages the requirement/verification facts
 and keeps only compact identities and coverage links. Detailed records remain
 available through `source_with_selection()`. `sysml_attribute(path, qualified_name)` is the
@@ -321,6 +324,102 @@ authored runtime verdict:
    QUALIFIED_NAME` validates the Twin mapping before constructing the
    simulation and selects its declared verdict channel. The mapped Rhai
    observer still owns measurement and verdict policy.
+
+### Typed engineering values and policy boundary
+
+The shared `lunco-engineering-values` crate is a mechanism seam, not another
+domain language. It accepts a resolved unit definition (`symbol`, SI
+dimensions, scale, and optional affine offset), validates finite values, and
+performs dimension-safe conversion. It deliberately does not parse unit names
+or contain SysML, USD, Modelica, Griffin, or relationship vocabulary.
+
+The UCUM-compatible unit catalog is authored at the Rhai library edge and can
+be replaced by a Twin/SysML library. Rhai policy selects the catalog entry,
+chooses the relation and tolerance, queries USD facts, and orchestrates
+Modelica/Rumoca. Native Rust functions only perform the generic value
+operation and return residual-ready values. This keeps the source-of-truth
+chain explicit:
+
+```text
+SysML intent and typed constants
+        -> Rhai policy and orchestration
+        -> USD observations / Modelica-Rumoca equations
+        -> typed residual and evidence
+```
+
+Native Bevy vectors, quaternions, and transforms remain the geometry runtime
+values. They are adapted to the policy-free quantity seam only when a
+dimensioned scalar crosses a domain boundary; the neutral `HookValue` ABI is
+not expanded with domain-runtime types.
+
+The numerical convention is equally explicit: authored requirements,
+Rhai/mechanical residuals, USD-stage geometry facts, and Modelica/Rumoca
+exchange values are `f64`. The shared Rust math bridge owns representation
+validity and numerically sensitive vector primitives such as finite-vector
+validation and clamped cosine; it reuses the host/Rhai standard math surface
+for functions such as `PI`, `acos`, and `sqrt` rather than copying constants
+into each policy library. Rhai integer literals may be accepted at a policy
+edge, but are canonicalized to `f64` before residual evidence is emitted.
+Conversion to Bevy's `f32` `Vec3`/`Quat` is an explicit presentation or
+renderer boundary only; it must not occur in SysML checks, USD measurements,
+or Modelica-facing calculations.
+
+### Mechanical relation policy
+
+`assets/scripting/tools/mechanical_relations.rhai` is the extensible authored
+mechanical/CAD relation library. It consumes already-resolved native `f64`
+vectors and caller-supplied tolerances, and returns residual/evidence records;
+it does not know Twin names, USD paths, SysML identifiers, or Modelica
+components. Its current generic vocabulary covers scalar equality and ranges,
+point distance/coincidence, signed plane distance, under/clearance, angles,
+parallelism, same direction, perpendicularity, line/plane relations,
+collinearity, coplanarity, coincident axes, plane mirroring, axial half-turn
+symmetry, midpoint-on-plane, and paired symmetry. A Twin can extend or replace
+this Rhai module without a Rust rebuild. Rust supplies only the reusable
+numeric mechanism; SysML and the observing policy supply intent, units,
+tolerances, source identity, and verdict ownership.
+
+The numerical policies do not use string comparisons as a type system. Rhai
+values cross through explicit Rust predicates/converters (`f64_from`,
+`f64_only`, `array_is`, `map_is`, `string_is`, `vec3_is_valid`,
+`vec3_is_native`, `vec2_is_native`, `transform_is_finite`) and typed overloads;
+the SysML adapter similarly exposes `sysml_model_is`, `sysml_quantity_is`, and
+`sysml_enum_is` for opaque semantic wrappers. This keeps the dynamic boundary
+clear while avoiding repeated `type_of` dispatch in the hot path.
+
+Runtime numerical policy is exposed by
+`assets/scripting/tools/numerical_settings.rhai` over the existing generic
+active-Twin settings surface. It reads explicit, independently typed `f64`
+fields such as `numerics.comparison.length_abs_m`,
+`numerics.comparison.scalar_abs`, `numerics.comparison.angle_abs_rad`, and
+`numerics.solver.residual_abs` on
+each report/solve, so a setting update is visible without a process restart.
+Consumers resolve the profile once and pass the selected value through their
+call graph; they do not query settings inside per-vector loops. Missing or
+integer-valued tolerance settings remain configuration errors. This runtime
+profile controls algorithm/solver policy only; it never silently overrides a
+normative SysML requirement tolerance, which stays in the source-backed
+requirement record and is included in evidence. The Modelica translation
+readback consumes `numerics.solver.residual_abs`; its USD placement frame
+contract consumes the explicitly separate scalar and angle fields. The Griffin
+Twin manifest shows the concrete persisted profile without introducing a Rust
+global or an implicit default.
+
+### Native-plan compatibility contract
+
+Twin-local policies must consume the shared bridge contract rather than
+matching historical Rhai type labels. Numeric SysML projections are normalized
+through `f64_from`/`f64_only`; arrays, maps, strings, and native vectors use
+`array_is`, `map_is`, `string_is`, and `vec3_is_native`. Opaque SysML handles
+and AST nodes remain domain-typed values and may retain their explicit
+registered identity checks. This distinction prevents a valid typed projection
+from being mistaken for an empty geometry plan.
+
+The Griffin production observer now verifies the complete native component plan
+(`27` component records and `6` rail records) together with the mechanical
+relation and symmetry evidence. The plan remains a Rhai-owned, source-backed
+recipe consumed by the generic visual builder; no Griffin component count or
+placement table was added to Rust.
 
 The remaining work is bounded follow-up: full KerML expression/constraint
 execution, a full SysML editor, and a SysML-to-USD projection are not part of

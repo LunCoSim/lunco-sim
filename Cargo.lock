@@ -7133,8 +7133,10 @@ dependencies = [
  "lunco-celestial-data",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-geotiff",
  "lunco-settings",
  "lunco-workspace",
+ "tiff",
 ]
 
 [[package]]
@@ -7656,6 +7658,13 @@ name = "lunco-embodiment-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+]
+
+[[package]]
+name = "lunco-engineering-values"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -8397,6 +8406,7 @@ dependencies = [
  "log",
  "lunco-assets-core",
  "lunco-assets-path",
+ "lunco-assets-runtime",
  "lunco-modelica-ast",
  "lunco-modelica-compiler",
  "lunco-modelica-core",
@@ -9387,6 +9397,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-behavior",
  "lunco-core",
+ "lunco-engineering-values",
  "lunco-geometry-core",
  "lunco-hooks",
  "lunco-hooks-rhai",
@@ -9820,6 +9831,7 @@ dependencies = [
  "lunco-core",
  "lunco-environment",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
  "lunco-usd-avian-filters",
@@ -10234,6 +10246,7 @@ name = "lunco-usd-data"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-engineering-values",
  "openusd",
  "serde",
 ]

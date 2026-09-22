@@ -397,6 +397,7 @@ fn unique_paths(ops: &[UsdOp]) -> Vec<String> {
 mod tests {
     use super::*;
     use lunco_doc::{Document, DocumentId};
+    use lunco_usd_document::document::LayerId;
 
     fn assembly_document() -> UsdDocument {
         UsdDocument::new(DocumentId::new(1), "#usda 1.0\ndef Xform \"Assembly\" {}\n")
