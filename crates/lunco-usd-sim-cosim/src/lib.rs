@@ -97,8 +97,8 @@ struct UsdTelemetryChannel;
 /// Runtime index for the one-time USD telemetry projection.
 ///
 /// The declaration projector is triggered by scene/projection changes and by
-/// unprojected prims.  Its wrapper-port index therefore
-/// belong to the projection lifecycle, not to the per-frame query.  Keeping
+/// newly spawned prims. Its wrapper-port index therefore belongs to the
+/// projection lifecycle, not to the per-frame query. Keeping
 /// them here makes the steady state an empty gated system instead of a full
 /// ECS scan and a set of cloned USD-path keys every Update.
 #[derive(Resource, Default)]
@@ -129,17 +129,28 @@ fn mark_usd_telemetry_projection_index_dirty(
             Changed<GeneratedModelicaSource>,
             Added<ModelicaSignalLayout>,
             Changed<ModelicaSignalLayout>,
+            Added<SimComponent>,
+            Added<lunco_port_core::PortSurface>,
+            Added<lunco_port_core::PortSurfaceReady>,
         )>,
     >,
     stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
     projected: Query<Entity, With<UsdTelemetryProjected>>,
     channels: Query<Entity, With<UsdTelemetryChannel>>,
+    stage_assets: Option<Res<Assets<UsdStageAsset>>>,
     mut commands: Commands,
 ) {
     let revision_changed = stage_revision
         .as_ref()
         .is_some_and(|revision| revision.0 != index.observed_stage_revision);
-    if !added_prims.is_empty() || !changed_wrappers.is_empty() || revision_changed {
+    let stage_assets_changed = stage_assets
+        .as_ref()
+        .is_some_and(|assets| assets.is_changed());
+    if !added_prims.is_empty()
+        || !changed_wrappers.is_empty()
+        || revision_changed
+        || stage_assets_changed
+    {
         index.dirty = true;
         index.diagnostics.clear();
         if let Some(revision) = stage_revision {
@@ -163,23 +174,27 @@ fn telemetry_projection_index_changed(
             Changed<GeneratedModelicaSource>,
             Added<ModelicaSignalLayout>,
             Changed<ModelicaSignalLayout>,
+            Added<SimComponent>,
+            Added<lunco_port_core::PortSurface>,
+            Added<lunco_port_core::PortSurfaceReady>,
         )>,
     >,
     index: Res<UsdTelemetryProjectionIndex>,
     stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
+    stage_assets: Option<Res<Assets<UsdStageAsset>>>,
 ) -> bool {
     !added_prims.is_empty()
         || !changed_wrappers.is_empty()
         || stage_revision
             .as_ref()
             .is_some_and(|revision| revision.0 != index.observed_stage_revision)
+        || stage_assets
+            .as_ref()
+            .is_some_and(|assets| assets.is_changed())
 }
 
-fn telemetry_projection_needed(
-    index: Res<UsdTelemetryProjectionIndex>,
-    pending: Query<(), (With<UsdPrimPath>, Without<UsdTelemetryProjected>)>,
-) -> bool {
-    index.dirty || !pending.is_empty()
+fn telemetry_projection_needed(index: Res<UsdTelemetryProjectionIndex>) -> bool {
+    index.dirty
 }
 
 fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjectionIndex>) {
@@ -2200,13 +2215,6 @@ impl Plugin for UsdSimCosimPlugin {
         );
         app.add_systems(
             Update,
-            mark_usd_telemetry_projection_index_dirty
-                .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
-                .run_if(telemetry_projection_index_changed)
-                .in_set(CosimUpdateSet::Projection),
-        );
-        app.add_systems(
-            Update,
             lunco_usd_sim_domain::sync_generated_network_documents
                 .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
                 .in_set(CosimUpdateSet::Projection),
@@ -2256,6 +2264,13 @@ impl Plugin for UsdSimCosimPlugin {
                 request_modelica_parameter_recompile,
                 seed_usd_input_defaults,
                 dispatch_loaded_modelica_sources,
+                // Run the lifecycle trigger after wrapper/source publication,
+                // because those systems may add the runtime surface in this
+                // same chain after the domain projection pass has completed.
+                // This keeps the index correct without restoring a steady-state
+                // scan for every unprojected prim.
+                mark_usd_telemetry_projection_index_dirty
+                    .run_if(telemetry_projection_index_changed),
                 // The wrapper publishes the generic SimComponent surface and the
                 // authored output contract in this same lifecycle transaction.
                 // Project authored telemetry only after that publication, so the
@@ -2391,7 +2406,11 @@ mod tests {
             .init_resource::<TelemetryProjectionRuns>()
             .add_systems(
                 Update,
-                count_telemetry_projection_runs.run_if(telemetry_projection_needed),
+                (
+                    mark_usd_telemetry_projection_index_dirty,
+                    count_telemetry_projection_runs.run_if(telemetry_projection_needed),
+                )
+                    .chain(),
             );
 
         app.update();
@@ -2400,6 +2419,13 @@ mod tests {
         let entity = app.world_mut().spawn(UsdPrimPath::default()).id();
         app.update();
         assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+
+        // The production projector clears the dirty bit after rebuilding its
+        // indexes. This focused gate test models that ownership edge without
+        // pulling in the composed USD stage.
+        app.world_mut()
+            .resource_mut::<UsdTelemetryProjectionIndex>()
+            .dirty = false;
 
         app.world_mut()
             .entity_mut(entity)

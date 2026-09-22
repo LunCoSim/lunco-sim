@@ -497,12 +497,14 @@ impl Plugin for TimePlugin {
             .set_max_delta(BASE_VIRTUAL_MAX_DELTA);
 
         app.init_resource::<SimTick>()
+            .init_resource::<lunco_core_runtime::SimulationExecutionMode>()
             .init_resource::<MissionClock>()
             .init_resource::<TimeTransport>()
             .init_resource::<PendingScenePause>()
             .init_resource::<WorldTime>()
             .init_resource::<CelestialTime>()
             .register_type::<MissionClock>()
+            .register_type::<lunco_core_runtime::SimulationExecutionMode>()
             .register_type::<TimeTransport>()
             .register_type::<WorldTime>()
             .register_type::<CelestialTime>()

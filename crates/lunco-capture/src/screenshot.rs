@@ -96,6 +96,7 @@ impl Plugin for ScreenshotPlugin {
 
         // Offline Frame-by-Frame Recording Mode
         app.init_resource::<lunco_core_runtime::KeepAwake>()
+            .init_resource::<lunco_core_runtime::SimulationExecutionMode>()
             .init_resource::<OfflineRenderReadiness>()
             .init_resource::<OfflineRecordingState>()
             .init_resource::<OfflineVideoSettings>()
@@ -820,6 +821,8 @@ pub struct OfflineRecordingState {
     /// use a small catch-up cap; a declared 25 FPS take needs its full 40 ms
     /// frame delta or the film silently runs short.
     pub prev_virtual_max_delta: Option<std::time::Duration>,
+    /// Host execution policy as it was before this deterministic take.
+    pub prev_execution_mode: Option<lunco_core_runtime::SimulationExecutionMode>,
     /// Encode straight to a video file via a spawned `ffmpeg` instead of a PNG
     /// sequence (destination named a video file — see [`output_is_video`]).
     /// Demoted back to a PNG sequence at activation if `ffmpeg` is not
@@ -1157,6 +1160,7 @@ fn on_start_offline_recording(trigger: On<StartOfflineRecording>, mut commands: 
 fn activate_recording(
     pending: &PendingShotStart,
     state: &mut OfflineRecordingState,
+    execution_mode: &mut lunco_core_runtime::SimulationExecutionMode,
     keep_awake: &mut lunco_core_runtime::KeepAwake,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     commands: &mut Commands,
@@ -1204,6 +1208,12 @@ fn activate_recording(
         state.output_dir = fallback;
         state.video = false;
     }
+
+    // Recording is an explicit max-speed host policy. The recorder still owns
+    // the deterministic per-frame clock below; this mode only tells the host
+    // not to wait between render/update iterations.
+    state.prev_execution_mode = Some(*execution_mode);
+    *execution_mode = lunco_core_runtime::SimulationExecutionMode::MaxSpeed;
 
     // Ask to stay awake for the duration of the recording. An unattended capture
     // has no focused window, so the `reactive_low_power` throttle would otherwise
@@ -1258,6 +1268,7 @@ fn activate_recording(
 /// replace it, freezing virtual time until the process restarts.
 fn teardown_recording(
     state: &mut OfflineRecordingState,
+    execution_mode: &mut lunco_core_runtime::SimulationExecutionMode,
     keep_awake: &mut lunco_core_runtime::KeepAwake,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     virtual_time: &mut bevy::time::Time<bevy::time::Virtual>,
@@ -1282,6 +1293,9 @@ fn teardown_recording(
     if let Some(prev) = state.prev_virtual_max_delta.take() {
         virtual_time.set_max_delta(prev);
     }
+    if let Some(prev) = state.prev_execution_mode.take() {
+        *execution_mode = prev;
+    }
     // Restore automatic realtime ticking
     commands.insert_resource(TimeUpdateStrategy::Automatic);
 }
@@ -1290,6 +1304,7 @@ fn teardown_recording(
 fn on_stop_offline_recording(
     _trigger: On<StopOfflineRecording>,
     mut state: ResMut<OfflineRecordingState>,
+    mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
     mut keep_awake: ResMut<lunco_core_runtime::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
@@ -1304,6 +1319,7 @@ fn on_stop_offline_recording(
     if state.active {
         teardown_recording(
             &mut state,
+            &mut execution_mode,
             &mut keep_awake,
             &mut windows,
             &mut virtual_time,
@@ -1507,6 +1523,7 @@ fn scene_visuals_ready(
 fn start_recording_when_scene_ready(
     pending: Option<ResMut<PendingShotStart>>,
     mut state: ResMut<OfflineRecordingState>,
+    mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
     mut keep_awake: ResMut<lunco_core_runtime::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     meshes: Query<&bevy::mesh::Mesh3d>,
@@ -1550,6 +1567,7 @@ fn start_recording_when_scene_ready(
     activate_recording(
         &pending,
         &mut state,
+        &mut execution_mode,
         &mut keep_awake,
         &mut windows,
         &mut commands,
@@ -1706,6 +1724,7 @@ fn deliver_offline_frame(
     trigger: On<ScreenshotCaptured>,
     requests: Query<&PendingCapture>,
     mut state: ResMut<OfflineRecordingState>,
+    mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
     mut keep_awake: ResMut<lunco_core_runtime::KeepAwake>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
@@ -1768,6 +1787,7 @@ fn deliver_offline_frame(
                     error!("[offline-record] failed to start ffmpeg ({e}) — aborting recording");
                     teardown_recording(
                         &mut state,
+                        &mut execution_mode,
                         &mut keep_awake,
                         &mut windows,
                         &mut virtual_time,
@@ -1787,6 +1807,7 @@ fn deliver_offline_frame(
             );
             teardown_recording(
                 &mut state,
+                &mut execution_mode,
                 &mut keep_awake,
                 &mut windows,
                 &mut virtual_time,
@@ -1802,6 +1823,7 @@ fn deliver_offline_frame(
             );
             teardown_recording(
                 &mut state,
+                &mut execution_mode,
                 &mut keep_awake,
                 &mut windows,
                 &mut virtual_time,
@@ -1824,6 +1846,7 @@ fn deliver_offline_frame(
             );
             teardown_recording(
                 &mut state,
+                &mut execution_mode,
                 &mut keep_awake,
                 &mut windows,
                 &mut virtual_time,
@@ -1849,6 +1872,7 @@ fn deliver_offline_frame(
             );
             teardown_recording(
                 &mut state,
+                &mut execution_mode,
                 &mut keep_awake,
                 &mut windows,
                 &mut virtual_time,

@@ -120,7 +120,8 @@ with the last one each frame silently winning:
 | Knob | Sole writer | Purpose |
 |---|---|---|
 | `TimeUpdateStrategy` | `drive_offline_clock` (in `Last`) | advance virtual time exactly `1/fps` per captured frame |
-| `WinitSettings` | `sim_focus_pace` (`lunco-modelica-core`) | whether the app may sleep |
+| `SimulationExecutionMode` | recorder activation/teardown | select `MaxSpeed` for the host while the take is active, then restore the prior mode |
+| `WinitSettings` | `sim_focus_pace` (`lunco-modelica-ui`) | apply the execution mode and decide whether the app may sleep |
 | `Window::present_mode` | the recorder, on start/stop | uncapped (`AutoNoVsync`) while recording |
 
 `drive_offline_clock` runs in `Last`, so the strategy it writes is the one Bevy's
@@ -128,11 +129,11 @@ with the last one each frame silently winning:
 system has run.
 
 > [!IMPORTANT]
-> **To keep the app awake, hold a `lunco_core_runtime::KeepAwake` token — never write
-> `WinitSettings` directly.** `sim_focus_pace` rewrites it every frame and is the last
-> writer, so any direct write is reverted on the next frame. An unattended capture has no
-> focused window, and under the `reactive_low_power` throttle the app sleeps between
-> redraws: **measured 2–10 s per frame versus ~50 ms awake.**
+> **To keep the app awake, select `MaxSpeed` through the execution policy and hold a
+> `lunco_core_runtime::KeepAwake` token — never write `WinitSettings` directly.**
+> `sim_focus_pace` is the sole Winit writer and applies the policy every frame. An
+> unattended capture has no focused window, and under the `reactive_low_power` throttle
+> the app sleeps between redraws: **measured 2–10 s per frame versus ~50 ms awake.**
 
 ---
 

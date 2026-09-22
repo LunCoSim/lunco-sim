@@ -1,10 +1,10 @@
 //! Frame-pacing intent, shared across crates.
 //!
 //! Winit's `unfocused_mode` is a single global knob that several subsystems have
-//! an opinion about, and the last writer each frame wins. `lunco-modelica-core`'s
-//! `sim_focus_pace` re-pegs it every frame (Continuous while a Modelica sim runs,
-//! the binary's idle policy otherwise), so any other crate that merely *sets*
-//! `WinitSettings` has its choice silently reverted on the next frame.
+//! an opinion about, and the last writer each frame wins. The application pacer
+//! re-pegs it from the explicit execution mode and active simulation state, so
+//! a background realtime Twin gets a bounded cadence while recording/tests can
+//! deliberately request Continuous updates.
 //!
 //! [`KeepAwake`] is how a subsystem states the intent instead of fighting over the
 //! knob: whoever paces winit ORs these requests in. It is a counter, not a bool, so
@@ -25,7 +25,19 @@ use bevy::prelude::*;
 /// host to feed the fixed lattice explicitly and run the Bevy schedule without
 /// a wall-clock wait. The fixed timestep, transport rate, and co-simulation
 /// barrier remain the same in both modes.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(
+    Resource,
+    Reflect,
+    serde::Serialize,
+    serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+)]
+#[reflect(Resource)]
 pub enum SimulationExecutionMode {
     /// Use the host's normal wall-clock pacing.
     #[default]

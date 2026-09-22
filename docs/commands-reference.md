@@ -1517,6 +1517,20 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `epoch_jd` | `f64` |  Absolute epoch, Julian Date (TDB). |
 
+#### `SetSimulationExecutionMode`
+
+Select the host execution cadence independently of the live simulation rate.
+`Realtime` uses the normal wall-clock cadence; `MaxSpeed` removes the host wait
+for headless, recording, or deterministic test runs. Use [`SetTimeTransport`]
+to pause the simulation or change its simulated-time rate; this command does
+not change that rate.
+
+- *defined in:* `crates/lunco-time/src/domain.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `mode` | `SimulationExecutionMode` |  `Realtime` or `MaxSpeed`. |
+
 #### `SetTimeTransport`
 
  Drive the LIVE-WORLD transport (physics/tick clock), distinct from

@@ -151,6 +151,7 @@ fn sim_focus_pace(
     settings: Option<ResMut<bevy::winit::WinitSettings>>,
     pending: Option<Res<lunco_modelica_runner::PendingHandles>>,
     models: Query<&lunco_modelica_runtime::ModelicaModel>,
+    execution_mode: Option<Res<lunco_core_runtime::SimulationExecutionMode>>,
     keep_awake: Option<Res<lunco_core_runtime::KeepAwake>>,
     mut idle: Local<Option<bevy::winit::UpdateMode>>,
 ) {
@@ -159,12 +160,25 @@ fn sim_focus_pace(
         *idle = Some(settings.unfocused_mode);
     }
     let sim_active = pending.map(|p| !p.0.is_empty()).unwrap_or(false)
-        || models.iter().any(|m| !m.paused && m.is_compiled)
-        || keep_awake.map(|k| k.wanted()).unwrap_or(false);
-    let desired = if sim_active {
+        || models.iter().any(|m| !m.paused && m.is_compiled);
+    let max_speed = execution_mode
+        .is_some_and(|mode| *mode == lunco_core_runtime::SimulationExecutionMode::MaxSpeed);
+    let keep_awake = keep_awake.map(|request| request.wanted()).unwrap_or(false);
+    let idle_mode = idle.expect("snapshot set above");
+    let desired = if max_speed || keep_awake {
         bevy::winit::UpdateMode::Continuous
+    } else if sim_active && !matches!(idle_mode, bevy::winit::UpdateMode::Continuous) {
+        // An unfocused active simulator still needs a wall-clock cadence, but
+        // `Continuous` turns it into an unbounded max-speed loop as soon as the
+        // compositor stops pacing the window. Keep background simulation at the
+        // fixed realtime cadence so one Twin cannot starve the desktop or other
+        // Twin windows. Focused rendering is still paced by the focused mode's
+        // presentation setting.
+        bevy::winit::UpdateMode::reactive(std::time::Duration::from_secs_f64(
+            1.0 / lunco_core_runtime::FIXED_HZ,
+        ))
     } else {
-        idle.expect("snapshot set above")
+        idle_mode
     };
     if settings.unfocused_mode != desired {
         settings.unfocused_mode = desired;

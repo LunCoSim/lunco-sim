@@ -633,6 +633,73 @@ pub struct LunCoSimHeadlessPlugin {
     pub execution_mode: lunco_core_runtime::SimulationExecutionMode,
 }
 
+/// Install a headless runner whose wait is read after every update.
+///
+/// The command surface can therefore switch `SimulationExecutionMode` without
+/// restarting the process. The runner owns only wall-clock waiting; the time
+/// spine and any deterministic recorder still own the duration fed to Bevy's
+/// clock. In headless max-speed mode this runner also installs the fixed
+/// duration that the mode promises. Realtime restores automatic wall-clock
+/// sampling when a live command switches back.
+fn install_dynamic_headless_runner(app: &mut App) {
+    app.set_runner(|mut app| {
+        use bevy::app::PluginsState;
+        use std::time::{Duration, Instant};
+
+        let plugins_state = app.plugins_state();
+        if plugins_state != PluginsState::Cleaned {
+            while app.plugins_state() == PluginsState::Adding {
+                std::thread::yield_now();
+            }
+            app.finish();
+            app.cleanup();
+        }
+
+        let mut previous_mode = None;
+        loop {
+            let started = Instant::now();
+            app.update();
+
+            if let Some(exit) = app.should_exit() {
+                return exit;
+            }
+
+            let mode = app
+                .world()
+                .get_resource::<lunco_core_runtime::SimulationExecutionMode>()
+                .copied()
+                .unwrap_or_default();
+            if previous_mode != Some(mode) {
+                match mode {
+                    lunco_core_runtime::SimulationExecutionMode::Realtime => {
+                        app.world_mut()
+                            .insert_resource(bevy::time::TimeUpdateStrategy::Automatic);
+                    }
+                    lunco_core_runtime::SimulationExecutionMode::MaxSpeed => {
+                        app.world_mut().insert_resource(
+                            bevy::time::TimeUpdateStrategy::ManualDuration(
+                                Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK),
+                            ),
+                        );
+                    }
+                }
+                previous_mode = Some(mode);
+            }
+
+            let cadence = match mode {
+                lunco_core_runtime::SimulationExecutionMode::Realtime => {
+                    Duration::from_secs_f64(1.0 / lunco_core_runtime::FIXED_HZ)
+                }
+                lunco_core_runtime::SimulationExecutionMode::MaxSpeed => Duration::ZERO,
+            };
+            let elapsed = started.elapsed();
+            if elapsed < cadence {
+                std::thread::sleep(cadence - elapsed);
+            }
+        }
+    });
+}
+
 impl Default for LunCoSimHeadlessPlugin {
     fn default() -> Self {
         Self {
@@ -665,18 +732,15 @@ impl Plugin for LunCoSimHeadlessPlugin {
         // fixed cadence as the server's wall-clock pacing; max-speed mode feeds
         // one fixed duration per update and removes the wait entirely. Both
         // modes still execute the same schedules and the same causal barrier.
-        let wait = match self.execution_mode {
-            lunco_core_runtime::SimulationExecutionMode::Realtime => {
-                std::time::Duration::from_secs_f64(1.0 / lunco_core_runtime::FIXED_HZ)
-            }
-            lunco_core_runtime::SimulationExecutionMode::MaxSpeed => {
-                app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-                    std::time::Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK),
-                ));
-                std::time::Duration::ZERO
-            }
-        };
-        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(wait));
+        if matches!(
+            self.execution_mode,
+            lunco_core_runtime::SimulationExecutionMode::MaxSpeed
+        ) {
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK),
+            ));
+        }
+        install_dynamic_headless_runner(app);
 
         info!(
             "[luncosim] running HEADLESS (--no-ui), execution={:?}: no window/GPU/egui; local simulation only",

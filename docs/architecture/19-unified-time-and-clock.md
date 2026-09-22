@@ -214,6 +214,15 @@ API for a pure celestial presentation clock, including scales above the live
 transport ceiling; it publishes `CelestialTime` and does not overwrite
 `WorldTime`.
 
+`SetSimulationExecutionMode` is the separate host-pacing command. `Realtime`
+means that the host admits the fixed lattice on a wall-clock cadence;
+`MaxSpeed` means that a headless, recording, or test host may run without an
+intentional wait. It never changes `TimeTransport.rate`: a run can therefore
+be realtime at `1x`, realtime at `4x`, or max-speed with an explicitly authored
+transport rate. The host adapter owns the wait (`ScheduleRunner` or Winit),
+while a deterministic recorder owns its `TimeUpdateStrategy`; no subsystem may
+write both knobs as a shortcut.
+
 ## 11. Current clock-tree boundaries
 
 These boundaries are part of the contract and are retained here because they

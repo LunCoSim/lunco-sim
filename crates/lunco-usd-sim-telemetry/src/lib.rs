@@ -41,10 +41,12 @@ impl Plugin for PhysicsTelemetryPlugin {
 #[derive(Resource, Default)]
 pub struct PhysicsTelemetryState {
     previous: HashMap<Entity, PreviousKinematics>,
-    /// Last physics-time batch sample per source. The shared signal registry
-    /// still applies the final per-channel rate; this owner-level cursor only
-    /// avoids rebuilding the same channel values between due samples.
-    last_sample_times: HashMap<Entity, f64>,
+    /// Next physics-time batch sample. The shared signal registry still applies
+    /// the final per-channel rate; this owner-level gate keeps the body query
+    /// out of fixed steps between telemetry batches.
+    next_sample_time: Option<f64>,
+    last_sample_time: Option<f64>,
+    sample_rate_hz: Option<f64>,
     metadata: HashMap<SignalRef, SignalMeta>,
     metadata_group_paths: HashMap<Entity, String>,
 }
@@ -107,7 +109,9 @@ pub fn retain_physics_telemetry(
 ) {
     let Some(settings) = settings else {
         state.previous.clear();
-        state.last_sample_times.clear();
+        state.next_sample_time = None;
+        state.last_sample_time = None;
+        state.sample_rate_hz = None;
         state.metadata.clear();
         state.metadata_group_paths.clear();
         return;
@@ -115,14 +119,18 @@ pub fn retain_physics_telemetry(
     if !settings.enabled || !settings.default_rate_hz.is_finite() || settings.default_rate_hz <= 0.0
     {
         state.previous.clear();
-        state.last_sample_times.clear();
+        state.next_sample_time = None;
+        state.last_sample_time = None;
+        state.sample_rate_hz = None;
         state.metadata.clear();
         state.metadata_group_paths.clear();
         return;
     }
     let Some(signals) = signals.as_deref_mut() else {
         state.previous.clear();
-        state.last_sample_times.clear();
+        state.next_sample_time = None;
+        state.last_sample_time = None;
+        state.sample_rate_hz = None;
         state.metadata.clear();
         state.metadata_group_paths.clear();
         return;
@@ -149,7 +157,6 @@ pub fn retain_physics_telemetry(
             return;
         }
         state.previous.remove(&entity);
-        state.last_sample_times.remove(&entity);
         state.metadata_group_paths.remove(&entity);
         state.metadata.retain(|signal, _| signal.entity != entity);
     };
@@ -161,6 +168,26 @@ pub fn retain_physics_telemetry(
     }
 
     let sample_interval = 1.0 / settings.default_rate_hz;
+    if state.sample_rate_hz != Some(settings.default_rate_hz) {
+        state.sample_rate_hz = Some(settings.default_rate_hz);
+        state.next_sample_time = None;
+    }
+    if state.last_sample_time.is_some_and(|last| time < last) {
+        state.previous.clear();
+        state.next_sample_time = None;
+    }
+    let sample_due = !state.next_sample_time.is_some_and(|next_sample_time| {
+        // The mission clock is derived from integer ticks, so a nominal
+        // 0.1 s boundary can land a few ulps below the decimal value.
+        // Treat that representation noise as due rather than delaying
+        // the batch by another fixed step.
+        time + sample_interval * 1.0e-9 < next_sample_time
+    });
+    if sample_due {
+        state.last_sample_time = Some(time);
+        state.next_sample_time = Some(time + sample_interval);
+    }
+
     // The registry owns the channel catalog. Snapshot its size once per fixed
     // pass without walking every retained history.
     let mut channel_count = signals.scalar_count();
@@ -176,7 +203,6 @@ pub fn retain_physics_telemetry(
             || angular_velocity.is_some_and(|value| !value.is_finite())
         {
             state.previous.remove(&entity);
-            state.last_sample_times.remove(&entity);
             continue;
         }
 
@@ -195,13 +221,13 @@ pub fn retain_physics_telemetry(
             }
         };
 
-        let sample_due = state
-            .last_sample_times
-            .get(&entity)
-            .is_none_or(|last| time < *last || time - *last >= sample_interval);
-        if !sample_due {
+        // Keep the fixed-step velocity cursor current so acceleration remains
+        // the derivative over the immediately preceding physics step. The
+        // expensive channel construction/retention below is still batch-gated.
+        if !sample_due && !metadata_dirty {
             continue;
         }
+
         if metadata_dirty {
             state.metadata_group_paths.insert(entity, prim.path.clone());
         }
@@ -474,7 +500,6 @@ pub fn retain_physics_telemetry(
         ) {
             commands.entity(entity).try_insert(SignalSource);
         }
-        state.last_sample_times.insert(entity, time);
     }
 
     for (entity, prim, wheel, suspension, hits, global_owner) in &wheels {
@@ -482,11 +507,7 @@ pub fn retain_physics_telemetry(
             .metadata_group_paths
             .get(&entity)
             .is_none_or(|path| path != &prim.path);
-        let sample_due = state
-            .last_sample_times
-            .get(&entity)
-            .is_none_or(|last| time < *last || time - *last >= sample_interval);
-        if !sample_due {
+        if !sample_due && !metadata_dirty {
             continue;
         }
         if metadata_dirty {
@@ -548,7 +569,6 @@ pub fn retain_physics_telemetry(
         ) {
             commands.entity(entity).try_insert(SignalSource);
         }
-        state.last_sample_times.insert(entity, time);
     }
 }
 
@@ -883,7 +903,6 @@ mod tests {
 
         let state = app.world().resource::<PhysicsTelemetryState>();
         assert!(!state.previous.contains_key(&body));
-        assert!(!state.last_sample_times.contains_key(&body));
         assert!(!state.metadata_group_paths.contains_key(&body));
         assert!(state.metadata.keys().all(|key| key.entity != body));
         assert!(app

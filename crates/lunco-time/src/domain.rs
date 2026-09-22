@@ -704,6 +704,32 @@ pub fn apply_control_animation(pb: &mut Playback, cmd: &ControlAnimation) {
     }
 }
 
+/// Select how the host advances the application loop, independently of the
+/// live simulation rate controlled by [`SetTimeTransport`]. `Realtime` keeps
+/// the normal wall-clock cadence; `MaxSpeed` lets headless, recording, and test
+/// hosts run the fixed lattice without an intentional wall-clock wait.
+#[Command(default)]
+pub struct SetSimulationExecutionMode {
+    /// Host execution policy.
+    pub mode: lunco_core_runtime::SimulationExecutionMode,
+}
+
+#[on_command(SetSimulationExecutionMode)]
+fn on_set_simulation_execution_mode(
+    trigger: On<SetSimulationExecutionMode>,
+    mut mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
+) {
+    let requested = trigger.event().mode;
+    if *mode != requested {
+        bevy::log::info!(
+            "[pacing] execution mode changed: {:?} -> {:?}",
+            *mode,
+            requested
+        );
+        *mode = requested;
+    }
+}
+
 /// Drive the LIVE-WORLD transport (physics/tick clock), distinct from
 /// [`ControlAnimation`] which drives the keyframe preview. Each field optional so
 /// one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
@@ -1089,6 +1115,7 @@ fn on_reset_time(
 
 register_commands!(
     on_control_animation,
+    on_set_simulation_execution_mode,
     on_set_time_transport,
     on_set_mission_epoch,
     on_set_clock,
@@ -1332,6 +1359,28 @@ mod tests {
             app.world().resource::<Time<Fixed>>().overstep(),
             std::time::Duration::ZERO
         );
+    }
+
+    #[test]
+    fn execution_mode_command_is_independent_of_transport_rate() {
+        let mut app = App::new();
+        app.insert_resource(lunco_core_runtime::SimulationExecutionMode::Realtime)
+            .insert_resource(crate::TimeTransport {
+                mode: TransportMode::Playing,
+                rate: 4.0,
+            })
+            .add_observer(on_set_simulation_execution_mode);
+
+        app.world_mut().trigger(SetSimulationExecutionMode {
+            mode: lunco_core_runtime::SimulationExecutionMode::MaxSpeed,
+        });
+
+        assert_eq!(
+            *app.world()
+                .resource::<lunco_core_runtime::SimulationExecutionMode>(),
+            lunco_core_runtime::SimulationExecutionMode::MaxSpeed
+        );
+        assert_eq!(app.world().resource::<crate::TimeTransport>().rate, 4.0);
     }
 
     #[test]
