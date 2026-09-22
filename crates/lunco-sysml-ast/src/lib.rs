@@ -308,6 +308,14 @@ pub struct SysmlExpression {
 pub struct SysmlConstraint {
     /// Source-backed constraint element.
     pub element: SysmlElement,
+    /// Typed feature members declared by this constraint definition or usage.
+    ///
+    /// Constraint parameters are KerML features too; keeping them separate
+    /// from ordinary attribute projections preserves their ownership and
+    /// direction (`in`, `out`, `inout`) without making consumers reparse the
+    /// declaration text.
+    #[serde(default)]
+    pub parameters: Vec<SysmlFeature>,
     /// Parsed, resolved body expressions in authored order.
     #[serde(default)]
     pub expressions: Vec<SysmlExpression>,
@@ -388,6 +396,15 @@ pub enum SysmlPrimitiveType {
     Real,
     Complex,
     String,
+}
+
+/// Direction of a constraint/action feature member.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlFeatureDirection {
+    In,
+    Out,
+    InOut,
+    None,
 }
 
 /// The collection cardinality and collection semantics of a feature.
@@ -832,6 +849,37 @@ pub struct SysmlAttribute {
     pub end: u32,
 }
 
+/// A typed KerML feature member that is not an ordinary attribute projection,
+/// for example a constraint parameter (`in p : Real`) or an action parameter.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlFeature {
+    /// Snapshot-scoped feature identity.
+    pub handle: SysmlFeatureHandle,
+    /// Snapshot-scoped owning element.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_handle: Option<SysmlElementHandle>,
+    /// Qualified owner (`Package::Constraint`).
+    pub owner: String,
+    /// Feature direction in the authored membership.
+    pub direction: SysmlFeatureDirection,
+    /// Feature name.
+    pub name: String,
+    /// Qualified feature name.
+    pub qualified_name: String,
+    /// Declared type spelling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+    /// Resolved declared type and multiplicity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_type: Option<SysmlType>,
+    /// Logical source file.
+    pub file: String,
+    /// Declaration byte-range start.
+    pub start: u32,
+    /// Declaration byte-range end.
+    pub end: u32,
+}
+
 impl SysmlAttribute {
     /// Return the attribute's typed source identity for the requested source
     /// generation.
@@ -1095,9 +1143,11 @@ impl SysmlAnalysis {
             source_fingerprint,
         );
         let constraints = project_constraints(
-            &workspace,
+            &mut workspace,
+            &files,
             &elements,
             &project_indices,
+            &type_catalog,
             source_revision,
             source_fingerprint,
         );
@@ -1390,17 +1440,19 @@ fn project_relationships(
 }
 
 fn project_constraints(
-    workspace: &Workspace,
+    workspace: &mut Workspace,
+    files: &[SysmlFile],
     elements: &[SysmlElement],
     project_files: &[usize],
+    type_catalog: &BTreeMap<String, SysmlTypeCategory>,
     source_revision: u64,
     source_fingerprint: u64,
 ) -> Vec<SysmlConstraint> {
-    let model = workspace.model();
     let mut constraints = Vec::new();
     for &file in project_files {
-        for &id in workspace.file_elements(file) {
-            let kind = model.kind(id);
+        let file_elements = workspace.file_elements(file).to_vec();
+        for id in file_elements {
+            let kind = workspace.model().kind(id);
             if !matches!(
                 kind,
                 ElementKind::ConstraintDefinition
@@ -1416,6 +1468,8 @@ fn project_constraints(
             else {
                 continue;
             };
+            let parameters =
+                project_constraint_parameters(workspace, files, elements, type_catalog, element);
             let expressions = workspace
                 .file_parse(file)
                 .syntax()
@@ -1441,11 +1495,101 @@ fn project_constraints(
                 .collect();
             constraints.push(SysmlConstraint {
                 element: element.clone(),
+                parameters,
                 expressions,
             });
         }
     }
     constraints
+}
+
+fn project_constraint_parameters(
+    workspace: &mut Workspace,
+    files: &[SysmlFile],
+    elements: &[SysmlElement],
+    type_catalog: &BTreeMap<String, SysmlTypeCategory>,
+    constraint: &SysmlElement,
+) -> Vec<SysmlFeature> {
+    let quantity_roots = [
+        semantic_type_id(workspace, "Quantities::ScalarQuantityValue"),
+        semantic_type_id(workspace, "Quantities::VectorQuantityValue"),
+        semantic_type_id(workspace, "Quantities::TensorQuantityValue"),
+    ];
+    let mut type_cache = HashMap::new();
+    elements
+        .iter()
+        .filter(|element| element.owner_handle == Some(constraint.handle))
+        .filter(|element| element.kind == "ReferenceUsage" || element.kind == "Feature")
+        .filter_map(|element| {
+            let file = files.iter().find(|file| file.name == element.file)?;
+            let declaration = file
+                .text
+                .get(element.start as usize..element.end as usize)?;
+            let trimmed = declaration.trim();
+            let (direction, after_direction) = if let Some(rest) = trimmed.strip_prefix("inout") {
+                (SysmlFeatureDirection::InOut, rest.trim_start())
+            } else if let Some(rest) = trimmed.strip_prefix("in") {
+                (SysmlFeatureDirection::In, rest.trim_start())
+            } else if let Some(rest) = trimmed.strip_prefix("out") {
+                (SysmlFeatureDirection::Out, rest.trim_start())
+            } else {
+                (SysmlFeatureDirection::None, trimmed)
+            };
+            let name_end = after_direction.find(|character: char| {
+                character == ':'
+                    || character == ';'
+                    || character == '='
+                    || character.is_whitespace()
+            })?;
+            let name = after_direction[..name_end].trim();
+            if name.is_empty() {
+                return None;
+            }
+            let (type_name, type_span) = after_direction.find(':').and_then(|colon| {
+                let tail_start = colon + 1;
+                let tail = &after_direction[tail_start..];
+                let type_end = tail.find(['=', ';', '{']).unwrap_or(tail.len());
+                let type_source = &tail[..type_end];
+                let type_name = type_source.trim();
+                if type_name.is_empty() {
+                    return None;
+                }
+                let absolute_start = element.start as usize + declaration.find(type_name)?;
+                let absolute_end = absolute_start + type_name.len();
+                Some((
+                    type_name.to_owned(),
+                    (
+                        u32::try_from(absolute_start).ok()?,
+                        u32::try_from(absolute_end).ok()?,
+                    ),
+                ))
+            })?;
+            let resolved = attribute_type_reference(workspace, element, type_span.0, type_span.1)
+                .map(|target| {
+                    resolved_type_semantics(workspace, target, &quantity_roots, &mut type_cache)
+                });
+            let mut declared_type = SysmlType::parse_with_catalog(&type_name, type_catalog)?;
+            if let Some(resolved) = &resolved {
+                declared_type.apply_resolved_type(resolved);
+            }
+            let owner = constraint.qualified_name.clone();
+            Some(SysmlFeature {
+                handle: SysmlFeatureHandle {
+                    element: element.handle,
+                },
+                owner_handle: Some(constraint.handle),
+                owner,
+                direction,
+                name: name.to_owned(),
+                qualified_name: element.qualified_name.clone(),
+                type_name: Some(type_name),
+                declared_type: Some(declared_type),
+                file: element.file.clone(),
+                start: element.start,
+                end: element.end,
+            })
+        })
+        .collect()
 }
 
 fn lower_expression(

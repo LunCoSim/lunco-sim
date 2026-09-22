@@ -61,7 +61,7 @@ fn finite_quat(value: DQuat, label: &str) -> Result<DQuat, Box<EvalAltResult>> {
         )));
     }
     let length_squared = value.length_squared();
-    if !length_squared.is_finite() || length_squared < 1e-24 {
+    if !length_squared.is_finite() || length_squared == 0.0 {
         return Err(invalid_value(format!(
             "{label} must have a finite, non-zero magnitude"
         )));
@@ -91,9 +91,48 @@ fn finite_transform(
 
 /// One numeric element of a script array.
 fn scalar(d: &Dynamic) -> Option<f64> {
-    d.as_float()
-        .ok()
-        .or_else(|| d.as_int().ok().map(|i| i as f64))
+    f64_from_dynamic(d.clone()).as_float().ok()
+}
+
+/// Canonicalize the two scalar inputs accepted at a Rhai numeric boundary to
+/// the engine's native f64.  This is deliberately a Rust boundary function so
+/// scripts do not need string-based type protocols or repeated dynamic method
+/// dispatch in numerical policies.
+fn f64_from_dynamic(value: Dynamic) -> Dynamic {
+    if let Ok(value) = value.as_float() {
+        return value
+            .is_finite()
+            .then_some(Dynamic::from_float(value))
+            .unwrap_or(Dynamic::UNIT);
+    }
+    if let Ok(integer) = value.as_int() {
+        let value = integer as f64;
+        if value.is_finite() && value as i128 == integer as i128 {
+            return Dynamic::from_float(value);
+        }
+    }
+    Dynamic::UNIT
+}
+
+/// Accept only a native Rhai f64.  Settings use this stricter boundary so an
+/// integer-valued TOML setting cannot silently become an engineering margin.
+fn f64_only_dynamic(value: Dynamic) -> Dynamic {
+    match value.as_float() {
+        Ok(value) if value.is_finite() => Dynamic::from_float(value),
+        _ => Dynamic::UNIT,
+    }
+}
+
+fn array_is_dynamic(value: Dynamic) -> bool {
+    value.is_array()
+}
+
+fn map_is_dynamic(value: Dynamic) -> bool {
+    value.is_map()
+}
+
+fn string_is_dynamic(value: Dynamic) -> bool {
+    value.is_string()
 }
 
 /// Read a native `Vec3` or `[x, y, z]` script value as a vector.
@@ -181,7 +220,7 @@ fn quat_from_array(d: &Dynamic) -> Option<DQuat> {
     }
     let q = DQuat::from_xyzw(c[0], c[1], c[2], c[3]);
     let length_squared = q.length_squared();
-    if !q.is_finite() || !length_squared.is_finite() || length_squared < 1e-24 {
+    if !q.is_finite() || !length_squared.is_finite() || length_squared == 0.0 {
         return None;
     }
     let normalized = q.normalize();
@@ -191,7 +230,7 @@ fn quat_from_array(d: &Dynamic) -> Option<DQuat> {
 fn to_quat(d: &Dynamic) -> Option<DQuat> {
     if let Some(q) = d.clone().try_cast::<DQuat>() {
         let length_squared = q.length_squared();
-        if !q.is_finite() || !length_squared.is_finite() || length_squared < 1e-24 {
+        if !q.is_finite() || !length_squared.is_finite() || length_squared == 0.0 {
             return None;
         }
         let normalized = q.normalize();
@@ -227,12 +266,76 @@ fn native_dot(a: DVec3, b: DVec3) -> Result<f64, Box<EvalAltResult>> {
         .ok_or_else(|| invalid_value("vector dot product must be finite"))
 }
 
+/// Whether a vector has a measurable direction.  This is a representation
+/// invariant, not a requirement tolerance: finite and non-zero is enough for
+/// the native f64 operations below to define a direction.
+fn native_vec3_is_valid(value: DVec3) -> bool {
+    value.is_finite() && value.length_squared().is_finite() && value.length_squared() > 0.0
+}
+
+fn native_vec3_is_native(_: DVec3) -> bool {
+    true
+}
+
+fn native_vec3_component(value: DVec3, index: i64) -> Result<f64, Box<EvalAltResult>> {
+    match index {
+        0 => Ok(value.x),
+        1 => Ok(value.y),
+        2 => Ok(value.z),
+        _ => Err(invalid_value("Vec3 component index must be 0, 1, or 2")),
+    }
+}
+
+fn native_quat_is_valid(value: DQuat) -> bool {
+    let length_squared = value.length_squared();
+    value.is_finite() && length_squared.is_finite() && length_squared > 0.0
+}
+
+fn native_transform_is_finite(transform: DTransform) -> bool {
+    let rotation_length_squared = transform.rotation.length_squared();
+    transform.translation.is_finite()
+        && transform.rotation.is_finite()
+        && rotation_length_squared.is_finite()
+        && transform.scale.is_finite()
+        && rotation_length_squared > 0.0
+}
+
+/// Cosine of the angle between two finite, non-zero vectors.  The clamp is
+/// kept beside the dot/normalization operation because round-off can place an
+/// otherwise valid cosine just outside acos' domain.
+fn native_cosine(a: DVec3, b: DVec3) -> Result<f64, Box<EvalAltResult>> {
+    if !native_vec3_is_valid(a) || !native_vec3_is_valid(b) {
+        return Err(invalid_value(
+            "vector cosine requires finite, non-zero vectors",
+        ));
+    }
+    let denominator = a.length() * b.length();
+    if !denominator.is_finite() || denominator <= 0.0 {
+        return Err(invalid_value("vector cosine has no finite denominator"));
+    }
+    let cosine = (a.dot(b) / denominator).clamp(-1.0, 1.0);
+    cosine
+        .is_finite()
+        .then_some(cosine)
+        .ok_or_else(|| invalid_value("vector cosine must be finite"))
+}
+
+fn native_angle_rad(a: DVec3, b: DVec3) -> Result<f64, Box<EvalAltResult>> {
+    native_cosine(a, b).and_then(|cosine| {
+        let angle = cosine.acos();
+        angle
+            .is_finite()
+            .then_some(angle)
+            .ok_or_else(|| invalid_value("vector angle must be finite"))
+    })
+}
+
 fn native_normalize(a: DVec3) -> Result<DVec3, Box<EvalAltResult>> {
     if !a.is_finite() {
         return Err(invalid_value("vector must contain only finite values"));
     }
     let length = a.length();
-    if length < 1e-12 {
+    if length == 0.0 {
         return Err(invalid_value("cannot normalize a zero-length vector"));
     }
     finite_vec3(a / length, "normalized vector")
@@ -324,6 +427,13 @@ fn is_direction(v: DVec3) -> bool {
 
 /// Register the math surface on a scripting engine.
 pub fn register(engine: &mut Engine) {
+    engine
+        .register_fn("f64_from", f64_from_dynamic)
+        .register_fn("f64_only", f64_only_dynamic)
+        .register_fn("array_is", array_is_dynamic)
+        .register_fn("map_is", map_is_dynamic)
+        .register_fn("string_is", string_is_dynamic);
+
     // Native glam values are the hot-loop representation.  They are registered
     // under stable script names, while the underlying types stay the same
     // `bevy::math` values used by the simulator (no second tuple implementation
@@ -345,6 +455,8 @@ pub fn register(engine: &mut Engine) {
         .register_fn("vec3_zero", || DVec3::ZERO)
         .register_fn("vec3_array", to_array)
         .register_fn("vec3_is_finite", |v: DVec3| v.is_finite())
+        .register_fn("vec3_is_valid", native_vec3_is_valid)
+        .register_fn("vec3_is_native", native_vec3_is_native)
         .register_get("x", |v: &mut DVec3| v.x)
         .register_get("y", |v: &mut DVec3| v.y)
         .register_get("z", |v: &mut DVec3| v.z)
@@ -357,10 +469,7 @@ pub fn register(engine: &mut Engine) {
         .register_fn("quat_identity", || DQuat::IDENTITY)
         .register_fn("quat_array", quat_to_array)
         .register_fn("quat_is_finite", |q: DQuat| q.is_finite())
-        .register_fn("quat_is_valid", |q: DQuat| {
-            let length_squared = q.length_squared();
-            q.is_finite() && length_squared.is_finite() && length_squared >= 1e-24
-        })
+        .register_fn("quat_is_valid", native_quat_is_valid)
         .register_fn("quat_from_euler_xyz_deg", native_quat_from_euler_xyz_deg)
         .register_fn("quat_to_euler_xyz_deg", native_quat_to_euler_xyz_deg)
         .register_fn("quat_inverse", native_quat_inverse)
@@ -377,14 +486,7 @@ pub fn register(engine: &mut Engine) {
             },
         )
         .register_fn("transform_identity", || DTransform::IDENTITY)
-        .register_fn("transform_is_finite", |transform: DTransform| {
-            let rotation_length_squared = transform.rotation.length_squared();
-            transform.translation.is_finite()
-                && transform.rotation.is_finite()
-                && rotation_length_squared.is_finite()
-                && transform.scale.is_finite()
-                && rotation_length_squared >= 1e-24
-        })
+        .register_fn("transform_is_finite", native_transform_is_finite)
         .register_fn("transform_compose", native_transform_compose)
         .register_fn("transform_apply_point", native_transform_apply_point)
         .register_get("translation", |transform: &mut DTransform| {
@@ -410,6 +512,9 @@ pub fn register(engine: &mut Engine) {
         .register_fn("vscale", native_scale)
         .register_fn("vcross", native_cross)
         .register_fn("vdot", native_dot)
+        .register_fn("vcosine", native_cosine)
+        .register_fn("vangle_rad", native_angle_rad)
+        .register_fn("vcomponent", native_vec3_component)
         .register_fn("vlen", |v: DVec3| {
             let length = v.length();
             length
@@ -462,6 +567,61 @@ pub fn register(engine: &mut Engine) {
         }
     });
 
+    engine.register_fn("vec3_is_valid", |value: Dynamic| {
+        to_vec3(&value).is_some_and(native_vec3_is_valid)
+    });
+
+    engine.register_fn("vec3_is_native", |value: Dynamic| {
+        value.clone().try_cast::<DVec3>().is_some()
+    });
+
+    engine.register_fn("vec2_is_native", |value: Dynamic| {
+        value.clone().try_cast::<DVec2>().is_some()
+    });
+
+    engine.register_fn("vec3_is_finite", |value: Dynamic| {
+        to_vec3(&value).is_some_and(|value| value.is_finite())
+    });
+
+    engine.register_fn("quat_is_valid", |value: Dynamic| {
+        value
+            .clone()
+            .try_cast::<DQuat>()
+            .is_some_and(native_quat_is_valid)
+    });
+
+    engine.register_fn("transform_is_finite", |value: Dynamic| {
+        value
+            .clone()
+            .try_cast::<DTransform>()
+            .is_some_and(native_transform_is_finite)
+    });
+
+    engine.register_fn("vcomponent", |value: Dynamic, index: i64| {
+        to_vec3(&value)
+            .and_then(|value| native_vec3_component(value, index).ok())
+            .map(Dynamic::from_float)
+            .unwrap_or(Dynamic::UNIT)
+    });
+
+    engine.register_fn("vcosine", |a: Dynamic, b: Dynamic| {
+        match (to_vec3(&a), to_vec3(&b)) {
+            (Some(a), Some(b)) => native_cosine(a, b)
+                .map(Dynamic::from_float)
+                .unwrap_or(Dynamic::UNIT),
+            _ => Dynamic::UNIT,
+        }
+    });
+
+    engine.register_fn("vangle_rad", |a: Dynamic, b: Dynamic| {
+        match (to_vec3(&a), to_vec3(&b)) {
+            (Some(a), Some(b)) => native_angle_rad(a, b)
+                .map(Dynamic::from_float)
+                .unwrap_or(Dynamic::UNIT),
+            _ => Dynamic::UNIT,
+        }
+    });
+
     // A zero-length vector has no direction, so it is returned unchanged rather
     // than divided by zero — the script's own convention, kept.
     engine.register_fn("vnorm", |a: Dynamic| match to_vec3(&a) {
@@ -476,7 +636,11 @@ pub fn register(engine: &mut Engine) {
     engine.register_fn(
         "clamp",
         |x: f64, lo: f64, hi: f64| {
-            if x.is_nan() { lo } else { x.clamp(lo, hi) }
+            if x.is_nan() {
+                lo
+            } else {
+                x.clamp(lo, hi)
+            }
         },
     );
 
@@ -537,6 +701,7 @@ pub fn register(engine: &mut Engine) {
     });
 
     crate::rhai_assembly::register(engine);
+    crate::rhai_engineering::register(engine);
     crate::rhai_geometry::register(engine);
 }
 
@@ -595,7 +760,7 @@ pub fn register_vec2(engine: &mut Engine) {
         })
         .register_fn("v2norm", |v: DVec2| {
             let length = v.length();
-            if !length.is_finite() || length < 1.0e-12 {
+            if !length.is_finite() || length == 0.0 {
                 return Err(invalid_value("cannot normalize a zero-length Vec2"));
             }
             finite_vec2(v / length, "normalized vector")
@@ -710,6 +875,46 @@ mod tests {
     }
 
     #[test]
+    fn native_vector_validity_and_cosine_are_f64_primitives() {
+        let d = eval(
+            "let a = vec3(1.0, 0.0, 0.0); \
+             let b = vec3(0.0, 1.0, 0.0); \
+             [vec3_is_valid(a), vec3_is_valid(vec3_zero()), \
+              vec3_is_valid([1.0, 0.0, 0.0]), \
+              vcosine(a, b), vcosine([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), \
+              f64_only(vcosine(a, b)) != ()]",
+        );
+        let values = d
+            .into_array()
+            .expect("vector primitives must return values");
+        assert!(values[0].as_bool().unwrap());
+        assert!(!values[1].as_bool().unwrap());
+        assert!(values[2].as_bool().unwrap());
+        assert!(values[3].as_float().unwrap().abs() < 1e-15);
+        assert!(values[4].as_float().unwrap().abs() < 1e-15);
+        assert!(values[5].as_bool().unwrap());
+    }
+
+    #[test]
+    fn numeric_boundary_converters_are_explicit_and_f64_based() {
+        let d = eval(
+            "[f64_from(3), f64_only(3), f64_only(3.0), array_is([1.0, 2.0]), map_is(#{}), map_is([]), string_is(\"x\"), string_is(1)]",
+        );
+        let values = d.into_array().expect("numeric boundary must return values");
+        assert_eq!(values[0].as_float().unwrap(), 3.0);
+        assert!(
+            values[1].is_unit(),
+            "integer must not pass f64-only boundary"
+        );
+        assert_eq!(values[2].as_float().unwrap(), 3.0);
+        assert!(values[3].as_bool().unwrap());
+        assert!(values[4].as_bool().unwrap());
+        assert!(!values[5].as_bool().unwrap());
+        assert!(values[6].as_bool().unwrap());
+        assert!(!values[7].as_bool().unwrap());
+    }
+
+    #[test]
     fn native_vec3_properties_and_quat_rotation_are_typed() {
         let d = eval("let p = vec3(1.0, 2.0, 3.0); [p.x, p.y, p.z]");
         let a = d.into_array().expect("vector properties must be readable");
@@ -770,11 +975,9 @@ mod tests {
     #[test]
     fn native_constructors_reject_non_finite_and_degenerate_values() {
         assert!(engine().eval::<Dynamic>("vec3(0.0/0.0, 0.0, 0.0)").is_err());
-        assert!(
-            engine()
-                .eval::<Dynamic>("quat(0.0, 0.0, 0.0, 0.0)")
-                .is_err()
-        );
+        assert!(engine()
+            .eval::<Dynamic>("quat(0.0, 0.0, 0.0, 0.0)")
+            .is_err());
         assert!(engine().eval::<Dynamic>("vnorm(vec3_zero())").is_err());
     }
 

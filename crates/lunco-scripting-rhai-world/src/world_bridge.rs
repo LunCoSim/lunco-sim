@@ -448,20 +448,78 @@ fn sysml_analysis_value(path: &str) -> Dynamic {
 /// the native model handle keeps repeated typed lookups on one immutable
 /// snapshot instead of rebuilding a dynamic report for every attribute.
 #[cfg(feature = "sysml")]
-fn sysml_model_value(path: &str) -> Dynamic {
+fn sysml_model_from_world(path: &str) -> Result<lunco_sysml_rhai::SysmlModelValue, Dynamic> {
     let Some(report) = bridge_core::with_world(|world| {
         lunco_scene_validation::validate::analyze_sysml_reference(world, path)
     }) else {
-        return sysml_value_error(path, "", "SysML analysis requires an active world scope");
+        return Err(sysml_value_error(
+            path,
+            "",
+            "SysML analysis requires an active world scope",
+        ));
     };
     if !report.ok {
-        return sysml_value_error(path, "", report.errors.join("; "));
+        return Err(sysml_value_error(path, "", report.errors.join("; ")));
     }
     let Some(analysis) = report.sysml_analysis else {
-        return sysml_value_error(path, "", "SysML source analysis is unavailable");
+        return Err(sysml_value_error(
+            path,
+            "",
+            "SysML source analysis is unavailable",
+        ));
     };
     publish_sysml_warning(path, None, None);
-    Dynamic::from(lunco_sysml_rhai::SysmlModelValue::new(path, analysis))
+    Ok(lunco_sysml_rhai::SysmlModelValue::new(path, analysis))
+}
+
+#[cfg(feature = "sysml")]
+fn sysml_model_value(path: &str) -> Dynamic {
+    match sysml_model_from_world(path) {
+        Ok(model) => Dynamic::from(model),
+        Err(error) => error,
+    }
+}
+
+/// Path-based SysML constraint result for API/MCP and other dynamic clients.
+///
+/// This deliberately returns the same structured result as the native model
+/// method, without requiring a caller to retain a Rust-backed Rhai handle.
+#[cfg(feature = "sysml")]
+fn sysml_constraint_ir_value(path: &str, name: &str) -> Dynamic {
+    match sysml_model_from_world(path) {
+        Ok(mut model) => lunco_sysml_rhai::constraint_ir_value(&mut model, name),
+        Err(error) => error,
+    }
+}
+
+/// Path-based Rumoca lowering result for API/MCP and other dynamic clients.
+#[cfg(feature = "sysml")]
+fn sysml_modelica_constraint_value(path: &str, name: &str) -> Dynamic {
+    match sysml_model_from_world(path) {
+        Ok(mut model) => lunco_sysml_rhai::modelica_constraint_value(&mut model, name),
+        Err(error) => error,
+    }
+}
+
+/// Path-based neutral-IR evaluator for API/MCP and other dynamic clients.
+#[cfg(feature = "sysml")]
+fn sysml_evaluate_constraint_value(
+    path: &str,
+    name: &str,
+    observations: Map,
+    absolute_tolerance: f64,
+    relative_tolerance: f64,
+) -> Dynamic {
+    match sysml_model_from_world(path) {
+        Ok(mut model) => lunco_sysml_rhai::evaluate_constraint_value(
+            &mut model,
+            name,
+            observations,
+            absolute_tolerance,
+            relative_tolerance,
+        ),
+        Err(error) => error,
+    }
 }
 
 #[cfg(feature = "sysml")]
@@ -2018,6 +2076,38 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     engine.register_fn("sysml_model", |path: ImmutableString| -> Dynamic {
         sysml_model_value(path.as_str())
     });
+    #[cfg(feature = "sysml")]
+    engine.register_fn(
+        "sysml_constraint_ir",
+        |path: ImmutableString, name: ImmutableString| -> Dynamic {
+            sysml_constraint_ir_value(path.as_str(), name.as_str())
+        },
+    );
+    #[cfg(feature = "sysml")]
+    engine.register_fn(
+        "sysml_modelica_constraint",
+        |path: ImmutableString, name: ImmutableString| -> Dynamic {
+            sysml_modelica_constraint_value(path.as_str(), name.as_str())
+        },
+    );
+    #[cfg(feature = "sysml")]
+    engine.register_fn(
+        "sysml_evaluate_constraint",
+        |path: ImmutableString,
+         name: ImmutableString,
+         observations: Map,
+         absolute_tolerance: f64,
+         relative_tolerance: f64|
+         -> Dynamic {
+            sysml_evaluate_constraint_value(
+                path.as_str(),
+                name.as_str(),
+                observations,
+                absolute_tolerance,
+                relative_tolerance,
+            )
+        },
+    );
     #[cfg(feature = "sysml")]
     engine.register_fn(
         "sysml_attribute",

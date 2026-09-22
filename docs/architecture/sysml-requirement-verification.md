@@ -39,6 +39,16 @@ plan and proposal; it does not auto-commit a Griffin edit or claim that a
 visual/runtime acceptance gate has passed. Arbitrary SysML constraint
 execution remains out of scope.
 
+The generic constraint compilation boundary is now explicit. A resolved
+supported constraint can be compiled by `lunco-sysml-ir`, carrying source
+spans, typed parameters, multiplicity, dependencies, diagnostics, and a
+deterministic fingerprint. `lunco-sysml-modelica` lowers valid IR to
+standalone Modelica and admits it through Rumoca. In-process Rhai may use a
+native `SysmlModel`; API/MCP callers should use the structured path functions
+`sysml_constraint_ir`, `sysml_modelica_constraint`, and
+`sysml_evaluate_constraint`. These are provider-neutral seams, not a Griffin
+relation library and not a claim that Rumoca executes KerML.
+
 ```rhai
 let source = sysml_requirements::source();
 let result = sysml_requirements::evaluate(source, [
@@ -175,6 +185,11 @@ the evaluator never invents a value or turns a missing predicate into a pass.
 
 This is deliberately a subset of SysML v2 verification semantics: requirement
 definitions/usages, subjects, attributes, and verification-case `verify`
-memberships. It does not pretend to be a full KerML execution engine. The
-subset is sufficient for deterministic system-level acceptance while remaining
-portable to headless tests and interactive Twin review.
+memberships, plus the bounded source-linked constraint IR and Modelica
+lowering path. It does not pretend to be a full KerML execution engine.
+Feature-chain navigation, reusable constraint invocation/default arguments,
+collection/index/aggregate semantics, full quantity conversion, behavioral
+execution, and automatic requirement-to-USD projection remain outside the
+subset. The supported boundary is sufficient for deterministic system-level
+acceptance while remaining portable to headless tests and interactive Twin
+review.

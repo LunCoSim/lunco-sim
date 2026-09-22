@@ -62,6 +62,7 @@ use bevy::log::warn_once;
 use bevy::math::{DQuat, DVec3, EulerRot, Quat, Vec3};
 use bevy::prelude::Transform;
 use bevy::reflect::Reflect;
+use lunco_engineering_values::{Quantity, Unit, UnitError};
 
 /// The stage's declared up axis. USD's default is `Y` (AOUSD); DCC/robotics
 /// stages (Omniverse, Isaac Sim, Blender, ROS) overwhelmingly author `Z`.
@@ -273,6 +274,23 @@ impl StageMetrics {
     /// this module existed. **True for every asset we ship.**
     pub fn is_canonical(&self) -> bool {
         self.up_axis == UpAxis::Y && (self.meters_per_unit - 1.0).abs() < 1e-12
+    }
+
+    /// Interpret one stage-authored linear scalar through the shared
+    /// engineering-value contract. Geometry decoders still use the native
+    /// `DVec3` fast path; this value object is the typed seam for requirements,
+    /// Modelica parameters, and other scalar adapters.
+    pub fn stage_length_quantity(&self, value: f64) -> Result<Quantity, UnitError> {
+        Quantity::with_unit(
+            value,
+            Unit::scaled_length("usd-stage-length", self.meters_per_unit)?,
+        )
+    }
+
+    /// Return a stage-authored length in canonical SI metres without making a
+    /// caller reproduce `metersPerUnit` conversion rules.
+    pub fn canonical_length(&self, value: f64) -> Result<f64, UnitError> {
+        self.stage_length_quantity(value)?.si_value()
     }
 }
 
@@ -1026,10 +1044,9 @@ mod tests {
             meters_per_unit: 0.01,
             up_axis: UpAxis::Y,
         });
-        assert!(
-            ct.point(Vec3::new(100.0, 0.0, 0.0))
-                .abs_diff_eq(Vec3::X, 1e-6)
-        );
+        assert!(ct
+            .point(Vec3::new(100.0, 0.0, 0.0))
+            .abs_diff_eq(Vec3::X, 1e-6));
         assert_eq!(ct.length(250.0), 2.5);
         assert!(
             ct.dir(Vec3::Y).abs_diff_eq(Vec3::Y, 1e-6),
@@ -1156,9 +1173,8 @@ mod tests {
             up_axis: UpAxis::Z,
         });
         assert!((ct.stage_length(2.5) - 250.0).abs() < 1e-9);
-        assert!(
-            ct.stage_point(Vec3::Y)
-                .abs_diff_eq(Vec3::new(0.0, 0.0, 100.0), 1e-3)
-        );
+        assert!(ct
+            .stage_point(Vec3::Y)
+            .abs_diff_eq(Vec3::new(0.0, 0.0, 100.0), 1e-3));
     }
 }

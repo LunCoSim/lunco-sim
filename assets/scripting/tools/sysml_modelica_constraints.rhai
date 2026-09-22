@@ -5,8 +5,17 @@
 import "modelica_editor" as modelica_editor;
 import "assembly_builder" as assembly_builder;
 import "assembly_edit" as assembly_edit;
+import "engineering_units" as engineering_units;
+import "numerical_settings" as numerical_settings;
 
-fn analyze(path) { sysml_analysis(path) }
+fn analyze(path) {
+    let report = sysml_analysis(path);
+    if map_is(report) && report.ok == true {
+        let model = sysml_model(path);
+        if type_of(model) == "SysmlModel" { report.model = model; }
+    }
+    report
+}
 
 /// Request only the geometry attributes this policy consumes. The generic
 /// projection filters the immutable SysML snapshot before constructing Rhai
@@ -25,6 +34,8 @@ fn analyze_selected(path, attribute_names) {
         }
     }
     report.analysis.attributes = selected;
+    let model = sysml_model(path);
+    if type_of(model) == "SysmlModel" { report.model = model; }
     report
 }
 
@@ -39,6 +50,17 @@ fn _constraint_by_name(report, qualified_name, kind) {
             && (kind == "" || record.element.kind == kind) { return record; }
     }
     ()
+}
+
+/// Compile one selected constraint through the native neutral IR and the
+/// Rumoca Modelica boundary. Empty constraint definitions are legal semantic
+/// declarations (and remain useful for binding discovery), but they are not
+/// executable Modelica obligations until they have a body.
+fn _modelica_backend(report, qualified_name) {
+    if report.path == () || !string_is(report.path) {
+        return #{ok: false, error: "SysML source path is unavailable"};
+    }
+    sysml_modelica_constraint(report.path, qualified_name)
 }
 
 fn _element_name(report, handle) {
@@ -80,16 +102,16 @@ fn _contains_handle(handles, candidate) {
 /// handles. Qualified names remain an explicit caller selector/display edge;
 /// no graph join is performed on text.
 fn select(report, requested) {
-    if type_of(report) != "map" || report.ok != true
+    if !map_is(report) || report.ok != true
         || report.analysis == () || report.analysis.constraints == () {
         return #{ok: false, error: "SysML analysis is unavailable"};
     }
-    if type_of(requested) != "array" || requested.is_empty() {
+    if !array_is(requested) || requested.is_empty() {
         return #{ok: false, error: "at least one qualified constraint definition is required"};
     }
 
     for identity in requested {
-        if type_of(identity) != "string" || !identity.contains("::") {
+        if !string_is(identity) || !identity.contains("::") {
             return #{ok: false, error: "constraint identities must be qualified SysML names"};
         }
     }
@@ -99,6 +121,13 @@ fn select(report, requested) {
     for identity in requested {
         let definition = _constraint_by_name(report, identity, "ConstraintDefinition");
         if definition == () { continue; }
+        let backend = _modelica_backend(report, identity);
+        if backend.ok != true && backend.ir.constraint != ()
+            && backend.ir.constraint.expressions.len() > 0 {
+            return #{ok: false, error: "constraint IR cannot cross the Rumoca Modelica boundary: "
+                + backend.error};
+        }
+        definition.modelica_backend = backend;
         let handle = definition.element.handle;
         if _contains_handle(definition_handles, handle) { continue; }
         definitions.push(definition);
@@ -150,12 +179,13 @@ fn select(report, requested) {
       relationships: related, references: related_references}
 }
 
-/// Read exactly three length quantities authored in metres, then lower them
-/// to the shared f64 Bevy/Rhai Vec3. Unit conversion is not inferred here.
+/// Read exactly three length quantities, resolve their UCUM/SI units through
+/// the shared native quantity adapter, then lower them to the shared f64
+/// Bevy/Rhai Vec3. Unit conversion is never inferred from a bare number.
 /// A qualified name is accepted only as a public selector; all later joins
 /// use the attribute's native feature and owner handles.
 fn position_m(report, feature_selector) {
-    if type_of(report) != "map" || report.analysis == ()
+    if !map_is(report) || report.analysis == ()
         || report.analysis.attributes == () {
         return #{ok: false, error: "SysML analysis has no attribute records"};
     }
@@ -163,7 +193,7 @@ fn position_m(report, feature_selector) {
     for attribute in report.analysis.attributes {
         if type_of(feature_selector) == "SysmlFeatureHandle"
             && attribute.handle == feature_selector { selected = attribute; break; }
-        if type_of(feature_selector) == "string"
+        if string_is(feature_selector)
             && attribute.qualified_name == feature_selector { selected = attribute; break; }
     }
     if selected != () {
@@ -183,10 +213,21 @@ fn position_m(report, feature_selector) {
         }
         let values = [];
         for element in attribute.value.elements {
-            if element.number_value == () || element.unit != "m" {
-                return #{ok: false, error: "SysML position components must be finite metre quantities: " + qualified_name};
+            if element.number_value == () || element.unit == () {
+                return #{ok: false, error: "SysML position components must be finite quantities: " + qualified_name};
             }
-            values.push(element.number_value);
+            let source_unit = engineering_units::ucum_unit(element.unit);
+            let metre_unit = engineering_units::ucum_unit("m");
+            let source_quantity = if source_unit == () || metre_unit == () {
+                ()
+            } else { quantity(element.number_value, source_unit) };
+            let value = if source_quantity == () { () } else {
+                quantity_value_in(source_quantity, metre_unit)
+            };
+            if value == () {
+                return #{ok: false, error: "SysML position components use unsupported or incompatible units: " + qualified_name};
+            }
+            values.push(value);
         }
         return #{ok: true, value: vec3(values[0], values[1], values[2]),
           feature: attribute.handle, owner: attribute.owner_handle,
@@ -200,11 +241,11 @@ fn position_m(report, feature_selector) {
 /// the bound part feature; the reference graph ties the connector to the
 /// particular constraint usage in whose context it is declared.
 fn bound_vector(report, usage_selector, input_name) {
-    if type_of(report) != "map" || report.analysis == ()
+    if !map_is(report) || report.analysis == ()
         || report.analysis.relationships == () || report.analysis.references == () {
         return #{ok: false, error: "SysML analysis has no binding relationship facts"};
     }
-    let usage = if type_of(usage_selector) == "map" { usage_selector }
+    let usage = if map_is(usage_selector) { usage_selector }
         else { _constraint_by_name(report, usage_selector, "ConstraintUsage") };
     if usage == () { return #{ok: false, error: "constraint usage selector did not resolve"}; }
     let usage_handle = usage.element.handle;
@@ -234,7 +275,7 @@ fn bound_vector(report, usage_selector, input_name) {
         for property in relationship.properties {
             if property.name == "relatedFeature" { related_features = property.feature_targets; }
         }
-        if type_of(related_features) != "array" || related_features.len() != 2 {
+        if !array_is(related_features) || related_features.len() != 2 {
             return #{ok: false, error: "binding connector must resolve to exactly two feature ends: "
                 + relationship.element.qualified_name};
         }
@@ -288,7 +329,7 @@ fn _modelica_vec3(value) {
 /// usage. Its standard SysML binding connectors select both endpoint features;
 /// callers never duplicate the feature mapping in Rhai arguments.
 fn assemble_segment(report, usage_name) {
-    if type_of(report) != "map" || report.analysis == () {
+    if !map_is(report) || report.analysis == () {
         return #{ok: false, error: "SysML analysis is unavailable"};
     }
     let usage = _constraint_by_name(report, usage_name, "ConstraintUsage");
@@ -301,6 +342,7 @@ fn assemble_segment(report, usage_name) {
     }
     let selection = select(report, [definition.element.qualified_name]);
     if selection.ok != true { return selection; }
+    let semantic_backend = selection.definitions[0].modelica_backend;
     let start = bound_vector(report, usage_name, "start");
     if start.ok != true { return start; }
     let finish = bound_vector(report, usage_name, "finish");
@@ -327,6 +369,8 @@ fn assemble_segment(report, usage_name) {
       start_binding: start.binding, end_binding: finish.binding,
       start_binding_name: _element_name(report, start.binding),
       end_binding_name: _element_name(report, finish.binding),
+      constraint_ir: semantic_backend.ir,
+      rumoca_modelica_source: semantic_backend.source,
       start: start.value, finish: finish.value}
 }
 
@@ -416,10 +460,11 @@ fn _modelica_scalar_expression(expression, axis, context) {
         return #{ok: true, source: expression.integer_value.to_string()};
     }
     if expression.real_value != () {
-        if type_of(expression.real_value) != "f64" || !expression.real_value.is_finite() {
+        let real_value = f64_only(expression.real_value);
+        if real_value == () {
             return #{ok: false, error: "constraint contains a non-finite real literal"};
         }
-        return #{ok: true, source: _modelica_real(expression.real_value)};
+        return #{ok: true, source: _modelica_real(real_value)};
     }
     if expression.boolean_value != () {
         return #{ok: true, source: if expression.boolean_value { "true" } else { "false" }};
@@ -436,7 +481,7 @@ fn _modelica_scalar_expression(expression, axis, context) {
             return #{ok: true, source: "(" + inner.source + ")"};
         }
         let symbol = expression.operator.modelica_symbol();
-        if type_of(symbol) != "string" {
+        if !string_is(symbol) {
             return #{ok: false, error: "SysML unary operator has no supported Modelica spelling"};
         }
         return #{ok: true, source: "(" + symbol + " " + inner.source + ")"};
@@ -447,7 +492,7 @@ fn _modelica_scalar_expression(expression, axis, context) {
             return #{ok: false, error: "nested equality is not a scalar Modelica expression"};
         }
         let symbol = expression.operator.modelica_symbol();
-        if type_of(symbol) != "string" {
+        if !string_is(symbol) {
             return #{ok: false, error: "SysML binary operator has no supported Modelica spelling"};
         }
         let lhs = _modelica_scalar_expression(children[0], axis, context);
@@ -465,10 +510,10 @@ fn _modelica_scalar_expression(expression, axis, context) {
 /// closure residual, so inconsistent datums are detected instead of silently
 /// overconstraining or moving the component to satisfy only the last mate.
 fn assemble_coincident_translation_set(report, usage_selectors) {
-    if type_of(report) != "map" || report.analysis == () {
+    if !map_is(report) || report.analysis == () {
         return #{ok: false, error: "SysML analysis is unavailable"};
     }
-    if type_of(usage_selectors) != "array" || usage_selectors.is_empty() {
+    if !array_is(usage_selectors) || usage_selectors.is_empty() {
         return #{ok: false, error: "at least one coincident-translation usage selector is required"};
     }
 
@@ -488,7 +533,7 @@ fn assemble_coincident_translation_set(report, usage_selectors) {
     let common_fixed_owner = ();
 
     for usage_selector in usage_selectors {
-        if type_of(usage_selector) != "string" {
+        if !string_is(usage_selector) {
             return #{ok: false, error: "usage selectors must be qualified SysML names"};
         }
         let usage = _constraint_by_name(report, usage_selector, "ConstraintUsage");
@@ -724,11 +769,18 @@ fn _coincident_translation_experiment_ticket(doc_id, parent_generation, generate
 /// Every requested output must be a finite f64 sample and the solved point
 /// must coincide with the SysML-bound target within a metre-scale tolerance.
 fn coincident_translation_readback(generated, completed) {
-    if type_of(generated) != "map" || generated.ok != true
-        || type_of(completed) != "map" || completed.ok != true
+    if !map_is(generated) || generated.ok != true
+        || !map_is(completed) || completed.ok != true
         || completed.complete != true || completed.ticket == ()
         || completed.result == () {
         return #{ ok: false, stage: "readback", error: "a completed generated Modelica experiment is required" };
+    }
+    let numerical_policy = numerical_settings::active();
+    let residual_tolerance = numerical_settings::require(
+        numerical_policy, "solver_abs");
+    if residual_tolerance == () {
+        return #{ ok: false, stage: "readback", error:
+            "Twin setting numerics.solver.residual_abs is required as a finite, non-negative f64" };
     }
     let result = completed.result;
     let source = query("GetDocumentSource", #{ doc_id: completed.ticket.doc_id });
@@ -751,11 +803,11 @@ fn coincident_translation_readback(generated, completed) {
     for axis in 1..4 {
         let name = "translation[" + axis.to_string() + "]";
         let samples = result.series[name];
-        if type_of(samples) != "array" || samples.is_empty() {
+        if !array_is(samples) || samples.is_empty() {
             return #{ ok: false, stage: "readback", error: "missing Modelica translation output " + name };
         }
-        let value = samples[samples.len() - 1];
-        if type_of(value) != "f64" || !value.is_finite() {
+        let value = f64_only(samples[samples.len() - 1]);
+        if value == () {
             return #{ ok: false, stage: "readback", error: "translation output is not finite f64 data: " + name };
         }
         components.push(value);
@@ -770,25 +822,26 @@ fn coincident_translation_readback(generated, completed) {
             let sample_index = relation_index * 3 + axis;
             let name = "relationResiduals[" + sample_index.to_string() + "]";
             let samples = result.series[name];
-            if type_of(samples) != "array" || samples.is_empty() {
+            if !array_is(samples) || samples.is_empty() {
                 return #{ ok: false, stage: "readback",
                     error: "missing Modelica relation residual output " + name };
             }
-            let value = samples[samples.len() - 1];
-            if type_of(value) != "f64" || !value.is_finite() {
+            let value = f64_only(samples[samples.len() - 1]);
+            if value == () {
                 return #{ ok: false, stage: "readback",
                     error: "Modelica relation residual is not finite f64 data: " + name };
             }
             residual_components.push(value);
         }
         let residual = vec3(residual_components[0], residual_components[1], residual_components[2]);
-        let satisfied = vlen(residual) <= 1.0e-9;
+        let satisfied = vlen(residual) <= residual_tolerance;
         if !satisfied { all_closed = false; }
         relation_residuals.push(#{usage: relation.usage,
             usage_handle: relation.usage_handle,
             moving_feature: relation.moving_feature,
             fixed_feature: relation.fixed_feature,
             residual: residual, residual_m: vlen(residual),
+            residual_tolerance_m: residual_tolerance,
             satisfied: satisfied});
     }
     let dof = #{initial: generated.initial_translation_dof,
@@ -798,11 +851,13 @@ fn coincident_translation_readback(generated, completed) {
     if !all_closed {
         return #{ok: false, stage: "equation_check",
             error: "the shared translation does not close every source-bound SysML relation",
-            translation: translation, relation_residuals: relation_residuals, dof: dof};
+            translation: translation, relation_residuals: relation_residuals,
+            residual_tolerance_m: residual_tolerance, dof: dof};
     }
     #{ ok: true, kind: "coincident_translation_set_solution",
        translation: translation, units: "m", residual: relation_residuals[0].residual,
        relation_residuals: relation_residuals, relation_count: generated.relation_count,
+       residual_tolerance_m: residual_tolerance,
        dof: dof,
        moving_point: generated.moving_point, fixed_point: generated.fixed_point,
        constraint: generated.constraint, usage: generated.usage, usages: generated.usages,
@@ -817,7 +872,7 @@ fn coincident_translation_readback(generated, completed) {
 /// edits are polled through the shared command-result API before the generated
 /// wrapper is inspected or dispatched; pending remains non-blocking.
 fn poll_coincident_translation(ticket, generated) {
-    if type_of(ticket) != "map" || ticket.stage == () {
+    if !map_is(ticket) || ticket.stage == () {
         return #{ ok: false, stage: "ticket", retryable: false,
             error: "a source-application or Modelica experiment ticket is required" };
     }
@@ -896,15 +951,15 @@ fn poll_coincident_translation(ticket, generated) {
        result: progress.result, solution: solution }
 }
 
-fn _vector_matches(value, expected) {
+fn _vector_matches(value, expected, tolerance) {
     if value == () { return false; }
-    if type_of(value) == "Vec3" {
-        return vlen(vsub(value, expected)) <= 1.0e-9;
+    if vec3_is_native(value) {
+        return vlen(vsub(value, expected)) <= tolerance;
     }
-    if type_of(value) != "array" || value.len() != 3 { return false; }
-    (value[0] - expected.x).abs() <= 1.0e-9
-        && (value[1] - expected.y).abs() <= 1.0e-9
-        && (value[2] - expected.z).abs() <= 1.0e-9
+    if !array_is(value) || value.len() != 3 { return false; }
+    (value[0] - expected.x).abs() <= tolerance
+        && (value[1] - expected.y).abs() <= tolerance
+        && (value[2] - expected.z).abs() <= tolerance
 }
 
 /// Build a generation-bound typed Editor placement plan from the completed
@@ -916,10 +971,20 @@ fn coincident_translation_placement_plan(doc_id, edit_target, path,
     parent_generation, solution) {
     if doc_id == () || doc_id == 0 || edit_target == () || edit_target == ""
         || path == () || !path.starts_with("/") || parent_generation == ()
-        || type_of(solution) != "map" || solution.ok != true
-        || type_of(solution.translation) != "Vec3" || solution.units != "m" {
+        || !map_is(solution) || solution.ok != true
+        || !vec3_is_native(solution.translation) || solution.units != "m" {
         return #{ ok: false, stage: "plan", error: "explicit document, edit target, path, generation, and metre-valued completed solution are required" };
     }
+    let numerical_policy = numerical_settings::active();
+    let scalar_tolerance = numerical_settings::require(
+        numerical_policy, "scalar_abs");
+    let angle_tolerance_rad = numerical_settings::require(
+        numerical_policy, "angle_abs_rad");
+    if scalar_tolerance == () || angle_tolerance_rad == () {
+        return #{ ok: false, stage: "plan", error:
+            "Twin settings numerics.comparison.scalar_abs and numerics.comparison.angle_abs_rad are required as finite, non-negative f64 values" };
+    }
+    let rotation_tolerance_deg = angle_tolerance_rad * 180.0 / PI();
     let document = assembly_edit::describe(doc_id);
     if document == () || document.ok == false || document.generation != parent_generation {
         return #{ ok: false, stage: "plan", error: "USD document generation changed before placement planning", inspection: document };
@@ -945,11 +1010,11 @@ fn coincident_translation_placement_plan(doc_id, edit_target, path,
         return #{ ok: false, stage: "plan", error: "translation placement target must be an existing Xform", target: prim };
     }
     let rotation = if prim.attrs == () { () } else { prim.attrs["xformOp:rotateXYZ"] };
-    if rotation != () && !_vector_matches(rotation, vec3(0.0, 0.0, 0.0)) {
+    if rotation != () && !_vector_matches(rotation, vec3(0.0, 0.0, 0.0), rotation_tolerance_deg) {
         return #{ ok: false, stage: "frame_contract", error: "coincident translation policy requires identity target rotation" };
     }
     let scale = if prim.attrs == () { () } else { prim.attrs["xformOp:scale"] };
-    if scale != () && !_vector_matches(scale, vec3(1.0, 1.0, 1.0)) {
+    if scale != () && !_vector_matches(scale, vec3(1.0, 1.0, 1.0), scalar_tolerance) {
         return #{ ok: false, stage: "frame_contract", error: "coincident translation policy requires unit target scale" };
     }
     let plan = assembly_builder::place_plan(
@@ -973,8 +1038,8 @@ fn coincident_translation_placement_plan(doc_id, edit_target, path,
 /// Submit the typed plan to the visible USD Editor proposal/review owner and
 /// read the accepted proposal back. This does not commit geometry.
 fn propose_coincident_translation_plan(plan, label, activate_editor) {
-    if type_of(plan) != "map" || plan.ok != true || plan.ops == ()
-        || label == () || type_of(label) != "string" || label == "" {
+    if !map_is(plan) || plan.ok != true || plan.ops == ()
+        || label == () || !string_is(label) || label == "" {
         return #{ ok: false, stage: "proposal", error: "a valid typed placement plan and label are required" };
     }
     if activate_editor == true {

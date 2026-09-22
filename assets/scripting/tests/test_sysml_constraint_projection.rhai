@@ -3,7 +3,7 @@
 
 import "sysml_modelica_constraints" as geometry_constraints;
 
-let path = "assets/scripting/tests/fixtures/sysml_constraint_projection.sysml";
+let path = "lunco://scripting/tests/fixtures/sysml_constraint_projection.sysml";
 let report = geometry_constraints::analyze_selected(path,
     ["upperMount", "lowerMount", "movingAnchor", "fixedAnchor",
      "movingAnchorSecond", "fixedAnchorSecond",
@@ -82,6 +82,21 @@ checks.push(t_true(selected.ok == true && selected.definitions.len() == 1
     && selected.usages[0].element.qualified_name
         == "ConstraintProjection::StrutAssembly::loadPath",
     "Rhai policy selects the definition and its typed usage from the generic graph"));
+
+let coincidence_backend = sysml_modelica_constraint(path,
+    "ConstraintProjection::CoincidentPointTranslation");
+checks.push(t_true(coincidence_backend.ok == true
+    && coincidence_backend.ir.valid == true
+    && coincidence_backend.ir.status == "valid"
+    && coincidence_backend.ir.constraint.parameters.len() == 3
+    && coincidence_backend.ir.constraint.parameters[0].direction == "in"
+    && coincidence_backend.ir.constraint.parameters[0].type.value == "Quantity"
+    && coincidence_backend.ir.constraint.parameters[0].type.lower == 3
+    && coincidence_backend.ir.constraint.parameters[0].type.upper == 3
+    && coincidence_backend.source.contains("model SysmlConstraint_")
+    && coincidence_backend.source.contains("Real movingPoint[3]")
+    && coincidence_backend.source.contains("equation"),
+    "the neutral constraint IR exposes typed KerML parameters and the Rumoca-backed Modelica source"));
 
 let binding_links = [];
 for relationship in report.analysis.relationships {

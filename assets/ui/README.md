@@ -27,10 +27,10 @@ Forms, text inputs, DOM querying, JavaScript, accessibility semantics, and
 browser-style event propagation are not supplied by this layer. The separate
 `bevy_hui_widgets 0.6.0` crate has primitive text-input, slider, and select
 components, but it does not supply the complete editor, focus, clipboard,
-validation, accessibility, or modal contract required by LunCoSim. It is not
-part of the runtime UI dependency set. The `lunco-ui::modal` queue/outcome
-contract, scrim, focus, and typed close dispatch therefore remain in the shared
-egui modal host.
+validation, accessibility, or rich-dialog contract required by LunCoSim. It is
+not part of the runtime UI dependency set. Simple authored viewport modals may
+use the runtime `modal`/`dismiss_action` contract; rich dialogs remain in the
+shared `lunco-ui::modal` egui host.
 
 ## Data and actions
 
@@ -60,9 +60,12 @@ by the runtime, while Twin-authored actions are forwarded as typed
 `runtime.ui.action` events for Rhai policy. A dynamic control can use one
 shared callback and a HUI tag property:
 `on_press="runtime_ui_authored_action" tag:action="{action}"`.
-The pressed node supplies the action value; the template does not inspect HTML
-ids or call domain resources. This is the reusable path for program selection,
-route editing, and other Twin-defined tools without a Rust callback per item.
+Additional `tag:*` values are carried as a typed `HookValue` parameter map; the
+runtime never encodes an action and its arguments into a name string. The
+pressed node supplies the action value; the template does not inspect HTML ids
+or call domain resources. This is the reusable path for program selection,
+route editing, consent rows, and other Twin-defined tools without a Rust
+callback per item.
 Unknown fields/actions and unsafe asset paths are rejected before mounting.
 
 Use stable `id` attributes for authored HUI nodes and `#id` selectors in their
@@ -170,7 +173,8 @@ link this UI or its file watcher; web builds use the normal bundled-asset cache
 workflow.
 
 The shipped surfaces are the rover HUD, camera-status card, celestial view
-switcher, terrain progress card, and networking scenario-download card. The
+switcher, terrain progress card, asset-consent modal, and networking
+scenario-download card. The
 Settings ▸ HUD submenu is the user-facing view over the existing global HUD
 owners and the active Twin's camera-status setting; it does not add a second
 visibility registry. Camera-status is gated by the active Twin's generic

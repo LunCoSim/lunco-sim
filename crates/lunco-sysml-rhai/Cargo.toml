@@ -9,6 +9,8 @@ description = "Read-only Rhai reporting adapter for SysML v2 analysis"
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-sysml-ast = { path = "../lunco-sysml-ast" }
+lunco-sysml-ir = { path = "../lunco-sysml-ir" }
+lunco-sysml-modelica = { path = "../lunco-sysml-modelica" }
 rhai = { workspace = true }
 
 [lints]

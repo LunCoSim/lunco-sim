@@ -29,3 +29,9 @@ lunco-core = { path = "../lunco-core" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The deterministic terrain fixture generator is an example-only producer; keep
+# GeoTIFF encoding out of the runtime asset-manager dependency closure.
+lunco-geotiff = { path = "../lunco-geotiff" }
+tiff = { workspace = true }

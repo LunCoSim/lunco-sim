@@ -36,6 +36,20 @@ use lunco_settings::DownloadSettings;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
+/// Authored decision hook for one generic asset transaction.
+pub const ASSET_DOWNLOAD_PREPARE_HOOK: &str = "assets.download.prepare";
+
+lunco_hooks::declare_hook! {
+    id: ASSET_DOWNLOAD_PREPARE_HOOK,
+    owner: "lunco-assets-download",
+    description: "Choose safe network, cache, replacement, and backup policy for one asset transaction.",
+    signature: [facts: Map],
+    output: Map,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn scratch_name(process_id: u32, attempt: u64) -> String {
     format!("lunco_{process_id}_{attempt}")
@@ -98,10 +112,18 @@ pub fn download_asset_with_control(
     let dest = entry_dest_path(entry, dest_root)
         .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?;
 
+    let policy = prepare_download_policy(entry, key, &dest, dest_root.is_some())?;
+
     // Cache-hit check #1 — versioned install (used by libraries like
     // the source library tarball where `version = "4.1.0"` pins an upstream
     // release). Matches on `.version` marker sibling.
-    if installed_destination_present(entry, &dest) {
+    let installed = installed_destination_present(entry, &dest);
+    if installed && policy.install_mode == InstallMode::Reject {
+        return Err(DownloadError::PolicyDenied(format!(
+            "asset `{key}` is already installed and the download policy rejects replacement"
+        )));
+    }
+    if installed && !policy.cache_refresh && policy.install_mode == InstallMode::KeepExisting {
         let detail = entry
             .version
             .as_deref()
@@ -114,6 +136,12 @@ pub fn download_asset_with_control(
             dest.display()
         );
         return Ok(());
+    }
+
+    if !policy.allow_network {
+        return Err(DownloadError::PolicyDenied(format!(
+            "asset `{key}` is not installed and the download policy denies network access"
+        )));
     }
 
     // Cache-hit check #2 — sha256 match. When the manifest pins a
@@ -318,6 +346,7 @@ pub fn download_asset_with_control(
                 &dest,
                 entry.version.as_deref(),
                 Some(&hash),
+                &policy,
                 &control,
             )?;
         } else {
@@ -330,6 +359,7 @@ pub fn download_asset_with_control(
                 &dest,
                 entry.version.as_deref(),
                 Some(&hash),
+                &policy,
                 &control,
             )?;
         }
@@ -339,6 +369,7 @@ pub fn download_asset_with_control(
             &dest,
             entry.version.as_deref(),
             None,
+            &policy,
             &control,
         )?;
         download_stage.disarm();
@@ -731,6 +762,205 @@ pub enum DownloadError {
     /// The caller cancelled the operation before commit.
     #[error("cancelled by caller")]
     Cancelled,
+    /// The installed Rhai policy rejected this transaction.
+    #[error("asset download policy denied the transaction: {0}")]
+    PolicyDenied(String),
+    /// The installed Rhai policy returned a shape outside the closed contract.
+    #[error("asset download policy is invalid: {0}")]
+    PolicyInvalid(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallMode {
+    Replace,
+    KeepExisting,
+    Reject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackupDisposition {
+    DiscardAfterCommit,
+    Retain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DownloadPolicy {
+    allow_network: bool,
+    cache_refresh: bool,
+    install_mode: InstallMode,
+    backup: BackupDisposition,
+    retain_max_count: usize,
+}
+
+impl Default for DownloadPolicy {
+    fn default() -> Self {
+        Self {
+            allow_network: true,
+            cache_refresh: false,
+            install_mode: InstallMode::KeepExisting,
+            backup: BackupDisposition::DiscardAfterCommit,
+            retain_max_count: 0,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_download_policy(
+    entry: &AssetEntry,
+    key: &str,
+    destination: &Path,
+    twin_scoped: bool,
+) -> Result<DownloadPolicy, DownloadError> {
+    use lunco_hooks::HookValue;
+
+    let facts = HookValue::map([
+        ("key", HookValue::str(key)),
+        ("name", HookValue::str(entry.name.clone())),
+        ("url", HookValue::str(entry.url.clone())),
+        (
+            "destination",
+            HookValue::str(
+                entry
+                    .dest
+                    .clone()
+                    .unwrap_or_else(|| destination.display().to_string()),
+            ),
+        ),
+        ("twin_scoped", HookValue::Bool(twin_scoped)),
+        ("shared_cache", HookValue::Bool(entry.shared)),
+        ("destination_exists", HookValue::Bool(destination.exists())),
+        (
+            "version",
+            entry
+                .version
+                .clone()
+                .map_or(HookValue::Unit, HookValue::str),
+        ),
+        (
+            "expected_sha256",
+            entry.sha256.clone().map_or(HookValue::Unit, HookValue::str),
+        ),
+        ("has_process", HookValue::Bool(entry.process.is_some())),
+    ]);
+
+    let Some(result) = lunco_hooks::invoke(ASSET_DOWNLOAD_PREPARE_HOOK, &[facts]) else {
+        return Ok(DownloadPolicy::default());
+    };
+    let value = result.map_err(|error| DownloadError::PolicyInvalid(error.to_string()))?;
+    parse_download_policy(value)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_download_policy(value: lunco_hooks::HookValue) -> Result<DownloadPolicy, DownloadError> {
+    use lunco_hooks::HookValue;
+
+    let HookValue::Map(fields) = value else {
+        return Err(DownloadError::PolicyInvalid("expected a map".to_owned()));
+    };
+    let allowed = [
+        "allow_network",
+        "cache",
+        "install_mode",
+        "backup",
+        "retain_max_count",
+    ];
+    for (name, _) in &fields {
+        if !allowed.contains(&name.as_str()) {
+            return Err(DownloadError::PolicyInvalid(format!(
+                "unknown field `{name}`"
+            )));
+        }
+    }
+    if fields
+        .iter()
+        .filter(|(name, _)| name == "allow_network")
+        .count()
+        != 1
+        || fields.iter().filter(|(name, _)| name == "cache").count() != 1
+        || fields
+            .iter()
+            .filter(|(name, _)| name == "install_mode")
+            .count()
+            != 1
+        || fields.iter().filter(|(name, _)| name == "backup").count() != 1
+        || fields
+            .iter()
+            .filter(|(name, _)| name == "retain_max_count")
+            .count()
+            != 1
+    {
+        return Err(DownloadError::PolicyInvalid(
+            "all decision fields are required exactly once".to_owned(),
+        ));
+    }
+    let get = |name: &str| {
+        fields
+            .iter()
+            .find(|(field, _)| field == name)
+            .map(|(_, value)| value)
+            .expect("required policy field was checked above")
+    };
+    let allow_network = match get("allow_network") {
+        HookValue::Bool(value) => *value,
+        value => return Err(policy_type("allow_network", "bool", value)),
+    };
+    let cache = match get("cache").as_str() {
+        Some("use_existing") => false,
+        Some("refresh") => true,
+        _ => {
+            return Err(DownloadError::PolicyInvalid(
+                "cache must be `use_existing` or `refresh`".to_owned(),
+            ))
+        }
+    };
+    let install_mode = match get("install_mode").as_str() {
+        Some("replace") => InstallMode::Replace,
+        Some("keep_existing") => InstallMode::KeepExisting,
+        Some("reject") => InstallMode::Reject,
+        _ => {
+            return Err(DownloadError::PolicyInvalid(
+                "install_mode must be `replace`, `keep_existing`, or `reject`".to_owned(),
+            ))
+        }
+    };
+    let backup = match get("backup").as_str() {
+        Some("discard_after_commit") => BackupDisposition::DiscardAfterCommit,
+        Some("retain") => BackupDisposition::Retain,
+        _ => {
+            return Err(DownloadError::PolicyInvalid(
+                "backup must be `discard_after_commit` or `retain`".to_owned(),
+            ))
+        }
+    };
+    let retain_max_count = match get("retain_max_count") {
+        HookValue::Int(value) if (0..=32).contains(value) => *value as usize,
+        HookValue::Int(value) => {
+            return Err(DownloadError::PolicyInvalid(format!(
+                "retain_max_count must be between 0 and 32, got {value}"
+            )))
+        }
+        value => return Err(policy_type("retain_max_count", "int", value)),
+    };
+    if backup == BackupDisposition::Retain && retain_max_count == 0 {
+        return Err(DownloadError::PolicyInvalid(
+            "retained backups require retain_max_count > 0".to_owned(),
+        ));
+    }
+    Ok(DownloadPolicy {
+        allow_network,
+        cache_refresh: cache,
+        install_mode,
+        backup,
+        retain_max_count,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn policy_type(field: &str, expected: &str, actual: &lunco_hooks::HookValue) -> DownloadError {
+    DownloadError::PolicyInvalid(format!(
+        "field `{field}` must be {expected}, got {}",
+        actual.type_name()
+    ))
 }
 
 /// Caller-supplied control surface for a download. It carries optional HTTP
@@ -833,6 +1063,7 @@ fn install_staged_path(
     destination: &Path,
     version: Option<&str>,
     archive_hash: Option<&str>,
+    policy: &DownloadPolicy,
     control: &DownloadControl<'_>,
 ) -> Result<(), DownloadError> {
     let parent = destination.parent().unwrap_or_else(|| Path::new("."));
@@ -889,7 +1120,7 @@ fn install_staged_path(
     let backup_root = parent.join(format!(".lunco-install-backup-{}-{id}", std::process::id()));
     std::fs::create_dir(&backup_root)
         .map_err(|error| DownloadError::WriteFailed(backup_root.clone(), error.to_string()))?;
-    let backup = StagingPath::directory(backup_root.clone());
+    let mut backup = StagingPath::directory(backup_root.clone());
 
     let backup_destination = backup_root.join("destination");
     let marker_backups: Vec<PathBuf> = marker_paths
@@ -951,9 +1182,41 @@ fn install_staged_path(
     }
 
     drop(_gate);
+    let has_retained_state = destination_backed_up || marker_backed_up.iter().any(|backed| *backed);
+    if policy.backup == BackupDisposition::Retain
+        && has_retained_state
+        && policy.retain_max_count > 0
+    {
+        backup.disarm();
+        retain_install_backups(parent, policy.retain_max_count);
+    }
     drop(backup);
     drop(marker_stages);
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn retain_install_backups(parent: &Path, max_count: usize) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let mut backups = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(".lunco-install-backup-"))
+        })
+        .collect::<Vec<_>>();
+    backups.sort_by_key(|entry| entry.file_name());
+    let keep_from = backups.len().saturating_sub(max_count);
+    for entry in backups.into_iter().take(keep_from) {
+        // The prefix and directory check above are the complete deletion
+        // authority. Policy never supplies a path or a delete operation.
+        let _ = std::fs::remove_dir_all(entry.path());
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -1139,6 +1402,7 @@ mod tests {
             &destination,
             Some("4.1.0"),
             None,
+            &DownloadPolicy::default(),
             &DownloadControl::default(),
         )
         .expect("install staged directory");
@@ -1163,7 +1427,57 @@ mod tests {
         assert!(lunco_storage::read_directory_sync(root.path())
             .expect("list install root")
             .iter()
-            .all(|entry| !entry.display_name().starts_with(".lunco-install-backup-")));
+            .all(|entry| {
+                entry
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_none_or(|name| !name.starts_with(".lunco-install-backup-"))
+            }));
+    }
+
+    #[test]
+    fn download_policy_accepts_only_the_closed_typed_decision() {
+        let policy = parse_download_policy(lunco_hooks::HookValue::map([
+            ("allow_network", lunco_hooks::HookValue::Bool(false)),
+            ("cache", lunco_hooks::HookValue::str("refresh")),
+            ("install_mode", lunco_hooks::HookValue::str("replace")),
+            ("backup", lunco_hooks::HookValue::str("retain")),
+            ("retain_max_count", lunco_hooks::HookValue::Int(2)),
+        ]))
+        .expect("valid policy");
+        assert!(!policy.allow_network);
+        assert!(policy.cache_refresh);
+        assert_eq!(policy.install_mode, InstallMode::Replace);
+        assert_eq!(policy.backup, BackupDisposition::Retain);
+        assert_eq!(policy.retain_max_count, 2);
+    }
+
+    #[test]
+    fn download_policy_rejects_unknown_and_unsafe_retention_choices() {
+        let unknown = parse_download_policy(lunco_hooks::HookValue::map([
+            ("allow_network", lunco_hooks::HookValue::Bool(true)),
+            ("cache", lunco_hooks::HookValue::str("use_existing")),
+            ("install_mode", lunco_hooks::HookValue::str("keep_existing")),
+            (
+                "backup",
+                lunco_hooks::HookValue::str("discard_after_commit"),
+            ),
+            ("retain_max_count", lunco_hooks::HookValue::Int(0)),
+            ("delete_path", lunco_hooks::HookValue::str("/tmp")),
+        ]));
+        assert!(matches!(unknown, Err(DownloadError::PolicyInvalid(_))));
+
+        let zero_retention = parse_download_policy(lunco_hooks::HookValue::map([
+            ("allow_network", lunco_hooks::HookValue::Bool(true)),
+            ("cache", lunco_hooks::HookValue::str("use_existing")),
+            ("install_mode", lunco_hooks::HookValue::str("replace")),
+            ("backup", lunco_hooks::HookValue::str("retain")),
+            ("retain_max_count", lunco_hooks::HookValue::Int(0)),
+        ]));
+        assert!(matches!(
+            zero_retention,
+            Err(DownloadError::PolicyInvalid(_))
+        ));
     }
 
     #[test]
@@ -1180,7 +1494,14 @@ mod tests {
         };
 
         assert!(matches!(
-            install_staged_path(&staged, &destination, None, None, &control),
+            install_staged_path(
+                &staged,
+                &destination,
+                None,
+                None,
+                &DownloadPolicy::default(),
+                &control,
+            ),
             Err(DownloadError::Cancelled)
         ));
         assert_eq!(

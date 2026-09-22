@@ -26,6 +26,26 @@ or compatibility shim because the first search was incomplete.
 | Mission phases, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration in production; `on_tick` is test-only for sampled verdicts |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
+For engineering requirements, keep the same split at the numerical boundary:
+SysML owns typed intent, units, normative tolerances, and requirement/
+verification identity; USD owns realized geometry and standard scene facts;
+Modelica/Rumoca owns equations and continuous state; Rhai owns the selected
+mechanical relation, orchestration, and evidence; Rust owns only reusable,
+hot, type-safe f64 mechanisms. The authored
+`assets/scripting/tools/mechanical_relations.rhai` library is the extension
+point for CAD-like predicates such as distance, coincidence, parallelism,
+under/clearance, mirroring, and symmetry. Do not grow a Rust registry of
+relation names or product-specific checks.
+
+Use the existing Rhai standard math surface for ordinary scalar operations and
+the native Rust bridge for f64 vector validity, dot/cross, clamped cosine,
+angle, and native component access. Keep native values in hot loops; arrays are
+only explicit interchange boundaries. Use typed predicates (`f64_only`,
+`array_is`, `map_is`, `string_is`, `vec3_is_native`) instead of string-based
+runtime type protocols. Numerical settings are explicit per dimension and are
+resolved once per report/solve; they do not replace a source-owned SysML
+tolerance or become a global epsilon.
+
 For Avian-backed physics, keep one numeric admission contract at
 `lunco-physics::avian_backend`. The BigSpace bridge owns lifecycle admission of
 f64 poses and collider support geometry before the Avian step, `GridSpatialQuery`

@@ -49,14 +49,15 @@ The standard Twin and Files navigation is the optional
 `lunco-workbench-browser` feature layered on the shell; do not recreate those
 panels in an authored runtime surface.
 
-The shared `lunco-ui::modal` host owns modal queueing, scrim, focus, Esc
-dismissal, outcomes, and the typed `CloseModal` command. Base HUI has no modal
-queue/outcome contract; the optional widget crate only supplies primitive input,
-slider, and select mechanics. A dialog requiring editing, focus, validation,
-accessibility, or modal semantics belongs in that host until the runtime
-surface contract grows and is tested. Generic keyed collection hosts are
-available for ordered arrays of typed records; the collection host owns row
-lifecycle only, while Rhai owns the records, labels, ordering, and actions.
+`lunco-ui::modal` remains the owner for rich dialogs requiring focus, queued
+outcomes, editing, validation, or accessibility. The generic runtime surface
+also supports a deliberately small authored modal contract: a viewport surface
+may declare `modal: true` and an authored `dismiss_action`; visible controls
+own their computed input regions and Escape emits that semantic action. Generic
+keyed collection hosts provide dynamic rows, while Rhai owns the records,
+labels, ordering, visibility, and action meaning. Do not grow this into a
+second rich-dialog implementation without a separate typed contract and
+acceptance tests.
 
 Twin-authored actions are open-ended semantic identifiers. The reusable
 `program-browser` surface publishes typed arrays of records; its HUI row
@@ -71,11 +72,12 @@ lander, route, or another model. Rich source text entry remains in the existing
 Rhai editor/REPL until HUI gains tested typed input semantics.
 
 For dynamic semantic controls, use the HUI convention
-`on_press="runtime_ui_authored_action" tag:action="{action}"`. The
-`action` tag property is supplied by the Rhai view model and becomes a
-typed `runtime.ui.action` event. This permits Twin-defined actions and dynamic
-controls without registering one Rust callback per item. Do not use
-JavaScript or encode action payloads as JSON.
+`on_press="runtime_ui_authored_action" tag:action="{action}"`. Additional
+`tag:*` values become a typed `HookValue` parameter map on the generic action
+event; the runtime does not concatenate names and values into a protocol
+string. This permits Twin-defined actions and dynamic controls without
+registering one Rust callback per item. Do not use JavaScript or encode action
+payloads as JSON.
 
 Collection hosts retain the Rhai-authored row order, clip their list, and
 consume wheel input at the host boundary. They own row lifecycle only; do not

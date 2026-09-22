@@ -1,0 +1,25 @@
+#usda 1.0
+(
+    defaultPrim = "SysmlConstraintIr"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "SysmlConstraintIr"
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/sysml_constraint_ir.rhai@
+        }
+    }
+}

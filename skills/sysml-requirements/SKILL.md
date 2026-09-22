@@ -26,6 +26,8 @@ Check the feature set and owner before saying that a capability is missing:
 | Scene identity, topology, geometry and authored physical facts | USD | standard runtime path | prim paths, schemas, relationships, dimensions, materials, physics topology |
 | Continuous equations and domain state | Modelica | standard domain backend | propulsion, electrical, thermal and other continuous models |
 | Scenario policy, observations, checks and verdicts | Rhai | default scenario backend | runtime observation, actuation, generic requirement evaluation and test policy |
+| Bounded resolved-constraint IR | `lunco-sysml-ir` | default with SysML support | typed source-linked constraint compilation, diagnostics, fingerprints, and provider-neutral evaluation |
+| Bounded SysML-to-Modelica lowering | `lunco-sysml-modelica` through the Rumoca boundary | default with SysML support | typed scalar/fixed-array equation lowering; not SysML resolution or engineering intent |
 | Python integration | Python backend | `python` feature, opt-in | explicit one-shot or integration requests only; not the normal scenario workflow |
 | Generic parsing, resolution, transport and lifecycle mechanisms | Rust crates | feature-dependent | reusable substrate, not Twin-specific policy |
 
@@ -218,28 +220,72 @@ is needed before constructing additional evidence.
 Unit-bearing vector components are preserved as arrays of native `Quantity`
 values. A geometry policy must validate the declared quantity kind, fixed
 cardinality, and each component's unit before lowering them to the shared
-`Vec3`; never read only `number_value` and drop unit metadata. The current
-SysML-to-Modelica geometry adapter accepts `LengthValue[3]` in metres and
-reports other units as unsupported rather than guessing a conversion.
+`Vec3`; never read only `number_value` and drop unit metadata. The shared
+`lunco-engineering-values` seam performs dimension-safe conversion, while the
+authored `engineering_units.rhai` catalog selects the supported UCUM-compatible
+symbols. The current SysML-to-Modelica geometry adapter accepts a bounded
+`LengthValue[3]` catalog and converts compatible entries to metres; it is not a
+full UCUM parser and must fail closed for unsupported units.
 Other physical-property quantities, including material properties, need the
 same unit-preserving treatment. Do not reuse the geometry-only length adapter,
 strip units, or assume an unimplemented material projection; capability-check
 the property kind and consumer before generating a model.
 
+For CAD/mechanical intent, keep the requirement and tolerance in SysML, then
+call the reloadable `assets/scripting/tools/mechanical_relations.rhai` policy
+with resolved native values. Its generic vocabulary includes distance,
+coincidence, signed plane distance, under/clearance, parallelism,
+perpendicularity, collinearity, coplanarity, mirroring, and plane/axis
+symmetry. It returns residual/evidence records and knows neither Griffin names
+nor USD paths. Do not add a product-specific relation predicate to Rust; add a
+generic Rust numeric primitive only when the operation is shared, hot, and
+not expressible safely with the Rhai standard math surface.
+
+`source_with_attributes()` is a bounded value projection and intentionally does
+not carry requirement/verification identity tables. Use
+`source_with_selection()` when evidence must retain source-linked requirement
+or verification identities. Identity and source revision remain Rust-owned;
+the Rhai observer owns the selected relation and verdict policy.
+
+Keep normative requirement tolerances in SysML evidence. Runtime settings such
+as `numerics.comparison.length_abs_m` and
+`numerics.solver.residual_abs` are algorithm/solver policy, resolved once per
+operation from the active Twin and passed through the call graph. They must not
+silently replace a SysML acceptance tolerance or collapse different physical
+dimensions into one epsilon.
+
 It does not provide a full SysML/KerML execution engine. Parsed generic
 elements, references, constraints, and relationships are source facts, not a
-claim that their behavior is executed. Rhai may select a supported geometry
-policy and assemble Modelica from typed facts. The current
-`CoincidentPointTranslation` policy can run a bounded asynchronous Modelica
-solve, read native finite `f64` results by exact experiment identity, and
-produce a generation-bound typed USD placement plan. The plan remains dry and
-requires Editor review/commit; no result is applied automatically. This is a
-specific policy, not arbitrary SysML constraint execution.
-General constraint/parametric execution, state and behavior execution, full
-quantity conversion, a dedicated SysML editor, full UI source-set browsing,
-and automatic SysML-to-USD projection remain outside the current runtime. If a
-request needs one of those, report the exact bounded gap after checking the
-current owner and dependencies.
+claim that their behavior is executed. The bounded constraint path now
+compiles the resolved supported subset into `lunco-sysml-ir`; a Rhai policy
+selects provider bindings; and `lunco-sysml-modelica` renders a typed
+constraint into Modelica admitted through Rumoca. Native in-process policy can
+retain a `SysmlModel` handle, while API/MCP callers use the structured
+path-level functions `sysml_constraint_ir`, `sysml_modelica_constraint`, and
+`sysml_evaluate_constraint` without serializing a native handle. Authored
+source references use `lunco://`; a USD prim target remains a USD path.
+
+The current IR supports typed scalar expressions, conditional expressions,
+fixed primitive multiplicities, source-linked diagnostics, and deterministic
+fingerprints. It does not yet support feature-chain navigation, reusable
+constraint invocation/default arguments, collection/index/aggregate
+expressions, full quantity conversion, redefinition/subsetting semantics,
+null/invalid propagation across all providers, requirement membership
+execution, applicability, or state/behavior execution. Do not recreate those
+features with a hidden Rhai parser, Griffin-specific Rust, parallel arrays, or
+qualified-name fallback tables. Add the generic AST/IR/provider mechanism and
+then author the standard SysML construct.
+
+The existing `CoincidentPointTranslation` policy can still run a bounded
+asynchronous Modelica solve, read native finite `f64` results by exact
+experiment identity, and produce a generation-bound typed USD placement plan.
+The plan remains dry and requires Editor review/commit; no result is applied
+automatically. This is a specific policy over the generic boundary, not
+arbitrary SysML constraint execution. General constraint/parametric execution,
+state and behavior execution, a dedicated SysML editor, full UI source-set
+browsing, and automatic SysML-to-USD projection remain outside the current
+runtime. If a request needs one of those, report the exact bounded gap after
+checking the current owner and dependencies.
 
 ## Source organization
 

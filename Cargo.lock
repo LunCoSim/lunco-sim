@@ -7134,8 +7134,10 @@ dependencies = [
  "lunco-celestial-data",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-geotiff",
  "lunco-settings",
  "lunco-workspace",
+ "tiff",
 ]
 
 [[package]]
@@ -7185,6 +7187,7 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-assets-path",
  "lunco-assets-transport",
+ "lunco-hooks",
  "lunco-settings",
  "lunco-storage",
  "rayon",
@@ -7657,6 +7660,13 @@ name = "lunco-embodiment-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+]
+
+[[package]]
+name = "lunco-engineering-values"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -8402,6 +8412,7 @@ dependencies = [
  "log",
  "lunco-assets-core",
  "lunco-assets-path",
+ "lunco-assets-runtime",
  "lunco-modelica-ast",
  "lunco-modelica-compiler",
  "lunco-modelica-core",
@@ -9392,6 +9403,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-behavior",
  "lunco-core",
+ "lunco-engineering-values",
  "lunco-geometry-core",
  "lunco-hooks",
  "lunco-hooks-rhai",
@@ -9563,6 +9575,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-sysml-ir"
+version = "0.1.0"
+dependencies = [
+ "lunco-hash",
+ "lunco-sysml-ast",
+ "serde",
+]
+
+[[package]]
+name = "lunco-sysml-modelica"
+version = "0.1.0"
+dependencies = [
+ "lunco-modelica-ast",
+ "lunco-sysml-ast",
+ "lunco-sysml-ir",
+]
+
+[[package]]
 name = "lunco-sysml-report"
 version = "0.1.0"
 dependencies = [
@@ -9578,6 +9608,8 @@ dependencies = [
  "lunco-core",
  "lunco-scripting-rhai-core",
  "lunco-sysml-ast",
+ "lunco-sysml-ir",
+ "lunco-sysml-modelica",
  "rhai",
 ]
 
@@ -9827,6 +9859,7 @@ dependencies = [
  "lunco-core",
  "lunco-environment",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-core",
  "lunco-usd-avian-filters",
@@ -10241,6 +10274,7 @@ name = "lunco-usd-data"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-engineering-values",
  "openusd",
  "serde",
 ]

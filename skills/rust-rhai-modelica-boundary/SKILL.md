@@ -37,6 +37,36 @@ scene/scenario tests.
 Math means domain equations in Modelica; Rust still owns numerical operations
 that are part of a real-time engine invariant or a generic projection.
 
+Use Rhai's standard scalar math where it already provides the operation
+(`PI`, `acos`, `sqrt`, trigonometry, and finite checks). Keep the runtime's
+native engineering convention at `f64`; an explicit renderer/presentation
+lowering is the only normal `f32` boundary. Put shared hot vector operations
+in the Rust Rhai bridge over the existing native `DVec3`/`DQuat`/transform
+values: finite/validity predicates, dot/cross, clamped cosine, angle, component
+access, and explicit f64 conversion. Do not rebuild vectors as arrays inside a
+per-tick or per-relation loop.
+
+At the dynamic Rhai boundary, use typed overloads and explicit Rust predicates
+such as `f64_from`, `f64_only`, `array_is`, `map_is`, `string_is`,
+`vec3_is_native`, and `vec3_is_valid`. String comparisons remain appropriate
+for actual semantic identifiers, qualified names, paths, and enum literals;
+they are not a runtime type protocol. Opaque SysML handles/AST nodes may still
+need their registered domain type identity until a typed predicate exists.
+
+For reusable CAD/mechanical checks, prefer the authored
+`assets/scripting/tools/mechanical_relations.rhai` policy. It accepts resolved
+native values and caller-supplied tolerances, returns residual/evidence maps,
+and can be extended without a Rust rebuild. Rust should provide only the
+generic numerical mechanism; SysML supplies normative intent and Rhai selects
+the policy.
+
+Numerical settings use the existing active-Twin generic settings surface.
+Keep separate f64 fields for scalar, length, angle, time, and solver policy;
+resolve them once at a report/solve boundary, not inside a hot loop. A missing
+or integer-valued engineering tolerance is a configuration error. Never add a
+Rust global epsilon or let runtime solver policy silently override a normative
+SysML tolerance.
+
 For a typed language bridge such as SysML, keep parsing, name/type resolution,
 source spans, and lossless native-value conversion in Rust. Expose those
 resolved types to Rhai and keep changeable project parameter checks, selectors,

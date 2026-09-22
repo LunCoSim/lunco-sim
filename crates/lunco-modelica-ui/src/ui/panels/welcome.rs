@@ -1024,8 +1024,3 @@ impl Panel for WelcomePanel {
         }
     }
 }
-
-#[cfg(test)]
-mod example_path_tests {
-    use super::*;
-}
