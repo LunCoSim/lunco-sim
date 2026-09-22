@@ -111,7 +111,7 @@ application controls. The tutorial
 draw systems are chained within their shared layer, so their relative paint order
 is deterministic as well.
 
-Tutorial catalogs must use the shared
+Rhai-contributed workbench menus use the shared
 `lunco_workbench::menu_popup_max_width` helper with the egui content viewport,
 fix that width before laying out wrapped rows, and let short lists shrink
 vertically instead of reserving an empty scroll region. Completion state uses

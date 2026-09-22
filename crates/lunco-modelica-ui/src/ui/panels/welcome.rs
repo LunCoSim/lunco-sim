@@ -123,7 +123,7 @@ pub fn load_example_path_catalog(
     let candidates = text_assets
         .entries()
         .iter()
-        .filter(|entry| entry.asset_path.ends_with(".json"))
+        .filter(|entry| entry.twin_id.is_none() && entry.asset_path.ends_with(".json"))
         .map(|entry| (entry.asset_path.clone(), entry.handle.clone()))
         .collect::<Vec<_>>();
     commands.insert_resource(ExamplePathCatalogAssets(candidates));

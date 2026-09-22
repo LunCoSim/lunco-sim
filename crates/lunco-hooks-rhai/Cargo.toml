@@ -10,6 +10,7 @@ lunco-hooks = { path = "../lunco-hooks" }
 # `sync` feature (workspace-pinned) makes rhai's Engine/Dynamic Send+Sync, so a
 # RhaiHook can live in the global registry behind `Arc<dyn ScriptHook>`.
 rhai = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

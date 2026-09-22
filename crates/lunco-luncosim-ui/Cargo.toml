@@ -131,6 +131,7 @@ lunco-scene-camera = { path = "../lunco-scene-camera", optional = true }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["window-audience"] }
+lunco-scripting-rhai-core = { path = "../lunco-scripting-rhai-core" }
 lunco-scripting-rhai-runtime = { path = "../lunco-scripting-rhai-runtime" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core", optional = true }
 lunco-settings = { path = "../lunco-settings" }

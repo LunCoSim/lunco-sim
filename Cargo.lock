@@ -7763,6 +7763,7 @@ version = "0.1.0"
 dependencies = [
  "lunco-hooks",
  "rhai",
+ "serde_json",
 ]
 
 [[package]]
@@ -8286,6 +8287,7 @@ dependencies = [
  "lunco-scene-selection",
  "lunco-scripting",
  "lunco-scripting-bridge-core",
+ "lunco-scripting-rhai-core",
  "lunco-scripting-rhai-runtime",
  "lunco-settings",
  "lunco-status-core",

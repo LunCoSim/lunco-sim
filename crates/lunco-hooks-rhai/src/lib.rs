@@ -18,6 +18,68 @@ pub mod rhai_limits;
 use lunco_hooks::{HookError, HookResult, HookValue, RegisteredHook, ScriptHook};
 use rhai::{Dynamic, Engine, Scope, AST};
 
+/// Register the shared JSON-to-Rhai value bridge on an engine.
+///
+/// JSON parsing is available to both ordinary script engines and Rhai hooks;
+/// conversion rejects integers that Rhai cannot represent exactly.
+pub fn register_json(engine: &mut Engine) {
+    engine.register_fn("parse_json", |source: String| parse_json(&source));
+}
+
+fn parse_json(source: &str) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+    let value = serde_json::from_str::<serde_json::Value>(source).map_err(|error| {
+        Box::new(rhai::EvalAltResult::ErrorRuntime(
+            Dynamic::from(format!("invalid JSON: {error}")),
+            rhai::Position::NONE,
+        ))
+    })?;
+    json_to_dynamic(value, "$").map_err(|error| {
+        Box::new(rhai::EvalAltResult::ErrorRuntime(
+            Dynamic::from(error),
+            rhai::Position::NONE,
+        ))
+    })
+}
+
+fn json_to_dynamic(value: serde_json::Value, path: &str) -> Result<Dynamic, String> {
+    use serde_json::Value;
+
+    match value {
+        Value::Null => Ok(Dynamic::UNIT),
+        Value::Bool(value) => Ok(Dynamic::from_bool(value)),
+        Value::String(value) => Ok(Dynamic::from(value)),
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(Dynamic::from_int(value))
+            } else if let Some(value) = value.as_u64() {
+                Err(format!(
+                    "JSON integer at {path} exceeds Rhai's signed integer range: {value}"
+                ))
+            } else if let Some(value) = value.as_f64() {
+                Ok(Dynamic::from_float(value))
+            } else {
+                Err(format!(
+                    "JSON number at {path} cannot be represented by Rhai"
+                ))
+            }
+        }
+        Value::Array(values) => values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| json_to_dynamic(value, &format!("{path}[{index}]")))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Dynamic::from_array),
+        Value::Object(values) => values
+            .into_iter()
+            .map(|(key, value)| {
+                let child_path = format!("{path}.{key}");
+                json_to_dynamic(value, &child_path).map(|value| (key.into(), value))
+            })
+            .collect::<Result<rhai::Map, _>>()
+            .map(Dynamic::from_map),
+    }
+}
+
 /// A hook implemented by a rhai function.
 ///
 /// Holds its own `Engine` + compiled `AST` with literal top-level constants
@@ -53,6 +115,7 @@ impl RhaiHook {
         configure: impl FnOnce(&mut Engine),
     ) -> Result<Self, String> {
         let mut engine = Engine::new();
+        register_json(&mut engine);
 
         // Close the file-import hole BEFORE compiling anything. `Engine::new()`
         // installs rhai's `FileModuleResolver`, which reads arbitrary files
