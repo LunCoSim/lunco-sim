@@ -1058,6 +1058,35 @@ The Tracy-enabled production binary and that focused test pass. Both captures
 are local ignored diagnostics; a settled, non-Tracy production window remains
 required before claiming an FPS gain.
 
+### 2026-09-24 — event-admitted USD policy projection
+
+The post-main capture attributed 638.1 ms of self time across 589 calls
+(1.083 ms mean) to `lunco_luncosim_runtime::project_usd_policies`, matching
+the 589 rendered frames. Its idle guard still allocated the root-stage ID list
+and recomputed the loaded-stage/generation signal each `Update`; an unresolved
+file-backed policy also kept the projector running every frame while its
+RhaiSource loaded.
+
+The application now admits this projector from the existing
+`UsdStageRevision`, `RhaiSourceAssetRevision`, or a Rhai source-load failure
+message. It retries a pending policy only when the asset owner publishes a
+Rhai-source lifecycle revision or failure event. Only a failure matching a
+retained source handle for an authored policy causes re-projection; unrelated
+failures return before the root scan. The existing root/generation comparison
+still suppresses re-extraction for unrelated scene revisions.
+The focused scheduling regression test covers idle frames and each wake
+source; the Tracy-enabled production binary also builds.
+
+The post-change diagnostic capture is
+`scripts/perf/captures/summer-space-school-policy-revision-20260924.tracy`
+(20.31 s, 650 frames, 3.73 million zones). It is not a clean comparison:
+three other simulator sessions were left untouched, and `/api/ready` remained
+`ready=false`, `world_hold=true`, with USD physics admission pending at 20.95 s.
+The capture exporter did not finish its full-trace system roll-up in the
+bounded inspection window, so no post-change CPU delta is claimed. The app's
+transient logged FPS is likewise not acceptance evidence. Its own API Exit was
+accepted and ports 4193/8087 were verified closed.
+
 ## Acceptance criteria
 
 The issue is closed only when all of the following are recorded from a real

@@ -6,7 +6,7 @@
 //! installation, USD-authored policy projection, policy authoring, and
 //! scripting journal consumers.
 
-use bevy::asset::{AssetEvent, AssetServer};
+use bevy::asset::{AssetLoadFailedEvent, AssetServer};
 use bevy::prelude::*;
 
 use lunco_usd_bevy_core::program::{
@@ -60,7 +60,24 @@ impl Plugin for LunCoSimRuntimePlugin {
             Update,
             project_usd_policies
                 .after(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetSet)
-                .before(lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets),
+                .before(lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets)
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::resource_changed::<
+                        lunco_usd_bevy_scene::UsdStageRevision,
+                    >
+                        .or_else(
+                            bevy::ecs::schedule::common_conditions::resource_changed::<
+                                lunco_scripting_rhai_world::source_asset::RhaiSourceAssetRevision,
+                            >,
+                        )
+                        .or_else(
+                            bevy::ecs::schedule::common_conditions::on_message::<
+                                AssetLoadFailedEvent<
+                                    lunco_scripting_rhai_world::source_asset::RhaiSource,
+                                >,
+                            >,
+                        ),
+                ),
         );
 
         #[cfg(feature = "networking")]
@@ -271,6 +288,7 @@ fn project_usd_policies(
     mut synthesizers: ResMut<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     asset_server: Res<AssetServer>,
+    stage_revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     sources: Option<Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>>,
     mut pending: Local<
         std::collections::HashMap<
@@ -278,22 +296,20 @@ fn project_usd_policies(
             Handle<lunco_scripting_rhai_world::source_asset::RhaiSource>,
         >,
     >,
-    mut source_events: MessageReader<
-        AssetEvent<lunco_scripting_rhai_world::source_asset::RhaiSource>,
+    source_revision: Res<lunco_scripting_rhai_world::source_asset::RhaiSourceAssetRevision>,
+    mut source_failures: MessageReader<
+        AssetLoadFailedEvent<lunco_scripting_rhai_world::source_asset::RhaiSource>,
     >,
     mut last: Local<Option<(usize, usize, u64)>>,
-    mut awaiting: Local<bool>,
 ) {
-    let source_changed = source_events.read().any(|event| {
-        matches!(
-            event,
-            AssetEvent::Added { .. }
-                | AssetEvent::Modified { .. }
-                | AssetEvent::Removed { .. }
-                | AssetEvent::Unused { .. }
-                | AssetEvent::LoadedWithDependencies { .. }
-        )
+    let failed_policy_source = source_failures.read().fold(false, |failed, event| {
+        failed || pending.values().any(|handle| handle.id() == event.id)
     });
+    let stage_changed = stage_revision.is_changed();
+    let source_changed = source_revision.is_changed();
+    if !stage_changed && !source_changed && !failed_policy_source {
+        return;
+    }
     let root_ids: Vec<_> = roots.iter().map(|prim| prim.stage_handle.id()).collect();
     let signal = (
         root_ids.len(),
@@ -303,7 +319,7 @@ fn project_usd_policies(
             .filter_map(|id| stages.get(*id).map(|_| canonical.generation_for(*id)))
             .sum::<u64>(),
     );
-    if *last == Some(signal) && !*awaiting && !source_changed {
+    if *last == Some(signal) && !source_changed && !failed_policy_source {
         return;
     }
     *last = Some(signal);
@@ -324,7 +340,6 @@ fn project_usd_policies(
     pending.retain(|p, _| live.contains(p.as_str()));
 
     let mut desired = Vec::with_capacity(authored.len());
-    let mut unresolved = false;
     for a in &authored {
         let source = if let Some(src) = &a.inline_source {
             src.clone()
@@ -337,10 +352,7 @@ fn project_usd_policies(
                 &mut pending,
             ) {
                 PolicySource::Ready(text) => text,
-                PolicySource::Loading => {
-                    unresolved = true;
-                    continue;
-                }
+                PolicySource::Loading => continue,
                 PolicySource::Failed => continue,
             }
         } else {
@@ -353,7 +365,6 @@ fn project_usd_policies(
             deterministic: a.deterministic,
         });
     }
-    *awaiting = unresolved;
     let previous_synthesizers: std::collections::HashSet<String> = registry
         .policies
         .iter()
@@ -644,5 +655,96 @@ fn replay_scenario_journal_timeline(
             }
         }
         applied.insert(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::asset::{AssetId, AssetLoadError, AssetPath};
+    use bevy::ecs::message::Messages;
+
+    #[derive(Resource, Default)]
+    struct PolicyProjectionRuns(u32);
+
+    fn count_policy_projection(mut runs: ResMut<PolicyProjectionRuns>) {
+        runs.0 += 1;
+    }
+
+    #[test]
+    fn policy_projection_wakes_on_owner_revisions_and_policy_source_failure() {
+        use lunco_scripting_rhai_world::source_asset::{RhaiSource, RhaiSourceAssetRevision};
+        use lunco_usd_bevy_scene::UsdStageRevision;
+
+        let mut app = App::new();
+        app.init_resource::<UsdStageRevision>()
+            .init_resource::<RhaiSourceAssetRevision>()
+            .init_resource::<PolicyProjectionRuns>()
+            .add_message::<AssetLoadFailedEvent<RhaiSource>>()
+            .add_systems(
+                Update,
+                count_policy_projection.run_if(
+                    bevy::ecs::schedule::common_conditions::resource_changed::<UsdStageRevision>
+                        .or_else(
+                            bevy::ecs::schedule::common_conditions::resource_changed::<
+                                RhaiSourceAssetRevision,
+                            >,
+                        )
+                        .or_else(
+                            bevy::ecs::schedule::common_conditions::on_message::<
+                                AssetLoadFailedEvent<RhaiSource>,
+                            >,
+                        ),
+                ),
+            );
+
+        app.update();
+        app.update();
+        let settled = app.world().resource::<PolicyProjectionRuns>().0;
+        app.update();
+        assert_eq!(app.world().resource::<PolicyProjectionRuns>().0, settled);
+
+        app.world_mut().resource_mut::<UsdStageRevision>().bump();
+        app.update();
+        assert_eq!(
+            app.world().resource::<PolicyProjectionRuns>().0,
+            settled + 1
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<PolicyProjectionRuns>().0,
+            settled + 1
+        );
+
+        *app.world_mut().resource_mut::<RhaiSourceAssetRevision>() =
+            RhaiSourceAssetRevision::default();
+        app.update();
+        assert_eq!(
+            app.world().resource::<PolicyProjectionRuns>().0,
+            settled + 2
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<PolicyProjectionRuns>().0,
+            settled + 2
+        );
+
+        app.world_mut()
+            .resource_mut::<Messages<AssetLoadFailedEvent<RhaiSource>>>()
+            .write(AssetLoadFailedEvent {
+                id: AssetId::invalid(),
+                path: AssetPath::parse("missing.rhai").into_owned(),
+                error: AssetLoadError::AssetMetaReadError,
+            });
+        app.update();
+        assert_eq!(
+            app.world().resource::<PolicyProjectionRuns>().0,
+            settled + 3
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<PolicyProjectionRuns>().0,
+            settled + 3
+        );
     }
 }
