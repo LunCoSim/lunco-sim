@@ -349,8 +349,6 @@ pub fn insert_celestial_comms_components(
     // the wrong light whenever a scene had two, and picked by archetype
     // iteration order whenever two were equally bright.
     //
-    // The fill used to be spawned from Rust at startup, which is why it had no
-    // USD identity to filter on in the first place.
     if reader.type_name(sdf_path).as_deref() == Some("DistantLight") {
         let parent_is_body = match sdf_path.parent() {
             Some(parent) => match read_i32_strict(reader, &parent, "lunco:body") {
@@ -413,12 +411,12 @@ pub fn insert_celestial_comms_components(
     } else {
         read_geodetic_anchor(reader, sdf_path)
     };
+    let is_scene_root = prim_path_str.matches('/').count() == 1 && prim_path_str.starts_with('/');
     match anchor {
         Ok(Some(anchor)) => {
             commands.entity(entity).try_insert(anchor);
             // Root prim anchor = the scene's site frame.
-            let is_root = prim_path_str.matches('/').count() == 1 && prim_path_str.starts_with('/');
-            if is_root {
+            if is_scene_root {
                 commands.entity(entity).try_insert(SiteAnchor);
                 info!(
                     "[usd-celestial] site anchor {}: body {} lat {:.4} lon {:.4} h {:.1} m",
@@ -428,21 +426,6 @@ pub fn insert_celestial_comms_components(
                     anchor.geodetic.lon_deg,
                     anchor.geodetic.height_m
                 );
-                // Scene-authored date: `double lunco:time:epochJd` picks the world
-                // epoch (e.g. one where a polar site is sunlit — at Shackleton the
-                // real sun crosses the horizon on a ~monthly cycle, so an unlucky
-                // "now" default renders the whole demo pitch-black).
-                match read_real_strict(reader, sdf_path, "lunco:time:epochJd") {
-                    Ok(Some(epoch_jd)) if epoch_jd != 0.0 => {
-                        info!("[usd-celestial] scene epoch: JD {epoch_jd:.4}");
-                        commands.trigger(lunco_time::SetMissionEpoch { epoch_jd });
-                    }
-                    Ok(_) => {}
-                    Err(()) => warn!(
-                        "[usd-celestial] {} has malformed `lunco:time:epochJd`; authored epoch ignored",
-                        prim_path_str
-                    ),
-                }
             }
         }
         Ok(None) => {}
@@ -452,92 +435,71 @@ pub fn insert_celestial_comms_components(
         ),
     }
 
-    // --- Mission declaration (LunCoMissionAPI) ---
-    //
-    // A mission is OPT-IN per scene, and separately from the sky: declaring bodies
-    // says "this world has a Moon", not "spawn Artemis II into my landing film".
-    // Missions used to be loaded by scanning `assets/missions/*.json` whenever ANY
-    // celestial body was declared, so every lunar scene silently acquired every
-    // mission on disk. Now a scene asks by referencing the mission's USD file, the
-    // same way it asks for a sky by referencing `solar_system.usda`.
-    //
-    // Keyed on `lunco:mission:id` — the identifying attribute, following the
-    // libration/orbit convention above. A prim without one is not a half-declared
-    // mission, it is simply not a mission.
-    let mission_id = match read_authored_string(reader, sdf_path, "lunco:mission:id") {
-        Ok(Some(id)) if !id.is_empty() => Some(id),
-        Ok(None) => None,
-        Ok(Some(_)) => {
+    // The epoch belongs to the scene root and does not depend on whether the
+    // scene also declares a geodetic site anchor.
+    if reader.has_api_schema(sdf_path, "LunCoEpochAPI") {
+        if !is_scene_root {
             warn!(
-                "[usd-celestial] {} has an empty mission id; declaration ignored",
+                "[usd-celestial] {} applies LunCoEpochAPI outside the scene root; epoch ignored",
                 prim_path_str
             );
-            None
-        }
-        Err(()) => {
-            warn!(
-                "[usd-celestial] {} has malformed mission attributes; declaration ignored",
-                prim_path_str
-            );
-            None
-        }
-    };
-    if let Some(id) = mission_id {
-        let mission = (|| {
-            let name = read_authored_string(reader, sdf_path, "lunco:mission:name")?
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| id.clone());
-            let description = read_authored_string(reader, sdf_path, "lunco:mission:description")?
-                .unwrap_or_default();
-            Ok(lunco_celestial_spatial_core::MissionDecl {
-                id: id.clone(),
-                name,
-                description,
-            })
-        })();
-        match mission {
-            Ok(mission) => {
-                let name = mission.name.clone();
-                commands.entity(entity).try_insert(mission);
-                info!("[usd-celestial] scene declares mission {name} ({id}) at {prim_path_str}");
+        } else {
+            match read_real_strict(reader, sdf_path, "lunco:time:epochJd") {
+                Ok(Some(epoch_jd)) if epoch_jd != 0.0 => {
+                    info!("[usd-celestial] scene epoch: JD {epoch_jd:.4}");
+                    commands.trigger(lunco_time::SetMissionEpoch { epoch_jd });
+                }
+                Ok(_) => warn!(
+                    "[usd-celestial] {} applies LunCoEpochAPI without a non-zero epoch; authored epoch ignored",
+                    prim_path_str
+                ),
+                Err(()) => warn!(
+                    "[usd-celestial] {} has malformed `lunco:time:epochJd`; authored epoch ignored",
+                    prim_path_str
+                ),
             }
-            Err(()) => warn!(
-                "[usd-celestial] {} has invalid mission attributes; declaration ignored",
-                prim_path_str
-            ),
         }
     }
 
-    // --- Mission trajectory (LunCoMissionTrajectoryAPI) ---
+    // --- Derived trajectory view (LunCoTrajectoryViewAPI) ---
     //
     // VISUALISATION parameters only. The state vectors are NOT here and never were:
     // the curve is sampled at runtime from the ephemeris provider keyed by
     // `trackedId`/`referenceId`, so this prim says how to DRAW a trajectory, not
     // where the spacecraft is. Keyed on `trackedId` — without a target there is
     // nothing to plot.
-    let trajectory_target = match read_authored_i32(reader, sdf_path, "lunco:trajectory:trackedId")
-    {
-        Ok(Some(id)) if id != 0 => Some(id),
-        Ok(None) => None,
-        Ok(Some(id)) => {
-            warn!(
-                "[usd-celestial] {} has invalid trajectory tracked id {}; declaration ignored",
-                prim_path_str, id
-            );
-            None
+    let trajectory_target = if reader.has_api_schema(sdf_path, "LunCoTrajectoryViewAPI") {
+        match read_authored_i32(reader, sdf_path, "lunco:trajectory:trackedId") {
+            Ok(Some(id)) if id != 0 => Some(id),
+            Ok(None) => {
+                warn!(
+                    "[usd-celestial] {} applies LunCoTrajectoryViewAPI without a tracked id; view ignored",
+                    prim_path_str
+                );
+                None
+            }
+            Ok(Some(id)) => {
+                warn!(
+                    "[usd-celestial] {} has invalid trajectory tracked id {}; declaration ignored",
+                    prim_path_str, id
+                );
+                None
+            }
+            Err(()) => {
+                warn!(
+                    "[usd-celestial] {} has malformed trajectory attributes; declaration ignored",
+                    prim_path_str
+                );
+                None
+            }
         }
-        Err(()) => {
-            warn!(
-                "[usd-celestial] {} has malformed trajectory attributes; declaration ignored",
-                prim_path_str
-            );
-            None
-        }
+    } else {
+        None
     };
     if let Some(tracked_id) = trajectory_target {
         let trajectory = (|| {
-            let reference_id = read_authored_i32(reader, sdf_path, "lunco:trajectory:referenceId")?
-                .unwrap_or(DEFAULT_ANCHOR_BODY);
+            let reference_id =
+                read_authored_i32(reader, sdf_path, "lunco:trajectory:referenceId")?.ok_or(())?;
             if reference_id == 0 {
                 return Err(());
             }
@@ -556,11 +518,14 @@ pub fn insert_celestial_comms_components(
             {
                 return Err(());
             }
-            let frame = read_authored_token(reader, sdf_path, "lunco:trajectory:frame")?
-                .unwrap_or_else(|| "Inertial".to_string());
-            if !matches!(frame.as_str(), "Inertial" | "BodyFixed") {
-                return Err(());
-            }
+            let frame = match read_authored_token(reader, sdf_path, "lunco:trajectory:frame")?
+                .as_deref()
+                .unwrap_or("Inertial")
+            {
+                "Inertial" => lunco_celestial_spatial_core::TrajectoryFrame::Inertial,
+                "BodyFixed" => lunco_celestial_spatial_core::TrajectoryFrame::BodyFixed,
+                _ => return Err(()),
+            };
             let user_visible =
                 read_authored_bool(reader, sdf_path, "lunco:trajectory:userVisible")?;
             let start_epoch_jd =
@@ -576,7 +541,7 @@ pub fn insert_celestial_comms_components(
             let name = read_authored_string(reader, sdf_path, "lunco:trajectory:name")?
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| prim_path_str.to_string());
-            Ok(lunco_celestial_spatial_core::MissionTrajectoryDecl {
+            Ok(lunco_celestial_spatial_core::TrajectoryViewDecl {
                 name,
                 tracked_id,
                 reference_id,
@@ -592,100 +557,92 @@ pub fn insert_celestial_comms_components(
         match trajectory {
             Ok(trajectory) => {
                 commands.entity(entity).try_insert(trajectory);
-                info!("[usd-celestial] mission trajectory {prim_path_str}: target {tracked_id}");
+                info!("[usd-celestial] trajectory view {prim_path_str}: target {tracked_id}");
             }
             Err(()) => warn!(
-                "[usd-celestial] {} has invalid mission trajectory attributes; declaration ignored",
+                "[usd-celestial] {} has invalid trajectory-view attributes; declaration ignored",
                 prim_path_str
             ),
         }
     }
 
-    // --- Mission spacecraft marker (LunCoMissionSpacecraftAPI) ---
+    // --- Ephemeris-driven USD prim (LunCoEphemerisPositionAPI) ---
     //
-    // Keyed on `ephemerisId`: the marker's whole job is to sit where the ephemeris
-    // says that body is, so a prim naming no body is unplaceable, not defaulted.
-    let spacecraft_id = match read_authored_i32(reader, sdf_path, "lunco:spacecraft:ephemerisId") {
-        Ok(Some(id)) if id != 0 => Some(id),
-        Ok(None) => None,
-        Ok(Some(id)) => {
-            warn!(
-                "[usd-celestial] {} has invalid spacecraft ephemeris id {}; declaration ignored",
-                prim_path_str, id
-            );
-            None
+    // The composed USD prim owns its geometry, material, scale, and orientation.
+    // This component binds its translation to two ephemeris bodies.
+    let target_id = if reader.has_api_schema(sdf_path, "LunCoEphemerisPositionAPI") {
+        match read_authored_i32(reader, sdf_path, "lunco:ephemeris:targetId") {
+            Ok(Some(id)) if id != 0 => Some(id),
+            Ok(None) => {
+                warn!(
+                    "[usd-celestial] {} applies LunCoEphemerisPositionAPI without a target id; position ignored",
+                    prim_path_str
+                );
+                None
+            }
+            Ok(Some(id)) => {
+                warn!(
+                    "[usd-celestial] {} has invalid ephemeris target id {}; declaration ignored",
+                    prim_path_str, id
+                );
+                None
+            }
+            Err(()) => {
+                warn!(
+                    "[usd-celestial] {} has malformed ephemeris position attributes; declaration ignored",
+                    prim_path_str
+                );
+                None
+            }
         }
-        Err(()) => {
-            warn!(
-                "[usd-celestial] {} has malformed spacecraft attributes; declaration ignored",
-                prim_path_str
-            );
-            None
-        }
+    } else {
+        None
     };
-    if let Some(ephemeris_id) = spacecraft_id {
-        let spacecraft = (|| {
-            let reference_id = read_authored_i32(reader, sdf_path, "lunco:spacecraft:referenceId")?
-                .unwrap_or(DEFAULT_ANCHOR_BODY);
+    if let Some(target_id) = target_id {
+        let position = (|| {
+            let reference_id =
+                read_authored_i32(reader, sdf_path, "lunco:ephemeris:referenceId")?.ok_or(())?;
             if reference_id == 0 {
                 return Err(());
             }
-            let scale =
-                read_real_strict(reader, sdf_path, "lunco:spacecraft:scale")?.unwrap_or(1.0);
-            if !scale.is_finite() || scale <= 0.0 {
-                return Err(());
+            Ok(lunco_celestial::EphemerisPosition {
+                target_id,
+                reference_id,
+            })
+        })();
+        match position {
+            Ok(position) => {
+                commands.entity(entity).try_insert(position);
+                info!("[usd-celestial] ephemeris position {prim_path_str}: target {target_id}");
             }
-            let scale = scale as f32;
-            if !scale.is_finite() || scale <= 0.0 {
-                return Err(());
-            }
-            let start_epoch_jd =
-                read_authored_real(reader, sdf_path, "lunco:spacecraft:startEpochJd")?
-                    .and_then(|value| (value != 0.0).then_some(value));
-            let end_epoch_jd = read_authored_real(reader, sdf_path, "lunco:spacecraft:endEpochJd")?
-                .and_then(|value| (value != 0.0).then_some(value));
-            if start_epoch_jd.is_some() != end_epoch_jd.is_some()
-                || matches!((start_epoch_jd, end_epoch_jd), (Some(start), Some(end)) if end < start)
-            {
-                return Err(());
-            }
-            let marker_radius_km =
-                read_positive_optional_real(reader, sdf_path, "lunco:spacecraft:markerRadiusKm")?;
+            Err(()) => warn!(
+                "[usd-celestial] {} has invalid ephemeris position attributes; component ignored",
+                prim_path_str
+            ),
+        }
+    }
+
+    // --- Spacecraft interaction identity (LunCoSpacecraftAPI) ---
+    //
+    // This semantic is independent of ephemeris placement. The authored USD
+    // model and `Name` provide its visible geometry and label; the hit sphere is
+    // only for possession and camera framing.
+    if reader.has_api_schema(sdf_path, "LunCoSpacecraftAPI") {
+        let spacecraft = (|| {
             let hit_radius_km =
                 read_positive_optional_real(reader, sdf_path, "lunco:spacecraft:hitRadiusKm")?;
-            let name = read_authored_string(reader, sdf_path, "lunco:spacecraft:name")?
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| prim_path_str.to_string());
-            let marker_color =
-                read_authored_rgba(reader, sdf_path, "lunco:spacecraft:markerColor")?;
-            let marker_radius_km = marker_radius_km.map(|value| value as f32);
-            let hit_radius_km = hit_radius_km.map(|value| value as f32);
-            if marker_radius_km.is_some_and(|value| !value.is_finite() || value <= 0.0)
-                || hit_radius_km.is_some_and(|value| !value.is_finite() || value <= 0.0)
-            {
+            let hit_radius_m = hit_radius_km.unwrap_or_default() * 1000.0;
+            if !hit_radius_m.is_finite() {
                 return Err(());
             }
-            Ok(lunco_celestial_spatial_core::MissionSpacecraftDecl {
-                name,
-                ephemeris_id,
-                reference_id,
-                scale,
-                start_epoch_jd,
-                end_epoch_jd,
-                marker_radius_km,
-                hit_radius_km,
-                marker_color,
-            })
+            Ok(lunco_celestial::Spacecraft { hit_radius_m })
         })();
         match spacecraft {
             Ok(spacecraft) => {
                 commands.entity(entity).try_insert(spacecraft);
-                info!(
-                    "[usd-celestial] mission spacecraft {prim_path_str}: ephemeris {ephemeris_id}"
-                );
             }
             Err(()) => warn!(
-                "[usd-celestial] {} has invalid mission spacecraft attributes; declaration ignored",
+                "[usd-celestial] {} has invalid spacecraft interaction attributes; component ignored",
                 prim_path_str
             ),
         }
@@ -1003,7 +960,7 @@ fn project_celestial_comms_prims(
         // An ordinary scene mount keeps the empty path as a documented
         // defaultPrim sentinel until the visual projector writes the concrete
         // root path. Resolve that sentinel here from the same loaded plan so
-        // the root's authored mission epoch is projected before child domains
+        // the root's authored scene epoch is projected before child domains
         // (notably terrain) begin building from the default clock epoch.
         let (reader, _generation) = canonical.reader_for(id, stage_asset);
         let Some(resolved_path) =

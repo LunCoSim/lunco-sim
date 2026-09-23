@@ -556,9 +556,9 @@ pub fn avatar_raycast_possession(
     // passed `t < min_t` and the click "leaked" through the ground into a
     // `FocusTarget` on the planet.
     let mut min_t = if click.hit.position.is_some() {
-        click.hit.depth
+        f64::from(click.hit.depth)
     } else {
-        f32::INFINITY
+        f64::INFINITY
     };
 
     let control_target = find_control_owner_from_hit(
@@ -573,8 +573,12 @@ pub fn avatar_raycast_possession(
     // Spacecraft hit-spheres (no real colliders) — possessable, not selectable.
     let mut spacecraft_hit: Option<Entity> = None;
     for (entity, gtf, sc) in q_spacecraft.iter() {
-        let oc = ray.origin - gtf.translation();
-        let b = oc.dot(ray.direction.as_vec3());
+        if !sc.hit_radius_m.is_finite() || sc.hit_radius_m <= 0.0 {
+            continue;
+        }
+        let oc = bevy::math::DVec3::from(ray.origin) - bevy::math::DVec3::from(gtf.translation());
+        let direction = bevy::math::DVec3::from(ray.direction.as_vec3());
+        let b = oc.dot(direction);
         let c = oc.dot(oc) - sc.hit_radius_m.powi(2);
         let discr = b * b - c;
         if discr >= 0.0 {
@@ -592,9 +596,11 @@ pub fn avatar_raycast_possession(
     let mut body_hit: Option<Entity> = None;
     if CELESTIAL_CLICK_FOCUS {
         for (entity, gtf, body) in q_bodies.iter() {
-            let oc = ray.origin - gtf.translation();
-            let b = oc.dot(ray.direction.as_vec3());
-            let c = oc.dot(oc) - (body.radius_m as f32).powi(2);
+            let oc =
+                bevy::math::DVec3::from(ray.origin) - bevy::math::DVec3::from(gtf.translation());
+            let direction = bevy::math::DVec3::from(ray.direction.as_vec3());
+            let b = oc.dot(direction);
+            let c = oc.dot(oc) - body.radius_m.powi(2);
             let discr = b * b - c;
             if discr >= 0.0 {
                 let t = -b - discr.sqrt();

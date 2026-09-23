@@ -85,7 +85,7 @@ entry = "twin_lifecycle"
 
 [[policies]]
 hook = "application.asset.lifecycle"
-source = "tutorial_catalog_menu.rhai"
+source = "application_asset_lifecycle.rhai"
 entry = "application_asset_lifecycle"
 required = true
 

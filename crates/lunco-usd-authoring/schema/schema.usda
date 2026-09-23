@@ -1242,13 +1242,14 @@ class "LunCoEpochAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """The scene's mission epoch, authored on the site-anchor root prim.
+    doc = """The scene's ephemeris epoch, authored on the scene root prim.
     Explicit because the real sun crosses a lunar horizon on a ~monthly cycle: an
-    unlucky "now" default renders the whole scene pitch-black."""
+    unlucky machine-clock default can render the scene at the wrong lighting and
+    outside the coverage of scene-selected ephemeris data."""
 )
 {
     double lunco:time:epochJd = 0 (
-        doc = "Mission start epoch, Julian date. 0/unauthored = the engine default."
+        doc = "Scene epoch in Julian days. 0/unauthored leaves the engine default."
     )
 }
 
@@ -1310,49 +1311,21 @@ class "LunCoLibrationAPI" (
     )
 }
 
-class "LunCoMissionAPI" (
+class "LunCoTrajectoryViewAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """Declares the prim a MISSION — presentation metadata for the mission
-    browser. Keyed on `id`: a prim without one is not a half-declared mission, it
-    is simply not a mission."""
-)
-{
-    string lunco:mission:id = "" (
-        doc = "Stable mission identifier (`\"apollo15\"`)."
-    )
-    string lunco:mission:name = "" (
-        doc = "Display name. Empty = the id."
-    )
-    string lunco:mission:description = "" (
-        doc = "One-paragraph mission blurb."
-    )
-    double lunco:mission:start = 0 (
-        doc = "Mission start epoch, Julian date."
-    )
-    double lunco:mission:duration = 0 (
-        doc = "Mission duration, days."
-    )
-}
-
-class "LunCoMissionTrajectoryAPI" (
-    inherits = </APISchemaBase>
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """VISUALISATION parameters for a mission trajectory plot. The state
-    vectors are NOT here and never were: the ephemeris provider owns where the
-    spacecraft is. Keyed on `trackedId` — without a target there is nothing to
-    plot."""
+    doc = """Parameters for a trajectory view sampled from the active ephemeris
+    provider. The authored prim selects the tracked and reference bodies and
+    controls the derived line's sampling and presentation."""
 )
 {
     int lunco:trajectory:trackedId = 0 (
         doc = "Ephemeris id of the body/spacecraft whose path is plotted."
     )
-    int lunco:trajectory:referenceId = 301 (
-        doc = "Ephemeris id of the frame's reference body. The default is the Moon."
+    int lunco:trajectory:referenceId = 0 (
+        doc = "Ephemeris id of the frame's reference body; 0 is unset."
     )
     string lunco:trajectory:name = "" (
         doc = "Display name. Empty = the prim path."
@@ -1380,42 +1353,36 @@ class "LunCoMissionTrajectoryAPI" (
     )
 }
 
-class "LunCoMissionSpacecraftAPI" (
+class "LunCoEphemerisPositionAPI" (
     inherits = </APISchemaBase>
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """A mission spacecraft MARKER — sits where the ephemeris says that body
-    is. Keyed on `ephemerisId`: a prim naming no body is unplaceable, not
-    defaulted."""
+    doc = """Places an authored USD prim from ephemeris state relative to a body.
+    Standard USD geometry, materials, and transforms define its appearance; this
+    schema supplies the tracked and reference bodies. A prim is hidden while its
+    ephemeris state is unavailable."""
 )
 {
-    int lunco:spacecraft:ephemerisId = 0 (
-        doc = "Ephemeris id of the spacecraft this marker follows."
+    int lunco:ephemeris:targetId = 0 (
+        doc = "Ephemeris id of the body whose position drives this prim; 0 is unset."
     )
-    int lunco:spacecraft:referenceId = 301 (
-        doc = "Ephemeris id of the reference body. The default is the Moon."
+    int lunco:ephemeris:referenceId = 0 (
+        doc = "Ephemeris id of the origin used for this prim's local translation; 0 is unset."
     )
-    string lunco:spacecraft:name = "" (
-        doc = "Display name. Empty = the prim path."
-    )
-    float lunco:spacecraft:scale = 1 (
-        doc = "Visual scale multiplier for the marker model."
-    )
-    double lunco:spacecraft:startEpochJd = 0 (
-        doc = "Epoch before which the marker is hidden, Julian date. 0 = always."
-    )
-    double lunco:spacecraft:endEpochJd = 0 (
-        doc = "Epoch after which the marker is hidden, Julian date. 0 = always."
-    )
-    float lunco:spacecraft:markerRadiusKm = 0 (
-        doc = "Marker billboard radius, kilometres. 0 = engine default."
-    )
-    float lunco:spacecraft:hitRadiusKm = 0 (
-        doc = "Click/pick radius, kilometres. 0 = engine default."
-    )
-    color4f lunco:spacecraft:markerColor = (1, 1, 1, 1) (
-        doc = "Marker colour, linear RGBA."
+}
+
+class "LunCoSpacecraftAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Marks a prim as a spacecraft for selection, possession, and camera
+    framing. USD geometry and its `Name` provide the visible model and label."""
+)
+{
+    double lunco:spacecraft:hitRadiusKm = 0 (
+        doc = "Analytic possession and camera framing radius in kilometres; 0 disables the hit sphere."
     )
 }
 

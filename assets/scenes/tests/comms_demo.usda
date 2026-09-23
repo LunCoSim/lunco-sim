@@ -2,247 +2,155 @@
 (
     defaultPrim = "CommsDemoScene"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Comms connectivity demo (doc 43): a Shackleton-ridge site with a rover
-# (antenna aboard), a base mast, a lunar relay satellite (ELFO) and an Earth
-# DSN station. The root anchor georeferences the scene on the Moon — the site
-# frame that grounds every scene-local antenna. Link state is published as a
-# `LinkState` component per node (readable via `query_entity`) plus the
-# `query("Links")` graph snapshot and `link.aos` / `link.los` events. Ask it from
-# rhai: `can_reach("rover", "earth")` (see `scripting/prelude/links.rhai`).
 def Xform "CommsDemoScene" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
-    doc = "MoonDAO comms demo: Malapert Massif site with rover, base mast, lunar relay (ELFO) and the three DSN complexes on Earth — connectivity via the generic link kernel (lunco:linkNode; link.aos/link.los events)."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    documentation = "MoonDAO comms demo: Malapert Massif site with rover, base mast, lunar relay (ELFO) and the three DSN complexes on Earth — connectivity via the generic link kernel (lunco:linkNode; link.aos/link.los events)."
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
     kind = "assembly"
 )
 {
     uniform bool lunco:spawnable = false
-
-    # This scene wants a sky: Sun, Earth and Moon. Celestial content is opt-in per
-    # scene (doc 19 §11e) — the bodies, their globes, the orbit views and the
-    # ephemeris all exist because these prims declare them, not because a Rust flag
-    # was flipped. A scene that says nothing here gets no celestial content at all.
+    double lunco:anchor:lat = -85.99
+    double lunco:anchor:lon = 2.9
+    double lunco:anchor:height = 0.3
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
     def "SolarSystem" (
         prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
     )
     {
     }
-
-    # Site frame: Shackleton–de Gerlache connecting ridge (Artemis site).
-    # Malapert Massif summit region — the classic lunar comms-relay site:
-    # near-continuous sunlight and Earth permanently a few degrees above the
-    # northern horizon (direct DSN line of sight). The previous Shackleton-rim
-    # point (-89.45, -136.7) sits in topographic shadow at every azimuth.
-    double lunco:anchor:lat = -85.99
-    double lunco:anchor:lon = 2.9
-    # Height above the RENDERED moon surface. The globe tiles are a pure
-    # sphere at `radius_m` (no DEM), and the site frame origin sits at
-    # `radius + height` — an authored 6000 m (real Malapert altitude above
-    # the reference sphere) floated the whole scene 6 km above the visible
-    # surface ("terrain is not merged with lunar surface"). 0.3 m rests the
-    # ground pad on the sphere without z-fighting the tangent point.
-    double lunco:anchor:height = 0.3
-    int lunco:anchor:body = 301
-    # Local MORNING at Malapert: real ephemeris sun at +2.6° elevation and ~72°
-    # in azimuth away from Earth's sky position (measured by sweeping
-    # SetMissionEpoch over a lunar day). Morning beats local noon (+5.2°) for
-    # the demo: at noon the sun stands next to Earth in the sky, so Earth shows
-    # its NIGHT side (a black disc — "click on Earth" saw nothing); in the
-    # morning Earth is a lit gibbous. Without an authored epoch the clock
-    # defaults to "now", which can land in lunar polar night (pitch-black).
-    double lunco:time:epochJd = 2461395.5
-
     def Plane "Ground" (
-        prepend apiSchemas = ["LunCoTerrainAPI"]
+        prepend apiSchemas = "LunCoTerrainAPI"
     )
     {
         token lunco:terrain:surfaceRole = "flat-site"
         double width = 1.0
         double length = 1.0
         token axis = "Y"
-        double3 xformOp:translate = (0, 0, 0)
-        double3 xformOp:scale = (400, 1.0, 400)
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
+        double3 xformOp:scale = (400.0, 1.0, 400.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.42, 0.4, 0.38)]
+        color3f[] primvars:displayColor = [(0.41999998688697815, 0.4000000059604645, 0.3799999952316284)]
         bool physics:collisionEnabled = true
     }
-
     def LunCoEnvironment "Environment"
     {
-        # Exposure matched to grazing polar light: at the authored epoch the sun
-        # sits ~2.6° above the Malapert horizon, so flat ground receives
-        # 128k·sin(2.6°) ≈ 5.8k lux (luminance ≈ 740 cd/m² at regolith
-        # albedo) → EV100 ≈ 12.5. The full-daylight default (EV16) renders the
-        # scene nearly black.
         float lunco:env:exposureEv100 = 12.5
     }
-
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
+        uniform bool lunco:avatar = true
+        double3 xformOp:translate = (14.0, 6.0, 12.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        double3 lunco:cameraLookAt = (6.0, 1.4, 0.0)
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
         {
         }
-        uniform bool lunco:avatar = true
-        # Framed on the rover (at ~(6, 1.4, 0)) from a 3/4 view, so the scene opens
-        # looking straight at it and its connectivity beams, not out at empty regolith.
-        double3 xformOp:translate = (14, 6, 12)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-        double3 lunco:cameraLookAt = (6, 1.4, 0)
     }
-
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
-        double3 xformOp:translate = (6, 1.4, 0)
+        double3 xformOp:translate = (6.0, 1.4, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        # Give the rover's antenna a simulated link budget: `radio.usda` is
-        # `antenna.usda` (the link node) composed with `CommsLink.mo` (Friis → SNR →
-        # Shannon → buffer), with the RF design authored as ordinary `inputs:`. The
-        # component's defaults already describe a small S-band rover radio working the
-        # relay, so nothing needs overriding here — override an `inputs:` only where
-        # this vehicle genuinely differs.
         over "Comms" (
             prepend references = @lunco://components/comms/radio.usda@</CommsRadio>
         )
         {
-            over "YawHead" { over "DishGimbal" { over "DishHead" { over "LinkAperture" {
-                string lunco:link:class = "rover"
-                # Antenna pointing limit — NOT a horizon proxy. A surface rover can talk to
-                # to a nearby station slightly downhill; distant below-horizon peers are
-                # rejected by body/terrain occlusion, not this local pointing limit.
-                double lunco:link:minElevationDeg = -10.0
-                # The feed reaches lunar peers but not an Earth DSN directly, keeping the
-                # relay load-bearing in this scenario.
-                double lunco:link:maxRangeM = 100000000
-            } } } }
+            over "YawHead"
+            {
+                over "DishGimbal"
+                {
+                    over "DishHead"
+                    {
+                        over "LinkAperture"
+                        {
+                            string lunco:link:class = "rover"
+                            double lunco:link:minElevationDeg = -10.0
+                            double lunco:link:maxRangeM = 100000000.0
+                        }
+                    }
+                }
+            }
         }
     }
-
-    # Base comms mast — a scene-local antenna, like the moonbase one.
     def Xform "BaseMast" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
-        double3 xformOp:translate = (-8, 0, -4)
+        double3 xformOp:translate = (-8.0, 0.0, -4.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 200.0
         bool physics:kinematicEnabled = true
-
         over "Mast"
         {
             double height = 3.2
-            double3 xformOp:translate = (0, 1.6, 0)
+            double3 xformOp:translate = (0.0, 1.6, 0.0)
         }
         over "YawHead"
         {
-            double3 xformOp:translate = (0, 3.2, 0)
+            double3 xformOp:translate = (0.0, 3.2, 0.0)
             over "DishGimbal"
             {
                 over "DishHead"
                 {
-                    double3 xformOp:scale = (4, 4, 4)
+                    double3 xformOp:scale = (4.0, 4.0, 4.0)
                     over "LinkAperture"
                     {
                         string lunco:link:class = "base"
-                        # This is the local site mast, not an Earth relay. The
-                        # authored 5 km service radius is long enough to reach
-                        # the rover at this site and far too short to make a
-                        # 360,000 km lunar-to-Earth hop an accidental shortcut.
                         double lunco:link:maxRangeM = 5000.0
                     }
                 }
             }
         }
     }
-
-    # (No yaw joint here. The antenna component owns it and mounts by ancestry —
-    # this prim IS the component's root and carries the body, so the mount
-    # resolves to itself. A second joint across the same pair would double the
-    # constraint.)
-
-    # Lunar relay on its default ELFO (elements on the asset; override here to
-    # reposition). Placed on the Moon's grid by the celestial systems when the
-    # solar hierarchy is enabled; hidden otherwise — comms math is unaffected.
     def Xform "RelaySat" (
         prepend references = @lunco://vessels/satellites/relay_sat.usda@</RelaySat>
     )
     {
-        # ANCHOR THE ELEMENTS TO THIS SCENE'S EPOCH.
-        #
-        # `lunco:orbit:meanAnomalyDeg = 180` in `relay_sat.usda` means apolune —
-        # the whole point of the authored ELFO, whose apolune dwells over the
-        # lunar south pole and so hangs above this Malapert site for hours.
-        #
-        # But mean anomaly is only meaningful WITH the epoch it was measured at,
-        # and `lunco:orbit:epochJd` defaults to J2000. This scene authors
-        # `lunco:time:epochJd = 2461395.5`, so the satellite was propagated ~24
-        # years from J2000 before the first frame and arrived at an arbitrary
-        # phase: measured at 3971 km from the Moon's centre with a local-up
-        # component of −2.2°, i.e. just BELOW the site's horizon. Every
-        # surface↔relay and relay↔DSN edge was severed, the graph held exactly one
-        # edge (base↔rover, 14 m), and the routing assertions failed on geometry
-        # rather than on routing.
-        #
-        # Stating the epoch is what makes "apolune" mean apolune HERE. It also
-        # makes the demo deterministic: the relay is in the same place every run,
-        # independent of when the elements happened to be authored.
         double lunco:orbit:epochJd = 2461395.5
     }
-
-    # Earth ground stations — the three DSN complexes, ~120° apart so at
-    # least one always sees the Moon (that's WHY there are three).
     def Xform "DSS_Madrid" (
         prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     )
     {
         double lunco:anchor:lat = 40.4314
         double lunco:anchor:lon = -4.2481
-        double lunco:anchor:height = 837
+        double lunco:anchor:height = 837.0
         int lunco:anchor:body = 399
     }
-
     def Xform "DSS_Goldstone" (
         prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     )
     {
         double lunco:anchor:lat = 35.4267
         double lunco:anchor:lon = -116.89
-        double lunco:anchor:height = 1001
+        double lunco:anchor:height = 1001.0
         int lunco:anchor:body = 399
     }
-
     def Xform "DSS_Canberra" (
         prepend references = @lunco://components/comms/ground_station.usda@</GroundStation>
     )
     {
         double lunco:anchor:lat = -35.4014
         double lunco:anchor:lon = 148.9817
-        double lunco:anchor:height = 688
+        double lunco:anchor:height = 688.0
         int lunco:anchor:body = 399
     }
-
-    # Connectivity is computed by the generic link kernel over the `lunco:linkNode`
-    # endpoints (rover mast, base mast, relay, DSN stations) — no scenario needed;
-    # the builtin `link.connected` verdict applies range / elevation / body +
-    # terrain occlusion. Routing / autonomy is authored on top of its LinkState +
-    # link.aos / link.los events.
-
     def Scope "Scenario"
     {
         custom string lunco:scenario = "comms-demo"
-
         def Scope "Test" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
+            prepend apiSchemas = "LunCoProgramAPI"
         )
         {
             uniform token info:implementationSource = "sourceAsset"

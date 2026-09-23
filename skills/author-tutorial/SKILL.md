@@ -39,7 +39,7 @@ examples under `assets/tutorials/`.
 
 The `track` value determines the submenu containing the lesson. Reuse an
 existing track when the lesson belongs to that learning path. The Rhai policy
-at `assets/scripting/policy/tutorial_catalog_menu.rhai` discovers the unique
+at `assets/scripting/policy/application_asset_lifecycle.rhai` discovers the unique
 marked catalog from generic asset-scope events and uses the shared `parse_json`
 function; do not add tutorial-specific Rust loading or menu code.
 

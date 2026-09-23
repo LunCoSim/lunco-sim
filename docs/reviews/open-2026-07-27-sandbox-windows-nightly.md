@@ -327,7 +327,6 @@ Smaller items in the same category:
   consumes the canonical `lunco_render::SceneCamera` intent and reports only a concrete window
   `Camera3d` that has no declared owner; tooling cameras must use the same intent rather than an
   application-specific registration or auto-tagging path.
-- `[ephemeris] NAIF -1024 has no cached vectors — download 'artemis2_vectors' from Settings ▸ Downloadable data` is correct and actionable. Left here as the example of what the others should look like.
 
 **Fix:** no `eprintln!`/`println!` in shipped crates — route through `tracing` with a target and a rate limit. Worth a clippy lint (`clippy.toml` already exists) so this cannot recur.
 

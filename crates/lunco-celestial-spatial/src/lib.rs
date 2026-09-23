@@ -18,11 +18,11 @@ use lunco_environment::{Gravity, GravityBody};
 
 mod big_space_setup;
 pub mod cadence;
+mod celestial_views;
 mod globe_lod;
 mod gravity;
 mod imagery;
 pub mod link;
-mod missions;
 pub mod placement;
 pub mod pose;
 mod presentation_markers;
@@ -38,7 +38,6 @@ pub use big_space_setup::*;
 pub use globe_lod::{GlobeLod, GlobeLodBudget};
 pub use gravity::*;
 pub use link::*;
-pub use missions::*;
 pub use placement::*;
 pub use pose::*;
 pub use soi::*;
@@ -136,12 +135,8 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_terrain_globe::TerrainPlugin);
         }
 
-        // The unified mission-time spine (doc 19 — T1): MissionClock + transport +
-        // the derived `WorldTime` view. Guarded so a context that also adds it via
-        // another plugin (e.g. `UsdAnimationPlugin` for the animation sampler) is fine.
-        // `TimePlugin` now owns the wall-clock seed itself (Startup), so every
-        // spine context anchors at the real launch instant — no celestial-only
-        // seed system anymore.
+        // Shared simulation time and its derived `WorldTime` view. Guarded so a
+        // context that also adds it through another plugin can compose safely.
         if !app.is_plugin_added::<lunco_time::TimePlugin>() {
             app.add_plugins(lunco_time::TimePlugin);
         }
@@ -161,8 +156,7 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<globe_lod::GlobeLodBudget>();
         // Celestial content always lives in the canonical persistent BigSpace
         // shell. Installing the shell here when a host has not already done so
-        // keeps headless/test apps on the same hierarchy as production and
-        // removes the former celestial-only root fallback.
+        // keeps headless/test apps on the same hierarchy as production.
         if !app.is_plugin_added::<lunco_spatial::WorldShellPlugin>() {
             app.add_plugins(lunco_spatial::WorldShellPlugin);
         }
@@ -174,6 +168,7 @@ impl Plugin for CelestialPlugin {
         app.register_type::<lunco_celestial_spatial_core::SolarTracked>();
         app.register_type::<lunco_celestial::CelestialBody>();
         app.register_type::<lunco_celestial::Spacecraft>();
+        app.register_type::<lunco_celestial::EphemerisPosition>();
         app.add_systems(
             Update,
             pose::update_solar_poses.run_if(cadence::tracked_needs_solve()),
@@ -270,7 +265,7 @@ impl Plugin for CelestialPlugin {
         // big_space::prelude::BigSpaceDefaultPlugins should be added by the application entry point
         // after disabling TransformPlugin. Trajectory mesh/sampling presentation is installed by
         // the presentation composition, not by this headless spatial runtime.
-        app.add_plugins(missions::MissionPlugin);
+        app.add_plugins(celestial_views::CelestialViewsPlugin);
 
         if !app.is_plugin_added::<GravityPlugin>() {
             app.add_plugins(GravityPlugin);
@@ -486,19 +481,15 @@ impl Plugin for CelestialPlugin {
 ///
 /// * **Ownership marker.** Every celestial-owned root carries
 ///   [`CelestialDerived`](big_space_setup::CelestialDerived) — the solar hierarchy,
-///   orbit views, and mission spacecraft. Despawning those roots recursively removes
+///   orbit views, and authored ephemeris spacecraft. Despawning those roots recursively removes
 ///   their grids, bodies, terrain tiles, labels, and other structural descendants.
 ///   A new ownership root is covered the moment it carries the marker; the invariant
 ///   lives in one line on the marker's doc.
-/// * **Idempotent re-spawn.** The spawners gate on "does my output exist yet"
-///   (`SolarSystemRoot`/`TrajectoryView` empty), not a `Local` latch — so once this
-///   clears them, loading a scene *with* bodies rebuilds cleanly. Missions gate the
-///   same way but per-declaration: `MissionSpawned` is stamped on the USD prim entity
-///   that declared the mission, so it dies with the prim on teardown and a reload
-///   re-declares and re-spawns without any resource needing to be consulted.
-/// * **Resource state reset.** `MissionRegistry` (a diagnostic list of the ids spawned
-///   into the current scene) and the terrain-curvature coupling are resources, not
-///   entities, so they are reset here explicitly.
+/// * **Idempotent re-spawn.** The spawners gate on current outputs or stamp the
+///   trajectory/spacecraft declaration prim. Those scene-owned prims and markers
+///   are removed together, so a replacement scene can project its own views.
+/// * **Resource state reset.** Terrain-curvature coupling is a resource rather
+///   than an entity, so it is reset here explicitly.
 ///
 /// The clock tree is reset separately and universally by `lunco_time::ResetTime`, fired
 /// from the scene-clear choke point — so a detached/fast sky clock is already back on
@@ -508,7 +499,6 @@ fn teardown_celestial_scene(
     mut active_physics_frame: ResMut<lunco_spatial::ActivePhysicsFrame>,
     q_derived: Query<Entity, With<big_space_setup::CelestialDerived>>,
     q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
-    mut registry: ResMut<MissionRegistry>,
     mut orbital_pin: ResMut<OrbitalViewPin>,
     curvature: Option<Res<lunco_terrain_surface::TerrainBodyCurvature>>,
 ) {
@@ -537,7 +527,6 @@ fn teardown_celestial_scene(
         n += 1;
     }
 
-    registry.missions.clear();
     // The pin is a scene-scoped presentation fact. The avatar that owned the
     // orbit transaction is about to be retired with the outgoing scene, so
     // retaining the pin would make the replacement scene look orbital without
@@ -607,7 +596,6 @@ mod scene_teardown_tests {
     #[test]
     fn replacement_declarations_cannot_suppress_celestial_teardown() {
         let mut app = App::new();
-        app.init_resource::<MissionRegistry>();
         app.init_resource::<OrbitalViewPin>();
         app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
 
@@ -642,7 +630,6 @@ mod scene_teardown_tests {
     #[test]
     fn teardown_frame_reset_cannot_overwrite_replacement_frame() {
         let mut app = App::new();
-        app.init_resource::<MissionRegistry>();
         app.init_resource::<OrbitalViewPin>();
         app.add_systems(lunco_core::SceneTeardown, teardown_celestial_scene);
 
@@ -675,7 +662,6 @@ mod scene_teardown_tests {
     #[test]
     fn scene_teardown_clears_the_outgoing_orbital_presentation_pin() {
         let mut app = App::new();
-        app.init_resource::<MissionRegistry>();
         app.insert_resource(OrbitalViewPin {
             active: true,
             body: lunco_celestial::ephemeris_id::EARTH,

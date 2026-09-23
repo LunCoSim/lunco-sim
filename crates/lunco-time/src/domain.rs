@@ -816,9 +816,9 @@ fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTrans
 /// `{"type":"ExecuteCommand","command":"SetMissionEpoch","params":{"epoch_jd":2461253.0}}`. Sets both
 /// the mission origin and the calendar anchor at the CURRENT tick, so the sim
 /// jumps to that date without a tick discontinuity. This is how a scene picks
-/// its date: a site-anchored USD stage authors `double lunco:time:epochJd` on
-/// its root prim (e.g. an epoch where the Shackleton site is sunlit) and the
-/// USD bridge fires this command on load.
+/// its date: a USD scene root applies `LunCoEpochAPI` and authors
+/// `double lunco:time:epochJd` (for example, a site scene may choose an epoch
+/// with sunlight at Shackleton), and the USD bridge fires this command on load.
 #[Command(default)]
 pub struct SetMissionEpoch {
     /// Absolute epoch, Julian Date (TDB).

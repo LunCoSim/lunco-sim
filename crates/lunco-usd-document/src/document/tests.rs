@@ -105,6 +105,59 @@ fn a_canonical_stage_authors_the_value_verbatim() {
     );
 }
 
+#[test]
+fn stage_and_prim_documentation_use_typed_reversible_operations() {
+    let mut doc = UsdDocument::with_origin(
+        DocumentId::new(79),
+        TINY_USDA,
+        DocumentOrigin::writable_file("/tmp/documentation.usda"),
+    );
+    let root = SdfPath::abs_root();
+    let world = SdfPath::new("/World").unwrap();
+
+    let stage_inverse = doc
+        .apply(UsdOp::SetStageDocumentation {
+            edit_target: LayerId::root(),
+            documentation: Some("Scene documentation".into()),
+        })
+        .expect("stage documentation applies");
+    assert_eq!(
+        doc.data()
+            .field(&root, sdf::FieldKey::Documentation.as_str()),
+        Some(&sdf::Value::String("Scene documentation".into()))
+    );
+    doc.apply(stage_inverse)
+        .expect("stage documentation restores");
+    assert_eq!(
+        doc.data()
+            .field(&root, sdf::FieldKey::Documentation.as_str()),
+        None
+    );
+
+    doc.apply(UsdOp::SetPrimDocumentation {
+        edit_target: LayerId::root(),
+        path: "/World".into(),
+        documentation: Some("World documentation".into()),
+    })
+    .expect("prim documentation applies");
+    assert_eq!(
+        doc.data()
+            .field(&world, sdf::FieldKey::Documentation.as_str()),
+        Some(&sdf::Value::String("World documentation".into()))
+    );
+    doc.apply(UsdOp::SetPrimDocumentation {
+        edit_target: LayerId::root(),
+        path: "/World".into(),
+        documentation: None,
+    })
+    .expect("prim documentation clears");
+    assert_eq!(
+        doc.data()
+            .field(&world, sdf::FieldKey::Documentation.as_str()),
+        None
+    );
+}
+
 /// UNDO MUST LAND WHERE IT STARTED on a non-canonical stage.
 ///
 /// The inverse op is built from a value read raw out of the layer — i.e. in the
@@ -605,8 +658,7 @@ fn view_layer_composes_without_entering_persistent_runtime_source() {
     assert_eq!(document.runtime_revision(), 1);
     assert_eq!(document.view_revision(), 1);
 
-    let persistent =
-        usda_to_data(&document.persistent_composed_source().unwrap()).unwrap();
+    let persistent = usda_to_data(&document.persistent_composed_source().unwrap()).unwrap();
     assert!(persistent.spec(&points).is_some());
     assert!(persistent.spec(&ribbon).is_none());
 

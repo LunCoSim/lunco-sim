@@ -1,16 +1,15 @@
 # lunco-celestial-ephemeris — declared datasets.
 #
-# Analytic ephemerides (VSOP2013 planets, ELP/MPP02 Moon) are CODE and ship with
-# the crate. A MISSION trajectory cannot be: it is a query answered by JPL
-# Horizons, so it is declared here as a dataset and downloaded only when a user
-# asks (Settings ▸ Downloadable data). The engine never fetches on its own.
+# Analytic ephemerides (VSOP2013 planets, ELP/MPP02 Moon) ship with the crate.
+# This JPL Horizons vector product is declared as a dataset. The application
+# asset policy selects it for its scene; provisioning remains an explicit user
+# action through Downloadable data.
 #
-# `dest` is resolved against the shared engine cache (`lunco_assets_core::cache_dir`),
-# and must match the `lunco-celestial-ephemeris` path contract — the loader scans
-# `<cache>/ephemeris/target_<naif>_*.csv`, so the date range in the filename is
-# documentation, not a lookup key.
+# `dest` is resolved against the shared engine cache
+# (`lunco_assets_core::cache_dir`). The application asset lifecycle policy
+# requests this registry entry only for a scene that uses these vectors.
 #
-# The URL is the Horizons VECTORS query for the mission: geocentric
+# The URL is the Horizons VECTORS query for this spacecraft: geocentric
 # (CENTER='500@399'), ECLIPTIC reference plane — the frame `parse_ephemeris_csv`
 # asserts. Changing the frame here silently changes the meaning of the numbers.
 #
@@ -25,9 +24,8 @@ dest = "ephemeris/target_-1024_2026-04-02_0159_2026-04-11_0001.csv"
 
 # WHAT these bytes are, read by `lunco-celestial-ephemeris` and ignored by the
 # downloader. It lives here because it describes THIS product: `center` is the
-# `CENTER=` of the query above, so the two can never drift. There used to be a
-# second file (`assets/missions/*.ephemeris.json`) repeating the id and centre
-# next to a duplicate copy of the query — deleted.
+# `CENTER=` of the query above, so the declaration keeps the data meaning next
+# to the transport query.
 [artemis2_vectors.ephemeris]
 naif_id = -1024
 center = "500@399"          # → parent body 399 (Earth)

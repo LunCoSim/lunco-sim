@@ -2,46 +2,24 @@
 (
     defaultPrim = "Artemis2Review"
     upAxis = "Y"
-    metersPerUnit = 1
-    doc = """The opt-in side of the mission gate: a scene that DOES want Artemis II.
-
-    This is the counterpart to every other scene in the library, which now gets no
-    mission at all. It exists so the gate is testable in both directions — that
-    `episode_01_recording.usda` shows no Orion is only half the claim; the other
-    half is that a scene which asks still gets exactly what it used to.
-
-    Two references, two separate statements:
-      * `solar_system.usda` — this world has a Sun/Earth/Moon (and therefore an
-        ephemeris to sample).
-      * `artemis_2_mission.usda` — and draw Artemis II in it.
-
-    A scene may make the first without the second. That is the whole point: it is
-    what stopped a lunar-landing film from silently acquiring a crewed Orion.
-    """
+    metersPerUnit = 1.0
 )
 
-def Xform "Artemis2Review"
+def Xform "Artemis2Review" (
+    prepend apiSchemas = "LunCoEpochAPI"
+)
 {
-    # The scene's sun, composed from the shared engine light. The engine default
-    # IS this reference, so a scene that omits it is unlit.
+    double lunco:time:epochJd = 2461132.58
     def DistantLight "Sun" (
         prepend references = @lunco://lighting/sun.usda@</Sun>
     )
     {
     }
-
-    # NO `UsdPhysicsScene` HERE, deliberately. That prim states ONE gravity
-    # vector for a whole scene, which is the wrong shape for an orbital scene:
-    # gravity here is per-body and position-dependent, computed by the celestial
-    # subsystem's point-mass model (`Gravity::Surface` + `GravityProvider`).
-    # Authoring a flat vector would override that with a single constant
-    # direction and pin every spacecraft to a fictitious "down".
     def "SolarSystem" (
         prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
     )
     {
     }
-
     def "Artemis2" (
         prepend references = @lunco://missions/artemis_2_mission.usda@</Artemis2Mission>
     )

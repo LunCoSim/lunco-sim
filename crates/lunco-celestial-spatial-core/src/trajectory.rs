@@ -1,4 +1,4 @@
-//! Render-independent trajectory facts projected from authored mission data.
+//! Render-independent trajectory facts projected from authored USD data.
 
 use bevy::math::DVec3;
 use bevy::prelude::*;

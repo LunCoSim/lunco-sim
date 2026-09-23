@@ -439,6 +439,14 @@ labels. Invalid paths, invalid kind identifiers, composed-only prims, and stale
 generations fail before journaling; each metadata edit triggers the required
 composed projection refresh.
 
+`UsdOp::SetStageDocumentation` and `UsdOp::SetPrimDocumentation` author the
+standard USD `doc` metadata through the same journalled path. A prim-level
+documentation edit can create a local `over` for a prim authored in another
+document layer; a target that exists only through a reference or payload is
+rejected. Clearing an opinion reveals weaker-layer documentation. These
+operations update narrative metadata without rewriting authored USD source
+text.
+
 `UsdOp::SetStageMetrics` authors the shared `StageMetrics` and `UpAxis` core
 types (`meters_per_unit` and Y/Z axis) as stage-root metadata in the selected
 layer. The scale must be finite and positive. Because these values change the

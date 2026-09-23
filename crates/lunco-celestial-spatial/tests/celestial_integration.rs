@@ -449,7 +449,7 @@ fn each_builtin_orbit_target_has_one_colocated_star_fixed_grid() {
 }
 
 #[test]
-fn spacecraft_mount_only_in_their_declared_inertial_reference_grid() {
+fn ephemeris_positions_mount_only_in_their_declared_inertial_reference_grid() {
     let mut app = celestial_test_app();
     app.insert_resource(EphemerisResource {
         provider: Arc::new(StubEphemeris),
@@ -461,11 +461,9 @@ fn spacecraft_mount_only_in_their_declared_inertial_reference_grid() {
     let spacecraft = app
         .world_mut()
         .spawn((
-            lunco_celestial::Spacecraft {
-                name: "Frame probe".into(),
-                ephemeris_id: -10_001,
+            lunco_celestial::EphemerisPosition {
+                target_id: -10_001,
                 reference_id: moon,
-                user_visible: true,
                 ..Default::default()
             },
             Transform::from_scale(Vec3::splat(2.0)),

@@ -88,9 +88,8 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-terrain-core = { path = "../lunco-terrain-core" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 
-# NOTE: `ureq` used to live here for an ephemeris-download path that no longer
-# exists in this crate (zero references in `src/`). Ephemeris fetching is
-# `lunco-celestial-ephemeris`'s job. Do not re-add without a call site.
+# Dataset artifact reads and provisioning use the shared asset runtime; this
+# crate does not own a downloader.
 
 [dev-dependencies]
 # `HeightGrid`, to build the minimal `SurfaceOracle` a terrain entity needs in

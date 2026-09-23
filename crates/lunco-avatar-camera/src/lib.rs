@@ -915,7 +915,7 @@ fn orbit_system(
         let min_dist = if let Some(body) = body {
             body.radius_m + SURFACE_ORBIT_HANDOFF_ALTITUDE_M
         } else if let Ok(spacecraft) = q_sc.get(orbit.target) {
-            (spacecraft.hit_radius_m as f64).max(10.0)
+            spacecraft.hit_radius_m.max(10.0)
         } else {
             10.0
         };

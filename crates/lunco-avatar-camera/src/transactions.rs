@@ -348,7 +348,7 @@ pub(crate) fn on_focus_command(
     if let Ok(body) = q_bodies.get(physical_target) {
         distance = body.radius_m * 3.0;
     } else if let Ok(sc) = q_sc.get(cmd.target) {
-        distance = (sc.hit_radius_m as f64 * 5.0).max(100.0);
+        distance = (sc.hit_radius_m * 5.0).max(100.0);
     }
 
     let (yaw, pitch, _) = cam_tf.rotation.to_euler(EulerRot::YXZ);

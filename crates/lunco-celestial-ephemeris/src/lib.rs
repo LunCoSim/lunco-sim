@@ -18,6 +18,7 @@ use celestial_core::Vector3;
 use celestial_ephemeris::{moon::ElpMpp02Moon, planets::Vsop2013Emb, Vsop2013Earth, Vsop2013Sun};
 use celestial_time::julian::JulianDate;
 use celestial_time::TDB;
+use lunco_celestial::ephemeris_id::{EARTH, EARTH_MOON_BARYCENTER, MOON, SUN};
 use lunco_celestial::frames::{EclipticAu, IcrfAu};
 
 use std::collections::HashMap;
@@ -28,28 +29,21 @@ use lunco_celestial::ephemeris::{CsvDataPoint, EphemerisProvider, EphemerisResou
 
 /// Concrete implementation of the hybrid [`EphemerisProvider`].
 ///
-/// Combines built-in analytical VSOP/ELP modules with a local cache of
-/// external mission data (JPL Horizons CSV).
+/// Combines built-in analytical VSOP/ELP modules with scene-selected external
+/// dataset artifacts (JPL Horizons CSV).
 pub struct CelestialEphemerisProvider {
     _sun: Vsop2013Sun,
     earth: Vsop2013Earth,
     emb: Vsop2013Emb,
     moon: ElpMpp02Moon,
-    // `Arc<RwLock>` so the background JPL-Horizons fetch (kicked off by
-    // `EphemerisPlugin`) can insert mission vectors after launch without
-    // blocking app startup. Reads on the (hot) `position` path take an
-    // uncontended read lock.
+    // `Arc<RwLock>` lets the asset runtime publish scene-requested
+    // vectors without widening the read-only provider trait. Reads on the
+    // `position` path take an uncontended read lock.
     custom_data: Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>,
-    /// body → parent, THE gravitational hierarchy. Read from `BodyRegistry` (the registry's
-    /// `BodyDescriptor::parent_id` is the single source of truth) plus each mission's own
-    /// declared `center`.
-    ///
-    /// P8(c): this used to be a `match` hardcoded in `EphemerisProvider::global_position`,
-    /// duplicating the registry — and the two had already drifted apart (the `match` knew
-    /// mission id `-1024`; the registry did not). Two descriptions of the shape of the solar
-    /// system is one too many.
+    /// Body-to-parent relationships from the body registry and the selected
+    /// datasets' declared `center` metadata.
     parents: Arc<RwLock<HashMap<i32, i32>>>,
-    /// Changes whenever a mission dataset becomes available. The cadence
+    /// Changes whenever a scene-requested dataset becomes available. The cadence
     /// policy observes this atomic revision instead of locking provider data
     /// on every render frame.
     motion_revision: Arc<AtomicU64>,
@@ -57,12 +51,7 @@ pub struct CelestialEphemerisProvider {
 
 const AU_KM: f64 = 149_597_870.7;
 
-/// A JPL Horizons `CENTER` (`"@399"`, `"500@399"`, `"399"`) → NAIF id.
-///
-/// A mission's own config already says what it orbits, so the mission half of the tree comes
-/// from the mission — not from a `match` arm someone has to remember to add. (The old hardcoded
-/// tree knew exactly ONE mission id, `-1024`. The second mission would have rendered at the
-/// Sun.)
+/// Convert a JPL Horizons `CENTER` (`"@399"`, `"500@399"`, `"399"`) to its NAIF id.
 fn parse_center(center: &str) -> Option<i32> {
     center.rsplit('@').next()?.trim().parse::<i32>().ok()
 }
@@ -76,42 +65,88 @@ fn parents_from_registry() -> HashMap<i32, i32> {
         .collect()
 }
 
-/// Parse JPL-Horizons CSV vector text into sorted [`CsvDataPoint`]s.
-/// Lines with `$$` markers and blanks are skipped. Column layout:
-/// `jd, calendar, x, y, z, ...` (so x/y/z are indices 2/3/4).
-fn parse_ephemeris_csv(text: &str) -> Vec<CsvDataPoint> {
+/// Parse one complete JPL-Horizons CSV vector block into strictly ordered
+/// [`CsvDataPoint`]s. Data column layout is `jd, calendar, x, y, z, ...`.
+fn parse_ephemeris_csv(text: &str) -> Result<Vec<CsvDataPoint>, String> {
     let mut points = Vec::new();
-    for line in text.lines() {
-        if line.contains("$$") || line.trim().is_empty() {
+    let mut in_data = false;
+    let mut saw_start = false;
+    let mut saw_end = false;
+    for (line_index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if !in_data {
+            if line == "$$SOE" {
+                if saw_start {
+                    return Err(format!("line {}: duplicate $$SOE marker", line_index + 1));
+                }
+                saw_start = true;
+                in_data = true;
+            }
             continue;
         }
-        let parts: Vec<&str> = line.split(',').collect();
-        if parts.len() >= 5 {
-            if let (Ok(jd), Ok(x), Ok(y), Ok(z)) = (
-                parts[0].trim().parse::<f64>(),
-                parts[2].trim().parse::<f64>(),
-                parts[3].trim().parse::<f64>(),
-                parts[4].trim().parse::<f64>(),
-            ) {
-                points.push(CsvDataPoint {
-                    jd,
-                    // ASSERTED ecliptic, because the mission JSON asked JPL for
-                    // `REF_PLANE=ECLIPTIC`. Still UNVALIDATED: a mission asking for `FRAME`
-                    // would re-introduce the Shackleton bug for that one body, silently. The
-                    // newtype makes the downstream plumbing safe; it cannot check what JPL
-                    // was asked for.
-                    pos_au: EclipticAu::new(DVec3::new(x / AU_KM, y / AU_KM, z / AU_KM)),
-                });
-            }
+        if line == "$$EOE" {
+            saw_end = true;
+            break;
         }
+        if line.is_empty() {
+            continue;
+        }
+
+        let mut columns = line.split(',');
+        let first = columns.next().unwrap_or_default().trim();
+        let row_error = |reason: &str| format!("line {}: {reason}", line_index + 1);
+        let jd = first
+            .parse::<f64>()
+            .map_err(|_| row_error("Julian date must be numeric"))?;
+        if !jd.is_finite() {
+            return Err(row_error("Julian date must be finite"));
+        }
+        if points
+            .last()
+            .is_some_and(|previous: &CsvDataPoint| previous.jd >= jd)
+        {
+            return Err(row_error("Julian dates must be strictly increasing"));
+        }
+        let values = columns.collect::<Vec<_>>();
+        if values.len() < 4 {
+            return Err(row_error(
+                "vector row requires calendar and three coordinates",
+            ));
+        }
+        let parse_coordinate = |column: usize, axis: &str| {
+            values[column]
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| row_error(&format!("{axis} coordinate must be finite numeric data")))
+        };
+        let (x, y, z) = (
+            parse_coordinate(1, "x")?,
+            parse_coordinate(2, "y")?,
+            parse_coordinate(3, "z")?,
+        );
+        points.push(CsvDataPoint {
+            jd,
+            // Horizons vectors use the ecliptic frame specified by the
+            // dataset declaration's `REF_PLANE=ECLIPTIC` query.
+            pos_au: EclipticAu::new(DVec3::new(x / AU_KM, y / AU_KM, z / AU_KM)),
+        });
     }
-    points.sort_by(|a, b| a.jd.partial_cmp(&b.jd).unwrap_or(std::cmp::Ordering::Equal));
-    points
+    if !saw_start {
+        return Err("missing $$SOE marker".into());
+    }
+    if !saw_end {
+        return Err("missing $$EOE marker".into());
+    }
+    if points.is_empty() {
+        return Err("no Horizons vector rows were found".into());
+    }
+    Ok(points)
 }
 
 /// Return the exact angular-rate bound of the provider's piecewise-linear CSV
-/// interpolation. The position is clamped outside the first/last sample, so
-/// only adjacent samples can contribute motion. An invalid segment or one
+/// interpolation. Only adjacent in-coverage samples contribute motion. An invalid segment or one
 /// passing through the origin cannot provide a finite direction bound and
 /// therefore keeps the cadence gate exact.
 fn maximum_piecewise_linear_angular_rate(points: &[CsvDataPoint]) -> f64 {
@@ -152,11 +187,8 @@ fn maximum_piecewise_linear_angular_rate(points: &[CsvDataPoint]) -> f64 {
 
 /// The `[<key>.ephemeris]` sub-table of a declared dataset: what the bytes are.
 ///
-/// Transport (`url`, `dest`, `sha256`) is `lunco-assets`' half of the same
-/// entry; this is ours. Keeping both in ONE declaration is what removed the old
-/// `assets/missions/*.ephemeris.json`, which restated the id and centre beside
-/// a second copy of the Horizons query — two files to keep in step, and the
-/// startup path that read them was where the app phoned home.
+/// Transport (`url`, `dest`, `sha256`) and this domain metadata share one
+/// manifest entry; the downloader ignores this sub-table.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct EphemerisDatasetMeta {
     /// NAIF id these vectors describe.
@@ -168,25 +200,18 @@ pub struct EphemerisDatasetMeta {
     pub center: String,
 }
 
-/// Parse a downloaded Horizons response into sorted vectors.
+/// Parse a complete delivered Horizons response into ordered vectors.
 ///
-/// `None` when the bytes are not UTF-8 or hold no usable rows — a present but
-/// unparseable file is reported, never silently treated as "no data".
-fn parse_vectors(bytes: &[u8]) -> Option<Vec<CsvDataPoint>> {
-    let text = std::str::from_utf8(bytes).ok()?;
-    let points = parse_ephemeris_csv(&text);
-    if points.is_empty() {
-        return None;
-    }
-    Some(points)
+/// A present but incomplete or malformed asset returns an error; it is never
+/// silently treated as "no data".
+fn parse_vectors(text: &str) -> Result<Vec<CsvDataPoint>, String> {
+    parse_ephemeris_csv(text)
 }
 
 impl CelestialEphemerisProvider {
-    /// Analytic bodies only — VSOP/ELP plus the registry's parent tree.
-    ///
-    /// Mission vectors are DECLARED datasets and are added by
-    /// [`adopt_ephemeris_datasets`] once their files are on disk, so
-    /// construction reads no manifests, no JSON, and certainly no network.
+    /// Build the analytic provider with the standard body's parent tree.
+    /// Scene-selected datasets are parsed only when the generic asset runtime
+    /// delivers their bytes.
     pub fn new() -> Self {
         Self {
             _sun: Vsop2013Sun,
@@ -209,25 +234,8 @@ impl Default for CelestialEphemerisProvider {
 /// Rotate an **equatorial / ICRS** rectangular vector into **ecliptic J2000**
 /// (rotation about +X by the J2000 mean obliquity).
 ///
-/// The `celestial-ephemeris` VSOP2013 wrappers (`heliocentric_position`) and
-/// the ELP/MPP02 moon (`geocentric_position_icrs`) all return ICRS/equatorial
-/// axes, while the `EphemerisProvider` contract — and everything downstream
-/// (`ecliptic_to_bevy`, the geodesy in `lunco_celestial::geo`, and
-/// `BodyDescriptor::polar_axis`, which maps the IAU/WGCCRE pole out of the ICRF
-/// into exactly this frame) — is ecliptic J2000. Feeding equatorial vectors through
-/// unconverted tilts every "up"/"north" by 23.4°: measured at the Shackleton
-/// site anchor this rendered the sun ~45° below the horizon (pitch-black
-/// ground) instead of the real grazing ~1°.
-///
-/// **It is now typed**, and that is the fix that outlives the incident: it takes an [`IcrfAu`]
-/// and returns an [`EclipticAu`], so it is the ONLY way to produce the frame the
-/// `EphemerisProvider` contract promises. A raw `DVec3` from VSOP/ELP cannot skip it, and the
-/// geodesy downstream will not accept anything else. The bug is no longer a thing you can write.
-///
-/// The obliquity comes from `lunco_celestial::iau::OBLIQUITY_J2000_DEG` — the same constant the
-/// IAU pole transform uses. It used to be a second literal here, with a comment in `iau.rs`
-/// begging the two to agree; if they ever drifted, every "north" in the sim would be wrong by
-/// the difference, silently.
+/// The typed ICRF input and ecliptic output keep provider coordinates aligned
+/// with downstream geodesy. The obliquity is shared with the IAU pole transform.
 pub fn equatorial_to_ecliptic(p: IcrfAu) -> EclipticAu {
     let epsilon = lunco_celestial::iau::OBLIQUITY_J2000_DEG.to_radians();
     let (sin_e, cos_e) = epsilon.sin_cos();
@@ -240,9 +248,7 @@ pub fn equatorial_to_ecliptic(p: IcrfAu) -> EclipticAu {
 }
 
 impl CelestialEphemerisProvider {
-    /// P8(d) for the built-in bodies: an evaluation error is `None` — "we do not
-    /// know" — never a zero vector, which is a *position* (the frame origin) and
-    /// indistinguishable from a real result.
+    /// Return no position when the analytical library cannot evaluate this epoch.
     fn emb_heliocentric(&self, tdb: &TDB) -> Option<Vector3> {
         self.emb.heliocentric_position(tdb).ok().or_else(|| {
             bevy::log::warn_once!(
@@ -272,24 +278,26 @@ impl CelestialEphemerisProvider {
 }
 
 impl EphemerisProvider for CelestialEphemerisProvider {
-    /// P8(c): read from the tree, which is the registry's — not a `match` that duplicates it.
     fn parent_id(&self, body_id: i32) -> Option<i32> {
         self.parents.read().ok()?.get(&body_id).copied()
     }
 
     fn position(&self, body_id: i32, epoch_jd: f64) -> Option<EclipticAu> {
+        if !epoch_jd.is_finite() {
+            return None;
+        }
         let julian = JulianDate::new(epoch_jd, 0.0);
         let tdb = TDB::from_julian_date(julian);
 
         match body_id {
-            10 => Some(EclipticAu::ZERO), // the Sun IS the origin of this frame
-            3 => {
+            SUN => Some(EclipticAu::ZERO), // the Sun IS the origin of this frame
+            EARTH_MOON_BARYCENTER => {
                 let p = self.emb_heliocentric(&tdb)?;
                 Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
                     p.x, p.y, p.z,
                 ))))
             }
-            399 => {
+            EARTH => {
                 let p_emb = self.emb_heliocentric(&tdb)?;
                 let p_earth = self.earth_heliocentric(&tdb)?;
                 Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
@@ -298,7 +306,7 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                     p_earth.z - p_emb.z,
                 ))))
             }
-            301 => {
+            MOON => {
                 let p_m_geo_arr = self.moon_geocentric_icrs(&tdb)?;
                 const AU_KM: f64 = 149_597_870.7;
                 let p_m_geo_au = equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
@@ -318,45 +326,37 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                 Some(p_m_geo_au + p_earth_rel_emb)
             }
             other_id => {
-                // Mission fixtures use NAIF -1024 as an authored "trajectory
-                // data not supplied" sentinel. It is intentionally absent, not
-                // a failed lookup, so do not turn that opt-in fixture into a
-                // runtime warning on every scene load.
-                if other_id == -1024 {
-                    return None;
-                }
-                // Uncontended read lock; the background fetch only takes a
-                // write lock briefly when a CSV finishes downloading.
+                // Uncontended read lock; the scene-requested asset read only
+                // takes a write lock briefly when its parsed vectors arrive.
                 let guard = self.custom_data.read().unwrap_or_else(|e| e.into_inner());
                 if let Some(data) = guard.get(&other_id) {
-                    if !data.is_empty() {
-                        if epoch_jd <= data.first().unwrap().jd {
-                            return Some(data.first().unwrap().pos_au);
-                        }
-                        if epoch_jd >= data.last().unwrap().jd {
-                            return Some(data.last().unwrap().pos_au);
-                        }
-                        let idx = data.partition_point(|p| p.jd <= epoch_jd);
-                        if idx > 0 && idx < data.len() {
-                            let p0 = &data[idx - 1];
-                            let p1 = &data[idx];
-                            let t = (epoch_jd - p0.jd) / (p1.jd - p0.jd);
-                            return Some(p0.pos_au.lerp(p1.pos_au, t));
-                        }
+                    if data.first().is_some_and(|point| epoch_jd < point.jd)
+                        || data.last().is_some_and(|point| epoch_jd > point.jd)
+                    {
+                        return None;
                     }
+                    if data.len() == 1 {
+                        return data
+                            .first()
+                            .filter(|point| point.jd == epoch_jd)
+                            .map(|point| point.pos_au);
+                    }
+                    let idx = data.partition_point(|p| p.jd <= epoch_jd);
+                    if idx == 0 {
+                        return None;
+                    }
+                    if idx == data.len() {
+                        return data.last().map(|point| point.pos_au);
+                    }
+                    let p0 = &data[idx - 1];
+                    let p1 = &data[idx];
+                    let t = (epoch_jd - p0.jd) / (p1.jd - p0.jd);
+                    return Some(p0.pos_au.lerp(p1.pos_au, t));
                 }
-                // P8(d): an unknown id — or a body whose CSV failed to fetch — lands HERE, at
-                // the parent's centre, indistinguishable from a valid position. A failed
-                // Mars fetch renders Mars inside the Sun and nothing says so. Making this an
-                // `Option<EclipticAu>` is the right fix and is now CHEAP (the type is already
-                // threaded); it forces all ~22 call sites to decide what "no ephemeris" means,
-                // P8(d) FIXED. This used to return ZERO — a *position* — so a body whose CSV
-                // failed to fetch rendered at its parent's centre, indistinguishable from a
-                // real result. `None` says what is actually true: we do not know. Callers now
-                // skip the body rather than drawing it inside the Sun.
+                // A body without an analytic solution or selected dataset has
+                // no position; callers skip placement and rendering.
                 bevy::log::warn_once!(
-                    "[ephemeris] no data for NAIF id {body_id} — it will not be placed. \
-                     (Previously it was drawn at its parent's centre, silently.)"
+                    "[ephemeris] no data for NAIF id {body_id} — it will not be placed."
                 );
                 None
             }
@@ -398,6 +398,46 @@ mod frame_tests {
     }
 
     #[test]
+    fn vector_csv_rejects_invalid_or_repeated_samples() {
+        let valid = "header\n$$SOE\n2451545.0, J2000, 149597870.7, 0, 0\n2451546.0, J2000, 0, 149597870.7, 0\n$$EOE";
+        let points = parse_vectors(valid).expect("valid Horizons rows");
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].jd, 2_451_545.0);
+
+        let duplicate = "$$SOE\n2451545.0, J2000, 1, 2, 3\n2451545.0, J2000, 4, 5, 6\n$$EOE";
+        assert!(parse_vectors(duplicate).is_err());
+
+        let non_finite = "$$SOE\n2451545.0, J2000, NaN, 2, 3\n$$EOE";
+        assert!(parse_vectors(non_finite).is_err());
+
+        let malformed_row = "$$SOE\ninvalid, J2000, 1, 2, 3\n$$EOE";
+        assert!(parse_vectors(malformed_row).is_err());
+
+        let missing_end = "$$SOE\n2451545.0, J2000, 1, 2, 3";
+        assert!(parse_vectors(missing_end).is_err());
+    }
+
+    #[test]
+    fn custom_vector_positions_are_unavailable_outside_dataset_coverage() {
+        let provider = CelestialEphemerisProvider::new();
+        const TEST_BODY: i32 = 10_024;
+        provider.custom_data.write().unwrap().insert(
+            TEST_BODY,
+            vec![
+                csv_point(10.0, 1.0, 0.0, 0.0),
+                csv_point(20.0, 3.0, 0.0, 0.0),
+            ],
+        );
+
+        assert!(provider.position(TEST_BODY, 9.0).is_none());
+        assert_eq!(provider.position(TEST_BODY, 10.0).unwrap().raw().x, 1.0);
+        assert_eq!(provider.position(TEST_BODY, 15.0).unwrap().raw().x, 2.0);
+        assert_eq!(provider.position(TEST_BODY, 20.0).unwrap().raw().x, 3.0);
+        assert!(provider.position(TEST_BODY, 21.0).is_none());
+        assert!(provider.position(TEST_BODY, f64::NAN).is_none());
+    }
+
+    #[test]
     fn csv_motion_bound_matches_piecewise_linear_interpolation() {
         let points = [csv_point(0.0, 1.0, 0.0, 0.0), csv_point(2.0, 1.0, 1.0, 0.0)];
 
@@ -417,23 +457,14 @@ mod frame_tests {
         assert!(maximum_piecewise_linear_angular_rate(&points).is_infinite());
     }
 
-    /// The REAL conversion, not a copy of it.
-    ///
-    /// This used to be a hand-rolled `fn ecl_to_bevy` here — a second implementation of
-    /// `lunco_celestial::coords::ecliptic_to_bevy`, written only because that one was
-    /// `pub(crate)` and therefore unreachable from this crate. A conversion people have to copy
-    /// is a conversion that drifts, and this pair is the one whose drift once put the sun 45°
-    /// below the horizon. `coords` is now `pub`, so the test exercises the same code the
-    /// product does.
+    /// Shared coordinate conversion used by the provider's consumers.
     use lunco_celestial::coords::ecliptic_to_bevy;
 
     /// End-to-end frame check: with the provider's equatorial→ecliptic
     /// conversion and the tilt-aware geodesy, the sun's elevation at the
     /// Shackleton site must stay GRAZING (bounded by the moon axis tilt +
     /// site colatitude, ~±2.5°) and must actually rise above +1° at some
-    /// epoch within a year. Both fail loudly under the historical frame
-    /// bugs (equatorial vectors fed to ecliptic geodesy put the sun ±23-45°
-    /// off the horizon).
+    /// epoch within a year.
     #[test]
     fn shackleton_sun_stays_grazing_and_gets_lit_epochs() {
         let provider = CelestialEphemerisProvider::new();
@@ -449,7 +480,7 @@ mod frame_tests {
         for step in 0..=(366 * 4) {
             let jd = 2461228.5 + step as f64 * 0.25; // 6 h steps from 2026-07-07
             let p_moon = provider
-                .global_position(301, jd)
+                .global_position(MOON, jd)
                 .expect("VSOP/ELP always have the Moon");
             let center_m = ecliptic_to_bevy(p_moon).raw();
             let frame = solar_tangent_frame(moon, &site, center_m, jd);
@@ -474,20 +505,8 @@ mod frame_tests {
         );
     }
 
-    /// **P2 regression — the Moon's near side must actually face Earth.**
-    ///
-    /// The test above cannot see the bug that shipped: it checks Shackleton's
-    /// *elevation*, and at a pole elevation is **longitude-insensitive**. So a
-    /// rotation model with the correct RATE and NO PHASE (`W₀` absent — exactly
-    /// what this codebase had) passes it while the whole Moon sits 38.3° out of
-    /// true, ~1160 km of surface at the equator.
-    ///
-    /// This is the longitude-SENSITIVE check. The Moon is tidally locked, so the
-    /// **sub-Earth point** — where Earth is at the lunar zenith — must stay near
-    /// lunar longitude 0 forever. Optical libration in longitude swings it ±8°
-    /// (the orbit is eccentric, the spin is uniform), so bound it at 10°.
-    ///
-    /// Under the old model this reads ≈ 38° at J2000 and wanders — a hard fail.
+    /// The tidally locked Moon keeps the sub-Earth point near lunar longitude
+    /// zero, allowing for optical libration.
     #[test]
     fn moon_near_side_faces_earth_across_epochs() {
         use lunco_celestial::{body_fixed_to_geodetic, body_rotation};
@@ -507,8 +526,8 @@ mod frame_tests {
 
             // Earth as seen from the Moon, in the engine (ecliptic-Bevy) frame.
             let to_earth = ecliptic_to_bevy(
-                provider.global_position(399, jd).expect("Earth")
-                    - provider.global_position(301, jd).expect("Moon"),
+                provider.global_position(EARTH, jd).expect("Earth")
+                    - provider.global_position(MOON, jd).expect("Moon"),
             )
             .normalize()
             .raw();
@@ -562,9 +581,6 @@ pub struct EphemerisPlugin;
 
 impl Plugin for EphemerisPlugin {
     fn build(&self, app: &mut App) {
-        // Analytic bodies now; mission datasets when their files exist.
-        // Downloading is `lunco-assets`' concern — this crate DECLARES
-        // (`Assets.toml`) and REPORTS. It owns no URL, no socket, no task.
         let provider = CelestialEphemerisProvider::new();
         // Handle onto the same maps the provider reads, so a dataset that
         // arrives later reaches `position()` without a restart. The trait is
@@ -581,159 +597,107 @@ impl Plugin for EphemerisPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // Declaring is `DatasetRegistryPlugin`'s job — it scans
-            // `assets/manifests/`, where this crate's datasets live as DATA
-            // (`ephemeris.toml`). This crate only ADOPTS: whatever is already
-            // cached is picked up on the first `Update`, and anything
-            // downloaded later on the frame the registry reports it installed.
-            // One code path for both.
-            app.add_systems(Update, adopt_ephemeris_datasets);
+            app.init_resource::<LoadedEphemerisDatasets>()
+                .add_observer(consume_ephemeris_dataset_artifact)
+                .add_systems(lunco_core::SceneTeardown, clear_scene_ephemeris_datasets);
         }
     }
 }
 
-/// Adopt every ephemeris dataset whose artifact is available through the asset
-/// registry — cached from an earlier run, downloaded a moment ago, or shipped
-/// inside an open Twin.
-///
-/// Everything it needs is in the ONE declaration: `path` (where transport put
-/// the bytes) and `[<key>.ephemeris]` (what they are). No directory scan, no
-/// filename convention to reverse-engineer, no mission JSON.
-///
-/// The parent is registered even when the file is absent: it is astronomy, and
-/// without it a later download would land in a provider that thinks the
-/// spacecraft orbits the Sun.
+/// Parse a generic asset-runtime delivery when its declaration carries
+/// ephemeris metadata. Dataset selection and text reads belong to the authored
+/// application asset lifecycle policy and generic asset runtime respectively.
 #[cfg(not(target_arch = "wasm32"))]
-fn adopt_ephemeris_datasets(
+fn consume_ephemeris_dataset_artifact(
+    trigger: On<lunco_assets_runtime::DatasetTextArtifactReady>,
     registry: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
-    settings: Option<Res<lunco_settings::DownloadSettings>>,
-    vectors: Option<Res<EphemerisVectors>>,
-    mut seen: Local<std::collections::HashSet<String>>,
-    mut pending: Local<Vec<PendingEphemerisRead>>,
+    vectors: Res<EphemerisVectors>,
+    mut loaded: ResMut<LoadedEphemerisDatasets>,
 ) {
-    let (Some(registry), Some(settings), Some(vectors)) = (registry, settings, vectors) else {
+    let Some(registry) = registry else {
+        error!("[ephemeris] dataset delivery has no declared dataset registry");
         return;
     };
-
-    use bevy::tasks::futures_lite::future;
-
-    let mut completed = Vec::new();
-    pending.retain_mut(|read| {
-        let Some(result) = future::block_on(future::poll_once(&mut read.task)) else {
-            return true;
-        };
-        completed.push((read.key.clone(), read.naif_id, result));
-        false
-    });
-    for (key, naif_id, result) in completed {
-        match result {
-            Ok(bytes) => match parse_vectors(&bytes) {
-                Some(points) => {
-                    info!(
-                        "[ephemeris] loaded {} vectors for NAIF {} from dataset '{}'",
-                        points.len(),
-                        naif_id,
-                        key
-                    );
-                    vectors
-                        .data
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(naif_id, points);
-                    vectors.motion_revision.fetch_add(1, Ordering::Release);
-                }
-                None => error!(
-                    "[ephemeris] dataset '{}' is present but is not a readable Horizons VECTORS \
-                     response",
-                    key
-                ),
-            },
-            Err(error) => error!("[ephemeris] could not read dataset '{}': {error}", key),
+    let text = &trigger.event().text;
+    let Some(entry) = registry.entry(&trigger.event().id) else {
+        error!(
+            "[ephemeris] delivered dataset '{}' is no longer declared",
+            trigger.event().id
+        );
+        return;
+    };
+    let Some(meta) = entry.spec.domain::<EphemerisDatasetMeta>("ephemeris") else {
+        return;
+    };
+    let meta = match meta {
+        Ok(meta) => meta,
+        Err(error) => {
+            error!(
+                "[ephemeris] dataset '{}' has malformed ephemeris metadata: {error}",
+                entry.id
+            );
+            return;
         }
+    };
+    let Some(parent_id) = parse_center(&meta.center) else {
+        error!(
+            "[ephemeris] dataset '{}' has an unparseable center '{}'",
+            entry.id, meta.center
+        );
+        return;
+    };
+    let points = match parse_vectors(text) {
+        Ok(points) => points,
+        Err(error) => {
+            error!("[ephemeris] dataset '{}' is invalid: {error}", entry.id);
+            return;
+        }
+    };
+
+    if let Some(previous_owner) = loaded.owners.get(&meta.naif_id) {
+        if previous_owner != &entry.id {
+            error!(
+                "[ephemeris] datasets '{}' and '{}' both define NAIF {}; scene policy must select one",
+                previous_owner, entry.id, meta.naif_id
+            );
+            return;
+        }
+    } else {
+        loaded.owners.insert(meta.naif_id, entry.id.clone());
+        loaded.prior_parents.insert(
+            meta.naif_id,
+            vectors
+                .parents
+                .read()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(&meta.naif_id)
+                .copied(),
+        );
+        loaded.prior_data.insert(
+            meta.naif_id,
+            vectors
+                .data
+                .read()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(&meta.naif_id)
+                .cloned(),
+        );
     }
-
-    for entry in registry.entries() {
-        let Some(meta) = entry.spec.domain::<EphemerisDatasetMeta>("ephemeris") else {
-            continue; // not ours
-        };
-        let meta = match meta {
-            Ok(m) => m,
-            Err(e) => {
-                // Loud: a typo'd declaration would otherwise mean a body that
-                // silently never appears.
-                if seen.insert(format!("bad:{}", entry.key)) {
-                    error!(
-                        "[ephemeris] dataset '{}' has a malformed [ephemeris] table: {e}",
-                        entry.key
-                    );
-                }
-                continue;
-            }
-        };
-
-        if seen.insert(format!("parent:{}", entry.key)) {
-            match parse_center(&meta.center) {
-                Some(parent) => {
-                    vectors
-                        .parents
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(meta.naif_id, parent);
-                }
-                None => error!(
-                    "[ephemeris] dataset '{}' has an unparseable center '{}' — NAIF {} would \
-                     be placed heliocentrically, so it is left out entirely",
-                    entry.key, meta.center, meta.naif_id
-                ),
-            }
-        }
-
-        if !entry.state.is_installed() {
-            if seen.insert(format!("absent:{}", entry.key)) {
-                info!(
-                    "[ephemeris] NAIF {} has no cached vectors — download '{}' from \
-                     Settings ▸ Downloadable data (nothing is fetched automatically)",
-                    meta.naif_id, entry.key
-                );
-            }
-            continue;
-        }
-        if !seen.insert(format!("loaded:{}", entry.key)) {
-            continue;
-        }
-        let asset = lunco_assets_runtime::discovery::AssetFile {
-            asset_path: entry.artifact_uri(),
-            stem: entry.key.clone(),
-            rel: entry.artifact_rel.clone(),
-            abs_path: entry.artifact_path(),
-            twin: match &entry.scope {
-                lunco_assets_datasets::DatasetScope::Engine => None,
-                lunco_assets_datasets::DatasetScope::Twin { name, .. } => Some(name.clone()),
-            },
-        };
-        let key = entry.key.clone();
-        let settings = settings.clone();
-        pending.push(PendingEphemerisRead {
-            key,
-            naif_id: meta.naif_id,
-            task: bevy::tasks::IoTaskPool::get().spawn(async move {
-                lunco_assets_runtime::asset_read::read_asset_bytes(&asset, &settings).await
-            }),
-        });
-    }
+    vectors
+        .parents
+        .write()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(meta.naif_id, parent_id);
+    vectors
+        .data
+        .write()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(meta.naif_id, points);
+    loaded.ids.insert(meta.naif_id);
+    vectors.motion_revision.fetch_add(1, Ordering::Release);
 }
 
-/// One non-blocking read of a declared ephemeris artifact. The asset layer
-/// owns path resolution and storage; this package only parses the returned
-/// bytes into its provider representation.
-#[cfg(not(target_arch = "wasm32"))]
-struct PendingEphemerisRead {
-    key: String,
-    naif_id: i32,
-    task: bevy::tasks::Task<Result<Vec<u8>, String>>,
-}
-
-/// Writable handles onto the provider's mission maps — the only way a dataset
+/// Writable handles onto the provider's external-data maps — the only way a dataset
 /// that arrives after construction becomes visible to `position()`.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
@@ -741,4 +705,52 @@ struct EphemerisVectors {
     data: Arc<RwLock<HashMap<i32, Vec<CsvDataPoint>>>>,
     parents: Arc<RwLock<HashMap<i32, i32>>>,
     motion_revision: Arc<AtomicU64>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+struct LoadedEphemerisDatasets {
+    ids: std::collections::HashSet<i32>,
+    owners: HashMap<i32, String>,
+    prior_parents: HashMap<i32, Option<i32>>,
+    prior_data: HashMap<i32, Option<Vec<CsvDataPoint>>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn clear_scene_ephemeris_datasets(
+    mut loaded: ResMut<LoadedEphemerisDatasets>,
+    vectors: Res<EphemerisVectors>,
+) {
+    if loaded.ids.is_empty() {
+        return;
+    }
+    let mut data = vectors
+        .data
+        .write()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut parents = vectors
+        .parents
+        .write()
+        .unwrap_or_else(|error| error.into_inner());
+    let ids = std::mem::take(&mut loaded.ids);
+    for id in ids {
+        match loaded.prior_data.remove(&id).flatten() {
+            Some(points) => {
+                data.insert(id, points);
+            }
+            None => {
+                data.remove(&id);
+            }
+        }
+        loaded.owners.remove(&id);
+        match loaded.prior_parents.remove(&id).flatten() {
+            Some(parent) => {
+                parents.insert(id, parent);
+            }
+            None => {
+                parents.remove(&id);
+            }
+        }
+    }
+    vectors.motion_revision.fetch_add(1, Ordering::Release);
 }

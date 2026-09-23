@@ -30,7 +30,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme parsing, canonicalization, separator normalization, and traversal checks. It has no Bevy, filesystem, storage, or application dependency. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, traversal-safe path/cache operations, and storage-facing identity contracts. It excludes source catalogs, scripting, text loaders, discovery, network, and archive/runtime integration. |
-| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, library/model/script/text loaders, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
+| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, library/model/script/text loaders, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, process-output ownership validation, lifecycle state, and the typed request/process/cancel command contracts. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
 | **`lunco-assets-transport`** | Small native HTTP transport boundary: shared timeout, retry/backoff, and resumable byte-transfer primitives. It has no manifest, archive, raster, or Bevy dependency. |
 | **`lunco-assets-download`** | Manifest-aware native download, SHA-256 verification, archive extraction, staging, and atomic source installation. It has no Bevy or raster-processing dependency. |
@@ -369,10 +369,11 @@ does not own source catalogs, discovery, scripting, text loaders, HTTP,
 archives, raster, SVG, GeoTIFF, or native processing.
 
 **`lunco-assets-runtime`**
-The Bevy asset-source and authored-text runtime. It owns source registration,
-discovery/catalogs, library/model/script/text loaders, web fetch integration,
-and the asset-manifest tool while consuming identity and storage contracts from
-`lunco-assets-core`.
+The Bevy asset-source, authored-text, and selected-dataset runtime. It owns
+source registration, discovery/catalogs, library/model/script/text loaders,
+policy-requested dataset artifact reads, web fetch integration, and the
+asset-manifest tool while consuming identity and storage contracts from
+`lunco-assets-core` and dataset declarations from `lunco-assets-datasets`.
 
 **`lunco-assets-datasets`**
 The lightweight dataset contract boundary. It owns `Assets.toml` declarations,
@@ -434,13 +435,13 @@ The generic Web Worker pool transport (wasm-only; `#![cfg(target_arch = "wasm32"
 ### Simulation Engine
 
 **`lunco-celestial`**
-Headless celestial semantics. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, geodesy, Kepler propagation, and the `EphemerisResource` abstraction. It has no scene hierarchy, BigSpace, terrain, rendering, or UI dependency. The concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
+Headless celestial semantics. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, geodesy, Kepler propagation, the `EphemerisResource` abstraction, and generic `EphemerisPosition`/`Spacecraft` components. It has no scene hierarchy, BigSpace, terrain, rendering, or UI dependency. The concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
 
 **`lunco-celestial-spatial-core`**
 The lightweight ECS boundary for celestial spatial facts. It owns the semantic
 frame-to-grid index, canonical site/body-fixed pose query, ENU surface-frame
 helpers, scene body declarations, orbital-view state, the cached local gravity
-fact, detached celestial Sun presentation state, authored mission declarations,
+fact, detached celestial Sun presentation state,
 the solar-tracking marker, and the
 published `LinkNode`, `LinkState`, `LinkGeometryState`, Wi-Fi, peer, and
 occluder components consumed by cameras, avatars, networking, scripting,
@@ -448,8 +449,8 @@ telemetry, USD projection, and UI. It depends only on the semantic celestial
 package, generic spatial coordinates, and the Bevy/BigSpace types required by
 those contracts. It does not install a celestial runtime or pull terrain,
 globe, link solving, imagery, trajectory sampling, cadence, or asset
-integration. It also owns the render-independent trajectory view/frame/path
-contracts consumed by both the spatial mission projector and the optional
+integration. It also owns the render-independent ephemeris position and
+trajectory view/frame/path contracts consumed by the spatial projector and the optional
 trajectory presentation package.
 
 **`lunco-celestial-spatial`**

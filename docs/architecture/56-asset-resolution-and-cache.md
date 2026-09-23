@@ -264,10 +264,9 @@ installed state continue to come from `DatasetRegistry`. This is a rule about
 trust, not bandwidth: a simulator that phones home when you open a file has to
 be *explained* rather than *read*.
 
-That rule is also why fetching lives in the explicit provisioning package
-family and nowhere else. A domain crate owning its own downloader inevitably
-grows a "just fetch it at startup" line — the ephemeris crate had exactly that,
-`ureq` and all, and the guarantee dies one crate at a time.
+Fetching lives in the explicit provisioning package family. Domain crates
+consume artifacts delivered by the shared asset runtime and do not choose
+network behavior.
 
 | Concern | Owner |
 |---|---|
@@ -280,7 +279,9 @@ grows a "just fetch it at startup" line — the ephemeris crate had exactly that
 | per-transaction network/cache/replacement/backup decision | `assets.download.prepare` Rhai policy through `lunco-assets-download` |
 | decode, raster math, external glTF processing, and baked sidecars | `lunco-assets-processing` |
 | Bevy worker lifecycle and CLI composition | `lunco-assets` |
-| declaring datasets + reporting what it loaded | the domain crate |
+| selecting scene dataset artifacts | `application.asset.lifecycle` Rhai policy |
+| registry-validated asynchronous text artifact reads through canonical asset URIs | `lunco-assets-runtime::DatasetArtifactPlugin` |
+| parsing delivered text into domain data | the consuming domain crate |
 | listing and requesting | the UI (knows no dataset by name) |
 | engine Modelica source URI | `lunco-assets-core::engine_model_asset_uri` |
 | engine scene-test root | `lunco-assets-core::engine_scene_tests_root` |
@@ -379,30 +380,38 @@ naif_id = -1024
 center  = "500@399"               # the CENTER= of the query above
 ```
 
-This replaced `assets/missions/*.ephemeris.json`, which restated the id and
-centre next to a second copy of the Horizons query. Two files describing one
-product is one too many: they drift, and the drift is silent — a mismatched
-`center` places a spacecraft around the wrong body while looking like data.
+The split is deliberate: **USD selects the tracked and reference bodies**
+(`lunco:ephemeris:targetId` and `lunco:ephemeris:referenceId`), while the
+dataset declares the center of its own vector samples. A scene does not author
+that center, because two scenes could then disagree about the same artifact.
+The selected dataset also owns its time coverage. The provider returns no
+position outside those samples, so an authored USD prim is hidden instead of
+being held at a stale endpoint.
 
-The split that remains is deliberate: **USD says WHICH body**
-(`lunco:body` / `lunco:spacecraft:ephemerisId`, a NAIF id — the join key the
-schema already documents), the **dataset says what its own numbers mean**. A
-scene does not author `center`, because two scenes could then disagree about the
-same file and one would be wrong. And the prim names no path: unlike a `.mo`
-behind `info:sourceAsset`, an ephemeris body has an identity of its own, so
-binding by id is both stronger and immune to the download's date range changing.
+The application asset lifecycle policy selects
+`engine/ephemeris/artemis2_vectors` when
+`lunco://scenes/celestial/artemis_2_review.usda` completes loading. The generic asset
+runtime resolves that id through the dataset registry to its canonical
+`lunco://` URI and loads it with the shared UTF-8 `TextAsset` loader. The
+ephemeris provider never walks the registry or checks the cache at startup; it
+parses delivered text, and its scene-owned vectors are cleared at
+`SceneTeardown`. An unavailable dataset is reported when the active scene
+policy requests it, while unrelated missing datasets remain quiet until used.
+The scene root authors the initial Julian epoch inside the selected artifact's
+sample coverage, so loading the scene does not depend on the machine clock or
+on endpoint clamping.
 
 ### Still open
 
 1. present under the owning root (`assets/` or the Twin) → serve it — **done**
 2. else present in that owner's cache → serve it — **done**
 3. else declared in an `Assets.toml` → offer it; materialise **on request** — **done**
-4. else → unresolved: report it on the `StatusBus` — **open**
+4. else → unresolved: report it on the `StatusBus` — **open for unrequested USD references**
 
-Step 4 still matters: a missing payload yields a prim with no geometry and no
-error, indistinguishable from a modelling mistake. Silence is the expensive
-part. Note step 3 is deliberately *not* automatic materialisation — see the rule
-above; the resolver offers, the user decides.
+Step 4 still matters for asset references that have no dataset declaration.
+Declared datasets selected by scene policy are reported by the generic artifact
+reader when unavailable. Step 3 is deliberately *not* automatic materialisation
+— see the rule above; the resolver offers, the user decides.
 
 Content addressing by `sha256` (rather than URL hash) remains open, and buys
 what path-keyed caches cannot: a changed URL with an unchanged hash is a cache

@@ -389,7 +389,7 @@ pub(crate) struct GlobeTiles {
     ///
     /// Entity-scoped (a field on the body's own component) rather than a
     /// `Local<HashMap<Entity, _>>` in the system, for the same reason
-    /// `MissionSpawned` is (missions.rs): a `Local` outlives scene teardown and
+    /// `TrajectoryViewSpawned` is scene-entity scoped: a `Local` outlives teardown and
     /// would keep stale keys for despawned bodies, while this dies with the body.
     pub last_solve_cam: Option<DVec3>,
     /// Presentation camera that produced [`last_solve_cam`]. The camera entity

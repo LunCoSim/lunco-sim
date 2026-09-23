@@ -754,7 +754,7 @@ fn stage_meters_per_unit_missing(facts) {
     out
 }
 
-/// `LunCoEpochAPI` is the authored opt-in to celestial/mission time. Its schema
+/// `LunCoEpochAPI` is the authored opt-in to scene ephemeris time. Its schema
 /// default is zero, which deliberately means "no authored epoch" so the runtime
 /// can remain backwards-compatible with a partial scene. That is not a safe
 /// contract for an orbital scene: a polar surface can be dark at the engine's
@@ -776,7 +776,7 @@ fn epoch_api_requires_authored_time(facts) {
             "epoch-api-missing-time",
             "error",
             prim.path,
-            "LunCoEpochAPI opts this stage into authored mission time, but lunco:time:epochJd is missing, zero, or malformed. Author a non-zero Julian epoch on this prim; for a fixed-light scene remove the epoch API and celestial payload instead.",
+            "LunCoEpochAPI opts this stage into authored ephemeris time, but lunco:time:epochJd is missing, zero, or malformed. Author a non-zero Julian epoch on the scene root; for a fixed-light scene remove the epoch API and celestial payload instead.",
         ));
     }
     out

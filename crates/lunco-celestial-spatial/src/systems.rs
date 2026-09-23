@@ -291,26 +291,17 @@ pub fn ephemeris_update_system(
         return;
     };
 
-    // The epoch gate is NOT here. It used to be a private
-    // `Local<f64>` comparing against 1e-9 JD — i.e. "did the epoch change at
-    // all" — which meant a running clock re-projected the whole body/frame
-    // hierarchy every single frame. It is now the shared
-    // `cadence::celestial_needs_solve` run condition, on an angular error
-    // budget, applied at registration alongside the other four celestial
-    // systems.
-    //
-    // Deliberately shared and not re-derived locally: two gates with two
-    // `Local`s drift, and a half-advanced celestial tree puts the sun and the
-    // bodies at different instants.
+    // The shared angular-error cadence gate is registered with the other
+    // celestial systems so the body hierarchy and Sun projection solve at one
+    // epoch.
 
     for (mut cell, mut tf, frame, child_of) in &mut q_frames {
         let Some(ephemeris_id) = frame.center() else {
             continue;
         };
 
-        // EphemerisProvider::position returns position relative to its parent defined in registry/hierarchy
-        // P8(d): no data ⇒ leave the body where it is. It used to be teleported to its
-        // parent's centre — a failed CSV fetch put the body inside the Sun, and nothing said so.
+        // EphemerisProvider::position returns position relative to its parent
+        // in the body registry hierarchy.
         let Some(rel_pos_au) = ephemeris.provider.position(ephemeris_id, world.epoch_jd) else {
             continue;
         };
@@ -404,7 +395,7 @@ pub fn sun_emit_direction(
 ///
 /// The Sun sits at the heliocentre, so the Moon→Sun direction is just
 /// `-ecliptic_to_bevy(global_position(Moon)).raw()` (mirrors the solar-panel pointing
-/// in the mission integration). A `DirectionalLight` emits along its local forward
+/// in the surface integration). A `DirectionalLight` emits along its local forward
 /// (`-Z`) and rays travel FROM the Sun INTO the scene, so the semantic state
 /// stores the opposite look direction. The scene sun is identified structurally
 /// by excluding Earthshine and scoped preview lights; ambiguity is an authored

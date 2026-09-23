@@ -6,7 +6,9 @@
 
 mod trajectories;
 
-pub use trajectories::{TrajectoryMeshMarker, TrajectoryPlugin, mission_visibility_system};
+pub use trajectories::{
+    TrajectoryMeshMarker, TrajectoryPlugin, trajectory_epoch_visibility_system,
+};
 
 /// Installs trajectory presentation systems without changing the semantic
 /// celestial or spatial runtime composition.

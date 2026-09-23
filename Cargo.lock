@@ -7226,6 +7226,7 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-assets-path",
  "lunco-core",
  "lunco-settings",
@@ -7459,7 +7460,7 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-assets-runtime",
  "lunco-celestial",
- "lunco-settings",
+ "lunco-core",
  "serde",
 ]
 

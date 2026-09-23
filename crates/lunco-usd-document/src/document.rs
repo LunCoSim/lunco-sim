@@ -592,6 +592,22 @@ pub enum UsdOp {
         /// Positive finite metres per authored unit, plus the typed up axis.
         metrics: StageMetrics,
     },
+    /// Author standard USD `doc` metadata on the layer pseudo-root.
+    SetStageDocumentation {
+        /// Layer to write.
+        edit_target: LayerId,
+        /// Documentation text, or `None` to clear this layer's opinion.
+        documentation: Option<String>,
+    },
+    /// Author standard USD `doc` metadata on one prim.
+    SetPrimDocumentation {
+        /// Layer to write.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// Documentation text, or `None` to clear this layer's opinion.
+        documentation: Option<String>,
+    },
     /// Author the standard USD `kind` metadata on an existing prim.
     ///
     /// `None` removes the selected layer's opinion and lets composition reveal
@@ -749,6 +765,8 @@ impl UsdOp {
             | Self::SetConnection { edit_target, .. }
             | Self::SetDefaultPrim { edit_target, .. }
             | Self::SetStageMetrics { edit_target, .. }
+            | Self::SetStageDocumentation { edit_target, .. }
+            | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
@@ -791,6 +809,8 @@ impl UsdOp {
             | Self::SetConnection { edit_target, .. }
             | Self::SetDefaultPrim { edit_target, .. }
             | Self::SetStageMetrics { edit_target, .. }
+            | Self::SetStageDocumentation { edit_target, .. }
+            | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
@@ -832,6 +852,7 @@ impl UsdOp {
             | Self::SetRelationship { path, .. }
             | Self::SetConnection { path, .. }
             | Self::SetPrimKind { path, .. }
+            | Self::SetPrimDocumentation { path, .. }
             | Self::SetApiSchemas { path, .. }
             | Self::SetVariantSelection { path, .. }
             | Self::SetPayload { path, .. }
@@ -841,7 +862,9 @@ impl UsdOp {
             Self::MovePrim {
                 from_path, to_path, ..
             } => vec![from_path.clone(), to_path.clone()],
-            Self::SetDefaultPrim { .. } | Self::SetStageMetrics { .. } => {
+            Self::SetDefaultPrim { .. }
+            | Self::SetStageMetrics { .. }
+            | Self::SetStageDocumentation { .. } => {
                 vec!["/".to_owned()]
             }
         }
@@ -1976,6 +1999,8 @@ impl Document for UsdDocument {
             | UsdOp::SetConnection { edit_target, .. }
             | UsdOp::SetDefaultPrim { edit_target, .. }
             | UsdOp::SetStageMetrics { edit_target, .. }
+            | UsdOp::SetStageDocumentation { edit_target, .. }
+            | UsdOp::SetPrimDocumentation { edit_target, .. }
             | UsdOp::SetPrimKind { edit_target, .. }
             | UsdOp::MovePrim { edit_target, .. }
             | UsdOp::SetApiSchemas { edit_target, .. }
@@ -3052,6 +3077,117 @@ impl Document for UsdDocument {
                     sdf::Value::Token(metrics.up_axis.as_token().into()),
                 );
                 self.commit(target, new_data, UsdChange::Resync { path: "/".into() });
+                Ok(inverse)
+            }
+
+            UsdOp::SetStageDocumentation { documentation, .. } => {
+                let root = SdfPath::abs_root();
+                let prior = self
+                    .layer(target)
+                    .field(&root, sdf::FieldKey::Documentation.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::String(text)) => UsdOp::SetStageDocumentation {
+                        edit_target: id,
+                        documentation: Some(text),
+                    },
+                    None => UsdOp::SetStageDocumentation {
+                        edit_target: id,
+                        documentation: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                let mut new_data = self.layer(target).clone();
+                if !new_data.has_spec(&root) {
+                    return Err(DocumentError::ValidationFailed(
+                        "SetStageDocumentation requires an authored USD pseudo-root".into(),
+                    ));
+                }
+                match documentation {
+                    Some(text) => new_data.set_field(
+                        &root,
+                        sdf::FieldKey::Documentation.as_str(),
+                        sdf::Value::String(text),
+                    ),
+                    None => new_data.erase_field(&root, sdf::FieldKey::Documentation.as_str()),
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path: "/".into(),
+                        attr: sdf::FieldKey::Documentation.as_str().to_owned(),
+                    },
+                );
+                Ok(inverse)
+            }
+
+            UsdOp::SetPrimDocumentation {
+                path,
+                documentation,
+                ..
+            } => {
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) if !prim.is_property_path() => prim,
+                    Ok(_) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetPrimDocumentation target {path} must name a prim, not a property"
+                        )));
+                    }
+                    Err(_)
+                        if self.path_is_under_composed_arc_path(
+                            &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
+                        ) =>
+                    {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetPrimDocumentation target {path} is composed/read-only; author the owning prim or a local override"
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                };
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::Documentation.as_str())
+                    .cloned();
+                let prior_is_absent = prior.is_none();
+                let inverse = match prior {
+                    Some(sdf::Value::String(text)) => UsdOp::SetPrimDocumentation {
+                        edit_target: id,
+                        path: path.clone(),
+                        documentation: Some(text),
+                    },
+                    None => UsdOp::SetPrimDocumentation {
+                        edit_target: id,
+                        path: path.clone(),
+                        documentation: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                if documentation.is_none() && prior_is_absent {
+                    return Ok(inverse);
+                }
+                let mut new_data = self.layer(target).clone();
+                if documentation.is_some() && !new_data.has_spec(&prim_sdf) {
+                    let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                    stage.override_prim(path.as_str()).map_err(author_err)?;
+                    new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                }
+                match documentation {
+                    Some(text) => new_data.set_field(
+                        &prim_sdf,
+                        sdf::FieldKey::Documentation.as_str(),
+                        sdf::Value::String(text),
+                    ),
+                    None => new_data.erase_field(&prim_sdf, sdf::FieldKey::Documentation.as_str()),
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: sdf::FieldKey::Documentation.as_str().to_owned(),
+                    },
+                );
                 Ok(inverse)
             }
 

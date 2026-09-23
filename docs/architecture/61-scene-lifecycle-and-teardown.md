@@ -70,6 +70,13 @@ Scene-scoped `RuntimeDiagnostics` is cleared at the same boundary. Each producer
 then repopulates only its own findings, so a camera, environment, or physics
 error from the outgoing scene cannot be displayed as a fact about the replacement.
 
+Scene-requested dataset reads follow the same boundary. Rhai selects datasets
+at scene completion; the generic asset runtime loads their canonical URIs and
+retires outstanding read completions at `SceneTransitionStarted`. Domain-owned
+data derived from delivered text is cleared during `SceneTeardown`. The
+application asset lifecycle policy requests only the declared artifacts needed
+by the completed scene.
+
 Windowed presentation state follows the same ownership rule. A scene authors
 its initial camera selection through `CameraTrack` or a unique `LocalEmbodiment`;
 avatar or scene-root projection never creates an implicit view. A window host

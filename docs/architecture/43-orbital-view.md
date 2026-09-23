@@ -6,14 +6,15 @@
 `lunco-celestial` owns the solar-system semantic model. `lunco-celestial-
 ephemeris` supplies the concrete ephemeris provider. The
 `lunco-celestial-spatial` adapter projects those semantics into the scene
-hierarchy. Its reusable frame lookup and surface-coordinate contracts live in
-`lunco-celestial-spatial-core`, so camera, avatar, networking, telemetry, and
-USD projection consumers do not install the terrain/globe/link runtime merely
-to read or publish a celestial fact. The core also carries authored mission
-declarations, the solar-tracking marker, and Wi-Fi endpoint contracts; the
-runtime adapter alone samples trajectories, updates poses, and projects radio
-state. USD authors the physical intent; the engine resolves it into the
-existing reference-frame hierarchy.
+hierarchy. `lunco-celestial` owns the generic ephemeris-position and spacecraft
+interaction components. Reusable frame lookup and surface-coordinate
+contracts live in `lunco-celestial-spatial-core`, so camera, avatar, networking,
+telemetry, and USD projection consumers do not install the terrain/globe/link
+runtime merely to read or publish a celestial fact. Spatial core also carries
+trajectory-view contracts, the solar-tracking marker, and Wi-Fi endpoint
+contracts; the runtime adapter samples trajectories, updates poses, and
+projects radio state. USD authors the physical intent; the engine resolves it
+into the existing reference-frame hierarchy.
 
 ## Body catalog
 
@@ -43,7 +44,26 @@ User-facing components describe physical intent:
 - `GeodeticAnchor` places a point on a named body's surface;
 - `KeplerOrbit` describes a body-centred orbit;
 - `LibrationAnchor` describes an Earth–Moon/Sun–body libration point;
-- `MissionTrajectoryDecl` selects an inertial or body-fixed trajectory view.
+- `EphemerisPosition` binds an authored USD prim to target and reference body
+  ids. The source dataset owns its coverage; unavailable positions hide the prim.
+- `Spacecraft` marks an entity for spacecraft selection, possession, and camera
+  framing. Its USD model remains the visible geometry.
+- `TrajectoryViewDecl` selects an inertial or body-fixed trajectory view.
+
+An authored prim that follows vector data uses `LunCoEphemerisPositionAPI` to
+name the target and reference body. A `LunCoSpacecraftAPI` on the reusable model
+only opts it into spacecraft selection, possession, and camera framing; the
+model's composed USD geometry supplies its appearance. Dataset metadata owns
+the vector center and time coverage. Missing or out-of-coverage state hides
+the prim, while ordinary celestial bodies do not acquire ephemeris-position or
+spacecraft components implicitly.
+
+USD composition groups assemble the scene's bodies and spacecraft models. A
+`TrajectoryViewDecl` is a presentation request: it samples the selected
+provider and draws a path for its authored target/reference pair. The Artemis
+review scene authors its epoch inside the selected vector dataset's coverage;
+Rhai's application asset policy requests that dataset when the scene completes
+loading.
 
 `FrameTree` is the f64 hub-and-spoke conversion layer. It converts through the
 solar inertial frame and requires the epoch, body registry, and ephemeris.
@@ -132,3 +152,8 @@ reinterpreted.
 
 Do not add a second body catalog, cached rotation-rate copy, raw f32 absolute
 position, guessed grid parent, or fallback for missing ephemeris data.
+
+`assets/scenarios/tests/artemis_ephemeris_position.rhai` checks the composed
+Orion binding, scene epoch, generic trajectory schemas, ECS projections, and
+the negative case for an ordinary Earth prim against
+`artemis_2_review.usda` through the production API.

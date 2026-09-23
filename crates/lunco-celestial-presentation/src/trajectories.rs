@@ -309,7 +309,7 @@ impl Plugin for TrajectoryPlugin {
             .init_resource::<TrajectoryPresentationState>();
 
         // Trajectories are content: a scene declares them through
-        // `lunco:trajectory:*` (`MissionTrajectoryDecl`), and no trajectory is
+        // `lunco:trajectory:*` (`TrajectoryViewDecl`), and no trajectory is
         // created for an undeclared body.
         //
         // The Update chain fences each stage of the asynchronous presentation.
@@ -319,7 +319,7 @@ impl Plugin for TrajectoryPlugin {
         app.add_systems(
             Update,
             (
-                mission_visibility_system,
+                trajectory_epoch_visibility_system,
                 track_trajectory_view_changes,
                 spawn_trajectory_update_task,
                 handle_trajectory_tasks,
@@ -1227,7 +1227,10 @@ fn handle_trajectory_alpha_tasks(
     }
 }
 
-pub fn mission_visibility_system(world: Res<WorldTime>, mut q_views: Query<&mut TrajectoryView>) {
+pub fn trajectory_epoch_visibility_system(
+    world: Res<WorldTime>,
+    mut q_views: Query<&mut TrajectoryView>,
+) {
     for mut view in q_views.iter_mut() {
         if let (Some(start), Some(end)) = (view.start_epoch, view.end_epoch) {
             let should_be_visible = world.epoch_jd >= start && world.epoch_jd <= end;
@@ -1235,7 +1238,7 @@ pub fn mission_visibility_system(world: Res<WorldTime>, mut q_views: Query<&mut 
                 view.is_visible = should_be_visible;
             }
         } else {
-            // Non-mission trajectories are always active
+            // Unbounded trajectories are always active.
             if !view.is_visible {
                 view.is_visible = true;
             }

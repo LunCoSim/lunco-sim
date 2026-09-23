@@ -81,6 +81,68 @@ checks.push(t_true(lifecycle_call.ok == true
         && lifecycle_call.value.twin_id == "test",
     "the authored lifecycle policy returns its typed event facts"));
 
+let asset_lifecycle = ();
+for hook in hooks {
+    if hook.id == "application.asset.lifecycle" { asset_lifecycle = hook; }
+}
+checks.push(t_true(asset_lifecycle != ()
+        && asset_lifecycle.declared == true
+        && asset_lifecycle.parameters.len() == 2
+        && asset_lifecycle.parameters[0].type == "string"
+        && asset_lifecycle.parameters[1].type == "map"
+        && asset_lifecycle.output == "map",
+    "application asset selection has a reflected typed lifecycle contract"));
+let artemis_assets = invoke_hook("application.asset.lifecycle", [
+    "scene_loaded",
+    #{
+        provider: "application:scene-assets",
+        scope: "application",
+        twin_id: (),
+        twin_name: (),
+        asset_root_uri: "lunco://",
+        payload: #{
+            path: "lunco://scenes/celestial/artemis_2_review.usda",
+            root_prim: "/Artemis2Review",
+        },
+    },
+]);
+checks.push(t_true(artemis_assets.ok == true
+        && artemis_assets.value.dataset_text_artifacts.len() == 1
+        && artemis_assets.value.dataset_text_artifacts[0]
+            == "engine/ephemeris/artemis2_vectors",
+    "the Artemis review scene selects its declared text dataset"));
+let unrelated_scene_assets = invoke_hook("application.asset.lifecycle", [
+    "scene_loaded",
+    #{
+        provider: "application:scene-assets",
+        scope: "application",
+        twin_id: (),
+        twin_name: (),
+        asset_root_uri: "lunco://",
+        payload: #{path: "lunco://scenes/celestial/solar_system.usda", root_prim: "/SolarSystem"},
+    },
+]);
+checks.push(t_true(unrelated_scene_assets.ok == true
+        && unrelated_scene_assets.value.dataset_text_artifacts.len() == 0,
+    "unrelated scenes do not select Artemis vectors"));
+let twin_scene_assets = invoke_hook("application.asset.lifecycle", [
+    "scene_loaded",
+    #{
+        provider: "application:scene-assets",
+        scope: "application",
+        twin_id: (),
+        twin_name: (),
+        asset_root_uri: "lunco://",
+        payload: #{
+            path: "twin://another/scenes/celestial/artemis_2_review.usda",
+            root_prim: "/Artemis2Review",
+        },
+    },
+]);
+checks.push(t_true(twin_scene_assets.ok == true
+        && twin_scene_assets.value.dataset_text_artifacts.len() == 0,
+    "a Twin scene with the same suffix does not select engine vectors"));
+
 let camera_call = invoke_hook("camera.default_presentation", [#{
     local_avatar_camera_count: 1,
     camera_track_count: 0,

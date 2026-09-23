@@ -1,5 +1,5 @@
-// Application policy for projecting authored catalog JSON into the generic
-// workbench menu contract. Rust supplies text asset lifecycle facts only.
+// Application policy for authored JSON menus and scene-selected dataset text.
+// Rust supplies lifecycle facts and validates generic asset actions.
 const TUTORIAL_CATALOG_KIND = "lunco.tutorial-catalog.v1";
 
 fn empty_menu_contribution() {
@@ -107,6 +107,21 @@ fn track_menu_item(name, items) {
 }
 
 fn application_asset_lifecycle(event, ctx) {
+    if event == "scene_loaded" {
+        if ctx.payload.path.type_of() != "string" {
+            throw("scene_loaded requires a scene path");
+        }
+        let dataset_text_artifacts = [];
+        if ctx.payload.path == "lunco://scenes/celestial/artemis_2_review.usda" {
+            dataset_text_artifacts.push("engine/ephemeris/artemis2_vectors");
+        }
+        let result = empty_menu_contribution();
+        result.dataset_text_artifacts = dataset_text_artifacts;
+        return result;
+    }
+    if event == "scene_cleared" {
+        return empty_menu_contribution();
+    }
     if event == "json_scope_loading" {
         if ctx.scope == "twin" && !ctx.payload.has_json_assets {
             return empty_menu_contribution();
