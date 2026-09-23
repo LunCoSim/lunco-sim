@@ -126,6 +126,7 @@ FixedUpdate:
   3. CosimApplySet::ApplyForces     — apply_pending_forces: drain PendingForces into Avian Forces
   4. sync_inputs_to_modelica        — SimComponent.inputs → ModelicaModel.inputs
   5. ModelicaSet::SpawnRequests     — send next step command with fixed dt
+  SimTickSet                        — closes the causal tick; ScriptingSet follows it
 
 FixedPostUpdate:
   6. Avian PhysicsSchedule          — integrate_positions, constraint solve, writeback
@@ -212,12 +213,17 @@ with non-blocking implementation for independent paths:
 **4. Script participants use the same fixed-step transaction boundary.**
 `sync_script_inputs` runs after causal propagation and physics actuation, then
 the public `lunco_scripting::ScriptingSet` executes each Python/Rhai participant
-once. Its output is published before the next propagation phase, so the output
-is consumed on the following fixed tick. This explicit one-tick delay is the
-conservative discrete co-simulation rule; it prevents a script/physics
-algebraic cycle from depending on Bevy system insertion order. Modelica input
-sampling and script input sampling therefore occur at named schedule edges,
-not as unsynchronised per-frame callbacks.
+once after `SimTickSet`. Its output is published before the next propagation
+phase, so the output is consumed on the following fixed tick. A fixed-step
+event is eligible only when its recorded `sim_tick` is older than current tick
+after `SimTickSet`; an event stamped at the boundary waits for a later tick.
+While paused, the next `Update` pass delivers discrete events without advancing
+`SimTick`. A newly started or restarted scenario reads its current owner state
+in `on_start` and does not replay an event batch from before that lifecycle
+boundary. These named schedule edges prevent a script/physics algebraic cycle
+from depending on incidental system order. Modelica input sampling and script
+input sampling therefore occur at fixed schedule edges, not as unsynchronised
+per-frame callbacks.
 
 Because the wait is real, it is **surfaced**: `lunco_modelica_worker::worker::CosimLag`
 records the communication gap for every live participant every fixed tick, and

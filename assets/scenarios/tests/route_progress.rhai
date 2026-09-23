@@ -75,6 +75,8 @@ fn target_is(subject, doc, path) {
 
 fn finish(me, passed) {
     me.done = true;
+    me.checks.push(t_true(me.event_order_ok,
+        "physics sensor events reach the scenario after their producer SimTick"));
     me.checks.push(t_true(passed, "route progress reaches its final verification"));
     report_verdict(me.checks, "ROUTE PROGRESS", "ROUTE_PROGRESS");
 }
@@ -92,10 +94,14 @@ fn on_start(me, ctx) {
     this.started = 0;
     this.stopped = 0;
     this.reached = [];
+    this.event_order_ok = true;
 }
 
 fn on_event(me, evt, ctx) {
     if this.done { return; }
+    if evt.name.starts_with("enter:") && sim_tick() <= evt.sim_tick {
+        this.event_order_ok = false;
+    }
     if evt.name == "enter:route_P1"
         && event_is_within(evt.value, find(SUBJECT_PATH)) {
         this.point_one_entered += 1;

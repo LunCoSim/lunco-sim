@@ -1034,10 +1034,10 @@ fn dirty_authored_scene_document(world: &World) -> Option<String> {
     })
 }
 
-/// Keep the runner-owned lifecycle closed while asynchronous scene participants
-/// warm up. The normal runtime opens scenarios automatically when readiness
-/// clears; a scene test must inspect its clean authored baseline before its
-/// scenario can submit an edit.
+/// Keep the runner-owned lifecycle closed while scene participants warm up.
+/// The normal runtime opens scenarios automatically when all initial readiness
+/// holds clear; a scene test must inspect its clean authored baseline before
+/// its scenario can submit an edit.
 fn hold_scenarios_closed(app: &mut App) {
     if let Some(mut gate) = app
         .world_mut()
@@ -1530,7 +1530,7 @@ pub fn run() -> u8 {
         #[cfg(feature = "ui")]
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
-                use lunco_luncosim_edit_ui::selection::{compute_selection_aabb, Selected};
+                use lunco_luncosim_edit_ui::selection::{Selected, compute_selection_aabb};
                 use lunco_usd_bevy_scene::UsdPrimPath;
 
                 let target_ent = {

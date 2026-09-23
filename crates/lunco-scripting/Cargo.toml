@@ -30,6 +30,7 @@ lunco-core-session = { path = "../lunco-core-session", optional = true }
 # Python-only and script-free builds do not acquire the input projection.
 # For the readiness policy contract declared by its owning crate.
 lunco-readiness = { workspace = true, optional = true }
+lunco-core-runtime = { path = "../lunco-core-runtime", optional = true }
 lunco-time = { path = "../lunco-time", optional = true }
 pyo3 = { version = "0.23", optional = true }
 libloading = { version = "0.8", optional = true }
@@ -53,6 +54,7 @@ rhai = [
     "dep:lunco-scripting-bridge-core",
     "lunco-scripting-bridge-core/workspace",
     "dep:lunco-readiness",
+    "dep:lunco-core-runtime",
     "dep:lunco-time",
 ]
 python = [
@@ -67,6 +69,7 @@ python = [
     "dep:lunco-core-session",
     "dep:lunco-scripting-bridge-core",
     "dep:lunco-readiness",
+    "dep:lunco-core-runtime",
     "dep:lunco-time",
 ]
 

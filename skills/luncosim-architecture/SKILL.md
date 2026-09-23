@@ -345,9 +345,14 @@ never reparent the station or use presentation coordinates for physics or link
 calculations.
 
 Scenario telemetry is collected only while `ScenarioExecutionGate` is open.
-Events arriving before scene readiness cannot be delivered to a scenario, so
-they must not accumulate in the inbox; clear the outgoing scene's pending batch
-when a scene transition closes the gate.
+That gate waits for all initial scene readiness holds because scenarios may
+reference entities outside their owner subtree. After admission, entity holds
+idle only scenarios inside the held owner subtree. Fixed-step delivery after
+`SimTickSet` releases only events stamped before the current tick; paused
+`Update` delivers discrete events without advancing that tick. A new scenario
+reads current owner state in `on_start` rather than replaying events from before
+its lifecycle. Clear the outgoing scene's pending batch when a scene transition
+closes the gate.
 
 Workbench perspectives publish scene visibility as layout intent. A perspective
 that uses the full window as its 3D presentation must opt into

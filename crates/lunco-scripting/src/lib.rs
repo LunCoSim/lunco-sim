@@ -222,7 +222,7 @@ impl Plugin for LunCoScriptingPlugin {
             .register_type::<doc::ScenarioParameters>()
             .register_type::<doc::ScriptLanguage>();
 
-        app.configure_sets(FixedUpdate, ScriptingSet);
+        configure_scripting_schedule(app);
 
         #[cfg(feature = "python")]
         app.init_resource::<python::PythonStatus>();
@@ -270,6 +270,49 @@ impl Plugin for LunCoScriptingPlugin {
             commands::register_all_commands(app);
             commands::register_command_policies(app);
         }
+    }
+}
+
+fn configure_scripting_schedule(app: &mut App) {
+    #[cfg(any(feature = "rhai", feature = "python"))]
+    app.configure_sets(
+        FixedUpdate,
+        ScriptingSet.after(lunco_core_runtime::SimTickSet),
+    );
+    #[cfg(not(any(feature = "rhai", feature = "python")))]
+    app.configure_sets(FixedUpdate, ScriptingSet);
+}
+
+#[cfg(all(test, any(feature = "rhai", feature = "python")))]
+mod schedule_tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct ObservedTick(u64);
+
+    fn advance_tick(mut tick: ResMut<lunco_core_runtime::SimTick>) {
+        tick.0 += 1;
+    }
+
+    fn observe_tick(tick: Res<lunco_core_runtime::SimTick>, mut observed: ResMut<ObservedTick>) {
+        observed.0 = tick.0;
+    }
+
+    #[test]
+    fn scripting_runs_after_the_authoritative_fixed_tick() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core_runtime::SimTick>()
+            .init_resource::<ObservedTick>();
+        configure_scripting_schedule(&mut app);
+        app.add_systems(
+            FixedUpdate,
+            advance_tick.in_set(lunco_core_runtime::SimTickSet),
+        )
+        .add_systems(FixedUpdate, observe_tick.in_set(ScriptingSet));
+
+        app.world_mut().run_schedule(FixedUpdate);
+
+        assert_eq!(app.world().resource::<ObservedTick>().0, 1);
     }
 }
 
