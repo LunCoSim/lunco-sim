@@ -1087,6 +1087,25 @@ bounded inspection window, so no post-change CPU delta is claimed. The app's
 transient logged FPS is likewise not acceptance evidence. Its own API Exit was
 accepted and ports 4193/8087 were verified closed.
 
+### 2026-09-24 — avoid redundant shader readiness validation
+
+The earlier Tracy inspection put
+`lunco_render_bevy::shader_look::rebind_changed_shader_look` at about 0.60 ms
+mean per invocation. Source review found that this change-driven system
+revalidated shader stages, reflected schema, and image dependencies even when
+the entity still resolved to its current material, and when the entity had no
+readiness latch to invalidate. The result was discarded in both cases.
+
+The system now performs that readiness query only when the material actually
+changes and the entity is currently marked ready. This preserves the required
+invalidation behavior for a not-yet-ready replacement while avoiding work on
+same-material live-parameter edits and entities that cannot lose readiness.
+The focused `live_parameter_update_keeps_ready_cached_material` regression
+checks that a live update keeps its existing material and readiness marker.
+This is a source-backed reduction, not yet a measured FPS/CPU delta; the
+existing concurrent, readiness-held Tracy capture is not suitable for a
+post-change comparison. A clean settled window remains required.
+
 ## Acceptance criteria
 
 The issue is closed only when all of the following are recorded from a real

@@ -31,8 +31,8 @@
 //! by name, and is repacked the moment the schema lands. That machinery is
 //! untouched.
 
-use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
-use crate::shader_material::{build_shader_material, wgsl_source, ShaderMaterial};
+use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
+use crate::shader_material::{ShaderMaterial, build_shader_material, wgsl_source};
 use bevy::asset::AssetId;
 use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
@@ -41,10 +41,10 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureDimension, TextureFormat};
 use bevy::shader::Shader;
-use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use lunco_materials::{
-    rgba8_mip_chain, validate_shader_stage, ParamSchema, Rgba8MipMode, ShaderLook, ShaderLookBound,
-    ShaderLookKey, ShaderLookReady, ShaderStage, TextureLayer,
+    ParamSchema, Rgba8MipMode, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady,
+    ShaderStage, TextureLayer, rgba8_mip_chain, validate_shader_stage,
 };
 use lunco_render::{ProceduralSkybox, SurfaceAlpha};
 use std::sync::Arc;
@@ -485,16 +485,18 @@ fn rebind_changed_shader_look(
         // with the same already-loaded shader and images. Preserve readiness when
         // that replacement is already render-ready, otherwise the deferred
         // remove/re-add cycle makes the terrain cover alternate every ECS turn.
-        let replacement_ready = materials
-            .get(&handle)
-            .zip(shaders.as_deref())
-            .zip(images.as_deref())
-            .zip(schemas.as_deref())
-            .is_some_and(|(((material, shaders), images), schemas)| {
-                material_is_render_ready(material, shaders, images, schemas)
-            });
-        if !same_material && was_ready && !replacement_ready {
-            commands.entity(e).try_remove::<ShaderLookReady>();
+        if !same_material && was_ready {
+            let replacement_ready = materials
+                .get(&handle)
+                .zip(shaders.as_deref())
+                .zip(images.as_deref())
+                .zip(schemas.as_deref())
+                .is_some_and(|(((material, shaders), images), schemas)| {
+                    material_is_render_ready(material, shaders, images, schemas)
+                });
+            if !replacement_ready {
+                commands.entity(e).try_remove::<ShaderLookReady>();
+            }
         }
 
         // The look changed but resolved to the material it is ALREADY on ⇒ only
@@ -1298,6 +1300,29 @@ mod tests {
         app.update();
         assert_eq!(material_of(&app, e), first);
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 2);
+    }
+
+    #[test]
+    fn live_parameter_update_keeps_ready_cached_material() {
+        let mut app = app();
+        let e = app
+            .world_mut()
+            .spawn(ShaderLook::new("shaders/terrain_layered.wgsl"))
+            .id();
+        app.update();
+        let handle = material_of(&app, e);
+        app.world_mut().entity_mut(e).insert(ShaderLookReady);
+        app.world_mut()
+            .entity_mut(e)
+            .get_mut::<ShaderLook>()
+            .expect("look")
+            .live
+            .insert("transition".into(), ParamValue::F32(0.5));
+
+        app.update();
+
+        assert_eq!(material_of(&app, e), handle);
+        assert!(app.world().entity(e).contains::<ShaderLookReady>());
     }
 
     /// Texture layers land on the right `ShaderMaterial` slots, and two looks that
