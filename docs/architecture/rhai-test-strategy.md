@@ -33,8 +33,9 @@ The architecture keeps source facts, policy, and runtime observation separate:
 | Normative statement and identifier | `requirement def`/usage, `doc`, attributes and constraints | Reads the resolved requirement; does not redefine it |
 | Traceability | `satisfy`, `verify`, and standard realization references | Resolves USD prims, Modelica participants and source revisions |
 | Verification intent | `verification def`/usage, subject and verified requirement | Selects the existing scene/backend and declares required observations |
+| Supported scalar predicate | Constraint expression compiled to the neutral SysML IR | Binds typed provider observations and records `pass`, `fail`, `inconclusive`, or `error` |
 | Measurement and actuation | Not a second simulator | Public USD queries, commands, telemetry, Modelica ports and physics facts |
-| Verdict | Supplies requirement intent, not runtime verdict execution | The mapped Rhai observer emits the production verdict and evidence |
+| Verdict and evidence | Supplies source identity and constraint intent | The generic Rhai evaluator emits source-revision and constraint-fingerprint evidence |
 
 The SysML source is the portable requirement contract. A run result is
 separate evidence, never an edit to the requirement file. Rust exposes
@@ -63,8 +64,10 @@ The current runtime provides this bounded integration:
    applies requirement/provenance policy.
 4. `lint.sysml` applies structural source-quality policy; the independent
    `sysml_modelica_constraints.rhai` tool selects geometry constraint facts
-   and assembles Modelica. Other policies can consume the same generic facts
-   without adding Rust-side rules.
+   and assembles Modelica. `sysml_requirements::evaluate` can execute the
+   bounded scalar constraint subset through the source-pinned `SysmlModel`
+   handle; other policies can consume the same generic facts without adding
+   Rust-side rules.
 5. `report_structured_verdict` carries requirement identity, source revision,
    observations and evidence while the stable `TESTS_OK`/`TESTS_FAIL` envelope
    remains available. The production `--verification` selector validates one
@@ -72,13 +75,18 @@ The current runtime provides this bounded integration:
    boundary.
 
 Full KerML expression/constraint execution and automatic requirement-to-USD
-projection remain outside the bounded integration.
+projection remain outside the bounded integration. A constraint check does
+not implement feature navigation, collection aggregates, full unit conversion,
+requirement membership execution, or applicability. Rhai still selects the
+provider target and maps USD/telemetry/Modelica values; it must not duplicate a
+supported predicate in a Twin-specific boolean.
 
 ### Test and requirement ownership
 
-Keep requirement intent, identifiers, units, and authored limits in standard
-SysML. Keep executable observations, command sequencing, runtime queries,
-policy, and verdict logic in the Twin's Rhai observer. This avoids turning
+Keep requirement intent, identifiers, units, authored limits, and every
+supported acceptance predicate in standard SysML. Keep provider selection,
+executable observations, command sequencing, runtime queries, orchestration,
+and evidence formatting in the Twin's Rhai observer. This avoids turning
 SysML into a second simulator and keeps checks editable without a Rust rebuild.
 
 Use Rust tests only for generic mechanisms the production Rhai/API surface
@@ -101,6 +109,22 @@ let result = sysml_requirements::evaluate(source, [
        attr: "mass", expected_attr: "massBudgetKg", tolerance: 0.001 }
 ]);
 report_structured_verdict(result, "MASS REQUIREMENTS", "MASS_REQUIREMENTS");
+```
+
+For a source-defined predicate, use `constraint_check` and bind every input
+explicitly. Missing values remain inconclusive; unknown parameter names and
+invalid constraints remain errors. `evaluate_document(source, doc_id, checks)`
+uses the same generic check table against an explicit open Editor document.
+
+```rhai
+let result = sysml_requirements::evaluate(source, [
+    sysml_requirements::constraint_check(
+        "PAYLOAD-001", "lander", "payloadCapacity", "VerifyPayloadCapacity",
+        "ExampleRequirements::PayloadWithinCapacity",
+        #{payloadKg: #{provider: "usd", state: "value", value: observed_payload_kg},
+          capacityKg: #{provider: "source_literal", state: "value", value: capacity_kg}},
+        "derived", 0.0)
+]);
 ```
 
 The Rust surface needed to support this is intentionally small: one

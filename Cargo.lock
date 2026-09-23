@@ -10608,6 +10608,7 @@ dependencies = [
  "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
+ "serde",
  "serde_json",
  "tempfile",
 ]

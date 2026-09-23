@@ -635,7 +635,8 @@ restart:
   geometry**) → one shared `<OS config dir>/lunco/settings.json` via `lunco-settings`
   (§9b). No new file per feature.
 - **Per-project volatile UI state** (active perspective, open-document
-  list, and positions of authored draggable runtime windows) → **global storage keyed by
+  list, dock arrangements, per-editor presentation views, and positions of
+  authored draggable runtime windows) → **global storage keyed by
   a hash of the project path**, *not* written into the Twin folder:
   `<OS config dir>/lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
   `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
@@ -643,7 +644,7 @@ restart:
   read or written only while a Twin is active. With no active Twin, the host
   uses its startup windows and does not load or save a shared no-folder
   session.
-The `lunco-workbench-window` crate restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). The `lunco-workbench-state` crate owns volatile per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies only the layout-provider adapter used for dock capture and restore. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
+The `lunco-workbench-window` crate restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). The `lunco-workbench-state` crate owns volatile per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies only the layout-provider adapter used for dock capture and restore. Snapshot reads, file refreshes, serialization, and writes run on Bevy's task pool through the existing `lunco-storage` boundary, so disk work does not block the UI thread. Shutdown waits for an in-flight workspace write before honoring `AppExit`. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
 
 An explicit host launch may provide a one-shot
 `lunco-workbench-state::WorkspaceStateRestorePolicy` initial perspective. The
@@ -659,10 +660,33 @@ different sets) and **drops anything unknown** — `PanelId` /
 `PerspectiveId` hold `&'static str`, so the live registry is the source
 of truth, never the file.
 
-**Restore.** Once a Twin is active, its document snapshots are reopened through
-their registered domain codecs, and saved dock trees are reconciled against the
-live tabs. This restores the Twin's open documents and layout after restart.
-No active Twin means there is no workspace-state load or save.
+**Restore.** Once a Twin is active, the saved workspace snapshot loads
+asynchronously. Domain codecs prepare file-backed buffers on the task pool,
+then reopen documents through their existing registry and lifecycle path; saved
+dock trees are reconciled against the live tabs. For USD, clean file-backed
+documents refresh from their current source file, while dirty buffers restore
+from the saved snapshot. A file keeps one `UsdDocument` identity and one
+projected preview session. Additional saved USD tabs are explicit view
+identities over that session, so they share live edits and stage projection
+while retaining their own camera and presentation settings. Normal file opens
+reuse the existing document by file origin; users add another perspective with
+the preview's **Open view** action. A saved USD view tab without a restored
+document/view is removed during dock reconciliation instead of reopening as an
+empty tab. Older workspace snapshots that saved a USD document but no view
+metadata reopen one default view. Current snapshots distinguish a preview the
+user explicitly closed from a document whose default preview is still loading;
+the former stays closed on restore, while the latter opens through normal
+document readiness. No active Twin means there is no workspace-state load or
+save.
+
+Twin startup policy remains authored in Rhai: `twin.lifecycle` chooses the
+Twin's authored default scene and startup assets through the normal typed open
+commands. Replaying the user's saved editor session is generic per-Twin
+workspace persistence, not Twin product policy; it reuses document codecs,
+`DocumentRegistry`, `lunco-storage`, and the existing document lifecycle
+events. The Twin journal continues to record authored document operations and
+lifecycle history. Camera and dock state stay in workspace persistence because
+they are user presentation state, not authored edits or undo entries.
 
 ### 9a. Recents
 

@@ -780,8 +780,9 @@ fn validate_physics_backend_state(
     length_unit: Res<PhysicsLengthUnit>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut changed_bodies: Local<EntityHashSet>,
 ) {
-    let mut changed_bodies = EntityHashSet::default();
+    changed_bodies.clear();
     for (entity, position, rotation) in &q_bodies {
         if position.is_changed() || rotation.is_changed() {
             changed_bodies.insert(entity);

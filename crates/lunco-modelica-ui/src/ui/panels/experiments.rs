@@ -1862,32 +1862,59 @@ fn render_experiments_plot_inner(
                                     } else {
                                         format!("{head} {}/{}", picked_in_group, matching.len())
                                     };
-                                    let mut header = egui::CollapsingHeader::new(label)
-                                        .id_salt(format!("exp_picker_group_{head}"))
-                                        .default_open(false);
-                                    // While filtering, force every surviving
-                                    // group open so matches show without a
-                                    // second click.
-                                    if filtering {
-                                        header = header.open(Some(true));
-                                    }
-                                    header.show(ui, |ui| {
-                                        for t in matching {
-                                            let full = if head.is_empty() {
-                                                t.clone()
-                                            } else {
-                                                format!("{head}.{t}")
-                                            };
-                                            let mut on = picked_vars.contains(&full);
-                                            if ui
-                                                .checkbox(&mut on, t)
-                                                .on_hover_text(&full)
-                                                .changed()
-                                            {
-                                                toggle_var = Some(full);
+                                    let group_id =
+                                        ui.make_persistent_id(("exp_picker_group", head.as_str()));
+                                    let _ = lunco_workbench_widgets::tree::branch(
+                                        ui,
+                                        group_id,
+                                        false,
+                                        filtering.then_some(true),
+                                        |ui| {
+                                            let width = ui.available_width();
+                                            lunco_workbench_widgets::tree::label(
+                                                ui,
+                                                label,
+                                                width,
+                                                egui::Sense::click(),
+                                            )
+                                            .clicked()
+                                        },
+                                        |ui| {
+                                            for t in matching {
+                                                let full = if head.is_empty() {
+                                                    t.clone()
+                                                } else {
+                                                    format!("{head}.{t}")
+                                                };
+                                                let mut on = picked_vars.contains(&full);
+                                                let changed =
+                                                    lunco_workbench_widgets::tree::leaf(ui, |ui| {
+                                                        let changed = ui
+                                                            .checkbox(&mut on, "")
+                                                            .on_hover_text(&full)
+                                                            .changed();
+                                                        let width = ui.available_width();
+                                                        let label_clicked =
+                                                            lunco_workbench_widgets::tree::label(
+                                                                ui,
+                                                                t.as_str(),
+                                                                width,
+                                                                egui::Sense::click(),
+                                                            )
+                                                            .on_hover_text(&full)
+                                                            .clicked();
+                                                        if label_clicked {
+                                                            on = !on;
+                                                        }
+                                                        changed || label_clicked
+                                                    })
+                                                    .inner;
+                                                if changed {
+                                                    toggle_var = Some(full);
+                                                }
                                             }
-                                        }
-                                    });
+                                        },
+                                    );
                                 }
                             });
                     });

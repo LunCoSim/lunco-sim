@@ -5,11 +5,12 @@
 `lunco-ui` provides **reusable mechanisms** that domain crates use to build panels. It does **not** contain panel implementations — those live in `src/ui/` of each domain crate.
 
 Hierarchy-row presentation is owned by `lunco-workbench-widgets::tree`, not by this
-widget crate. Domain panels use that shared `branch`/`leaf` contract for
-disclosure controls, row width, expansion state, and indentation while keeping
-their view-model reads and typed actions local. This includes the Ports entity
-browser; raw `CollapsingHeader`/`CollapsingState` is reserved for non-tree
-sections.
+widget crate. Every domain tree uses that shared `branch`/`leaf` contract for
+disclosure controls, row width, expansion state, and indentation, plus
+`label` and `selectable_label` for left-aligned text rows. Depth-based trees use
+the shared default-open policy. Domain panels keep their view-model reads and
+typed actions local. This includes the Ports entity browser; raw
+`CollapsingHeader`/`CollapsingState` is reserved for non-tree sections.
 
 The Editor Prims row follows the Entities selectable-row allocation and places
 its transient Visible, Invisible, and Contour controls in the trailing region.

@@ -33,6 +33,13 @@ structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
 
+Treat Bevy `Changed<T>`/`Added<T>` filters as population filters, not free
+events: a no-match query can still inspect candidate entities, and separate
+`is_empty()` queries can repeat that work. Combine compatible invalidation
+sources into one `Or` query when they drive the same decision. If this remains a
+hot path, audit every writer before adding a source-owned event/revision/dirty
+set; do not create another per-frame full-population scan.
+
 When gating a dependency's multi-system transform schedule, distinguish its
 per-update output flags from authoritative input changes. Preserve any required
 settle pass after a floating-origin change, and test the change → settle → idle

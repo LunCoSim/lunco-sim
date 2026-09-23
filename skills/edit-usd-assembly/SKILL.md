@@ -292,6 +292,11 @@ the active simulation viewport.
    view targets from their measured dock rects. The USD viewport's
    `UsdPreviewRenderBudget` caps each target at 2048 px per axis and 4,194,304
    pixels, and caps visible views at 8,388,608 pixels per frame by default.
+   The active Twin's workspace restores one document per file origin and
+   recreates saved view tabs over that same preview session, including each
+   view's camera and presentation settings. Reopening a file reuses its
+   document; use **Open view** to add another perspective. Failed or stale USD
+   view tabs are removed during restore rather than left empty.
    These are presentation budgets, not authored USD values; invalid zero limits
    leave the target inactive.
    Wait for `InspectUsdViewport` to report `projection_ready: true` before

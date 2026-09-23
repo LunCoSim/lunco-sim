@@ -65,7 +65,7 @@ struct PreviousKinematics {
 /// shared registry policy applies the same rate, retention, and channel-limit
 /// rules as all other runtime recorders; display deadband never removes a
 /// simulation-time point from a history.
-pub fn retain_physics_telemetry(
+fn retain_physics_telemetry(
     mut commands: Commands,
     settings: Option<Res<TelemetrySettings>>,
     mut signals: Option<ResMut<SignalRegistry>>,
@@ -76,6 +76,7 @@ pub fn retain_physics_telemetry(
     physics_time: Option<Res<Time<Physics>>>,
     mut removed_bodies: RemovedComponents<RigidBody>,
     mut removed_wheels: RemovedComponents<WheelRaycast>,
+    mut sample_buffer: Local<Vec<PhysicsSample>>,
     sources: Query<(), Or<(With<RigidBody>, With<WheelRaycast>)>>,
     bodies: Query<
         (
@@ -238,7 +239,8 @@ pub fn retain_physics_telemetry(
             continue;
         };
 
-        let mut samples = Vec::with_capacity(36);
+        let samples = &mut *sample_buffer;
+        samples.clear();
         if let Some(linear_velocity) = linear_velocity {
             samples.extend(vector_channels(
                 "linear_velocity",
@@ -493,7 +495,7 @@ pub fn retain_physics_telemetry(
             global_owner.copied(),
             &prim.path,
             time,
-            samples,
+            samples.drain(..),
             &mut channel_count,
             &mut state.metadata,
             metadata_dirty,

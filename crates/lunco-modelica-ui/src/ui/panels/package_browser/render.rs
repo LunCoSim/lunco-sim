@@ -57,9 +57,15 @@ pub(crate) fn render_node_single_ro(
                 false,
                 query.is_active().then_some(true),
                 |ui| {
-                    ui.add(egui::Label::new(name.as_str()).sense(egui::Sense::click()))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
+                    let width = ui.available_width();
+                    lunco_workbench_widgets::tree::label(
+                        ui,
+                        name.as_str(),
+                        width,
+                        egui::Sense::click(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
                 },
                 |ui| {
                     if let Some(kids) = children {
@@ -124,11 +130,8 @@ pub(crate) fn render_node_single_ro(
                 if is_active {
                     label = label.strong().color(theme.tokens.accent);
                 }
-                ui.add(
-                    egui::Label::new(label)
-                        .selectable(false)
-                        .sense(egui::Sense::click()),
-                )
+                let width = ui.available_width();
+                lunco_workbench_widgets::tree::label(ui, label, width, egui::Sense::click())
             });
             let mut resp = row.inner;
             if resp.clicked() {

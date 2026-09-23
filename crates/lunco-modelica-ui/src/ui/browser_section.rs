@@ -123,7 +123,8 @@ impl BrowserSection for ModelicaSection {
                 false,
                 query.is_active().then_some(true),
                 |ui| {
-                    ui.add(egui::Label::new(label).sense(egui::Sense::click()))
+                    let width = ui.available_width();
+                    lunco_workbench_widgets::tree::label(ui, label, width, egui::Sense::click())
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                 },
@@ -599,17 +600,20 @@ fn render_workspace_doc_row(
             true,
             None,
             |ui| {
-                let resp = ui
-                    .add(
-                        egui::Label::new(format!("{icon}  {doc_name}")).sense(egui::Sense::click()),
-                    )
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(
-                        "Click to expand/collapse. \
+                let width = ui.available_width();
+                let resp = lunco_workbench_widgets::tree::label(
+                    ui,
+                    format!("{icon}  {doc_name}"),
+                    width,
+                    egui::Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(
+                    "Click to expand/collapse. \
                          Double-click (or F2 while focused) to rename. \
                          Untitled drafts → renames the top-level class. \
                          Saved files → renames the file on disk.",
-                    );
+                );
                 if resp.double_clicked() {
                     start_rename = Some(doc_name.to_string());
                 }
@@ -1026,12 +1030,9 @@ fn render_class_row(
             } else {
                 egui::RichText::new(&class.short_name)
             };
-            ui.add(
-                egui::Label::new(label)
-                    .selectable(false)
-                    .sense(egui::Sense::click()),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            let width = ui.available_width();
+            lunco_workbench_widgets::tree::label(ui, label, width, egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
         })
         .inner;
         // Explicit highlight band — `selectable_label`'s default
@@ -1087,9 +1088,10 @@ fn render_class_row(
                 } else {
                     egui::RichText::new(header_text.as_str())
                 };
-                let resp = ui
-                    .add(egui::Label::new(label).sense(egui::Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                let width = ui.available_width();
+                let resp =
+                    lunco_workbench_widgets::tree::label(ui, label, width, egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
                 header_clicked = resp.clicked();
                 resp.on_hover_ui(|ui| {
                     ui.strong(&short);

@@ -139,6 +139,13 @@ reads only the sources published by those dependency handles. Non-literal import
 are rejected while loading because an async asset graph cannot make an unknown
 runtime path safe or deterministic.
 
+A statically registered tool call such as `waypoint_editor::route_positions(...)`
+does not declare an asset dependency. A scenario that needs a source-defined
+tool during its first lifecycle hook must use a literal asset import such as
+`import "lunco://scripting/tools/waypoint_editor" as waypoint_editor;`. This
+keeps the tool source in the scenario's normal asynchronous dependency closure;
+the bare tool-registry import form is for composing already registered tools.
+
 ## `lunco-assets-path` owns URI/path algebra; assets core/runtime own resolution
 
 `lunco-assets-path` contains the platform-neutral rules that must be shared by

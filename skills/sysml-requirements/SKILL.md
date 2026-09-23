@@ -32,9 +32,11 @@ Check the feature set and owner before saying that a capability is missing:
 | Generic parsing, resolution, transport and lifecycle mechanisms | Rust crates | feature-dependent | reusable substrate, not Twin-specific policy |
 
 The source-of-truth rule is strict: SysML states what the system must be and
-why; USD states what is authored and observable; Modelica states equations;
-Rhai executes the observation and policy. A verification registry selects a
-scene and script but does not duplicate requirement text or thresholds.
+why; USD states what is authored and observable; Modelica states continuous
+equations; supported SysML constraint expressions execute through the neutral
+IR. Rhai selects providers, queries observations, orchestrates behavior, and
+formats evidence. A verification registry selects a scene and script but does
+not duplicate requirement text or thresholds.
 
 For mission models with material-dependent structural, pressure, thermal, or
 electrical behavior, follow the
@@ -66,8 +68,11 @@ The existing Rhai lint substrate is part of this path: `RunLint` executes the
 domain policy in `assets/scripting/policy/lint_<domain>.rhai` over Rust-produced
 facts, while Twin verification scripts use
 `assets/scripting/tools/sysml_requirements.rhai` to read the mounted SysML
-snapshot and evaluate composed USD evidence. Keep both in Rhai; Rust supplies
-typed facts and lifecycle, not mission- or component-specific assertions.
+snapshot, bind composed USD observations, execute supported source constraints
+through the neutral IR, and emit structured evidence. Keep provider and
+component selection in Rhai; keep supported acceptance predicates in SysML;
+Rust supplies generic typed mechanisms, not mission- or component-specific
+assertions.
 
 Relevant implementation and design references:
 
@@ -244,8 +249,11 @@ not expressible safely with the Rhai standard math surface.
 `source_with_attributes()` is a bounded value projection and intentionally does
 not carry requirement/verification identity tables. Use
 `source_with_selection()` when evidence must retain source-linked requirement
-or verification identities. Identity and source revision remain Rust-owned;
-the Rhai observer owns the selected relation and verdict policy.
+or verification identities. Identity and source revision remain Rust-owned.
+For a supported source predicate, create a generic `constraint_check` and pass
+it to `evaluate` or `evaluate_document`; Rhai selects explicit provider
+observations and the neutral IR returns `pass`, `fail`, `inconclusive`, or
+`error`. Do not collapse those states into a Twin-specific boolean assertion.
 
 Keep normative requirement tolerances in SysML evidence. Runtime settings such
 as `numerics.comparison.length_abs_m` and
@@ -275,6 +283,18 @@ execution, applicability, or state/behavior execution. Do not recreate those
 features with a hidden Rhai parser, Griffin-specific Rust, parallel arrays, or
 qualified-name fallback tables. Add the generic AST/IR/provider mechanism and
 then author the standard SysML construct.
+
+`sysml_requirements::constraint_check` binds a check table to that supported
+subset. Binding keys must match the source constraint parameter names; an
+unknown key is an error and an omitted observation is unavailable. Evidence
+retains the qualified constraint, source revision, fingerprint, provider
+observations, expression results, diagnostics, and four-state verdict.
+`evaluate_document(source, doc_id, checks)` gives the same generic checks an
+explicit Editor document scope for USD queries. Generic observation kinds
+include `not_exists` for absence requirements and typed source-vector component
+selection through `expected_index`. The `tolerance` argument on a check is
+numerical evaluator policy for equality comparisons; engineering acceptance
+bounds must remain parameters of the SysML constraint itself.
 
 The existing `CoincidentPointTranslation` policy can still run a bounded
 asynchronous Modelica solve, read native finite `f64` results by exact

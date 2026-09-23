@@ -828,14 +828,15 @@ fn render_tree_node(
     lunco_workbench_widgets::tree::branch(
         ui,
         id,
-        depth < 2,
+        lunco_workbench_widgets::tree::default_open_at_depth(depth),
         None,
         |ui| {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!("{} ({visible})", node.label)).strong(),
-                )
-                .sense(egui::Sense::click()),
+            let width = ui.available_width();
+            lunco_workbench_widgets::tree::label(
+                ui,
+                egui::RichText::new(format!("{} ({visible})", node.label)).strong(),
+                width,
+                egui::Sense::click(),
             )
             .clicked()
         },

@@ -2203,9 +2203,7 @@ impl Plugin for UsdSimCosimPlugin {
 
         app.add_systems(
             Update,
-            lunco_usd_sim_domain::project_domain_islands
-                .run_if(lunco_usd_sim_domain::domain_projection_due)
-                .in_set(CosimUpdateSet::Projection),
+            lunco_usd_sim_domain::project_domain_islands.in_set(CosimUpdateSet::Projection),
         );
         app.add_systems(
             Update,

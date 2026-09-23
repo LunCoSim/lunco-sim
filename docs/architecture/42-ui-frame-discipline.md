@@ -72,6 +72,16 @@ to reason about where a spike came from. Ask instead:
    consumer and re-run only when the producer has advanced it. Phase α
    diagram projection uses this pattern (`last_seen_gen`).
 
+`Changed<T>` and `Added<T>` filters are change detection, not constant-time
+events: on a miss Bevy may still inspect every entity in the candidate
+archetypes. Several separate `Query::is_empty()` checks over overlapping
+populations can repeat that scan. Combine compatible invalidation sources into
+one `Or` query when they feed the same decision, but keep unrelated owners
+separate. If a hot, large population still costs too much, audit all writers and
+publish a source-owned event/revision/dirty set; do not replace downstream work
+with another full-population poll. In particular, never trade a dependency's
+optimized propagation pass for an application scan over the same grid.
+
 Only use unconditional-every-frame systems for genuinely continuous
 work: the renderer, physics stepping, tool animation ticks, smooth
 camera easing. Everything else is reactive.

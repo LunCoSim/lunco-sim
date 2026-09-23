@@ -480,8 +480,14 @@ impl PortPanel {
                         false,
                         None,
                         |ui| {
-                            ui.add(egui::Label::new(title).sense(egui::Sense::click()))
-                                .clicked()
+                            let width = ui.available_width();
+                            lunco_workbench_widgets::tree::label(
+                                ui,
+                                title,
+                                width,
+                                egui::Sense::click(),
+                            )
+                            .clicked()
                         },
                         |_| {},
                     ) {
@@ -512,7 +518,8 @@ impl PortPanel {
             default_open,
             None,
             |ui| {
-                ui.add(egui::Label::new(title).sense(egui::Sense::click()))
+                let width = ui.available_width();
+                lunco_workbench_widgets::tree::label(ui, title, width, egui::Sense::click())
                     .clicked()
             },
             |ui| {

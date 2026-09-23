@@ -1395,6 +1395,11 @@ impl UsdDocument {
         self.last_saved_base_revision = Some(self.base_revision);
     }
 
+    /// Restore an unsaved authored buffer without changing its source.
+    pub fn mark_restored_dirty(&mut self) {
+        self.last_saved_base_revision = None;
+    }
+
     /// Suffix of the change ring strictly after `since_generation`.
     pub fn changes_since(&self, since_generation: u64) -> impl Iterator<Item = (u64, &UsdChange)> {
         self.changes

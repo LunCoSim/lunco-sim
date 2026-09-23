@@ -856,6 +856,17 @@ impl Plugin for LunCoSimHeadlessPlugin {
 #[derive(Resource, Default)]
 struct BigSpaceOriginSettlePending(bool);
 
+type HighPrecisionPropagationChanges = Or<(
+    (With<FloatingOrigin>, Changed<CellCoord>),
+    (
+        With<CellCoord>,
+        Without<Stationary>,
+        Or<(Changed<Transform>, Changed<CellCoord>, Changed<ChildOf>)>,
+    ),
+    (With<Grid>, Changed<Children>),
+    (With<Stationary>, Without<StationaryInitialized>),
+)>;
+
 /// Open the high-precision propagation set only when an input can change its output.
 ///
 /// BigSpace's propagation system already prunes clean subtrees, but an active
@@ -866,40 +877,24 @@ struct BigSpaceOriginSettlePending(bool);
 /// high-precision global transform; a false positive costs one ordinary pass,
 /// while a false negative would leave rendered GlobalTransforms stale. The
 /// per-compute local-origin unchanged flag is output, not persistent input.
-fn high_precision_propagation_due(
-    changed_origin_cell: Query<(), (With<FloatingOrigin>, Changed<CellCoord>)>,
-    changed_spatial: Query<
-        (),
-        (
-            With<CellCoord>,
-            Without<Stationary>,
-            Or<(Changed<Transform>, Changed<CellCoord>, Changed<ChildOf>)>,
-        ),
-    >,
-    changed_grid_children: Query<(), (With<Grid>, Changed<Children>)>,
-    uninitialized_stationary: Query<(), (With<Stationary>, Without<StationaryInitialized>)>,
-) -> bool {
-    !changed_origin_cell.is_empty()
-        || !changed_spatial.is_empty()
-        || !changed_grid_children.is_empty()
-        || !uninitialized_stationary.is_empty()
+fn high_precision_propagation_due(changed: Query<(), HighPrecisionPropagationChanges>) -> bool {
+    !changed.is_empty()
 }
+
+type LocalOriginPropagationChanges = Or<(
+    (With<FloatingOrigin>, Changed<CellCoord>),
+    Or<(Changed<ChildOf>, Changed<Children>)>,
+    Added<FloatingOrigin>,
+    Added<Grid>,
+    Added<BigSpace>,
+)>;
 
 /// Open BigSpace's local-origin walk for changed inputs or one settle pass.
 fn local_origin_propagation_due(
     settle_pending: Res<BigSpaceOriginSettlePending>,
-    changed_origin_cell: Query<(), (With<FloatingOrigin>, Changed<CellCoord>)>,
-    changed_hierarchy: Query<(), Or<(Changed<ChildOf>, Changed<Children>)>>,
-    added_origin: Query<(), Added<FloatingOrigin>>,
-    added_grid: Query<(), Added<Grid>>,
-    added_big_space: Query<(), Added<BigSpace>>,
+    changed: Query<(), LocalOriginPropagationChanges>,
 ) -> bool {
-    !changed_origin_cell.is_empty()
-        || !changed_hierarchy.is_empty()
-        || !added_origin.is_empty()
-        || !added_grid.is_empty()
-        || !added_big_space.is_empty()
-        || settle_pending.0
+    !changed.is_empty() || settle_pending.0
 }
 
 /// Remember whether BigSpace needs one follow-up local-origin computation.
@@ -955,29 +950,28 @@ fn configure_big_space_propagation_gates(app: &mut App) {
     );
 }
 
+type LowPrecisionPropagationChanges = Or<(
+    Or<(Changed<Transform>, Added<Transform>)>,
+    Or<(Changed<ChildOf>, Changed<Children>)>,
+    (
+        Or<(With<Grid>, With<CellCoord>)>,
+        Or<(Changed<GlobalTransform>, Added<GlobalTransform>)>,
+    ),
+)>;
+
 /// Open BigSpace's low-precision walk only when a local transform hierarchy or
 /// an upstream high-precision root changed.
 fn low_precision_propagation_due(
-    changed_transforms: Query<(), Or<(Changed<Transform>, Added<Transform>)>>,
-    changed_hierarchy: Query<(), Or<(Changed<ChildOf>, Changed<Children>)>>,
+    changed: Query<(), LowPrecisionPropagationChanges>,
     // This is deliberately the same root predicate BigSpace uses for its low
     // precision walk. A descendant `GlobalTransform` is an OUTPUT of that walk;
     // treating it as an input makes the application reopen the walk because of
     // BigSpace's own previous-frame writes.
-    changed_global_roots: Query<
-        (),
-        (
-            Or<(With<Grid>, With<CellCoord>)>,
-            Or<(Changed<GlobalTransform>, Added<GlobalTransform>)>,
-        ),
-    >,
     mut removed_transforms: RemovedComponents<Transform>,
     mut removed_hierarchy: RemovedComponents<ChildOf>,
     mut removed_global_transforms: RemovedComponents<GlobalTransform>,
 ) -> bool {
-    !changed_transforms.is_empty()
-        || !changed_hierarchy.is_empty()
-        || !changed_global_roots.is_empty()
+    !changed.is_empty()
         || removed_transforms.read().next().is_some()
         || removed_hierarchy.read().next().is_some()
         || removed_global_transforms.read().next().is_some()

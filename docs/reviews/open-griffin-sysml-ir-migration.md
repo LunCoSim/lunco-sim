@@ -1,6 +1,7 @@
 # Griffin SysML/KerML IR migration review
 
 **Reviewed:** 2026-09-22
+**Update:** 2026-09-23
 
 **Input:** `griffin-kerml-architecture-and-implementation-report-2026-09-22.md` and the current `astrobotic-griffin-1` SysML/Rhai sources
 
@@ -39,12 +40,32 @@ No Griffin-specific Rust should be added to bridge the current gap. The
 missing language mechanisms belong in the generic AST/IR/provider layers;
 Griffin should then author standard source and policy over those mechanisms.
 
+### 2026-09-23 migration update
+
+The generic `sysml_requirements::constraint_check` path now binds named
+provider observations to the neutral constraint IR and preserves its four-state
+verdict, source revision, and constraint fingerprint in evidence. It also has
+an explicit-document evaluator for Editor USD queries. Griffin's payload
+capacity and ramp-command bounds now have source-authored scalar constraints
+and use that evaluator instead of Twin-specific Rhai predicates. The ramp
+requirement prose was reconciled with its active 50 degree SysML datum; the
+previous 0.58 rad text was stale.
+
+This is an implemented migration slice, not production Editor acceptance. The
+generic check path and Griffin constraints still need a focused live Rhai
+check. Most Griffin mesh/layout predicates, the custom parameter audit, and
+requirement checks expressed only in Twin Rhai remain to be migrated. The
+language gaps below still block source-driven topology and aggregate
+constraints.
+
 ## Audit of the current Griffin model
 
 The primary Griffin requirement/configuration sources contain many useful
-engineering values and requirement usages. They do not yet contain the
-relationships needed to execute the model. The current audit found no
-production `constraint def`/`constraint` relation library, `binding`,
+engineering values and requirement usages. A small bounded scalar constraint
+slice now exists for payload capacity, ramp command range, bus clearances, and
+observed counts. The sources still lack the relationships needed to execute
+the overall model. The current audit found no complete topology/constraint
+library with `binding`,
 `connect`, `flow`, `port`, `action`, `state`, `transition`, `satisfy`,
 `refine`, or `derive` graph for the lander assembly. Geometry is primarily
 represented by attributes, arrays, string IDs, USD paths, and explanatory
