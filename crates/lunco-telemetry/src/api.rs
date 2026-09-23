@@ -109,6 +109,12 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
 
     fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
         let signals = world.resource::<SignalRegistry>();
+        let delivery = world.resource::<super::SampleDeliveryQueue>();
+        let delivery_budget = world
+            .resource::<super::TelemetrySettings>()
+            .max_sample_deliveries_per_update;
+        let delivery_capacity =
+            delivery_budget.saturating_mul(lunco_time::MAX_FIXED_STEPS_PER_FRAME as usize);
 
         let mut channels: Vec<ApiValue> = signals
             .iter_scalar()
@@ -165,6 +171,11 @@ impl ApiQueryProvider for ListTelemetryChannelsProvider {
         Ok(Some(api_value!({
             "channels": channels,
             "count": count,
+            "delivery": {
+                "pending_samples": delivery.samples.len(),
+                "queue_capacity": delivery_capacity,
+                "dropped_samples": delivery.dropped_total,
+            },
         })))
     }
 }
@@ -229,9 +240,7 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
         // remains correct even when several fixed steps have completed since the
         // last rendered frame.
         let tick = world.resource::<lunco_core_runtime::SimTick>().0;
-        let epoch_jd = world
-            .resource::<lunco_time::MissionClock>()
-            .epoch_jd(tick);
+        let epoch_jd = world.resource::<lunco_time::MissionClock>().epoch_jd(tick);
         if !epoch_jd.is_finite() {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
@@ -447,6 +456,11 @@ pub(crate) fn build(app: &mut App) {
 mod tests {
     use super::*;
 
+    fn init_delivery_status(world: &mut World) {
+        world.insert_resource(crate::TelemetrySettings::default());
+        world.init_resource::<crate::SampleDeliveryQueue>();
+    }
+
     #[test]
     fn a_channel_key_round_trips() {
         let k = channel_key(
@@ -495,12 +509,28 @@ mod tests {
     #[test]
     fn list_provider_keeps_same_named_local_signals_separate() {
         let mut world = World::new();
+        init_delivery_status(&mut world);
         let left = world.spawn_empty().id();
         let right = world.spawn_empty().id();
         let mut registry = SignalRegistry::default();
         registry.push_scalar(SignalRef::new(left, "contact"), 0.0, 1.0);
         registry.push_scalar(SignalRef::new(right, "contact"), 0.0, 0.0);
         world.insert_resource(registry);
+        {
+            let mut delivery = world.resource_mut::<crate::SampleDeliveryQueue>();
+            delivery.samples.push_back(crate::SampledParameter {
+                channel: left,
+                name: "contact".to_owned(),
+                value: lunco_telemetry_core::TelemetryValue::F64(1.0),
+                unit: String::new(),
+                timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 1,
+                source: left,
+                changed: true,
+            });
+            delivery.dropped_total = 3;
+        }
 
         let Ok(Some(data)) = ListTelemetryChannelsProvider.execute(&world, &ApiValue::Unit) else {
             panic!("list provider must return a catalog");
@@ -520,11 +550,25 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert_ne!(keys[0], keys[1]);
         assert!(keys.iter().all(|key| key.starts_with("session/")));
+        let delivery = data.get("delivery").expect("delivery status object");
+        assert_eq!(
+            delivery.get("pending_samples").and_then(ApiValue::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            delivery.get("dropped_samples").and_then(ApiValue::as_i64),
+            Some(3)
+        );
+        assert_eq!(
+            delivery.get("queue_capacity").and_then(ApiValue::as_i64),
+            Some(65_536)
+        );
     }
 
     #[test]
     fn list_provider_exposes_modelica_component_identity() {
         let mut world = World::new();
+        init_delivery_status(&mut world);
         let entity = world.spawn_empty().id();
         let signal = SignalRef::new(entity, "science_power");
         let mut registry = SignalRegistry::default();
@@ -595,11 +639,9 @@ mod tests {
     #[test]
     fn archived_api_channel_keeps_its_key_and_history() {
         let mut world = World::new();
+        init_delivery_status(&mut world);
         world.insert_resource(lunco_core_runtime::SimTick(720));
-        world.insert_resource(lunco_time::MissionClock::anchored(
-            lunco_time::J2000_JD,
-            0,
-        ));
+        world.insert_resource(lunco_time::MissionClock::anchored(lunco_time::J2000_JD, 0));
         let entity = world.spawn(GlobalEntityId::from_raw(42)).id();
         let signal = SignalRef::new(entity, "motor_current");
         let mut registry = SignalRegistry::default();

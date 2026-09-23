@@ -9,6 +9,19 @@ deadband, clock binding via `TimeBinding`, persisted `TelemetrySettings`, retain
 history, the query/subscription API, engine diagnostics admitted as channels, and
 `SampledParameter::sim_secs`/`source` identity.
 
+Sampling reads remain tick-bound so every value carries its source `sim_tick` and domain
+time. The sampler queues immutable samples; bounded subscriber, logging, and history
+fan-out runs in the plugin-owned `Telemetry` cycle in `PostUpdate`, after the fixed
+simulation. `max_sample_deliveries_per_update` caps observer work per frame. Its queue is
+bounded by that budget times the shared maximum fixed-step burst. When sustained load fills
+the queue, the oldest non-authoritative samples are dropped, the dropped total is retained,
+and one warning is emitted for the overload episode. Scene transitions also discard pending
+samples from the outgoing Twin and count them as drops, so delayed delivery cannot leak data
+into the next Twin. These boundaries can leave visible gaps in telemetry history while the
+physics tick continues independently. The sampler itself still reads live ECS/port state in
+an exclusive fixed pass; moving immutable source preparation off-thread does not permit
+reading live simulation state asynchronously.
+
 The one-line thesis: telemetry history is shared, bounded, and policy-driven. Modelica runtime
 state is retained by the render-free Modelica projection; authored channels use the same
 registry, so inspectors, APIs, recorders, and plots never depend on one another's UI state.
@@ -102,11 +115,13 @@ catalog's labels still use `display_channel_label`.
 
 `LunCoTelemetryPlugin` is registered in the shared simulation composition.
 Sampling is `run_if`-gated on a `Parameter` existing and runs on the fixed
-clock. When channels exist, the current exclusive sampler walks its cached
-channel plan on each fixed tick to check due times; that work and its synchronous
-observers are a known performance gap tracked by the deterministic runtime
-contract. Preserve authored rate/clock semantics while moving to a due-driven
-plan and separating observation consumers from the physics step.
+clock. When channels exist, the exclusive sampler walks its cached channel plan
+on each fixed tick to check due times and read live ECS/port state. It queues
+immutable, tick-stamped samples for bounded `PostUpdate` delivery, so retention,
+subscriber, and logging observers do not run inline with physics. The remaining
+fixed-path plan walk and live reads are a performance item in the deterministic
+runtime contract; preserve authored rate/clock semantics while reducing that
+work.
 
 `lunco-telemetry-core` owns the transport-neutral telemetry contracts
 (`TelemetryEvent`, `SampledParameter`, `Parameter`, `ChannelSource`, and their
@@ -367,6 +382,10 @@ they are transport-agnostic and already reachable over the API and MCP. **An Ope
 adapter (or a YAMCS bridge) is a thin integration layer over these, not a rewrite**; HTTP/WebSocket streaming
 can be layered on later without touching this layer.
 
+`ListTelemetryChannels` also returns a `delivery` object with `pending_samples`,
+`queue_capacity`, and cumulative `dropped_samples`. This makes overload visible
+to a ground client; missing telemetry samples never hold the simulation clock.
+
 Two decisions that make that possible:
 
 - **Channel key = `"<owner>:<name>"`, never the name alone.** Names collide — two rovers both
@@ -425,6 +444,7 @@ struct TelemetrySettings {          // impl SettingsSection, KEY = "telemetry"
     default_rate_hz: f64,           // 5.0 — the semantic default for omitted channel rates
     default_retention: usize,       // 1500 samples — five minutes at 5 Hz
     max_channels: usize,            // 8192 live channels by default; backpressure guard
+    max_sample_deliveries_per_update: usize, // 1024 callbacks per app frame by default
     enabled: bool,
     default_deadband: TelemetryDeadband,
 }
@@ -441,6 +461,9 @@ The resolution rules are deliberately narrow:
 - `LunCoTelemetryPlugin` installs and owns the unified mission-time spine and telemetry
   settings required by the sampler. A host that calls the internal sampler without that
   plugin is misconfigured; it does not receive guessed settings or a second clock.
+- The plugin installs the bounded `Telemetry` delivery cycle automatically. A queue
+  overflow drops only old telemetry samples, reports the overload episode, and never holds
+  `SimulationProgress` or the fixed physics cycle.
 - The query and export providers use the plugin-owned `SignalRegistry`; a missing registry is
   an integration error, not an empty recording.
 - A persisted telemetry section must contain the current fields. Missing fields or unknown

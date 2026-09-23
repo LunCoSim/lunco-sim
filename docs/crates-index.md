@@ -9,7 +9,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Stable ECS engine facts: identity/provenance, shared markers, typed scene requests, runtime diagnostics/fault contracts, state markers, and small ECS utilities. Reconciliation, exposure storage, synchronization helpers, pacing, and domain composition have their own owners. |
+| **`lunco-core`** | Stable ECS engine facts: identity/provenance, typed scene requests, runtime diagnostics/fault contracts, clock/cycle invocation context, state markers, and small ECS utilities. Reconciliation, exposure storage, synchronization helpers, pacing, and domain composition have their own owners. |
 | **`lunco-geometry-core`** | Precision-preserving, renderer-independent geometry kernels: finite f64 AABB/OBB relations and convex profile extrusion. Shared by authored geometry tools without depending on ECS or USD mesh evaluators. |
 | **`lunco-core-runtime`** | Bevy runtime owner for core contracts: fixed simulation ticks, rollback/netcode schedule anchors, pacing/barriers, gate instrumentation, subsystem toggles, recoverable synchronization helpers, and the runtime plugin that installs those mechanisms. |
 | **`lunco-exposure-core`** | Renderer-independent typed exposure registry (`EngineExposures`, `ExposureValue`, and refresh state). It has no application projection or UI policy; `lunco-luncosim-exposures` supplies the production projection. |

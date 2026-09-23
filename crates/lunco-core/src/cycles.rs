@@ -57,6 +57,8 @@ pub enum RuntimeCycle {
     Command,
     /// Application-scoped one-shot Rhai/REPL evaluation.
     Repl,
+    /// Tick-stamped telemetry delivery and retention fan-out.
+    Telemetry,
     /// EgUI/application UI painting and typed command emission.
     Ui,
     /// Presentation snapshots, transform hand-off, and render intent.
@@ -82,6 +84,8 @@ pub enum RuntimeCycleSet {
     Command,
     /// Application-scoped one-shot Rhai/REPL evaluation.
     Repl,
+    /// Bounded delivery of sampled telemetry outside the fixed simulation loop.
+    Telemetry,
     /// UI painting cycle.
     Ui,
     /// Presentation/render hand-off cycle.

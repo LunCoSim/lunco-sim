@@ -147,8 +147,8 @@ host crate when the owning presentation package can be installed directly.
 
 Use the shared `lunco_core::RuntimeScope` and `RuntimeCycleSet` vocabulary when
 placing a cross-cutting system. `Core`, `Application`, and `Twin` describe
-ownership; `Lifecycle`, `Simulation`, `Interaction`, `Command`, `Repl`, `Ui`, `Presentation`, and
-`Visualization` describe cadence. These are schedule labels and typed route
+ownership; `Lifecycle`, `Simulation`, `Interaction`, `Command`, `Repl`, `Telemetry`,
+`Ui`, `Presentation`, and `Visualization` describe cadence. These are schedule labels and typed route
 metadata, not a new global event bus. Twin-owned resources and completions must
 carry their mount generation and be retired at Twin teardown.
 
@@ -166,18 +166,23 @@ scope, cycle, and generation as unit instead of inventing an owner. Add a
 separate schedule driver only when a cycle needs independent cadence or
 overload semantics, and keep expensive calculations off
 the UI/physics-critical thread.
+Telemetry samples are captured with the fixed tick, then delivered through the
+plugin-owned bounded `Telemetry` cycle. Never run subscription, retention, or
+logging observers inline with fixed physics; report queue loss through the
+telemetry status query and keep simulation progress independent.
 The GUI installs `TerrainSurfaceVisualizationPlugin`; server and scene-test
 compositions keep terrain physics/query support but omit camera-driven LOD,
 visual-map baking, and overlays entirely. A system hidden behind a server-mode
 `run_if` still exists in that schedule and is not equivalent to omitting it.
 Application builders install the selected capabilities automatically; authors
 should not assemble Bevy schedules by hand. Rhai currently declares peer
-selection through `@scope host|client|both`; an unknown value disables that
-scenario and publishes one document error for its source generation instead of
-defaulting to host. Cycle and clock selection come from the Rust owner, not a
-script directive. A callback error remains visible and local to its owner;
-required authoritative hooks hold/fault their owner. Never panic or silently
-report success for a failed hook.
+selection through `@scope host|client|both`, with simulation as its supported
+timing. An unknown scope or unsupported timing disables only that scenario and
+publishes one document error for its source generation instead of breaking the
+host, defaulting to host, or guessing a clock. Cycle and clock selection come
+from the Rust owner, not a script directive. A callback error remains visible
+and local to its owner; required authoritative hooks hold/fault their owner.
+Never panic or silently report success for a failed hook.
 
 Every cycle boundary should expose low-cost aggregate duration, work and queue
 counts, and missed-budget/overload counts through the existing diagnostics
@@ -188,11 +193,12 @@ the simulation telemetry sampler.
 Keep telemetry's two lanes distinct: authoritative events used by Rhai retain
 their producer tick and deterministic delivery order; continuous samples are
 bounded observations of committed state. The fixed sample boundary captures
-only due channels and a small typed record. Logging, subscriber fan-out,
-formatting, serialization, persistence, and UI plot decimation run afterward.
-The current sampler still walks a cached list for due checks and triggers
-observers inline; treat reducing that work and measuring its effect on physics
-throughput as an open owner-level change, not a completed guarantee.
+due channels into a small typed record. A cached channel plan still requires a
+fixed-path walk and live port reads; its samples then go through a bounded
+post-simulation cycle. Logging, subscriber fan-out, formatting, serialization,
+persistence, and UI plot decimation run outside the physics transaction.
+Reducing fixed-path sampling work and measuring its effect on throughput remain
+open owner-level work, not a completed guarantee.
 
 Commands and one-shot Rhai/REPL evaluations have independent application
 clocks. Record command cadence from the shared `CommandOccurred` publication

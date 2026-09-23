@@ -143,6 +143,7 @@ impl Plugin for LunCoCoreRuntimePlugin {
             (
                 lunco_core::RuntimeCycleSet::Presentation,
                 lunco_core::RuntimeCycleSet::Ui,
+                lunco_core::RuntimeCycleSet::Telemetry,
             )
                 .chain(),
         );

@@ -40,6 +40,7 @@ The runtime uses these existing cycle families:
 | `Simulation` | co-simulation, Rhai behavior, controllers, physics | fixed `SimTick`; domain time is derived from that tick |
 | `Interaction` | avatar and camera interaction | wall-rooted `interaction` domain |
 | `Command` / `Repl` | typed command admission and one-shot script evaluation | application/wall cadence; never advances simulation time |
+| `Telemetry` | delivery of fixed-tick samples to retention and external subscribers | bounded application-frame work; each sample keeps its source tick and domain time |
 | `Ui` | egui and workbench updates | host frame/input cadence |
 | `Visualization` / `Presentation` | LOD selection, render preparation, visual projection | presentation cadence or an explicitly selected visual time domain |
 
@@ -61,6 +62,12 @@ server therefore does no terrain LOD selection or visual baking at all. Other
 hosts can opt into a presentation capability when they actually render or
 capture frames.
 
+Application builders install the capabilities selected for that host, and each
+feature-owned plugin registers its systems in the cycle it owns. The shared
+cycle labels and ordering anchors do not install work by themselves; if a host
+does not include a capability plugin, that capability contributes no systems
+to its schedules. Authors select a host capability, not individual Bevy sets.
+
 Rust owns the actual cycle boundary. Reuse Bevy's `First`/`PreUpdate`,
 `FixedUpdate`, `Update`, `PostUpdate`, and the existing `InteractionSchedule`
 where they already express the cadence; retain `RuntimeCycleSet` for ordering
@@ -71,12 +78,28 @@ policy. A separate schedule still runs CPU work somewhere: UI-frame work must
 stay short, and expensive visualization/analysis runs as bounded background
 tasks with a small owner-boundary commit.
 
+Telemetry reads values at their authoritative fixed tick, then delivers the
+immutable samples through a bounded `Telemetry` cycle after simulation and UI
+work. Its per-frame callback budget limits fan-out cost, and queue overload
+drops old samples with an explicit warning without pausing physics. Scene
+transitions clear the outgoing Twin's pending delivery queue and count those
+samples as drops. Subscriber and history timing is therefore application-frame
+timing; sample contents and source ticks remain simulation facts. Throughput
+and frame-time acceptance for heavy telemetry loads remain a measured open item.
+
 Each Rust cycle boundary supplies the same typed execution context to its
 systems and synchronous callees: owner scope/generation, cycle/phase, selected
 clock sample, and logical sequence. Rhai reads that context from its caller;
 it cannot choose a different clock for a nested function or hook. Bevy schedules
 remain statically composed by owner crates, so an absent capability is absent
 from the host schedule and an installed cycle has a visible owner.
+
+Rhai scheduling metadata is admission data, not a request to mutate the Rust
+scheduler. A script with an unknown peer scope or unsupported timing is skipped
+and receives a document diagnostic for that source revision; the host and its
+other scripts continue. The owner must not guess a scope or move the script to
+another clock. Runtime callback errors also remain visible and local to their
+owner, with required authoritative hooks holding or faulting that owner.
 
 Every cycle exposes low-cost aggregate duration, work admitted/completed,
 queue/in-flight depth, and deadline/overload counts through the existing
@@ -290,10 +313,10 @@ loss or a reason to block the physics step on I/O.
 Continuous `SampledParameter` records are observations of committed state, not
 simulation inputs. Their value and `SimTick` stamp are captured at the declared
 sample boundary so a sample cannot combine values from different ticks. Capture
-uses the authored channel rates and clock bindings, performs only due-channel
-reads, and appends a small typed record to the retained signal history. The
-sampling plan must be due-driven so fixed ticks do not walk every channel just
-to reject most of them. API subscriptions, display decimation, log formatting,
+uses the authored channel rates and clock bindings, walks the cached channel
+plan for due checks and live reads, then queues a small typed record for bounded
+post-simulation delivery and retention. Reducing that fixed-path walk and live
+read cost remains open. API subscriptions, display decimation, log formatting,
 recording encoders, and file/network I/O run after capture on their owning
 application or background cycle. Live display may report dropped observations;
 a configured lossless recording must instead fault explicitly if its bounded

@@ -41,11 +41,11 @@
 //!
 //! ## Where the samples go — the consumer half was already shipped
 //!
-//! `SampledParameter` is observed by `lunco_api::subscription::sampled_param_observer`
-//! (this is what `SubscribeTelemetry` delivers), mapped by
-//! `TelemetryResponse::from_sampled`, and logged by `lunco-telemetry-core`.
-//! `LunCoTelemetryPlugin` supplies the sampling producer; the core plugin supplies
-//! the shared bus and its observers.
+//! `SampledParameter` is delivered through a bounded post-simulation queue to
+//! `lunco_api::subscription::sampled_param_observer` (the `SubscribeTelemetry`
+//! stream), retained history, and `lunco-telemetry-core` logging. The source
+//! sample keeps its fixed tick and domain timestamp; external delivery does not
+//! run on the physics schedule.
 //!
 //! Distinct from `TelemetryEvent`, which is the *push* channel (something explicitly
 //! emits an event). This is the *pull* channel: it samples state nobody emitted.
@@ -62,6 +62,7 @@ use lunco_signal::TelemetryDeadband;
 use lunco_telemetry_core::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
 use lunco_time::{domain_time, ResolvedDomains, TimeBinding, WorldTime};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// Persisted telemetry defaults. Stored under the `"telemetry"` key of
 /// `settings.json`.
@@ -87,6 +88,10 @@ pub struct TelemetrySettings {
     ///
     /// Costs 16 B per sample: 24 KB per channel, ~188 MiB at the 8192-channel cap.
     pub default_retention: usize,
+    /// Maximum number of queued sample notifications delivered during one app frame.
+    /// The queue can hold at most this many samples per permitted fixed step.
+    #[serde(default = "default_max_sample_deliveries_per_update")]
+    pub max_sample_deliveries_per_update: usize,
     /// Master switch.
     pub enabled: bool,
     /// Default numeric visibility policy for channels without an explicit
@@ -108,6 +113,7 @@ impl Default for TelemetrySettings {
             // silently truncated by enumeration order.
             max_channels: 8192,
             default_retention: 1500,
+            max_sample_deliveries_per_update: default_max_sample_deliveries_per_update(),
             enabled: true,
             default_deadband: TelemetryDeadband::default(),
         }
@@ -116,6 +122,17 @@ impl Default for TelemetrySettings {
 
 impl SettingsSection for TelemetrySettings {
     const KEY: &'static str = "telemetry";
+
+    fn validate_section(&self) -> Result<(), String> {
+        if self.max_sample_deliveries_per_update == 0 {
+            return Err("max_sample_deliveries_per_update must be greater than zero".to_owned());
+        }
+        Ok(())
+    }
+}
+
+fn default_max_sample_deliveries_per_update() -> usize {
+    1024
 }
 
 /// Control the telemetry subsystem at runtime.
@@ -404,6 +421,34 @@ struct SamplingPlan {
     dirty: bool,
 }
 
+/// Tick-stamped samples waiting for non-authoritative retention and subscribers.
+/// Production is fixed-step; delivery runs in its own bounded application cycle.
+#[derive(Resource, Default)]
+struct SampleDeliveryQueue {
+    samples: VecDeque<SampledParameter>,
+    dropped_total: u64,
+    overloaded: bool,
+}
+
+fn discard_pending_samples_on_scene_transition(
+    trigger: On<lunco_core::SceneTransitionStarted>,
+    mut queue: ResMut<SampleDeliveryQueue>,
+) {
+    let dropped = queue.samples.len();
+    if dropped == 0 {
+        return;
+    }
+    queue.samples.clear();
+    queue.dropped_total = queue.dropped_total.saturating_add(dropped as u64);
+    queue.overloaded = false;
+    warn!(
+        transition = trigger.event().id.get(),
+        dropped,
+        dropped_total = queue.dropped_total,
+        "telemetry discarded pending samples from the outgoing scene at its lifecycle boundary"
+    );
+}
+
 /// Rebuild the sampling plan from the unique signal identity `(measured entity,
 /// channel name)`.  Several projections can observe the same port, but the
 /// retained registry uses that pair as its key; sampling the same key twice
@@ -500,6 +545,7 @@ impl Plugin for LunCoTelemetryPlugin {
         app.add_observer(retain_sample);
         app.add_observer(drop_signal_of_removed_channel);
         app.add_observer(lunco_signal::drop_signals_of_removed_source);
+        app.add_observer(discard_pending_samples_on_scene_transition);
         register_all_commands(app);
         // Engine health (FPS, frame time) as real telemetry channels — see
         // `spawn_engine_health_channels`.
@@ -513,7 +559,8 @@ impl Plugin for LunCoTelemetryPlugin {
         app.insert_resource(SamplingPlan {
             channels: Vec::new(),
             dirty: true,
-        });
+        })
+        .init_resource::<SampleDeliveryQueue>();
         app.add_systems(
             // FIXED step — see the module docs. Not `Update`: telemetry would then be
             // paced by the frame rate (different sample counts on a fast vs slow
@@ -535,6 +582,39 @@ impl Plugin for LunCoTelemetryPlugin {
                 // clock, never to the render/update cadence.
                 .after(lunco_core_runtime::SimTickSet),
         );
+        app.add_systems(
+            PostUpdate,
+            deliver_sampled_parameters
+                .in_set(lunco_core::RuntimeCycleSet::Telemetry)
+                .run_if(sample_deliveries_pending),
+        );
+    }
+}
+
+fn sample_deliveries_pending(queue: Res<SampleDeliveryQueue>) -> bool {
+    !queue.samples.is_empty()
+}
+
+fn deliver_sampled_parameters(world: &mut World) {
+    let budget = world
+        .resource::<TelemetrySettings>()
+        .max_sample_deliveries_per_update;
+    if budget == 0 {
+        warn_once!("telemetry: sample delivery is disabled because its per-update budget is zero");
+        return;
+    }
+    let capacity = budget.saturating_mul(lunco_time::MAX_FIXED_STEPS_PER_FRAME as usize);
+    let batch = {
+        let mut queue = world.resource_mut::<SampleDeliveryQueue>();
+        let count = budget.min(queue.samples.len());
+        let batch = queue.samples.drain(..count).collect::<Vec<_>>();
+        if queue.samples.len() < capacity / 2 {
+            queue.overloaded = false;
+        }
+        batch
+    };
+    for sample in batch {
+        world.trigger(sample);
     }
 }
 
@@ -663,6 +743,12 @@ fn sample_parameters(world: &mut World) {
     if !settings.enabled {
         return;
     }
+    if settings.max_sample_deliveries_per_update == 0 {
+        warn_once!(
+            "telemetry: sample capture is disabled because its per-update delivery budget is zero"
+        );
+        return;
+    }
 
     // Absolute epoch for wall-clock labelling; the per-channel domain gives the
     // precise timebase (see `SampledParameter::sim_secs`). Both come from the
@@ -706,6 +792,12 @@ fn sample_parameters(world: &mut World) {
         .remove_resource::<ResolvedDomains>()
         .expect("LunCoTelemetryPlugin requires lunco_time::ResolvedDomains");
     let resolved_domains = &resolved_taken;
+    let mut delivery_queue = world
+        .remove_resource::<SampleDeliveryQueue>()
+        .expect("LunCoTelemetryPlugin requires its SampleDeliveryQueue resource");
+    let delivery_budget = settings.max_sample_deliveries_per_update;
+    let delivery_capacity =
+        delivery_budget.saturating_mul(lunco_time::MAX_FIXED_STEPS_PER_FRAME as usize);
 
     if plan.channels.len() > settings.max_channels {
         warn_once!(
@@ -717,8 +809,8 @@ fn sample_parameters(world: &mut World) {
         );
     }
 
-    let mut samples: Vec<SampledParameter> = Vec::new();
     let mut clock_writes: Vec<(Entity, ChannelClock)> = Vec::new();
+    let mut dropped = 0usize;
 
     for &entity in plan.channels.iter().take(settings.max_channels) {
         // The plan may be a tick stale on removal — a dead entity or a stripped
@@ -818,7 +910,7 @@ fn sample_parameters(world: &mut World) {
         // Recording is clock-driven; `changed` is only the operator/API
         // notification decision. Keeping both on the sample prevents a
         // deadband from making a time-series appear frozen.
-        samples.push(SampledParameter {
+        let sample = SampledParameter {
             channel: entity,
             name: param.name.clone(),
             value,
@@ -830,7 +922,12 @@ fn sample_parameters(world: &mut World) {
             // a subscriber needs to tell two rovers' `motor_current` apart.
             source: measured,
             changed,
-        });
+        };
+        if delivery_queue.samples.len() >= delivery_capacity {
+            delivery_queue.samples.pop_front();
+            dropped = dropped.saturating_add(1);
+        }
+        delivery_queue.samples.push_back(sample);
 
         advance(&mut clock, t, rate);
         clock_writes.push((entity, clock));
@@ -838,6 +935,7 @@ fn sample_parameters(world: &mut World) {
 
     world.insert_resource(resolved_taken);
     world.insert_resource(plan);
+    world.insert_resource(delivery_queue);
 
     for (entity, clock) in clock_writes {
         if let Ok(mut e) = world.get_entity_mut(entity) {
@@ -845,8 +943,18 @@ fn sample_parameters(world: &mut World) {
         }
     }
 
-    for sample in samples {
-        world.trigger(sample);
+    if dropped > 0 {
+        let mut queue = world.resource_mut::<SampleDeliveryQueue>();
+        queue.dropped_total = queue.dropped_total.saturating_add(dropped as u64);
+        if !queue.overloaded {
+            warn!(
+                dropped_this_tick = dropped,
+                dropped_total = queue.dropped_total,
+                capacity = delivery_capacity,
+                "telemetry delivery queue is full; oldest tick-stamped samples were dropped to keep simulation progress independent"
+            );
+            queue.overloaded = true;
+        }
     }
 }
 
@@ -1228,6 +1336,85 @@ mod tests {
         seen
     }
 
+    #[test]
+    fn sampled_parameter_fanout_runs_after_fixed_simulation_with_a_frame_budget() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        let fixed_seen = Arc::clone(&seen);
+        let first_fixed_pass = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let checked = Arc::clone(&first_fixed_pass);
+        app.add_systems(
+            FixedUpdate,
+            (move || {
+                if !checked.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    assert!(
+                        fixed_seen.lock().unwrap().is_empty(),
+                        "sample observers must not run on the fixed simulation path"
+                    );
+                }
+            })
+            .after(sample_parameters_system),
+        );
+        app.world_mut()
+            .resource_mut::<TelemetrySettings>()
+            .max_sample_deliveries_per_update = 1;
+        app.world_mut().spawn((
+            Port { value: 1.0 },
+            Parameter {
+                rate_hz: Some(lunco_core_runtime::FIXED_HZ),
+                ..reflect_channel("first")
+            },
+        ));
+        app.world_mut().spawn((
+            Port { value: 2.0 },
+            Parameter {
+                rate_hz: Some(lunco_core_runtime::FIXED_HZ),
+                ..reflect_channel("second")
+            },
+        ));
+
+        step_fixed(&mut app, 1);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert_eq!(
+            app.world().resource::<SampleDeliveryQueue>().samples.len(),
+            1,
+            "the remaining sample waits for the next telemetry delivery cycle"
+        );
+        app.update();
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn scene_transition_discards_queued_samples_from_the_outgoing_twin() {
+        let mut app = app();
+        app.world_mut()
+            .resource_mut::<SampleDeliveryQueue>()
+            .samples
+            .push_back(SampledParameter {
+                channel: Entity::PLACEHOLDER,
+                name: "old_scene_value".to_owned(),
+                value: TelemetryValue::F64(2.0),
+                unit: String::new(),
+                timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 1,
+                source: Entity::PLACEHOLDER,
+                changed: true,
+            });
+        let transition = lunco_core::SceneTransition::clear();
+        let transition_id =
+            lunco_core::SceneTransitionCoordinator::default().start(transition.clone());
+
+        app.world_mut().trigger(lunco_core::SceneTransitionStarted {
+            id: transition_id,
+            transition,
+        });
+
+        let queue = app.world().resource::<SampleDeliveryQueue>();
+        assert!(queue.samples.is_empty());
+        assert_eq!(queue.dropped_total, 1);
+    }
+
     fn reflect_channel(name: &str) -> Parameter {
         Parameter {
             name: name.to_string(),
@@ -1292,6 +1479,18 @@ mod tests {
         assert!(value.get("schema_version").is_none());
         assert!(serde_json::from_value::<TelemetrySettings>(value).is_ok());
 
+        let mut prior_shape = serde_json::to_value(TelemetrySettings::default()).unwrap();
+        prior_shape
+            .as_object_mut()
+            .unwrap()
+            .remove("max_sample_deliveries_per_update");
+        let restored: TelemetrySettings = serde_json::from_value(prior_shape)
+            .expect("the new telemetry delivery budget has a documented default");
+        assert_eq!(
+            restored.max_sample_deliveries_per_update,
+            default_max_sample_deliveries_per_update()
+        );
+
         let missing_current_deadband = serde_json::json!({
             "default_rate_hz": 5.0,
             "max_channels": 8192,
@@ -1314,6 +1513,10 @@ mod tests {
             serde_json::from_value::<TelemetrySettings>(invalid_deadband).is_err(),
             "a persisted deadband with an invalid tolerance must be rejected"
         );
+
+        let mut invalid_budget = TelemetrySettings::default();
+        invalid_budget.max_sample_deliveries_per_update = 0;
+        assert!(invalid_budget.validate_section().is_err());
     }
 
     #[test]

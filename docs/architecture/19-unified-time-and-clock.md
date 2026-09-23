@@ -178,6 +178,11 @@ declared cycle boundary. See
 [`62-deterministic-runtime-and-async-boundaries.md`](62-deterministic-runtime-and-async-boundaries.md)
 for the cross-domain invocation and async-commit contract.
 
+Telemetry samples are read on their simulation-domain clock, then delivered
+through the plugin-owned bounded `Telemetry` cycle after the fixed schedule.
+The delivery cycle preserves each sample's source tick and never acquires a
+simulation progress hold.
+
 Rhai scenario preparation and hooks receive the scenario owner's typed cycle,
 phase, clock sample, sequence, and event producer stamp. Paused lifecycle/event
 callbacks receive no elapsed-time clock. One-shot REPL and tool calls use the
