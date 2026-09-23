@@ -66,6 +66,8 @@ For derived marker sets, compare current membership with the desired set and
 apply only additions/removals; unrelated rebuilds must not emit lifecycle churn.
 Removal invalidation should be qualified by the entity's authored USD identity
 and relevant endpoint capability, not by a generic component removal alone.
+Extract a USD program's declared interface once at admission and reuse it for
+validation, diagnostics, and publication instead of re-enumerating attributes.
 
 Keep invalidation domains distinct: a wiring/topology latch may be raised by
 endpoint arrivals and must not automatically trigger whole-stage domain
