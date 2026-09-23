@@ -42,8 +42,14 @@ the owning terminal result has been committed. Scene load/restart/clear use
 `SceneTransitionId`; same-path transitions still have distinct identities.
 Keep participant readiness and `PhysicsHolds` in their owners: they control
 local/world physics admission, while `SimulationProgress` controls whether the
-shared causal tick may advance. Surface the active wait reason through the
-existing status bus.
+shared causal tick may advance. `UsdSceneRuntimePlugin` installs this shared
+resource when selected and holds active reference spawns on the mounted primary
+scene through closure preparation and live ECS projection. Preview and additive
+mounts retain diagnostics without pausing or faulting the primary simulation. A
+terminal primary reference failure retains its exact hold and publishes a path
+diagnostic plus `RuntimeFault` until scene teardown; inactive or removed,
+nonfaulted operations release their own keys. Surface the active wait reason
+through the existing status bus.
 
 For engineering requirements, keep the same split at the numerical boundary:
 SysML owns typed intent, units, normative tolerances, and requirement/

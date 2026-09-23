@@ -945,7 +945,15 @@ pub(crate) fn reconcile_structural_live(
 ) {
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
     for path in resync_paths {
-        let Ok(sp) = SdfPath::new(path) else { continue };
+        let Ok(sp) = SdfPath::new(path) else {
+            crate::twin_projection::fail_pending_instance_projection(
+                world,
+                id,
+                path,
+                "the committed prim path is invalid",
+            );
+            continue;
+        };
         // Program source is projected onto the existing owner, while the
         // program prim itself still follows the normal USD structural path.
         let program_owner = if let Some(owner) = find_program_owner(world, id, path) {
@@ -975,10 +983,20 @@ pub(crate) fn reconcile_structural_live(
         let live = find_live_entity(world, id, path);
         match (exists, live) {
             (false, Some(entity)) => {
-                if let Some(mut pending) =
+                let removed = if let Some(mut pending) =
                     world.get_resource_mut::<crate::twin_projection::PendingInstanceProjections>()
                 {
-                    pending.remove(id, path);
+                    pending.remove(id, path)
+                } else {
+                    None
+                };
+                if let Some(pending) = removed {
+                    if !pending.failure_reported {
+                        crate::twin_projection::release_reference_progress(
+                            world,
+                            pending.progress_key,
+                        );
+                    }
                 }
                 crate::scene::despawn_usd_subtree(world, entity);
             }
@@ -1006,12 +1024,17 @@ pub(crate) fn reconcile_structural_live(
                         Ok(Some(transform)) => transform,
                         Ok(None) => Transform::IDENTITY,
                         Err(error) => {
-                            error!("[usd] incremental spawn rejected for {path}: {error}");
+                            crate::twin_projection::fail_pending_instance_projection(
+                                world,
+                                id,
+                                path,
+                                &format!("live prim transform could not be read: {error}"),
+                            );
                             continue;
                         }
                     }
                 };
-                let instance_projection = world
+                let mut instance_projection = world
                     .get_resource_mut::<crate::twin_projection::PendingInstanceProjections>()
                     .and_then(|mut pending| pending.take(id, path));
                 let catalog_id = instance_projection.as_ref().and_then(|_| {
@@ -1024,17 +1047,32 @@ pub(crate) fn reconcile_structural_live(
                 if let Some(entity) =
                     crate::scene::spawn_usd_child_under_parent(world, parent_entity, path, tf)
                 {
-                    if let Some(mut projection) = instance_projection {
-                        projection.root = Some(entity);
+                    if let Some(mut pending) = instance_projection.take() {
+                        pending.projection.root = Some(entity);
                         world
                             .entity_mut(entity)
-                            .insert((lunco_usd_bevy_stage::UsdInstanceRoot, projection));
+                            .insert((lunco_usd_bevy_stage::UsdInstanceRoot, pending.projection));
+                        if !pending.failure_reported {
+                            crate::twin_projection::release_reference_progress(
+                                world,
+                                pending.progress_key,
+                            );
+                        }
                     }
                     if let Some(catalog_id) = catalog_id {
                         world
                             .entity_mut(entity)
                             .insert(lunco_core::CatalogEntryId(catalog_id));
                     }
+                } else if let Some(pending) = instance_projection.take() {
+                    crate::twin_projection::report_reference_failure(
+                        world,
+                        pending.progress_key,
+                        id,
+                        path,
+                        "prepared USD instance projection",
+                        "the composed root could not be inserted into its live parent",
+                    );
                 }
             }
             // ALREADY LIVE, AND RESYNCED — not "nothing to do".
@@ -1045,7 +1083,23 @@ pub(crate) fn reconcile_structural_live(
             // never overwrites a moving body with its authored spawn pose. The
             // physics bridge below likewise refreshes only a missing schema
             // projection, never an already admitted vehicle.
-            (true, Some(_entity)) => {
+            (true, Some(entity)) => {
+                let pending = world
+                    .get_resource_mut::<crate::twin_projection::PendingInstanceProjections>()
+                    .and_then(|mut pending| pending.take(id, path));
+                if let Some(mut pending) = pending {
+                    pending.projection.root = Some(entity);
+                    world
+                        .entity_mut(entity)
+                        .insert((lunco_usd_bevy_stage::UsdInstanceRoot, pending.projection));
+                    crate::twin_projection::refresh_prim_subtree(world, id, path);
+                    if !pending.failure_reported {
+                        crate::twin_projection::release_reference_progress(
+                            world,
+                            pending.progress_key,
+                        );
+                    }
+                }
                 reproject_physics_if_needed(world, id, path);
             }
             _ => {}

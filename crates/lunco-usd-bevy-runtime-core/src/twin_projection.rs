@@ -56,6 +56,7 @@ use crate::scene::LoadScene;
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets_core::twin_source::TwinRoots;
+use lunco_core_runtime::{SimulationProgress, SimulationProgressKey, SimulationProgressOwner};
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued,
@@ -158,6 +159,8 @@ impl PendingTwinDocs {
 /// the openusd change sink fires and `project_stage_changes` instantiates the
 /// composed subtree — no whole-scene reload.
 struct RefSpawn {
+    /// Stable identity for this reference admission operation.
+    progress_key: SimulationProgressKey,
     /// The scene whose live [`CanonicalStage`](lunco_usd_bevy_stage::canonical::CanonicalStage)
     /// the spawn is authored onto.
     scene_id: AssetId<UsdStageAsset>,
@@ -187,6 +190,17 @@ struct RefSpawn {
     /// materialized into the live stage; a later reactivation keeps the same
     /// transaction valid without authoring an inactive intermediate prim.
     active: bool,
+    /// Whether this operation currently gates time for the mounted primary scene.
+    held: bool,
+    /// Whether the asset event has already been consumed while the root was
+    /// inactive. The loaded asset remains available for a later activation.
+    asset_ready: bool,
+    /// Terminal closure/projection failure, retained until the authored root
+    /// is replaced or removed.
+    failure: Option<String>,
+    /// Whether the retained failure has been published to the runtime fault
+    /// and diagnostic owners while the root is active.
+    failure_reported: bool,
     /// The document removed this pending root before its reference became
     /// live. Keep the transaction until the asset event is consumed so later
     /// descendant edits cannot leak onto the live stage; a new AddPrim at the
@@ -201,6 +215,8 @@ pub(crate) struct PendingRefSpawns {
     items: Vec<RefSpawn>,
     ready: HashSet<AssetId<UsdStageAsset>>,
     failed: HashMap<AssetId<UsdStageAsset>, String>,
+    next_operation_id: u64,
+    held_keys: HashSet<SimulationProgressKey>,
     /// Strong handles held while a coarse document rebuild waits for a newly
     /// referenced closure. Without this retention the load becomes `Unused`
     /// before the async loader can publish its prepared asset.
@@ -213,7 +229,13 @@ pub(crate) struct PendingRefSpawns {
 /// instance with the same asset.
 #[derive(Resource, Default)]
 pub(crate) struct PendingInstanceProjections {
-    plans: HashMap<(AssetId<UsdStageAsset>, String), UsdInstanceProjection>,
+    plans: HashMap<(AssetId<UsdStageAsset>, String), PendingInstanceProjection>,
+}
+
+pub(crate) struct PendingInstanceProjection {
+    pub(crate) projection: UsdInstanceProjection,
+    pub(crate) progress_key: SimulationProgressKey,
+    pub(crate) failure_reported: bool,
 }
 
 impl PendingInstanceProjections {
@@ -222,24 +244,55 @@ impl PendingInstanceProjections {
         scene_id: AssetId<UsdStageAsset>,
         prim_path: String,
         projection: UsdInstanceProjection,
+        progress_key: SimulationProgressKey,
     ) {
-        self.plans.insert((scene_id, prim_path), projection);
+        self.plans.insert(
+            (scene_id, prim_path),
+            PendingInstanceProjection {
+                projection,
+                progress_key,
+                failure_reported: false,
+            },
+        );
     }
 
     pub(crate) fn take(
         &mut self,
         scene_id: AssetId<UsdStageAsset>,
         prim_path: &str,
-    ) -> Option<UsdInstanceProjection> {
+    ) -> Option<PendingInstanceProjection> {
         self.plans.remove(&(scene_id, prim_path.to_string()))
     }
 
-    pub(crate) fn remove(&mut self, scene_id: AssetId<UsdStageAsset>, prim_path: &str) {
-        self.plans.remove(&(scene_id, prim_path.to_string()));
+    pub(crate) fn remove(
+        &mut self,
+        scene_id: AssetId<UsdStageAsset>,
+        prim_path: &str,
+    ) -> Option<PendingInstanceProjection> {
+        self.plans.remove(&(scene_id, prim_path.to_string()))
+    }
+
+    fn progress_key(
+        &self,
+        scene_id: AssetId<UsdStageAsset>,
+        prim_path: &str,
+    ) -> Option<SimulationProgressKey> {
+        self.plans
+            .get(&(scene_id, prim_path.to_string()))
+            .map(|pending| pending.progress_key)
     }
 }
 
 impl PendingRefSpawns {
+    fn allocate_progress_key(&mut self) -> Option<SimulationProgressKey> {
+        let operation_id = self.next_operation_id;
+        self.next_operation_id = operation_id.checked_add(1)?;
+        Some(SimulationProgressKey {
+            owner: SimulationProgressOwner::SceneReferences,
+            operation_id,
+        })
+    }
+
     fn push(&mut self, item: RefSpawn, ready: bool) {
         if ready {
             self.ready.insert(item.ref_handle.id());
@@ -247,9 +300,20 @@ impl PendingRefSpawns {
         self.items.push(item);
     }
 
-    fn replace_path(&mut self, scene_id: AssetId<UsdStageAsset>, prim_path: &str) {
-        self.items
-            .retain(|item| !(item.scene_id == scene_id && item.prim_path == prim_path));
+    fn replace_path(
+        &mut self,
+        scene_id: AssetId<UsdStageAsset>,
+        prim_path: &str,
+    ) -> Vec<SimulationProgressKey> {
+        let mut released = Vec::new();
+        self.items.retain(|item| {
+            let keep = !(item.scene_id == scene_id && item.prim_path == prim_path);
+            if !keep && !item.failure_reported {
+                released.push(item.progress_key);
+            }
+            keep
+        });
+        released
     }
 
     fn index_for_path(&self, scene_id: AssetId<UsdStageAsset>, path: &str) -> Option<usize> {
@@ -284,6 +348,254 @@ impl PendingRefSpawns {
     }
 }
 
+fn is_authoritative_scene_stage(world: &World, scene_id: AssetId<UsdStageAsset>) -> bool {
+    let Some(root) = world
+        .get_resource::<lunco_core::SceneMountState>()
+        .and_then(lunco_core::SceneMountState::active_root)
+    else {
+        return false;
+    };
+    world
+        .get::<UsdPrimPath>(root)
+        .is_some_and(|path| path.stage_handle.id() == scene_id)
+}
+
+fn acquire_reference_progress(
+    world: &mut World,
+    key: SimulationProgressKey,
+    scene_id: AssetId<UsdStageAsset>,
+    reason: String,
+) -> bool {
+    if !is_authoritative_scene_stage(world, scene_id) {
+        return false;
+    }
+    world
+        .resource_mut::<SimulationProgress>()
+        .acquire(key, reason);
+    world
+        .resource_mut::<PendingRefSpawns>()
+        .held_keys
+        .insert(key);
+    true
+}
+
+pub(crate) fn release_reference_progress(world: &mut World, key: SimulationProgressKey) {
+    if let Some(mut progress) = world.get_resource_mut::<SimulationProgress>() {
+        progress.release(key);
+    }
+    if let Some(mut pending) = world.get_resource_mut::<PendingRefSpawns>() {
+        pending.held_keys.remove(&key);
+    }
+}
+
+fn activate_reference_progress(world: &mut World, item: &mut RefSpawn) {
+    if !item.held {
+        let reason = format!(
+            "Preparing USD reference {} from `{}`",
+            item.prim_path, item.asset_path
+        );
+        item.held = acquire_reference_progress(world, item.progress_key, item.scene_id, reason);
+    }
+}
+
+fn deactivate_reference_progress(world: &mut World, item: &mut RefSpawn) {
+    if item.held && !item.failure_reported {
+        release_reference_progress(world, item.progress_key);
+        item.held = false;
+    }
+}
+
+fn set_pending_reference_active(world: &mut World, index: usize, active: bool) {
+    let state = {
+        let mut pending = world.resource_mut::<PendingRefSpawns>();
+        let Some(item) = pending.items.get_mut(index) else {
+            return;
+        };
+        if item.removed {
+            return;
+        }
+        let changed = item.active != active;
+        item.active = active;
+        (
+            item.progress_key,
+            item.ref_handle.id(),
+            item.held,
+            item.asset_ready,
+            item.failure.clone(),
+            item.failure_reported,
+            item.scene_id,
+            item.prim_path.clone(),
+            item.asset_path.clone(),
+            changed,
+        )
+    };
+    let (
+        key,
+        asset_id,
+        held,
+        asset_ready,
+        failure,
+        failure_reported,
+        scene_id,
+        prim_path,
+        asset_path,
+        changed,
+    ) = state;
+    if !active {
+        if held && !failure_reported {
+            release_reference_progress(world, key);
+            if let Some(item) = world
+                .resource_mut::<PendingRefSpawns>()
+                .items
+                .get_mut(index)
+            {
+                item.held = false;
+            }
+        }
+        return;
+    }
+    if !held {
+        let acquired = acquire_reference_progress(
+            world,
+            key,
+            scene_id,
+            format!("Preparing USD reference {prim_path} from `{asset_path}`"),
+        );
+        if let Some(item) = world
+            .resource_mut::<PendingRefSpawns>()
+            .items
+            .get_mut(index)
+        {
+            item.held = acquired;
+        }
+    }
+    if changed {
+        let mut pending = world.resource_mut::<PendingRefSpawns>();
+        if asset_ready {
+            pending.ready.insert(asset_id);
+        }
+        if let Some(error) = &failure {
+            pending.failed.insert(asset_id, error.clone());
+        }
+    }
+    if let Some(error) = failure.filter(|_| !failure_reported) {
+        report_reference_failure(world, key, scene_id, &prim_path, &asset_path, &error);
+        if let Some(item) = world
+            .resource_mut::<PendingRefSpawns>()
+            .items
+            .get_mut(index)
+        {
+            item.failure_reported = true;
+        }
+    }
+}
+
+fn cancel_pending_reference(world: &mut World, index: usize) {
+    let (key, held) = {
+        let mut pending = world.resource_mut::<PendingRefSpawns>();
+        let Some(item) = pending.items.get_mut(index) else {
+            return;
+        };
+        item.removed = true;
+        item.active = false;
+        item.translate = None;
+        item.deferred_ops.clear();
+        (item.progress_key, item.held)
+    };
+    let failure_reported = world.resource::<PendingRefSpawns>().items[index].failure_reported;
+    if held && !failure_reported {
+        release_reference_progress(world, key);
+        if let Some(item) = world
+            .resource_mut::<PendingRefSpawns>()
+            .items
+            .get_mut(index)
+        {
+            item.held = false;
+        }
+    }
+}
+
+fn fail_reference_spawn(world: &mut World, item: &mut RefSpawn, detail: String) {
+    item.failure = Some(detail.clone());
+    if item.active && !item.failure_reported {
+        item.held = report_reference_failure(
+            world,
+            item.progress_key,
+            item.scene_id,
+            &item.prim_path,
+            &item.asset_path,
+            &detail,
+        );
+        item.failure_reported = true;
+    } else if !item.failure_reported {
+        item.failure_reported = true;
+    }
+}
+
+/// Keep every failed document projection diagnosable, while only a failure on
+/// the mounted primary scene faults and holds authoritative simulation time.
+pub(crate) fn report_reference_failure(
+    world: &mut World,
+    key: SimulationProgressKey,
+    scene_id: AssetId<UsdStageAsset>,
+    prim_path: &str,
+    asset_path: &str,
+    detail: &str,
+) -> bool {
+    const PRODUCER: &str = "usd-reference-admission";
+    let subject = format!("{scene_id:?}:{prim_path}");
+    let reason = format!("USD reference {prim_path} could not be admitted: {detail}");
+    let authoritative = acquire_reference_progress(world, key, scene_id, reason.clone());
+    if authoritative {
+        world
+            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
+            .raise("usd-reference-admission", None, subject.clone(), detail);
+    }
+    let mut diagnostics =
+        world.get_resource_or_insert_with(lunco_core::RuntimeDiagnostics::default);
+    diagnostics
+        .findings
+        .retain(|finding| !(finding.producer == PRODUCER && finding.subject == subject));
+    diagnostics.findings.push(lunco_core::RuntimeDiagnostic {
+        code: "usd-reference-admission".to_owned(),
+        severity: lunco_core::DiagnosticSeverity::Error,
+        producer: PRODUCER.to_owned(),
+        subject,
+        message: format!("`{asset_path}`: {detail}"),
+    });
+    diagnostics
+        .findings
+        .sort_by(|left, right| left.subject.cmp(&right.subject));
+    error!("[twin] {reason}");
+    authoritative
+}
+
+pub(crate) fn fail_pending_instance_projection(
+    world: &mut World,
+    scene_id: AssetId<UsdStageAsset>,
+    prim_path: &str,
+    detail: &str,
+) {
+    let key = world
+        .get_resource::<PendingInstanceProjections>()
+        .and_then(|pending| pending.progress_key(scene_id, prim_path));
+    if let Some(key) = key {
+        report_reference_failure(
+            world,
+            key,
+            scene_id,
+            prim_path,
+            "prepared USD instance projection",
+            detail,
+        );
+        if let Some(mut pending) = world.get_resource_mut::<PendingInstanceProjections>() {
+            if let Some(pending) = pending.plans.get_mut(&(scene_id, prim_path.to_owned())) {
+                pending.failure_reported = true;
+            }
+        }
+    }
+}
+
 /// Clear asynchronous referenced-spawn work owned by the outgoing scene.
 ///
 /// Pending default-scene document loads are owned by their admitted Twin and
@@ -291,11 +603,18 @@ impl PendingRefSpawns {
 pub(crate) fn reset_scene_projection_state(
     mut pending_refs: ResMut<PendingRefSpawns>,
     mut pending_instances: Option<ResMut<PendingInstanceProjections>>,
+    mut progress: Option<ResMut<SimulationProgress>>,
 ) {
+    if let Some(progress) = progress.as_deref_mut() {
+        for key in pending_refs.held_keys.drain() {
+            progress.release(key);
+        }
+    }
     pending_refs.items.clear();
     pending_refs.ready.clear();
     pending_refs.failed.clear();
     pending_refs.retained_assets.clear();
+    pending_refs.held_keys.clear();
     if let Some(pending_instances) = pending_instances.as_deref_mut() {
         pending_instances.plans.clear();
     }
@@ -1143,29 +1462,43 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 // A new authored root is a new transaction. Drop the old
                 // transaction, including any stale activation state, and let
                 // the normal AddPrim path queue/materialize this one.
-                world.resource_mut::<PendingRefSpawns>().items.remove(index);
+                let removed = {
+                    let mut pending = world.resource_mut::<PendingRefSpawns>();
+                    pending.items.get_mut(index).map(|item| {
+                        let state = (item.progress_key, item.held);
+                        item.removed = true;
+                        item.active = false;
+                        item.held = false;
+                        state
+                    })
+                };
+                if let Some((key, held)) = removed {
+                    if held {
+                        release_reference_progress(world, key);
+                    }
+                    world.resource_mut::<PendingRefSpawns>().items.remove(index);
+                }
             } else {
-                let pending = &mut world.resource_mut::<PendingRefSpawns>().items[index];
-                if pending.removed {
+                if world.resource::<PendingRefSpawns>().items[index].removed {
                     return;
                 }
                 match op {
                     UsdOp::RemovePrim { .. } if exact_root => {
-                        pending.removed = true;
-                        pending.active = false;
-                        pending.translate = None;
-                        pending.deferred_ops.clear();
+                        cancel_pending_reference(world, index);
                     }
                     UsdOp::SetActive { active, .. } if exact_root => {
-                        pending.active = *active;
+                        set_pending_reference_active(world, index, *active);
                     }
                     UsdOp::ClearActive { .. } if exact_root => {
-                        pending.active = true;
+                        set_pending_reference_active(world, index, true);
                     }
                     UsdOp::SetTranslate { value, .. } if exact_root => {
-                        pending.translate = Some(*value);
+                        world.resource_mut::<PendingRefSpawns>().items[index].translate =
+                            Some(*value);
                     }
-                    _ => pending.deferred_ops.push(op.clone()),
+                    _ => world.resource_mut::<PendingRefSpawns>().items[index]
+                        .deferred_ops
+                        .push(op.clone()),
                 }
                 return;
             }
@@ -1672,18 +2005,16 @@ fn spawn_prim_op(
 ) {
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
     let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
-    let Ok(sp) = openusd::sdf::Path::new(prim_path) else {
-        return;
-    };
-
-    // A root AddPrim starts a new live projection transaction. If an earlier
-    // transaction for the same path was canceled while its asset was loading,
-    // it must not retain deferred operations for this new authored root.
-    world
-        .resource_mut::<PendingRefSpawns>()
-        .replace_path(scene_id, prim_path);
-
     let Some(asset_path) = reference else {
+        let Ok(sp) = openusd::sdf::Path::new(prim_path) else {
+            return;
+        };
+        for key in world
+            .resource_mut::<PendingRefSpawns>()
+            .replace_path(scene_id, prim_path)
+        {
+            release_reference_progress(world, key);
+        }
         // Plain prim — author now.
         if let Some(cs) = world
             .get_non_send::<CanonicalStages>()
@@ -1696,104 +2027,152 @@ fn spawn_prim_op(
         return;
     };
 
-    // Referenced spawn: the live stage may already have the source bytes, but
-    // the standalone asset plan is still the projection input for this
-    // instance. Require that plan before authoring so the first frame never
-    // falls back to repeated live-stage reads.
-    enum Plan {
-        Now { projection: UsdInstanceProjection },
-        Fetch { ref_handle: Handle<UsdStageAsset> },
+    let Some(progress_key) = world
+        .resource_mut::<PendingRefSpawns>()
+        .allocate_progress_key()
+    else {
+        let detail = "USD reference operation identity space is exhausted";
+        let exhaustion_key = SimulationProgressKey {
+            owner: SimulationProgressOwner::SceneReferences,
+            operation_id: u64::MAX,
+        };
+        report_reference_failure(
+            world,
+            exhaustion_key,
+            scene_id,
+            prim_path,
+            &asset_path,
+            detail,
+        );
+        return;
+    };
+    for key in world
+        .resource_mut::<PendingRefSpawns>()
+        .replace_path(scene_id, prim_path)
+    {
+        release_reference_progress(world, key);
     }
-    let (ref_id, has_layer_bytes) = {
+
+    if openusd::sdf::Path::new(prim_path).is_err() {
+        let detail = format!("invalid USD prim path `{prim_path}`");
+        let mut item = failed_ref_spawn(
+            progress_key,
+            scene_id,
+            prim_path,
+            type_name,
+            &asset_path,
+            reference_prim_path,
+            detail.clone(),
+        );
+        item.held = report_reference_failure(
+            world,
+            progress_key,
+            scene_id,
+            prim_path,
+            &asset_path,
+            &detail,
+        );
+        item.failure_reported = true;
+        world.resource_mut::<PendingRefSpawns>().push(item, false);
+        return;
+    };
+
+    let ref_id = {
         let Some(cs) = world
             .get_non_send::<CanonicalStages>()
             .and_then(|s| s.get(scene_id))
         else {
+            let detail = "the owning scene stage is unavailable";
+            let mut item = failed_ref_spawn(
+                progress_key,
+                scene_id,
+                prim_path,
+                type_name,
+                &asset_path,
+                reference_prim_path,
+                detail.to_owned(),
+            );
+            item.held = report_reference_failure(
+                world,
+                progress_key,
+                scene_id,
+                prim_path,
+                &asset_path,
+                detail,
+            );
+            item.failure_reported = true;
+            world.resource_mut::<PendingRefSpawns>().push(item, false);
             return;
         };
-        let ref_id = cs.canonical_reference_id(&asset_path);
-        (ref_id.clone(), cs.has_layer_bytes(&ref_id))
+        cs.canonical_reference_id(&asset_path)
     };
     let ref_handle = world
         .resource::<AssetServer>()
         .load::<UsdStageAsset>(bevy::asset::AssetPath::parse(&ref_id).into_owned());
-    let plan = if !has_layer_bytes {
-        Plan::Fetch { ref_handle }
-    } else if let Some(asset) = world
+    let ref_id = ref_handle.id();
+    let ready = world
         .resource::<Assets<UsdStageAsset>>()
-        .get(ref_handle.id())
-    {
-        let projection = match asset.projection_plan.for_instance(prim_path) {
-            Ok(plan) => UsdInstanceProjection {
-                root: None,
-                plan: Arc::new(plan),
-            },
-            Err(error) => {
-                error!(
-                    "[twin] referenced spawn {prim_path} has an invalid prepared projection plan for `{asset_path}`: {error}"
-                );
-                return;
-            }
-        };
-        Plan::Now { projection }
-    } else {
-        Plan::Fetch { ref_handle }
-    };
-    match plan {
-        Plan::Now { projection } => {
-            if let Some(cs) = world
-                .get_non_send::<CanonicalStages>()
-                .and_then(|s| s.get(scene_id))
-            {
-                let result = cs.projector().author_referenced_prim(
-                    &sp,
-                    type_name.as_deref(),
-                    &asset_path,
-                    reference_prim_path.as_deref(),
-                );
-                if let Err(e) = result {
-                    warn!("[twin] referenced spawn {prim_path}: {e}");
-                } else {
-                    world.resource_mut::<PendingInstanceProjections>().insert(
-                        scene_id,
-                        prim_path.to_string(),
-                        projection,
-                    );
-                }
-            }
-        }
-        Plan::Fetch { ref_handle } => {
-            let ref_id = ref_handle.id();
-            let ready = world
-                .resource::<Assets<UsdStageAsset>>()
-                .get(ref_id)
-                .is_some();
-            let failed = world
-                .resource::<AssetServer>()
-                .get_load_state(ref_id)
-                .is_some_and(|state| state.is_failed());
-            world.resource_mut::<PendingRefSpawns>().push(
-                RefSpawn {
-                    scene_id,
-                    prim_path: prim_path.to_string(),
-                    type_name,
-                    asset_path,
-                    reference_prim_path,
-                    ref_handle,
-                    translate: None,
-                    deferred_ops: Vec::new(),
-                    active: true,
-                    removed: false,
-                },
-                ready,
-            );
-            if failed {
-                world.resource_mut::<PendingRefSpawns>().mark_failed(
-                    ref_id,
-                    "the referenced asset had already failed to load".into(),
-                );
-            }
-        }
+        .get(ref_id)
+        .is_some();
+    let failed = world
+        .resource::<AssetServer>()
+        .get_load_state(ref_id)
+        .is_some_and(|state| state.is_failed());
+    let reason = format!("Preparing USD reference {prim_path} from `{asset_path}`");
+    let held = acquire_reference_progress(world, progress_key, scene_id, reason);
+    world.resource_mut::<PendingRefSpawns>().push(
+        RefSpawn {
+            progress_key,
+            scene_id,
+            prim_path: prim_path.to_string(),
+            type_name,
+            asset_path,
+            reference_prim_path,
+            ref_handle,
+            translate: None,
+            deferred_ops: Vec::new(),
+            active: true,
+            held,
+            asset_ready: ready,
+            failure: None,
+            failure_reported: false,
+            removed: false,
+        },
+        ready,
+    );
+    if failed {
+        world.resource_mut::<PendingRefSpawns>().mark_failed(
+            ref_id,
+            "the referenced asset had already failed to load".into(),
+        );
+    }
+}
+
+fn failed_ref_spawn(
+    progress_key: SimulationProgressKey,
+    scene_id: AssetId<UsdStageAsset>,
+    prim_path: &str,
+    type_name: Option<String>,
+    asset_path: &str,
+    reference_prim_path: Option<String>,
+    detail: String,
+) -> RefSpawn {
+    RefSpawn {
+        progress_key,
+        scene_id,
+        prim_path: prim_path.to_owned(),
+        type_name,
+        asset_path: asset_path.to_owned(),
+        reference_prim_path,
+        ref_handle: Handle::default(),
+        translate: None,
+        deferred_ops: Vec::new(),
+        active: true,
+        held: false,
+        asset_ready: false,
+        failure: Some(detail),
+        failure_reported: true,
+        removed: false,
     }
 }
 
@@ -2066,54 +2445,77 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             std::mem::take(&mut pending.failed),
         )
     };
-    let pending = std::mem::take(&mut world.resource_mut::<PendingRefSpawns>().items);
+    let mut pending = std::mem::take(&mut world.resource_mut::<PendingRefSpawns>().items);
+    pending.sort_by_key(|item| item.progress_key.operation_id);
     let mut still = Vec::new();
     for mut item in pending {
-        if item.removed || !item.active {
-            // The authored document canceled or deactivated this root while
-            // its reference closure was in flight. Do not materialize a
-            // transient live instance for a state that is no longer active.
+        if item.removed {
+            deactivate_reference_progress(world, &mut item);
             continue;
         }
-        if let Some(error) = failed.get(&item.ref_handle.id()) {
-            error!(
-                "[twin] referenced spawn {} failed to load `{}`: {error}",
-                item.prim_path, item.asset_path
-            );
-            continue;
-        }
-        if !ready.contains(&item.ref_handle.id()) {
+        if !item.active {
+            if ready.contains(&item.ref_handle.id()) {
+                item.asset_ready = true;
+            }
+            if let Some(error) = failed.get(&item.ref_handle.id()) {
+                item.failure = Some(error.clone());
+            }
+            deactivate_reference_progress(world, &mut item);
             still.push(item);
             continue;
         }
+        activate_reference_progress(world, &mut item);
+        if let Some(error) = item.failure.clone() {
+            if !item.failure_reported {
+                fail_reference_spawn(world, &mut item, error);
+            }
+            still.push(item);
+            continue;
+        }
+        if let Some(error) = failed.get(&item.ref_handle.id()) {
+            fail_reference_spawn(world, &mut item, error.clone());
+            still.push(item);
+            continue;
+        }
+        if !item.asset_ready && !ready.contains(&item.ref_handle.id()) {
+            still.push(item);
+            continue;
+        }
+        item.asset_ready = true;
         let recipe = world
             .resource::<Assets<UsdStageAsset>>()
             .get(item.ref_handle.id())
             .and_then(|a| a.recipe.clone());
         let Some(recipe) = recipe else {
-            error!(
-                "[twin] referenced spawn {} received a ready event without a usable recipe for `{}`",
-                item.prim_path, item.asset_path
+            fail_reference_spawn(
+                world,
+                &mut item,
+                "the ready referenced asset has no usable layer recipe".to_owned(),
             );
+            still.push(item);
             continue;
         };
         let Some(asset) = world
             .resource::<Assets<UsdStageAsset>>()
             .get(item.ref_handle.id())
         else {
-            error!(
-                "[twin] referenced spawn {} became ready without its prepared asset for `{}`",
-                item.prim_path, item.asset_path
+            fail_reference_spawn(
+                world,
+                &mut item,
+                "the asset-ready event has no prepared USD asset".to_owned(),
             );
+            still.push(item);
             continue;
         };
         let plan = match asset.projection_plan.for_instance(&item.prim_path) {
             Ok(plan) => plan,
             Err(error) => {
-                error!(
-                    "[twin] referenced spawn {} has an invalid prepared projection plan for `{}`: {error}",
-                    item.prim_path, item.asset_path
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    format!("invalid prepared projection plan: {error}"),
                 );
+                still.push(item);
                 continue;
             }
         };
@@ -2122,53 +2524,66 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             plan: Arc::new(plan),
         };
         let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else {
+            let detail = format!("invalid USD prim path `{}`", item.prim_path);
+            fail_reference_spawn(world, &mut item, detail);
+            still.push(item);
             continue;
         };
-        let result = {
-            let Some(cs) = world
-                .get_non_send::<CanonicalStages>()
-                .and_then(|s| s.get(item.scene_id))
-            else {
-                continue; // scene stage gone — drop the spawn
-            };
-            // Inject the closure bytes so PCP can resolve the reference, then author.
-            cs.add_layer_bytes(recipe.bytes.clone());
-            let result = cs.projector().author_referenced_prim(
-                &sp,
-                item.type_name.as_deref(),
-                &item.asset_path,
-                item.reference_prim_path.as_deref(),
-            );
-            if result.is_ok() {
-                // Apply the transform after the prim/reference exists. This is the
-                // ordering guarantee for first-use referenced markers and spawned
-                // vehicles alike.
-                if let Some(translate) = item.translate {
-                    if let Err(e) = cs.projector().author_translate(&sp, translate) {
-                        warn!("[twin] referenced spawn {} translate: {e}", item.prim_path);
-                    } else {
-                        crate::live_consume::mark_live_transform(
-                            world,
-                            item.scene_id,
-                            item.prim_path.clone(),
-                            crate::live_consume::TransformEditChannels::translate(),
-                        );
-                    }
+        let stage_result = world
+            .get_non_send::<CanonicalStages>()
+            .and_then(|stages| stages.get(item.scene_id))
+            .map(|cs| {
+                if !cs.add_layer_bytes(recipe.bytes.clone()) {
+                    return Err("the owning stage cannot accept referenced layer bytes".to_owned());
                 }
+                cs.projector()
+                    .author_referenced_prim(
+                        &sp,
+                        item.type_name.as_deref(),
+                        &item.asset_path,
+                        item.reference_prim_path.as_deref(),
+                    )
+                    .map_err(|error| format!("failed to author the reference: {error}"))?;
+                let translated = if let Some(translate) = item.translate {
+                    cs.projector()
+                        .author_translate(&sp, translate)
+                        .map_err(|error| format!("failed to apply the spawn transform: {error}"))?;
+                    true
+                } else {
+                    false
+                };
+                Ok(translated)
+            });
+        let translated = match stage_result {
+            None => {
+                fail_reference_spawn(
+                    world,
+                    &mut item,
+                    "the owning scene stage disappeared before projection".to_owned(),
+                );
+                still.push(item);
+                continue;
             }
-            result
+            Some(Ok(translated)) => translated,
+            Some(Err(error)) => {
+                fail_reference_spawn(world, &mut item, error);
+                still.push(item);
+                continue;
+            }
         };
-        if let Err(e) = result {
-            warn!(
-                "[twin] referenced spawn {} (post-fetch): {e}",
-                item.prim_path
+        if translated {
+            crate::live_consume::mark_live_transform(
+                world,
+                item.scene_id,
+                item.prim_path.clone(),
+                crate::live_consume::TransformEditChannels::translate(),
             );
-            continue;
         }
         world.resource_mut::<PendingInstanceProjections>().insert(
             item.scene_id,
             item.prim_path.clone(),
             projection,
+            item.progress_key,
         );
         // Replay child-owned metadata and relationships only after the
         // referenced root exists on the live stage. The document already owns
@@ -2568,6 +2983,122 @@ mod tests {
         assert_eq!(
             pending.failed.get(&handle.id()).map(String::as_str),
             Some("source unavailable")
+        );
+    }
+
+    #[test]
+    fn reference_admission_tracks_activity_and_publishes_terminal_failure() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(PendingRefSpawns::default());
+        world.insert_resource(PendingInstanceProjections::default());
+        world.insert_resource(SimulationProgress::default());
+
+        let key = world
+            .resource_mut::<PendingRefSpawns>()
+            .allocate_progress_key()
+            .expect("reference operation identity");
+        let scene_id = AssetId::<UsdStageAsset>::default();
+        let root = world
+            .spawn((
+                UsdSceneRoot,
+                UsdPrimPath {
+                    stage_handle: Handle::default(),
+                    path: "/World".to_owned(),
+                },
+            ))
+            .id();
+        let mut mounts = lunco_core::SceneMountState::default();
+        mounts.register_root(root, true);
+        world.insert_resource(mounts);
+        let path = "/World/Rover";
+        let asset = "lunco://vessels/rover.usda";
+        let detail = "referenced asset failed to load";
+        let mut item = failed_ref_spawn(
+            key,
+            scene_id,
+            path,
+            Some("Xform".to_owned()),
+            asset,
+            None,
+            detail.to_owned(),
+        );
+        item.held = report_reference_failure(&mut world, key, scene_id, path, asset, detail);
+        item.failure_reported = true;
+        world.resource_mut::<PendingRefSpawns>().push(item, false);
+
+        assert!(world.resource::<SimulationProgress>().is_held());
+        assert!(world.resource::<lunco_core::RuntimeFaults>().active());
+        assert_eq!(
+            world.resource::<lunco_core::RuntimeDiagnostics>().findings[0].code,
+            "usd-reference-admission"
+        );
+
+        set_pending_reference_active(&mut world, 0, false);
+        assert!(world.resource::<SimulationProgress>().is_held());
+        set_pending_reference_active(&mut world, 0, true);
+        assert!(world.resource::<SimulationProgress>().is_held());
+
+        cancel_pending_reference(&mut world, 0);
+        assert!(world.resource::<SimulationProgress>().is_held());
+        assert!(
+            world
+                .resource_mut::<PendingRefSpawns>()
+                .replace_path(scene_id, path)
+                .is_empty()
+        );
+        assert!(world.resource::<SimulationProgress>().is_held());
+
+        world.run_system_once(reset_scene_projection_state).unwrap();
+        assert!(!world.resource::<SimulationProgress>().is_held());
+    }
+
+    #[test]
+    fn preview_reference_failure_does_not_hold_the_active_simulation() {
+        let mut world = World::new();
+        world.insert_resource(PendingRefSpawns::default());
+        world.insert_resource(SimulationProgress::default());
+
+        let active_root = world
+            .spawn((
+                UsdSceneRoot,
+                UsdPrimPath {
+                    stage_handle: Handle::default(),
+                    path: "/World".to_owned(),
+                },
+            ))
+            .id();
+        let mut mounts = lunco_core::SceneMountState::default();
+        mounts.register_root(active_root, true);
+        world.insert_resource(mounts);
+
+        let key = world
+            .resource_mut::<PendingRefSpawns>()
+            .allocate_progress_key()
+            .expect("reference operation identity");
+        report_reference_failure(
+            &mut world,
+            key,
+            AssetId::invalid(),
+            "/World/PreviewRover",
+            "lunco://vessels/rover.usda",
+            "referenced asset failed to load",
+        );
+
+        assert!(!world.resource::<SimulationProgress>().is_held());
+        assert!(
+            !world
+                .get_resource::<lunco_core::RuntimeFaults>()
+                .is_some_and(lunco_core::RuntimeFaults::active)
+        );
+        assert_eq!(
+            world
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .len(),
+            1,
+            "the owning document still receives a visible diagnostic"
         );
     }
 

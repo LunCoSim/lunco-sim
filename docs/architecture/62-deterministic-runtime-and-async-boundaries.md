@@ -164,7 +164,19 @@ authoritative hook holds or faults its owner through the runtime-fault contract.
 barrier. Scene lifecycle holds carry a monotonic `SceneTransitionId`; only the
 matching terminal edge releases its hold. The admission gate covers work that
 changes which authoritative scene can run. Ordinary parsing, analysis, editor
-work, and LOD refinement continue in their own cycles and do not pause physics.
+work, and optional LOD refinement do not acquire this gate. Their selected
+owner plugins control their cadence; GUI LOD still shares the `Update` schedule
+with UI until its heavy selection work moves to a bounded worker path (D16).
+An active reference spawn on the mounted primary `UsdSceneRoot` acquires a
+`SceneReferences` operation key when the typed structural change is admitted.
+Its hold follows the prepared closure through live-stage authoring and ECS root
+projection. Preview and additive document references keep their own projection
+lifecycle and diagnostics; they do not hold or fault the primary simulation.
+An inactive or removed primary root releases its exact key until that operation
+has faulted. A primary closure or projection failure records a `RuntimeFault`,
+a path-addressed diagnostic, and a persistent progress hold; scene teardown
+clears both before a replacement scene runs. `UsdSceneRuntimePlugin` installs
+the progress resource it needs, so selecting that capability is sufficient.
 The causal transaction follows explicit owner phases:
 
 1. Capture external commands and events as typed inputs with their authoritative

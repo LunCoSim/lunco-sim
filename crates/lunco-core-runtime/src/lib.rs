@@ -224,8 +224,12 @@ fn release_scene_progress_hold(
     }
 }
 
-fn reset_core_scene_state(mut rollback: ResMut<RollbackInProgress>) {
+fn reset_core_scene_state(
+    mut rollback: ResMut<RollbackInProgress>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+) {
     rollback.0 = false;
+    faults.clear();
 }
 
 fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>) {
@@ -327,5 +331,18 @@ mod tests {
         assert_eq!(cadence.command.sequence, 2);
         assert_eq!(cadence.repl.sequence, 0);
         assert_eq!(cadence.command.interval_secs, Some(0.25));
+    }
+
+    #[test]
+    fn scene_teardown_clears_the_terminal_runtime_fault() {
+        let mut app = App::new();
+        app.add_plugins(LunCoCoreRuntimePlugin);
+        app.world_mut()
+            .resource_mut::<lunco_core::RuntimeFaults>()
+            .raise("runtime-invariant", None, "scene", "invalid state");
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
     }
 }
