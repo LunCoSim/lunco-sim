@@ -534,17 +534,15 @@ pub(super) fn rewire_usd_connections(
         (bevy::asset::AssetId<UsdStageAsset>, Option<u64>, &str, &str),
         (Entity, &str),
     > = HashMap::new();
-    let environment_probe_entities: std::collections::HashSet<Entity> = wiring
-        .endpoints
-        .iter()
-        .filter_map(|(entity, _, _, _, is_probe, _, _)| is_probe.then_some(entity))
-        .collect();
-    let port_surfaces: HashMap<Entity, &lunco_port_core::PortSurface> = wiring
-        .endpoints
-        .iter()
-        .filter_map(|(entity, _, _, _, _, surface, _)| surface.map(|surface| (entity, surface)))
-        .collect();
-    for (e, p, _, generated, _, _, projection) in wiring.endpoints.iter() {
+    let mut environment_probe_entities = HashSet::new();
+    let mut port_surfaces = HashMap::new();
+    for (e, p, _, generated, is_probe, surface, projection) in wiring.endpoints.iter() {
+        if is_probe {
+            environment_probe_entities.insert(e);
+        }
+        if let Some(surface) = surface {
+            port_surfaces.insert(e, surface);
+        }
         let instance = instance_of(e, projection);
         let key = (p.stage_handle.id(), instance, p.path.as_str());
         by_path.insert(key, e);

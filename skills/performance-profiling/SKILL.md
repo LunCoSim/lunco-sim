@@ -60,6 +60,8 @@ known property instead of enumerating every attribute name. If one enumeration
 feeds multiple derived port sets, derive them together from that single result.
 Temporary lookup indexes over immutable ECS queries should borrow path and port
 surface data instead of cloning those maps for a one-pass reconciliation.
+Build compatible per-entity indexes in one query traversal rather than running
+separate full-population passes for each index.
 
 Keep invalidation domains distinct: a wiring/topology latch may be raised by
 endpoint arrivals and must not automatically trigger whole-stage domain
