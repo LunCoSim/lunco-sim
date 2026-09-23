@@ -29,12 +29,14 @@ Push heavy work off-thread or behind a cache; profile before optimizing.
 >   different axis from the per-frame-work discipline below. Don't conflate them.
 
 The celestial presentation system holds one realtime pacing request while
-`CelestialTime` advances and a scene camera can see celestial presentation
-frames. This keeps accelerated Earth, Moon, and Sun samples moving smoothly when
-the window is unfocused. The request selects the bounded fixed cadence; it does
-not bypass vsync while focused or switch the host into continuous max-speed
-updates. It is released when the clock pauses, the presentation frames or camera
-leave, or the scene tears down.
+`CelestialTime` advances, celestial presentation frames exist, and the
+`SceneViewport` is visible with a resolved active camera. Use that viewport
+binding as the presentation owner; do not derive cadence demand from the later
+render-side `Camera::is_active` actuation. This keeps accelerated Earth, Moon,
+and Sun samples moving smoothly when the window is unfocused. The request selects
+the bounded fixed cadence; it does not bypass vsync while focused or switch the
+host into continuous max-speed updates. It is released when the clock pauses,
+the presentation frames or viewport leave, or the scene tears down.
 
 The app ships with a real-time 3D scene, a Modelica simulator, and a
 heavyweight egui UI on top. The frame budget is shared — UI work that
