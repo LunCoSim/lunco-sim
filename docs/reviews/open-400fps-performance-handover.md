@@ -43,6 +43,18 @@ The startup and Twin lifecycle paths no longer synchronously walk the open Twin
 roots from the UI schedule, and listing generations prevent a closed/reopened
 Twin from publishing stale results.
 
+This pass also reduces repeated reactive work without changing cadence or
+validation: the HUD invalidation sources now share one combined `Or` query; the
+Modelica projector checks prim and identity additions together once inside its
+system instead of scanning them in both a run condition and the system; and
+BigSpace's high-, local-, and low-precision admission predicates each combine
+their existing spatial invalidation filters into one query per schedule
+boundary. BigSpace still owns all propagation work and the origin-settle pass
+is unchanged. Physics-validation and telemetry scratch buffers also retain
+capacity across calls. These are source-level work reductions only. Their CPU
+benefit is not yet measured, and the next clean settled Apollo run remains
+necessary before claiming an FPS improvement.
+
 ## Verification
 
 - `cargo clean` from the optimization checkout removed 16.2 GiB after the
