@@ -49,6 +49,12 @@ single bootstrap discovery for entities predating plugin installation, and
 retry only work whose authoritative stage/readiness input is still pending.
 The idle run condition should inspect the owner set, not scan the population.
 
+For whole-index projectors such as USD telemetry, use one initial bootstrap,
+then coalesce relevant insert/remove observers into an invalidation flag. Keep
+stage-generation and asset-store invalidation as scalar checks. Do not repeat
+the same `Added`/`Changed` population filters in both the run condition and the
+projector, and do not reproject until the index is invalidated.
+
 When gating a dependency's multi-system transform schedule, distinguish its
 per-update output flags from authoritative input changes. Preserve any required
 settle pass after a floating-origin change, and test the change → settle → idle

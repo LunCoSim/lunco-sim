@@ -49,11 +49,14 @@ Modelica projector checks prim and identity additions together once inside its
 system instead of scanning them in both a run condition and the system; and
 BigSpace's high-, local-, and low-precision admission predicates each combine
 their existing spatial invalidation filters into one query per schedule
-boundary. BigSpace still owns all propagation work and the origin-settle pass
-is unchanged. Physics-validation and telemetry scratch buffers also retain
-capacity across calls. These are source-level work reductions only. Their CPU
-benefit is not yet measured, and the next clean settled Apollo run remains
-necessary before claiming an FPS improvement.
+boundary. The USD telemetry projector performs one bootstrap pass, then uses
+component insert/remove observers plus scalar stage-revision and asset-change
+signals instead of repeated `Added`/`Changed` population queries in both its
+run condition and invalidation system. BigSpace still owns all propagation
+work and the origin-settle pass is unchanged. Physics-validation and telemetry
+scratch buffers also retain capacity across calls. These are source-level work
+reductions only. Their CPU benefit is not yet measured, and the next clean
+settled Apollo run remains necessary before claiming an FPS improvement.
 
 ## Verification
 
