@@ -26,6 +26,15 @@ or compatibility shim because the first search was incomplete.
 | Mission phases, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration in production; `on_tick` is test-only for sampled verdicts |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
+For cross-domain execution, read
+[`62-deterministic-runtime-and-async-boundaries.md`](../../docs/architecture/62-deterministic-runtime-and-async-boundaries.md).
+Keep parsing, source resolution, and immutable preparation off the UI/fixed
+schedule when inputs can be captured by revision. Admit results only at an
+owner boundary in stable identity order. Keep live-world hooks and physics
+inside their deterministic schedule. Do not claim whole-simulation replay
+determinism while dynamic script reads bypass the causal graph or production
+physics uses an unpinned parallel profile.
+
 For engineering requirements, keep the same split at the numerical boundary:
 SysML owns typed intent, units, normative tolerances, and requirement/
 verification identity; USD owns realized geometry and standard scene facts;

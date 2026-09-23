@@ -54,6 +54,18 @@ bodies because those lifecycle operations transport initial pose or frame state.
 The exact BigSpace re-split comparison remains the authority for distinguishing
 representation maintenance from semantic motion.
 
+The application admits BigSpace's propagation schedule sets from spatial input
+changes rather than running the full hierarchy pass on every stable frame.
+`LocalFloatingOrigin::is_local_origin_unchanged` describes the result of its
+most recent computation, not a persistent dirty state. After a floating-origin
+change, the origin-computation set must run once more on the next stable update
+to report the settled relationship. The application records whether that
+follow-up is pending after an admitted origin pass, so idle schedule admission
+does not scan every grid. High-precision propagation is admitted by changed
+spatial inputs themselves; a retained `false` flag must not keep it running
+indefinitely. Test the shift, settle, and stable-frame sequence at the
+application schedule boundary.
+
 ## Review checklist
 
 When a camera, body, rover, trajectory, or line jitters:
