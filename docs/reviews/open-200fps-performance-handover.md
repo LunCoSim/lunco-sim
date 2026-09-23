@@ -537,6 +537,16 @@ in-flight synthesis remains live. A full discovery is kept for initial
 admission and a live USD wiring revision that may change composed network
 membership.
 
+Cosim prim discovery and Python-availability readiness now share a coalesced
+set populated by `UsdPrimPath`/`UsdSourcedCosim` lifecycle events, with a
+one-time initial sweep for hosts where prims predate plugin installation.
+Their update gates no longer probe all USD prims for absent markers every
+frame. Scene teardown retires the pending set. The production-path comparison
+and bounded Tracy attribution remain outstanding.
+`cargo test -j 4 -p lunco-usd-sim-cosim --lib --test usd_connection_mechanics`
+passes with 31 unit cases and 4 USD-wiring integration cases; this validates
+lifecycle admission, not a measured frame-rate gain.
+
 The wiring run condition now reads the existing `UsdWiringDirty` latch instead
 of querying the full endpoint population for `Added<T>` matches each update.
 Endpoint contract and identity observers, relevant removals, composed-stage

@@ -922,10 +922,11 @@ USD-to-cosim translator. `UsdSimCosimPlugin` installs source discovery,
 wiring, readiness, telemetry projection, and the Modelica/script participant
 exchange independently from vehicle realization. Wiring facts are cached by
 composed generation and instance, with unchanged runtime edges retained across
-unrelated endpoint arrivals. Generic scene commands and mount/teardown
-mechanics live in `lunco-usd-bevy-runtime-core`; `sync` owns the fixed-step
-port exchange and authored event projection. Its optional API query providers
-live in `lunco-usd-sim-cosim-api`.
+unrelated endpoint arrivals. Cosim prim source discovery and Python readiness
+share a lifecycle-coalesced pending-prim set. Generic scene commands and
+mount/teardown mechanics live in `lunco-usd-bevy-runtime-core`; `sync` owns the
+fixed-step port exchange and authored event projection. Its optional API query
+providers live in `lunco-usd-sim-cosim-api`.
 
 **`lunco-usd-sim-cosim-api`**
 Optional API query providers for the cosimulation runtime: uniform ports,

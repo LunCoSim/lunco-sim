@@ -52,7 +52,7 @@ use lunco_usd_bevy_stage::{
     UsdWiringDirty,
 };
 use openusd::sdf::{Path as SdfPath, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
 use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule};
@@ -354,12 +354,60 @@ pub struct PendingPythonSource {
     pub asset_path: String,
 }
 
+/// Coalesced USD-prim discovery work for the cosimulation projection.
+#[derive(Resource)]
+struct PendingUsdCosimPrimWork {
+    entities: HashSet<Entity>,
+    initial_discovery: bool,
+}
+
+impl Default for PendingUsdCosimPrimWork {
+    fn default() -> Self {
+        Self {
+            entities: HashSet::new(),
+            initial_discovery: true,
+        }
+    }
+}
+
+fn queue_added_usd_cosim_prim(
+    trigger: On<Add, UsdPrimPath>,
+    unprocessed: Query<(), Without<UsdSourcedCosim>>,
+    mut pending: ResMut<PendingUsdCosimPrimWork>,
+) {
+    if unprocessed.contains(trigger.entity) {
+        pending.entities.insert(trigger.entity);
+    }
+}
+
+fn forget_removed_usd_cosim_prim(
+    trigger: On<Remove, UsdPrimPath>,
+    mut pending: ResMut<PendingUsdCosimPrimWork>,
+) {
+    pending.entities.remove(&trigger.entity);
+}
+
+fn queue_removed_usd_sourced_cosim(
+    trigger: On<Remove, UsdSourcedCosim>,
+    prims: Query<(), With<UsdPrimPath>>,
+    mut pending: ResMut<PendingUsdCosimPrimWork>,
+) {
+    if prims.contains(trigger.entity) {
+        pending.entities.insert(trigger.entity);
+    }
+}
+
+fn reset_usd_cosim_prim_work(mut pending: ResMut<PendingUsdCosimPrimWork>) {
+    pending.entities.clear();
+    pending.initial_discovery = false;
+}
+
 /// Reads cosim attributes from USD prims and dispatches model
 /// compilation + wires. Runs in `Update` after `sync_usd_visuals` so
 /// `Transform` / `Mesh3d` / `Material` are already present.
-/// Run condition: any `UsdPrimPath` entity still lacks `UsdSourcedCosim`.
-fn any_unprocessed_usd_cosim(q: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>) -> bool {
-    !q.is_empty()
+/// Run condition: the initial discovery or a queued prim lifecycle is pending.
+fn any_unprocessed_usd_cosim(pending: Res<PendingUsdCosimPrimWork>) -> bool {
+    pending.initial_discovery || !pending.entities.is_empty()
 }
 
 /// Run condition: any `UsdSourcedCosim` modelica model still needs wrapping
@@ -380,6 +428,7 @@ fn any_unwrapped_modelica(
 pub(crate) fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdSourcedCosim>>,
+    mut pending: ResMut<PendingUsdCosimPrimWork>,
     stages: Res<Assets<UsdStageAsset>>,
     // Initial reads use the worker-produced plan; later authored generations
     // use the live canonical stage selected by the shared reader boundary.
@@ -389,28 +438,35 @@ pub(crate) fn process_usd_cosim_prims(
     mut python_unavailable: ResMut<PythonUnavailablePrograms>,
 ) {
     // Which prims a component collection already owns, per stage. Computed once
-    // per run rather than per prim (it is a full stage walk), and NOT cached
-    // across runs: this system only runs while unprocessed prims remain, and
-    // each prim is decided exactly once.
+    // per batch rather than per prim.
     let mut members_by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, BTreeSet<String>> =
         HashMap::new();
-    for (entity, prim_path, instance_projection) in query.iter() {
+    let mut entities = std::mem::take(&mut pending.entities);
+    if pending.initial_discovery {
+        // This single bootstrap pass covers entities that predate plugin
+        // installation. Normal scene arrivals are queued by the lifecycle
+        // observer and do not need a population scan.
+        pending.initial_discovery = false;
+        entities.extend(query.iter().map(|(entity, _, _)| entity));
+    }
+    let mut entities: Vec<_> = entities.into_iter().collect();
+    entities.sort_unstable();
+    for entity in entities {
+        let Ok((entity, prim_path, instance_projection)) = query.get(entity) else {
+            continue;
+        };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
+            pending.entities.insert(entity);
             continue;
         };
 
         let id = prim_path.stage_handle.id();
-        // Mark examined up front so each prim is inspected exactly once.
-        // Without this, every *non-cosim* prim (wheels, ground, ramps — the
-        // bulk of the scene) failed the active-cosim gate below via the
-        // early `continue` WITHOUT ever gaining `UsdSourcedCosim`, so it stayed
-        // in the `Without<UsdSourcedCosim>` query forever — and this system
-        // re-ran every frame, deep-cloning the whole stage per prim. That was
-        // the dominant sandbox CPU cost (see scripts/perf/README.md).
-        // Safe: every other `UsdSourcedCosim` consumer also requires a
-        // `ModelicaModel` / `SimComponent` / `ScriptedModel` that a non-cosim
-        // prim never gains, so marking it here matches nothing downstream.
+        // Record that this prim's authored cosim surface has been examined,
+        // including non-programmable prims, before any early return below.
+        // Other cosim consumers also require a model/script participant, so
+        // this ownership marker alone does not make a visual prim a solver.
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
+            pending.entities.insert(entity);
             continue;
         };
         let (reader, _generation) =
@@ -465,12 +521,13 @@ pub(crate) fn process_usd_cosim_prims(
 fn report_python_unavailable(
     mut diagnostics: ResMut<PythonUnavailablePrograms>,
     in_flight: Option<Res<SceneLoadInFlight>>,
-    unprocessed: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>,
+    pending: Res<PendingUsdCosimPrimWork>,
 ) {
     if diagnostics.reported
         || diagnostics.paths.is_empty()
         || in_flight.is_some()
-        || !unprocessed.is_empty()
+        || pending.initial_discovery
+        || !pending.entities.is_empty()
     {
         return;
     }
@@ -2090,12 +2147,16 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_usd_sim_domain::DomainClassUsers>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjectionCandidates>()
+            .init_resource::<PendingUsdCosimPrimWork>()
             .init_resource::<WiringFactsCache>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>();
         app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
         app.add_observer(request_binding_epoch::<UsdPrimPath>)
             .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
+            .add_observer(queue_added_usd_cosim_prim)
+            .add_observer(forget_removed_usd_cosim_prim)
+            .add_observer(queue_removed_usd_sourced_cosim)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_prim)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_identity)
             .add_observer(lunco_usd_sim_domain::queue_removed_domain_identity)
@@ -2205,6 +2266,7 @@ impl Plugin for UsdSimCosimPlugin {
             report_python_unavailable.after(CosimUpdateSet::Scene),
         );
         app.add_systems(lunco_core::SceneTeardown, reset_python_unavailable);
+        app.add_systems(lunco_core::SceneTeardown, reset_usd_cosim_prim_work);
         app.add_systems(lunco_core::SceneTeardown, reset_wiring_facts_cache);
         app.add_systems(
             lunco_core::SceneTeardown,
@@ -2436,6 +2498,68 @@ mod tests {
 
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 7);
+    }
+
+    #[test]
+    fn cosim_prim_discovery_tracks_only_unprocessed_lifecycles() {
+        let mut app = App::new();
+        app.init_resource::<PendingUsdCosimPrimWork>();
+        app.world_mut()
+            .resource_mut::<PendingUsdCosimPrimWork>()
+            .initial_discovery = false;
+        app.add_observer(queue_added_usd_cosim_prim)
+            .add_observer(forget_removed_usd_cosim_prim)
+            .add_observer(queue_removed_usd_sourced_cosim);
+
+        let unprocessed = app.world_mut().spawn(UsdPrimPath::default()).id();
+        assert!(app
+            .world()
+            .resource::<PendingUsdCosimPrimWork>()
+            .entities
+            .contains(&unprocessed));
+
+        let already_sourced = app
+            .world_mut()
+            .spawn((UsdPrimPath::default(), UsdSourcedCosim))
+            .id();
+        assert!(!app
+            .world()
+            .resource::<PendingUsdCosimPrimWork>()
+            .entities
+            .contains(&already_sourced));
+
+        app.world_mut()
+            .entity_mut(unprocessed)
+            .remove::<UsdPrimPath>();
+        assert!(!app
+            .world()
+            .resource::<PendingUsdCosimPrimWork>()
+            .entities
+            .contains(&unprocessed));
+
+        app.world_mut()
+            .entity_mut(already_sourced)
+            .remove::<UsdSourcedCosim>();
+        assert!(app
+            .world()
+            .resource::<PendingUsdCosimPrimWork>()
+            .entities
+            .contains(&already_sourced));
+    }
+
+    #[test]
+    fn scene_teardown_retires_cosim_prim_discovery_work() {
+        let mut app = App::new();
+        let mut pending = PendingUsdCosimPrimWork::default();
+        pending.entities.insert(Entity::from_bits(1));
+        app.insert_resource(pending)
+            .add_systems(lunco_core::SceneTeardown, reset_usd_cosim_prim_work);
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        let pending = app.world().resource::<PendingUsdCosimPrimWork>();
+        assert!(pending.entities.is_empty());
+        assert!(!pending.initial_discovery);
     }
 
     #[derive(Resource, Default)]

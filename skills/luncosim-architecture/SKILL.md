@@ -614,7 +614,9 @@ only roots that use that source. A root is not synthesized until every
 referenced member class has a terminal verdict, avoiding repeated graph
 extraction across asynchronous asset arrivals. Scene teardown clears the
 scene-owned reverse index and pending candidate sets; resolved member-class
-facts remain asset-owned and reusable.
+facts remain asset-owned and reusable. Cosim source discovery and Python
+readiness share one lifecycle-coalesced pending-prim set rather than probing
+all USD prims for unprocessed markers on stable updates.
 
 If zero-delay bidirectional coupling is required, move the coupled components
 into one generated Modelica root and solve the combined DAE. Do not add a Rhai

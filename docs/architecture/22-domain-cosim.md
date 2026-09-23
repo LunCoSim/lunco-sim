@@ -527,6 +527,13 @@ and identity observers, removals, live USD edits, and authority changes wake
 reconciliation; stable updates read the latch without scanning endpoint
 entities for `Added<T>` matches.
 
+Cosim prim source discovery and the Python-availability completion check share
+one coalesced pending-prim set. `UsdPrimPath` and `UsdSourcedCosim` lifecycle
+observers add or retire entity IDs; one initial sweep covers prims that existed
+before plugin installation. Both update gates then read the same pending set,
+so settled scenes do not query every USD prim each frame. Scene teardown clears
+the scene-owned work set.
+
 Domain source resolution has a separate invalidation path. Each discovered
 network root records its Modelica source assets; when a source class settles or
 changes, only roots indexed under that asset are queued for synthesis. New USD
