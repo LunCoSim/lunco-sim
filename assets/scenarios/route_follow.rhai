@@ -8,6 +8,10 @@
 // route. The authored Modelica program owns the continuous control law; this
 // policy only publishes one target setpoint when the target changes.
 
+// Declare this dependency so the asynchronous script asset graph loads it
+// before the scenario's first lifecycle hook.
+import "lunco://scripting/tools/waypoint_editor" as waypoint_editor;
+
 fn route_failure(message) {
     #{ ok: false, error: message }
 }
