@@ -510,12 +510,31 @@ def Scope "Amplifier" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 }
 ```
 
-`rewire_usd_connections` resolves each connection to ECS entities and spawns one
-`SimConnection` per resolved edge. A generated domain root's `inputs:` boundary
-is deferred until projection has installed its `ModelicaModel`: the model-arrival
-event explicitly rebuilds the derived wire cache. The connection system therefore
-waits for both entities **and** the target's runtime contract; it never creates an
-edge merely to discover on a later fixed tick that the port surface was absent.
+`rewire_usd_connections` resolves each connection to ECS entities and reconciles
+one `SimConnection` per resolved edge. Immutable USD facts are cached by stage,
+authored generation, and runtime-instance identity; Modelica membership and each
+endpoint's connection/default/transform facts are read once per cache key. A
+generated domain root's `inputs:` boundary is deferred until projection has
+installed its `ModelicaModel`: the model-arrival event rechecks wiring, while
+unchanged edge entities and binding state are retained. Changed or removed edges
+still pass through the normal lifecycle. Scene teardown clears the stage-fact
+cache. The connection system therefore waits for both entities **and** the
+target's runtime contract; it never creates an edge merely to discover on a later
+fixed tick that the port surface was absent.
+
+Domain source resolution has a separate invalidation path. Each discovered
+network root records its Modelica source assets; when a source class settles or
+changes, only roots indexed under that asset are queued for synthesis. New USD
+path/identity arrivals are discovered individually, and the domain projector is
+not entered while its root work set is empty. Candidate roots stay out of the
+projection work set until every referenced member source has a terminal class
+verdict; asset arrival waves therefore do not repeatedly traverse a partially
+resolved network. Invalid source verdicts are terminal and still reach
+synthesis so the authored error is reported. A full discovery is reserved for
+initial admission or a live stage/wiring revision that can change composed
+network membership. Scene teardown clears the reverse index and pending
+discovery/projection candidate sets; resolved member-class facts remain
+reusable because they belong to shared Modelica source assets, not a scene.
 
 The result: a multi-component, multi-language cosim is a USD edit, not
 a Rust edit. `assets/scenes/tests/cosim_chain.usda` and its Rhai scenario

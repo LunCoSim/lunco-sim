@@ -524,41 +524,67 @@ the process and port were confirmed gone. These samples are diagnostic only;
 the Apollo readiness gate remains blocked by the independent ten-body
 USD-physics-admission issue recorded above.
 
-#### 2026-08-30 generated-domain projection trigger gating
+#### 2026-09-23 USD wiring and domain-island work sets
 
-`lunco_usd_sim_domain::project_domain_islands` was approximately **1.397 ms** in
-the mixed Tracy attribution. Its own code already knew the exact lifecycle
-triggers and returned immediately on stable frames, but the production
-schedule still entered the system and constructed its large query set every
-frame. The existing trigger contract is now also the Bevy `run_if` condition:
-new prim/identity, USD wiring dirty, or member-class resolution. The internal
-guard remains the same semantic protection for direct system invocation; the
-production schedule now skips the idle system entirely.
+The domain projector is admitted only while its root projection queue is
+non-empty. Discovery and projection are separate coalesced sets: path and
+instance-identity arrivals discover only those entities; each root records the
+Modelica assets it uses; and a class asset completion or modification queues
+only dependent roots. A candidate root stays out of the projection work set
+until every member source has a terminal class verdict, so asynchronous source
+arrival does not repeatedly traverse a partially resolved network. Unrelated
+in-flight synthesis remains live. A full discovery is kept for initial
+admission and a live USD wiring revision that may change composed network
+membership.
 
-The focused `lunco-usd-sim` domain-projection tests and production build are
-the verification gate for this change. A settled Apollo rerun is still needed
-for an FPS comparison after the independent readiness issue is fixed; no FPS
-gain is claimed from the blocked run.
+#### Current generated-domain cache and measured baseline
 
-#### 2026-08-30 generated-domain projection work-set gating
+`rewire_usd_connections` caches immutable composed facts by stage asset,
+canonical generation, and runtime-instance identity. Its reconciliation still
+checks current ECS endpoint availability, but equal connections retain their
+entity and binding state; only changed or absent edges go through add/remove
+lifecycle. Stage-generation changes naturally select fresh facts, and scene
+teardown clears the wiring cache plus the scene-owned domain reverse index and
+pending discovery/projection candidate sets. Resolved Modelica class facts
+remain asset-owned and reusable across scenes.
 
-The first trigger gate exposed a second cost: while runtime instance identities
-were being minted, one `Added<GlobalEntityId>` caused the projector to walk all
-USD prims and re-run ownership resolution for each one. The projector now
-keeps the existing full pass only for `UsdWiringDirty` and member-source
-resolution, and processes only prims with an added USD path or identity for
-identity-driven work. The shared `is_domain_network_root` predicate remains
-the first composed-stage check before synthesizer selection.
+The pre-change Summer Space School Apollo High Tracy capture
+`scripts/perf/captures/summer-space-school-cpu-4210-20260923.tracy` attributes
+7.727 s (17.04%) to `project_domain_islands` across 571 calls, including one
+6.400 s invocation, and 7.216 s (15.91%) to `rewire_usd_connections` across 37
+calls (195.0 ms mean, 295.9 ms max). Before the terminal-class gate, a
+35.34-second mixed startup capture on the updated local-main base recorded
+`rewire_usd_connections` at 124 ms across 32 calls (3.87 ms mean, 99.16 ms
+max), while `project_domain_islands` ran 9 times for 5.719 s total (635 ms
+mean, 2.853 s max). The wiring result is a large reduction in composed-read
+and reconciliation time; domain projection no longer runs every frame, but
+its remaining startup calls still dominate the USD projection work.
 
-Before the work-set change, the clean 20-second Tracy capture recorded 179
-frames and `project_domain_islands` at 8.081 s total across 175 calls (46.18 ms
-mean). After it, the same production Apollo High run recorded 362 frames in
-20.29 s, reached `/api/ready`, and shut down through typed `Exit`; the dense
-1.45-million-zone trace was saved as
-`scripts/perf/captures/apollo-high-domain-targeted-20260830.tracy`. Its CSV
-decoder was not used for a post-change per-zone percentile because it exceeded
-the practical decode window, so no unobserved post-change zone timing is
-claimed. The clean runtime gate and focused `lunco-usd-sim` suite passed.
+That Tracy window also attributed 12.207 s (34.54%) to
+`avian3d::spatial_query::raycast` over 841 calls (14.51 ms mean). The app was
+not ready: `/api/ready` still reported `USD physics admission`, and another
+user-owned simulator remained active, so the observed ~32 FPS diagnostic
+average is neither a clean acceptance number nor an isolated-machine result.
+The capture is
+`scripts/perf/captures/summer-space-school-wiring-cache-main-6798d539-20260923.tracy`.
+The post-gate diagnostic capture
+`scripts/perf/captures/summer-space-school-island-settled-20260923.tracy` spans
+25.35 seconds and 39 frames. Its CSV decode was stopped after 2m40s of one-core
+CPU use while an unrelated build was active; no post-gate per-zone total is
+claimed. The run remained unready with `USD physics admission` and two pending
+EarthTracker compiles, so its frame time is not FPS acceptance. A separate clean
+20-second High-quality window that reaches readiness remains required before
+claiming a product-performance improvement.
+
+After fast-forwarding to `3a46fb4` (dynamic USD-reference admission), a second
+25.29-second Tracy run recorded 74 frames and 324,039 zones in
+`scripts/perf/captures/summer-space-school-post-main-admission-20260923.tracy`.
+The first readiness sample still had scene/physics/wiring holds; the final
+sample reached `ready=true`, `world_hold=false`, and zero pending work. Tracy
+instrumentation and two pre-existing simulator sessions (ports 37431 and 3743)
+make this diagnostic only, not clean FPS acceptance. Per-zone post-gate totals
+remain unverified; the separate clean 20-second High-quality window is still
+required.
 
 #### 2026-08-30 bounded parallel authored scene runner
 

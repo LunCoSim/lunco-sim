@@ -1,11 +1,121 @@
 use super::*;
 use lunco_usd_bevy_scene::UsdSceneAwaitingStage;
+use std::collections::HashSet;
 
-/// (as opposed to authored some other way). [`rewire_usd_connections`] despawns
-/// every tagged edge and rebuilds the set from the composed stage, which is what
-/// makes `SimConnection` a **pure derived cache** of USD wiring.
+/// (as opposed to authored some other way). [`rewire_usd_connections`] reconciles
+/// tagged edges against composed USD wiring, preserving unchanged runtime edges.
 #[derive(Component, Default)]
 pub struct UsdWiredConnection;
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct WiringFactsKey {
+    stage: bevy::asset::AssetId<UsdStageAsset>,
+    generation: u64,
+    instance: Option<u64>,
+}
+
+#[derive(Resource, Default)]
+pub(super) struct WiringFactsCache(std::collections::HashMap<WiringFactsKey, StageWiringFacts>);
+
+#[derive(Default)]
+struct StageWiringFacts {
+    modelica_members: Option<std::collections::HashSet<String>>,
+    prims: std::collections::HashMap<String, PrimWiringFacts>,
+}
+
+struct PrimWiringFacts {
+    type_name: Option<String>,
+    is_domain_root: bool,
+    attributes: Vec<AttributeWiringFacts>,
+}
+
+struct AttributeWiringFacts {
+    name: String,
+    connections: Vec<String>,
+    value: Option<f64>,
+    scale: f64,
+    offset: f64,
+    is_network_boundary_output: bool,
+    feeds_internal_network_input: bool,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct ConnectionIdentity {
+    start_element: Entity,
+    start_connector: String,
+    start_is_input: bool,
+    end_element: Entity,
+    end_connector: String,
+}
+
+struct PreviousWiredEdge {
+    entity: Entity,
+    connection: SimConnection,
+    name: Option<String>,
+}
+
+fn connection_identity(connection: &SimConnection) -> ConnectionIdentity {
+    ConnectionIdentity {
+        start_element: connection.start_element,
+        start_connector: connection.start_connector.clone(),
+        start_is_input: connection.start_is_input,
+        end_element: connection.end_element,
+        end_connector: connection.end_connector.clone(),
+    }
+}
+
+fn same_connection(left: &SimConnection, right: &SimConnection) -> bool {
+    left.start_element == right.start_element
+        && left.start_connector == right.start_connector
+        && left.start_is_input == right.start_is_input
+        && left.end_element == right.end_element
+        && left.end_connector == right.end_connector
+        && left.scale.to_bits() == right.scale.to_bits()
+        && left.offset.to_bits() == right.offset.to_bits()
+}
+
+fn read_prim_wiring_facts(view: &dyn UsdReadObject, prim: &SdfPath) -> PrimWiringFacts {
+    let type_name = view.type_name(prim);
+    let is_domain_root = lunco_usd_sim_domain::is_runtime_domain_network_root(view, prim);
+    let attributes = view
+        .attr_names(prim)
+        .into_iter()
+        .filter(|name| name.starts_with("inputs:") || name.starts_with("outputs:"))
+        .map(|name| {
+            let sink_conn = name
+                .strip_prefix("inputs:")
+                .or_else(|| name.strip_prefix("outputs:"))
+                .unwrap_or(&name);
+            let sink_conn = sink_conn.strip_suffix(".connect").unwrap_or(sink_conn);
+            let is_output = name.starts_with("outputs:");
+            AttributeWiringFacts {
+                connections: view.connections(prim, &name),
+                value: view.real(prim, &name),
+                scale: view
+                    .real(prim, &format!("lunco:factor:{sink_conn}"))
+                    .unwrap_or(1.0),
+                offset: view
+                    .real(prim, &format!("lunco:offset:{sink_conn}"))
+                    .unwrap_or(0.0),
+                is_network_boundary_output: is_domain_root
+                    && is_output
+                    && lunco_usd_bevy_core::program::is_network_boundary_output(view, prim, &name),
+                feeds_internal_network_input: is_domain_root
+                    && !is_output
+                    && lunco_usd_bevy_core::program::internal_network_input_source(
+                        view, prim, sink_conn,
+                    )
+                    .is_some(),
+                name,
+            }
+        })
+        .collect();
+    PrimWiringFacts {
+        type_name,
+        is_domain_root,
+        attributes,
+    }
+}
 
 /// Queries used by the wiring projection. Keeping them in one system parameter
 /// leaves the projection below the Bevy system-parameter arity limit while
@@ -31,7 +141,16 @@ pub(super) struct WiringQueries<'w, 's> {
             With<SimComponent>,
         )>,
     >,
-    edges: Query<'w, 's, Entity, With<UsdWiredConnection>>,
+    edges: Query<
+        'w,
+        's,
+        (
+            Entity,
+            Option<&'static SimConnection>,
+            Option<&'static Name>,
+        ),
+        With<UsdWiredConnection>,
+    >,
     global_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
     provenance: Query<'w, 's, &'static lunco_core::Provenance>,
     instance_roots: Query<'w, 's, (), With<UsdInstanceRoot>>,
@@ -55,12 +174,24 @@ pub(super) struct WiringQueries<'w, 's> {
 pub(super) fn wiring_due(
     arrivals: Query<
         (),
-        Or<(
-            Added<SimComponent>,
-            Added<lunco_port_core::OutputPorts>,
-            Added<lunco_port_core::PortSurface>,
-            Added<lunco_port_core::PortSurfaceReady>,
-        )>,
+        (
+            With<UsdPrimPath>,
+            Or<(
+                With<lunco_port_core::PortSurfaceReady>,
+                With<lunco_port_core::PortSurface>,
+                With<lunco_port_core::OutputPorts>,
+                With<SimComponent>,
+            )>,
+            Or<(
+                Added<UsdPrimPath>,
+                Added<lunco_core::GlobalEntityId>,
+                Added<UsdInstanceProjection>,
+                Added<SimComponent>,
+                Added<lunco_port_core::OutputPorts>,
+                Added<lunco_port_core::PortSurface>,
+                Added<lunco_port_core::PortSurfaceReady>,
+            )>,
+        ),
     >,
     dirty: Res<UsdWiringDirty>,
     role: Option<Res<lunco_core_session::NetworkRole>>,
@@ -236,11 +367,9 @@ pub(super) fn settle_binding_epoch(
 }
 
 /// Derive the co-sim wiring from native USD `connectionPaths`. `SimConnection`s
-/// are a **pure derived cache**: whenever the wiring
-/// topology may have changed, the whole derived set is rebuilt from the composed
-/// stage. A full rebuild (not a per-prim patch) is what makes the lifecycle
-/// correct — an edge exists exactly when *both* its endpoints do, regardless of
-/// the order they spawn or which end is removed.
+/// are a **pure derived cache**: whenever the wiring topology may have changed,
+/// desired edges are recomputed from composed USD and reconciled with existing
+/// edges. Unchanged edges retain their identity and binding state.
 ///
 /// Trigger (dormant otherwise — steady state is zero work):
 /// - **structural** — a simulation endpoint or its port surface is added or
@@ -254,14 +383,19 @@ pub(super) fn settle_binding_epoch(
 /// A connection whose source prim is not yet spawned is skipped (its later spawn
 /// re-runs this); a malformed source path is logged and skipped — restoring the
 /// diagnostic the deleted `process_usd_cosim_wire_read` emitted.
-/// Rebuild the derived USD `connectionPaths` wiring cache in a focused host.
+/// Cache entries are scoped to a composed stage generation and instance.
 ///
 /// `UsdSimCosimPlugin` installs this system as part of its normal update pipeline.
 /// This narrow installer is also useful to headless integration hosts that
 /// provide the wiring resources and want to exercise this owner without
 /// assembling the complete application plugin graph.
 pub fn install_wiring_system(app: &mut App) {
+    app.init_resource::<WiringFactsCache>();
     app.add_systems(Update, rewire_usd_connections);
+}
+
+pub(super) fn reset_wiring_facts_cache(mut cache: ResMut<WiringFactsCache>) {
+    cache.0.clear();
 }
 
 pub(super) fn rewire_usd_connections(
@@ -271,23 +405,33 @@ pub(super) fn rewire_usd_connections(
     // composition system parallel change-detection paths.
     wiring_arrivals: Query<
         (),
-        Or<(
-            // Generated networks publish their actual port surface one
-            // deferred step after `ModelicaModel` is installed. Re-run the
-            // derived USD wiring when that endpoint contract arrives; without
-            // this transition a boundary wire can be permanently absent while
-            // diagnostics quite correctly report no broken edge.
-            Added<SimComponent>,
-            Added<lunco_port_core::OutputPorts>,
-            // A generic physical surface can be installed after a broader
-            // endpoint marker (for example a rigid body) already exists. The
-            // surface itself is the authoritative transition for its named
-            // ports; do not rely on the earlier marker to trigger a rebuild.
-            Added<lunco_port_core::PortSurface>,
-            Added<lunco_port_core::PortSurfaceReady>,
-        )>,
+        (
+            With<UsdPrimPath>,
+            Or<(
+                With<lunco_port_core::PortSurfaceReady>,
+                With<lunco_port_core::PortSurface>,
+                With<lunco_port_core::OutputPorts>,
+                With<SimComponent>,
+            )>,
+            Or<(
+                // Identity can arrive after the endpoint contract during a
+                // runtime instance spawn, so it independently re-resolves the
+                // stage/path index without turning visual prim arrivals into
+                // whole-scene wiring work.
+                Added<UsdPrimPath>,
+                Added<lunco_core::GlobalEntityId>,
+                Added<UsdInstanceProjection>,
+                // Generated networks publish their public port surface after
+                // ModelicaModel; physical surfaces can also arrive later.
+                Added<SimComponent>,
+                Added<lunco_port_core::OutputPorts>,
+                Added<lunco_port_core::PortSurface>,
+                Added<lunco_port_core::PortSurfaceReady>,
+            )>,
+        ),
     >,
     mut dirty: ResMut<UsdWiringDirty>,
+    mut facts_cache: ResMut<WiringFactsCache>,
     // Wiring consumes a projected endpoint, not an initial path stub. The
     // grouped query parameter keeps this system within Bevy's arity limit;
     // the endpoint marker remains the authoritative admission contract.
@@ -340,6 +484,7 @@ pub(super) fn rewire_usd_connections(
             projection,
         )
     };
+    let mut active_cache_keys = HashSet::new();
 
     // Index every prim entity by (stage, instance, path). The stage is part of
     // prim identity: two composed USD projections may carry the same path text
@@ -413,16 +558,24 @@ pub(super) fn rewire_usd_connections(
     }
     let mut earth_direction_required = std::collections::HashSet::new();
 
-    // Network membership, per stage — see the skip below. One stage walk per
-    // rebuild, not per prim.
-    let mut members_by_stage: HashMap<
-        bevy::asset::AssetId<UsdStageAsset>,
-        std::collections::HashSet<String>,
-    > = HashMap::new();
-
-    // Rebuild: drop every derived edge, then re-derive from the composed stage.
-    for e in wiring.edges.iter() {
-        commands.entity(e).try_despawn();
+    // Reuse identical edge entities so a new endpoint does not invalidate and
+    // rebind every connection in the scene. A changed authored edge is replaced
+    // through the normal add/remove lifecycle.
+    let mut previous_edges: HashMap<ConnectionIdentity, std::collections::VecDeque<_>> =
+        HashMap::new();
+    for (entity, connection, name) in wiring.edges.iter() {
+        let Some(connection) = connection else {
+            commands.entity(entity).try_despawn();
+            continue;
+        };
+        previous_edges
+            .entry(connection_identity(connection))
+            .or_default()
+            .push_back(PreviousWiredEdge {
+                entity,
+                connection: connection.clone(),
+                name: name.map(|name| name.as_str().to_string()),
+            });
     }
 
     for (entity, prim_path, has_modelica, _, _, wheel_endpoints, projection) in
@@ -432,15 +585,41 @@ pub(super) fn rewire_usd_connections(
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
-        let (reader, _generation) = canonical.reader_for_entity(id, stage_asset, projection);
+        let sink_instance = instance_of(entity, projection);
+        let (reader, generation) = canonical.reader_for_entity(id, stage_asset, projection);
         let view: &dyn UsdReadObject = &reader;
         let Ok(sink_sdf) = SdfPath::new(&prim_path.path) else {
+            continue;
+        };
+        let cache_key = WiringFactsKey {
+            stage: id,
+            generation,
+            instance: sink_instance,
+        };
+        active_cache_keys.insert(cache_key);
+        let stage_facts = facts_cache.0.entry(cache_key).or_default();
+        if stage_facts.modelica_members.is_none() {
+            stage_facts.modelica_members = Some(
+                lunco_usd_bevy_core::program::modelica_network_member_paths(view),
+            );
+        }
+        if !stage_facts.prims.contains_key(&prim_path.path) {
+            stage_facts.prims.insert(
+                prim_path.path.clone(),
+                read_prim_wiring_facts(view, &sink_sdf),
+            );
+        }
+        let is_modelica_member = stage_facts
+            .modelica_members
+            .as_ref()
+            .is_some_and(|members| members.contains(&prim_path.path));
+        let Some(prim_facts) = stage_facts.prims.get(&prim_path.path) else {
             continue;
         };
         // `LunCoEvent.inputs:trigger` is a standard USD connection, but its
         // consumer is the event projector below rather than the scalar
         // SimConnection fabric.
-        if view.type_name(&sink_sdf).as_deref() == Some("LunCoEvent") {
+        if prim_facts.type_name.as_deref() == Some("LunCoEvent") {
             continue;
         }
         // A component inside a synthesized Modelica network: its causal AND
@@ -455,18 +634,14 @@ pub(super) fn rewire_usd_connections(
         // member has a pin: a causal-only member kept its `inputs:` wired at
         // runtime as well as compiled into the wrapper, so the equation and the
         // wire both drove it.
-        let members = members_by_stage
-            .entry(id)
-            .or_insert_with(|| lunco_usd_bevy_core::program::modelica_network_member_paths(view));
-        if members.contains(&prim_path.path) {
+        if is_modelica_member {
             continue;
         }
 
         // Resolve this prim's wires within its OWN instance — a source path names a
         // prim of the same spawn, never a same-named prim of a different one.
-        let sink_instance = instance_of(entity, projection);
-
-        for attr in view.attr_names(&sink_sdf) {
+        for attribute in &prim_facts.attributes {
+            let attr = attribute.name.as_str();
             // An `outputs:X.connect` is a FORWARD: this prim publishes an interior
             // node's result as its own X. It is how a component REPLACES a producer
             // — a Modelica drive law supplies the vessel's `drive_left`, and not one
@@ -491,7 +666,7 @@ pub(super) fn rewire_usd_connections(
             // actuator-port scan, which drops non-numeric attributes for this exact
             // reason.
             let shading_prim = matches!(
-                view.type_name(&sink_sdf).as_deref(),
+                prim_facts.type_name.as_deref(),
                 Some("Material" | "Shader" | "NodeGraph")
             );
             let forward = attr
@@ -543,8 +718,8 @@ pub(super) fn rewire_usd_connections(
             // skipping that would leave the island's demand inputs permanently
             // unwritten and every motor's electrical draw at zero.
             if attr.starts_with("outputs:")
-                && lunco_usd_sim_domain::is_runtime_domain_network_root(view, &sink_sdf)
-                && lunco_usd_bevy_core::program::is_network_boundary_output(view, &sink_sdf, &attr)
+                && prim_facts.is_domain_root
+                && attribute.is_network_boundary_output
             {
                 continue;
             }
@@ -555,18 +730,12 @@ pub(super) fn rewire_usd_connections(
             // the first fixed tick. `Added<ModelicaModel>` above re-runs this pass
             // when the contract arrives.
             if attr.starts_with("inputs:")
-                && lunco_usd_sim_domain::is_runtime_domain_network_root(view, &sink_sdf)
-                && lunco_usd_bevy_core::program::internal_network_input_source(
-                    view, &sink_sdf, sink_conn,
-                )
-                .is_some()
+                && prim_facts.is_domain_root
+                && attribute.feeds_internal_network_input
             {
                 continue;
             }
-            if attr.starts_with("inputs:")
-                && lunco_usd_sim_domain::is_runtime_domain_network_root(view, &sink_sdf)
-                && !has_modelica
-            {
+            if attr.starts_with("inputs:") && prim_facts.is_domain_root && !has_modelica {
                 continue;
             }
             // SSP `LinearTransformation`: the propagated value is `src * factor +
@@ -578,12 +747,8 @@ pub(super) fn rewire_usd_connections(
             // Tolerant of `float` or `double` authoring — a wire naturally matches
             // the `float`-typed port it scales, so a strict `double` read would
             // silently drop the transform.
-            let scale = view
-                .real(&sink_sdf, &format!("lunco:factor:{sink_conn}"))
-                .unwrap_or(1.0);
-            let offset = view
-                .real(&sink_sdf, &format!("lunco:offset:{sink_conn}"))
-                .unwrap_or(0.0);
+            let scale = attribute.scale;
+            let offset = attribute.offset;
 
             // A PARAMETER IS AN INPUT WITH A CONSTANT INSTEAD OF A CONNECTION.
             // An `inputs:` port with no wire into it is authored data — `float
@@ -591,13 +756,13 @@ pub(super) fn rewire_usd_connections(
             // parameters. Collected here (the one pass that already enumerates
             // every `inputs:` port with the composed reader in hand) and applied
             // by `seed_usd_input_defaults` once the model exists.
-            let sources = view.connections(&sink_sdf, &attr);
+            let sources = &attribute.connections;
             if sources.is_empty() {
                 // An unconnected `outputs:` is just a declared port, not a parameter.
                 if forward.is_some() {
                     continue;
                 }
-                if let Some(v) = view.real(&sink_sdf, &attr) {
+                if let Some(v) = attribute.value {
                     defaults
                         .entry(entity)
                         .or_default()
@@ -803,22 +968,36 @@ pub(super) fn rewire_usd_connections(
                     );
                     continue;
                 };
+                let connection = SimConnection {
+                    start_element,
+                    start_connector: src_conn.to_string(),
+                    start_is_input,
+                    end_element,
+                    end_connector,
+                    scale,
+                    offset,
+                };
+                let name = format!("UsdWire {src} -> {}.{sink_conn}", prim_path.path);
+                let identity = connection_identity(&connection);
+                if let Some(previous) = previous_edges
+                    .get_mut(&identity)
+                    .and_then(std::collections::VecDeque::pop_front)
+                {
+                    if same_connection(&previous.connection, &connection)
+                        && previous.name.as_deref() == Some(name.as_str())
+                    {
+                        continue;
+                    }
+                    commands.entity(previous.entity).try_despawn();
+                }
                 commands.spawn((
-                    SimConnection {
-                        start_element,
-                        start_connector: src_conn.to_string(),
-                        start_is_input,
-                        end_element,
-                        end_connector,
-                        scale,
-                        offset,
-                    },
+                    connection,
                     UsdWiredConnection,
                     // Keep the immutable USD fact on the derived runtime edge.
                     // The generic binder has no USD dependency, but its terminal
                     // diagnostics still need to name the authored source and
                     // sink that must be repaired.
-                    Name::new(format!("UsdWire {src} -> {}.{sink_conn}", prim_path.path)),
+                    Name::new(name),
                     // A derived edge is a pure cache of USD wiring — every peer
                     // re-derives it from the same stage, so it must never carry
                     // network identity. `Local` makes that ownership explicit;
@@ -831,6 +1010,16 @@ pub(super) fn rewire_usd_connections(
             }
         }
     }
+
+    for edges in previous_edges.into_values() {
+        for edge in edges {
+            commands.entity(edge.entity).try_despawn();
+        }
+    }
+
+    facts_cache
+        .0
+        .retain(|key, _| active_cache_keys.contains(key));
 
     // Publish the authored parameters — but ONLY where they changed. This runs on
     // every structural change (any prim spawning anywhere re-runs the whole pass),

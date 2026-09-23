@@ -920,10 +920,12 @@ the full vehicle projector.
 **`lunco-usd-sim-cosim`**
 USD-to-cosim translator. `UsdSimCosimPlugin` installs source discovery,
 wiring, readiness, telemetry projection, and the Modelica/script participant
-exchange independently from vehicle realization. Generic scene commands and
-mount/teardown mechanics live in `lunco-usd-bevy-runtime-core`; `sync` owns
-the fixed-step port exchange and authored event projection. Its optional API
-query providers live in `lunco-usd-sim-cosim-api`.
+exchange independently from vehicle realization. Wiring facts are cached by
+composed generation and instance, with unchanged runtime edges retained across
+unrelated endpoint arrivals. Generic scene commands and mount/teardown
+mechanics live in `lunco-usd-bevy-runtime-core`; `sync` owns the fixed-step
+port exchange and authored event projection. Its optional API query providers
+live in `lunco-usd-sim-cosim-api`.
 
 **`lunco-usd-sim-cosim-api`**
 Optional API query providers for the cosimulation runtime: uniform ports,
@@ -934,11 +936,13 @@ alongside the runtime; default cosimulation hosts do not inherit its direct
 
 **`lunco-usd-sim-domain`**
 Render-free USD domain projection. It reads composed component-network facts,
-resolves Modelica member classes, invokes authored Rhai synthesizers, and
-publishes generated Modelica sources. Generic force/torque actuator lowering
-belongs to `lunco-usd-actuation`, while USD wiring and participant lifecycle belong
-to `lunco-usd-sim-cosim`. Optional generated-source API queries are provided by
-the separate `lunco-usd-sim-domain-api` package.
+resolves Modelica member classes through a source-to-root dependency index,
+waits for all referenced classes to settle before synthesis, invokes authored
+Rhai synthesizers, and publishes generated Modelica sources.
+Generic force/torque actuator lowering belongs to `lunco-usd-actuation`, while
+USD wiring and participant lifecycle belong to `lunco-usd-sim-cosim`. Optional
+generated-source API queries are provided by the separate
+`lunco-usd-sim-domain-api` package.
 
 **`lunco-usd-sim-domain-api`**
 Optional API query providers for the generated Modelica source projection. The

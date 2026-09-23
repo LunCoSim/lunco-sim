@@ -67,8 +67,8 @@ mod wiring;
 use wiring::{
     causal_participants_changed, derive_causal_barrier_participants, forget_binding_model_status,
     mark_wiring_dirty_on_remove, request_binding_epoch, request_binding_epoch_on_model_change,
-    request_binding_epoch_on_remove, rewire_usd_connections, settle_binding_epoch, wiring_due,
-    BindingModelStatuses,
+    request_binding_epoch_on_remove, reset_wiring_facts_cache, rewire_usd_connections,
+    settle_binding_epoch, wiring_due, BindingModelStatuses, WiringFactsCache,
 };
 pub use wiring::{
     install_wiring_system, modelica_models_terminal, BindingEpochWait, UsdWiredConnection,
@@ -2086,15 +2086,20 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<BindingModelStatuses>()
             .init_resource::<PythonUnavailablePrograms>()
             .init_resource::<lunco_usd_sim_domain::MemberClasses>()
-            .init_resource::<lunco_usd_sim_domain::ProjectionDirty>()
+            .init_resource::<lunco_usd_sim_domain::DomainClassUsers>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjectionCandidates>()
+            .init_resource::<WiringFactsCache>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>();
         app.add_observer(request_binding_epoch::<UsdPrimPath>)
             .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_prim)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_identity)
+            .add_observer(lunco_usd_sim_domain::queue_removed_domain_identity)
+            .add_observer(lunco_usd_sim_domain::queue_added_domain_instance_projection)
+            .add_observer(lunco_usd_sim_domain::queue_removed_domain_instance_projection)
+            .add_observer(lunco_usd_sim_domain::forget_domain_projection_entity)
             // Link port names are derived from the classes of the other authored
             // LinkNodes. A node arriving after its wire must therefore reopen the
             // same binding transaction as any other projected endpoint.
@@ -2201,6 +2206,11 @@ impl Plugin for UsdSimCosimPlugin {
             report_python_unavailable.after(CosimUpdateSet::Scene),
         );
         app.add_systems(lunco_core::SceneTeardown, reset_python_unavailable);
+        app.add_systems(lunco_core::SceneTeardown, reset_wiring_facts_cache);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            lunco_usd_sim_domain::reset_scene_projection_work,
+        );
         app.add_systems(
             lunco_core::SceneTeardown,
             reset_usd_telemetry_projection_index,
@@ -2208,7 +2218,9 @@ impl Plugin for UsdSimCosimPlugin {
 
         app.add_systems(
             Update,
-            lunco_usd_sim_domain::project_domain_islands.in_set(CosimUpdateSet::Projection),
+            lunco_usd_sim_domain::project_domain_islands
+                .run_if(lunco_usd_sim_domain::domain_projection_due)
+                .in_set(CosimUpdateSet::Projection),
         );
         app.add_systems(
             Update,

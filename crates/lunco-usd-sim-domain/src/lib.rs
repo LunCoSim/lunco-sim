@@ -256,29 +256,103 @@ pub struct PendingDomainProjections {
     tasks: Vec<PendingDomainProjection>,
 }
 
-/// Entity-level projection arrivals, coalesced by Bevy lifecycle observers.
-/// A full scan is retained for a host that installs the projector after its
-/// initial USD entities already exist.
+/// Domain-root candidates discovered from USD entity and source lifecycles.
+/// Discovery and projection are separate queues so settled class assets can
+/// reproject only the networks that use them.
 #[derive(Resource)]
 pub struct PendingDomainProjectionCandidates {
-    entities: HashSet<Entity>,
-    initial_scan: bool,
+    discovery: HashSet<Entity>,
+    projection: HashSet<Entity>,
+    initial_discovery: bool,
 }
 
 impl Default for PendingDomainProjectionCandidates {
     fn default() -> Self {
         Self {
-            entities: HashSet::new(),
-            initial_scan: true,
+            discovery: HashSet::new(),
+            projection: HashSet::new(),
+            initial_discovery: true,
         }
     }
+}
+
+impl PendingDomainProjectionCandidates {
+    pub fn has_projection_work(&self) -> bool {
+        !self.projection.is_empty()
+    }
+
+    fn reset_for_scene(&mut self) {
+        *self = Self::default();
+    }
+}
+
+pub fn domain_projection_due(candidates: Res<PendingDomainProjectionCandidates>) -> bool {
+    candidates.has_projection_work()
+}
+
+/// Reverse index from a Modelica source asset to the domain roots that depend
+/// on its declared class. Source completion then invalidates those roots only.
+#[derive(Resource, Default)]
+pub struct DomainClassUsers {
+    roots_by_asset: HashMap<String, HashSet<Entity>>,
+    assets_by_root: HashMap<Entity, HashSet<String>>,
+}
+
+impl DomainClassUsers {
+    fn root_sources_settled(&self, root: Entity, classes: &MemberClasses) -> bool {
+        self.assets_by_root
+            .get(&root)
+            .is_none_or(|assets| assets.iter().all(|asset| classes.known.contains_key(asset)))
+    }
+
+    fn replace_root_assets(&mut self, root: Entity, assets: HashSet<String>) {
+        self.remove_root(root);
+        for asset in &assets {
+            self.roots_by_asset
+                .entry(asset.clone())
+                .or_default()
+                .insert(root);
+        }
+        if !assets.is_empty() {
+            self.assets_by_root.insert(root, assets);
+        }
+    }
+
+    fn remove_root(&mut self, root: Entity) {
+        let Some(assets) = self.assets_by_root.remove(&root) else {
+            return;
+        };
+        for asset in assets {
+            if let Some(roots) = self.roots_by_asset.get_mut(&asset) {
+                roots.remove(&root);
+                if roots.is_empty() {
+                    self.roots_by_asset.remove(&asset);
+                }
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.roots_by_asset.clear();
+        self.assets_by_root.clear();
+    }
+}
+
+/// Retire scene-owned discovery state before a replacement scene is admitted.
+/// Resolved Modelica class facts remain cached because they are asset-owned.
+pub fn reset_scene_projection_work(
+    mut users: ResMut<DomainClassUsers>,
+    mut candidates: ResMut<PendingDomainProjectionCandidates>,
+) {
+    users.clear();
+    candidates.reset_for_scene();
 }
 
 pub fn queue_added_domain_prim(
     trigger: On<Add, UsdPrimPath>,
     mut pending: ResMut<PendingDomainProjectionCandidates>,
 ) {
-    pending.entities.insert(trigger.entity);
+    pending.discovery.insert(trigger.entity);
 }
 
 pub fn queue_added_domain_identity(
@@ -287,8 +361,48 @@ pub fn queue_added_domain_identity(
     mut pending: ResMut<PendingDomainProjectionCandidates>,
 ) {
     if prims.contains(trigger.entity) {
-        pending.entities.insert(trigger.entity);
+        pending.discovery.insert(trigger.entity);
     }
+}
+
+pub fn queue_added_domain_instance_projection(
+    trigger: On<Add, UsdInstanceProjection>,
+    prims: Query<(), With<UsdPrimPath>>,
+    mut pending: ResMut<PendingDomainProjectionCandidates>,
+) {
+    if prims.contains(trigger.entity) {
+        pending.discovery.insert(trigger.entity);
+    }
+}
+
+pub fn queue_removed_domain_identity(
+    trigger: On<Remove, lunco_core::GlobalEntityId>,
+    prims: Query<(), With<UsdPrimPath>>,
+    mut pending: ResMut<PendingDomainProjectionCandidates>,
+) {
+    if prims.contains(trigger.entity) {
+        pending.discovery.insert(trigger.entity);
+    }
+}
+
+pub fn queue_removed_domain_instance_projection(
+    trigger: On<Remove, UsdInstanceProjection>,
+    prims: Query<(), With<UsdPrimPath>>,
+    mut pending: ResMut<PendingDomainProjectionCandidates>,
+) {
+    if prims.contains(trigger.entity) {
+        pending.discovery.insert(trigger.entity);
+    }
+}
+
+pub fn forget_domain_projection_entity(
+    trigger: On<Remove, UsdPrimPath>,
+    mut users: ResMut<DomainClassUsers>,
+    mut pending: ResMut<PendingDomainProjectionCandidates>,
+) {
+    users.remove_root(trigger.entity);
+    pending.discovery.remove(&trigger.entity);
+    pending.projection.remove(&trigger.entity);
 }
 
 fn queue_domain_projection(
@@ -596,57 +710,41 @@ pub fn project_domain_islands(
     q_instance_member: Query<(), With<lunco_usd_bevy_stage::UsdInstanceMember>>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
-    dirty: Res<lunco_usd_bevy_stage::UsdWiringDirty>,
-    // A member class landing is the projector's third trigger: the networks that
-    // returned `Pending` have to be re-asked, and no prim spawned or changed.
-    mut projection: ParamSet<(ResMut<ProjectionDirty>, ResMut<PendingDomainProjections>)>,
+    mut pending: ResMut<PendingDomainProjections>,
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
+    class_users: Res<DomainClassUsers>,
     classes: Res<MemberClasses>,
     registry: Res<SynthesizerRegistry>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
     let Some(channels) = channels else { return };
-    let has_added_projection_entity = candidates.initial_scan || !candidates.entities.is_empty();
-    let full_reprojection = {
-        let mut projection_dirty = projection.p0();
-        if !projection_is_due_from_flags(has_added_projection_entity, dirty.0, projection_dirty.0) {
-            return;
-        }
-        // Identity assignment is per prim during a runtime-instance spawn. Do
-        // not turn one descendant's identity transition into a re-synthesis of
-        // every existing prim: ordinary identity arrivals are coalesced by the
-        // lifecycle observers below, while wiring/source invalidation explicitly
-        // broadens the work to a full stage projection.
-        let full_reprojection = dirty.0 || projection_dirty.0 || candidates.initial_scan;
-        projection_dirty.0 = false;
-        full_reprojection
-    };
-    candidates.initial_scan = false;
+    if candidates.projection.is_empty() {
+        return;
+    }
     let started = web_time::Instant::now();
     let mut projected = 0usize;
-    let mut pending = projection.p1();
-    if full_reprojection {
-        // A pending task captured the previous class/source and wiring view.
-        // Drop it before queuing the new transaction; otherwise a late
-        // `Pending` result can consume the invalidation and leave the network
-        // without another trigger. The task owns no mutable world state, so
-        // cancellation is the complete invalidation operation.
-        pending.tasks.clear();
-    }
-    let candidates: Vec<_> = if full_reprojection {
-        candidates.entities.clear();
-        prims.iter().collect()
-    } else {
-        let mut entities: Vec<_> = candidates.entities.drain().collect();
-        entities.sort_unstable();
-        entities
-            .into_iter()
-            .filter_map(|entity| prims.get(entity).ok())
-            .collect()
-    };
-    for (entity, prim, previous, installed_model, instance_projection) in candidates {
+    let mut candidate_entities: Vec<_> = candidates.projection.drain().collect();
+    candidate_entities.sort_unstable();
+    let candidate_set: HashSet<_> = candidate_entities.iter().copied().collect();
+    // Invalidate only in-flight synthesis for roots whose source view changed.
+    // Unrelated network tasks remain valid and continue without restarting.
+    pending
+        .tasks
+        .retain(|task| !candidate_set.contains(&task.entity));
+    for entity in candidate_entities {
+        let Ok((entity, prim, previous, installed_model, instance_projection)) = prims.get(entity)
+        else {
+            continue;
+        };
         if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
+            continue;
+        }
+        // Source asset arrivals invalidate their dependent roots individually.
+        // Do not run graph extraction for a partially loaded network: the
+        // synthesizer would return Pending after traversing the same USD graph,
+        // then repeat that work for each remaining class arrival.
+        if !class_users.root_sources_settled(entity, &classes) {
             continue;
         }
         // Scope every authored path to the same USD instance as the generated
@@ -1418,20 +1516,6 @@ impl MemberClasses {
     }
 }
 
-/// Set when a member class resolves, so the projection that was waiting on it
-/// re-runs. Prim spawn and live edits are the projector's other triggers; the
-/// asset event is the resolution trigger for a pending source.
-#[derive(Resource, Default)]
-pub struct ProjectionDirty(pub bool);
-
-fn projection_is_due_from_flags(
-    has_added_projection_entity: bool,
-    wiring_dirty: bool,
-    projection_dirty: bool,
-) -> bool {
-    has_added_projection_entity || wiring_dirty || projection_dirty
-}
-
 /// Resolve every member source's DECLARED class before synthesis.
 ///
 /// Scans the stage for component collections, loads each member's
@@ -1451,9 +1535,9 @@ pub fn resolve_member_classes(
         Query<&ChildOf>,
         Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     ),
-    added: Query<(), Added<UsdPrimPath>>,
     mut classes: ResMut<MemberClasses>,
-    mut projection_dirty: ResMut<ProjectionDirty>,
+    mut class_users: ResMut<DomainClassUsers>,
+    mut candidates: ResMut<PendingDomainProjectionCandidates>,
     dirty: Res<lunco_usd_bevy_stage::UsdWiringDirty>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
@@ -1479,7 +1563,8 @@ pub fn resolve_member_classes(
         .read()
         .map(|event| (event.id, event.error.to_string()))
         .collect();
-    let discover = !added.is_empty() || dirty.0;
+    let full_discovery = candidates.initial_discovery || dirty.0;
+    let discover = full_discovery || !candidates.discovery.is_empty();
     if !discover && loaded.is_empty() && modified.is_empty() && failed.is_empty() {
         return;
     }
@@ -1500,8 +1585,22 @@ pub fn resolve_member_classes(
         classes.pending.insert(asset, handle);
     }
     if discover {
-        for (entity, prim, instance_projection) in &prims {
+        let discovery_entities: Vec<_> = if full_discovery {
+            class_users.clear();
+            candidates.discovery.clear();
+            candidates.initial_discovery = false;
+            prims.iter().collect()
+        } else {
+            let mut entities: Vec<_> = candidates.discovery.drain().collect();
+            entities.sort_unstable();
+            entities
+                .into_iter()
+                .filter_map(|entity| prims.get(entity).ok())
+                .collect()
+        };
+        for (entity, prim, instance_projection) in discovery_entities {
             if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
+                class_users.remove_root(entity);
                 continue;
             }
             let id = prim.stage_handle.id();
@@ -1515,11 +1614,14 @@ pub fn resolve_member_classes(
                 continue;
             };
             if !is_runtime_domain_network_root(view, &root) {
+                class_users.remove_root(entity);
                 continue;
             }
             let Ok(members) = view.collection_members(&root, "components") else {
+                class_users.remove_root(entity);
                 continue;
             };
+            let mut source_assets = HashSet::new();
             for member in members {
                 if !view.has_api_schema(&member, "LunCoProgramAPI") {
                     continue;
@@ -1535,6 +1637,7 @@ pub fn resolve_member_classes(
                     }
                 };
                 let asset = source_ref.asset;
+                source_assets.insert(asset.clone());
                 if classes.known.contains_key(&asset) || classes.pending.contains_key(&asset) {
                     continue;
                 }
@@ -1543,6 +1646,8 @@ pub fn resolve_member_classes(
                 classes.handles.insert(asset.clone(), handle.clone());
                 classes.pending.insert(asset, handle);
             }
+            class_users.replace_root_assets(entity, source_assets);
+            candidates.projection.insert(entity);
         }
     }
 
@@ -1564,7 +1669,11 @@ pub fn resolve_member_classes(
         .iter()
         .filter_map(|(asset, handle)| {
             let id = handle.id();
-            if !discovered.contains(&id) && !loaded.contains(&id) && !failed.contains_key(&id) {
+            if !discovered.contains(&id)
+                && !loaded.contains(&id)
+                && !modified.contains(&id)
+                && !failed.contains_key(&id)
+            {
                 return None;
             }
             if let Some(source) = sources.get(handle) {
@@ -1602,17 +1711,28 @@ pub fn resolve_member_classes(
             Ok((class, outputs, metadata)) => {
                 classes.outputs.insert(asset.clone(), outputs);
                 classes.metadata.insert(asset.clone(), metadata);
-                classes.known.insert(asset, MemberClass::Declared(class));
+                classes
+                    .known
+                    .insert(asset.clone(), MemberClass::Declared(class));
             }
             Err(error) => {
                 warn!("[domain-projection] {asset}: {error}");
-                classes.known.insert(asset, MemberClass::Invalid(error));
+                classes
+                    .known
+                    .insert(asset.clone(), MemberClass::Invalid(error));
             }
         }
-        // The projection that was waiting on this member has no other reason to
-        // re-run: an asset load is neither a prim spawn nor a USD edit.
-        projection_dirty.0 = true;
+        if let Some(roots) = class_users.roots_by_asset.get(&asset) {
+            candidates.projection.extend(roots.iter().copied());
+        }
     }
+    // A network's declared member classes are a single synthesis input. Keep
+    // its root queued until every referenced source has a terminal verdict so
+    // the projector runs once with a complete class set, not once per asset
+    // arrival while the rest of the network is still pending.
+    candidates
+        .projection
+        .retain(|root| class_users.root_sources_settled(*root, &classes));
 }
 
 #[cfg(test)]
@@ -1621,22 +1741,90 @@ mod tests {
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
 
     #[test]
-    fn domain_projection_schedule_requires_an_authoring_trigger() {
-        assert!(!projection_is_due_from_flags(false, false, false));
-        assert!(projection_is_due_from_flags(true, false, false));
-        assert!(projection_is_due_from_flags(false, true, false));
-        assert!(projection_is_due_from_flags(false, false, true));
+    fn source_class_users_invalidate_only_dependent_roots() {
+        let mut users = DomainClassUsers::default();
+        let motor = Entity::from_bits(1);
+        let battery = Entity::from_bits(2);
+        users.replace_root_assets(
+            motor,
+            HashSet::from(["motor.mo".to_string(), "battery.mo".to_string()]),
+        );
+        users.replace_root_assets(battery, HashSet::from(["battery.mo".to_string()]));
+
+        assert_eq!(users.roots_by_asset["motor.mo"], HashSet::from([motor]));
+        assert_eq!(
+            users.roots_by_asset["battery.mo"],
+            HashSet::from([motor, battery])
+        );
+
+        users.replace_root_assets(motor, HashSet::from(["motor.mo".to_string()]));
+        assert_eq!(users.roots_by_asset["battery.mo"], HashSet::from([battery]));
+
+        users.remove_root(motor);
+        assert!(!users.roots_by_asset.contains_key("motor.mo"));
+        assert_eq!(users.roots_by_asset["battery.mo"], HashSet::from([battery]));
     }
 
     #[test]
-    fn projection_observers_coalesce_usd_path_and_identity_arrivals() {
+    fn domain_projection_waits_for_every_member_class_verdict() {
+        let root = Entity::from_bits(3);
+        let mut users = DomainClassUsers::default();
+        users.replace_root_assets(
+            root,
+            HashSet::from(["motor.mo".to_string(), "battery.mo".to_string()]),
+        );
+        let mut classes = MemberClasses::default();
+
+        assert!(!users.root_sources_settled(root, &classes));
+        classes.declare("motor.mo", "LunCo.Electrical.Motor");
+        assert!(!users.root_sources_settled(root, &classes));
+        classes.reject("battery.mo", "source asset did not declare a class");
+        assert!(users.root_sources_settled(root, &classes));
+    }
+
+    #[test]
+    fn scene_teardown_resets_domain_projection_work_but_not_asset_class_facts() {
+        let mut app = App::new();
+        let root = Entity::from_bits(4);
+        let mut users = DomainClassUsers::default();
+        users.replace_root_assets(root, HashSet::from(["motor.mo".to_string()]));
+        let mut candidates = PendingDomainProjectionCandidates::default();
+        candidates.initial_discovery = false;
+        candidates.discovery.insert(root);
+        candidates.projection.insert(root);
+        let mut classes = MemberClasses::default();
+        classes.declare("motor.mo", "LunCo.Electrical.Motor");
+
+        app.insert_resource(users)
+            .insert_resource(candidates)
+            .insert_resource(classes)
+            .add_systems(Update, reset_scene_projection_work);
+        app.update();
+
+        let users = app.world().resource::<DomainClassUsers>();
+        assert!(users.roots_by_asset.is_empty());
+        assert!(users.assets_by_root.is_empty());
+        let candidates = app.world().resource::<PendingDomainProjectionCandidates>();
+        assert!(candidates.discovery.is_empty());
+        assert!(candidates.projection.is_empty());
+        assert!(candidates.initial_discovery);
+        assert_eq!(
+            app.world().resource::<MemberClasses>().resolve("motor.mo"),
+            Ok(Some("LunCo.Electrical.Motor".into()))
+        );
+    }
+
+    #[test]
+    fn domain_discovery_observers_coalesce_path_and_identity_arrivals() {
         let mut app = App::new();
         app.insert_resource(PendingDomainProjectionCandidates {
-            entities: HashSet::new(),
-            initial_scan: false,
+            discovery: HashSet::new(),
+            projection: HashSet::new(),
+            initial_discovery: false,
         })
         .add_observer(queue_added_domain_prim)
-        .add_observer(queue_added_domain_identity);
+        .add_observer(queue_added_domain_identity)
+        .add_observer(queue_removed_domain_identity);
 
         let entity = app
             .world_mut()
@@ -1652,8 +1840,22 @@ mod tests {
             .spawn(lunco_core::GlobalEntityId::from_raw(13));
 
         let pending = app.world().resource::<PendingDomainProjectionCandidates>();
-        assert_eq!(pending.entities.len(), 1);
-        assert!(pending.entities.contains(&entity));
+        assert_eq!(pending.discovery.len(), 1);
+        assert!(pending.discovery.contains(&entity));
+        assert!(pending.projection.is_empty());
+
+        app.world_mut()
+            .resource_mut::<PendingDomainProjectionCandidates>()
+            .discovery
+            .clear();
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<lunco_core::GlobalEntityId>();
+        assert!(app
+            .world()
+            .resource::<PendingDomainProjectionCandidates>()
+            .discovery
+            .contains(&entity));
     }
 
     fn component(path: &str, target: Option<&str>) -> DomainComponent {

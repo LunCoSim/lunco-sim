@@ -604,6 +604,15 @@ and equivalent domain connectors) inside the root whose solver owns their
 algebraic equations. A typed scalar USD connection between two roots is causal
 and may have a macro-step or one-step delay. It is not an acausal `connect()`.
 
+USD connection projection caches immutable endpoint facts by composed-stage
+generation and runtime-instance identity. Reconciliation retains unchanged
+`SimConnection` entities and bindings; edited edges use the normal add/remove
+lifecycle. Domain source-class completion invalidates only roots that use that
+source. A root is not synthesized until every referenced member class has a
+terminal verdict, avoiding repeated graph extraction across asynchronous asset
+arrivals. Scene teardown clears the scene-owned reverse index and pending
+candidate sets; resolved member-class facts remain asset-owned and reusable.
+
 If zero-delay bidirectional coupling is required, move the coupled components
 into one generated Modelica root and solve the combined DAE. Do not add a Rhai
 polling loop, duplicate state, or hidden cross-root fallback. Automatic island
