@@ -78,6 +78,35 @@ fn distance(a, b) {
     vlen(vsub(a, b))
 }
 
+/// Transform a point by a planar rigid rotation about Z and a translation.
+/// Coordinates keep the caller's length unit; the angle is in radians.
+fn planar_rigid_transform_point(origin, local_point, rotation_rad) {
+    if !vec3_is_finite(origin) || !vec3_is_finite(local_point)
+        || f64_from(rotation_rad) == () {
+        return ();
+    }
+    let cosine = cos(rotation_rad);
+    let sine = sin(rotation_rad);
+    let x = vcomponent(origin, 0)
+        + vcomponent(local_point, 0) * cosine
+        - vcomponent(local_point, 1) * sine;
+    let y = vcomponent(origin, 1)
+        + vcomponent(local_point, 0) * sine
+        + vcomponent(local_point, 1) * cosine;
+    vec3(x, y, vcomponent(origin, 2) + vcomponent(local_point, 2))
+}
+
+/// Return the travel-direction offset that miter-cuts a slab edge so its toe
+/// face becomes horizontal after a planar Z rotation. `thickness` and the
+/// returned run use the caller's length unit; the angle is in radians.
+fn planar_horizontal_face_bevel_run(thickness, rotation_rad) {
+    if !_finite_scalar(thickness) || thickness <= 0.0
+        || !_finite_scalar(rotation_rad) { return (); }
+    let sine = sin(rotation_rad).abs();
+    if sine == 0.0 { return (); }
+    thickness * cos(rotation_rad).abs() / sine
+}
+
 fn distance_requirement(a, b, expected, tolerance) {
     let actual = distance(a, b);
     if actual == () || !_finite_scalar(expected) { return (); }

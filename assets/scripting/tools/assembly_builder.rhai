@@ -1032,39 +1032,44 @@ fn _mesh_int_array(values, label) {
     literal + "]"
 }
 
-// Build a small native UsdGeomMesh from typed topology arrays.  This is the
-// generic escape hatch for faceted panels and housings that cannot be
-// represented honestly by a Cube primitive; callers still submit the result
-// through assembly_edit::batch and the normal USD authoring journal.
-fn mesh_shape_plan(edit_target, parent, name, points, face_counts,
-                   face_indices, color, collision_enabled) {
-    if edit_target == () || parent == () || name == () || name == ""
-        || name.contains("/") {
-        return plan_error("mesh_shape_plan requires an edit target, parent path, and name");
-    }
-    if !parent.starts_with("/") || parent.ends_with("/") && parent != "/" {
-        return plan_error("mesh_shape_plan parent must be an absolute USD path");
-    }
+fn _mesh_shape_attribute_ops(edit_target, shape, points, face_counts,
+                             face_indices, color, collision_enabled,
+                             collision_approximation) {
     if points == () || points.len() == 0 || face_counts == () || face_counts.len() == 0
         || face_indices == () || face_indices.len() == 0 {
-        return plan_error("mesh_shape_plan requires non-empty points and face topology");
+        return plan_error("mesh geometry requires non-empty points and face topology");
     }
     if color == () || color.len() != 3 {
-        return plan_error("mesh_shape_plan color must have three components");
+        return plan_error("mesh geometry color must have three components");
     }
-    let shape = if parent == "/" { "/" + name } else { parent + "/" + name };
-    let ops = [#{ AddPrim: #{
-        edit_target: edit_target,
-        parent_path: parent,
-        name: name,
-        type_name: "Mesh",
-        reference: (),
-        reference_prim_path: "",
-    }}];
-    ops.push(#{ SetAttribute: #{
+    if type_of(collision_enabled) != "bool" {
+        return plan_error("mesh collision state must be boolean");
+    }
+    let index_count = 0;
+    for count in face_counts {
+        if type_of(count) != "i64" || count < 3 {
+            return plan_error("mesh faces must contain at least three vertices");
+        }
+        index_count += count;
+    }
+    if index_count != face_indices.len() {
+        return plan_error("mesh face counts do not match the index array");
+    }
+    for index in face_indices {
+        if type_of(index) != "i64" || index < 0 || index >= points.len() {
+            return plan_error("mesh face index is outside the point array");
+        }
+    }
+    if collision_approximation != ()
+        && collision_approximation != "convexHull"
+        && collision_approximation != "convexDecomposition"
+        && collision_approximation != "none" {
+        return plan_error("unsupported USD mesh collision approximation");
+    }
+    let ops = [#{ SetAttribute: #{
         edit_target: edit_target, path: shape, name: "points",
         type_name: "point3f[]", value: _mesh_tuple3_array(points, "mesh points"),
-    }});
+    }}];
     ops.push(#{ SetAttribute: #{
         edit_target: edit_target, path: shape, name: "faceVertexCounts",
         type_name: "int[]", value: _mesh_int_array(face_counts, "face counts"),
@@ -1089,10 +1094,64 @@ fn mesh_shape_plan(edit_target, parent, name, points, face_counts,
         edit_target: edit_target, path: shape, schemas: ["PhysicsCollisionAPI"],
     }});
     ops.push(#{ SetAttribute: #{
-        edit_target: edit_target, path: shape, name: "physics:collisionEnabled",
-        type_name: "bool", value: collision_enabled.to_string(),
+        edit_target: edit_target, path: shape,
+        name: "physics:collisionEnabled", type_name: "bool",
+        value: collision_enabled.to_string(),
     }});
+    if collision_approximation != () {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: shape,
+            name: "physics:approximation", type_name: "token",
+            value: "\"" + collision_approximation + "\"",
+        }});
+    }
+    #{ok: true, ops: ops}
+}
+
+// Build a small native UsdGeomMesh from typed topology arrays.  This is the
+// generic escape hatch for faceted panels and housings that cannot be
+// represented honestly by a Cube primitive; callers still submit the result
+// through assembly_edit::batch and the normal USD authoring journal.
+fn mesh_shape_plan(edit_target, parent, name, points, face_counts,
+                   face_indices, color, collision_enabled) {
+    if edit_target == () || parent == () || name == () || name == ""
+        || name.contains("/") {
+        return plan_error("mesh_shape_plan requires an edit target, parent path, and name");
+    }
+    if !parent.starts_with("/") || parent.ends_with("/") && parent != "/" {
+        return plan_error("mesh_shape_plan parent must be an absolute USD path");
+    }
+    let shape = if parent == "/" { "/" + name } else { parent + "/" + name };
+    let ops = [#{ AddPrim: #{
+        edit_target: edit_target,
+        parent_path: parent,
+        name: name,
+        type_name: "Mesh",
+        reference: (),
+        reference_prim_path: "",
+    }}];
+    let attributes = _mesh_shape_attribute_ops(edit_target, shape, points,
+        face_counts, face_indices, color, collision_enabled, ());
+    if !attributes.ok { return attributes; }
+    for op in attributes.ops { ops.push(op); }
     #{ ok: true, kind: "mesh_shape", path: shape, ops: ops }
+}
+
+/// Update geometry on an existing Mesh through the same typed authoring
+/// journal as mesh creation. The shared serializer and topology validation
+/// keep create/update behavior aligned for generic assembly tooling.
+fn mesh_shape_update_plan(edit_target, path, points, face_counts,
+                          face_indices, color, collision_enabled,
+                          collision_approximation) {
+    if edit_target == () || path == () || !path.starts_with("/")
+        || path == "/" || path.ends_with("/") {
+        return plan_error("mesh_shape_update_plan requires an edit target and absolute mesh path");
+    }
+    let attributes = _mesh_shape_attribute_ops(edit_target, path, points,
+        face_counts, face_indices, color, collision_enabled,
+        collision_approximation);
+    if !attributes.ok { return attributes; }
+    #{ok: true, kind: "mesh_shape_update", path: path, ops: attributes.ops}
 }
 
 fn _cylinder_extent_literal(radius, height, axis) {

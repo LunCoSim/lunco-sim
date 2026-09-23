@@ -42,6 +42,17 @@ pub struct ObjectAabb {
     pub max: bevy::math::DVec3,
 }
 
+/// Exact composed points for one supported collision shape, in canonical
+/// stage coordinates. Mesh points are the authored convex-hull input; Cube
+/// points are its eight transformed corners. Other primitive types must use
+/// their own exact support-map provider rather than treating an AABB as shape.
+#[derive(Clone, Debug)]
+pub struct PrimCollisionGeometry {
+    pub type_name: String,
+    pub approximation: Option<String>,
+    pub vertices: Vec<[f64; 3]>,
+}
+
 /// A composed collision tree could not provide a trustworthy placement AABB.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CollisionAabbError {
@@ -155,6 +166,74 @@ pub fn collision_aabb(
         }
     }
     Ok(acc.map(|(min, max)| ObjectAabb { min, max }))
+}
+
+/// Read the exact transformed points for one collision Mesh or Cube. This is
+/// intended for geometric interface checks that need more than an aggregate
+/// AABB. Mesh vertices alone describe the selected convex-hull approximation;
+/// callers must inspect `approximation` and reject unsupported representations.
+pub fn prim_collision_geometry(
+    reader: &StageView<'_>,
+    prim_path: &str,
+) -> Result<Option<PrimCollisionGeometry>, CollisionAabbError> {
+    let path = SdfPath::new(prim_path)
+        .map_err(|_| CollisionAabbError::InvalidRootPath(prim_path.to_owned()))?;
+    if !UsdReadObject::has_prim(reader, &path)
+        || !UsdReadObject::is_active(reader, &path)
+        || !UsdReadObject::has_api_schema(
+            reader,
+            &path,
+            openusd::schemas::physics::tokens::API_COLLISION,
+        )
+        || effective_purpose(reader, &path) == Purpose::Guide
+    {
+        return Ok(None);
+    }
+    match UsdReadObject::boolean(reader, &path, "physics:collisionEnabled") {
+        Some(false) => return Ok(None),
+        Some(true) | None if !UsdReadObject::has_authored_attribute(
+            reader,
+            &path,
+            "physics:collisionEnabled",
+        ) => {}
+        Some(true) => {}
+        None => {
+            return Err(CollisionAabbError::InvalidCollisionEnabled {
+                prim: prim_path.to_owned(),
+            });
+        }
+    }
+    let type_name = UsdReadObject::type_name(reader, &path).unwrap_or_default();
+    if type_name != "Mesh" && type_name != "Cube" {
+        return Err(CollisionAabbError::MalformedPrimitive {
+            prim: prim_path.to_owned(),
+            type_name,
+        });
+    }
+    let local = local_shape_corners(reader, &path, &type_name).ok_or_else(|| {
+        CollisionAabbError::MalformedPrimitive {
+            prim: prim_path.to_owned(),
+            type_name: type_name.clone(),
+        }
+    })?;
+    let transform = geometry_world_transform(reader, &path)?;
+    let vertices = local
+        .into_iter()
+        .map(|point| {
+            let world = transform.transform_point(point.as_vec3()).as_dvec3();
+            [world.x, world.y, world.z]
+        })
+        .collect();
+    let approximation = if type_name == "Cube" {
+        Some("primitive".to_owned())
+    } else {
+        UsdReadObject::text(reader, &path, "physics:approximation")
+    };
+    Ok(Some(PrimCollisionGeometry {
+        type_name,
+        approximation,
+        vertices,
+    }))
 }
 
 /// Derive the composed geometry AABB of one USD shape prim in canonical stage

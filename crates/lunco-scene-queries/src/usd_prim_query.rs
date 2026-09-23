@@ -32,6 +32,11 @@
 //! `lunco_usd_bevy_scene::collision::collision_aabb` reader, so nested compound
 //! ownership, standard shape dimensions, purpose filtering, transforms, and
 //! malformed-data errors have one owner for API, Rhai, and other consumers.
+//! A request with `collision_geometry: true` adds exact composed vertices for
+//! one collision Mesh or Cube in canonical stage coordinates. This is the
+//! shape-level surface for interface checks that cannot be established by
+//! overlapping AABBs alone. Mesh results include the authored collision
+//! approximation; callers must reject approximations they cannot interpret.
 //! A request with `geometry_bounds: true` adds the selected prim's composed
 //! geometry AABB, including render-only shapes. This is the dimension-checking
 //! primitive for visual requirements; callers do not need to reconstruct
@@ -56,6 +61,7 @@
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "attrs": ["radius", "points"]}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "rels": ["lunco:mount:attachmentJoint"]}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"doc_id": 7, "path": "…", "collision_bounds": true}}
+//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"doc_id": 7, "path": "…", "collision_geometry": true}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "geometry_bounds": true}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "topology": true}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "relationships": true, "connections": true, "schemas": true}}
@@ -75,7 +81,9 @@ use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_authoring::author::open_doc_stage;
-use lunco_usd_bevy_scene::collision::{collision_aabb, prim_geometry_aabb, ObjectAabb};
+use lunco_usd_bevy_scene::collision::{
+    collision_aabb, prim_collision_geometry, prim_geometry_aabb, ObjectAabb,
+};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_usd_bevy_stage::read::UsdRead;
@@ -461,6 +469,7 @@ type PrimRead = (
     Option<ApiValue>,
     Option<ApiValue>,
     Option<ApiValue>,
+    Option<ApiValue>,
 );
 
 /// The read switches shared by the single- and multi-prim query surfaces.
@@ -476,6 +485,7 @@ struct UsdPrimQueryOptions {
     include_schemas: bool,
     include_children: bool,
     include_collision_bounds: bool,
+    include_collision_geometry: bool,
     include_geometry_bounds: bool,
     include_topology: bool,
 }
@@ -491,6 +501,7 @@ fn query_options(params: &ApiValue) -> Result<UsdPrimQueryOptions, ApiQueryError
         include_schemas: optional_bool(params, "schemas")?,
         include_children: optional_bool(params, "children")?,
         include_collision_bounds: optional_bool(params, "collision_bounds")?,
+        include_collision_geometry: optional_bool(params, "collision_geometry")?,
         include_geometry_bounds: optional_bool(params, "geometry_bounds")?,
         include_topology: optional_bool(params, "topology")?,
     })
@@ -632,6 +643,7 @@ fn query_record_value(
         children,
         active,
         collision_bounds,
+        collision_geometry,
         geometry_bounds,
         topology,
     ) = read;
@@ -677,6 +689,12 @@ fn query_record_value(
         out.push((
             "collision_bounds".to_string(),
             collision_bounds.unwrap_or(ApiValue::Unit),
+        ));
+    }
+    if options.include_collision_geometry {
+        out.push((
+            "collision_geometry".to_string(),
+            collision_geometry.unwrap_or(ApiValue::Unit),
         ));
     }
     if options.include_geometry_bounds {
@@ -812,6 +830,7 @@ fn execute_query_paths(
                     options.include_schemas,
                     options.include_children,
                     options.include_collision_bounds,
+                    options.include_collision_geometry,
                     options.include_geometry_bounds,
                     options.include_topology,
                     doc,
@@ -889,6 +908,7 @@ fn read_prim_from_view(
     include_schemas: bool,
     include_children: bool,
     include_collision_bounds: bool,
+    include_collision_geometry: bool,
     include_geometry_bounds: bool,
     include_topology: bool,
     doc: Option<DocumentId>,
@@ -943,6 +963,32 @@ fn read_prim_from_view(
             Err(error) => {
                 return Err(format!(
                     "QueryUsdPrim: invalid collision bounds at `{path}`: {error}"
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    let collision_geometry = if include_collision_geometry {
+        match prim_collision_geometry(view, path) {
+            Ok(Some(geometry)) => {
+                let vertices = geometry
+                    .vertices
+                    .iter()
+                    .map(|point| api_value!([point[0], point[1], point[2]]))
+                    .collect::<Vec<_>>();
+                Some(api_value!({
+                    "type_name": geometry.type_name,
+                    "approximation": geometry.approximation,
+                    "vertices": ApiValue::Array(vertices),
+                    "frame": "canonical_stage",
+                }))
+            }
+            Ok(None) => Some(ApiValue::Unit),
+            Err(error) => {
+                return Err(format!(
+                    "QueryUsdPrim: invalid collision geometry at `{path}`: {error}"
                 ));
             }
         }
@@ -1009,12 +1055,13 @@ fn read_prim_from_view(
         children,
         view.is_active(prim),
         collision_bounds,
+        collision_geometry,
         geometry_bounds,
         topology,
     )))
 }
 
-/// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds?, geometry_bounds?, topology? }`
+/// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds?, collision_geometry?, geometry_bounds?, topology? }`
 /// → composed attributes, active state, requested relationships, optional
 /// direct children, optional aggregate collision bounds, optional scoped
 /// topology facts, and world pose.
@@ -1052,7 +1099,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
     }
 }
 
-/// `QueryUsdPrims { doc_id?, paths, attrs?, rels?, children?, collision_bounds?, geometry_bounds?, topology? }`
+/// `QueryUsdPrims { doc_id?, paths, attrs?, rels?, children?, collision_bounds?, collision_geometry?, geometry_bounds?, topology? }`
 /// → the same records as `QueryUsdPrim`, read from one composed-stage snapshot.
 ///
 /// This is the preferred surface for authored verification and Editor

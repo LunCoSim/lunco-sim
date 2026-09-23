@@ -77,6 +77,14 @@ fn attribute_equals(id, component, requirement, verification, path, attr, expect
       attr: attr, expected: expected}
 }
 
+fn array_component(id, component, requirement, verification, path, attr,
+                   index_path, expected, tolerance) {
+    #{id: id, component: component, requirement: _short_identity(requirement),
+      verification: _short_identity(verification), kind: "attribute_component",
+      path: path, attr: attr, index_path: index_path,
+      expected: expected, tolerance: tolerance}
+}
+
 fn extent_component(id, component, requirement, verification, path, index,
                     expected_attr, multiplier, tolerance) {
     #{id: id, component: component, requirement: _short_identity(requirement),
@@ -91,6 +99,14 @@ fn bounds_component(id, component, requirement, verification, path, index,
       verification: _short_identity(verification), kind: "bounds_component", path: path,
       index: index, multiplier: multiplier, expected_attr: expected_attr,
       tolerance: tolerance}
+}
+
+fn collision_bounds_component(id, component, requirement, verification, path,
+                              index, expected_attr, multiplier, tolerance) {
+    let check = bounds_component(id, component, requirement, verification,
+        path, index, expected_attr, multiplier, tolerance);
+    check.representation = "collision";
+    check
 }
 
 fn source_list_count(id, component, requirement, verification, list_attr, count_attr) {

@@ -835,14 +835,22 @@ fn _check_one(report, check, indexes, model) {
     if check.kind == "attribute_component" {
         let actual_record = _query(check.path, [check.attr], check.doc_id);
         if !_ok(actual_record) || actual_record.attrs[check.attr] == () {
-            return _failure(check, "USD vector attribute " + check.attr + " is missing");
+            return _failure(check, "USD array attribute " + check.attr + " is missing");
         }
-        let vector = actual_record.attrs[check.attr];
-        if check.index == () || vector.len() <= check.index { return _failure(check, "USD vector component is missing"); }
+        let actual = actual_record.attrs[check.attr];
+        let indices = if check.index_path != () { check.index_path }
+            else if check.index != () { [check.index] } else { [] };
+        if indices.len() == 0 { return _failure(check, "USD array component path is missing"); }
+        for index in indices {
+            if type_of(actual) != "array" || index < 0 || actual.len() <= index {
+                return _failure(check, "USD array component is missing");
+            }
+            actual = actual[index];
+        }
         let expected = expected_result.value;
         let tolerance = if check.tolerance == () { 0.001 } else { check.tolerance };
-        if !_close(vector[check.index], expected, tolerance) { return _failure(check, "USD vector component disagrees with SysML expected value"); }
-        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, doc_id: check.doc_id, actual: vector[check.index], expected: expected};
+        if !_close(actual, expected, tolerance) { return _failure(check, "USD array component disagrees with expected value"); }
+        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, doc_id: check.doc_id, actual: actual, expected: expected};
     }
     if check.kind == "extent_component" {
         let actual_record = _query(check.path, ["size", "xformOp:scale"], check.doc_id);
@@ -865,16 +873,22 @@ fn _check_one(report, check, indexes, model) {
         return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, doc_id: check.doc_id, actual: actual, expected: expected};
     }
     if check.kind == "bounds_component" {
-        let request = #{path: check.path, geometry_bounds: true};
+        let is_collision = check.representation == "collision";
+        let representation = if is_collision { "collision_bounds" }
+            else { "geometry_bounds" };
+        let representation_label = if is_collision { "collision" } else { "geometry" };
+        let request = #{path: check.path};
+        if representation == "collision_bounds" { request.collision_bounds = true; }
+        else { request.geometry_bounds = true; }
         if check.doc_id != () { request.doc_id = check.doc_id; }
         let actual_record = query("QueryUsdPrim", request);
-        if !_ok(actual_record) || actual_record.geometry_bounds == () {
-            return _failure(check, "composed USD geometry bounds are missing");
+        if !_ok(actual_record) || actual_record[representation] == () {
+            return _failure(check, "composed USD " + representation_label + " bounds are missing");
         }
-        let bounds = actual_record.geometry_bounds;
+        let bounds = actual_record[representation];
         if bounds == () || bounds.half_extents == ()
             || check.index == () || bounds.half_extents.len() <= check.index {
-            return _failure(check, "composed USD geometry bounds component is missing");
+            return _failure(check, "composed USD bounds component is missing");
         }
         let multiplier = if check.multiplier == () { 1.0 } else { check.multiplier };
         let actual = bounds.half_extents[check.index] * multiplier;
@@ -884,11 +898,12 @@ fn _check_one(report, check, indexes, model) {
         if !_close(actual, expected, tolerance) {
             return #{ok: false, id: check.id, component: check.component,
                 requirement: check.requirement, path: check.path, doc_id: check.doc_id,
-                error: "composed USD geometry bound disagrees with SysML expected value",
+                error: "composed USD bound disagrees with SysML expected value",
                 actual: actual, expected: expected, tolerance: tolerance};
         }
         return #{ok: true, id: check.id, component: check.component, requirement: check.requirement,
-            path: check.path, doc_id: check.doc_id, actual: actual, expected: expected};
+            path: check.path, doc_id: check.doc_id, representation: representation,
+            actual: actual, expected: expected};
     }
     if check.kind == "attribute_equals" {
         let actual_record = _query(check.path, [check.attr], check.doc_id);
