@@ -55,6 +55,10 @@ stage-generation and asset-store invalidation as scalar checks. Do not repeat
 the same `Added`/`Changed` population filters in both the run condition and the
 projector, and do not reproject until the index is invalidated.
 
+When a USD reader already exposes `has_authored_attribute`, use it to test one
+known property instead of enumerating every attribute name. If one enumeration
+feeds multiple derived port sets, derive them together from that single result.
+
 Keep invalidation domains distinct: a wiring/topology latch may be raised by
 endpoint arrivals and must not automatically trigger whole-stage domain
 discovery. Use the canonical stage generation or authored-stage asset change

@@ -1568,18 +1568,21 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 message: "actuator-wrench collection contains no force actuators".into(),
             }]);
         }
-        let inputs: BTreeSet<String> = view
-            .attr_names(root)
-            .into_iter()
-            .filter_map(|attr| attr.strip_prefix("inputs:").map(strip_connection_suffix))
-            .filter(|name| !name.is_empty())
-            .collect();
-        let outputs: BTreeSet<String> = view
-            .attr_names(root)
-            .into_iter()
-            .filter_map(|attr| attr.strip_prefix("outputs:").map(strip_connection_suffix))
-            .filter(|name| !name.is_empty())
-            .collect();
+        let mut inputs = BTreeSet::new();
+        let mut outputs = BTreeSet::new();
+        for attr in view.attr_names(root) {
+            if let Some(name) = attr.strip_prefix("inputs:") {
+                let name = strip_connection_suffix(name);
+                if !name.is_empty() {
+                    inputs.insert(name);
+                }
+            } else if let Some(name) = attr.strip_prefix("outputs:") {
+                let name = strip_connection_suffix(name);
+                if !name.is_empty() {
+                    outputs.insert(name);
+                }
+            }
+        }
         for name in inputs.iter().chain(outputs.iter()) {
             if !is_modelica_identifier(name) {
                 return Err(vec![DomainProjectionError {
