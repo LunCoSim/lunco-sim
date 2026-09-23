@@ -6,6 +6,8 @@
 //! the conversion anchor (tick ↔ epoch), the transport (play/pause/rate), the
 //! derived causal [`WorldTime`] view, and the interpolated
 //! [`SimulationPresentationTime`] used by render-only consumers.
+//! Celestial render projection uses an explicit [`CelestialTime`] sample from
+//! the shared clock tree, separate from causal simulation time.
 //!
 //! The load-bearing rule is invariant 1 — **derive, never accumulate**. The
 //! calendar epoch is `epoch0 + (tick − tick0)/86400`, a pure function of the
@@ -46,6 +48,10 @@ pub const SECS_PER_DAY: f64 = 86_400.0;
 /// it are rejected by [`SetTimeTransport`](crate::SetTimeTransport), so every
 /// accepted live rate advances the causal simulation.
 pub const MAX_REALTIME_RATE: f64 = 64.0;
+
+/// Highest user-selectable rate for the presentation-only celestial clock.
+/// This clock never advances physics, co-simulation, or causal world state.
+pub const MAX_CELESTIAL_TIME_RATE: f64 = 100_000.0;
 
 /// The slowest selectable live transport rate. Pause is represented by
 /// [`TransportMode::Paused`], so an accepted rate is always positive.
@@ -514,6 +520,20 @@ pub struct WorldTime {
     pub met_secs: f64,
 }
 
+/// Calendar sample published from the resolved celestial clock-tree domain.
+///
+/// By default this follows mission elapsed time. A user may re-parent it to wall
+/// time and rate-scale it for a presentation time-lapse; causal simulation and
+/// physical `SunState` continue to use [`WorldTime`].
+#[derive(Resource, Debug, Clone, Copy, Default, Reflect)]
+#[reflect(Resource)]
+pub struct CelestialTime {
+    /// Presentation epoch (Julian Date, TDB).
+    pub epoch_jd: f64,
+    /// Seconds advanced by the celestial clock this frame.
+    pub delta_secs: f64,
+}
+
 /// Render-time sample interpolated between completed physical ticks.
 ///
 /// `sim_tick` is `completed_tick - 1 + overstep_fraction`, clamped to the
@@ -689,8 +709,8 @@ fn project_time_transport(
 /// and presentation interpolation. Scene epoch selection belongs to the
 /// required `scene.time.select` Rhai policy; the settled USD owner submits its
 /// validated decision through [`ApplySceneTimeSelection`]. Add once
-/// (guarded callers use [`App::is_plugin_added`]). Every consumer reads
-/// `WorldTime`.
+/// (guarded callers use [`App::is_plugin_added`]). Causal consumers read
+/// [`WorldTime`]; celestial presentation receives its separate clock-tree sample.
 pub struct TimePlugin;
 
 impl Plugin for TimePlugin {
@@ -717,11 +737,13 @@ impl Plugin for TimePlugin {
             .init_resource::<lunco_core::RuntimeFaults>()
             .init_resource::<PendingScenePause>()
             .init_resource::<WorldTime>()
+            .init_resource::<CelestialTime>()
             .init_resource::<SimulationPresentationTime>()
             .register_type::<MissionClock>()
             .register_type::<lunco_core_runtime::SimulationExecutionMode>()
             .register_type::<TimeTransport>()
             .register_type::<WorldTime>()
+            .register_type::<CelestialTime>()
             .register_type::<SimulationPresentationTime>()
             .configure_sets(
                 PostUpdate,

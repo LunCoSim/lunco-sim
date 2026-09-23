@@ -41,7 +41,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
 | **`lunco-settings`** | Centralised user-settings: one JSON file (`<OS config dir>/lunco/settings.json`), namespaced sections, auto-persist on change; also owns the shared `DownloadSettings` retry/backoff policy. |
 | **`lunco-theme`** | Centralized design tokens (Catppuccin-based) for consistent UI across all panels and domains. |
-| **`lunco-time`** | Unified mission-time spine (architecture doc 19): `MissionClock`/`TimeTransport`/causal `WorldTime`, interpolated `SimulationPresentationTime`, explicitly bound `TimeDomain` preview transport, and the `scales` projection layer over `celestial-time`. |
+| **`lunco-time`** | Unified mission-time spine (architecture doc 19): `MissionClock`/`TimeTransport`/causal `WorldTime`, interpolated `SimulationPresentationTime`, epoch-rooted `CelestialTime` with a presentation-only 100,000× clock control, explicitly bound `TimeDomain` preview transport, and the `scales` projection layer over `celestial-time`. |
 | **`lunco-worker-transport`** | Generic Web Worker pool transport (wasm-only): spawn / lazy-grow, boot wire-id handshake, byte + Transferable-`ArrayBuffer` post, crash respawn. Payload-agnostic (the caller supplies decode/route callbacks); shared by the Modelica Fast-Run workers and the DEM bake worker so neither reimplements the plumbing. |
 | **`lunco-status-core`** | Renderer-independent lifecycle, progress, and status infrastructure: `StatusBus`, scoped busy handles, tracked tasks, discrete diagnostics, and telemetry mirroring. Consumers such as the workbench status bar, busy widgets, and headless diagnostics read the same contract. |
 
@@ -55,7 +55,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | **`lunco-celestial`** | Headless celestial semantics: canonical body catalog/NAIF identities, ephemeris contracts, typed f64 frame transforms, geodesy, body rotation, and Kepler propagation. |
 | **`lunco-celestial-data`** | Dependency-free authoritative celestial constants shared by semantic and asset-processing packages without making the general core depend on the celestial domain. |
 | **`lunco-celestial-spatial-core`** | Lightweight Bevy/BigSpace contracts shared by celestial consumers: semantic frame lookup, canonical surface poses, surface axes, scene body declarations, orbital-view state, cached local-gravity facts, celestial Sun presentation state, and render-independent connectivity state. |
-| **`lunco-celestial-spatial`** | Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, physical-time globe and Sun projection, render-only body-fixed marker copies, links, cadence, and runtime celestial commands. |
+| **`lunco-celestial-spatial`** | Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, celestial-clock globe and Sun projection, render-only body-fixed marker copies, links, cadence, and runtime celestial commands. |
 | **`lunco-celestial-ephemeris`** | Analytic natural-body ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
 | **`lunco-terrain-core`** | Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde), shared by both the planar DEM streamer and the cube-sphere planetary tiler. |
@@ -341,7 +341,7 @@ after `LunCoCoreRuntimePlugin`; headless consumers that only need core
 primitives do not compile this policy layer.
 
 **`lunco-time`**
-The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/causal `WorldTime`, `SimulationPresentationTime` (interpolated between completed physical ticks), explicitly bound `TimeDomain` previews (`Playback`, `TimeBinding`, `ResolvedDomains`, `ControlAnimation`), and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**
+The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/causal `WorldTime`, `SimulationPresentationTime` (interpolated between completed physical ticks), `CelestialTime` (epoch-rooted render clock with a separate 100,000× ceiling), explicitly bound `TimeDomain` previews (`Playback`, `TimeBinding`, `ResolvedDomains`, `ControlAnimation`), and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**
 
 **`lunco-doc`**
 Foundation for structured, mutable artifacts (Modelica, USD, etc.) with built-in undo/redo logic. Defines the `DocumentHost` container and the atomic `DocumentOp` pattern for state mutation and inversion.

@@ -11,7 +11,7 @@ use lunco_celestial_spatial_core::{
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::{pose_in_grid, world_position_seeded};
-use lunco_time::{SimulationPresentationTime, WorldTime};
+use lunco_time::{CelestialTime, WorldTime};
 
 use crate::big_space_setup::CelestialPresentationGrid;
 
@@ -86,7 +86,7 @@ fn presentation_observer_inputs_changed(
 }
 
 pub fn presentation_celestial_frame_system(
-    presentation_time: Res<SimulationPresentationTime>,
+    celestial_time: Res<CelestialTime>,
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
@@ -127,9 +127,9 @@ pub fn presentation_celestial_frame_system(
                     pose_in_grid(camera, solar_grid, &q_parents, &q_grids, &presentation.p2())?.0;
                 let body_sky = ephemeris
                     .provider
-                    .global_position(surface_pose.body, presentation_time.epoch_jd)?;
+                    .global_position(surface_pose.body, celestial_time.epoch_jd)?;
                 let sky_rotation =
-                    lunco_celestial::geo::body_rotation(body, presentation_time.epoch_jd);
+                    lunco_celestial::geo::body_rotation(body, celestial_time.epoch_jd);
                 let world_rotation = lunco_celestial::geo::body_rotation(body, world.epoch_jd);
                 let camera_sky = ecliptic_to_bevy(body_sky).raw()
                     + sky_rotation * surface_pose.body_fixed_position.0;
@@ -142,7 +142,7 @@ pub fn presentation_celestial_frame_system(
     for (frame, mut cell, mut tf, child_of) in &mut presentation.p0() {
         let Some(rel_pos_au) = ephemeris
             .provider
-            .position(frame.body, presentation_time.epoch_jd)
+            .position(frame.body, celestial_time.epoch_jd)
         else {
             // The causal branch follows the same data contract: no ephemeris
             // means no new pose. Never substitute the parent's origin.
@@ -179,8 +179,7 @@ pub fn presentation_celestial_frame_system(
             continue;
         };
         if frame.body_fixed && desc.spins() {
-            let next =
-                lunco_celestial::geo::body_rotation(desc, presentation_time.epoch_jd).as_quat();
+            let next = lunco_celestial::geo::body_rotation(desc, celestial_time.epoch_jd).as_quat();
             if tf.rotation != next {
                 tf.rotation = next;
             }
@@ -188,11 +187,11 @@ pub fn presentation_celestial_frame_system(
     }
 }
 
-/// Project the interpolated physical-time solar direction into the active camera's view frame.
+/// Project the celestial-clock solar direction into the active camera's view frame.
 /// The sky shader consumes view-space rays, so this conversion avoids mixing its
 /// camera-relative render frame with BigSpace's floating-origin world frame.
 pub fn presentation_sun_system(
-    presentation_time: Res<SimulationPresentationTime>,
+    celestial_time: Res<CelestialTime>,
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
@@ -231,10 +230,10 @@ pub fn presentation_sun_system(
         return;
     };
 
-    let Some(sun_au) = ephemeris.provider.global_position(
-        lunco_celestial::ephemeris_id::SUN,
-        presentation_time.epoch_jd,
-    ) else {
+    let Some(sun_au) = ephemeris
+        .provider
+        .global_position(lunco_celestial::ephemeris_id::SUN, celestial_time.epoch_jd)
+    else {
         sun_presentation.clear();
         return;
     };
@@ -246,14 +245,14 @@ pub fn presentation_sun_system(
         };
         let Some(body_au) = ephemeris
             .provider
-            .global_position(surface_pose.body, presentation_time.epoch_jd)
+            .global_position(surface_pose.body, celestial_time.epoch_jd)
         else {
             sun_presentation.clear();
             return;
         };
         let body_position = ecliptic_to_bevy(body_au).raw();
         let body_rotation_at_sky =
-            lunco_celestial::geo::body_rotation(body, presentation_time.epoch_jd);
+            lunco_celestial::geo::body_rotation(body, celestial_time.epoch_jd);
         let to_sun_in_body_fixed = body_rotation_at_sky.inverse() * (sun_position - body_position)
             - surface_pose.body_fixed_position.0;
         let distance = to_sun_in_body_fixed.length();

@@ -85,9 +85,9 @@ fn on_tick(me, ctx) {
     this.checks.push(t_moved(travel, 1.0,
         "standard USD Orion motion with physical time"));
     this.checks.push(t_moved(abs(tdb_elapsed_s), 1.0,
-        "celestial TDB epoch with physical time"));
+        "mission TDB epoch with physical time"));
     this.checks.push(t_max(abs(tdb_elapsed_s - elapsed_sim_s), 0.01,
-        "celestial epoch follows the physical clock"));
+        "mission epoch follows the physical clock"));
 
     this.checks.push(t_max(abs(this.mission_epoch0_jd - NASA_START_TDB_JD), 0.000000001,
         "scene mission epoch"));

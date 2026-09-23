@@ -92,6 +92,11 @@ between completed physical ticks and holds while transport is paused. Do not
 introduce a mission-specific trajectory component or independent clock for
 motion already represented by USD animation.
 
+Celestial body ephemerides are not ordinary USD animation: their render-only
+frames and solar projection read `lunco_time::CelestialTime`. That clock follows
+the mission epoch by default and can be rate-scaled up to 100,000× for sky
+presentation without advancing physical bodies, terrain, or Avian state.
+
 For the local kinematic avatar, use the existing Avian `MoveAndSlide` query in
 `ActivePhysicsFrame`: convert the source Grid pose, displacement, and up vector
 with `grid_transform_between_grids`, perform one shape move, and convert the

@@ -80,8 +80,8 @@ pub(crate) fn sky_clock_visible(settings: Option<Res<OverlaySettings>>) -> bool 
     settings.is_some_and(|s| s.sky_clock)
 }
 
-/// Contribute the sky-time readout and visibility preference to the workbench
-/// Time menu.
+/// Contribute the celestial clock controls and visibility preference to the
+/// workbench Time menu.
 ///
 /// Registered at `Startup`; a no-op when the workbench layout is absent (headless
 /// runs, `luncosim test`), which is why it takes `&mut World` and bails rather than
@@ -108,8 +108,8 @@ pub(crate) fn register_time_menu(world: &mut World) {
         let original = edited;
         ui.checkbox(&mut edited.sky_clock, "Time HUD (top-left)")
             .on_hover_text(
-                "Show the floating sky-time readout. Time follows the physical \
-                 simulation and remains available in this menu when the HUD is hidden.",
+                "Show the floating sky-clock controls. They remain available in \
+                 the Time menu when the HUD is hidden.",
             );
         if edited != original {
             ctx.set_resource(edited);

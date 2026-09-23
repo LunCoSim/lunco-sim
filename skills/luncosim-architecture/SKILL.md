@@ -148,6 +148,9 @@ body projection and cadence belong to `lunco-celestial-spatial`; ordinary
 moving scene objects use standard USD `timeSamples` through
 `lunco-usd-bevy-animation`. Do not create a mission-only trajectory component
 or clock when composed USD animation expresses the motion.
+Celestial ephemeris presentation uses the shared `lunco-time::CelestialTime`
+domain, which may be rate-scaled up to 100,000× without advancing causal world
+state.
 
 ### Runtime scopes, cycles, and publication boundaries
 
