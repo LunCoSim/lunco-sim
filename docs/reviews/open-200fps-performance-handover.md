@@ -154,21 +154,25 @@ been recorded yet.
 
 ## Root-cause hypothesis, ranked by evidence
 
-### 1. BigSpace propagation creates a full worker/channel scope every frame
+### 1. Active BigSpace propagation passes create a worker/channel scope
 
 The locked BigSpace dependency is the Bevy 0.19 branch at revision
 `5f255228e9b4…`, checked out locally under Cargo's git checkout. Its
 `Grid::propagate_high_precision_channeled` implementation obtains the Bevy
-`ComputeTaskPool`, creates a channel and task scope every frame, starts one
-high-precision worker per compute thread, and dispatches grid work through that
-scope.
+`ComputeTaskPool`, creates a channel and task scope per invocation, starts
+high-precision worker tasks on that pool, and dispatches grid work through that
+scope. These are task-pool jobs, not newly created operating-system threads.
+Since 2026-09-05, the application gates the BigSpace sets and skips settled
+frames; the dependency cost described by the older capture applies to active
+propagation passes, not every render frame.
 
-On the reference host, the default Bevy policy exposes 24 compute workers on a
-32-logical-thread machine. The result is a settled world that repeatedly pays
-worker creation, channel coordination, producer/consumer scheduling, and
-cache/CPU contention even when the hierarchy has not materially changed. Tracy
-directly attributes the largest self-time to `hp_propagation_worker` and
-`hp_propagation_producer`, making this the first optimization target.
+The 2026-08-28 Tracy capture came from a reference host where the default Bevy
+policy exposed 24 compute workers on a 32-logical-thread machine. It directly
+attributed substantial self-time to `hp_propagation_worker` and
+`hp_propagation_producer`. That historical profile predates application-level
+admission and does not establish the current cost or FPS contribution. Active
+passes still pay the dependency's worker/channel coordination, so this remains
+an upstream optimization candidate to measure against the current app.
 
 The earlier local experiment in the main checkout capped the default compute
 policy at 8 workers while preserving the explicit deterministic thread count
@@ -177,15 +181,16 @@ but it was **not accepted as an improvement**: no clean post-change comparison
 was completed. The experiment is therefore not part of this `usd` handover
 branch.
 
-The durable fix belongs at the BigSpace propagation owner. The application must
-not clone the dependency's plugin into a second local implementation or add a
-main-only special case that changes physics/render semantics. Preferred design
-work, in order:
+The application-owned admission gate handles unchanged frames without
+duplicating propagation. Any further reduction of active-pass cost belongs at
+the BigSpace propagation owner; the application must not clone the dependency's
+plugin into a second local implementation or change physics/render semantics.
+Preferred upstream work, in order:
 
-1. Add or adopt an upstream propagation path that checks the authoritative
-   floating-origin and `GridDirtyTick` inputs, plus the actual high-precision
-   children, before spawning a worker scope. A clean hierarchy must return
-   without creating consumers, channels, or producer tasks.
+1. Add or adopt an upstream active-pass path that limits worker dispatch to
+   changed grids/subtrees before creating consumers, channels, or producer
+   tasks; preserve BigSpace's authoritative floating-origin and `GridDirtyTick`
+   semantics.
 2. Replace per-frame fan-out with a persistent, bounded worker mechanism whose
    scheduling contract is explicit and measurable.
 3. Preserve the existing dirty-tick, nested-grid, floating-origin, and
@@ -692,6 +697,21 @@ handover Tracy attribution still identifies BigSpace propagation fan-out as a
 prior CPU owner, with render preparation, PBR preparation, and presentation
 work remaining in the frame budget. A clean no-Tracy A/B remains the product
 performance evidence; profiler overhead is diagnostic only.
+
+#### 2026-09-23 local-origin settle admission
+
+The application gate now treats BigSpace's per-computation
+`is_local_origin_unchanged` flag as output rather than a persistent high-
+precision invalidation input. A real floating-origin cell change admits both
+the local-origin and high-precision passes; the local-origin gate admits one
+follow-up computation to settle that flag, while high precision stays closed
+unless an authoritative spatial input changes. This prevents the changed flag
+from reopening high-precision propagation indefinitely and preserves the
+required origin-settle pass. The pending settle is recorded after an admitted
+origin pass, so idle admission does not scan every grid. A focused headless
+schedule regression covers origin change, settle, and stable idle frames. No
+current clean-FPS or Tracy comparison has been recorded, so no runtime speedup
+is claimed.
 
 #### 2026-08-30 connectivity projection scheduler gating
 

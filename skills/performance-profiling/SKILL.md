@@ -33,6 +33,13 @@ structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
 
+When gating a dependency's multi-system transform schedule, distinguish its
+per-update output flags from authoritative input changes. Preserve any required
+settle pass after a floating-origin change, and test the change → settle → idle
+sequence so a gate neither stays open forever nor closes before propagation.
+Keep the settle marker between admitted passes so the idle admission check does
+not replace expensive propagation with a full-grid scan.
+
 For physics, distinguish persistent environmental state from transient
 commands: use the engine's persistent acceleration or passive non-waking force
 contract for gravity and contact support, and reserve waking force/torque writes

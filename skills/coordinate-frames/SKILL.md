@@ -44,6 +44,14 @@ camera, avatar, physics tile, or any entity that can mutate `CellCoord`,
 `Transform`, or `ChildOf`. Remove `Stationary` before relocating an entity, as
 required by BigSpace.
 
+Application schedule gates may skip BigSpace work only from authoritative
+spatial invalidations. `LocalFloatingOrigin::is_local_origin_unchanged` reports
+the result of its most recent computation; after an origin changes, admit one
+follow-up local-origin computation to settle that flag. Do not treat a retained
+`false` as a permanent high-precision invalidation. Verify an origin shift, its
+settle pass, then stable frames with propagation closed. Track the pending
+settle between admitted passes rather than scanning every grid in an idle gate.
+
 For a camera, compose the selected camera's authoritative f64 pose into the
 persistent `WorldGrid` and update the grid-direct `OriginAnchor`'s
 `(CellCoord, Transform)` split. `OriginAnchor` is the sole owner of
