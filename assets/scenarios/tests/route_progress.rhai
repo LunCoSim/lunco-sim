@@ -1,6 +1,5 @@
-// Production acceptance for Avian-driven route starts and preserved progress.
-// The Rover moves through each trigger; this observer never manufactures
-// route-zone events.
+// Production acceptance for Avian-backed initial occupancy, later route
+// arrivals, and preserved progress. This observer never manufactures zone events.
 
 const ROOT = "/RouteProgress";
 const ROUTE = ROOT + "/Route";
@@ -89,7 +88,6 @@ fn on_start(me, ctx) {
     this.doc = -1;
     this.subject = find(SUBJECT_PATH);
     this.route_entity = find_path(ROUTE);
-    this.start_entered = 0;
     this.point_one_entered = 0;
     this.started = 0;
     this.stopped = 0;
@@ -98,10 +96,6 @@ fn on_start(me, ctx) {
 
 fn on_event(me, evt, ctx) {
     if this.done { return; }
-    if evt.name == "enter:route_P0"
-        && event_is_within(evt.value, find(SUBJECT_PATH)) {
-        this.start_entered += 1;
-    }
     if evt.name == "enter:route_P1"
         && event_is_within(evt.value, find(SUBJECT_PATH)) {
         this.point_one_entered += 1;
@@ -143,10 +137,28 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 1 {
-        if this.start_entered == 0 { return; }
+        let points = point_paths(this.doc);
+        if points.len() != 3 || !color_is(
+            marker_color(this.doc, points[0]), [0.55, 0.55, 0.55]
+        ) { return; }
+        let sensor = find_path(points[0] + "/Trigger");
+        let contacts = query("SensorOccupants", #{ sensor: sensor });
+        let occupied = false;
+        if contacts != () && contacts.ok != false && contacts.entrants != () {
+            for entrant in contacts.entrants {
+                if event_is_within(entrant, this.subject) { occupied = true; }
+            }
+        }
+        let rejected = query("SensorOccupants", #{ sensor: this.subject });
+        let non_sensor_rejected = rejected != () && rejected.ok == false;
+        this.checks.push(t_true(occupied,
+            "the current Avian sensor contact identifies the route subject"));
+        this.checks.push(t_true(non_sensor_rejected,
+            "occupancy rejects a stable id that is not a sensor"));
+        if !occupied || !non_sensor_rejected { finish(this, false); return; }
         this.checks.push(t_true(true,
-            "Avian enter reaches the Rhai listener while the route is disabled"));
-        let toggled = emit("runtime.ui.action", "program.toggle");
+            "the occupied start point is visited before autopilot is enabled"));
+        let toggled = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         if !toggled { finish(this, false); return; }
         this.phase = 2;
         return;
@@ -177,7 +189,7 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(
             color_is(marker_color(this.doc, points[1]), [0.55, 0.55, 0.55]),
             "the next sensor event marks its route point visited"));
-        let stopped = emit("runtime.ui.action", "program.toggle");
+        let stopped = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         if !stopped { finish(this, false); return; }
         this.transition_elapsed = 0.0;
         this.phase = 4;
@@ -187,7 +199,7 @@ fn on_tick(me, ctx) {
     if this.phase == 4 {
         let active = port(this.subject, "program_active");
         if this.stopped == 0 || active == () || active > 0.5 { return; }
-        let started = emit("runtime.ui.action", "program.toggle");
+        let started = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         if !started { finish(this, false); return; }
         this.phase = 5;
         return;

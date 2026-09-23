@@ -404,51 +404,62 @@ fn route_entrant_matches(subject, entrant) {
     false
 }
 
-fn route_start_progress(me, state) {
+fn route_resume_index(me, state) {
     let points = route_children_for(me, state);
-    let visited = if state.visited_points == () { #{} } else { state.visited_points };
-    if points == () || points.len() == 0 {
-        return #{ index: 0, visited_points: visited };
-    }
-    let subject = route_subject_for(me, state);
+    if points == () { return 0; }
     let index = 0;
-    while index < points.len() {
-        let point = points[index];
-        if visited[point] == true {
-            index += 1;
-            continue;
-        }
-        let zone = query("QueryUsdPrim", #{
-            path: point + "/Trigger",
-            attrs: ["lunco:triggerZone", "radius"],
-        });
-        let entered = false;
-        if state.sensor_entered != () && zone != () && zone.ok != false
-            && zone.attrs != () && zone.attrs["lunco:triggerZone"] != () {
-            entered = state.sensor_entered[zone.attrs["lunco:triggerZone"]] == true;
-        }
-        // A route can be started after the sensor's enter pulse was emitted
-        // (for example, the rover was already parked on W0 when the operator
-        // pressed F). Treat the authored trigger volume as an initial
-        // occupancy snapshot only; after this transaction, Avian sensor
-        // enter events remain the sole arrival/progression authority.
-        let occupied = false;
-        if !entered && subject >= 0 && zone != () && zone.ok != false
-            && zone.attrs != () && zone.attrs["radius"] != () {
-            let subject_position = world_pos(subject);
-            let point_position = world_pos(find_path(point));
-            if subject_position != () && point_position != () {
-                let dx = subject_position[0] - point_position[0];
-                let dz = subject_position[2] - point_position[2];
-                let radius = zone.attrs["radius"];
-                occupied = dx * dx + dz * dz <= radius * radius;
-            }
-        }
-        if !entered && !occupied { break; }
-        visited[point] = true;
+    while index < points.len() && state.visited_points[points[index]] == true {
         index += 1;
     }
-    #{ index: index, visited_points: visited }
+    index
+}
+
+fn mark_route_point_visited(state, point) {
+    if state.visited_points[point] == true { return state; }
+    state.visited_points[point] = true;
+    state.marker_sync_pending = true;
+    state
+}
+
+fn mark_route_zone_visited(me, state, zone) {
+    let points = route_children_for(me, state);
+    if points == () { return state; }
+    for point in points {
+        let record = query("QueryUsdPrim", #{
+            path: point + "/Trigger",
+            attrs: ["lunco:triggerZone"],
+        });
+        if record != () && record.ok != false && record.attrs != ()
+            && record.attrs["lunco:triggerZone"] == zone {
+            state = mark_route_point_visited(state, point);
+        }
+    }
+    state
+}
+
+fn mark_initial_route_occupancy(me, state) {
+    let points = route_children_for(me, state);
+    let subject = route_subject_for(me, state);
+    if points == () || subject < 0 {
+        return route_failure("the route or its subject has no live projection");
+    }
+    for point in points {
+        let sensor = find_path(point + "/Trigger");
+        if sensor < 0 {
+            return route_failure("the route sensor has no live projection: " + point);
+        }
+        let contacts = query("SensorOccupants", #{ sensor: sensor });
+        if contacts == () || contacts.ok == false || contacts.entrants == () {
+            return route_failure("the route sensor occupancy is unavailable: " + point);
+        }
+        for entrant in contacts.entrants {
+            if route_entrant_matches(subject, entrant) {
+                state = mark_route_point_visited(state, point);
+                break;
+            }
+        }
+    }
+    #{ ok: true, state: state }
 }
 
 fn drive_current_point(me, state) {
@@ -593,8 +604,11 @@ fn refresh_route_view(me, state, snapshot) {
 
 // The runtime program HUD emits generic semantic actions. This route policy
 // owns the route-specific scope binding; the editor library remains generic.
-fn runtime_program_action(me, action, state) {
-    if action == () { return state; }
+fn runtime_program_action(me, payload, state) {
+    if type_of(payload) != "map" || type_of(payload["action"]) != "string" {
+        return state;
+    }
+    let action = payload["action"];
     let route = route_path(me);
     let doc = route_document(me);
     if route == () || doc == () { return state; }
@@ -695,19 +709,16 @@ fn start_route(me, state) {
 }
 
 fn begin_route_run(me, state, started) {
-    let progress = route_start_progress(me, state);
     state.selected = true;
     state.enabled = true;
     state.safe_stopped = false;
-    state.route_index = progress.index;
+    state.route_index = route_resume_index(me, state);
     state.current_path = ();
     state.commanded_path = ();
     state.commanded_revision = ();
     state.commanded_view_key = ();
     state.completed = false;
-    state.visited_points = progress.visited_points;
     state.marker_sync_pending = true;
-    state.sensor_entered = #{};
     state.route_error = "";
     state.start_requested = false;
     emit("route_started");
@@ -750,13 +761,19 @@ fn on_start(me, ctx) {
     this.completed = false;
     this.visited_points = #{};
     this.marker_sync_pending = true;
-    this.sensor_entered = #{};
     this.enabled = route_enabled_from_usd(me);
     this.selected = route_is_selected(me);
     this.route_revision = ();
     this.route_view_key = ();
     this.route_error = "";
     this.start_requested = false;
+    let occupancy = mark_initial_route_occupancy(me, this);
+    if occupancy.ok == true {
+        this = occupancy.state;
+    } else {
+        emit("route_presentation_unavailable", occupancy.error);
+    }
+    this.route_index = route_resume_index(me, this);
     let refreshed = refresh_route_view(me, this, ());
     this = refreshed.state;
     let view = refreshed.result;
@@ -845,16 +862,13 @@ fn on_event(me, evt, ctx) {
         this.commanded_view_key = ();
         return;
     }
-    // Avian owns zone occupancy. Keep route-zone enter pulses in the program's
-    // live state even while disabled so starting from the initial point targets
-    // the next point. This is runtime state only; no occupancy is written to
-    // USD.
+    // A live enter uses the same visit path as the startup contact snapshot.
+    // Visitation is runtime state regardless of whether guidance is enabled.
     if evt.name.starts_with("enter:") {
         let subject = route_subject_for(me, this);
         let zone = evt.name.sub_string(6);
         if subject >= 0 && route_entrant_matches(subject, evt.value) {
-            if this.sensor_entered == () { this.sensor_entered = #{}; }
-            this.sensor_entered[zone] = true;
+            this = mark_route_zone_visited(me, this, zone);
         }
     }
     let transition = advance_on_sensor(me, evt, this);
@@ -872,11 +886,6 @@ fn on_event(me, evt, ctx) {
             this.route_error = started.error;
         }
     } else if transition.kind == "advance" {
-        let point = current_point(me, this);
-        if point != () {
-            this.visited_points[point] = true;
-            this.marker_sync_pending = true;
-        }
         emit("route_point_reached", this.route_index);
         this.route_index = transition.index;
         this.current_path = ();

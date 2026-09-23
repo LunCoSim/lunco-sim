@@ -8,11 +8,13 @@
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_api::queries::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult};
+use lunco_api::queries::{
+    api_param_u64, ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult,
+};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::{api_param_array, api_param_bool, api_param_f64};
-use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
-use lunco_core::TriggerZone;
+use lunco_api_core::{api_value, api_value_from_u64, ApiErrorCode, ApiValue};
+use lunco_core::{GlobalEntityId, TriggerZone};
 use lunco_spatial::coords::GridPos;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
@@ -96,6 +98,76 @@ impl ApiQueryProvider for GroundHeightProvider {
     }
 }
 
+/// `SensorOccupants` — current moving-body contacts for a sensor's stable id.
+/// Unlike an enter pulse, this snapshot remains available when a script starts
+/// after the first physics contact. The route policy and other consumers decide
+/// what occupancy means; Avian remains the sole owner of contact truth.
+pub(crate) struct SensorOccupantsProvider;
+impl ApiQueryProvider for SensorOccupantsProvider {
+    fn name(&self) -> &'static str {
+        "SensorOccupants"
+    }
+
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let sensor_id = api_param_u64(params, "sensor")
+            .filter(|id| *id != 0)
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "SensorOccupants: `sensor` stable entity id is required",
+                )
+            })?;
+        let registry = world.get_resource::<ApiEntityRegistry>().ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "SensorOccupants: stable entity registry is unavailable",
+            )
+        })?;
+        let sensor = registry
+            .resolve(&GlobalEntityId::from_raw(sensor_id))
+            .filter(|entity| world.get::<Sensor>(*entity).is_some())
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::EntityNotFound,
+                    "SensorOccupants: `sensor` does not identify a live sensor",
+                )
+            })?;
+        let graph = world.get_resource::<ContactGraph>().ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "SensorOccupants: physics contact graph is unavailable",
+            )
+        })?;
+        let mut entrants = Vec::new();
+        for pair in graph
+            .contact_pairs_with(sensor)
+            .filter(|pair| pair.is_touching())
+        {
+            let (collider, body) = if pair.collider1 == sensor {
+                (pair.collider2, pair.body2)
+            } else {
+                (pair.collider1, pair.body1)
+            };
+            if body.is_some_and(|entity| {
+                matches!(
+                    world.get::<RigidBody>(entity),
+                    Some(RigidBody::Dynamic | RigidBody::Kinematic)
+                )
+            }) {
+                if let Some(id) = contact_gid(registry, collider, body) {
+                    entrants.push(id);
+                }
+            }
+        }
+        entrants.sort_unstable();
+        entrants.dedup();
+        Ok(Some(ApiValue::map([(
+            "entrants",
+            ApiValue::Array(entrants.into_iter().map(api_value_from_u64).collect()),
+        )])))
+    }
+}
+
 /// Shared cast → typed value. Maps the hit collider back to its `GlobalEntityId` (null
 /// when the collider has no registered id, e.g. unregistered terrain).
 ///
@@ -161,6 +233,7 @@ pub(crate) fn register_physics_queries(app: &mut App) {
     let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
     reg.register(RaycastProvider);
     reg.register(GroundHeightProvider);
+    reg.register(SensorOccupantsProvider);
 }
 
 fn initialize_grid_spatial_query_state(world: &mut World) {

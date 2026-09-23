@@ -27,6 +27,9 @@ Read the focused contract when implementing one:
   as a callable library; it is still a Rhai tool, not a Rust vehicle
   implementation. Other `.rhai` files, including tests and scenarios, are
   loaded only by an explicit scene/runtime request or the CLI test path.
+  In an external Twin session, verify admission with `ListToolLibraries` after
+  `/api/ready`; a policy-layer handoff must re-admit standard tools when the
+  classifier returns.
 - Put a Twin-specific builder, component lint, or requirement helper in
   `<twin>/tools/<name>.rhai`. It is persisted with that Twin and must not leak
   into unrelated Twins.

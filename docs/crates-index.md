@@ -78,7 +78,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
+| **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential, and generic Avian sensor events plus current-occupancy queries. |
 | **`lunco-control-core`** | Generic semantic-control contracts: `ControlLink`, `AcquireControl`, `ReleaseControlSource`, the shared `UserIntent` vocabulary, authored intent-to-port bindings, input state, egui focus gate, interaction schedule boundary, and bounded causal-edge trace. Input producers and domain consumers depend on this focused package instead of placing control policy in `lunco-core`. |
 | **`lunco-interaction-core`** | Small cross-runtime cursor-interaction contract: registered USD button policy, semantic exclusive possession arbitration, editor tool gates, drag state, and the affected-entity marker consumed by camera, possession, and follow runtimes. It contains no editor implementation. |
 | **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |

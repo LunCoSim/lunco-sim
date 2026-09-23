@@ -215,6 +215,14 @@ lifecycle gate is closed, events are not buffered because no scenario can
 consume them and the gated driver cannot drain them. Scene transitions also
 clear pending events from the outgoing scene.
 
+Physics producers can still run before that gate opens: Avian detects contacts
+in `FixedPostUpdate`, while scenario hooks run only after scene readiness
+(`FixedUpdate`, or `Update` when paused). An `enter:<zone>` edge can therefore
+precede a program's `on_start` and be intentionally discarded. Treat events as
+transitions after scenario startup; when a program needs to know what is true at
+startup, read the current state from its owning subsystem (for sensors,
+`SensorOccupants`) in `on_start`.
+
 ### Examples
 
 `assets/scenarios/`: `route_follow.rhai` (route-point task program, emits
