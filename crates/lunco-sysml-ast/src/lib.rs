@@ -11,7 +11,7 @@ pub mod lint_facts;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
-use sysml_model::{ElementId, ElementKind, Value};
+use sysml_model::{ElementId, ElementKind, Role, Value};
 use sysml_semantics::Workspace;
 use sysml_syntax::{SyntaxKind, SyntaxNode, TextRange};
 
@@ -916,6 +916,23 @@ pub struct SysmlSubject {
     pub type_name: Option<String>,
 }
 
+/// A required or assumed constraint formally owned by a requirement.
+///
+/// `usage` is the constraint feature in the requirement context. When that
+/// feature is typed by a reusable constraint definition, `definition` names
+/// that definition. Keeping both identities preserves SysML membership while
+/// allowing consumers to compile the reusable definition with provider data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlRequirementConstraint {
+    /// `require` or `assume` membership kind.
+    pub kind: String,
+    /// Contextual constraint usage owned by the requirement membership.
+    pub usage: SysmlElement,
+    /// Reusable definition typed by the usage, if one is declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<SysmlElement>,
+}
+
 /// A structured requirement declaration or usage.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlRequirementRecord {
@@ -927,6 +944,10 @@ pub struct SysmlRequirementRecord {
     pub subjects: Vec<SysmlSubject>,
     /// Attributes declared inside this requirement.
     pub attributes: Vec<SysmlAttribute>,
+    /// Required and assumed constraint memberships, including inherited
+    /// memberships from a requirement definition used by this requirement.
+    #[serde(default)]
+    pub constraints: Vec<SysmlRequirementConstraint>,
     /// Qualified or written requirements named by `verify` memberships.
     pub verifies: Vec<String>,
     /// Written satisfaction targets, when present.
@@ -1153,7 +1174,13 @@ impl SysmlAnalysis {
         );
         let attributes = project_attributes(&mut workspace, &files, &elements, &type_catalog);
         let records = project_records(&attributes, source_revision);
-        let requirements = project_requirements(&files, &elements, &attributes);
+        let requirements = project_requirements(
+            &workspace,
+            &project_indices,
+            &files,
+            &elements,
+            &attributes,
+        );
         let verifications = project_verifications(&files, &elements);
 
         Self {
@@ -2362,6 +2389,8 @@ fn split_top_level_commas(value: &str) -> Option<Vec<&str>> {
 }
 
 fn project_requirements(
+    workspace: &Workspace,
+    project_files: &[usize],
     files: &[SysmlFile],
     elements: &[SysmlElement],
     attributes: &[SysmlAttribute],
@@ -2395,17 +2424,92 @@ fn project_requirements(
                 })
                 .cloned()
                 .collect();
+            let semantic_file = project_files
+                .iter()
+                .copied()
+                .find(|&file| workspace.file_name(file) == element.file);
+            let semantic_id = semantic_file.and_then(|file| {
+                workspace
+                    .file_elements(file)
+                    .iter()
+                    .copied()
+                    .find(|id| id.index() as u32 == element.id)
+            });
+            let constraints = semantic_id
+                .map(|id| project_requirement_constraints(workspace, elements, id))
+                .unwrap_or_default();
             Some(SysmlRequirementRecord {
                 element: element.clone(),
                 documentation: fields.documentation,
                 subjects: fields.subjects,
                 attributes: owned_attributes,
+                constraints,
                 verifies: fields.verifies,
                 satisfies: fields.satisfies,
                 realizations: fields.realizations,
             })
         })
         .collect()
+}
+
+fn project_requirement_constraints(
+    workspace: &Workspace,
+    elements: &[SysmlElement],
+    requirement: ElementId,
+) -> Vec<SysmlRequirementConstraint> {
+    let model = workspace.model();
+    let mut owners = vec![requirement];
+    if model.kind(requirement).is_a(ElementKind::RequirementUsage) {
+        owners.extend(model.types_of(requirement).filter(|&ty| {
+            model.kind(ty).is_a(ElementKind::RequirementDefinition)
+        }));
+    }
+
+    let mut constraints = Vec::new();
+    for owner in owners {
+        for &constraint_usage in model.owned(owner) {
+            if sysml_model::membership_kind(model, constraint_usage)
+                != ElementKind::RequirementConstraintMembership
+            {
+                continue;
+            }
+            let kind = match model.member_role(constraint_usage) {
+                Some(Role::Require) => "requirement",
+                Some(Role::Assume) => "assumption",
+                _ => continue,
+            };
+            let Some(usage_element) = elements
+                .iter()
+                .find(|element| element.id == constraint_usage.index() as u32)
+                .cloned()
+            else {
+                continue;
+            };
+            let definition = workspace
+                .references()
+                .iter()
+                .filter(|reference| reference.from == constraint_usage)
+                .filter_map(|reference| {
+                    elements
+                        .iter()
+                        .find(|element| element.id == reference.target.index() as u32)
+                })
+                .find(|element| {
+                    element.kind == "ConstraintDefinition"
+                        || element.kind == "ConstraintUsage"
+                })
+                .cloned();
+            let record = SysmlRequirementConstraint {
+                kind: kind.to_owned(),
+                usage: usage_element,
+                definition,
+            };
+            if !constraints.contains(&record) {
+                constraints.push(record);
+            }
+        }
+    }
+    constraints
 }
 
 fn project_verifications(
@@ -2528,6 +2632,8 @@ fn diagnostic_from_finding(
 mod tests {
     use super::*;
 
+    static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn malformed_source_is_reported_without_panicking() {
         let analysis = SysmlAnalysis::from_files_without_stdlib([("broken.sysml", "package {")]);
@@ -2545,7 +2651,51 @@ mod tests {
     }
 
     #[test]
+    fn requirement_projection_preserves_required_constraint_and_objective_links() {
+        let source = include_str!("../../../assets/scripting/tests/fixtures/sysml_requirement_constraint.sysml");
+        let analysis = SysmlAnalysis::build(
+            [("sysml_requirement_constraint.sysml", source)],
+            true,
+            7,
+        );
+        assert!(
+            !analysis.has_errors(),
+            "fixture diagnostics: {:?}",
+            analysis.diagnostics()
+        );
+
+        let requirement = analysis
+            .requirements()
+            .iter()
+            .find(|record| {
+                record.element.qualified_name
+                    == "SysmlRequirementConstraint::payloadCapacity"
+            })
+            .expect("requirement usage is projected");
+        assert_eq!(requirement.constraints.len(), 1);
+        assert_eq!(requirement.constraints[0].kind, "requirement");
+        assert_eq!(
+            requirement.constraints[0]
+                .definition
+                .as_ref()
+                .map(|element| element.qualified_name.as_str()),
+            Some("SysmlRequirementConstraint::PayloadWithinCapacity")
+        );
+
+        let verification = analysis
+            .verifications()
+            .iter()
+            .find(|record| {
+                record.element.qualified_name
+                    == "SysmlRequirementConstraint::VerifyPayloadCapacity"
+            })
+            .expect("verification case is projected");
+        assert_eq!(verification.verifies, ["payloadCapacity"]);
+    }
+
+    #[test]
     fn cached_analysis_reuses_same_revision_snapshot() {
+        let _guard = CACHE_TEST_LOCK.lock().expect("cache test lock poisoned");
         let first = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
         let second = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
         assert!(Arc::ptr_eq(&first, &second));
@@ -2553,6 +2703,7 @@ mod tests {
 
     #[test]
     fn cached_analysis_never_reuses_revision_for_different_sources() {
+        let _guard = CACHE_TEST_LOCK.lock().expect("cache test lock poisoned");
         let first = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
         let second = SysmlAnalysis::build_cached([("a.sysml", "part def B {}")], false, 0x1234);
         assert!(!Arc::ptr_eq(&first, &second));

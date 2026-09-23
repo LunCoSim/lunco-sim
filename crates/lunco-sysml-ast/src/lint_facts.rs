@@ -800,6 +800,33 @@ fn requirement(value: &SysmlRequirementRecord) -> H {
             "attributes",
             H::Array(value.attributes.iter().map(attribute).collect()),
         ),
+        (
+            "constraints",
+            H::Array(
+                value
+                    .constraints
+                    .iter()
+                    .map(|constraint| {
+                        let mut fields = vec![
+                            ("kind", H::str(constraint.kind.clone())),
+                            (
+                                "qualified_name",
+                                H::str(constraint.usage.qualified_name.clone()),
+                            ),
+                            ("usage", element(&constraint.usage)),
+                        ];
+                        if let Some(definition) = &constraint.definition {
+                            fields.push((
+                                "definition_name",
+                                H::str(definition.qualified_name.clone()),
+                            ));
+                            fields.push(("definition", element(definition)));
+                        }
+                        H::map(fields)
+                    })
+                    .collect(),
+            ),
+        ),
         ("verifies", strings(&value.verifies)),
         ("satisfies", strings(&value.satisfies)),
         ("realizations", strings(&value.realizations)),

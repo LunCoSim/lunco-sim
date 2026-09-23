@@ -1539,6 +1539,32 @@ fn requirement_dynamic(record: &lunco_sysml_ast::SysmlRequirementRecord, revisio
                 .collect(),
         ),
     );
+    value.insert(
+        "constraints".into(),
+        Dynamic::from_array(
+            record
+                .constraints
+                .iter()
+                .map(|constraint| {
+                    let mut item = Map::new();
+                    item.insert("kind".into(), Dynamic::from(constraint.kind.clone()));
+                    item.insert(
+                        "qualified_name".into(),
+                        Dynamic::from(constraint.usage.qualified_name.clone()),
+                    );
+                    item.insert("usage".into(), element_dynamic(&constraint.usage));
+                    if let Some(definition) = &constraint.definition {
+                        item.insert(
+                            "definition_name".into(),
+                            Dynamic::from(definition.qualified_name.clone()),
+                        );
+                        item.insert("definition".into(), element_dynamic(definition));
+                    }
+                    Dynamic::from_map(item)
+                })
+                .collect(),
+        ),
+    );
     value.insert("verifies".into(), string_array(&record.verifies));
     value.insert("satisfies".into(), string_array(&record.satisfies));
     value.insert("realizations".into(), string_array(&record.realizations));

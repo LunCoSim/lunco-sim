@@ -4,7 +4,9 @@
 // reads expected values through `expected_attr` from AnalyzeSysml. The check
 // table is authored by a Twin, while this evaluator is reusable by any Twin.
 // It deliberately supports only typed, read-only observations; it never edits
-// USD and never embeds a vehicle name or domain assumption.
+// USD and never embeds a vehicle name or domain assumption. Constraint
+// predicates execute from the source-pinned SysML model through the neutral
+// constraint IR; this module only binds observations and records the verdict.
 
 fn _text(value) {
     if value == () { return ""; }
@@ -58,8 +60,9 @@ fn _equal_value(actual, expected) {
     actual == expected
 }
 
-fn _query(path, attrs) {
+fn _query(path, attrs, doc_id) {
     let request = #{path: path};
+    if doc_id != () { request.doc_id = doc_id; }
     if attrs != () { request.attrs = attrs; }
     query("QueryUsdPrim", request)
 }
@@ -508,16 +511,202 @@ fn _expected(report, check) {
     if resolved.record.value.number_value != () {
         return #{ok: true, value: resolved.record.value.number_value};
     }
+    if resolved.record.value.boolean_value != () {
+        return #{ok: true, value: resolved.record.value.boolean_value};
+    }
+    if check.expected_index != () {
+        let value = native_value(report, check.expected_attr);
+        let indices = if type_of(check.expected_index) == "array" {
+            check.expected_index
+        } else { [check.expected_index] };
+        for index in indices {
+            if type_of(value) == "array" && value.len() > index {
+                value = value[index];
+            } else if type_of(value) == "Vec3" {
+                if index == 0 { value = value.x; }
+                else if index == 1 { value = value.y; }
+                else if index == 2 { value = value.z; }
+                else { return #{ok: false, error: "SysML expected vector index is out of range: " + check.expected_attr}; }
+            } else {
+                return #{ok: false, error: "SysML expected vector component is unavailable: " + check.expected_attr};
+            }
+        }
+        return #{ok: true, value: value};
+    }
     #{ok: true, value: _text(resolved.record.value.literal)}
+}
+
+/// Create a generic requirement-linked SysML constraint check record.
+/// `bindings` is keyed by declared constraint parameter name or qualified
+/// name. Each value may be a native typed value or an explicit provider
+/// observation map (`provider`, `state`, `value`, and optional `detail`).
+/// Constraint logic remains authored in SysML.
+fn constraint_check(id, component, requirement, verification,
+                    constraint_name, bindings, provider, tolerance) {
+    #{id: id, component: component, requirement: requirement,
+      verification: verification, kind: "constraint",
+      constraint: constraint_name,
+      bindings: if bindings == () { #{} } else { bindings },
+      provider: if provider == () || provider == "" { "derived" } else { provider },
+      tolerance: if tolerance == () { 0.0 } else { tolerance }}
+}
+
+fn _constraint_observations(model, check) {
+    if check.constraint == () || check.constraint == "" {
+        return #{ok: false, error: "SysML constraint identity is missing"};
+    }
+    let ir = model.constraint_ir(check.constraint);
+    if ir == () || ir.valid != true || ir.constraint == () {
+        let message = "SysML constraint is unavailable or invalid: " + check.constraint;
+        if ir != () && ir.diagnostics != () && ir.diagnostics.len() > 0 {
+            message += "; " + ir.diagnostics[0].message;
+        }
+        return #{ok: false, error: message, ir: ir};
+    }
+    let bindings = if check.bindings == () { #{} } else { check.bindings };
+    let observations = #{};
+    let known_names = #{};
+    for parameter in ir.constraint.parameters {
+        known_names[parameter.name] = parameter.qualified_name;
+        known_names[parameter.qualified_name] = parameter.qualified_name;
+    }
+    // Unknown authored keys are a binding error. Never silently ignore a typo
+    // and turn an absent observation into an apparent constraint pass.
+    for name in bindings.keys() {
+        if known_names[name] == () {
+            return #{ok: false,
+                error: "binding names no SysML constraint parameter: " + name,
+                ir: ir};
+        }
+    }
+    for parameter in ir.constraint.parameters {
+        let supplied = bindings[parameter.name];
+        if supplied == () { supplied = bindings[parameter.qualified_name]; }
+        if supplied == () {
+            observations[parameter.qualified_name] = #{
+                provider: check.provider, state: "unavailable",
+                detail: "No observation was supplied for this SysML constraint parameter"};
+            continue;
+        }
+        if type_of(supplied) == "map" {
+            let observation = supplied;
+            if observation.provider == () { observation.provider = check.provider; }
+            if observation.state == () { observation.state = "value"; }
+            observations[parameter.qualified_name] = observation;
+        } else {
+            observations[parameter.qualified_name] = #{
+                provider: check.provider, state: "value", value: supplied};
+        }
+    }
+    #{ok: true, observations: observations, ir: ir}
+}
+
+fn _constraint_is_required(report, requirement, constraint_name) {
+    let identity = requirement_name(report, requirement);
+    if identity.ok != true {
+        return #{ok: false, error: identity.error};
+    }
+    let record = ();
+    for candidate in report.requirement_records {
+        if _record_name(candidate) == identity.name {
+            record = candidate;
+            break;
+        }
+    }
+    if record == () {
+        return #{ok: false,
+            error: "SysML requirement record is unavailable: " + identity.name};
+    }
+    if record.constraints == () {
+        return #{ok: false,
+            error: "SysML requirement has no projected require/assume memberships: " + identity.name};
+    }
+    for membership in record.constraints {
+        if membership.kind != "requirement" { continue; }
+        if membership.qualified_name == constraint_name
+            || membership.definition_name == constraint_name {
+            return #{ok: true, requirement: identity.name,
+                usage: membership.qualified_name,
+                definition: membership.definition_name};
+        }
+    }
+    #{ok: false, error: "constraint is not a required constraint of "
+        + identity.name + ": " + constraint_name}
+}
+
+fn _check_constraint(report, check, model) {
+    if !sysml_model_is(model) {
+        return #{ok: false, id: check.id, component: check.component,
+            requirement: check.requirement, verification: check.verification,
+            kind: check.kind, constraint: check.constraint, verdict: "error",
+            error: "source-pinned SysML model is unavailable"};
+    }
+    if model.source_revision_hex != report.source_revision_hex {
+        return #{ok: false, id: check.id, component: check.component,
+            requirement: check.requirement, verification: check.verification,
+            kind: check.kind, constraint: check.constraint, verdict: "error",
+            error: "SysML source revision changed between requirement analysis and constraint binding",
+            analyzed_source_revision: report.source_revision_hex,
+            constraint_source_revision: model.source_revision_hex};
+    }
+    let membership = _constraint_is_required(report, check.requirement,
+        check.constraint);
+    if membership.ok != true {
+        return #{ok: false, id: check.id, component: check.component,
+            requirement: check.requirement, verification: check.verification,
+            kind: check.kind, constraint: check.constraint, verdict: "error",
+            error: membership.error,
+            source_revision: report.source_revision_hex};
+    }
+    let bound = _constraint_observations(model, check);
+    if bound.ok != true {
+        return #{ok: false, id: check.id, component: check.component,
+            requirement: check.requirement, verification: check.verification,
+            kind: check.kind, constraint: check.constraint, verdict: "error",
+            error: bound.error,
+            diagnostics: if bound.ir == () { [] } else { bound.ir.diagnostics }};
+    }
+    let tolerance = if check.tolerance == () { 0.0 } else { check.tolerance };
+    if !_numeric(tolerance) || tolerance < 0.0 {
+        return #{ok: false, id: check.id, component: check.component,
+            requirement: check.requirement, verification: check.verification,
+            kind: check.kind, constraint: check.constraint, verdict: "error",
+            error: "constraint comparison tolerance must be a finite non-negative number"};
+    }
+    let evaluation = model.evaluate_constraint(check.constraint,
+        bound.observations, tolerance, tolerance);
+    if evaluation == () || evaluation.verdict == () {
+        return #{ok: false, id: check.id, component: check.component,
+            requirement: check.requirement, verification: check.verification,
+            kind: check.kind, constraint: check.constraint, verdict: "error",
+            error: "SysML constraint evaluator returned no verdict",
+            observations: bound.observations};
+    }
+    #{ok: evaluation.verdict == "pass", id: check.id,
+      component: check.component, requirement: check.requirement,
+      verification: check.verification, kind: check.kind,
+      constraint: check.constraint, verdict: evaluation.verdict,
+      error: if evaluation.verdict == "pass" { "" }
+        else { "SysML constraint verdict: " + evaluation.verdict },
+      constraint_fingerprint: bound.ir.constraint.fingerprint,
+      constraint_source: bound.ir.constraint.source,
+      required_constraint_usage: membership.usage,
+      required_constraint_definition: membership.definition,
+      expression_results: evaluation.expression_results,
+      diagnostics: evaluation.diagnostics,
+      observations: bound.observations,
+      source_revision: report.source_revision_hex,
+      tolerance: tolerance}
 }
 
 fn _failure(check, message) {
     #{ ok: false, id: check.id, component: check.component,
        requirement: check.requirement, verification: check.verification,
-       kind: check.kind, path: check.path, error: message }
+       kind: check.kind, path: check.path, doc_id: check.doc_id,
+       error: message }
 }
 
-fn _check_one(report, check, indexes) {
+fn _check_one(report, check, indexes, model) {
     if check == () || check.id == () || check.requirement == ()
         || check.verification == () || check.kind == () {
         return #{ok: false, id: "<invalid>", error: "check requires id, requirement, verification, and kind"};
@@ -528,6 +717,10 @@ fn _check_one(report, check, indexes) {
     if !_indexed_coverage(indexes, check.requirement, check.verification) {
         return _failure(check, "no SysML verification case covers this requirement");
     }
+    if check.kind == "constraint" {
+        return _check_constraint(report, check, model);
+    }
+
     let expected_result = _expected(report, check);
     if expected_result.ok != true {
         return _failure(check, expected_result.error);
@@ -573,35 +766,11 @@ fn _check_one(report, check, indexes) {
             actual: actual, expected: expected};
     }
 
-    // A source-derived assertion has no USD path.  Twin-authored Rhai uses
-    // this for cross-component contracts (for example, a ramp envelope
-    // derived from the FLIP wheel stations) while retaining the same
-    // requirement/verification coverage and structured evidence as a USD
-    // observation.  The predicate itself is computed by the Twin; this
-    // generic branch only records the result and enforces loud failure.
-    if check.kind == "assert" {
-        if check.ok == () {
-            return _failure(check, "source-derived assertion did not provide a boolean result");
-        }
-        let actual = if check.actual == () { () } else { check.actual };
-        let expected = if check.expected == () { () } else { check.expected };
-        if check.ok != true {
-            let message = if check.error == () || check.error == ""
-                { "source-derived assertion failed" } else { check.error };
-            return #{ok: false, id: check.id, component: check.component,
-                requirement: check.requirement, verification: check.verification,
-                kind: check.kind, error: message, actual: actual, expected: expected};
-        }
-        return #{ok: true, id: check.id, component: check.component,
-            requirement: check.requirement, verification: check.verification,
-            kind: check.kind, actual: actual, expected: expected};
-    }
-
     if check.path == () || check.path == "" {
         return _failure(check, "USD observation path is missing");
     }
     if check.kind == "exists" {
-        let record = _query(check.path, ["visibility"]);
+        let record = _query(check.path, ["visibility"], check.doc_id);
         if !_ok(record) { return _failure(check, "USD prim is missing"); }
         if check.expected_type != () && record.type_name != check.expected_type {
             return _failure(check, "USD type is " + record.type_name + ", expected " + check.expected_type);
@@ -609,21 +778,34 @@ fn _check_one(report, check, indexes) {
         if check.visible == true && record.attrs["visibility"] == "invisible" {
             return _failure(check, "USD prim is invisible");
         }
-        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path};
+        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, doc_id: check.doc_id};
+    }
+    if check.kind == "not_exists" {
+        let record = _query(check.path, (), check.doc_id);
+        if _ok(record) {
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement, verification: check.verification,
+                kind: check.kind, path: check.path, doc_id: check.doc_id,
+                error: "USD prim that must be absent is present",
+                actual_type: record.type_name};
+        }
+        return #{ok: true, id: check.id, component: check.component,
+            requirement: check.requirement, verification: check.verification,
+            kind: check.kind, path: check.path, doc_id: check.doc_id};
     }
     if check.kind == "children" {
         let missing = [];
         for child_path in check.paths {
-            let child = _query(child_path, ["visibility"]);
+            let child = _query(child_path, ["visibility"], check.doc_id);
             if !_ok(child) || check.visible == true && child.attrs["visibility"] == "invisible" {
                 missing.push(child_path);
             }
         }
         if missing.len() > 0 { return _failure(check, "missing/invisible USD children: " + missing); }
-        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path};
+        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, doc_id: check.doc_id};
     }
     if check.kind == "attribute" {
-        let actual_record = _query(check.path, [check.attr]);
+        let actual_record = _query(check.path, [check.attr], check.doc_id);
         if !_ok(actual_record) || actual_record.attrs[check.attr] == () {
             return _failure(check, "USD attribute " + check.attr + " is missing");
         }
@@ -644,14 +826,14 @@ fn _check_one(report, check, indexes) {
         }
         if !matches {
             return #{ok: false, id: check.id, component: check.component,
-                requirement: check.requirement, path: check.path,
+                requirement: check.requirement, path: check.path, doc_id: check.doc_id,
                 error: "USD attribute disagrees with SysML expected value",
                 actual: actual, expected: expected};
         }
-        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, actual: actual, expected: expected};
+        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, doc_id: check.doc_id, actual: actual, expected: expected};
     }
     if check.kind == "attribute_component" {
-        let actual_record = _query(check.path, [check.attr]);
+        let actual_record = _query(check.path, [check.attr], check.doc_id);
         if !_ok(actual_record) || actual_record.attrs[check.attr] == () {
             return _failure(check, "USD vector attribute " + check.attr + " is missing");
         }
@@ -660,10 +842,10 @@ fn _check_one(report, check, indexes) {
         let expected = expected_result.value;
         let tolerance = if check.tolerance == () { 0.001 } else { check.tolerance };
         if !_close(vector[check.index], expected, tolerance) { return _failure(check, "USD vector component disagrees with SysML expected value"); }
-        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, actual: vector[check.index], expected: expected};
+        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, doc_id: check.doc_id, actual: vector[check.index], expected: expected};
     }
     if check.kind == "extent_component" {
-        let actual_record = _query(check.path, ["size", "xformOp:scale"]);
+        let actual_record = _query(check.path, ["size", "xformOp:scale"], check.doc_id);
         if !_ok(actual_record) || actual_record.attrs["size"] == ()
             || actual_record.attrs["xformOp:scale"] == () {
             return _failure(check, "USD extent source attributes are missing");
@@ -676,14 +858,16 @@ fn _check_one(report, check, indexes) {
         let tolerance = if check.tolerance == () { 0.001 } else { check.tolerance };
         if !_close(actual, expected, tolerance) {
             return #{ok: false, id: check.id, component: check.component,
-                requirement: check.requirement, path: check.path,
+                requirement: check.requirement, path: check.path, doc_id: check.doc_id,
                 error: "derived USD extent disagrees with SysML expected value",
                 actual: actual, expected: expected, tolerance: tolerance};
         }
-        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, actual: actual, expected: expected};
+        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, doc_id: check.doc_id, actual: actual, expected: expected};
     }
     if check.kind == "bounds_component" {
-        let actual_record = query("QueryUsdPrim", #{path: check.path, geometry_bounds: true});
+        let request = #{path: check.path, geometry_bounds: true};
+        if check.doc_id != () { request.doc_id = check.doc_id; }
+        let actual_record = query("QueryUsdPrim", request);
         if !_ok(actual_record) || actual_record.geometry_bounds == () {
             return _failure(check, "composed USD geometry bounds are missing");
         }
@@ -699,15 +883,15 @@ fn _check_one(report, check, indexes) {
         let tolerance = if check.tolerance == () { 0.001 } else { check.tolerance };
         if !_close(actual, expected, tolerance) {
             return #{ok: false, id: check.id, component: check.component,
-                requirement: check.requirement, path: check.path,
+                requirement: check.requirement, path: check.path, doc_id: check.doc_id,
                 error: "composed USD geometry bound disagrees with SysML expected value",
                 actual: actual, expected: expected, tolerance: tolerance};
         }
         return #{ok: true, id: check.id, component: check.component, requirement: check.requirement,
-            path: check.path, actual: actual, expected: expected};
+            path: check.path, doc_id: check.doc_id, actual: actual, expected: expected};
     }
     if check.kind == "attribute_equals" {
-        let actual_record = _query(check.path, [check.attr]);
+        let actual_record = _query(check.path, [check.attr], check.doc_id);
         if !_ok(actual_record) || actual_record.attrs[check.attr] == () { return _failure(check, "USD attribute is missing"); }
         let actual = actual_record.attrs[check.attr];
         let expected = expected_result.value;
@@ -715,13 +899,15 @@ fn _check_one(report, check, indexes) {
         // authored string opinions.  Compare string content, not the literal
         // delimiters, while keeping numeric/bool equality exact.
         if !_equal_value(actual, expected) { return _failure(check, "USD attribute does not equal expected value"); }
-        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path};
+        return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path, doc_id: check.doc_id};
     }
     if check.kind == "relationship" {
         if check.rel == () || check.rel == "" {
             return _failure(check, "USD relationship name is missing");
         }
-        let actual_record = query("QueryUsdPrim", #{path: check.path, rels: [check.rel]});
+        let request = #{path: check.path, rels: [check.rel]};
+        if check.doc_id != () { request.doc_id = check.doc_id; }
+        let actual_record = query("QueryUsdPrim", request);
         if !_ok(actual_record) || actual_record.relationships == ()
             || actual_record.relationships[check.rel] == () {
             return _failure(check, "USD relationship is missing");
@@ -737,7 +923,7 @@ fn _check_one(report, check, indexes) {
             }
         }
         return #{ok: true, id: check.id, component: check.component,
-            requirement: check.requirement, path: check.path, actual: actual,
+            requirement: check.requirement, path: check.path, doc_id: check.doc_id, actual: actual,
             expected: expected};
     }
     _failure(check, "unknown generic SysML/USD check kind " + check.kind)
@@ -750,7 +936,7 @@ fn evaluate(source_report, checks) {
         // Large tables must use the streaming path so direct callers cannot
         // accidentally construct an oversized aggregate.  The stream has no
         // channel here; callers that need live evidence should call it with a
-        // channel explicitly (component_requirements does this).
+        // channel explicitly when streaming a large result set.
         return evaluate_stream(source_report, checks, "", "");
     }
     // Keep each value crossing the Rhai boundary bounded. A component may
@@ -775,8 +961,22 @@ fn evaluate(source_report, checks) {
         return #{ok: false, results: [failure], failures: [failure],
             check_count: 0, requirement_count: 0, failure_count: 1};
     }
+    let needs_model = false;
     for check in checks {
-        let result = _check_one(source_report, check, indexes);
+        if check.kind == "constraint" { needs_model = true; }
+    }
+    let model = ();
+    if needs_model {
+        if source_report.path == () || source_report.path == "" {
+            let failure = #{ok: false,
+                error: "SysML source report has no resolvable model path"};
+            return #{ok: false, results: [failure], failures: [failure],
+                check_count: 0, requirement_count: 0, failure_count: 1};
+        }
+        model = sysml_model(source_report.path);
+    }
+    for check in checks {
+        let result = _check_one(source_report, check, indexes, model);
         // Stamp canonical source identities only on emitted evidence.  The
         // authored check stays short and is never duplicated for every leaf
         // observation, while reports remain self-describing.
@@ -872,6 +1072,21 @@ fn evaluate_stream(source_report, checks, channel, title) {
             check_count: 0, requirement_count: 0, failure_count: 1,
             streamed: true};
     }
+    let needs_model = false;
+    for check in checks {
+        if check.kind == "constraint" { needs_model = true; }
+    }
+    let model = ();
+    if needs_model {
+        if source_report.path == () || source_report.path == "" {
+            let failure = #{ok: false,
+                error: "SysML source report has no resolvable model path"};
+            return #{ok: false, results: [failure], failures: [failure],
+                check_count: 0, requirement_count: 0, failure_count: 1,
+                streamed: true};
+        }
+        model = sysml_model(source_report.path);
+    }
     let verification = "";
     if checks.len() > 0 && checks[0].verification != () {
         verification = indexes.verification_identities[checks[0].verification];
@@ -882,7 +1097,7 @@ fn evaluate_stream(source_report, checks, channel, title) {
     let requirement_names = [];
     let result_index = 0;
     for check in checks {
-        let result = _check_one(source_report, check, indexes);
+        let result = _check_one(source_report, check, indexes, model);
         result.requirement = indexes.requirement_identities[check.requirement];
         result.verification = indexes.verification_identities[check.verification];
         if result.component == () && check.component != () { result.component = check.component; }
@@ -927,6 +1142,45 @@ fn evaluate_stream(source_report, checks, channel, title) {
       failure_count: failure_count, verification: verification,
       source_revision: source_report.source_revision_hex,
       source_files: source_report.source_files}
+}
+
+fn _document_checks(doc_id, checks) {
+    let scoped = [];
+    for check in checks {
+        if type_of(check) != "map" {
+            scoped.push(check);
+            continue;
+        }
+        let copy = #{};
+        for name in check.keys() { copy[name] = check[name]; }
+        copy.doc_id = doc_id;
+        scoped.push(copy);
+    }
+    scoped
+}
+
+/// Evaluate generic requirement checks against an explicit open Editor
+/// document. The document identifier is attached to each USD observation, so
+/// no observer can accidentally read a different active stage.
+fn evaluate_document(source_report, doc_id, checks) {
+    if doc_id == () {
+        return #{ok: false, results: [], failures: [
+            "document-scoped SysML evaluation requires an explicit doc_id"],
+            check_count: 0, requirement_count: 0, failure_count: 1};
+    }
+    evaluate(source_report, _document_checks(doc_id, checks))
+}
+
+/// Streaming counterpart of `evaluate_document` for bounded Editor evidence.
+fn evaluate_document_stream(source_report, doc_id, checks, channel, title) {
+    if doc_id == () {
+        let failure = #{ok: false,
+            error: "document-scoped SysML evaluation requires an explicit doc_id"};
+        return #{ok: false, results: [failure], failures: [failure],
+            check_count: 0, requirement_count: 0, failure_count: 1,
+            streamed: true};
+    }
+    evaluate_stream(source_report, _document_checks(doc_id, checks), channel, title)
 }
 
 /// Build the canonical source report for the active Twin. Parsing and typed
@@ -1268,4 +1522,82 @@ fn provenance(report, requirement_id) {
     #{ok: true, evidence: found,
       source_revision: revision, source_revision_hex: revision,
       source_files: files}
+}
+
+// Resolve a provenance catalog record by the canonical SysML requirement
+// identity. This keeps generic check tools independent of Twin-specific ID
+// prefix tables such as GRR- or FSR-.
+fn provenance_for_requirement(report, qualified_requirement) {
+    if type_of(report) != "map" || report.path == () || report.path == "" {
+        return #{ok: false,
+            error: _report_error(report, "SysML source report is unavailable")};
+    }
+    if qualified_requirement == () || qualified_requirement == "" {
+        return #{ok: false, error: "qualified SysML requirement identity is missing"};
+    }
+    let identity = query("AnalyzeSysml", #{
+        path: report.path, tables: ["attributes"],
+        attribute_names: ["qualifiedRequirement"],
+        attribute_string_values: [qualified_requirement]
+    });
+    if identity == () || identity.analysis == ()
+        || identity.analysis.attributes == () {
+        return #{ok: false,
+            error: _report_error(identity, "SysML provenance owner is unavailable")};
+    }
+    if identity.analysis.attributes.len() != 1 {
+        return #{ok: false, error: if identity.analysis.attributes.len() == 0 {
+            "SysML provenance record is missing: " + qualified_requirement
+        } else { "ambiguous SysML provenance record: " + qualified_requirement }};
+    }
+    let owner = identity.analysis.attributes[0].owner;
+    let selected = query("AnalyzeSysml", #{
+        path: report.path, tables: ["attributes"],
+        attribute_names: [owner + "::requirementId", owner + "::qualifiedRequirement",
+            owner + "::sourceReference", owner + "::rationale", owner + "::status"],
+        attribute_owners: [owner]
+    });
+    if selected == () || selected.analysis == () {
+        return #{ok: false,
+            error: _report_error(selected, "SysML provenance source is unavailable")};
+    }
+    let fields = #{};
+    for attribute in selected.analysis.attributes {
+        if attribute.owner == owner { fields[attribute.name] = attribute; }
+    }
+    let qualified = _literal_text(fields.qualifiedRequirement);
+    if qualified != qualified_requirement {
+        return #{ok: false,
+            error: "SysML provenance identity disagrees with the selected requirement"};
+    }
+    let source_records = [];
+    for field_name in fields.keys() { source_records.push(fields[field_name]); }
+    if source_records.len() == 0 {
+        return #{ok: false, error: "SysML provenance fields are unavailable"};
+    }
+    let source_start = source_records[0].start;
+    let source_end = source_records[0].end;
+    let source_file = source_records[0].file;
+    for record in source_records {
+        if record.start < source_start { source_start = record.start; }
+        if record.end > source_end { source_end = record.end; }
+    }
+    let evidence = #{owner: owner,
+        requirement_id: _literal_text(fields.requirementId),
+        qualified_requirement: qualified,
+        source_span: #{file: source_file, start: source_start, end: source_end}};
+    let source_reference = _literal_text(fields.sourceReference);
+    let rationale = _literal_text(fields.rationale);
+    let status = _literal_text(fields.status);
+    if source_reference != () { evidence.source_reference = source_reference; }
+    if rationale != () { evidence.rationale = rationale; }
+    if status != () { evidence.status = status; }
+    let revision = report.source_revision_hex;
+    let files = report.source_files;
+    if report.analysis != () {
+        if revision == () { revision = report.analysis.source_revision_hex; }
+        if files == () { files = report.analysis.source_files; }
+    }
+    #{ok: true, evidence: evidence, source_revision: revision,
+      source_revision_hex: revision, source_files: files}
 }
