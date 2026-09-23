@@ -61,7 +61,9 @@ using the narrower queued-entity path. Generated Modelica document sync also
 uses lifecycle-queued wrappers and a dirty publisher latch rather than per-frame
 `Changed` filters. Domain synthesis uses direct authored-property lookup for
 member communication periods and enumerates root attributes once for both
-actuator input and output ports. These are source-level work reductions only.
+actuator input and output ports. USD connection reconciliation also borrows
+endpoint paths, generated aliases, and port surfaces in its temporary indexes
+instead of cloning them. These are source-level work reductions only.
 Their CPU benefit is not yet measured, and the next clean settled Apollo run
 remains necessary before claiming an FPS improvement.
 

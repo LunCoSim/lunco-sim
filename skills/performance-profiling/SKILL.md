@@ -58,6 +58,8 @@ projector, and do not reproject until the index is invalidated.
 When a USD reader already exposes `has_authored_attribute`, use it to test one
 known property instead of enumerating every attribute name. If one enumeration
 feeds multiple derived port sets, derive them together from that single result.
+Temporary lookup indexes over immutable ECS queries should borrow path and port
+surface data instead of cloning those maps for a one-pass reconciliation.
 
 Keep invalidation domains distinct: a wiring/topology latch may be raised by
 endpoint arrivals and must not automatically trigger whole-stage domain
