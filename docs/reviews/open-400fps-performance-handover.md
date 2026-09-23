@@ -64,7 +64,9 @@ member communication periods and enumerates root attributes once for both
 actuator input and output ports. USD connection reconciliation also borrows
 endpoint paths, generated aliases, and port surfaces in its temporary indexes
 instead of cloning them; it builds those indexes in one endpoint sweep instead
-of three separate population scans. These are source-level work reductions only.
+of three separate population scans. Earth-direction demand now reconciles its
+existing and desired marker sets, avoiding remove/re-add events on unrelated
+rewires. These are source-level work reductions only.
 Their CPU benefit is not yet measured, and the next clean settled Apollo run
 remains necessary before claiming an FPS improvement.
 

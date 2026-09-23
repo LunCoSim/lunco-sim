@@ -62,6 +62,8 @@ Temporary lookup indexes over immutable ECS queries should borrow path and port
 surface data instead of cloning those maps for a one-pass reconciliation.
 Build compatible per-entity indexes in one query traversal rather than running
 separate full-population passes for each index.
+For derived marker sets, compare current membership with the desired set and
+apply only additions/removals; unrelated rebuilds must not emit lifecycle churn.
 
 Keep invalidation domains distinct: a wiring/topology latch may be raised by
 endpoint arrivals and must not automatically trigger whole-stage domain

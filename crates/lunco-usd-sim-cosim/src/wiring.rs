@@ -131,6 +131,7 @@ pub(super) struct WiringQueries<'w, 's> {
             Has<ModelicaModel>,
             Option<&'static GeneratedModelicaSource>,
             Has<lunco_environment::EnvironmentProbe>,
+            Has<lunco_environment::EarthDirectionRequired>,
             Option<&'static lunco_port_core::PortSurface>,
             Option<&'static UsdInstanceProjection>,
         ),
@@ -535,10 +536,16 @@ pub(super) fn rewire_usd_connections(
         (Entity, &str),
     > = HashMap::new();
     let mut environment_probe_entities = HashSet::new();
+    let mut earth_direction_already_required = HashSet::new();
     let mut port_surfaces = HashMap::new();
-    for (e, p, _, generated, is_probe, surface, projection) in wiring.endpoints.iter() {
+    for (e, p, _, generated, is_probe, has_earth_direction, surface, projection) in
+        wiring.endpoints.iter()
+    {
         if is_probe {
             environment_probe_entities.insert(e);
+            if has_earth_direction {
+                earth_direction_already_required.insert(e);
+            }
         }
         if let Some(surface) = surface {
             port_surfaces.insert(e, surface);
@@ -567,13 +574,8 @@ pub(super) fn rewire_usd_connections(
     let mut defaults: HashMap<Entity, HashMap<String, f64>> = HashMap::new();
 
     // Earth demand is a composed-wire fact, not a property of every environment
-    // probe. Rebuild the projection from the same connection sweep below so a
-    // live wire edit removes demand as well as adding it.
-    for entity in &environment_probe_entities {
-        commands
-            .entity(*entity)
-            .remove::<lunco_environment::EarthDirectionRequired>();
-    }
+    // probe. Reconcile membership after the connection sweep and preserve probes
+    // whose authored demand did not change.
     let mut earth_direction_required = std::collections::HashSet::new();
 
     // Reuse identical edge entities so a new endpoint does not invalidate and
@@ -596,7 +598,7 @@ pub(super) fn rewire_usd_connections(
             });
     }
 
-    for (entity, prim_path, has_modelica, _, _, wheel_endpoints, projection) in
+    for (entity, prim_path, has_modelica, _, _, _, wheel_endpoints, projection) in
         wiring.endpoints.iter()
     {
         let id = prim_path.stage_handle.id();
@@ -1051,9 +1053,14 @@ pub(super) fn rewire_usd_connections(
         }
     }
 
-    for entity in earth_direction_required {
+    for entity in earth_direction_already_required.difference(&earth_direction_required) {
         commands
-            .entity(entity)
+            .entity(*entity)
+            .remove::<lunco_environment::EarthDirectionRequired>();
+    }
+    for entity in earth_direction_required.difference(&earth_direction_already_required) {
+        commands
+            .entity(*entity)
             .try_insert(lunco_environment::EarthDirectionRequired);
     }
 }
