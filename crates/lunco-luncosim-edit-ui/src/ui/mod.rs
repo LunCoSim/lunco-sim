@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use lunco_control_core::ControlBinding;
 use lunco_control_core::ControlLink;
-use lunco_core::SceneMountState;
+use lunco_core::{GlobalEntityId, SceneMountState};
 use lunco_embodiment_core::roles::{Embodiment, TheLocalEmbodiment};
 use lunco_luncosim_edit_gizmo_ui as edit_gizmo;
 use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
@@ -722,6 +722,11 @@ impl Plugin for SceneEditUiPlugin {
         // selection, possession, camera, runtime-diagnostic, and diagnostic
         // lease owners; it does not add a second policy or status store.
         app.init_resource::<authoring_review::AuthoringReviewView>();
+        app.init_resource::<authoring_review::AuthoringReviewTargetIndexDirty>()
+            .add_observer(authoring_review::mark_target_index_dirty_on_add::<UsdPrimPath>)
+            .add_observer(authoring_review::mark_target_index_dirty_on_remove::<UsdPrimPath>)
+            .add_observer(authoring_review::mark_target_index_dirty_on_add::<GlobalEntityId>)
+            .add_observer(authoring_review::mark_target_index_dirty_on_remove::<GlobalEntityId>);
         app.add_view_model_every_frame(authoring_review::populate_authoring_review_view);
 
         // Joint State view-model: the selected vessel's joints and wheels are

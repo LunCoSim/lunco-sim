@@ -256,6 +256,41 @@ pub struct PendingDomainProjections {
     tasks: Vec<PendingDomainProjection>,
 }
 
+/// Entity-level projection arrivals, coalesced by Bevy lifecycle observers.
+/// A full scan is retained for a host that installs the projector after its
+/// initial USD entities already exist.
+#[derive(Resource)]
+pub struct PendingDomainProjectionCandidates {
+    entities: HashSet<Entity>,
+    initial_scan: bool,
+}
+
+impl Default for PendingDomainProjectionCandidates {
+    fn default() -> Self {
+        Self {
+            entities: HashSet::new(),
+            initial_scan: true,
+        }
+    }
+}
+
+pub fn queue_added_domain_prim(
+    trigger: On<Add, UsdPrimPath>,
+    mut pending: ResMut<PendingDomainProjectionCandidates>,
+) {
+    pending.entities.insert(trigger.entity);
+}
+
+pub fn queue_added_domain_identity(
+    trigger: On<Add, lunco_core::GlobalEntityId>,
+    prims: Query<(), With<UsdPrimPath>>,
+    mut pending: ResMut<PendingDomainProjectionCandidates>,
+) {
+    if prims.contains(trigger.entity) {
+        pending.entities.insert(trigger.entity);
+    }
+}
+
 fn queue_domain_projection(
     pending: &mut PendingDomainProjections,
     entity: Entity,
@@ -544,7 +579,6 @@ pub fn project_domain_islands(
         Query<&ChildOf>,
         Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     ),
-    triggers: Query<(), Or<(Added<UsdPrimPath>, Added<lunco_core::GlobalEntityId>)>>,
     prims: Query<(
         Entity,
         &UsdPrimPath,
@@ -566,12 +600,14 @@ pub fn project_domain_islands(
     // A member class landing is the projector's third trigger: the networks that
     // returned `Pending` have to be re-asked, and no prim spawned or changed.
     mut projection: ParamSet<(ResMut<ProjectionDirty>, ResMut<PendingDomainProjections>)>,
+    mut candidates: ResMut<PendingDomainProjectionCandidates>,
     classes: Res<MemberClasses>,
     registry: Res<SynthesizerRegistry>,
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
-    let has_added_projection_entity = !triggers.is_empty();
+    let Some(channels) = channels else { return };
+    let has_added_projection_entity = candidates.initial_scan || !candidates.entities.is_empty();
     let full_reprojection = {
         let mut projection_dirty = projection.p0();
         if !projection_is_due_from_flags(has_added_projection_entity, dirty.0, projection_dirty.0) {
@@ -579,13 +615,14 @@ pub fn project_domain_islands(
         }
         // Identity assignment is per prim during a runtime-instance spawn. Do
         // not turn one descendant's identity transition into a re-synthesis of
-        // every existing prim: only a wiring/source invalidation needs the full
-        // stage projection. The query iteration remains cheap, while the stage
-        // and policy reads below are reserved for the changed entities.
-        let full_reprojection = dirty.0 || projection_dirty.0;
+        // every existing prim: ordinary identity arrivals are coalesced by the
+        // lifecycle observers below, while wiring/source invalidation explicitly
+        // broadens the work to a full stage projection.
+        let full_reprojection = dirty.0 || projection_dirty.0 || candidates.initial_scan;
         projection_dirty.0 = false;
         full_reprojection
     };
+    candidates.initial_scan = false;
     let started = web_time::Instant::now();
     let mut projected = 0usize;
     let mut pending = projection.p1();
@@ -597,12 +634,19 @@ pub fn project_domain_islands(
         // cancellation is the complete invalidation operation.
         pending.tasks.clear();
     }
-    let Some(channels) = channels else { return };
-    for (entity, prim, previous, installed_model, instance_projection) in &prims {
+    let candidates: Vec<_> = if full_reprojection {
+        candidates.entities.clear();
+        prims.iter().collect()
+    } else {
+        let mut entities: Vec<_> = candidates.entities.drain().collect();
+        entities.sort_unstable();
+        entities
+            .into_iter()
+            .filter_map(|entity| prims.get(entity).ok())
+            .collect()
+    };
+    for (entity, prim, previous, installed_model, instance_projection) in candidates {
         if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
-            continue;
-        }
-        if !full_reprojection && !triggers.contains(entity) {
             continue;
         }
         // Scope every authored path to the same USD instance as the generated
@@ -1582,6 +1626,34 @@ mod tests {
         assert!(projection_is_due_from_flags(true, false, false));
         assert!(projection_is_due_from_flags(false, true, false));
         assert!(projection_is_due_from_flags(false, false, true));
+    }
+
+    #[test]
+    fn projection_observers_coalesce_usd_path_and_identity_arrivals() {
+        let mut app = App::new();
+        app.insert_resource(PendingDomainProjectionCandidates {
+            entities: HashSet::new(),
+            initial_scan: false,
+        })
+        .add_observer(queue_added_domain_prim)
+        .add_observer(queue_added_domain_identity);
+
+        let entity = app
+            .world_mut()
+            .spawn(UsdPrimPath {
+                stage_handle: Handle::default(),
+                path: "/Scene/Body".into(),
+            })
+            .id();
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(lunco_core::GlobalEntityId::from_raw(12));
+        app.world_mut()
+            .spawn(lunco_core::GlobalEntityId::from_raw(13));
+
+        let pending = app.world().resource::<PendingDomainProjectionCandidates>();
+        assert_eq!(pending.entities.len(), 1);
+        assert!(pending.entities.contains(&entity));
     }
 
     fn component(path: &str, target: Option<&str>) -> DomainComponent {
