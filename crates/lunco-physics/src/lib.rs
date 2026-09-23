@@ -102,21 +102,20 @@ pub const MAX_DIAGNOSTIC_SUBSTEP_COUNT: u32 = 64;
 /// Runtime admission policy for physics reproducibility.
 ///
 /// Avian's parallel island/contact work is order-sensitive. A deterministic
-/// run therefore needs an explicitly pinned compute pool, not merely a fixed
-/// timestep. The application composition root sets this resource when it
-/// chooses the task-pool policy; the physics crate owns the meaning and all
-/// consumers can report it without trying to inspect Bevy's global pool.
+/// run therefore needs a single-threaded compute pool, not merely a fixed
+/// timestep. The composition root snapshots the initialized Bevy pool width;
+/// the physics crate owns the meaning and exposes it to consumers.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PhysicsDeterminism {
-    /// Requested compute-pool width. `None` means the host left the pool
-    /// unconstrained and the result must not be treated as reproducible.
+    /// Effective compute-pool width observed at application composition.
+    /// `None` means the pool was unavailable and the result is not reproducible.
     pub compute_threads: Option<usize>,
     /// True only for the single-threaded admission profile.
     pub deterministic: bool,
 }
 
 impl PhysicsDeterminism {
-    /// Build the contract from the composition root's explicit pool choice.
+    /// Build the contract from the effective pool width observed by the host.
     pub const fn from_compute_threads(compute_threads: Option<usize>) -> Self {
         Self {
             compute_threads,

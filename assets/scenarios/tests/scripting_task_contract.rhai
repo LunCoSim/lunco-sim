@@ -11,6 +11,9 @@ fn on_start(me, ctx) {
     this.start_clock = execution.clock;
     this.start_tick = sim_tick();
     this.start_dt = dt();
+    let physics_clock = clock_snapshot();
+    this.physics_compute_threads = physics_clock.physics_compute_threads;
+    this.physics_deterministic = physics_clock.physics_deterministic;
     this.task_ctx_is_empty = false;
     this.mission_ctx_is_empty = false;
     this.elapsed = 0.0;
@@ -128,6 +131,8 @@ fn on_tick(me, ctx) {
             t_true(this.start_ctx_is_empty, "on_start receives the empty default context"),
             t_true(this.start_cycle == "simulation" && this.start_phase == "start", "on_start inherits its simulation cycle and start phase"),
             t_true(this.start_clock == "simulation" && this.start_dt > 0.0 && this.start_tick >= 0, "simulation clock APIs work in on_start"),
+            t_true(this.physics_compute_threads >= 1, "physics admission reports the effective compute-pool width"),
+            t_true(this.physics_deterministic == (this.physics_compute_threads == 1), "physics determinism matches the effective compute-pool width"),
             t_true(this.task_ctx_is_empty, "task receives the empty default context"),
             t_true(this.mission_ctx_is_empty, "mission receives the empty default context"),
             t_true(this.event_ctx_is_empty, "on_event receives the empty default context"),

@@ -453,8 +453,11 @@ The whole-simulation guarantee remains open because:
    revision-matched interface. Bevy's wasm task pool runs on the browser main
    thread, so the web loader still needs a Modelica Web Worker handoff for a
    fully non-blocking parse.
-5. The production GUI does not pin Avian's compute pool; `PhysicsDeterminism`
-   correctly reports that configuration as nondeterministic.
+5. The simulation composition records the effective Bevy compute-pool width in
+   `PhysicsDeterminism`, and the production scripting task scene checks that
+   observation. The GUI still leaves Avian's compute pool unconstrained, so its
+   live physics remains nondeterministic until a production profile is measured
+   and selected.
 6. The command journal does not yet provide a whole-simulation authoritative
    input log and replay verdict, and adaptive Modelica is not a cross-machine
    bitwise deterministic solver.

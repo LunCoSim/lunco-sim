@@ -389,8 +389,10 @@ impl Plugin for LunCoSimSimulationPlugin {
             .world()
             .contains_resource::<lunco_physics::PhysicsDeterminism>()
         {
+            let compute_threads =
+                bevy::tasks::ComputeTaskPool::try_get().map(|pool| pool.thread_num());
             app.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
-                None,
+                compute_threads,
             ));
         }
         let args: Vec<String> = std::env::args().collect();
