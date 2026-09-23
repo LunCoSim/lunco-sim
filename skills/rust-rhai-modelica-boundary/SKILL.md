@@ -102,7 +102,9 @@ the first entity, a fabricated value, or an older behavior.
    scripting host into a small contract crate. Native immutable preparation
    uses `lunco_core_runtime::AsyncWorkAdmission`; domain owners keep their
    typed result and deterministic commit boundary instead of adding a local
-   priority scheduler.
+   priority scheduler. Superseded work may be withdrawn while queued. A running
+   job is not preempted; reject its stale result at the owner and release only
+   the exact progress operation it owns.
 4. Place tests at the observable owner. Keep Rust tests for pure lowering,
    math, parsing, schema/composition, serialization, and generic lifecycle or
    interpreter seams. Put behavior, policy, asset, long-USD, and model-backed

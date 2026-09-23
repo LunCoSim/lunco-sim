@@ -232,17 +232,21 @@ boundary), `Interactive` (work for the visible/active Twin or viewport), and
 operation identity orders requests within a class; aging or a reserved
 background share prevents starvation. A priority changes which queued job
 starts first; it never changes simulation order, event order, or which result
-is valid. Domain owners
-keep their typed task handles, payloads, and result validation. The shared
-policy only admits bounded work onto the existing pool and reports queue/in-
-flight status.
+is valid. Domain owners keep their typed task handles, payloads, and result
+validation. An owner may cancel a request while it is still queued. Once a
+worker has started it, work that owns a simulation progress hold keeps that
+exact hold until a current result commits or the operation is explicitly
+retired; a stale completion cannot release a newer operation's hold. The
+shared policy only admits bounded work onto the existing pool and reports
+queue, in-flight, rejection, and queued cancellation counts.
 
 Native Bevy hosts install `AsyncWorkAdmission` from `lunco-core-runtime`. Each
 request carries a stable key containing scope generation, owner identity,
 source revision, and operation id. The resource bounds queued and admitted
 work, applies the three priorities with reserved interactive/background
-service, and exposes aggregate queue counters. Owners still validate and
-commit their typed results at their own boundary. Modelica document parsing is
+service, and exposes aggregate queue counters. It can withdraw queued work but
+does not preempt a running task. Owners still validate and commit their typed
+results at their own boundary. Modelica document parsing is
 the first migrated consumer; Rhai, SysML, USD, Modelica library preparation,
 and visualization preparation still need to join this path. On wasm, Bevy's
 async-compute pool is cooperative on the browser main thread; existing Web

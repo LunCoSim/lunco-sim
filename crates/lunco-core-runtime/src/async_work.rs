@@ -127,6 +127,8 @@ pub struct AsyncWorkSnapshot {
     pub finished: u64,
     /// Total requests rejected by capacity, duplicate-key, or platform checks.
     pub rejected: u64,
+    /// Queued requests withdrawn by their owner before dispatch.
+    pub cancelled: u64,
     /// Changes when queued work, limits, or worker counts change.
     pub revision: u64,
     /// Changes only when queue or worker capacity becomes available.
@@ -149,6 +151,7 @@ struct SharedWorkState {
     submitted: AtomicU64,
     finished: AtomicU64,
     rejected: AtomicU64,
+    cancelled: AtomicU64,
     revision: AtomicU64,
     capacity_revision: AtomicU64,
 }
@@ -264,6 +267,38 @@ impl AsyncWorkAdmission {
         Ok(())
     }
 
+    /// Withdraw a queued request before dispatch. A request already dispatched
+    /// to a worker remains owned by that worker; its owner must reject a stale
+    /// result at the commit boundary.
+    pub fn cancel_queued(&mut self, key: AsyncWorkKey) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = key;
+            false
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
+            let queue_key = queued
+                .jobs
+                .keys()
+                .find(|queue_key| queue_key.key == key)
+                .copied();
+            let Some(queue_key) = queue_key else {
+                return false;
+            };
+            queued.jobs.remove(&queue_key);
+            queued.keys.remove(&key);
+            self.shared.cancelled.fetch_add(1, Ordering::Relaxed);
+            self.shared.revision.fetch_add(1, Ordering::Release);
+            self.shared
+                .capacity_revision
+                .fetch_add(1, Ordering::Release);
+            true
+        }
+    }
+
     /// Current queue, worker, rejection, and revision counters.
     pub fn snapshot(&self) -> AsyncWorkSnapshot {
         let queued_state = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
@@ -279,6 +314,7 @@ impl AsyncWorkAdmission {
             submitted: self.shared.submitted.load(Ordering::Relaxed),
             finished: self.shared.finished.load(Ordering::Relaxed),
             rejected: self.shared.rejected.load(Ordering::Relaxed),
+            cancelled: self.shared.cancelled.load(Ordering::Relaxed),
             revision: self.shared.revision.load(Ordering::Acquire),
             capacity_revision: self.shared.capacity_revision.load(Ordering::Acquire),
         }
@@ -595,6 +631,47 @@ mod tests {
             })
         );
         assert_eq!(admission.snapshot().queued, [0, 0, 2]);
+    }
+
+    #[test]
+    fn owner_can_cancel_queued_work_and_reuse_its_identity() {
+        let mut admission = AsyncWorkAdmission::default();
+        let key = key(11);
+        admission
+            .submit(AsyncWorkPriority::SimulationRequired, key, || {})
+            .unwrap();
+        let capacity_revision = admission.capacity_revision();
+
+        assert!(admission.cancel_queued(key));
+        assert_eq!(admission.snapshot().queued, [0, 0, 0]);
+        assert_eq!(admission.snapshot().cancelled, 1);
+        assert_eq!(admission.capacity_revision(), capacity_revision + 1);
+        assert!(
+            admission
+                .submit(AsyncWorkPriority::SimulationRequired, key, || {})
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn owner_cannot_cancel_work_after_dispatch() {
+        let mut admission = AsyncWorkAdmission::default();
+        let key = key(12);
+        admission
+            .submit(AsyncWorkPriority::SimulationRequired, key, || {})
+            .unwrap();
+        let (priority, active_key, _) = admission.pop_next().unwrap();
+        admission
+            .shared
+            .active_keys
+            .lock()
+            .unwrap()
+            .insert(active_key);
+        admission.shared.in_flight[priority.index()].fetch_add(1, Ordering::AcqRel);
+
+        assert!(!admission.cancel_queued(key));
+        assert_eq!(admission.snapshot().in_flight, [1, 0, 0]);
+        assert_eq!(admission.snapshot().cancelled, 0);
     }
 
     #[test]
