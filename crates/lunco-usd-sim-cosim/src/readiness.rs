@@ -9,7 +9,7 @@
 //! |---|---|---|
 //! | [`kinds::SCENE_LOAD`] | the stage or its projected participants are still settling | world |
 //! | [`kinds::PROGRAM_COMPILE`] | an entity's Modelica model has not compiled | its owning physical subtree |
-//! | [`kinds::PARTICIPANT_INIT`] | an authored rigid body has not been admitted to Avian | world |
+//! | [`kinds::PARTICIPANT_INIT`] | an active Modelica model has not completed its first communication point (entity), or an authored rigid body has not been admitted to Avian (world) | entity subtree or world |
 //!
 //! # Why reconcile systems rather than events
 //!
@@ -52,7 +52,7 @@ struct PhysicsAdmissionWait {
     ticket: ReadinessTicket,
 }
 
-/// The open compile wait for this entity's Modelica model.
+/// The open compile or first-exchange wait for this entity's Modelica model.
 ///
 /// On the entity rather than in a side table so it dies with the entity; the
 /// registry drops waits whose subject was despawned, so a scene reload
@@ -103,9 +103,10 @@ fn scene_still_loading(stage_loading: bool) -> bool {
     stage_loading
 }
 
-/// Freeze the physical owner of a Modelica entity whose program has not compiled
-/// yet, and release its wait the moment that program is runnable (or terminally
-/// failed).
+/// Freeze the physical owner of a Modelica entity during its program lifecycle
+/// while it compiles or an active participant awaits its first successful
+/// communication point. A deliberately paused, compiled model is ready without
+/// a live step.
 ///
 /// This is the descent-lander race, closed: the entity exists and has mass and a
 /// collider long before the model that is supposed to fly it has been through the
@@ -114,9 +115,9 @@ fn scene_still_loading(stage_loading: bool) -> bool {
 ///
 /// The `ModelicaModel` lifecycle is authoritative here. A bind-published
 /// [`SimComponent`] intentionally remains `Compiling` until its first solver
-/// tick, but that first tick cannot happen while offline recording is waiting
-/// for the visual gate. Waiting on the component status would therefore make
-/// the recorder wait on the event that the recorder itself must initiate.
+/// tick, so the model's source state closes the compile wait and its first
+/// successful communication point closes participant initialization. Waiting
+/// on the wrapper status would conflate those separate lifecycle facts.
 ///
 /// The wait is deliberately attached to the owning physical subtree rather than
 /// the whole world. A cold compiler must not stop unrelated rovers, terrain
@@ -239,13 +240,14 @@ fn owning_physics_entity(
     entity
 }
 
-/// Whether the simulation must remain frozen for this model's compiler.
+/// Whether this Modelica participant has reached the state its owner needs.
 ///
-/// Source compilation and the first live solver tick are different lifecycle
-/// events. `ModelicaModel.is_compiled` closes this wait; the Modelica sync loop
-/// then performs the first tick and promotes the public component to Running.
-/// A component error remains a named readiness fact, even when the model field
-/// has not received the same diagnostic yet.
+/// Source compilation and the first live communication point are different
+/// lifecycle events. A paused model is intentionally ready after compilation;
+/// an active model keeps its owning physical subtree held until a successful
+/// step publishes its first live outputs. A component error remains a named
+/// readiness fact, even when the model field has not received the same
+/// diagnostic yet.
 fn modelica_wait_kind(
     model: &ModelicaModel,
     component: Option<&SimComponent>,
@@ -258,6 +260,8 @@ fn modelica_wait_kind(
         Some(kinds::PROGRAM_FAILED)
     } else if model.is_compiling || !model.is_compiled {
         Some(kinds::PROGRAM_COMPILE)
+    } else if !model.paused && (!model.current_time.is_finite() || model.current_time <= 0.0) {
+        Some(kinds::PARTICIPANT_INIT)
     } else {
         None
     }
@@ -343,12 +347,48 @@ mod tests {
 
         let compiled = ModelicaModel {
             is_compiled: true,
+            paused: true,
             ..default()
         };
         assert_eq!(
             modelica_wait_kind(&compiled, Some(&compiling)),
             None,
-            "the first solver tick must not be blocked by the component's bind-time status"
+            "a deliberately paused model is ready after its source compiles"
+        );
+
+        let active = ModelicaModel {
+            is_compiled: true,
+            paused: false,
+            ..default()
+        };
+        assert_eq!(
+            modelica_wait_kind(&active, Some(&compiling)),
+            Some(kinds::PARTICIPANT_INIT),
+            "an active participant remains pending until its first live communication point"
+        );
+
+        let initialized = ModelicaModel {
+            is_compiled: true,
+            paused: false,
+            current_time: active.communication_period_secs,
+            ..default()
+        };
+        assert_eq!(
+            modelica_wait_kind(&initialized, None),
+            None,
+            "a completed first communication point closes participant initialization"
+        );
+
+        let invalid_time = ModelicaModel {
+            is_compiled: true,
+            paused: false,
+            current_time: f64::NAN,
+            ..default()
+        };
+        assert_eq!(
+            modelica_wait_kind(&invalid_time, None),
+            Some(kinds::PARTICIPANT_INIT),
+            "a non-finite solver clock is not evidence of an initial exchange"
         );
     }
 

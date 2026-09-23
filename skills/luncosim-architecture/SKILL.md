@@ -49,7 +49,10 @@ mounts retain diagnostics without pausing or faulting the primary simulation. A
 terminal primary reference failure retains its exact hold and publishes a path
 diagnostic plus `RuntimeFault` until scene teardown; inactive or removed,
 nonfaulted operations release their own keys. Surface the active wait reason
-through the existing status bus.
+through the existing status bus. An active USD Modelica participant remains
+readiness-held through its first successful communication point; a compiled,
+intentionally paused model is ready without being stepped. Keep that participant
+readiness separate from the shared `SimulationProgress` lifecycle gate.
 
 For engineering requirements, keep the same split at the numerical boundary:
 SysML owns typed intent, units, normative tolerances, and requirement/
