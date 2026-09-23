@@ -543,9 +543,6 @@ one-time initial sweep for hosts where prims predate plugin installation.
 Their update gates no longer probe all USD prims for absent markers every
 frame. Scene teardown retires the pending set. The production-path comparison
 and bounded Tracy attribution remain outstanding.
-`cargo test -j 4 -p lunco-usd-sim-cosim --lib --test usd_connection_mechanics`
-passes with 31 unit cases and 4 USD-wiring integration cases; this validates
-lifecycle admission, not a measured frame-rate gain.
 
 The wiring run condition now reads the existing `UsdWiringDirty` latch instead
 of querying the full endpoint population for `Added<T>` matches each update.
@@ -573,6 +570,20 @@ Focused validation passed:
 This verifies lifecycle and wiring behavior, not a measured FPS improvement. A
 clean settled Summer Space School window and bounded Tracy attribution remain
 required.
+
+Modelica wrapper admission had a separate `is_empty()` query and a full
+candidate iteration in the same Update loop. It now uses its own
+`PendingEntityWork` instance: `ModelicaModel`/`UsdSourcedCosim` additions and
+`SimComponent` removal queue eligible owners; owner removal and scene teardown
+retire them; one bootstrap discovery covers pre-existing unwrapped models. The
+wrapper gate reads that set and the wrapper batch queries only queued entities.
+Focused validation passes:
+
+- `nice -n 19 cargo test -j 4 -p lunco-usd-sim-cosim --lib` — **34/34**, including queued arrival, existing-model bootstrap, already-wrapped exclusion, surface re-admission, and teardown cases.
+- `nice -n 19 cargo test -j 4 -p lunco-usd-sim-cosim --test usd_connection_mechanics` — **4/4**.
+
+This removes another idle ECS poll; clean FPS and Tracy measurements remain
+outstanding.
 
 #### Current generated-domain cache and measured baseline
 

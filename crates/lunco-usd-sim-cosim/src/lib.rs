@@ -364,6 +364,16 @@ impl Default for PendingUsdCosimPrimWork {
     }
 }
 
+/// Lifecycle-queued Modelica owners that still need their shared port surface.
+#[derive(Resource)]
+struct PendingModelicaWrapWork(PendingEntityWork);
+
+impl Default for PendingModelicaWrapWork {
+    fn default() -> Self {
+        Self(PendingEntityWork::with_initial_discovery())
+    }
+}
+
 fn queue_added_usd_cosim_prim(
     trigger: On<Add, UsdPrimPath>,
     unprocessed: Query<(), Without<UsdSourcedCosim>>,
@@ -391,7 +401,55 @@ fn queue_removed_usd_sourced_cosim(
     }
 }
 
+fn queue_modelica_wrap_for_new_model(
+    trigger: On<Add, ModelicaModel>,
+    eligible: Query<(), (With<UsdSourcedCosim>, Without<SimComponent>)>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    if eligible.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn queue_modelica_wrap_for_new_cosim_owner(
+    trigger: On<Add, UsdSourcedCosim>,
+    eligible: Query<(), (With<ModelicaModel>, Without<SimComponent>)>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    if eligible.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn queue_modelica_wrap_after_surface_removal(
+    trigger: On<Remove, SimComponent>,
+    eligible: Query<(), (With<UsdSourcedCosim>, With<ModelicaModel>)>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    if eligible.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn forget_removed_modelica_wrap_source(
+    trigger: On<Remove, ModelicaModel>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    pending.0.forget(trigger.entity);
+}
+
+fn forget_removed_modelica_wrap_owner(
+    trigger: On<Remove, UsdSourcedCosim>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    pending.0.forget(trigger.entity);
+}
+
 fn reset_usd_cosim_prim_work(mut pending: ResMut<PendingUsdCosimPrimWork>) {
+    pending.0.clear();
+}
+
+fn reset_modelica_wrap_work(mut pending: ResMut<PendingModelicaWrapWork>) {
     pending.0.clear();
 }
 
@@ -405,17 +463,8 @@ fn any_unprocessed_usd_cosim(pending: Res<PendingUsdCosimPrimWork>) -> bool {
 
 /// Run condition: any `UsdSourcedCosim` modelica model still needs wrapping
 /// into a `SimComponent`.
-fn any_unwrapped_modelica(
-    q: Query<
-        (),
-        (
-            With<UsdSourcedCosim>,
-            With<ModelicaModel>,
-            Without<SimComponent>,
-        ),
-    >,
-) -> bool {
-    !q.is_empty()
+fn any_pending_modelica_wrap(pending: Res<PendingModelicaWrapWork>) -> bool {
+    pending.0.has_work()
 }
 
 pub(crate) fn process_usd_cosim_prims(
@@ -1886,8 +1935,20 @@ pub(crate) fn wrap_modelica_into_simcomponent(
         (Entity, &ModelicaModel, Option<&UsdModelicaPortContract>),
         (With<UsdSourcedCosim>, Without<SimComponent>),
     >,
+    mut pending: ResMut<PendingModelicaWrapWork>,
 ) {
-    for (entity, model, contract) in q_new.iter() {
+    let mut entities = pending.0.take_queued();
+    if pending.0.take_initial_discovery() {
+        // Cover unwrapped participants that predate this cosim projector.
+        entities.extend(q_new.iter().map(|(entity, ..)| entity));
+    }
+    let mut candidates: Vec<_> = entities
+        .into_iter()
+        .filter_map(|entity| q_new.get(entity).ok())
+        .collect();
+    candidates.sort_unstable_by_key(|(entity, ..)| *entity);
+
+    for (entity, model, contract) in candidates {
         let mut entity_commands = commands.entity(entity);
         entity_commands.try_insert(SimComponent {
             model_name: model.model_name.clone(),
@@ -2139,6 +2200,7 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjectionCandidates>()
             .init_resource::<PendingUsdCosimPrimWork>()
+            .init_resource::<PendingModelicaWrapWork>()
             .init_resource::<WiringFactsCache>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>();
@@ -2148,6 +2210,11 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(queue_added_usd_cosim_prim)
             .add_observer(forget_removed_usd_cosim_prim)
             .add_observer(queue_removed_usd_sourced_cosim)
+            .add_observer(queue_modelica_wrap_for_new_model)
+            .add_observer(queue_modelica_wrap_for_new_cosim_owner)
+            .add_observer(queue_modelica_wrap_after_surface_removal)
+            .add_observer(forget_removed_modelica_wrap_source)
+            .add_observer(forget_removed_modelica_wrap_owner)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_prim)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_identity)
             .add_observer(lunco_usd_sim_domain::queue_removed_domain_identity)
@@ -2258,6 +2325,7 @@ impl Plugin for UsdSimCosimPlugin {
         );
         app.add_systems(lunco_core::SceneTeardown, reset_python_unavailable);
         app.add_systems(lunco_core::SceneTeardown, reset_usd_cosim_prim_work);
+        app.add_systems(lunco_core::SceneTeardown, reset_modelica_wrap_work);
         app.add_systems(lunco_core::SceneTeardown, reset_wiring_facts_cache);
         app.add_systems(
             lunco_core::SceneTeardown,
@@ -2327,7 +2395,7 @@ impl Plugin for UsdSimCosimPlugin {
             Update,
             (
                 rewire_usd_connections.run_if(wiring_due),
-                wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
+                wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
                 request_modelica_parameter_recompile,
                 seed_usd_input_defaults,
                 dispatch_loaded_modelica_sources,
@@ -2540,6 +2608,111 @@ mod tests {
     }
 
     #[test]
+    fn modelica_wrap_work_tracks_only_unwrapped_participant_lifecycles() {
+        let mut app = App::new();
+        app.init_resource::<PendingModelicaWrapWork>();
+        app.world_mut()
+            .resource_mut::<PendingModelicaWrapWork>()
+            .0
+            .take_initial_discovery();
+        app.add_observer(queue_modelica_wrap_for_new_model)
+            .add_observer(queue_modelica_wrap_for_new_cosim_owner)
+            .add_observer(queue_modelica_wrap_after_surface_removal)
+            .add_observer(forget_removed_modelica_wrap_source)
+            .add_observer(forget_removed_modelica_wrap_owner);
+
+        let owner = app.world_mut().spawn(UsdSourcedCosim).id();
+        app.world_mut()
+            .entity_mut(owner)
+            .insert(ModelicaModel::default());
+        assert!(app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(owner));
+
+        let model_first = app.world_mut().spawn(ModelicaModel::default()).id();
+        app.world_mut()
+            .entity_mut(model_first)
+            .insert(UsdSourcedCosim);
+        assert!(app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(model_first));
+
+        let already_wrapped = app
+            .world_mut()
+            .spawn((
+                UsdSourcedCosim,
+                ModelicaModel::default(),
+                SimComponent::default(),
+            ))
+            .id();
+        assert!(!app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(already_wrapped));
+
+        app.world_mut()
+            .entity_mut(already_wrapped)
+            .remove::<SimComponent>();
+        assert!(app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(already_wrapped));
+
+        app.world_mut()
+            .entity_mut(already_wrapped)
+            .remove::<ModelicaModel>();
+        assert!(!app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(already_wrapped));
+
+        app.world_mut()
+            .entity_mut(owner)
+            .remove::<UsdSourcedCosim>();
+        assert!(!app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(owner));
+    }
+
+    #[test]
+    fn modelica_wrapper_bootstraps_existing_and_queues_new_participants() {
+        let mut app = App::new();
+        app.init_resource::<PendingModelicaWrapWork>()
+            .add_observer(queue_modelica_wrap_for_new_model)
+            .add_observer(queue_modelica_wrap_for_new_cosim_owner)
+            .add_observer(queue_modelica_wrap_after_surface_removal)
+            .add_observer(forget_removed_modelica_wrap_source)
+            .add_observer(forget_removed_modelica_wrap_owner)
+            .add_systems(
+                Update,
+                wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
+            );
+
+        let preexisting = app
+            .world_mut()
+            .spawn((UsdSourcedCosim, ModelicaModel::default()))
+            .id();
+        app.update();
+        assert!(app.world().get::<SimComponent>(preexisting).is_some());
+
+        let arriving = app.world_mut().spawn(UsdSourcedCosim).id();
+        app.world_mut()
+            .entity_mut(arriving)
+            .insert(ModelicaModel::default());
+        app.update();
+        assert!(app.world().get::<SimComponent>(arriving).is_some());
+    }
+
+    #[test]
     fn scene_teardown_retires_cosim_prim_discovery_work() {
         let mut app = App::new();
         let mut pending = PendingUsdCosimPrimWork::default();
@@ -2551,6 +2724,23 @@ mod tests {
 
         let pending = app.world().resource::<PendingUsdCosimPrimWork>();
         assert!(!pending.0.has_work());
+    }
+
+    #[test]
+    fn scene_teardown_retires_modelica_wrapper_work() {
+        let mut app = App::new();
+        let mut pending = PendingModelicaWrapWork::default();
+        pending.0.queue(Entity::from_bits(1));
+        app.insert_resource(pending)
+            .add_systems(lunco_core::SceneTeardown, reset_modelica_wrap_work);
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        assert!(!app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .has_work());
     }
 
     #[derive(Resource, Default)]
@@ -2777,7 +2967,10 @@ mod tests {
 
         let mut app = App::new();
         let e = app.world_mut().spawn((UsdSourcedCosim, model)).id();
-        app.add_systems(Update, wrap_modelica_into_simcomponent);
+        app.init_resource::<PendingModelicaWrapWork>().add_systems(
+            Update,
+            wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
+        );
         app.update();
 
         let comp = app
@@ -2812,7 +3005,10 @@ mod tests {
             .world_mut()
             .spawn((UsdSourcedCosim, model, contract))
             .id();
-        app.add_systems(Update, wrap_modelica_into_simcomponent);
+        app.init_resource::<PendingModelicaWrapWork>().add_systems(
+            Update,
+            wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
+        );
 
         app.update();
 

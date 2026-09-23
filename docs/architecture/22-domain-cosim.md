@@ -537,6 +537,13 @@ vehicle projector owns a separate instance of the same contract, so each
 projection domain drains only its own work. Scene teardown clears each
 scene-owned set.
 
+Modelica wrapper admission has its own owner-scoped set as well. Model and
+cosim-owner additions queue an entity that lacks `SimComponent`; removing that
+surface reopens wrapping, while removal of either owner component retires its
+queued work. One initial discovery covers pre-existing unwrapped models, and
+the wrapper's run condition and batch both consume this set rather than polling
+the unwrapped population every Update.
+
 Domain source resolution has a separate invalidation path. Each discovered
 network root records its Modelica source assets; when a source class settles or
 changes, only roots indexed under that asset are queued for synthesis. New USD
