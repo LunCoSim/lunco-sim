@@ -36,25 +36,10 @@ def Xform "SandboxScene" (
     double lunco:time:epochJd = 2461395.5
 
     # Celestial content — opt-in standard solar set (Sun, Earth, Moon).
-    # Trajectories (OrbitViews) are enabled via `lunco:trajectory:userVisible = true` overrides.
     def "SolarSystem" (
         prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
     )
     {
-        over "Earth"
-        {
-            over "OrbitView"
-            {
-                bool lunco:trajectory:userVisible = true
-            }
-        }
-        over "Moon"
-        {
-            over "OrbitView"
-            {
-                bool lunco:trajectory:userVisible = true
-            }
-        }
     }
 
     # ── Sky ────────────────────────────────────────────────────────────────

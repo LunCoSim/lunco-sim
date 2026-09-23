@@ -319,6 +319,10 @@ scenarios or runs. The file is still opened through `DocumentOrigin::File` and
 saveable with `SaveDocument`. **`SaveAsTwin`** adds the manifest-backed Twin
 metadata when the user wants it.
 
+Documentation updates to existing metadata strings and a `RemovePrim` with one
+unambiguous authored spec patch the original USDA source, retaining unrelated
+comments and layout. Other base-layer edits serialize from canonical SDF data.
+
 ## Which stage opens — scene resolution
 
 A Twin may contain **many** `.usda` files. Exactly one is the **active stage**
@@ -839,14 +843,14 @@ single-axis `rotateX/Y/Z`.
 
 ### Animation
 
-Authored `timeSamples` drive entities at the current sim time (architecture doc 19 — the
-unified time spine). At composition (`flatten_stage`) each attribute's composed
+Authored `timeSamples` drive entities at the physical presentation time
+(architecture doc 19 — the unified time spine). At composition (`flatten_stage`) each attribute's composed
 `timeSamples` and the stage `timeCodesPerSecond` are carried onto the flattened scene
 (sublayer/reference `LayerOffset`s are baked in by PCP), so animation works on referenced
 assets, not just single-layer files. A prim with any animated channel is tagged
 `UsdAnimated`; the per-frame samplers then drive:
 
-- **Transform** — the full transform decode above, evaluated at the entity's resolved time.
+- **Transform** — the full transform decode above, evaluated at the entity's resolved time. A prim directly beneath a BigSpace `Grid` may use `double3 xformOp:translate`; its f64 position is split into `(CellCoord, Transform)` before the cell-local translation is narrowed. This high-precision path accepts a translate-first stack followed by rotations and scale; a transform stack whose translation cannot be split with its authored meaning intact is rejected visibly.
 - **Visibility** — animated `visibility` token (held).
 - **Material** — animated `inputs:diffuseColor` / `inputs:opacity` (and geom
   `primvars:displayColor`) into the entity's **`PbrLook`** — the render-free appearance
@@ -859,11 +863,11 @@ assets, not just single-layer files. A prim with any animated channel is tagged
   > slow memory climb, not a crash.
 
 An animated rigid body is demoted to `RigidBody::Kinematic` (`lunco-usd-avian`) so the
-sampler's writes don't fight the physics solver. Playback is independent of the physics
-clock: animated entities bind to a singleton **animation-preview** `TimeDomain`, driven by
-the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
-(play / pause / scrub / rate). See [`19-unified-time-and-clock.md`](19-unified-time-and-clock.md)
-(T5/T7) for the clock model.
+sampler's writes don't fight the physics solver. Unbound authored animation follows
+`SimulationPresentationTime`; an explicit `TimeBinding` may select the editor's
+**animation-preview** domain, driven by `ControlAnimation` and the Inspector
+**Animation** section. See [`19-unified-time-and-clock.md`](19-unified-time-and-clock.md)
+for the clock model.
 
 ### Testing
 Production runtime acceptance tests load **real USD files** through the same

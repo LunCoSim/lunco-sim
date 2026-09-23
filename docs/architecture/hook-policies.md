@@ -193,9 +193,13 @@ The startup function is the only bootstrap convention in each scope. It is
 authored behavior and can choose installation order/reporting, while Rust
 retains the generic typed installer, owner-contract validation, and cleanup
 boundary. There is no second hardcoded list of policy files or source roles in
-the engine. The `scripting.source.classify` policy classifies engine-library
-sources as preludes or unrelated scenario content; Twin tool libraries are
-selected and loaded by the `twin.lifecycle` action plan.
+the engine. The required `scripting.source.classify` policy classifies
+engine-library sources as preludes or unrelated scenario content; admission,
+asset publication, and runtime preparation run in that order. During a policy
+replacement, a temporarily unavailable classifier leaves the current admitted
+sources intact and closes script execution until the authored policy returns.
+Twin tool libraries are selected and loaded by the `twin.lifecycle` action
+plan.
 
 ### Tool layers and shutdown
 

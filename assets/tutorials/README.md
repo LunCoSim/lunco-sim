@@ -52,10 +52,14 @@ starting the script. The command uses the active `WorldRoot` when a catalog
 entry omits a host target.
 
 Use USD's existing composition vocabulary in scene assets: `subLayers`,
-`references`, `payloads`, `UsdPhysics`, and `UsdLux`. A scene that depends on
-celestial time must author its epoch and opt into its celestial payload; a
-fixed-light scene should author its `DistantLight` explicitly. Do not add a
-lesson-specific schema or hide a missing environment with a runtime fallback.
+`references`, `payloads`, `UsdPhysics`, and `UsdLux`. The startup-installed
+`scene.time.select` policy runs once after the USD scene and queued visual/mesh
+projections settle. It uses an authored non-zero root epoch when present and
+current computer UTC converted to TDB otherwise. Time-dependent consumers wait
+for that result. A missing epoch for celestial sources warns and is linted;
+author one when the scene needs repeatable celestial time. A fixed-light scene
+should author its `DistantLight` explicitly. Do not add a lesson-specific
+schema.
 
 Tutorial controls use semantic input bindings (`input_hint(...)`) and
 progression uses semantic commands or authoritative state. Do not hardcode

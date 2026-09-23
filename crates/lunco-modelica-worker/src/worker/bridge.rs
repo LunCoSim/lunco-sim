@@ -301,7 +301,7 @@ pub fn spawn_modelica_requests(
         // this render frame before this first solver request was dispatched.
         // The current fixed iteration is the only valid one; discard the
         // remaining overstep so the runner cannot execute another tick after
-        // the barrier has been raised. `advance_world_clock` pauses the virtual
+        // the barrier has been raised. `project_time_transport` pauses the virtual
         // clock before the next frame, which then keeps every FixedUpdate
         // consumer (SimTick, Rhai, controllers, Modelica, and Avian) stopped
         // until the result is released in Update.

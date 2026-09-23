@@ -4,20 +4,21 @@
 //! netcode/integrator substrate) — and **everything calendar/celestial is
 //! *derived*, never accumulated**. This crate owns the layer *above* the tick:
 //! the conversion anchor (tick ↔ epoch), the transport (play/pause/rate), the
-//! derived causal [`WorldTime`] view, and the separate [`CelestialTime`]
-//! presentation view.
+//! derived causal [`WorldTime`] view, and the interpolated
+//! [`SimulationPresentationTime`] used by render-only consumers.
 //!
-//! The load-bearing rule is invariant 1 — **derive, never accumulate**. The old
-//! `epoch += Δt` (the former celestial clock) drifted, was frame-rate
-//! dependent and could not seek; here `epoch = epoch0 + (tick − tick0)/86400` is
-//! an exact pure function of the integer tick.
+//! The load-bearing rule is invariant 1 — **derive, never accumulate**. The
+//! calendar epoch is `epoch0 + (tick − tick0)/86400`, a pure function of the
+//! integer tick.
 //!
 //! `sim_secs` / MET and the calendar epoch are both derived from the same fixed
 //! tick and mission origin. All real logic is the pure [`advance_clock`] function
-//! (unit-tested headless, no Bevy `Time`). [`advance_world_clock`] is the thin
-//! Bevy adapter that projects its result onto Bevy's virtual clock.
+//! (unit-tested headless, no Bevy `Time`). `project_time_transport` applies the
+//! transport before the fixed loop; [`advance_world_clock`] publishes the final
+//! completed tick after that loop.
 
 use bevy::prelude::*;
+use lunco_hooks::HookValue as H;
 use std::time::Duration;
 
 use lunco_core_runtime::{SimTick, SECS_PER_TICK};
@@ -49,6 +50,166 @@ pub const MAX_REALTIME_RATE: f64 = 64.0;
 /// The slowest selectable live transport rate. Pause is represented by
 /// [`TransportMode::Paused`], so an accepted rate is always positive.
 pub const MIN_REALTIME_RATE: f64 = 0.1;
+
+/// Authored policy that chooses the mission-calendar epoch for a scene.
+pub const SCENE_TIME_SELECTION_HOOK: &str = "scene.time.select";
+
+lunco_hooks::declare_hook! {
+    id: SCENE_TIME_SELECTION_HOOK,
+    owner: "lunco-time",
+    description: "Select a mission epoch from composed scene facts and a current computer-time candidate.",
+    signature: [facts: Map],
+    output: Map,
+    deterministic: true,
+    required: true,
+    installable: true,
+}
+
+/// A validated decision returned by the authored scene-time policy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneTimeSelection {
+    /// Selected source: `authored` or `computer_time`.
+    pub source: &'static str,
+    /// Selected absolute epoch in Julian Date (TDB).
+    pub epoch_jd: f64,
+    /// Runtime warning returned by policy, when the authored scene needs one.
+    pub warning: Option<String>,
+}
+
+/// Readiness of the active scene's authored calendar selection.
+///
+/// Full USD applications hold time-dependent scene consumers until the stage
+/// has completed its load and projection transaction and the installed Rhai
+/// policy has selected the scene epoch. Small hosts that do not install this
+/// resource retain the standalone time-spine behavior.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
+pub struct SceneTimeState {
+    /// Current lifecycle phase.
+    pub phase: SceneTimePhase,
+    /// The selected scene epoch retained as the reset point.
+    pub selection: Option<SceneTimeSelectionRecord>,
+}
+
+/// Scene-time selection lifecycle phase.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SceneTimePhase {
+    /// No active scene provides a calendar selection.
+    #[default]
+    NoScene,
+    /// A scene transition is loading or projecting.
+    Loading,
+    /// Rhai selected an epoch and the clock tree reset is being applied.
+    Applying,
+    /// The selected epoch is installed and time-dependent consumers may run.
+    Ready,
+}
+
+/// Persistent reset point from the last completed scene-time policy decision.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneTimeSelectionRecord {
+    /// Selected source: `authored` or `computer_time`.
+    pub source: &'static str,
+    /// Selected absolute epoch in Julian Date (TDB).
+    pub epoch_jd: f64,
+}
+
+impl SceneTimeState {
+    /// Close the gate while the next scene is loading.
+    pub fn begin_scene_load(&mut self) {
+        self.phase = SceneTimePhase::Loading;
+        self.selection = None;
+    }
+
+    /// Record the policy result while the clock tree is reset.
+    pub fn begin_selection_application(&mut self, selection: &SceneTimeSelection) {
+        self.phase = SceneTimePhase::Applying;
+        self.selection = Some(SceneTimeSelectionRecord {
+            source: selection.source,
+            epoch_jd: selection.epoch_jd,
+        });
+    }
+
+    /// Mark the scene calendar ready for time-dependent consumers.
+    pub fn finish_selection_application(&mut self) {
+        self.phase = SceneTimePhase::Ready;
+    }
+
+    /// Leave the gate closed when there is no active scene.
+    pub fn clear_scene(&mut self) {
+        self.phase = SceneTimePhase::NoScene;
+        self.selection = None;
+    }
+
+    /// Whether scene-time consumers may run.
+    pub fn is_ready(&self) -> bool {
+        self.phase == SceneTimePhase::Ready
+    }
+}
+
+/// Run condition shared by time-dependent scene projections.
+pub fn scene_time_ready(state: Option<Res<SceneTimeState>>) -> bool {
+    state.is_none_or(|state| state.is_ready())
+}
+
+/// Typed handoff from the USD scene owner to the time owner after the Rhai
+/// policy has selected a validated epoch from the settled composed stage.
+#[derive(Event, Debug, Clone)]
+pub struct ApplySceneTimeSelection {
+    /// The validated result of `scene.time.select`.
+    pub selection: SceneTimeSelection,
+}
+
+/// Invoke the one scene-time policy and validate that it selected one of the
+/// candidates in `facts`. The policy decides; this function enforces the typed
+/// result contract before a clock owner applies it.
+pub fn select_scene_time(facts: &H) -> Result<SceneTimeSelection, String> {
+    let current = facts
+        .get("computer_time_tdb_jd")
+        .and_then(H::as_f64)
+        .filter(|value| value.is_finite() && *value != 0.0)
+        .ok_or_else(|| "scene time facts have no valid computer-time epoch".to_owned())?;
+    let decision = lunco_hooks::invoke(SCENE_TIME_SELECTION_HOOK, std::slice::from_ref(facts))
+        .ok_or_else(|| format!("required policy `{SCENE_TIME_SELECTION_HOOK}` is unavailable"))?
+        .map_err(|error| format!("scene time policy failed: {error}"))?;
+    let source = decision
+        .get("source")
+        .and_then(H::as_str)
+        .ok_or_else(|| "scene time policy result has no string source".to_owned())?;
+    let epoch_jd = decision
+        .get("epoch_jd")
+        .and_then(H::as_f64)
+        .filter(|value| value.is_finite() && *value != 0.0)
+        .ok_or_else(|| "scene time policy result has no valid numeric epoch_jd".to_owned())?;
+    let selected = match source {
+        "authored" => {
+            facts.get("epoch_api").and_then(H::as_bool) == Some(true)
+                && facts.get("epoch_status").and_then(H::as_str) == Some("valid")
+                && facts.get("authored_epoch_jd").and_then(H::as_f64) == Some(epoch_jd)
+        }
+        "computer_time" => current == epoch_jd,
+        _ => false,
+    };
+    if !selected {
+        return Err(format!(
+            "scene time policy selected `{source}` with an epoch outside the supplied facts"
+        ));
+    }
+    let warning = match decision.get("warning") {
+        Some(H::Unit) | None => None,
+        Some(H::Str(message)) => Some(message.clone()),
+        Some(value) => {
+            return Err(format!(
+                "scene time policy warning must be string or unit, got {}",
+                value.type_name()
+            ));
+        }
+    };
+    Ok(SceneTimeSelection {
+        source: if source == "authored" { "authored" } else { "computer_time" },
+        epoch_jd,
+        warning,
+    })
+}
 
 /// User-selectable rates for the causal fixed-step transport.
 ///
@@ -313,16 +474,6 @@ impl MissionClock {
     pub fn met_secs(&self, tick: u64) -> f64 {
         (self.epoch_jd(tick) - self.mission_epoch0_jd) * SECS_PER_DAY
     }
-
-    /// Restore the calendar mapping to the mission origin. The authored mission
-    /// origin itself is preserved so a scene reload can apply a new
-    /// `SetMissionEpoch` without stale calendar state.
-    pub fn reset_calendar(&mut self) {
-        self.anchor = TimeAnchor {
-            epoch0_jd: self.mission_epoch0_jd,
-            tick0: self.mission_tick0,
-        };
-    }
 }
 
 /// Return the virtual-clock rate for the transport.
@@ -345,10 +496,8 @@ pub fn advance_clock(rate: f64, paused: bool) -> f64 {
     }
 }
 
-/// The derived causal time view every simulation consumer reads. Written each
-/// frame by [`advance_world_clock`]. A detached presentation clock must never
-/// overwrite this resource: doing so lets a view command advance physics and
-/// other causal state.
+/// The derived causal time view every simulation consumer reads. Published after
+/// the fixed loop from its latest completed [`SimTick`].
 #[derive(Resource, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Resource)]
 pub struct WorldTime {
@@ -360,21 +509,85 @@ pub struct WorldTime {
     pub met_secs: f64,
 }
 
-/// The calendar time used by detached celestial presentation consumers.
+/// Render-time sample interpolated between completed physical ticks.
 ///
-/// Normally this is identical to [`WorldTime::epoch_jd`]. [`SetClock`](crate::SetClock)
-/// may deliberately re-parent the celestial clock onto wall time, however, so
-/// the sky can move while the causal simulation remains paused. This resource
-/// is the only place that presentation-only celestial epoch is published; it
-/// must not be used by physics, authored world state, or the active surface
-/// frame.
-#[derive(Resource, Debug, Clone, Copy, Default, Reflect)]
+/// `sim_tick` is `completed_tick - 1 + overstep_fraction`, clamped to the
+/// mission origin. This is the same one-step-behind interpolation used by
+/// physics rendering: it never predicts a state beyond a completed tick.
+/// Causal simulation continues to read [`WorldTime`] at integral `SimTick`s.
+#[derive(Resource, Debug, Clone, Copy, Default, Reflect, PartialEq)]
 #[reflect(Resource)]
-pub struct CelestialTime {
-    /// Derived celestial epoch (Julian Date, TDB).
+pub struct SimulationPresentationTime {
+    /// Interpolated physical tick, in fixed-step units.
+    pub sim_tick: f64,
+    /// TDB epoch corresponding to `sim_tick`.
     pub epoch_jd: f64,
-    /// Change in celestial epoch seconds since the previous frame.
+    /// Mission simulation seconds corresponding to `sim_tick`.
+    pub sim_secs: f64,
+    /// Mission elapsed seconds corresponding to `sim_tick`.
+    pub met_secs: f64,
+    /// Render-time advance since the previous presentation sample.
     pub delta_secs: f64,
+    /// Fixed-step interpolation fraction used to form this sample.
+    pub interpolation: f64,
+}
+
+/// System set publishing the physical-time render sample after the fixed loop.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SimulationPresentationTimeSet;
+
+fn interpolated_sim_tick(completed_tick: u64, mission_tick0: u64, alpha: f64) -> f64 {
+    if completed_tick <= mission_tick0 {
+        completed_tick as f64
+    } else {
+        completed_tick.saturating_sub(1) as f64 + alpha.clamp(0.0, 1.0)
+    }
+}
+
+fn update_simulation_presentation_time(
+    tick: Res<SimTick>,
+    mission: Res<MissionClock>,
+    fixed: Res<Time<Fixed>>,
+    virtual_time: Res<Time<Virtual>>,
+    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
+    mut presentation: ResMut<SimulationPresentationTime>,
+) {
+    let reset = mission.is_changed();
+    let held = virtual_time.is_paused() || coupling.is_some_and(|state| state.held);
+    let alpha = if reset {
+        0.0
+    } else if held {
+        // A pause presents the latest completed physical state and then holds
+        // it. This is the upper interpolation endpoint, never a prediction.
+        1.0
+    } else {
+        fixed.overstep_fraction_f64().clamp(0.0, 1.0)
+    };
+    let sim_tick = if reset {
+        tick.0 as f64
+    } else {
+        interpolated_sim_tick(tick.0, mission.mission_tick0, alpha)
+    };
+    let sim_secs = (sim_tick - mission.mission_tick0 as f64) * SECS_PER_TICK;
+    let epoch_jd = mission.anchor.epoch0_jd
+        + (sim_tick - mission.anchor.tick0 as f64) * SECS_PER_TICK / SECS_PER_DAY;
+    let met_secs = (epoch_jd - mission.mission_epoch0_jd) * SECS_PER_DAY;
+    let delta_secs = if reset {
+        0.0
+    } else {
+        sim_secs - presentation.sim_secs
+    };
+    let next = SimulationPresentationTime {
+        sim_tick,
+        epoch_jd,
+        sim_secs,
+        met_secs,
+        delta_secs,
+        interpolation: alpha,
+    };
+    if *presentation != next {
+        *presentation = next;
+    }
 }
 
 impl WorldTime {
@@ -392,22 +605,36 @@ impl WorldTime {
     }
 }
 
-/// System set for the spine step. Celestial/USD consumers order their epoch
-/// readers `.after` this set so they see the freshly-derived `WorldTime`.
+/// System set projecting transport onto Bevy's virtual clock before the fixed
+/// loop admits simulation work.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TimeSpineSet;
 
-/// The Bevy adapter: feed [`advance_clock`] the transport, write the derived
-/// `WorldTime`, and project the rate onto `Time<Virtual>` (the single control
-/// state). Runs in `PreUpdate` before `FixedUpdate` so the unified rate takes
-/// effect on the same frame.
+/// System set publishing the completed physical tick as [`WorldTime`].
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WorldTimeSet;
+
+/// Publish the causal [`WorldTime`] projection from the latest completed fixed
+/// tick. Running after the fixed loop keeps readers from observing a clock that
+/// is one rendered frame behind a burst of physical ticks.
 pub fn advance_world_clock(
     tick: Res<SimTick>,
-    transport: Res<TimeTransport>,
     clock: Res<MissionClock>,
     mut world: ResMut<WorldTime>,
+) {
+    world.epoch_jd = clock.epoch_jd(tick.0);
+    world.sim_secs = clock.sim_secs(tick.0);
+    world.met_secs = clock.met_secs(tick.0);
+}
+
+/// Project the one transport authority onto Bevy's virtual clock before the
+/// fixed loop admits work. The coupling barrier participates in the same pause
+/// projection so the tick and every physical-time consumer share one boundary.
+fn project_time_transport(
+    transport: Res<TimeTransport>,
     mut virtual_time: ResMut<Time<Virtual>>,
     coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
+    scene_time: Option<Res<SceneTimeState>>,
 ) {
     // A Modelica result that feeds an Avian force/torque port is a barrier for
     // the whole deterministic simulation, not just for Avian. If only the
@@ -417,12 +644,9 @@ pub fn advance_world_clock(
     // shares one coherent boundary. The resource is optional so the time spine
     // remains usable in small/headless apps that do not install co-simulation.
     let coupling_held = coupling.is_some_and(|state| state.held);
-    let paused = matches!(transport.mode, TransportMode::Paused) || coupling_held;
+    let scene_time_pending = scene_time.is_some_and(|state| !state.is_ready());
+    let paused = matches!(transport.mode, TransportMode::Paused) || coupling_held || scene_time_pending;
     let relative_speed = advance_clock(transport.rate, paused);
-
-    world.epoch_jd = clock.epoch_jd(tick.0);
-    world.sim_secs = clock.sim_secs(tick.0);
-    world.met_secs = clock.met_secs(tick.0);
 
     // Frozen transport is projected onto Bevy's `paused` flag, never onto
     // `relative_speed = 0`. Consumers treat relative speed as a divisor, so a
@@ -451,37 +675,12 @@ pub fn advance_world_clock(
     }
 }
 
-/// Startup: anchor the [`MissionClock`] mission origin **and** calendar anchor
-/// from the current wall clock (via the proper UTC→TAI→TT→TDB chain — doc 19 T3)
-/// at the current tick, so absolute mission time is anchored at the real launch
-/// instant in **every** spine context (celestial, USD, modelica, workbench) — not
-/// just where the ephemeris runs. The integrator clock (`sim_secs`) is unaffected:
-/// at `Startup` the tick is still 0, so `mission_tick0` stays 0 — only the
-/// calendar epoch moves off the `J2000` default.
-///
-/// **Skipped if the clock was already customized** away from the default (an app
-/// or scenario that inserted a specific epoch, or a deterministic replay), so an
-/// explicit override is never clobbered.
-///
-/// **Multiplayer:** the per-peer wall seed is a transient. The `anchor` is the
-/// host-authoritative, replicable unit — the networking layer overwrites the
-/// client's seed on first sync (doc 19 §transport). Sub-second machine-clock skew
-/// is cosmetic for celestial visuals until then, and the epoch projection is
-/// explicitly *not* required to be cross-peer bit-deterministic.
-pub fn seed_mission_clock_from_wall(tick: Res<SimTick>, mut mission: ResMut<MissionClock>) {
-    let is_default = mission.mission_tick0 == 0
-        && mission.mission_epoch0_jd == J2000_JD
-        && mission.anchor.tick0 == 0
-        && mission.anchor.epoch0_jd == J2000_JD;
-    if is_default {
-        *mission = MissionClock::anchored(scales::utc_now_tdb_jd(), tick.0);
-    }
-}
-
 /// Installs the mission-time spine: resources, the `PreUpdate` derivation step,
-/// and the wall-clock seed at `Startup`. Add once (guarded callers use
-/// [`App::is_plugin_added`]). Every consumer reads `WorldTime`; nothing else
-/// seeds the clock.
+/// and presentation interpolation. Scene epoch selection belongs to the
+/// required `scene.time.select` Rhai policy; the settled USD owner submits its
+/// validated decision through [`ApplySceneTimeSelection`]. Add once
+/// (guarded callers use [`App::is_plugin_added`]). Every consumer reads
+/// `WorldTime`.
 pub struct TimePlugin;
 
 impl Plugin for TimePlugin {
@@ -491,7 +690,8 @@ impl Plugin for TimePlugin {
         // self-sufficient where it doesn't.
         // Own the virtual-clock baseline here as well. Applications must not
         // install a second max-delta/rate policy beside the time spine.
-        app.init_resource::<Time<Virtual>>();
+        app.init_resource::<Time<Virtual>>()
+            .init_resource::<Time<Fixed>>();
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
             .set_max_delta(BASE_VIRTUAL_MAX_DELTA);
@@ -500,22 +700,41 @@ impl Plugin for TimePlugin {
             .init_resource::<lunco_core_runtime::SimulationExecutionMode>()
             .init_resource::<MissionClock>()
             .init_resource::<TimeTransport>()
+            .init_resource::<lunco_core::RuntimeFaults>()
             .init_resource::<PendingScenePause>()
             .init_resource::<WorldTime>()
-            .init_resource::<CelestialTime>()
+            .init_resource::<SimulationPresentationTime>()
             .register_type::<MissionClock>()
             .register_type::<lunco_core_runtime::SimulationExecutionMode>()
             .register_type::<TimeTransport>()
             .register_type::<WorldTime>()
-            .register_type::<CelestialTime>()
+            .register_type::<SimulationPresentationTime>()
+            .configure_sets(
+                PostUpdate,
+                (WorldTimeSet, SimulationPresentationTimeSet).chain(),
+            )
+            .add_observer(domain::on_apply_scene_time_selection)
+            .add_observer(domain::on_scene_transition_started)
+            .add_observer(domain::on_scene_transition_failed)
+            .add_observer(domain::on_scene_transition_completed)
             .add_systems(
                 PreUpdate,
                 (
-                    advance_world_clock.in_set(TimeSpineSet),
+                    project_time_transport.in_set(TimeSpineSet),
                     apply_fixed_step_budget.after(TimeSpineSet),
                 ),
-            )
-            .add_systems(Startup, seed_mission_clock_from_wall);
+            );
+
+        app.add_systems(
+            PostUpdate,
+            advance_world_clock.in_set(WorldTimeSet),
+        );
+        app.add_systems(
+            PostUpdate,
+            update_simulation_presentation_time
+                .in_set(SimulationPresentationTimeSet)
+                .before(bevy::transform::TransformSystems::Propagate),
+        );
 
         // The clock tree (T5): TimeDomain/Playback/TimeBinding + the per-frame
         // resolve into `ResolvedDomains` (in `DomainResolveSet`, `Update`).
@@ -532,6 +751,62 @@ mod tests {
     use lunco_core_runtime::FIXED_HZ;
 
     const EPS: f64 = 1e-9;
+
+    #[test]
+    fn render_time_interpolates_only_between_completed_physics_ticks() {
+        assert_eq!(interpolated_sim_tick(0, 0, 0.75), 0.0);
+        assert_eq!(interpolated_sim_tick(10, 0, 0.0), 9.0);
+        assert_eq!(interpolated_sim_tick(10, 0, 0.5), 9.5);
+        assert_eq!(interpolated_sim_tick(10, 0, 1.0), 10.0);
+        assert_eq!(interpolated_sim_tick(64, 0, 0.5), 63.5);
+        assert_eq!(interpolated_sim_tick(64, 0, 1.0), 64.0);
+        assert_eq!(interpolated_sim_tick(64, 0, 1.5), 64.0);
+        assert!(interpolated_sim_tick(64, 0, 0.5) <= 64.0);
+    }
+
+    #[test]
+    fn render_time_tracks_physics_fraction_and_holds_at_pause() {
+        let mut app = App::new();
+        let mut fixed = Time::<Fixed>::default();
+        fixed.set_timestep(Duration::from_secs(1));
+        app.insert_resource(SimTick(0))
+            .insert_resource(MissionClock::anchored(J2000_JD, 0))
+            .insert_resource(Time::<Virtual>::default())
+            .insert_resource(fixed)
+            .init_resource::<SimulationPresentationTime>()
+            .add_systems(PostUpdate, update_simulation_presentation_time);
+
+        app.update();
+        app.world_mut().resource_mut::<SimTick>().0 = 10;
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(Duration::from_millis(500));
+        app.update();
+        let presentation = *app.world().resource::<SimulationPresentationTime>();
+        assert_eq!(presentation.sim_tick, 9.5);
+        assert_eq!(presentation.sim_secs, 9.5 * SECS_PER_TICK);
+
+        app.world_mut().resource_mut::<SimTick>().0 = 64;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SimulationPresentationTime>().sim_tick,
+            63.5
+        );
+
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        app.update();
+        assert_eq!(
+            app.world().resource::<SimulationPresentationTime>().sim_tick,
+            64.0,
+            "pause presents the latest completed physics tick"
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<SimulationPresentationTime>().sim_tick,
+            64.0,
+            "presentation remains fixed while the physical tick is paused"
+        );
+    }
 
     #[test]
     fn epoch_derives_from_tick_no_accumulation() {
@@ -719,7 +994,7 @@ mod tests {
             world.insert_resource(WorldTime::default());
             world.insert_resource(Time::<Virtual>::default());
 
-            world.run_system_once(advance_world_clock).unwrap();
+            world.run_system_once(project_time_transport).unwrap();
 
             let vt = world.resource::<Time<Virtual>>();
             assert!(
@@ -751,7 +1026,7 @@ mod tests {
         vt.pause(); // start frozen, so we prove the transition back
         world.insert_resource(vt);
 
-        world.run_system_once(advance_world_clock).unwrap();
+        world.run_system_once(project_time_transport).unwrap();
 
         let vt = world.resource::<Time<Virtual>>();
         assert!(!vt.is_paused());
@@ -773,10 +1048,11 @@ mod tests {
             ..Default::default()
         });
 
-        world.run_system_once(advance_world_clock).unwrap();
+        world.run_system_once(project_time_transport).unwrap();
 
         let vt = world.resource::<Time<Virtual>>();
         assert!(vt.is_paused());
         assert_eq!(vt.relative_speed_f64(), 1.0);
     }
+
 }

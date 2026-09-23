@@ -754,19 +754,35 @@ fn stage_meters_per_unit_missing(facts) {
     out
 }
 
-/// `LunCoEpochAPI` is the authored opt-in to scene ephemeris time. Its schema
-/// default is zero, which deliberately means "no authored epoch" so the runtime
-/// can remain backwards-compatible with a partial scene. That is not a safe
-/// contract for an orbital scene: a polar surface can be dark at the engine's
-/// fallback time. Require the author to choose a non-zero epoch on the same prim.
-///
-/// A fixed-light scene stays valid by omitting both the epoch API and the
-/// celestial payload. This rule therefore checks the explicit opt-in, not the
-/// presence of a `DistantLight` and not a filename or tutorial path.
+/// `LunCoEpochAPI` opts the scene into a repeatable authored epoch. A scene with
+/// celestial sources but no valid root epoch uses current computer time; lint
+/// warns because that date changes between launches.
 fn epoch_api_requires_authored_time(facts) {
     let out = [];
+    let root_path = if facts.stage.default_prim == () {
+        "<stage>"
+    } else {
+        "/" + facts.stage.default_prim
+    };
+    let root_has_epoch_api = false;
+    let has_celestial_source = false;
     for prim in facts.prims {
+        if prim.path == root_path && prim.schemas.contains("LunCoEpochAPI") {
+            root_has_epoch_api = true;
+        }
+        if prim.schemas.contains("LunCoCelestialBodyAPI") {
+            has_celestial_source = true;
+        }
         if !prim.schemas.contains("LunCoEpochAPI") {
+            continue;
+        }
+        if prim.path != root_path {
+            out.push(finding(
+                "epoch-api-missing-time",
+                "warn",
+                prim.path,
+                "LunCoEpochAPI is only read from the selected scene root. Move it and lunco:time:epochJd to the root; runtime uses current computer UTC converted to TDB until then.",
+            ));
             continue;
         }
         if prim.epoch_jd != () && prim.epoch_jd.is_finite() && prim.epoch_jd != 0.0 {
@@ -774,9 +790,17 @@ fn epoch_api_requires_authored_time(facts) {
         }
         out.push(finding(
             "epoch-api-missing-time",
-            "error",
+            "warn",
             prim.path,
-            "LunCoEpochAPI opts this stage into authored ephemeris time, but lunco:time:epochJd is missing, zero, or malformed. Author a non-zero Julian epoch on the scene root; for a fixed-light scene remove the epoch API and celestial payload instead.",
+            "LunCoEpochAPI has no valid non-zero root lunco:time:epochJd. Runtime uses current computer UTC converted to TDB; author an epoch for repeatable celestial time.",
+        ));
+    }
+    if has_celestial_source && !root_has_epoch_api {
+        out.push(finding(
+            "epoch-api-missing-time",
+            "warn",
+            root_path,
+            "The composed stage contains LunCoCelestialBodyAPI but has no valid authored scene epoch. Runtime uses current computer UTC converted to TDB; author LunCoEpochAPI and a non-zero lunco:time:epochJd for repeatability.",
         ));
     }
     out

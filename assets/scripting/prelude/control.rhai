@@ -145,26 +145,18 @@ fn photo()                    { cmd("CaptureFromCamera") }
 // set its speed. The live transport supports 0.1×–64×, and every listed rate
 // advances causal fixed-step physics. `pause()` freezes everything (great right
 // after restart_scene() to inspect a scene without it running away);
-// `set_rate(4.0)` = 4× realtime. For a faster
-// presentation-only sky, use its SetClock path rather than live transport.
+// `set_rate(4.0)` = 4× realtime. Celestial and authored scene motion follow this
+// same physical tick, including its pause and rate.
 fn pause()                     { cmd("SetTimeTransport", #{ playing: false }) }
 fn play()                      { cmd("SetTimeTransport", #{ playing: true }) }
 fn set_rate(r)                 { cmd("SetTimeTransport", #{ rate: r }) }
 
-// Clock-tree controls. `clock` is "Celestial", "Interaction", or "Sim";
-// `parent` is "Sim" or "Real". These edits go through SetClock's typed
-// command/journal path, so every peer and replay sees the same affine clock
-// topology. Keep physics-driving clocks on Sim; Real is intentionally for
-// presentation/interaction only because it is wall-clock dependent.
-fn set_clock(clock, parent, scale, offset) {
-    cmd("SetClock", #{ clock: clock, parent: parent, scale: scale, offset: offset })
-}
 fn set_mission_epoch(epoch_jd) {
     cmd("SetMissionEpoch", #{ epoch_jd: epoch_jd })
 }
 
-// Animation transport — drives the `timeSamples` playhead (keyframed dollies,
-// visibility reveals, material fades). Shared sim clock; play once, all animate.
+// Explicit animation-preview transport. Scene animation defaults to the
+// interpolated physical tick; camera/edit previews bind to this playhead.
 fn play_animation()            { cmd("ControlAnimation", #{ playing: true }) }
 fn pause_animation()           { cmd("ControlAnimation", #{ playing: false }) }
 fn seek_animation(secs)        { cmd("ControlAnimation", #{ seek_secs: secs }) }

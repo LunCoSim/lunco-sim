@@ -1076,7 +1076,7 @@ fn discard_fixed_overstep_while_barrier_held(app: &mut App) {
 ///
 /// The final participant response can clear `SimulationBarrier` during the
 /// last `app.update()` in the readiness loop.  In that case the loop observes
-/// readiness and exits before the next `PreUpdate::advance_world_clock` pass,
+/// readiness and exits before the next `PreUpdate` transport projection,
 /// leaving `Time<Virtual>` paused even though `TimeTransport` is playing.  The
 /// first authored fixed tick would then never arrive (and a scenario that uses
 /// `elapsed_seconds()` would wait forever).  Apply the same generic transport
@@ -1138,7 +1138,6 @@ pub fn run() -> u8 {
         Some(cli.scene.clone()),
     );
     app.add_plugins(LunCoSimHeadlessPlugin::default());
-    app.add_plugins(lunco_celestial_presentation::CelestialPresentationPlugin);
     // The component runner has already resolved the manifest-selected scene.
     // Re-assert that resolved value at the application boundary immediately
     // before startup schedules are built. This keeps the runner independent of
@@ -1557,16 +1556,14 @@ pub fn run() -> u8 {
                         app.world_mut()
                             .query_filtered::<(&GlobalTransform, &bevy::camera::primitives::Aabb), (
                                 With<Mesh3d>,
-                                Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
-                                Without<lunco_core::programs::ProgramDriverId>,
+                                                    Without<lunco_core::programs::ProgramDriverId>,
                                 Without<lunco_core::NoSelectionBounds>,
                             )>();
                     let mut state_children = app.world_mut().query::<&Children>();
                     let mut state_skip = app.world_mut().query_filtered::<(), Or<(
                         With<big_space::prelude::Grid>,
                         With<big_space::prelude::CellCoord>,
-                        With<lunco_celestial_presentation::TrajectoryMeshMarker>,
-                        With<lunco_core::programs::ProgramDriverId>,
+                                    With<lunco_core::programs::ProgramDriverId>,
                         With<lunco_core::NoSelectionBounds>,
                     )>>();
                     let mut queue = Vec::new();

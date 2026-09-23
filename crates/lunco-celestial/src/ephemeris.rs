@@ -1,10 +1,10 @@
 //! # Ephemeris abstraction
 //!
 //! Defines the [`EphemerisProvider`] trait and the [`EphemerisResource`] that
-//! placement, trajectory, and body systems query.
+//! celestial body placement and lighting query.
 //! No heavy planetary-theory dependencies live here — they're in the sibling
 //! crate `lunco-celestial-ephemeris`, which provides
-//! `CelestialEphemerisProvider` (VSOP2013 + ELP/MPP02 + JPL Horizons CSV)
+//! `CelestialEphemerisProvider` (VSOP2013 + ELP/MPP02)
 //! and an `EphemerisPlugin` that drops it into `EphemerisResource`.
 //!
 //! Ephemeris is an explicit provider. Apps that need orbital placement add
@@ -16,16 +16,6 @@ use crate::frames::EclipticAu;
 use bevy::prelude::*;
 
 use std::sync::Arc;
-
-#[derive(Debug, Clone)]
-pub struct CsvDataPoint {
-    pub jd: f64,
-    /// **Ecliptic** J2000, AU, per the dataset's declared frame contract.
-    ///
-    /// The newtype makes downstream plumbing explicit; the consumer remains
-    /// responsible for validating the delivered dataset's frame.
-    pub pos_au: EclipticAu,
-}
 
 /// Abstract interface for any system providing spatial state over time.
 pub trait EphemerisProvider: Send + Sync + 'static {
@@ -42,11 +32,6 @@ pub trait EphemerisProvider: Send + Sync + 'static {
     /// guessed constant here would be worse than the extra solve because it
     /// would make a visibly stale frame look valid.
     fn maximum_angular_rate_rad_per_day(&self) -> f64;
-
-    /// Monotonic revision of the provider's motion model. A dataset arriving
-    /// asynchronously must reopen the cadence policy without making the policy
-    /// scan provider storage every frame.
-    fn motion_revision(&self) -> u64;
 
     /// Parent body id in the provider's hierarchy. `None` means the body is
     /// heliocentric or the provider has no parent fact for it.
@@ -117,9 +102,6 @@ mod ephemeris_contract_tests {
             0.0
         }
 
-        fn motion_revision(&self) -> u64 {
-            0
-        }
     }
 
     /// Missing positions stay absent through both local and global lookup.
@@ -158,9 +140,6 @@ mod ephemeris_contract_tests {
             }
             fn maximum_angular_rate_rad_per_day(&self) -> f64 {
                 0.0
-            }
-            fn motion_revision(&self) -> u64 {
-                0
             }
             // no `parent_id` override ⇒ no tree
         }

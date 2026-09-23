@@ -168,11 +168,14 @@ package checks after changing skill metadata or packaging.
 - Tutorial controls use the controller-owned `input_bindings` settings through
   Rhai `input_binding(...)`/`input_hint(...)`; progression uses semantic commands
   or authoritative state, never raw physical key names.
-- Tutorial scene payloads must choose their lighting/time contract in USD:
-  fixed authored `DistantLight` with no celestial opt-in, or an explicit
-  `LunCoEpochAPI`/`lunco:time:epochJd` plus the celestial payload. The authored
-  `epoch-api-missing-time` lint rejects implicit orbital time; do not repair it
-  in a script or with a runtime timing workaround.
+- Tutorial scene payloads choose fixed lighting or celestial sources in USD.
+  The startup-installed `scene.time.select` Rhai policy runs once after the
+  scene load and projection transaction settles. It uses a valid non-zero root
+  `LunCoEpochAPI`/`lunco:time:epochJd` when authored, and current computer UTC
+  converted to TDB otherwise. Physics, celestial placement, USD animation
+  sampling, and DEM construction wait for that result. Missing/invalid authored
+  time warns and is reported by `epoch-api-missing-time`; author a root epoch
+  for repeatable celestial scenes.
 
 ## Change review and documentation
 
@@ -303,11 +306,17 @@ package checks after changing skill metadata or packaging.
   command or source-checkout binary. Networking is opt-in:
   `cargo build -p lunco-luncosim --features networking`; local builds and scene
   tests must not start a multiplayer host.
-- Reuse one production session for asset, shader, and Rhai reloads through its
-  API. Before replacement, send API `Exit`, verify the process and port are gone,
-  then launch the replacement. Never overlap sessions or reuse an owned port.
-  Never use `pkill`. Use `/api/commands` for reloads, telemetry, screenshots,
-  and tests; use `ReloadShader` or `RunScenario` for live edits.
+- Every agent doing runtime work owns a LunCoSim session on its own explicit,
+  free API port. Agents may run concurrently on distinct ports. Never send
+  commands to, stop, restart, or reuse the port of another agent's session.
+  Launch it from the same repository checkout and working directory being used
+  for the task, with that checkout's resolved production binary in
+  `LUNCOSIM_BIN`. Verify `/proc/<pid>/cwd`, the binary path, PID, and port match
+  your checkout before controlling or replacing it; never use `pkill`.
+- Reuse your session for asset, shader, and Rhai reloads through its API. Before
+  replacing your own session, send API `Exit`, verify its process and port are
+  gone, then launch the replacement. Use `/api/commands` for reloads, telemetry,
+  screenshots, and tests; use `ReloadShader` or `RunScenario` for live edits.
 
 ## UI, performance, and persistence
 

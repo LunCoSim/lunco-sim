@@ -582,11 +582,6 @@ pub fn clear_scene_entities(commands: &mut Commands, scene: &SceneEntities) {
     info!(
         "[scene] cleanup: {despawned} grid children and {stage_prim_despawns} stage prims queued for despawn"
     );
-    // Every scene clear resets the whole clock tree to defaults (doc 19 §11b): a sky
-    // left detached at 100 000×, a scrubbed animation, a paused transport — none of it
-    // may survive into the next scene. This is the single choke point all three reload
-    // paths funnel through, so the reset lives here, not at each call site.
-    commands.trigger(lunco_time::ResetTime {});
 }
 
 /// Despawn a single USD prim **subtree** (one runtime prim and its descendants).

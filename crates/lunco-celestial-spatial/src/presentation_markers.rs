@@ -1,7 +1,7 @@
-//! Render-only marker copies for body-fixed entities in the detached sky.
+//! Render-only marker copies in the interpolated celestial presentation branch.
 //!
 //! Functional station entities stay under the causal body grid. Their visible
-//! screen markers also get a copy under the body's CelestialTime presentation
+//! screen markers also get a copy under the body's interpolated presentation
 //! grid, so the marker remains on the moving globe without changing link or
 //! physics coordinates.
 
@@ -82,8 +82,8 @@ pub(crate) fn presentation_markers_need_sync(
             .any(|replica| all_sources.get(replica.source).is_err())
 }
 
-/// Mirror screen markers below a geodetic anchor into the matching detached
-/// body-fixed presentation grid.
+/// Mirror screen markers below a geodetic anchor into the matching body-fixed
+/// presentation grid.
 #[allow(clippy::type_complexity)]
 pub(crate) fn sync_presentation_markers(
     frame_index: Res<ReferenceFrameIndex>,
@@ -301,7 +301,7 @@ pub(crate) fn sync_presentation_markers(
     }
 }
 
-/// Keep the causal marker on its own surface and select its detached copy in
+/// Keep the causal marker on its own surface and select its presentation copy in
 /// orbit or from another body's surface. The shared marker scaler still applies
 /// each marker's authored visibility distance.
 pub(crate) fn update_presentation_marker_visibility(

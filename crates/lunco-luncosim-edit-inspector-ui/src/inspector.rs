@@ -2288,8 +2288,8 @@ fn animation_transport_section(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         }
     });
 
-    // Scrub the playhead (seconds) over the bound clips' authored span (set by
-    // `bind_animated_to_preview`); fall back to a default window when no clip has
+    // Scrub the playhead (seconds) over the bound camera tracks' authored span;
+    // fall back to a default window when no track has
     // bound yet (so the bar is still usable). Pausing first lets the slider hold.
     let range = if pb.bounded() {
         pb.start..=pb.end

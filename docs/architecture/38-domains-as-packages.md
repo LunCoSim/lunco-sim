@@ -902,7 +902,7 @@ volume. Nothing to promote to, so it is now declared properly as `LunCoLightAPI`
 (`crates/lunco-usd-authoring/schema/`) instead of being authored as a bare `custom` attribute.
 
 **`lunco:` glue that *stays* (tiers 2–3 — USD has no schema):** `lunco:light:range`, `lunco:link:*`, `lunco:celestial:*`,
-`lunco:ephemeris_id` (SPICE metadata, §11), `lunco:net:*` (replication), `lunco:scenario`/
+`lunco:net:*` (replication), `lunco:scenario`/
 `triggerZone`/`waypoint` (sequencing/scene semantics), `lunco:avatar` (role), LunCoRaycastAPI (raw physics queries), `lunco:terrain:*`/`shadow:*` (LunCo
 render params — a partial `UsdRenderSettings` alignment is possible but not standard), `info:*`
 (the SysML **allocation** / USD+FMI-future binding).

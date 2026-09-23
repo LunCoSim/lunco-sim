@@ -2045,7 +2045,7 @@ mod tests {
         app.add_plugins((bevy::time::TimePlugin, lunco_time::TimePlugin));
         app.add_systems(InteractionSchedule, drive_self_drivers);
 
-        // Pause through the REAL path: the transport, which `advance_world_clock`
+        // Pause through the REAL path: the transport, which `project_time_transport`
         // projects onto `Time<Virtual>`'s paused flag.
         app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Paused;
 

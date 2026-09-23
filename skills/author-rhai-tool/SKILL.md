@@ -27,6 +27,10 @@ Read the focused contract when implementing one:
   as a callable library; it is still a Rhai tool, not a Rust vehicle
   implementation. Other `.rhai` files, including tests and scenarios, are
   loaded only by an explicit scene/runtime request or the CLI test path.
+  Startup admission, Bevy source publication, and runtime preparation are
+  ordered. The runtime keeps the current admitted sources and closes script
+  execution while the required classifier is temporarily unavailable during a
+  policy replacement.
 - Put a Twin-specific builder, component lint, or requirement helper in
   `<twin>/tools/<name>.rhai`. It is persisted with that Twin and must not leak
   into unrelated Twins.

@@ -733,7 +733,7 @@ pub(super) fn render_layout(
             // for mid-drive.
             //
             // Domain plugins contribute rows via the core
-            // `WorkbenchMenuRegistry` (the celestial sky clock),
+            // `WorkbenchMenuRegistry` (the celestial-time readout),
             // so nothing about the sky is hardcoded here.
             let r_time = ui.menu_button("Time", |ui| {
                 render_time_menu(ui, world, menus);

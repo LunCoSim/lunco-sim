@@ -8,12 +8,11 @@
 def Xform "Orion" (
     documentation = "Orion crew capsule."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoSpacecraftAPI"]
+    prepend apiSchemas = "LunCoCatalogAPI"
     displayName = "Orion Capsule"
 )
 {
     uniform bool lunco:spawnable = true
-    double lunco:spacecraft:hitRadiusKm = 1.0
     def Sphere "Capsule"
     {
         double radius = 1.0

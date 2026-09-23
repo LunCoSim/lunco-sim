@@ -111,13 +111,7 @@ fn application_asset_lifecycle(event, ctx) {
         if ctx.payload.path.type_of() != "string" {
             throw("scene_loaded requires a scene path");
         }
-        let dataset_text_artifacts = [];
-        if ctx.payload.path == "lunco://scenes/celestial/artemis_2_review.usda" {
-            dataset_text_artifacts.push("engine/ephemeris/artemis2_vectors");
-        }
-        let result = empty_menu_contribution();
-        result.dataset_text_artifacts = dataset_text_artifacts;
-        return result;
+        return empty_menu_contribution();
     }
     if event == "scene_cleared" {
         return empty_menu_contribution();

@@ -23,6 +23,13 @@ entry = "readiness_action"
 deterministic = true
 
 [[policies]]
+hook = "scene.time.select"
+source = "scene_time.rhai"
+entry = "select_scene_time"
+deterministic = true
+required = true
+
+[[policies]]
 hook = "physics.body_escape"
 source = "physics_escape.rhai"
 entry = "escaped_body_policy"

@@ -8,7 +8,9 @@
 use bevy::prelude::*;
 use lunco_physics::PhysicsTime;
 use lunco_scripting_bridge_core::{ValueBuilder, with_world};
-use lunco_time::{Clocks, MissionClock, ResolvedDomains, TimeTransport, WorldTime};
+use lunco_time::{
+    Clocks, MissionClock, ResolvedDomains, SimulationPresentationTime, TimeTransport, WorldTime,
+};
 
 /// `sim_tick()` — current admitted FixedUpdate tick. A missing core tick is a
 /// terminal clock-contract fault; `-1` is returned only as an explicit invalid
@@ -184,6 +186,9 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             .get_resource::<WorldTime>()
             .copied()
             .unwrap_or_default();
+        let presentation_time = world
+            .get_resource::<SimulationPresentationTime>()
+            .copied();
         let mission = world
             .get_resource::<MissionClock>()
             .copied()
@@ -270,6 +275,22 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             ("world_met_s".to_owned(), b.float(world_time.met_secs)),
             ("epoch_jd".to_owned(), b.float(world_time.epoch_jd)),
             (
+                "presentation_time_available".to_owned(),
+                b.bool(presentation_time.is_some()),
+            ),
+            (
+                "presentation_sim_s".to_owned(),
+                presentation_time.map_or_else(|| b.unit(), |time| b.float(time.sim_secs)),
+            ),
+            (
+                "presentation_epoch_jd".to_owned(),
+                presentation_time.map_or_else(|| b.unit(), |time| b.float(time.epoch_jd)),
+            ),
+            (
+                "presentation_interpolation".to_owned(),
+                presentation_time.map_or_else(|| b.unit(), |time| b.float(time.interpolation)),
+            ),
+            (
                 "mission_tick0".to_owned(),
                 b.int(mission.mission_tick0 as i64),
             ),
@@ -316,7 +337,6 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                 ("real", clocks.real),
                 ("sim", clocks.sim),
                 ("interaction", clocks.interaction),
-                ("celestial", clocks.celestial),
             ] {
                 if let Some(sample) = resolved.sample(entity) {
                     domains.push(b.map(vec![
@@ -328,6 +348,24 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             }
         }
         entries.push(("domains".to_owned(), b.array(domains)));
+        if let Some(presentation) =
+            world.get_resource::<lunco_time::SimulationPresentationTime>()
+        {
+            entries.push((
+                "presentation_time".to_owned(),
+                b.map(vec![
+                    ("sim_tick".to_owned(), b.float(presentation.sim_tick)),
+                    ("sim_s".to_owned(), b.float(presentation.sim_secs)),
+                    ("met_s".to_owned(), b.float(presentation.met_secs)),
+                    ("epoch_jd".to_owned(), b.float(presentation.epoch_jd)),
+                    ("delta_s".to_owned(), b.float(presentation.delta_secs)),
+                    (
+                        "interpolation".to_owned(),
+                        b.float(presentation.interpolation),
+                    ),
+                ]),
+            ));
+        }
         b.map(entries)
     })
     .unwrap_or_else(|| b.map(Vec::new()))

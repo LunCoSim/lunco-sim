@@ -19,9 +19,9 @@ pub struct CelestialBodyDecl {
 #[derive(Component)]
 pub struct SolarSystemRoot;
 
-/// Render-facing solar direction in the active camera's view frame for the
-/// detached celestial presentation clock. The causal lighting state remains
-/// owned by `lunco-environment`.
+/// Render-facing solar direction in the active camera's view frame, sampled
+/// from physical simulation time. The causal lighting state remains owned by
+/// `lunco-environment`.
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
 pub struct CelestialSunPresentation {
     /// Unit direction from the active camera toward the Sun in view coordinates.

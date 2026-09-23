@@ -1035,10 +1035,9 @@ fn rebuild_active_policy_registry(
     let active = effective_policy_definitions(registry);
     registry.policies = active.values().cloned().collect();
 
-    // Reconcile only the seams whose effective implementation changed. A
-    // Twin load commonly shadows the application layer with the same policy
-    // set; tearing down and rebuilding every hook here used to create one
-    // asset-admission wave per intermediate registry generation.
+    // Reconcile only the seams whose effective implementation changed. Compare
+    // callable identity rather than wrapper registration: restoring a retained
+    // lower layer wraps its same callable in a fresh registration.
     for id in ids {
         let Some(_definition) = active.get(&id) else {
             lunco_hooks::unregister(&id);
@@ -1047,10 +1046,13 @@ fn rebuild_active_policy_registry(
         };
         let desired = layer_hook(registry, &id);
         let current = lunco_hooks::get(&id);
-        let same_registration = desired
-            .as_ref()
-            .zip(current.as_ref())
-            .is_some_and(|(desired, current)| Arc::ptr_eq(&desired.0, current));
+        let same_registration = desired.as_ref().zip(current.as_ref()).is_some_and(
+            |(desired, current)| {
+                desired.0.backend == current.backend
+                    && desired.0.deterministic == current.deterministic
+                    && Arc::ptr_eq(&desired.0.hook, &current.hook)
+            },
+        );
         if !same_registration {
             if let Some((hook, _)) = desired.as_ref() {
                 lunco_hooks::register(copy_registered_hook(hook));
@@ -1269,11 +1271,10 @@ pub fn project_policies(
         })
         .into_values()
         .collect::<Vec<_>>();
-    let old_ids = all_policy_ids(registry);
-    for id in old_ids {
-        lunco_hooks::unregister(&id);
-        lunco_hooks::unbind_policy(&id);
-    }
+    // Keep unrelated active hooks registered while the USD layer changes. This
+    // projection runs on source-asset events as well as stage edits; clearing
+    // the global hook registry first made unchanged application policies
+    // briefly unavailable to concurrent source admission.
     registry.usd_policies.clear();
     registry.usd_hooks.clear();
     registry.usd_bindings.clear();
@@ -1797,4 +1798,5 @@ mod tests {
         retract_policy(MERGE_SEAM, Some(&journal));
         journal.with_read(|journal| assert_eq!(*journal.merge_strategy(), MergeStrategy::Default));
     }
+
 }

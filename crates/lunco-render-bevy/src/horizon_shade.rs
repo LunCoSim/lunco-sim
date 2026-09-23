@@ -478,7 +478,7 @@ pub fn wire_sun_for_non_terrain_materials(
         // and the asset is re-uploaded every frame. `SUN_DIR_EPSILON` for the same
         // reason as the terrain path above: an exact compare only stays quiet while
         // the sun is parked, and re-enters the per-frame repack as soon as the
-        // celestial clock moves it.
+        // simulation epoch moves it.
         let needs = shader_mats.get(&handle.0).is_some_and(|m| {
             m.get_vec3("sun_dir_world")
                 .is_none_or(|v| (v - to_sun_world).length() > SUN_DIR_EPSILON)

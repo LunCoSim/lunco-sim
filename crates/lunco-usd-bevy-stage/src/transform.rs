@@ -1,7 +1,9 @@
+use bevy::math::DVec3;
 use bevy::prelude::{EulerRot, Mat4, Quat, Transform, Vec3};
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::read::{UsdRead, UsdReadObject};
+use crate::read::read_vec3_f64_at;
 use crate::units::stage_convention;
 use crate::view::StageView;
 
@@ -46,6 +48,44 @@ pub fn compose_xform_order_at<R: UsdRead>(
     time: f64,
 ) -> Result<Option<Transform>, TransformReadError> {
     reader.local_transform_at(path, time)
+}
+
+/// Read a grid-direct USD translation without narrowing its `double3` value.
+///
+/// High-precision cell splitting is defined for a pure `xformOp:translate`
+/// stack. More complex stacks can move the translation through pivots or
+/// matrix operations, so a double-valued position in one of those stacks is
+/// rejected instead of being silently projected through Bevy's `f32`
+/// `Transform`.
+pub fn grid_translation_d_at(
+    reader: &dyn UsdReadObject,
+    path: &SdfPath,
+    time: f64,
+) -> Result<Option<DVec3>, TransformReadError> {
+    if reader.attr_type_name(path, "xformOp:translate").as_deref() != Some("double3") {
+        return Ok(None);
+    }
+
+    let order = read_xform_op_order(reader, path).ok_or_else(|| malformed_transform(path))?;
+    if order.first().map(String::as_str) != Some("xformOp:translate")
+        || order.iter().skip(1).any(|operation| {
+            let operation = operation.strip_prefix("!invert!").unwrap_or(operation);
+            !(operation.starts_with("xformOp:rotate")
+                || operation.starts_with("xformOp:orient")
+                || operation.starts_with("xformOp:scale"))
+        })
+    {
+        return Err(malformed_transform(path));
+    }
+    let Some(value) = read_vec3_f64_at(reader, path, "xformOp:translate", time) else {
+        return Err(malformed_transform(path));
+    };
+    let value = DVec3::from_array(value);
+    if !value.is_finite() {
+        return Err(malformed_transform(path));
+    }
+    let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
+    Ok(Some(convention.point_d(value)))
 }
 
 /// Compose a live OpenUSD transform through the shared reader contract.
@@ -247,3 +287,57 @@ impl openusd::schemas::geom::Imageable for XformablePrim {}
 impl openusd::schemas::geom::Xformable for XformablePrim {}
 
 pub const RESET_XFORM_STACK: &str = "!resetXformStack!";
+
+#[cfg(test)]
+mod high_precision_grid_translation_tests {
+    use super::*;
+    use lunco_usd_compose::recipe::StageRecipe;
+
+    fn plan(source: &str) -> crate::UsdStageProjectionPlan {
+        let recipe = StageRecipe::from_source("high_precision.usda", source);
+        crate::UsdStageProjectionPlan::from_recipe(&recipe).expect("compose authored stage")
+    }
+
+    #[test]
+    fn double3_time_samples_keep_precision_for_grid_splitting() {
+        let stage = plan(
+            r#"#usda 1.0
+(
+    metersPerUnit = 1
+    timeCodesPerSecond = 1
+)
+def Xform "Vehicle"
+{
+    double3 xformOp:translate.timeSamples = {
+        0: (149597870700.125, 0, 0),
+        10: (149597870700.375, 0, 0),
+    }
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+"#,
+        );
+        let path = SdfPath::new("/Vehicle").expect("valid prim path");
+
+        assert_eq!(
+            grid_translation_d_at(&stage, &path, 5.0).expect("valid stack"),
+            Some(DVec3::new(149_597_870_700.25, 0.0, 0.0))
+        );
+    }
+
+    #[test]
+    fn unsupported_double3_stack_is_rejected() {
+        let stage = plan(
+            r#"#usda 1.0
+def Xform "Vehicle"
+{
+    double3 xformOp:translate = (149597870700, 0, 0)
+    double3 xformOp:rotateXYZ = (0, 0, 30)
+    uniform token[] xformOpOrder = ["xformOp:rotateXYZ", "xformOp:translate"]
+}
+"#,
+        );
+        let path = SdfPath::new("/Vehicle").expect("valid prim path");
+
+        assert!(grid_translation_d_at(&stage, &path, 0.0).is_err());
+    }
+}

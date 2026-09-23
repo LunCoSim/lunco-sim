@@ -18,26 +18,7 @@ result.
 
 ---
 
-## 1. Ephemerides & orbit propagation
-
-### Adopt ANISE
-
-**What:** Replace the hand-cached ephemeris CSV pipeline with
-[ANISE](https://github.com/nyx-space/anise) — a pure-Rust SPICE implementation
-reading real `.bsp` kernels.
-
-**Why:** Three problems at once. The CSV cache is a bespoke format that must be
-regenerated out-of-band, and a missing CSV **fails the wasm build** (the
-build-script regen path only works into the workspace-parent cache). ANISE
-gives MOON_ME↔MOON_PA frame transforms for free — rasters now declare their
-frame (MOON_ME, ~875 m from PA on the surface), but nothing can *convert*
-between the two. And `.bsp` is the format every upstream ephemeris source
-actually ships.
-
-**Scope:** medium. Swap the ephemeris source behind `lunco-celestial`'s
-existing sampling interface; delete the CSV cache + regen build script; verify
-wasm (ANISE is no_std-friendly and pure Rust). The IAU/WGCCRE rotation model
-in [`43-orbital-view.md`](43-orbital-view.md) is a consumer, not a casualty.
+## 1. Orbit propagation
 
 ### Kepler solver → lox-space
 

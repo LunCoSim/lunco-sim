@@ -8,6 +8,7 @@ description = "Render-free USD time-sample animation projection for Bevy"
 [dependencies]
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset"] }
+big_space = { workspace = true }
 lunco-render = { path = "../lunco-render" }
 lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }

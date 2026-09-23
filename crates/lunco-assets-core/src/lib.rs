@@ -24,7 +24,6 @@
 //! ```text
 //! ~/.cache/lunco/             # Shared across ALL worktrees and Twins
 //! ├── textures/               # Large binaries (earth.jpg, moon.png)
-//! ├── ephemeris/              # JPL Horizons CSVs
 //! ├── remote/                 # HTTP-downloaded assets
 //! └── processed/              # AssetProcessor output
 //! ```

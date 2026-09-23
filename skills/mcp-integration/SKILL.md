@@ -12,11 +12,13 @@ Windsurf, Codex, and other MCP-compatible hosts.
 
 ## Lifecycle
 
-1. Start one production `luncosim` session with an explicit free `--api PORT`.
+1. Start this agent's production `luncosim` session with an explicit free
+   `--api PORT`, from the same checkout and working directory as its terminal.
    MCP connects to that API; it does not launch, rebuild, or replace the
    simulator. Verify `/api/ready` and use `DiscoverSchema` for live commands.
 2. Register either the published `@lunco/mcp-server` package or the checkout's
-   `.mcp.json`. Do not overlap sessions or reuse an occupied API port.
+   `.mcp.json`. Other agents may run on their own ports; do not control their
+   sessions or reuse an occupied API port.
 3. Call `list_skills` or read `lunco://skills` before declaring that a workflow
    is unavailable. Use `read_skill(name)` or `lunco://skills/<name>` to load
    the portable Markdown runbook, then follow its owner and evidence rules.

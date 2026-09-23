@@ -75,18 +75,14 @@ transforms fail during projection, mutable runtime pose/AABB failures raise
 origins return no hit without becoming a simulation fault. Use the existing
 bridge and scene-teardown tests for the first two, and a production Rhai scene
 test for the public query contract; do not add a second per-producer filter.
-For a trajectory
-or connection line, convert both endpoints into one semantic frame before
-generating cell-local geometry. Treat trajectory visibility as a work boundary:
-sample ephemeris and rebuild cell-local mesh only for an active trajectory view,
-and keep explicit geometry/sampling/presentation revisions. Compute results must
-carry their input revisions and stale results must be discarded; missing or empty
-inputs must resolve once until a frame/provider/input revision changes. When the
-Celestial domain is in high-rate transport, including an independent Celestial
-clock scale, hold an existing curve sample while continuing current-epoch frame
-alignment; do not rebuild thousands of points on a wall-clock cadence. Trajectory
-workers are polled without waiting from the main schedule, and their visualization
-must not become a UI-cycle dependency.
+For a line joining two frames, convert both endpoints into one semantic frame
+before generating cell-local geometry. For authored motion directly beneath a
+BigSpace `Grid`, use standard USD `double3 xformOp:translate` samples and split
+the f64 position with `Grid::translation_to_grid` before writing the local
+`Transform`. Unbound samples use `SimulationPresentationTime`, which stays
+between completed physical ticks and holds while transport is paused. Do not
+introduce a mission-specific trajectory component or independent clock for
+motion already represented by USD animation.
 
 For the local kinematic avatar, use the existing Avian `MoveAndSlide` query in
 `ActivePhysicsFrame`: convert the source Grid pose, displacement, and up vector

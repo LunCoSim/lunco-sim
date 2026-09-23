@@ -9,7 +9,7 @@ def Xform "Artemis2Review" (
     prepend apiSchemas = "LunCoEpochAPI"
 )
 {
-    double lunco:time:epochJd = 2461132.58
+    double lunco:time:epochJd = 2461132.5824799724
     def DistantLight "Sun" (
         prepend references = @lunco://lighting/sun.usda@</Sun>
     )

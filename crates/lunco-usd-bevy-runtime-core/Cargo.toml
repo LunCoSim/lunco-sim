@@ -23,7 +23,6 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-storage = { path = "../lunco-storage" }
-lunco-time = { path = "../lunco-time" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }

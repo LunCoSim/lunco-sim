@@ -750,10 +750,11 @@ fn sample_parameters(world: &mut World) {
         }
         let binding = entity_ref.get::<TimeBinding>();
 
-        // The unbound channel is keyed directly to the completed fixed tick;
-        // `WorldTime` was derived in `PreUpdate` and can lag when Bevy runs
-        // several fixed steps in one rendered frame. Bound channels retain
-        // their authored domain semantics through the shared resolver.
+        // The unbound channel is keyed directly to the current fixed tick.
+        // `WorldTime` is published after the fixed loop, so reading its frame
+        // view inside that loop could miss ticks completed earlier in this
+        // rendered frame. Bound channels retain their authored domain semantics
+        // through the shared resolver.
         let t = match binding {
             None => mission_clock.sim_secs(sim_tick),
             Some(_) => domain_time(resolved_domains, binding, &world_time),

@@ -8,12 +8,15 @@
 //! visual-only consumers do not compile or install control behavior.
 
 use crate::program_runtime::refresh_program_owner_with_network_members;
+use bevy::asset::Assets;
 use bevy::prelude::{Added, Entity, Without, World};
 use lunco_camera_core::{CameraFollow, parse_camera_follow};
 use lunco_control_core::ControlBinding;
 use lunco_port_core::InputPorts;
 use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjected};
-use lunco_usd_bevy_stage::{UsdRead, canonical::CanonicalStages};
+use lunco_usd_bevy_stage::{
+    UsdInstanceProjection, UsdRead, UsdStageAsset, canonical::CanonicalStages,
+};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{HashMap, HashSet};
 
@@ -70,28 +73,45 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         network_members_by_stage
             .entry(*stage_id)
             .or_insert_with(|| {
+                let Some(stage_asset) = world
+                    .get_resource::<Assets<UsdStageAsset>>()
+                    .and_then(|assets| assets.get(*stage_id))
+                else {
+                    bevy::log::warn!("[usd] stage asset {stage_id:?} is unavailable while projecting authored programs");
+                    return HashSet::new();
+                };
                 let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+                    bevy::log::warn!("[usd] canonical stage reader is unavailable while projecting authored programs");
                     return HashSet::new();
                 };
-                let Some(stage) = stages.get(*stage_id) else {
-                    return HashSet::new();
-                };
-                lunco_usd_bevy_core::program::modelica_network_member_paths(&stage.view())
+                let (reader, _) = stages.reader_for(*stage_id, stage_asset);
+                lunco_usd_bevy_core::program::modelica_network_member_paths(&reader)
             });
     }
 
     for (entity, stage_id, owner_path) in owners {
         let surface = {
-            let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+            let Some(stage_asset) = world
+                .get_resource::<Assets<UsdStageAsset>>()
+                .and_then(|assets| assets.get(stage_id))
+            else {
+                bevy::log::warn!(
+                    "[usd] stage asset {stage_id:?} is unavailable for projected owner {owner_path}"
+                );
                 continue;
             };
-            let Some(stage) = stages.get(stage_id) else {
+            let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+                bevy::log::warn!(
+                    "[usd] canonical stage reader is unavailable for projected owner {owner_path}"
+                );
                 continue;
             };
             let Ok(owner) = SdfPath::new(&owner_path) else {
                 continue;
             };
-            read_control_surface(&stage.view(), &owner)
+            let instance = world.get::<UsdInstanceProjection>(entity);
+            let (reader, _) = stages.reader_for_entity(stage_id, stage_asset, instance);
+            read_control_surface(&reader, &owner)
         };
 
         let Ok(mut owner) = world.get_entity_mut(entity) else {

@@ -21,7 +21,7 @@
 //! | Asset | Identity and integrity | Example |
 //! |-------|----------------------|---------|
 //! | Libraries (source library) | manifest `version` (semver) | `"4.1.0"` → `library/4.1.0/` |
-//! | Declared datasets | manifest `dest`, with optional `sha256` | `ephemeris/vectors.csv` |
+//! | Declared datasets | manifest `dest`, with optional `sha256` | `data/vectors.csv` |
 //! | Textures | `sha256` (content hash) | `"abc123..."` |
 
 #[cfg(not(target_arch = "wasm32"))]

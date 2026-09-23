@@ -363,43 +363,17 @@ atomic commit, rollback, and bounded cleanup under the install-backup prefix.
 An absent optional policy uses the downloader's documented generic default; an
 installed but malformed policy is a terminal transaction error.
 
-### Domain metadata rides with the declaration
+### Dataset meaning and scene selection
 
-A dataset's transport (`url`, `dest`, `sha256`) and its *meaning* belong in one
-place, because the meaning describes those exact bytes. `AssetEntry` keeps every
-unrecognised key verbatim and hands it back through `AssetEntry::domain::<T>()`,
-so the owning crate reads a sub-table this crate never interprets:
-
-```toml
-[artemis2_vectors]
-url  = "https://ssd.jpl.nasa.gov/api/horizons.api?…&CENTER='500%40399'&…"
-dest = "ephemeris/target_-1024_….csv"
-
-[artemis2_vectors.ephemeris]      # read by lunco-celestial-ephemeris
-naif_id = -1024
-center  = "500@399"               # the CENTER= of the query above
-```
-
-The split is deliberate: **USD selects the tracked and reference bodies**
-(`lunco:ephemeris:targetId` and `lunco:ephemeris:referenceId`), while the
-dataset declares the center of its own vector samples. A scene does not author
-that center, because two scenes could then disagree about the same artifact.
-The selected dataset also owns its time coverage. The provider returns no
-position outside those samples, so an authored USD prim is hidden instead of
-being held at a stale endpoint.
-
-The application asset lifecycle policy selects
-`engine/ephemeris/artemis2_vectors` when
-`lunco://scenes/celestial/artemis_2_review.usda` completes loading. The generic asset
-runtime resolves that id through the dataset registry to its canonical
-`lunco://` URI and loads it with the shared UTF-8 `TextAsset` loader. The
-ephemeris provider never walks the registry or checks the cache at startup; it
-parses delivered text, and its scene-owned vectors are cleared at
-`SceneTeardown`. An unavailable dataset is reported when the active scene
-policy requests it, while unrelated missing datasets remain quiet until used.
-The scene root authors the initial Julian epoch inside the selected artifact's
-sample coverage, so loading the scene does not depend on the machine clock or
-on endpoint clamping.
+Dataset transport facts and domain meaning stay together in the manifest.
+`AssetEntry` preserves domain tables and exposes them to the owning Rust
+consumer through `AssetEntry::domain::<T>()`; for example,
+`lunco-celestial-spatial` reads body imagery metadata. The dataset layer does
+not select scene assets. When a scene needs a declared text artifact, the
+authored `application.asset.lifecycle` Rhai policy returns its dataset id in
+`dataset_text_artifacts`; the generic asset runtime resolves and reads it.
+Missing requested assets are reported by that owner. A scene with no authored
+dataset request does not probe for unrelated data during startup.
 
 ### Still open
 

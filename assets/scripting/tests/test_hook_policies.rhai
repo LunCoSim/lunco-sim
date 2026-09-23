@@ -92,57 +92,47 @@ checks.push(t_true(asset_lifecycle != ()
         && asset_lifecycle.parameters[1].type == "map"
         && asset_lifecycle.output == "map",
     "application asset selection has a reflected typed lifecycle contract"));
-let artemis_assets = invoke_hook("application.asset.lifecycle", [
-    "scene_loaded",
-    #{
-        provider: "application:scene-assets",
-        scope: "application",
-        twin_id: (),
-        twin_name: (),
-        asset_root_uri: "lunco://",
-        payload: #{
-            path: "lunco://scenes/celestial/artemis_2_review.usda",
-            root_prim: "/Artemis2Review",
-        },
-    },
-]);
-checks.push(t_true(artemis_assets.ok == true
-        && artemis_assets.value.dataset_text_artifacts.len() == 1
-        && artemis_assets.value.dataset_text_artifacts[0]
-            == "engine/ephemeris/artemis2_vectors",
-    "the Artemis review scene selects its declared text dataset"));
-let unrelated_scene_assets = invoke_hook("application.asset.lifecycle", [
-    "scene_loaded",
-    #{
-        provider: "application:scene-assets",
-        scope: "application",
-        twin_id: (),
-        twin_name: (),
-        asset_root_uri: "lunco://",
-        payload: #{path: "lunco://scenes/celestial/solar_system.usda", root_prim: "/SolarSystem"},
-    },
-]);
-checks.push(t_true(unrelated_scene_assets.ok == true
-        && unrelated_scene_assets.value.dataset_text_artifacts.len() == 0,
-    "unrelated scenes do not select Artemis vectors"));
-let twin_scene_assets = invoke_hook("application.asset.lifecycle", [
-    "scene_loaded",
-    #{
-        provider: "application:scene-assets",
-        scope: "application",
-        twin_id: (),
-        twin_name: (),
-        asset_root_uri: "lunco://",
-        payload: #{
-            path: "twin://another/scenes/celestial/artemis_2_review.usda",
-            root_prim: "/Artemis2Review",
-        },
-    },
-]);
-checks.push(t_true(twin_scene_assets.ok == true
-        && twin_scene_assets.value.dataset_text_artifacts.len() == 0,
-    "a Twin scene with the same suffix does not select engine vectors"));
 
+let scene_time_hook = ();
+for hook in hooks {
+    if hook.id == "scene.time.select" { scene_time_hook = hook; }
+}
+checks.push(t_true(scene_time_hook != ()
+        && scene_time_hook.declared == true
+        && scene_time_hook.deterministic == true
+        && scene_time_hook.required == true
+        && scene_time_hook.installable == true
+        && scene_time_hook.parameters.len() == 1
+        && scene_time_hook.parameters[0].name == "facts"
+        && scene_time_hook.parameters[0].type == "map"
+        && scene_time_hook.output == "map",
+    "scene time has one required typed application policy"));
+let current_time_epoch = 2461400.125;
+let current_time_selection = invoke_hook("scene.time.select", [#{
+    epoch_api: false,
+    epoch_status: "not_applied",
+    authored_epoch_jd: (),
+    has_celestial_source: true,
+    computer_time_tdb_jd: current_time_epoch,
+}]);
+checks.push(t_true(current_time_selection.ok == true
+        && current_time_selection.value.source == "computer_time"
+        && current_time_selection.value.epoch_jd == current_time_epoch
+        && current_time_selection.value.warning.contains("computer UTC"),
+    "scene time policy selects the supplied current computer time for an untimed celestial scene"));
+let authored_time_epoch = 2461132.5824799724;
+let authored_time_selection = invoke_hook("scene.time.select", [#{
+    epoch_api: true,
+    epoch_status: "valid",
+    authored_epoch_jd: authored_time_epoch,
+    has_celestial_source: true,
+    computer_time_tdb_jd: current_time_epoch,
+}]);
+checks.push(t_true(authored_time_selection.ok == true
+        && authored_time_selection.value.source == "authored"
+        && authored_time_selection.value.epoch_jd == authored_time_epoch
+        && authored_time_selection.value.warning == (),
+    "scene time policy selects an authored root epoch when it is valid"));
 let camera_call = invoke_hook("camera.default_presentation", [#{
     local_avatar_camera_count: 1,
     camera_track_count: 0,

@@ -158,6 +158,14 @@ sources are discovered from the runtime manifest, then the authored
 `scripting.source.classify` startup policy admits only prelude and tool sources
 to the built-in runtime. Scenario, test, and other authored sources stay
 demand-loaded through an explicit scene/runtime request or the CLI test path.
+The source lifecycle is ordered: the policy admits candidates, Bevy publishes
+loaded sources, then the runtime prepares the prelude and tool registry. If the
+required classifier is temporarily unavailable during a policy replacement,
+the runtime keeps its current admissions and remains unready until the authored
+policy is available again. USD policy projection runs after source publication
+and before prelude preparation; projecting an unchanged layer preserves the
+active lower-layer hooks instead of briefly removing them from the shared
+registry.
 
 ## Allow-list
 

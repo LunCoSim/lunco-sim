@@ -8,7 +8,7 @@ license.workspace = true
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-# `SetClock`'s typed params (ClockId / ClockParent) cross the command/API boundary.
+lunco-hooks = { path = "../lunco-hooks" }
 serde = { workspace = true }
 # Time-scale + sidereal math (UTC/TAI/TT/TDB/UT1, leap table, GMST). Zero-dep
 # pure-math crate; wrapped behind `scales.rs` so the rest of the workspace never

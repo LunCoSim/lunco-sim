@@ -12,8 +12,6 @@ mod frame_index;
 pub mod surface_frame;
 mod surface_pose;
 mod tracking;
-mod trajectory;
-mod trajectory_view;
 
 pub use components::{
     AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSunPresentation, LocalGravityField,
@@ -34,5 +32,3 @@ pub use surface_pose::{
     BodyFixedPosition, SitePosition, SurfacePose, SurfacePoseQuery, resolve_surface_pose,
 };
 pub use tracking::SolarTracked;
-pub use trajectory::{TrajectoryFrame, TrajectoryPath, TrajectoryView};
-pub use trajectory_view::TrajectoryViewDecl;

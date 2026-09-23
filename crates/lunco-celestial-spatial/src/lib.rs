@@ -18,7 +18,6 @@ use lunco_environment::{Gravity, GravityBody};
 
 mod big_space_setup;
 pub mod cadence;
-mod celestial_views;
 mod globe_lod;
 mod gravity;
 mod imagery;
@@ -56,13 +55,7 @@ pub struct RoverClickEvent {
     pub rover: Entity,
 }
 
-/// Host-app policy for the celestial stack (doc 43).
-///
-/// Note what is NOT here any more: `spawn_hierarchy`. Whether a solar system exists
-/// is the *scene's* call, authored as `LunCoCelestialBodyAPI` prims and gated by
-/// [`lunco_celestial_spatial_core::celestial_declared`] — not a host-app boolean.
-/// This resource now carries only
-/// genuine host policy: whether the app owns its own camera.
+/// Host configuration for optional observer-camera spawning.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct CelestialConfig {
     /// Spawn the celestial Observer Camera. BigSpace origin ownership remains
@@ -167,11 +160,11 @@ impl Plugin for CelestialPlugin {
         queries::register_celestial_queries(app);
         app.register_type::<lunco_celestial_spatial_core::SolarTracked>();
         app.register_type::<lunco_celestial::CelestialBody>();
-        app.register_type::<lunco_celestial::Spacecraft>();
-        app.register_type::<lunco_celestial::EphemerisPosition>();
         app.add_systems(
             Update,
-            pose::update_solar_poses.run_if(cadence::tracked_needs_solve()),
+            pose::update_solar_poses
+                .run_if(cadence::tracked_needs_solve())
+                .run_if(lunco_time::scene_time_ready),
         );
 
         // Generic connectivity kernel: cadence-gated pairwise link solving in
@@ -263,9 +256,7 @@ impl Plugin for CelestialPlugin {
         app.insert_resource(CelestialBodyRegistry::default_system());
 
         // big_space::prelude::BigSpaceDefaultPlugins should be added by the application entry point
-        // after disabling TransformPlugin. Trajectory mesh/sampling presentation is installed by
-        // the presentation composition, not by this headless spatial runtime.
-        app.add_plugins(celestial_views::CelestialViewsPlugin);
+        // after disabling TransformPlugin.
 
         if !app.is_plugin_added::<GravityPlugin>() {
             app.add_plugins(GravityPlugin);
@@ -313,10 +304,11 @@ impl Plugin for CelestialPlugin {
         // System ordering is critical:
         // 1. big_space propagation runs first (default PreUpdate ordering)
         // 2. Our systems run AFTER to override GlobalTransform with body rotation
-        // The spine (`advance_world_clock`, in `TimeSpineSet`) runs first; the
-        // causal celestial hierarchy consumes `WorldTime.epoch_jd`. The sun
-        // presentation projection has its own gate and consumes `CelestialTime`,
-        // so a detached sky clock cannot re-pose the active surface or physics.
+        // The prior fixed loop publishes its completed tick as `WorldTime`; the
+        // PreUpdate transport projection admits this frame's fixed work. The
+        // causal celestial hierarchy consumes `WorldTime.epoch_jd`. Render-only
+        // celestial frames consume the one-step-behind interpolated physical
+        // sample after the fixed loop, before transform propagation.
         // Orbital view MODE state (scene-hide, gravity hold, camera
         // park/restore) — the camera itself flies to the focused body; the
         // world is never re-posed for viewing (see `OrbitalViewPin`).
@@ -360,33 +352,26 @@ impl Plugin for CelestialPlugin {
                     resource_changed::<cadence::CelestialInputsRevision>
                         .or_else(resource_changed::<CelestialBodyRegistry>)
                         .or_else(resource_changed::<lunco_celestial::EphemerisResource>)
-                        .or_else(cadence::provider_motion_changed),
                 ),
             )
                 .chain(),
         );
         app.add_systems(
             Last,
-            cadence::commit_celestial_epoch.run_if(cadence::tracked_needs_solve()),
+            cadence::commit_celestial_epoch
+                .run_if(cadence::tracked_needs_solve())
+                .run_if(lunco_time::scene_time_ready),
         );
         app.add_systems(
             Last,
             cadence::commit_celestial_presentation_epoch
-                .run_if(cadence::presentation_needs_solve()),
+                .run_if(cadence::presentation_needs_solve())
+                .run_if(lunco_time::scene_time_ready),
         );
 
         app.add_systems(
             PreUpdate,
             (
-                presentation_celestial_frame_system.run_if(
-                    cadence::presentation_needs_solve()
-                        .or_else(cadence::tracked_needs_solve())
-                        .or_else(presentation_observer_needs_sync()),
-                ),
-                presentation_sun_system.run_if(
-                    cadence::presentation_needs_solve()
-                        .or_else(presentation_sun_observer_needs_sync()),
-                ),
                 ephemeris_update_system.run_if(cadence::tracked_needs_solve()),
                 body_rotation_system.run_if(cadence::tracked_needs_solve()),
                 // The solar hierarchy stays inertial. Site content is mounted
@@ -398,10 +383,34 @@ impl Plugin for CelestialPlugin {
             )
                 .chain()
                 .in_set(CelestialEpochSet)
+                .run_if(lunco_time::scene_time_ready)
                 .after(lunco_time::TimeSpineSet),
         );
 
-        app.add_systems(Update, celestial_visuals_system);
+        app.add_systems(
+            PostUpdate,
+            (
+                presentation_celestial_frame_system.run_if(
+                    cadence::presentation_needs_solve()
+                        .or_else(cadence::tracked_needs_solve())
+                        .or_else(presentation_observer_needs_sync()),
+                ),
+                presentation_sun_system.run_if(
+                    cadence::presentation_needs_solve()
+                        .or_else(presentation_sun_observer_needs_sync()),
+                ),
+            )
+                .chain()
+                .run_if(lunco_time::scene_time_ready)
+                .after(lunco_time::SimulationPresentationTimeSet)
+                .after(lunco_time::InteractionRenderSet)
+                .before(TransformSystems::Propagate),
+        );
+
+        app.add_systems(
+            Update,
+            celestial_visuals_system.run_if(lunco_time::scene_time_ready),
+        );
         app.add_systems(
             Update,
             presentation_markers::sync_presentation_markers
@@ -449,7 +458,9 @@ impl Plugin for CelestialPlugin {
         // curves onto the globe sphere (see `placement::sync_terrain_body_curvature`).
         app.add_systems(
             Update,
-            placement::sync_terrain_body_curvature.in_set(CelestialTerrainSet::Curvature),
+            placement::sync_terrain_body_curvature
+                .in_set(CelestialTerrainSet::Curvature)
+                .run_if(lunco_time::scene_time_ready),
         );
 
         // Terrain spawning is now handled by lunco-terrain plugin
@@ -459,8 +470,8 @@ impl Plugin for CelestialPlugin {
         // system returns early when no ephemeris provider or site frame is
         // available, so manual `SetEnvironmentLight` (yaw/pitch) remains an
         // explicit operator command in non-orbital contexts. It tracks the
-        // causal world clock, while the detached globe presentation branch
-        // independently tracks CelestialTime:
+        // causal world clock, while the render-only globe branch samples the
+        // same physical timeline with fixed-step interpolation:
         // required since the celestial sun light is a TOP-LEVEL entity (it
         // must not ride the Solar Grid — heliocentric-magnitude translations
         // corrupt the f32 cascade-shadow matrices) and therefore inherits no
@@ -469,6 +480,7 @@ impl Plugin for CelestialPlugin {
             Update,
             update_sun_light_system
                 .run_if(cadence::tracked_needs_solve())
+                .run_if(lunco_time::scene_time_ready)
                 .before(lunco_environment::project_sun_state_to_light),
         );
     }
@@ -480,20 +492,20 @@ impl Plugin for CelestialPlugin {
 /// maintained despawn list:
 ///
 /// * **Ownership marker.** Every celestial-owned root carries
-///   [`CelestialDerived`](big_space_setup::CelestialDerived) — the solar hierarchy,
-///   orbit views, and authored ephemeris spacecraft. Despawning those roots recursively removes
+///   [`CelestialDerived`](big_space_setup::CelestialDerived) — the solar hierarchy
+///   and authored celestial bodies. Despawning those roots recursively removes
 ///   their grids, bodies, terrain tiles, labels, and other structural descendants.
 ///   A new ownership root is covered the moment it carries the marker; the invariant
 ///   lives in one line on the marker's doc.
 /// * **Idempotent re-spawn.** The spawners gate on current outputs or stamp the
-///   trajectory/spacecraft declaration prim. Those scene-owned prims and markers
-///   are removed together, so a replacement scene can project its own views.
+///   scene's body declarations. Those scene-owned prims and markers are removed
+///   together, so a replacement scene can project its own bodies.
 /// * **Resource state reset.** Terrain-curvature coupling is a resource rather
 ///   than an entity, so it is reset here explicitly.
 ///
 /// The clock tree is reset separately and universally by `lunco_time::ResetTime`, fired
-/// from the scene-clear choke point — so a detached/fast sky clock is already back on
-/// its `Epoch` root by the time this runs.
+/// from the scene-clear choke point. The render sample remains derived from the
+/// physical tick and has no independent clock state to restore.
 fn teardown_celestial_scene(
     mut commands: Commands,
     mut active_physics_frame: ResMut<lunco_spatial::ActivePhysicsFrame>,

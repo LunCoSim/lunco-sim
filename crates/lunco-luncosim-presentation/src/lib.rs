@@ -9,6 +9,5 @@ mod terrain_horizon;
 
 /// Register all GUI-facing simulator projections.
 pub fn register(app: &mut bevy::prelude::App) {
-    app.add_plugins(lunco_celestial_presentation::CelestialPresentationPlugin);
     presentation_bridge::register(app);
 }

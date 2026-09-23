@@ -313,7 +313,7 @@ works* — height-as-function, composition, error-driven detail, content-address
   ephemeris, never terrain.
 
 - **USD composition *is* the solar-system model.** `SolarSystem → Body (Xform +
-  ephemeris_id + georef) → Terrain (globe source + DEM-inset child prims) →
+  NAIF body identity (lunco:body) + georef) → Terrain (globe source + DEM-inset child prims) →
   features`. Bodies compose; payloads make far bodies lazy; layering adds a
   mission's landing-site inset or a session's cave non-destructively, per body.
   Geology is time-invariant, so the oracle is independent of ephemeris churn —

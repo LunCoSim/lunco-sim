@@ -637,14 +637,12 @@ pub fn handle_deselect_keys(
 /// Draws an AABB highlight for selected objects using Bevy Gizmos.
 ///
 /// **Subtree Filtering**:
-/// To prevent non-body utility subtrees (such as orbital trajectory lines, RF link
-/// beams, or nested spatial grids) from corrupting the selection box:
-/// The `q_aabb` query filters for entities with `Mesh3d`, excluding
-/// `TrajectoryMeshMarker` lines and program-driven beam markers
-/// (`ProgramDriverId`). The `q_skip_tree` query prevents `queue` from stepping
-/// into child grids, trajectory paths, or program drivers during traversal.
+/// To prevent non-body utility subtrees (such as RF link beams or nested
+/// spatial grids) from corrupting the selection box, the `q_aabb` query filters
+/// program-driven beam markers (`ProgramDriverId`) and the `q_skip_tree` query
+/// stops traversal at child grids and program drivers.
 /// Computes the body-frame bounding box (min, max) for an editable entity tree,
-/// excluding non-body subtrees (link beams, trajectory lines, sub-grids, program drivers).
+/// excluding non-body subtrees (link beams, sub-grids, program drivers).
 ///
 /// The returned points are in `body_transform`'s local frame.  This matters for
 /// a rotated rover: a world-axis AABB is visually misleading and grows/shrinks
@@ -657,7 +655,6 @@ pub fn compute_selection_aabb(
         (&GlobalTransform, &Aabb),
         (
             With<Mesh3d>,
-            Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
             Without<lunco_core::programs::ProgramDriverId>,
             Without<lunco_core::NoSelectionBounds>,
         ),
@@ -668,7 +665,6 @@ pub fn compute_selection_aabb(
         Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial_presentation::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>,
@@ -726,7 +722,6 @@ pub fn draw_selection_bounds(
         (&GlobalTransform, &Aabb),
         (
             With<Mesh3d>,
-            Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
             Without<lunco_core::programs::ProgramDriverId>,
             Without<lunco_core::NoSelectionBounds>,
         ),
@@ -737,7 +732,6 @@ pub fn draw_selection_bounds(
         Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial_presentation::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>,
@@ -1205,7 +1199,6 @@ mod tests {
 
         let mut q = app.world_mut().query_filtered::<Entity, (
             With<Mesh3d>,
-            Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
             Without<lunco_core::programs::ProgramDriverId>,
             Without<lunco_core::NoSelectionBounds>,
         )>();
@@ -1256,15 +1249,13 @@ mod tests {
             .world_mut()
             .query_filtered::<(&GlobalTransform, &Aabb), (
                 With<Mesh3d>,
-                Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
-                Without<lunco_core::programs::ProgramDriverId>,
+                    Without<lunco_core::programs::ProgramDriverId>,
                 Without<lunco_core::NoSelectionBounds>,
             )>();
         let mut state_children = app.world_mut().query::<&Children>();
         let mut state_skip = app.world_mut().query_filtered::<(), Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial_presentation::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>>();
@@ -1318,15 +1309,13 @@ mod tests {
             .world_mut()
             .query_filtered::<(&GlobalTransform, &Aabb), (
                 With<Mesh3d>,
-                Without<lunco_celestial_presentation::TrajectoryMeshMarker>,
-                Without<lunco_core::programs::ProgramDriverId>,
+                    Without<lunco_core::programs::ProgramDriverId>,
                 Without<lunco_core::NoSelectionBounds>,
             )>();
         let mut state_children = app.world_mut().query::<&Children>();
         let mut state_skip = app.world_mut().query_filtered::<(), Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial_presentation::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>>();

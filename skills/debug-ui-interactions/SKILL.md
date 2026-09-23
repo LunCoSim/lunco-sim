@@ -120,7 +120,8 @@ selector to compensate for a compositor capability that is not exposed.
 ## Stop cleanly
 
 Stop the session with the API `Exit`, then verify both the process and API port
-are gone before starting another one. Never use `pkill`, overlap sessions, or
+are gone before replacing your own session. Agents may use separate ports; never
+control another agent's session, use `pkill`, or
 reuse a port owned by another agent. A screenshot, command acknowledgement, or
 open TCP socket alone is not a completed UI test; hand off the exact runtime,
 input sequence, queries, screenshots, verdict, and any remaining compositor

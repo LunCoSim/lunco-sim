@@ -34,7 +34,7 @@ WorldRoot
         └── surface grid
             └── terrain, rovers, surface camera, surface trajectories
 
-Separately, a body may have a detached presentation branch below the inertial
+Separately, a body may have a render presentation branch below the inertial
 solar hierarchy:
 
 ```text
@@ -46,10 +46,10 @@ Solar inertial grid
 
 The two grids are deliberately not interchangeable. The physical surface grid
 is the authoritative parent for authored terrain, vehicles, physics, and local
-cameras. The globe presentation surface is derived render content and may
-follow an accelerated celestial presentation clock. `GlobeLod` stores both
-identities explicitly; using the presentation grid as a site parent would move
-the physical scene whenever presentation time advances.
+cameras. The globe presentation surface is derived render content sampled from
+the physical-time presentation resource. `GlobeLod` stores both identities
+explicitly; using the presentation grid as a site parent would move the
+physical scene during render interpolation.
 ```
 
 The body-fixed grid is the object that rotates. The body entity itself stays
@@ -101,12 +101,10 @@ body-fixed surface frame, so its descendants retain authored visibility; this
 also keeps hidden render-only templates hidden while their runtime driver owns
 any cloned presentation geometry.
 
-## Trajectories and links
+## Links
 
-Trajectory data carries an explicit semantic reference frame. Samples are
-converted through the f64 frame transform and then emitted as grid-local,
-cell-anchored render geometry. Line endpoints, labels, and connection beams
-must use the same frame conversion as their source entities; never combine a
+Line endpoints, labels, and connection beams use one semantic frame for both
+source poses before producing grid-local render geometry. Never combine a
 camera-relative `GlobalTransform` with a grid-absolute position.
 
 ## Physics and terrain
@@ -126,7 +124,7 @@ To add a new reference frame:
 1. define its semantic identity and f64 transform in `lunco-celestial`, then
    project it through `lunco-celestial-spatial`;
 2. add one concrete grid declaration and register it in the frame index;
-3. route placement/camera/trajectory/physics consumers through the existing
+3. route placement/camera/physics consumers through the existing
    frame conversion and atomic mount APIs;
 4. add a missing/duplicate-frame test and an end-to-end pose round-trip test.
 

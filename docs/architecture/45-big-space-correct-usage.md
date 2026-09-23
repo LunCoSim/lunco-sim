@@ -290,27 +290,27 @@ The body hierarchy has two intentionally separate surface-grid identities:
 
 - `GlobeLod.surface_grid` is the body-fixed physical grid. Site placement uses
   it for authored terrain, vehicles, physics, and surface cameras.
-- `GlobeLod.globe_grid` is the detached presentation grid. The globe LOD
+- `GlobeLod.globe_grid` is the render presentation grid. The globe LOD
   selector, streamed tile parents, and presentation-time camera projection use
   it for derived planetary imagery.
 
-The presentation grid may be updated by an accelerated celestial clock. It must
+The presentation grid samples physical time between completed ticks. It must
 never be used as the physical site parent, and physical content must never be
 reparented into it as a way to make a view look aligned. Keeping the ownership
 split in the component contract makes an invalid wiring a compile-time field
 initialization error rather than a runtime timing symptom.
 
-The detached sky also drives the rendered solar direction and globe pose. A
+The render presentation sample also drives the rendered solar direction and
+globe pose. A
 surface station remains a causal entity on the physical body-fixed grid; its
 screen marker is mirrored as render-only geometry under the matching
 presentation grid, so the marker follows the fast globe without changing
 station, terrain, physics, or link coordinates. The physical marker is shown
 from its own body's surface view; orbit and other-body views use the moving
 copy, avoiding a stationary duplicate. Celestial body shader looks retain
-installed dataset albedo unless USD authors an explicit albedo map. If the
-camera stays on a WorldTime surface while CelestialTime advances, the detached
-solar presentation hierarchy is rigidly aligned at the active body-fixed camera
-pose; this preserves the CelestialTime Earth/Moon/Sun directions in the local
+installed dataset albedo unless USD authors an explicit albedo map. The solar
+presentation hierarchy is rigidly aligned at the active body-fixed camera
+pose; this preserves the interpolated Earth/Moon/Sun directions in the local
 sky without reposing the causal body or site.
 
 The procedural Sun disc uniform uses the active camera's view coordinates,
@@ -319,7 +319,7 @@ camera's `CellCoord` and `Transform` through the canonical
 `lunco_spatial::pose_in_grid` helper before publishing it; it never compares a
 floating-origin world vector with camera-relative rays. BigSpace still owns
 `GlobalTransform` propagation to the rendered camera and presentation grids.
-Camera pose changes reopen this projection even while CelestialTime is paused.
+Camera pose changes reopen this projection while physical time is paused.
 
 Focused regression coverage lives beside the owning crates, notably
 `lunco-celestial` frame/placement tests, `lunco-usd-avian` bridge tests, and
