@@ -383,10 +383,12 @@ rate remain the user's intent while this gate pauses `Time<Virtual>`.
 
 The whole-simulation guarantee remains open because:
 
-1. Readiness and scene lifecycle do not yet share one complete admission
-   transaction through reference closure, Modelica preparation, physics
-   admission, and the first communication point. The lifecycle hold currently
-   ends at the asset/visual-projection terminal edge.
+1. Active USD Modelica participants now keep their owning physical subtree in
+   readiness until the first successful communication point; intentionally
+   paused models are ready after compilation. This does not yet make readiness
+   and scene lifecycle one admission transaction through reference closure,
+   Modelica preparation, and world physics admission. The lifecycle progress
+   hold still ends at the asset/visual-projection terminal edge.
 2. Runtime referenced assets can be projected as soon as their async load
    completes, and their pending dependency closure is not fully represented by
    readiness.

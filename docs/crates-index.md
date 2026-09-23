@@ -41,7 +41,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
 | **`lunco-settings`** | Centralised user-settings: one JSON file (`<OS config dir>/lunco/settings.json`), namespaced sections, auto-persist on change; also owns the shared `DownloadSettings` retry/backoff policy. |
 | **`lunco-theme`** | Centralized design tokens (Catppuccin-based) for consistent UI across all panels and domains. |
-| **`lunco-time`** | Unified mission-time spine (architecture doc 19): `MissionClock`/`TimeTransport`/causal `WorldTime`, interpolated `SimulationPresentationTime`, explicitly bound `TimeDomain` preview transport, and the `scales` projection layer over `celestial-time`. |
+| **`lunco-time`** | Unified mission-time spine (architecture doc 19): `MissionClock`/`TimeTransport`/causal `WorldTime`, interpolated `SimulationPresentationTime`, epoch-rooted `CelestialTime` with a presentation-only 100,000× clock control, explicitly bound `TimeDomain` preview transport, and the `scales` projection layer over `celestial-time`. |
 | **`lunco-worker-transport`** | Generic Web Worker pool transport (wasm-only): spawn / lazy-grow, boot wire-id handshake, byte + Transferable-`ArrayBuffer` post, crash respawn. Payload-agnostic (the caller supplies decode/route callbacks); shared by the Modelica Fast-Run workers and the DEM bake worker so neither reimplements the plumbing. |
 | **`lunco-status-core`** | Renderer-independent lifecycle, progress, and status infrastructure: `StatusBus`, scoped busy handles, tracked tasks, discrete diagnostics, and telemetry mirroring. Consumers such as the workbench status bar, busy widgets, and headless diagnostics read the same contract. |
 
@@ -55,7 +55,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | **`lunco-celestial`** | Headless celestial semantics: canonical body catalog/NAIF identities, ephemeris contracts, typed f64 frame transforms, geodesy, body rotation, and Kepler propagation. |
 | **`lunco-celestial-data`** | Dependency-free authoritative celestial constants shared by semantic and asset-processing packages without making the general core depend on the celestial domain. |
 | **`lunco-celestial-spatial-core`** | Lightweight Bevy/BigSpace contracts shared by celestial consumers: semantic frame lookup, canonical surface poses, surface axes, scene body declarations, orbital-view state, cached local-gravity facts, celestial Sun presentation state, and render-independent connectivity state. |
-| **`lunco-celestial-spatial`** | Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, physical-time globe and Sun projection, render-only body-fixed marker copies, links, cadence, and runtime celestial commands. |
+| **`lunco-celestial-spatial`** | Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, celestial-clock globe and Sun projection, render-only body-fixed marker copies, links, cadence, and runtime celestial commands. |
 | **`lunco-celestial-ephemeris`** | Analytic natural-body ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
 | **`lunco-terrain-core`** | Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde), shared by both the planar DEM streamer and the cube-sphere planetary tiler. |
@@ -134,10 +134,10 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It registers the vehicle wheel owner with `lunco-usd-bevy-core` for in-place live edits. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
 | **`lunco-usd-sim-authoring`** | Render-free composed readers for PhysX vehicle wheel-attachment and gear-drive authoring, shared by vehicle projection and scene validation; it also publishes the corresponding typed USD lint facts. Runtime ECS resynchronization remains in `lunco-usd-sim`, registered through the generic live-edit owner in `lunco-usd-bevy-core`. |
-| **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, pending differential contract, physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, and scene-runner packages. It contains no projection systems. |
+| **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, coalesced `PendingEntityWork`, pending differential contract, physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, and scene-runner packages. It contains no projection systems. |
 | **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`; generic scene admission and mounting belong to `lunco-usd-bevy-runtime-core`. |
 | **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
-| **`lunco-usd-sim-domain`** | Render-free USD domain projection: its public `network` module reads and validates component-network facts, `synthesis` owns Rhai-backed policies and generated-plan contracts, and the parent module owns Modelica member-class lifecycle plus ECS projection. Generic USD actuator lowering lives in `lunco-usd-actuation`; its optional API query providers live in `lunco-usd-sim-domain-api`. |
+| **`lunco-usd-sim-domain`** | Render-free USD domain projection: its public `network` module reads and validates component-network facts, `synthesis` owns Rhai-backed policies and generated-plan contracts, and the parent module owns Modelica member-class lifecycle, ECS projection, and lifecycle-queued generated-source document synchronization using `lunco-usd-sim-core::PendingEntityWork`. Generic USD actuator lowering lives in `lunco-usd-actuation`; its optional API query providers live in `lunco-usd-sim-domain-api`. |
 | **`lunco-usd-sim-domain-api`** | Optional API query providers for generated Modelica source inspection. Kept outside the render-free domain projector so its direct dependency set does not include the `lunco-api`/JSON query surface. |
 | **`lunco-usd-sim-celestial`** | Independent render-free projector for USD-authored celestial anchors, orbits, link nodes, occluders, and reflected-light metadata. It owns the celestial projection marker and does not depend on vehicle or cosimulation projection. |
 | **`lunco-usd-sim-shader`** | Independent render-free projector for `UsdShade` WGSL material intent. It authors `ShaderLook` and owns its shader-resolution marker; generic scene refresh invalidation arrives through the scene contract rather than a runtime-to-shader dependency. |
@@ -341,7 +341,7 @@ after `LunCoCoreRuntimePlugin`; headless consumers that only need core
 primitives do not compile this policy layer.
 
 **`lunco-time`**
-The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/causal `WorldTime`, `SimulationPresentationTime` (interpolated between completed physical ticks), explicitly bound `TimeDomain` previews (`Playback`, `TimeBinding`, `ResolvedDomains`, `ControlAnimation`), and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**
+The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/causal `WorldTime`, `SimulationPresentationTime` (interpolated between completed physical ticks), `CelestialTime` (epoch-rooted render clock with a separate 100,000× ceiling), explicitly bound `TimeDomain` previews (`Playback`, `TimeBinding`, `ResolvedDomains`, `ControlAnimation`), and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**
 
 **`lunco-doc`**
 Foundation for structured, mutable artifacts (Modelica, USD, etc.) with built-in undo/redo logic. Defines the `DocumentHost` container and the atomic `DocumentOp` pattern for state mutation and inversion.
@@ -912,18 +912,22 @@ registered through the generic live-edit owner in `lunco-usd-bevy-core`.
 **`lunco-usd-sim-core`**
 Small production contract package shared by the vehicle and USD cosim
 projectors and scene readiness. It owns `UsdSimSet` (including the shader
-projection-preparation boundary), `UsdSimProcessed`,
-`PendingDifferential`, and `GroundColliderPending`, keeping shared contracts
-out of either large implementation crate and allowing scene runners to avoid
-the full vehicle projector.
+projection-preparation boundary), `UsdSimProcessed`, the coalesced
+`PendingEntityWork` lifecycle queue, `PendingDifferential`, and
+`GroundColliderPending`, keeping shared contracts out of either large
+implementation crate and allowing scene runners to avoid the full vehicle
+projector.
 
 **`lunco-usd-sim-cosim`**
 USD-to-cosim translator. `UsdSimCosimPlugin` installs source discovery,
 wiring, readiness, telemetry projection, and the Modelica/script participant
-exchange independently from vehicle realization. Generic scene commands and
-mount/teardown mechanics live in `lunco-usd-bevy-runtime-core`; `sync` owns
-the fixed-step port exchange and authored event projection. Its optional API
-query providers live in `lunco-usd-sim-cosim-api`.
+exchange independently from vehicle realization. Wiring facts are cached by
+composed generation and instance, with unchanged runtime edges retained across
+unrelated endpoint arrivals. Cosim prim source discovery and Python readiness
+share a lifecycle-coalesced pending-prim set. Generic scene commands and
+mount/teardown mechanics live in `lunco-usd-bevy-runtime-core`; `sync` owns the
+fixed-step port exchange and authored event projection. Its optional API query
+providers live in `lunco-usd-sim-cosim-api`.
 
 **`lunco-usd-sim-cosim-api`**
 Optional API query providers for the cosimulation runtime: uniform ports,
@@ -934,11 +938,13 @@ alongside the runtime; default cosimulation hosts do not inherit its direct
 
 **`lunco-usd-sim-domain`**
 Render-free USD domain projection. It reads composed component-network facts,
-resolves Modelica member classes, invokes authored Rhai synthesizers, and
-publishes generated Modelica sources. Generic force/torque actuator lowering
-belongs to `lunco-usd-actuation`, while USD wiring and participant lifecycle belong
-to `lunco-usd-sim-cosim`. Optional generated-source API queries are provided by
-the separate `lunco-usd-sim-domain-api` package.
+resolves Modelica member classes through a source-to-root dependency index,
+waits for all referenced classes to settle before synthesis, invokes authored
+Rhai synthesizers, and publishes generated Modelica sources.
+Generic force/torque actuator lowering belongs to `lunco-usd-actuation`, while
+USD wiring and participant lifecycle belong to `lunco-usd-sim-cosim`. Optional
+generated-source API queries are provided by the separate
+`lunco-usd-sim-domain-api` package.
 
 **`lunco-usd-sim-domain-api`**
 Optional API query providers for the generated Modelica source projection. The

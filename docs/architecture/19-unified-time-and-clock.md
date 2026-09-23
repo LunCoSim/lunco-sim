@@ -4,7 +4,9 @@
 
 `lunco-time` owns the mission-time spine: the fixed simulation tick, transport,
 calendar anchor, causal `WorldTime`, and the physical-time sample used by
-presentation.
+ordinary render interpolation. Celestial rendering also reads `CelestialTime`,
+which uses the shared clock tree and can be rate-scaled without advancing causal
+state.
 
 ## 1. Master time and transport
 
@@ -85,14 +87,20 @@ simulation seconds, MET, and Julian date all come from the same `MissionClock`
 mapping as `WorldTime`.
 
 Ordinary USD time-sampled transforms, visibility, and material channels use
-this physical presentation sample. Celestial render frames and solar
-presentation use the same sample. Causal physics and body state continue to
-read `WorldTime` at integer ticks; render-only consumers may interpolate between
-those completed states, but they do not advance on wall time.
+this physical presentation sample. Causal physics and body state read
+`WorldTime` at integer ticks; ordinary render-only consumers may interpolate
+between those completed states, but they do not advance on wall time.
 
-Pausing the fixed simulation holds the sky, authored scene animation, and other
-simulation-time presentation together. The sky-time UI reads
-`SimulationPresentationTime`.
+Celestial frames and the rendered solar direction use `CelestialTime`. Its
+default source is mission elapsed time from the same deterministic tick. The
+`SetClock` command can re-parent that presentation clock to wall time and select
+a rate up to 100,000×. This changes only celestial rendering; `WorldTime`,
+physics, co-simulation, and ordinary USD animation stay on the causal timeline.
+The celestial solve gate applies its certified angular error budget to this
+clock, and visible motion requests the shared bounded realtime frame cadence.
+The Time menu and optional sky-clock HUD expose the same controls. The HUD can
+seek UTC dates and select rates through 100k×; `SetTimeTransport` remains the
+separate 0.1×–64× causal control.
 
 ## 3. Clock tree
 
@@ -106,11 +114,14 @@ The only raw roots are:
 
 - `Tick`: deterministic simulation time, frozen by the physical transport;
 - `Wall`: `Time<Real>`, non-deterministic and never paused.
+- `Epoch`: mission elapsed time, projected from the deterministic tick.
 
-`Clocks` publishes the `real`, `sim`, and wall-rooted `interaction` handles.
-The interaction domain drives camera, avatar, and UI easing that must remain
-responsive while the simulation is paused. It does not drive scene animation,
-celestial state, or physics.
+`Clocks` publishes the `real`, `sim`, wall-rooted `interaction`, and epoch-rooted
+`celestial` handles. The interaction domain drives camera, avatar, and UI easing
+that must remain responsive while the simulation is paused. The celestial
+domain drives render-only celestial frames and solar presentation; when it is
+re-parented to `Wall`, it must not drive scene animation, physics, or any causal
+state.
 
 A derived domain follows its parent. A driven domain adds `Playback` with its
 own seekable head, range, rate, loop, and pause state. `TimeBinding` attaches an
@@ -155,12 +166,12 @@ be turned into a kinematic playback shortcut to simplify UI controls.
 
 ## 6. Pause and cadence
 
-Pausing the physical transport freezes `SimTick`, physics, and every render
-sample derived from that tick. The interaction schedule remains available for
-camera and UI response. It is a separate presentation cadence, not another
-simulation clock. A terminal runtime fault also holds the shared fixed clock;
-otherwise Rhai, celestial presentation, and co-simulation could advance from an
-invalid state.
+Pausing the physical transport freezes `SimTick`, physics, and render samples
+derived from that tick. The interaction schedule remains available for camera
+and UI response. The celestial clock follows the mission epoch by default, so
+it freezes with the simulation; an explicit wall-time parent keeps only the
+celestial presentation moving. A terminal runtime fault holds the shared fixed
+clock, so Rhai and co-simulation cannot advance from invalid causal state.
 
 The fixed-step catch-up budget lives in `lunco-time`; consumers must not add a
 second rate path or drain an unbounded burst. Celestial recomputation may use
@@ -211,8 +222,9 @@ contract. Coordinate projection and time authority are separate boundaries.
 1. Store one causal master (`SimTick`); derive calendar and consumer views.
 2. Presentation samples completed physical ticks and never advances beyond the
    latest one.
-3. Scene animation and celestial presentation use the physical-time sample by
-   default; independent playback requires an explicit `TimeBinding`.
+3. Ordinary scene animation uses the physical-time sample; celestial
+   presentation uses its epoch-rooted clock by default and may be independently
+   rate-scaled without changing causal state.
 4. Causal state advances only on the fixed simulation cadence.
 5. The USD sampler is the shared authored-animation funnel.
 6. Interaction cadence serves camera/avatar/UI response and remains separate
@@ -223,6 +235,7 @@ contract. Coordinate projection and time authority are separate boundaries.
 | master tick and transport | `lunco-core` / `lunco-time` |
 | mission/calendar anchor and `WorldTime` | `lunco-time` |
 | physical presentation sample | `lunco-time` |
+| celestial presentation clock and `CelestialTime` | `lunco-time` |
 | explicit domains, playheads, and bindings | `lunco-time` |
 | USD value evaluation and visual projection | `lunco-usd-bevy-animation` |
 | celestial render projection | `lunco-celestial-spatial` |
@@ -231,6 +244,7 @@ contract. Coordinate projection and time authority are separate boundaries.
 | avatar/camera/UI presentation cadence | `InteractionSchedule` |
 
 `SetTimeTransport` controls the physical simulation. `SetMissionEpoch` changes
-the calendar anchor at the current tick. `ControlAnimation` controls explicitly
+the calendar anchor at the current tick. `SetClock` reparents, rate-scales, or
+seeks the celestial presentation clock. `ControlAnimation` controls explicitly
 bound preview or driven domains. `SetSimulationExecutionMode` controls host
 pacing only; it does not change `TimeTransport.rate`.

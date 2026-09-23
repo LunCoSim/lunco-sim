@@ -49,7 +49,10 @@ mounts retain diagnostics without pausing or faulting the primary simulation. A
 terminal primary reference failure retains its exact hold and publishes a path
 diagnostic plus `RuntimeFault` until scene teardown; inactive or removed,
 nonfaulted operations release their own keys. Surface the active wait reason
-through the existing status bus.
+through the existing status bus. An active USD Modelica participant remains
+readiness-held through its first successful communication point; a compiled,
+intentionally paused model is ready without being stepped. Keep that participant
+readiness separate from the shared `SimulationProgress` lifecycle gate.
 
 For engineering requirements, keep the same split at the numerical boundary:
 SysML owns typed intent, units, normative tolerances, and requirement/
@@ -148,6 +151,9 @@ body projection and cadence belong to `lunco-celestial-spatial`; ordinary
 moving scene objects use standard USD `timeSamples` through
 `lunco-usd-bevy-animation`. Do not create a mission-only trajectory component
 or clock when composed USD animation expresses the motion.
+Celestial ephemeris presentation uses the shared `lunco-time::CelestialTime`
+domain, which may be rate-scaled up to 100,000× without advancing causal world
+state.
 
 ### Runtime scopes, cycles, and publication boundaries
 
@@ -603,6 +609,20 @@ Keep acausal conservation connectors (`Pin`, `HeatPort`, `FluidPort`, `Flange`,
 and equivalent domain connectors) inside the root whose solver owns their
 algebraic equations. A typed scalar USD connection between two roots is causal
 and may have a macro-step or one-step delay. It is not an acausal `connect()`.
+
+USD connection projection caches immutable endpoint facts by composed-stage
+generation and runtime-instance identity. Reconciliation retains unchanged
+`SimConnection` entities and bindings; edited edges use the normal add/remove
+lifecycle. Endpoint lifecycle observers, USD edits, and authority changes feed
+the shared `UsdWiringDirty` latch, so stable updates do not scan endpoint
+populations for `Added<T>` filters. Domain source-class completion invalidates
+only roots that use that source. A root is not synthesized until every
+referenced member class has a terminal verdict, avoiding repeated graph
+extraction across asynchronous asset arrivals. Scene teardown clears the
+scene-owned reverse index and pending candidate sets; resolved member-class
+facts remain asset-owned and reusable. Cosim source discovery and Python
+readiness share one lifecycle-coalesced pending-prim set rather than probing
+all USD prims for unprocessed markers on stable updates.
 
 If zero-delay bidirectional coupling is required, move the coupled components
 into one generated Modelica root and solve the combined DAE. Do not add a Rhai

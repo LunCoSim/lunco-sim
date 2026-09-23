@@ -1393,7 +1393,10 @@ pub fn run() -> u8 {
     let participant_waits = {
         let mut waits = 0u32;
         while readiness_started.elapsed() < cli.readiness_timeout {
-            if modelica_exchanges_ready(app.world_mut()) {
+            // Worker responses land in Update, after this frame's
+            // PreUpdate readiness projection. Wait for both the first exchange
+            // and its cleared readiness state before leaving admission.
+            if modelica_exchanges_ready(app.world_mut()) && participants_ready(app.world_mut()) {
                 break;
             }
             // Advance only when no causal result is in flight. Once the first

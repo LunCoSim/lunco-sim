@@ -63,10 +63,7 @@ fn network_communication_period(
             path: component.path.clone(),
             message: format!("invalid Modelica component path: {error}"),
         })?;
-        let authored = view
-            .attr_names(&path)
-            .iter()
-            .any(|name| name == COMMUNICATION_PERIOD_ATTR);
+        let authored = view.has_authored_attribute(&path, COMMUNICATION_PERIOD_ATTR);
         let period = resolve_communication_period_secs(
             authored,
             view.real(&path, COMMUNICATION_PERIOD_ATTR),

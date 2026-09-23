@@ -360,6 +360,24 @@ a producer through `inputs:<name>`, and a produced setpoint leaves through
 only stores values for an imperative producer; it is not a second signal graph
 and must not shadow a generated Modelica output.
 
+### USD telemetry projection lifecycle
+
+USD telemetry declarations and generated Modelica output aliases are projected
+into the shared telemetry sampler once per relevant scene state. The projector
+owns one initial discovery pass for prims that predate plugin installation;
+after that, insert/remove observers for `UsdPrimPath`, generated-source and
+signal-layout metadata, `SimComponent`, and ready port surfaces coalesce into a
+single invalidation bit. Stage revisions and USD asset changes are checked as
+scalar invalidation sources. The dirty projector rebuilds its path/output maps
+and channels only after one of those sources changes; stable updates do not
+scan the entity population to rediscover lifecycle changes.
+
+The telemetry index and its emitted channels are derived scene state. Scene
+teardown clears the index, and the next initial projection is the only bootstrap
+for entities that existed before observer installation. Writers that replace
+projection metadata must publish it through ECS insertion/removal lifecycle;
+continuous Modelica output values stay outside this invalidation contract.
+
 ## Backend registry (dynamic, plugin-driven)
 
 Backends self-register at app boot. Each domain crate ships a Bevy
@@ -510,12 +528,63 @@ def Scope "Amplifier" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 }
 ```
 
-`rewire_usd_connections` resolves each connection to ECS entities and spawns one
-`SimConnection` per resolved edge. A generated domain root's `inputs:` boundary
-is deferred until projection has installed its `ModelicaModel`: the model-arrival
-event explicitly rebuilds the derived wire cache. The connection system therefore
-waits for both entities **and** the target's runtime contract; it never creates an
-edge merely to discover on a later fixed tick that the port surface was absent.
+`rewire_usd_connections` resolves each connection to ECS entities and reconciles
+one `SimConnection` per resolved edge. Immutable USD facts are cached by stage,
+authored generation, and runtime-instance identity; Modelica membership and each
+endpoint's connection/default/transform facts are read once per cache key. A
+generated domain root's `inputs:` boundary is deferred until projection has
+installed its `ModelicaModel`: the model-arrival event rechecks wiring, while
+unchanged edge entities and binding state are retained. Changed or removed edges
+still pass through the normal lifecycle. Scene teardown clears the stage-fact
+cache. The connection system therefore waits for both entities **and** the
+target's runtime contract; it never creates an edge merely to discover on a later
+fixed tick that the port surface was absent.
+
+Wiring admission uses the existing `UsdWiringDirty` latch. Endpoint contract
+and identity observers, removals, live USD edits, and authority changes wake
+reconciliation; stable updates read the latch without scanning endpoint
+entities for `Added<T>` matches.
+
+Cosim prim source discovery and the Python-availability completion check share
+one coalesced pending-prim set, implemented with the `PendingEntityWork`
+contract from `lunco-usd-sim-core`. `UsdPrimPath` and `UsdSourcedCosim`
+lifecycle observers add or retire entity IDs; one initial sweep covers prims
+that existed before plugin installation. Both update gates then read the same
+pending set, so settled scenes do not query every USD prim each frame. The
+vehicle projector owns a separate instance of the same contract, so each
+projection domain drains only its own work. Scene teardown clears each
+scene-owned set.
+
+Modelica wrapper admission has its own owner-scoped set as well. Model and
+cosim-owner additions queue an entity that lacks `SimComponent`; removing that
+surface reopens wrapping, while removal of either owner component retires its
+queued work. One initial discovery covers pre-existing unwrapped models, and
+the wrapper's run condition and batch both consume this set rather than polling
+the unwrapped population every Update.
+
+Domain source resolution has a separate invalidation path. Each discovered
+network root records its Modelica source assets; when a source class settles or
+changes, only roots indexed under that asset are queued for synthesis. New USD
+path/identity arrivals are discovered individually, and the domain projector is
+not entered while its root work set is empty. Candidate roots stay out of the
+projection work set until every referenced member source has a terminal class
+verdict; asset arrival waves therefore do not repeatedly traverse a partially
+resolved network. Invalid source verdicts are terminal and still reach
+synthesis so the authored error is reported. A full discovery is reserved for
+initial admission, a USD-stage asset change, or a changed generation on a live
+canonical stage. Endpoint lifecycle continues to requeue only its entity; the
+broader `UsdWiringDirty` latch is not a domain-membership signal. Scene teardown
+clears the reverse index, stage-generation cursor, and pending
+discovery/projection candidate sets; resolved member-class facts remain
+reusable because they belong to shared Modelica source assets, not a scene.
+
+Generated Modelica source documents use the same lifecycle discipline: source
+insert/replace queues only that wrapper for document synchronization, while a
+one-time bootstrap covers pre-existing wrappers. Source insertion/removal and
+document-link owners set the generated-metadata dirty flag consumed by the
+publisher; plugin startup marks the first publication dirty as well. Solver
+output does not invalidate generated source metadata, and no per-update
+`Changed<GeneratedModelicaSource>` population scan is required.
 
 The result: a multi-component, multi-language cosim is a USD edit, not
 a Rust edit. `assets/scenes/tests/cosim_chain.usda` and its Rhai scenario

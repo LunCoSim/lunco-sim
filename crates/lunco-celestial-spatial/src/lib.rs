@@ -12,6 +12,7 @@ use lunco_celestial_spatial_core::{
     update_reference_frame_index, AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSunPresentation,
     LocalGravityField, OrbitalViewPin, ReferenceFrameIndex, SolarSystemRoot,
 };
+use lunco_render::SceneCamera;
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
@@ -117,6 +118,46 @@ fn clear_celestial_presentation(mut sun: ResMut<CelestialSunPresentation>) {
     sun.clear();
 }
 
+#[derive(Resource, Default)]
+struct CelestialPresentationPacing {
+    requested: bool,
+}
+
+fn refresh_celestial_presentation_pacing(
+    celestial: Option<Res<lunco_time::CelestialTime>>,
+    frames: Query<(), With<CelestialPresentationGrid>>,
+    cameras: Query<&Camera, With<SceneCamera>>,
+    demand: Option<ResMut<lunco_core_runtime::FramePacingDemand>>,
+    mut pacing: ResMut<CelestialPresentationPacing>,
+) {
+    let Some(mut demand) = demand else { return };
+    let moving =
+        celestial.is_some_and(|clock| clock.delta_secs.is_finite() && clock.delta_secs != 0.0);
+    let has_active_camera = cameras.iter().any(|camera| camera.is_active);
+    let requested = moving && !frames.is_empty() && has_active_camera;
+    if requested == pacing.requested {
+        return;
+    }
+    if requested {
+        demand.acquire_realtime();
+    } else {
+        demand.release_realtime();
+    }
+    pacing.requested = requested;
+}
+
+fn release_celestial_presentation_pacing(
+    mut demand: Option<ResMut<lunco_core_runtime::FramePacingDemand>>,
+    mut pacing: ResMut<CelestialPresentationPacing>,
+) {
+    if pacing.requested {
+        if let Some(demand) = demand.as_deref_mut() {
+            demand.release_realtime();
+        }
+        pacing.requested = false;
+    }
+}
+
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
@@ -136,6 +177,16 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<CelestialConfig>();
         app.init_resource::<CelestialSunPresentation>();
         app.add_systems(lunco_core::SceneTeardown, clear_celestial_presentation);
+        app.init_resource::<CelestialPresentationPacing>()
+            .init_resource::<lunco_core_runtime::FramePacingDemand>()
+            .add_systems(
+                PreUpdate,
+                refresh_celestial_presentation_pacing.after(lunco_time::CelestialTimeSet),
+            )
+            .add_systems(
+                lunco_core::SceneTeardown,
+                release_celestial_presentation_pacing,
+            );
         app.init_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .init_resource::<lunco_port_core::ports::PortTopologyState>();
         // Globe LOD consumes the shared presentation binding, not Bevy's
@@ -307,8 +358,8 @@ impl Plugin for CelestialPlugin {
         // The prior fixed loop publishes its completed tick as `WorldTime`; the
         // PreUpdate transport projection admits this frame's fixed work. The
         // causal celestial hierarchy consumes `WorldTime.epoch_jd`. Render-only
-        // celestial frames consume the one-step-behind interpolated physical
-        // sample after the fixed loop, before transform propagation.
+        // celestial frames and the sky light consume `CelestialTime`, which can
+        // follow that mission epoch or a rate-scaled wall clock.
         // Orbital view MODE state (scene-hide, gravity hold, camera
         // park/restore) — the camera itself flies to the focused body; the
         // world is never re-posed for viewing (see `OrbitalViewPin`).
@@ -402,7 +453,7 @@ impl Plugin for CelestialPlugin {
             )
                 .chain()
                 .run_if(lunco_time::scene_time_ready)
-                .after(lunco_time::SimulationPresentationTimeSet)
+                .after(lunco_time::CelestialTimeSet)
                 .after(lunco_time::InteractionRenderSet)
                 .before(TransformSystems::Propagate),
         );

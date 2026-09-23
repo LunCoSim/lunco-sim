@@ -364,8 +364,8 @@ impl Plugin for LunCoSimUiPlugin {
                     }
                 },
             )
-            // The physical sky-time readout remains native egui because the
-            // deliberately minimal HUI contract does not provide its overlay layout.
+            // The celestial clock controls remain native egui because the
+            // deliberately minimal HUI contract does not provide this overlay.
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (

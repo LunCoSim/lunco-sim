@@ -8,6 +8,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_math::{Quat, Vec3};
+use std::collections::HashSet;
 
 /// Ordered phases shared by the USD simulation projections.
 ///
@@ -32,6 +33,68 @@ pub enum UsdSimSet {
 /// Marks a USD prim after its simulation projection has completed.
 #[derive(Component)]
 pub struct UsdSimProcessed;
+
+/// Coalesced entity work shared by independent USD simulation projectors.
+///
+/// Each owner keeps its own instance so one projector cannot consume another
+/// projector's work. Lifecycle observers queue entity IDs; a single bootstrap
+/// discovery can cover entities that existed before that owner was installed.
+#[derive(Debug, Default)]
+pub struct PendingEntityWork {
+    entities: HashSet<Entity>,
+    initial_discovery: bool,
+}
+
+impl PendingEntityWork {
+    /// Start with one population discovery for entities already in the world.
+    pub fn with_initial_discovery() -> Self {
+        Self {
+            entities: HashSet::new(),
+            initial_discovery: true,
+        }
+    }
+
+    /// Queue an entity once, coalescing repeated lifecycle signals.
+    pub fn queue(&mut self, entity: Entity) {
+        self.entities.insert(entity);
+    }
+
+    /// Remove an entity whose relevant owner component was removed.
+    pub fn forget(&mut self, entity: Entity) {
+        self.entities.remove(&entity);
+    }
+
+    /// Whether this entity is currently queued.
+    pub fn contains(&self, entity: Entity) -> bool {
+        self.entities.contains(&entity)
+    }
+
+    /// Whether bootstrap discovery or queued entity work remains.
+    pub fn has_work(&self) -> bool {
+        self.initial_discovery || !self.entities.is_empty()
+    }
+
+    /// Consume the one-time bootstrap-discovery request, if present.
+    pub fn take_initial_discovery(&mut self) -> bool {
+        std::mem::take(&mut self.initial_discovery)
+    }
+
+    /// Take queued entities so new lifecycle events can accumulate separately.
+    pub fn take_queued(&mut self) -> HashSet<Entity> {
+        std::mem::take(&mut self.entities)
+    }
+
+    /// Add entities discovered by an owner's one-time bootstrap query.
+    pub fn extend(&mut self, entities: impl IntoIterator<Item = Entity>) {
+        self.entities.extend(entities);
+    }
+
+    /// Retire all work when the scene owning those entities is torn down.
+    pub fn clear(&mut self) {
+        self.entities.clear();
+        self.initial_discovery = false;
+    }
+}
 
 /// Authored gear-joint data held until all referenced bodies are admitted.
 #[derive(Component)]
@@ -92,4 +155,42 @@ pub struct PhysicalWheel {
     /// Wheel mount offset in the enclosing vehicle frame. A client proxy can
     /// reconstruct the wheel's position as `chassis_pos + chassis_rot · mount_local`.
     pub mount_local: Vec3,
+}
+
+#[cfg(test)]
+mod pending_entity_work_tests {
+    use super::PendingEntityWork;
+    use bevy_ecs::entity::Entity;
+
+    #[test]
+    fn coalesces_entity_signals_and_drains_only_queued_work() {
+        let first = Entity::from_bits(1);
+        let second = Entity::from_bits(2);
+        let mut work = PendingEntityWork::default();
+
+        work.queue(first);
+        work.queue(first);
+        work.queue(second);
+
+        let queued = work.take_queued();
+        assert_eq!(queued.len(), 2);
+        assert!(queued.contains(&first));
+        assert!(queued.contains(&second));
+        assert!(!work.has_work());
+    }
+
+    #[test]
+    fn bootstrap_and_scene_reset_have_explicit_lifetimes() {
+        let entity = Entity::from_bits(3);
+        let mut work = PendingEntityWork::with_initial_discovery();
+
+        assert!(work.has_work());
+        assert!(work.take_initial_discovery());
+        assert!(!work.take_initial_discovery());
+        work.queue(entity);
+        work.clear();
+
+        assert!(!work.has_work());
+        assert!(!work.contains(entity));
+    }
 }

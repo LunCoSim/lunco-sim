@@ -38,7 +38,44 @@ events: a no-match query can still inspect candidate entities, and separate
 `is_empty()` queries can repeat that work. Combine compatible invalidation
 sources into one `Or` query when they drive the same decision. If this remains a
 hot path, audit every writer before adding a source-owned event/revision/dirty
-set; do not create another per-frame full-population scan.
+set; once all writers are accounted for, prefer that signal over an
+always-evaluated `Added<T>` population query in a run condition.
+
+For deferred USD projectors, keep one entity-work set per owner and feed it
+from the complete lifecycle boundary: identity arrival, projection readiness,
+invalidation, removal, and scene teardown. The same applies to deferred adapter
+steps such as wrapping a Modelica model into its shared port surface. Keep a
+single bootstrap discovery for entities predating plugin installation, and
+retry only work whose authoritative stage/readiness input is still pending.
+The idle run condition should inspect the owner set, not scan the population.
+
+For whole-index projectors such as USD telemetry, use one initial bootstrap,
+then coalesce relevant insert/remove observers into an invalidation flag. Keep
+stage-generation and asset-store invalidation as scalar checks. Do not repeat
+the same `Added`/`Changed` population filters in both the run condition and the
+projector, and do not reproject until the index is invalidated.
+
+When a USD reader already exposes `has_authored_attribute`, use it to test one
+known property instead of enumerating every attribute name. If one enumeration
+feeds multiple derived port sets, derive them together from that single result.
+Temporary lookup indexes over immutable ECS queries should borrow path and port
+surface data instead of cloning those maps for a one-pass reconciliation.
+Build compatible per-entity indexes in one query traversal rather than running
+separate full-population passes for each index.
+For derived marker sets, compare current membership with the desired set and
+apply only additions/removals; unrelated rebuilds must not emit lifecycle churn.
+Removal invalidation should be qualified by the entity's authored USD identity
+and relevant endpoint capability, not by a generic component removal alone.
+Extract a USD program's declared interface once at admission and reuse it for
+validation, diagnostics, and publication instead of re-enumerating attributes.
+
+Keep invalidation domains distinct: a wiring/topology latch may be raised by
+endpoint arrivals and must not automatically trigger whole-stage domain
+discovery. Use the canonical stage generation or authored-stage asset change
+for that broader pass; keep entity arrivals on their queued-entity path.
+Generated-source document sync should share the `PendingEntityWork` contract,
+and its metadata publisher should consume the owner-published dirty flag rather
+than adding a parallel change query.
 
 When gating a dependency's multi-system transform schedule, distinguish its
 per-update output flags from authoritative input changes. Preserve any required

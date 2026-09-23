@@ -49,11 +49,32 @@ Modelica projector checks prim and identity additions together once inside its
 system instead of scanning them in both a run condition and the system; and
 BigSpace's high-, local-, and low-precision admission predicates each combine
 their existing spatial invalidation filters into one query per schedule
-boundary. BigSpace still owns all propagation work and the origin-settle pass
-is unchanged. Physics-validation and telemetry scratch buffers also retain
-capacity across calls. These are source-level work reductions only. Their CPU
-benefit is not yet measured, and the next clean settled Apollo run remains
-necessary before claiming an FPS improvement.
+boundary. The USD telemetry projector performs one bootstrap pass, then uses
+component insert/remove observers plus scalar stage-revision and asset-change
+signals instead of repeated `Added`/`Changed` population queries in both its
+run condition and invalidation system. BigSpace still owns all propagation
+work and the origin-settle pass is unchanged. Physics-validation and telemetry
+scratch buffers also retain capacity across calls. Domain member-class
+discovery now uses the existing canonical-stage generations and USD-asset
+change signal for whole-scene rediscovery; endpoint wiring invalidation keeps
+using the narrower queued-entity path. Generated Modelica document sync also
+uses lifecycle-queued wrappers and a dirty publisher latch rather than per-frame
+`Changed` filters. Domain synthesis uses direct authored-property lookup for
+member communication periods and enumerates root attributes once for both
+actuator input and output ports. USD connection reconciliation also borrows
+endpoint paths, generated aliases, and port surfaces in its temporary indexes
+instead of cloning them; it builds those indexes in one endpoint sweep instead
+of three separate population scans. Earth-direction demand now reconciles its
+existing and desired marker sets, avoiding remove/re-add events on unrelated
+rewires. Endpoint removals now dirty USD wiring only when the removed
+capability belonged to an authored USD prim; unrelated `SimComponent` teardown
+no longer triggers a whole wiring pass. These are source-level work reductions
+only. Program binding extracts its declared input/output maps once and reuses
+them for the admission verdict and published interface; the communication
+period is read through a direct authored-property query. Orphan acausal
+admission also derives declaration and connection presence in one attribute pass.
+Their CPU benefit is not yet measured, and the next clean settled Apollo run
+remains necessary before claiming an FPS improvement.
 
 ## Verification
 

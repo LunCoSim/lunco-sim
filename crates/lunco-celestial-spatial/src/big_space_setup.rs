@@ -200,12 +200,11 @@ pub struct EarthSurfaceRoot;
 #[derive(Component)]
 pub struct MoonSurfaceRoot;
 
-/// A render-only celestial frame driven by
-/// [`lunco_time::SimulationPresentationTime`].
+/// A render-only celestial frame driven by [`lunco_time::CelestialTime`].
 ///
 /// Physical bodies and surface scenes stay under the [`ReferenceFrame`] tree
 /// driven by [`WorldTime`]. Globe imagery is presentation content, however:
-/// the visible Earth/Moon need interpolated poses without moving the physical
+/// the visible Earth/Moon need independent poses without moving the physical
 /// body, terrain, or Avian frame. This marker deliberately is *not* a
 /// `ReferenceFrame`, so the causal ephemeris and body-rotation systems cannot
 /// accidentally write it.
@@ -576,8 +575,8 @@ pub fn setup_big_space_hierarchy(
         ))
         .id();
 
-    // Globe imagery follows the interpolated physical presentation sample. Keep
-    // it on a separate high-precision branch: the physical body, picker collider,
+    // Globe imagery follows the celestial presentation clock. Keep it on a
+    // separate high-precision branch: the physical body, picker collider,
     // and surface scene remain in the causal WorldTime branch above. The
     // presentation branch must preserve the complete ephemeris ancestry: an
     // Earth child below the causal EMB would only follow the Earth-vs-EMB

@@ -146,6 +146,7 @@ come from 10-minute DE441 vector samples interpolated to those same epochs.
 1.  **Given** the mission prim has standard USD `double3` transform samples, **When** the physical clock advances, **Then** its composed transform follows those samples through the shared animation adapter.
 2.  **Given** the physical clock is paused, **When** rendered, **Then** the mission prim remains at the last physical presentation sample.
 3.  **Given** physical transport is paused or running at 64×, **When** the scene is sampled, **Then** natural-body state and authored mission motion follow the same physical time, and presentation never advances beyond a completed physical tick.
+4.  **Given** the celestial presentation clock is re-parented to wall time at up to 100,000×, **When** the sky is rendered, **Then** render-only celestial frames advance while physical body state, physics, and authored mission motion remain on the physical timeline.
 
 ### User Story 4 - Physical Time Transport (Priority: P2)
 

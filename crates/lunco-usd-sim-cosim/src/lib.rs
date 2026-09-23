@@ -54,7 +54,7 @@ use lunco_usd_bevy_stage::{
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
-use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
+use lunco_usd_sim_core::{PendingDifferential, PendingEntityWork, UsdSimProcessed, UsdSimSet};
 use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule};
 
 /// Installs USD-authored co-simulation participant and connection projection.
@@ -66,9 +66,10 @@ mod wiring;
 
 use wiring::{
     causal_participants_changed, derive_causal_barrier_participants, forget_binding_model_status,
-    mark_wiring_dirty_on_remove, request_binding_epoch, request_binding_epoch_on_model_change,
-    request_binding_epoch_on_remove, rewire_usd_connections, settle_binding_epoch, wiring_due,
-    BindingModelStatuses,
+    install_wiring_invalidation_observers, request_binding_epoch,
+    request_binding_epoch_on_model_change, request_binding_epoch_on_remove,
+    reset_wiring_facts_cache, rewire_usd_connections, settle_binding_epoch, wiring_due,
+    BindingModelStatuses, WiringFactsCache,
 };
 pub use wiring::{
     install_wiring_system, modelica_models_terminal, BindingEpochWait, UsdWiredConnection,
@@ -95,12 +96,12 @@ struct UsdTelemetryChannel;
 
 /// Runtime index for the one-time USD telemetry projection.
 ///
-/// The declaration projector is triggered by scene/projection changes and by
-/// newly spawned prims. Its wrapper-port index therefore belongs to the
-/// projection lifecycle, not to the per-frame query. Keeping
-/// them here makes the steady state an empty gated system instead of a full
-/// ECS scan and a set of cloned USD-path keys every Update.
-#[derive(Resource, Default)]
+/// `dirty` admits a projection pass; `invalidation_pending` is the coalesced
+/// lifecycle signal that makes the index and its output channels stale. The
+/// first pass is also the one-time discovery for entities that predate this
+/// plugin. Normal invalidation is fed by component lifecycle observers rather
+/// than population queries in Update.
+#[derive(Resource)]
 struct UsdTelemetryProjectionIndex {
     generated_outputs: HashMap<
         (
@@ -115,24 +116,40 @@ struct UsdTelemetryProjectionIndex {
     generated_entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     diagnostics: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), RuntimeDiagnostic>,
     observed_stage_revision: u64,
+    invalidation_pending: bool,
     dirty: bool,
+}
+
+impl Default for UsdTelemetryProjectionIndex {
+    fn default() -> Self {
+        Self {
+            generated_outputs: HashMap::new(),
+            entities_by_path: HashMap::new(),
+            generated_entities_by_path: HashMap::new(),
+            diagnostics: HashMap::new(),
+            observed_stage_revision: 0,
+            invalidation_pending: false,
+            dirty: true,
+        }
+    }
+}
+
+fn invalidate_usd_telemetry_projection_index_on_insert<T: Component>(
+    _: On<Insert, T>,
+    mut index: ResMut<UsdTelemetryProjectionIndex>,
+) {
+    index.invalidation_pending = true;
+}
+
+fn invalidate_usd_telemetry_projection_index_on_remove<T: Component>(
+    _: On<Remove, T>,
+    mut index: ResMut<UsdTelemetryProjectionIndex>,
+) {
+    index.invalidation_pending = true;
 }
 
 fn mark_usd_telemetry_projection_index_dirty(
     mut index: ResMut<UsdTelemetryProjectionIndex>,
-    added_prims: Query<(), Added<UsdPrimPath>>,
-    changed_wrappers: Query<
-        (),
-        Or<(
-            Added<GeneratedModelicaSource>,
-            Changed<GeneratedModelicaSource>,
-            Added<ModelicaSignalLayout>,
-            Changed<ModelicaSignalLayout>,
-            Added<SimComponent>,
-            Added<lunco_port_core::PortSurface>,
-            Added<lunco_port_core::PortSurfaceReady>,
-        )>,
-    >,
     stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
     projected: Query<Entity, With<UsdTelemetryProjected>>,
     channels: Query<Entity, With<UsdTelemetryChannel>>,
@@ -145,45 +162,30 @@ fn mark_usd_telemetry_projection_index_dirty(
     let stage_assets_changed = stage_assets
         .as_ref()
         .is_some_and(|assets| assets.is_changed());
-    if !added_prims.is_empty()
-        || !changed_wrappers.is_empty()
-        || revision_changed
-        || stage_assets_changed
-    {
-        index.dirty = true;
-        index.diagnostics.clear();
-        if let Some(revision) = stage_revision {
-            index.observed_stage_revision = revision.0;
-        }
-        for entity in &projected {
-            commands.entity(entity).remove::<UsdTelemetryProjected>();
-        }
-        for entity in &channels {
-            commands.entity(entity).try_despawn();
-        }
+    let lifecycle_changed = std::mem::take(&mut index.invalidation_pending);
+    if !lifecycle_changed && !revision_changed && !stage_assets_changed {
+        return;
+    }
+
+    index.dirty = true;
+    index.diagnostics.clear();
+    if let Some(revision) = stage_revision {
+        index.observed_stage_revision = revision.0;
+    }
+    for entity in &projected {
+        commands.entity(entity).remove::<UsdTelemetryProjected>();
+    }
+    for entity in &channels {
+        commands.entity(entity).try_despawn();
     }
 }
 
-fn telemetry_projection_index_changed(
-    added_prims: Query<(), Added<UsdPrimPath>>,
-    changed_wrappers: Query<
-        (),
-        Or<(
-            Added<GeneratedModelicaSource>,
-            Changed<GeneratedModelicaSource>,
-            Added<ModelicaSignalLayout>,
-            Changed<ModelicaSignalLayout>,
-            Added<SimComponent>,
-            Added<lunco_port_core::PortSurface>,
-            Added<lunco_port_core::PortSurfaceReady>,
-        )>,
-    >,
+fn telemetry_projection_index_invalidation_due(
     index: Res<UsdTelemetryProjectionIndex>,
     stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
     stage_assets: Option<Res<Assets<UsdStageAsset>>>,
 ) -> bool {
-    !added_prims.is_empty()
-        || !changed_wrappers.is_empty()
+    index.invalidation_pending
         || stage_revision
             .as_ref()
             .is_some_and(|revision| revision.0 != index.observed_stage_revision)
@@ -202,6 +204,7 @@ fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjection
     index.generated_entities_by_path.clear();
     index.diagnostics.clear();
     index.observed_stage_revision = 0;
+    index.invalidation_pending = false;
     index.dirty = true;
 }
 
@@ -353,32 +356,123 @@ pub struct PendingPythonSource {
     pub asset_path: String,
 }
 
+/// Coalesced USD-prim discovery work for the cosimulation projection.
+#[derive(Resource)]
+struct PendingUsdCosimPrimWork(PendingEntityWork);
+
+impl Default for PendingUsdCosimPrimWork {
+    fn default() -> Self {
+        Self(PendingEntityWork::with_initial_discovery())
+    }
+}
+
+/// Lifecycle-queued Modelica owners that still need their shared port surface.
+#[derive(Resource)]
+struct PendingModelicaWrapWork(PendingEntityWork);
+
+impl Default for PendingModelicaWrapWork {
+    fn default() -> Self {
+        Self(PendingEntityWork::with_initial_discovery())
+    }
+}
+
+fn queue_added_usd_cosim_prim(
+    trigger: On<Add, UsdPrimPath>,
+    unprocessed: Query<(), Without<UsdSourcedCosim>>,
+    mut pending: ResMut<PendingUsdCosimPrimWork>,
+) {
+    if unprocessed.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn forget_removed_usd_cosim_prim(
+    trigger: On<Remove, UsdPrimPath>,
+    mut pending: ResMut<PendingUsdCosimPrimWork>,
+) {
+    pending.0.forget(trigger.entity);
+}
+
+fn queue_removed_usd_sourced_cosim(
+    trigger: On<Remove, UsdSourcedCosim>,
+    prims: Query<(), With<UsdPrimPath>>,
+    mut pending: ResMut<PendingUsdCosimPrimWork>,
+) {
+    if prims.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn queue_modelica_wrap_for_new_model(
+    trigger: On<Add, ModelicaModel>,
+    eligible: Query<(), (With<UsdSourcedCosim>, Without<SimComponent>)>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    if eligible.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn queue_modelica_wrap_for_new_cosim_owner(
+    trigger: On<Add, UsdSourcedCosim>,
+    eligible: Query<(), (With<ModelicaModel>, Without<SimComponent>)>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    if eligible.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn queue_modelica_wrap_after_surface_removal(
+    trigger: On<Remove, SimComponent>,
+    eligible: Query<(), (With<UsdSourcedCosim>, With<ModelicaModel>)>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    if eligible.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn forget_removed_modelica_wrap_source(
+    trigger: On<Remove, ModelicaModel>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    pending.0.forget(trigger.entity);
+}
+
+fn forget_removed_modelica_wrap_owner(
+    trigger: On<Remove, UsdSourcedCosim>,
+    mut pending: ResMut<PendingModelicaWrapWork>,
+) {
+    pending.0.forget(trigger.entity);
+}
+
+fn reset_usd_cosim_prim_work(mut pending: ResMut<PendingUsdCosimPrimWork>) {
+    pending.0.clear();
+}
+
+fn reset_modelica_wrap_work(mut pending: ResMut<PendingModelicaWrapWork>) {
+    pending.0.clear();
+}
+
 /// Reads cosim attributes from USD prims and dispatches model
 /// compilation + wires. Runs in `Update` after `sync_usd_visuals` so
 /// `Transform` / `Mesh3d` / `Material` are already present.
-/// Run condition: any `UsdPrimPath` entity still lacks `UsdSourcedCosim`.
-fn any_unprocessed_usd_cosim(q: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>) -> bool {
-    !q.is_empty()
+/// Run condition: the initial discovery or a queued prim lifecycle is pending.
+fn any_unprocessed_usd_cosim(pending: Res<PendingUsdCosimPrimWork>) -> bool {
+    pending.0.has_work()
 }
 
 /// Run condition: any `UsdSourcedCosim` modelica model still needs wrapping
 /// into a `SimComponent`.
-fn any_unwrapped_modelica(
-    q: Query<
-        (),
-        (
-            With<UsdSourcedCosim>,
-            With<ModelicaModel>,
-            Without<SimComponent>,
-        ),
-    >,
-) -> bool {
-    !q.is_empty()
+fn any_pending_modelica_wrap(pending: Res<PendingModelicaWrapWork>) -> bool {
+    pending.0.has_work()
 }
 
 pub(crate) fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdSourcedCosim>>,
+    mut pending: ResMut<PendingUsdCosimPrimWork>,
     stages: Res<Assets<UsdStageAsset>>,
     // Initial reads use the worker-produced plan; later authored generations
     // use the live canonical stage selected by the shared reader boundary.
@@ -388,28 +482,34 @@ pub(crate) fn process_usd_cosim_prims(
     mut python_unavailable: ResMut<PythonUnavailablePrograms>,
 ) {
     // Which prims a component collection already owns, per stage. Computed once
-    // per run rather than per prim (it is a full stage walk), and NOT cached
-    // across runs: this system only runs while unprocessed prims remain, and
-    // each prim is decided exactly once.
+    // per batch rather than per prim.
     let mut members_by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, BTreeSet<String>> =
         HashMap::new();
-    for (entity, prim_path, instance_projection) in query.iter() {
+    let mut entities = pending.0.take_queued();
+    if pending.0.take_initial_discovery() {
+        // This single bootstrap pass covers entities that predate plugin
+        // installation. Normal scene arrivals are queued by the lifecycle
+        // observer and do not need a population scan.
+        entities.extend(query.iter().map(|(entity, _, _)| entity));
+    }
+    let mut entities: Vec<_> = entities.into_iter().collect();
+    entities.sort_unstable();
+    for entity in entities {
+        let Ok((entity, prim_path, instance_projection)) = query.get(entity) else {
+            continue;
+        };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
+            pending.0.queue(entity);
             continue;
         };
 
         let id = prim_path.stage_handle.id();
-        // Mark examined up front so each prim is inspected exactly once.
-        // Without this, every *non-cosim* prim (wheels, ground, ramps — the
-        // bulk of the scene) failed the active-cosim gate below via the
-        // early `continue` WITHOUT ever gaining `UsdSourcedCosim`, so it stayed
-        // in the `Without<UsdSourcedCosim>` query forever — and this system
-        // re-ran every frame, deep-cloning the whole stage per prim. That was
-        // the dominant sandbox CPU cost (see scripts/perf/README.md).
-        // Safe: every other `UsdSourcedCosim` consumer also requires a
-        // `ModelicaModel` / `SimComponent` / `ScriptedModel` that a non-cosim
-        // prim never gains, so marking it here matches nothing downstream.
+        // Record that this prim's authored cosim surface has been examined,
+        // including non-programmable prims, before any early return below.
+        // Other cosim consumers also require a model/script participant, so
+        // this ownership marker alone does not make a visual prim a solver.
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
+            pending.0.queue(entity);
             continue;
         };
         let (reader, _generation) =
@@ -464,12 +564,12 @@ pub(crate) fn process_usd_cosim_prims(
 fn report_python_unavailable(
     mut diagnostics: ResMut<PythonUnavailablePrograms>,
     in_flight: Option<Res<SceneLoadInFlight>>,
-    unprocessed: Query<(), (With<UsdPrimPath>, Without<UsdSourcedCosim>)>,
+    pending: Res<PendingUsdCosimPrimWork>,
 ) {
     if diagnostics.reported
         || diagnostics.paths.is_empty()
         || in_flight.is_some()
-        || !unprocessed.is_empty()
+        || pending.0.has_work()
     {
         return;
     }
@@ -1007,8 +1107,10 @@ fn process_usd_cosim_prim_read(
     // and makes no topology claim until a `.connect` opinion is authored. Skip
     // both forms here; report only the connected form because that one is an
     // actionable topology error.
-    if has_acausal_connector(reader, sdf_path) {
-        if has_connected_acausal_connector(reader, sdf_path) {
+    let (has_acausal_connectors, has_connected_acausal_connectors) =
+        acausal_connector_state(reader, sdf_path);
+    if has_acausal_connectors {
+        if has_connected_acausal_connectors {
             warn!(
                 "[usd-cosim] {}: declares acausal `connectors:*` but belongs to no \
                  CollectionAPI:components network, so no Modelica model is generated for it and it \
@@ -1064,12 +1166,8 @@ fn process_usd_cosim_prim_read(
         // driver) is somebody else's to run.
         _ => return,
     };
-    let has_ports = reader
-        .attr_names(sdf_path)
-        .iter()
-        .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
-    if !has_ports {
-        let (inputs, outputs) = declared_interface(reader, sdf_path);
+    let (mut inputs, outputs) = declared_interface(reader, sdf_path);
+    if inputs.is_empty() && outputs.is_empty() {
         let model_name = modelica_path.as_deref().map_or_else(
             || format!("Python:{}", python_path.as_deref().unwrap_or("<source>")),
             |path| format!("Modelica:{path}"),
@@ -1111,10 +1209,8 @@ fn process_usd_cosim_prim_read(
     let communication_period_result = match modelica_path.as_ref() {
         None => Ok(None),
         Some(_) => {
-            let authored = reader
-                .attr_names(sdf_path)
-                .iter()
-                .any(|name| name == "lunco:program:communicationPeriod");
+            let authored =
+                reader.has_authored_attribute(sdf_path, "lunco:program:communicationPeriod");
             lunco_modelica_runtime::resolve_communication_period_secs(
                 authored,
                 reader.real(sdf_path, "lunco:program:communicationPeriod"),
@@ -1131,7 +1227,6 @@ fn process_usd_cosim_prim_read(
     let communication_period_secs = match communication_period_result {
         Ok(value) => value,
         Err(reason) => {
-            let (inputs, outputs) = declared_interface(reader, sdf_path);
             let model_name = modelica_path
                 .as_deref()
                 .map_or_else(|| "Modelica".to_string(), |path| format!("Modelica:{path}"));
@@ -1181,7 +1276,6 @@ fn process_usd_cosim_prim_read(
             let reason =
                 format!("Python runtime unavailable; cannot run `{asset_path}` in this binary");
             python_unavailable.paths.insert(prim_path.path.clone());
-            let (inputs, outputs) = declared_interface(reader, sdf_path);
             commands.entity(entity).try_insert((
                 UsdSimProcessed,
                 lunco_core_session::NotPredictable,
@@ -1268,7 +1362,6 @@ fn process_usd_cosim_prim_read(
     // `dispatch_loaded_{modelica,python}_sources` flips the status live once the
     // source has loaded/compiled; until then `can_step()` holds a `Compiling`
     // component.
-    let (mut inputs, outputs) = declared_interface(reader, sdf_path);
     strip_rigid_body_inputs(reader, sdf_path, &mut inputs);
     let model_name = match (&modelica_path, &python_path) {
         (Some(path), _) => {
@@ -1335,21 +1428,20 @@ fn process_usd_cosim_prim_read(
     info!("[usd-cosim] program {} bound ({backend:?})", prim_path.path);
 }
 
-/// A `connectors:*` property declares an acausal Modelica interface. Such a
-/// program is only executable as a member of a component network.
-fn has_acausal_connector(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> bool {
-    reader
-        .attr_names(sdf_path)
-        .iter()
-        .any(|name| name.starts_with("connectors:"))
-}
-
-/// A bare `connectors:*` property declares an interface; only its connection
-/// list makes an authoring claim about circuit topology.
-fn has_connected_acausal_connector(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> bool {
-    reader.attr_names(sdf_path).iter().any(|name| {
-        name.starts_with("connectors:") && !reader.connections(sdf_path, name).is_empty()
-    })
+/// A `connectors:*` property declares an acausal Modelica interface, while its
+/// connection list makes the topology claim that warrants an orphan warning.
+/// Read both facts from one attribute-name traversal.
+fn acausal_connector_state(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> (bool, bool) {
+    let mut has_connector = false;
+    for name in reader.attr_names(sdf_path) {
+        if name.starts_with("connectors:") {
+            has_connector = true;
+            if !reader.connections(sdf_path, &name).is_empty() {
+                return (true, true);
+            }
+        }
+    }
+    (has_connector, false)
 }
 
 /// Return an actionable discrepancy between USD's public causal boundary and
@@ -1837,8 +1929,20 @@ pub(crate) fn wrap_modelica_into_simcomponent(
         (Entity, &ModelicaModel, Option<&UsdModelicaPortContract>),
         (With<UsdSourcedCosim>, Without<SimComponent>),
     >,
+    mut pending: ResMut<PendingModelicaWrapWork>,
 ) {
-    for (entity, model, contract) in q_new.iter() {
+    let mut entities = pending.0.take_queued();
+    if pending.0.take_initial_discovery() {
+        // Cover unwrapped participants that predate this cosim projector.
+        entities.extend(q_new.iter().map(|(entity, ..)| entity));
+    }
+    let mut candidates: Vec<_> = entities
+        .into_iter()
+        .filter_map(|entity| q_new.get(entity).ok())
+        .collect();
+    candidates.sort_unstable_by_key(|(entity, ..)| *entity);
+
+    for (entity, model, contract) in candidates {
         let mut entity_commands = commands.entity(entity);
         entity_commands.try_insert(SimComponent {
             model_name: model.model_name.clone(),
@@ -2086,15 +2190,71 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<BindingModelStatuses>()
             .init_resource::<PythonUnavailablePrograms>()
             .init_resource::<lunco_usd_sim_domain::MemberClasses>()
-            .init_resource::<lunco_usd_sim_domain::ProjectionDirty>()
+            .init_resource::<lunco_usd_sim_domain::DomainClassUsers>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjectionCandidates>()
+            .init_resource::<lunco_usd_sim_domain::PendingGeneratedSourceDocuments>()
+            .init_resource::<PendingUsdCosimPrimWork>()
+            .init_resource::<PendingModelicaWrapWork>()
+            .init_resource::<WiringFactsCache>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>();
+        app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
+        app.world_mut()
+            .resource_mut::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
+            .dirty = true;
         app.add_observer(request_binding_epoch::<UsdPrimPath>)
             .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
+            .add_observer(invalidate_usd_telemetry_projection_index_on_insert::<UsdPrimPath>)
+            .add_observer(invalidate_usd_telemetry_projection_index_on_remove::<UsdPrimPath>)
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_insert::<GeneratedModelicaSource>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_remove::<GeneratedModelicaSource>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_insert::<ModelicaSignalLayout>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_remove::<ModelicaSignalLayout>,
+            )
+            .add_observer(invalidate_usd_telemetry_projection_index_on_insert::<SimComponent>)
+            .add_observer(invalidate_usd_telemetry_projection_index_on_remove::<SimComponent>)
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_insert::<lunco_port_core::PortSurface>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_remove::<lunco_port_core::PortSurface>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_insert::<
+                    lunco_port_core::PortSurfaceReady,
+                >,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_remove::<
+                    lunco_port_core::PortSurfaceReady,
+                >,
+            )
+            .add_observer(queue_added_usd_cosim_prim)
+            .add_observer(forget_removed_usd_cosim_prim)
+            .add_observer(queue_removed_usd_sourced_cosim)
+            .add_observer(queue_modelica_wrap_for_new_model)
+            .add_observer(queue_modelica_wrap_for_new_cosim_owner)
+            .add_observer(queue_modelica_wrap_after_surface_removal)
+            .add_observer(forget_removed_modelica_wrap_source)
+            .add_observer(forget_removed_modelica_wrap_owner)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_prim)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_identity)
+            .add_observer(lunco_usd_sim_domain::queue_removed_domain_identity)
+            .add_observer(lunco_usd_sim_domain::queue_added_domain_instance_projection)
+            .add_observer(lunco_usd_sim_domain::queue_removed_domain_instance_projection)
+            .add_observer(lunco_usd_sim_domain::forget_domain_projection_entity)
+            .add_observer(lunco_usd_sim_domain::queue_generated_source_document_sync)
+            .add_observer(lunco_usd_sim_domain::queue_model_document_sync_for_generated_source)
+            .add_observer(lunco_usd_sim_domain::forget_generated_source_document_sync)
+            .add_observer(lunco_usd_sim_domain::mark_generated_sources_dirty_on_insert)
             // Link port names are derived from the classes of the other authored
             // LinkNodes. A node arriving after its wire must therefore reopen the
             // same binding transaction as any other projected endpoint.
@@ -2104,10 +2264,6 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
             .add_observer(lunco_usd_sim_domain::on_remove_generated_source)
             .add_observer(request_binding_epoch::<SimComponent>)
-            .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
-            .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::OutputPorts>)
-            .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurface>)
-            .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurfaceReady>)
             .add_observer(forget_binding_model_status)
             .add_observer(request_binding_epoch::<lunco_usd_avian_contracts::PendingUsdJoint>)
             .add_observer(
@@ -2117,6 +2273,7 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(request_binding_epoch_on_remove::<PendingDifferential>)
             .add_observer(request_binding_epoch::<SimConnection>)
             .add_observer(request_binding_epoch_on_remove::<SimConnection>);
+        install_wiring_invalidation_observers(app);
         // USD source-load and contract failures use the same core notice stream as
         // the Modelica compiler, so the workbench console has one observable error
         // surface. `add_message` is idempotent when the Modelica plugin registered
@@ -2201,6 +2358,13 @@ impl Plugin for UsdSimCosimPlugin {
             report_python_unavailable.after(CosimUpdateSet::Scene),
         );
         app.add_systems(lunco_core::SceneTeardown, reset_python_unavailable);
+        app.add_systems(lunco_core::SceneTeardown, reset_usd_cosim_prim_work);
+        app.add_systems(lunco_core::SceneTeardown, reset_modelica_wrap_work);
+        app.add_systems(lunco_core::SceneTeardown, reset_wiring_facts_cache);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            lunco_usd_sim_domain::reset_scene_projection_work,
+        );
         app.add_systems(
             lunco_core::SceneTeardown,
             reset_usd_telemetry_projection_index,
@@ -2208,7 +2372,9 @@ impl Plugin for UsdSimCosimPlugin {
 
         app.add_systems(
             Update,
-            lunco_usd_sim_domain::project_domain_islands.in_set(CosimUpdateSet::Projection),
+            lunco_usd_sim_domain::project_domain_islands
+                .run_if(lunco_usd_sim_domain::domain_projection_due)
+                .in_set(CosimUpdateSet::Projection),
         );
         app.add_systems(
             Update,
@@ -2220,6 +2386,7 @@ impl Plugin for UsdSimCosimPlugin {
             Update,
             lunco_usd_sim_domain::sync_generated_network_documents
                 .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
+                .run_if(lunco_usd_sim_domain::generated_source_document_sync_due)
                 .in_set(CosimUpdateSet::Projection),
         );
         app.add_systems(
@@ -2263,17 +2430,17 @@ impl Plugin for UsdSimCosimPlugin {
             Update,
             (
                 rewire_usd_connections.run_if(wiring_due),
-                wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
+                wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
                 request_modelica_parameter_recompile,
                 seed_usd_input_defaults,
                 dispatch_loaded_modelica_sources,
                 // Run the lifecycle trigger after wrapper/source publication,
                 // because those systems may add the runtime surface in this
                 // same chain after the domain projection pass has completed.
-                // This keeps the index correct without restoring a steady-state
-                // scan for every unprojected prim.
+                // Component observers and scalar USD revisions admit this work;
+                // the steady state does not query the entity population.
                 mark_usd_telemetry_projection_index_dirty
-                    .run_if(telemetry_projection_index_changed),
+                    .run_if(telemetry_projection_index_invalidation_due),
                 // The wrapper publishes the generic SimComponent surface and the
                 // authored output contract in this same lifecycle transaction.
                 // Project authored telemetry only after that publication, so the
@@ -2361,38 +2528,269 @@ mod tests {
     #[derive(Resource, Default)]
     struct WiringRuns(usize);
 
-    fn count_wiring_runs(mut runs: ResMut<WiringRuns>) {
+    fn count_wiring_runs(mut runs: ResMut<WiringRuns>, mut dirty: ResMut<UsdWiringDirty>) {
         runs.0 += 1;
+        dirty.0 = false;
     }
 
     #[test]
     fn wiring_gate_is_dormant_until_a_real_trigger() {
         let mut app = App::new();
         app.init_resource::<UsdWiringDirty>()
-            .init_resource::<WiringRuns>()
-            .add_systems(Update, count_wiring_runs.run_if(wiring_due));
+            .init_resource::<WiringRuns>();
+        install_wiring_invalidation_observers(&mut app);
+        app.add_systems(Update, count_wiring_runs.run_if(wiring_due));
 
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 0);
 
-        app.world_mut().spawn(UsdPrimPath::default());
+        let non_usd_model = app
+            .world_mut()
+            .spawn(lunco_cosim_core::SimComponent::default())
+            .id();
+        app.update();
+        app.world_mut()
+            .entity_mut(non_usd_model)
+            .remove::<lunco_cosim_core::SimComponent>();
+        app.update();
+        assert_eq!(
+            app.world().resource::<WiringRuns>().0,
+            0,
+            "a non-USD SimComponent lifecycle cannot dirty the USD wiring projection"
+        );
+
+        let visual_only = app.world_mut().spawn(UsdPrimPath::default()).id();
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 0);
 
-        app.world_mut().spawn(SimComponent::default());
+        app.world_mut()
+            .entity_mut(visual_only)
+            .insert(lunco_port_core::PortSurfaceReady);
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 1);
 
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 1);
+
+        app.world_mut()
+            .entity_mut(visual_only)
+            .insert(lunco_core::GlobalEntityId::from_raw(12));
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 2);
+
+        app.world_mut()
+            .entity_mut(visual_only)
+            .remove::<lunco_core::GlobalEntityId>();
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 3);
+
+        app.world_mut()
+            .entity_mut(visual_only)
+            .remove::<lunco_port_core::PortSurfaceReady>();
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 4);
 
         app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
         app.update();
-        assert_eq!(app.world().resource::<WiringRuns>().0, 2);
+        assert_eq!(app.world().resource::<WiringRuns>().0, 5);
 
-        app.world_mut().resource_mut::<UsdWiringDirty>().0 = false;
+        let endpoint = app
+            .world_mut()
+            .spawn((UsdPrimPath::default(), lunco_port_core::PortSurfaceReady))
+            .id();
         app.update();
-        assert_eq!(app.world().resource::<WiringRuns>().0, 2);
+        assert_eq!(app.world().resource::<WiringRuns>().0, 6);
+
+        app.world_mut().entity_mut(endpoint).remove::<UsdPrimPath>();
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 7);
+
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 7);
+    }
+
+    #[test]
+    fn cosim_prim_discovery_tracks_only_unprocessed_lifecycles() {
+        let mut app = App::new();
+        app.init_resource::<PendingUsdCosimPrimWork>();
+        app.world_mut()
+            .resource_mut::<PendingUsdCosimPrimWork>()
+            .0
+            .take_initial_discovery();
+        app.add_observer(queue_added_usd_cosim_prim)
+            .add_observer(forget_removed_usd_cosim_prim)
+            .add_observer(queue_removed_usd_sourced_cosim);
+
+        let unprocessed = app.world_mut().spawn(UsdPrimPath::default()).id();
+        assert!(app
+            .world()
+            .resource::<PendingUsdCosimPrimWork>()
+            .0
+            .contains(unprocessed));
+
+        let already_sourced = app
+            .world_mut()
+            .spawn((UsdPrimPath::default(), UsdSourcedCosim))
+            .id();
+        assert!(!app
+            .world()
+            .resource::<PendingUsdCosimPrimWork>()
+            .0
+            .contains(already_sourced));
+
+        app.world_mut()
+            .entity_mut(unprocessed)
+            .remove::<UsdPrimPath>();
+        assert!(!app
+            .world()
+            .resource::<PendingUsdCosimPrimWork>()
+            .0
+            .contains(unprocessed));
+
+        app.world_mut()
+            .entity_mut(already_sourced)
+            .remove::<UsdSourcedCosim>();
+        assert!(app
+            .world()
+            .resource::<PendingUsdCosimPrimWork>()
+            .0
+            .contains(already_sourced));
+    }
+
+    #[test]
+    fn modelica_wrap_work_tracks_only_unwrapped_participant_lifecycles() {
+        let mut app = App::new();
+        app.init_resource::<PendingModelicaWrapWork>();
+        app.world_mut()
+            .resource_mut::<PendingModelicaWrapWork>()
+            .0
+            .take_initial_discovery();
+        app.add_observer(queue_modelica_wrap_for_new_model)
+            .add_observer(queue_modelica_wrap_for_new_cosim_owner)
+            .add_observer(queue_modelica_wrap_after_surface_removal)
+            .add_observer(forget_removed_modelica_wrap_source)
+            .add_observer(forget_removed_modelica_wrap_owner);
+
+        let owner = app.world_mut().spawn(UsdSourcedCosim).id();
+        app.world_mut()
+            .entity_mut(owner)
+            .insert(ModelicaModel::default());
+        assert!(app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(owner));
+
+        let model_first = app.world_mut().spawn(ModelicaModel::default()).id();
+        app.world_mut()
+            .entity_mut(model_first)
+            .insert(UsdSourcedCosim);
+        assert!(app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(model_first));
+
+        let already_wrapped = app
+            .world_mut()
+            .spawn((
+                UsdSourcedCosim,
+                ModelicaModel::default(),
+                SimComponent::default(),
+            ))
+            .id();
+        assert!(!app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(already_wrapped));
+
+        app.world_mut()
+            .entity_mut(already_wrapped)
+            .remove::<SimComponent>();
+        assert!(app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(already_wrapped));
+
+        app.world_mut()
+            .entity_mut(already_wrapped)
+            .remove::<ModelicaModel>();
+        assert!(!app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(already_wrapped));
+
+        app.world_mut()
+            .entity_mut(owner)
+            .remove::<UsdSourcedCosim>();
+        assert!(!app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .contains(owner));
+    }
+
+    #[test]
+    fn modelica_wrapper_bootstraps_existing_and_queues_new_participants() {
+        let mut app = App::new();
+        app.init_resource::<PendingModelicaWrapWork>()
+            .add_observer(queue_modelica_wrap_for_new_model)
+            .add_observer(queue_modelica_wrap_for_new_cosim_owner)
+            .add_observer(queue_modelica_wrap_after_surface_removal)
+            .add_observer(forget_removed_modelica_wrap_source)
+            .add_observer(forget_removed_modelica_wrap_owner)
+            .add_systems(
+                Update,
+                wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
+            );
+
+        let preexisting = app
+            .world_mut()
+            .spawn((UsdSourcedCosim, ModelicaModel::default()))
+            .id();
+        app.update();
+        assert!(app.world().get::<SimComponent>(preexisting).is_some());
+
+        let arriving = app.world_mut().spawn(UsdSourcedCosim).id();
+        app.world_mut()
+            .entity_mut(arriving)
+            .insert(ModelicaModel::default());
+        app.update();
+        assert!(app.world().get::<SimComponent>(arriving).is_some());
+    }
+
+    #[test]
+    fn scene_teardown_retires_cosim_prim_discovery_work() {
+        let mut app = App::new();
+        let mut pending = PendingUsdCosimPrimWork::default();
+        pending.0.queue(Entity::from_bits(1));
+        app.insert_resource(pending)
+            .add_systems(lunco_core::SceneTeardown, reset_usd_cosim_prim_work);
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        let pending = app.world().resource::<PendingUsdCosimPrimWork>();
+        assert!(!pending.0.has_work());
+    }
+
+    #[test]
+    fn scene_teardown_retires_modelica_wrapper_work() {
+        let mut app = App::new();
+        let mut pending = PendingModelicaWrapWork::default();
+        pending.0.queue(Entity::from_bits(1));
+        app.insert_resource(pending)
+            .add_systems(lunco_core::SceneTeardown, reset_modelica_wrap_work);
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        assert!(!app
+            .world()
+            .resource::<PendingModelicaWrapWork>()
+            .0
+            .has_work());
     }
 
     #[derive(Resource, Default)]
@@ -2407,21 +2805,29 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<UsdTelemetryProjectionIndex>()
             .init_resource::<TelemetryProjectionRuns>()
+            .add_observer(invalidate_usd_telemetry_projection_index_on_insert::<UsdPrimPath>)
+            .add_observer(invalidate_usd_telemetry_projection_index_on_remove::<UsdPrimPath>)
             .add_systems(
                 Update,
                 (
-                    mark_usd_telemetry_projection_index_dirty,
+                    mark_usd_telemetry_projection_index_dirty
+                        .run_if(telemetry_projection_index_invalidation_due),
                     count_telemetry_projection_runs.run_if(telemetry_projection_needed),
                 )
                     .chain(),
             );
 
+        // Initial dirty state performs one bootstrap projection for entities
+        // that existed before the plugin and its observers were installed.
         app.update();
-        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 0);
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+        app.world_mut()
+            .resource_mut::<UsdTelemetryProjectionIndex>()
+            .dirty = false;
 
         let entity = app.world_mut().spawn(UsdPrimPath::default()).id();
         app.update();
-        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 2);
 
         // The production projector clears the dirty bit after rebuilding its
         // indexes. This focused gate test models that ownership edge without
@@ -2434,7 +2840,11 @@ mod tests {
             .entity_mut(entity)
             .insert(UsdTelemetryProjected);
         app.update();
-        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 2);
+
+        app.world_mut().entity_mut(entity).remove::<UsdPrimPath>();
+        app.update();
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 3);
     }
 
     #[test]
@@ -2619,7 +3029,10 @@ mod tests {
 
         let mut app = App::new();
         let e = app.world_mut().spawn((UsdSourcedCosim, model)).id();
-        app.add_systems(Update, wrap_modelica_into_simcomponent);
+        app.init_resource::<PendingModelicaWrapWork>().add_systems(
+            Update,
+            wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
+        );
         app.update();
 
         let comp = app
@@ -2654,7 +3067,10 @@ mod tests {
             .world_mut()
             .spawn((UsdSourcedCosim, model, contract))
             .id();
-        app.add_systems(Update, wrap_modelica_into_simcomponent);
+        app.init_resource::<PendingModelicaWrapWork>().add_systems(
+            Update,
+            wrap_modelica_into_simcomponent.run_if(any_pending_modelica_wrap),
+        );
 
         app.update();
 

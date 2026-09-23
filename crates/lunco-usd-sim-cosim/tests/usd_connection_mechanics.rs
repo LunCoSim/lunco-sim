@@ -7,7 +7,7 @@
 
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
-use lunco_cosim_core::SimConnection;
+use lunco_cosim_core::{ConnectionBinding, SimConnection};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdStageAsset, UsdWiringDirty};
 use lunco_usd_compose::recipe::StageRecipe;
@@ -48,7 +48,11 @@ fn setup() -> (App, AssetId<UsdStageAsset>, Handle<UsdStageAsset>) {
             .expect("define wiring root")
             .set_type_name("Xform")
             .expect("type wiring root");
-        for (path, type_name) in [("/World/Src", "Cube"), ("/World/Sink", "Cube")] {
+        for (path, type_name) in [
+            ("/World/Src", "Cube"),
+            ("/World/Sink", "Cube"),
+            ("/World/Other", "Cube"),
+        ] {
             stage
                 .define_prim(path)
                 .expect("define wiring endpoint")
@@ -82,6 +86,26 @@ fn spawn_endpoints(app: &mut App, handle: Handle<UsdStageAsset>) {
 fn edges(app: &mut App) -> Vec<SimConnection> {
     let mut q = app.world_mut().query::<&SimConnection>();
     q.iter(app.world()).cloned().collect()
+}
+
+#[derive(Resource, Default)]
+struct EarthRequirementEvents {
+    added: usize,
+    removed: usize,
+}
+
+fn count_earth_requirement_add(
+    _trigger: On<Add, lunco_environment::EarthDirectionRequired>,
+    mut events: ResMut<EarthRequirementEvents>,
+) {
+    events.added += 1;
+}
+
+fn count_earth_requirement_remove(
+    _trigger: On<Remove, lunco_environment::EarthDirectionRequired>,
+    mut events: ResMut<EarthRequirementEvents>,
+) {
+    events.removed += 1;
 }
 
 /// Structural endpoint projection derives the edge during the load-time
@@ -146,6 +170,134 @@ fn rewire_derives_at_load_and_clears() {
     assert!(
         edges(&mut app).is_empty(),
         "clearing connectionPaths removes the edge"
+    );
+}
+
+#[test]
+fn unrelated_endpoint_arrival_preserves_an_unchanged_wire() {
+    let (mut app, id, handle) = setup();
+    install_wiring_system(&mut app);
+    app.world()
+        .non_send::<CanonicalStages>()
+        .get(id)
+        .unwrap()
+        .stage()
+        .create_attribute("/World/Sink.inputs:force_y", "float")
+        .unwrap()
+        .set_connections([SdfPath::new("/World/Src.outputs:netForce").unwrap()])
+        .unwrap();
+    app.world_mut()
+        .non_send_mut::<CanonicalStages>()
+        .drain_all_changes();
+
+    spawn_endpoints(&mut app, handle.clone());
+    app.update();
+    let edge = {
+        let mut query = app
+            .world_mut()
+            .query_filtered::<Entity, With<SimConnection>>();
+        query.single(app.world()).expect("one derived wire")
+    };
+    app.world_mut()
+        .entity_mut(edge)
+        .insert(ConnectionBinding::Bound);
+
+    app.world_mut().spawn((
+        UsdPrimPath {
+            stage_handle: handle,
+            path: "/World/Other".into(),
+        },
+        lunco_port_core::PortSurfaceReady,
+    ));
+    app.update();
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<Entity, With<SimConnection>>();
+    assert_eq!(
+        query.single(app.world()).expect("one derived wire remains"),
+        edge
+    );
+    assert_eq!(
+        app.world().get::<ConnectionBinding>(edge),
+        Some(&ConnectionBinding::Bound),
+        "unchanged edges retain their binding state across unrelated arrivals"
+    );
+}
+
+#[test]
+fn unrelated_endpoint_arrival_does_not_toggle_earth_direction_demand() {
+    let (mut app, id, handle) = setup();
+    install_wiring_system(&mut app);
+    app.init_resource::<EarthRequirementEvents>()
+        .add_observer(count_earth_requirement_add)
+        .add_observer(count_earth_requirement_remove);
+    app.world()
+        .non_send::<CanonicalStages>()
+        .get(id)
+        .unwrap()
+        .stage()
+        .create_attribute("/World/Sink.inputs:earth_mount_x", "float")
+        .unwrap()
+        .set_connections([SdfPath::new("/World/Src.outputs:earth_mount_x").unwrap()])
+        .unwrap();
+    app.world_mut()
+        .non_send_mut::<CanonicalStages>()
+        .drain_all_changes();
+
+    let source = app
+        .world_mut()
+        .spawn((
+            UsdPrimPath {
+                stage_handle: handle.clone(),
+                path: "/World/Src".into(),
+            },
+            lunco_port_core::PortSurfaceReady,
+            lunco_environment::EnvironmentProbe,
+        ))
+        .id();
+    app.world_mut().spawn((
+        UsdPrimPath {
+            stage_handle: handle.clone(),
+            path: "/World/Sink".into(),
+        },
+        lunco_port_core::PortSurfaceReady,
+    ));
+    app.update();
+
+    assert!(app
+        .world()
+        .entity(source)
+        .contains::<lunco_environment::EarthDirectionRequired>());
+    assert_eq!(
+        app.world().resource::<EarthRequirementEvents>().added,
+        1,
+        "the first authored Earth-vector wire admits its source once"
+    );
+    assert_eq!(app.world().resource::<EarthRequirementEvents>().removed, 0);
+
+    app.world_mut().spawn((
+        UsdPrimPath {
+            stage_handle: handle,
+            path: "/World/Other".into(),
+        },
+        lunco_port_core::PortSurfaceReady,
+    ));
+    app.update();
+
+    assert!(app
+        .world()
+        .entity(source)
+        .contains::<lunco_environment::EarthDirectionRequired>());
+    assert_eq!(
+        app.world().resource::<EarthRequirementEvents>().added,
+        1,
+        "an unrelated endpoint must not re-add an unchanged demand marker"
+    );
+    assert_eq!(
+        app.world().resource::<EarthRequirementEvents>().removed,
+        0,
+        "an unrelated endpoint must not remove an unchanged demand marker"
     );
 }
 
