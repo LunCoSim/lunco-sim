@@ -1,14 +1,14 @@
 //! Which floating overlays the viewport shows — a persisted user preference.
 //!
 //! Three things used to draw over the 3D view unconditionally in the View
-//! perspective: the sky clock (top-left), the view-mode switcher (top-centre) and
+//! perspective: the celestial-time readout (top-left), the view-mode switcher (top-centre) and
 //! the rover HUD. The first two are *chrome you configure once*, not information
 //! you read every frame, and neither had an off switch anywhere — their visibility
 //! was a pair of system `run_if`s and nothing else, so "hide it" meant editing
 //! Rust.
 //!
-//! Both are now OFF by default and live behind [`OverlaySettings`]. The sky
-//! clock is configured from the workbench **Time** menu, while the view
+//! Both are now OFF by default and live behind [`OverlaySettings`]. The sky-time
+//! readout is configured from the workbench **Time** menu, while the view
 //! switcher is configured from **Camera** beside its body controls.
 //!
 //! The rover HUD is deliberately NOT in here: it only draws while you are
@@ -38,7 +38,7 @@ pub(crate) struct OverlaySettings {
     #[serde(default = "overlay_settings_schema_version")]
     schema_version: u8,
     #[serde(default)]
-    /// The sky-clock pill (top-left): celestial epoch, follow/independent, rate.
+    /// The sky-time pill (top-left): the interpolated physical-time epoch.
     pub sky_clock: bool,
     #[serde(default)]
     /// The view-mode switcher pill (top-centre): Surface / Moon / Earth, which
@@ -80,7 +80,7 @@ pub(crate) fn sky_clock_visible(settings: Option<Res<OverlaySettings>>) -> bool 
     settings.is_some_and(|s| s.sky_clock)
 }
 
-/// Contribute the sky-clock controls and visibility preference to the workbench
+/// Contribute the sky-time readout and visibility preference to the workbench
 /// Time menu.
 ///
 /// Registered at `Startup`; a no-op when the workbench layout is absent (headless
@@ -108,8 +108,8 @@ pub(crate) fn register_time_menu(world: &mut World) {
         let original = edited;
         ui.checkbox(&mut edited.sky_clock, "Time HUD (top-left)")
             .on_hover_text(
-                "Show the floating celestial time HUD. The same sky-clock controls \
-                 remain available in this menu when the HUD is hidden.",
+                "Show the floating sky-time readout. Time follows the physical \
+                 simulation and remains available in this menu when the HUD is hidden.",
             );
         if edited != original {
             ctx.set_resource(edited);

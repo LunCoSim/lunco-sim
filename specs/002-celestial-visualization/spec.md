@@ -4,25 +4,25 @@
 **Created**: 2026-03-31
 **Updated**: 2026-04-01
 **Status**: Implemented & Stable
-**Dependencies**: References advanced time/PhysicsMode (deferred — not yet specced), `009-coordinate-frame-tree` (advanced CFT)
-**Input**: User description: "I want to have model of Earth/Moon/Sun system, kind of like kerbal. It has to be simple. I want to use exponential camera. I want to be able to rotate it. Ideally I want to visualise position/trajectory of Artemis 2 mission there. Earth and Moon should be simple spheres. Position of three bodies must be real based on real data. We should be able to set time when it happens. If we get close we should be able to drive rovers."
+**Dependencies**: `009-coordinate-frame-tree` (advanced CFT)
+**Input**: User description: "I want to have model of Earth/Moon/Sun system, kind of like kerbal. It has to be simple. I want to use exponential camera. I want to be able to rotate it. Ideally I want to visualise position of Artemis 2 mission there. Earth and Moon should be simple spheres. Position of three bodies must be real based on real data. We should be able to set time when it happens. If we get close we should be able to drive rovers."
 
 ## Scope & Philosophy
 
 This spec lays the **foundational world architecture** for a solar-scale lunar colony simulator. The immediate deliverable is a working Sun/Earth/Moon system with real ephemeris, an exponential camera, and basic surface interaction. However, every system is designed as an **extensible foundation** — hardcoded for three bodies now, but structured so that adding Mars, its moons, Lagrange points and the full solar system is a data-driven extension, not a rewrite.
 
 **This spec owns:**
-- Basic clock architecture (Celestial + Application clocks — the minimum needed for visualization and time scrubbing)
+- Physical simulation clock plus application interaction time
 - Celestial body registry and rendering
 - Gravity model interface (point-mass implementation)
 - `big_space` integration, floating origin, and all spatial setup
 - Basic surface terrain tiles
 - Exponential observer camera (macro-scale)
-- Trajectory visualization
+- Scene-authored spacecraft motion
 - SOI transitions and grid re-parenting
 
 **This spec does NOT own (deferred to other specs):**
-- Advanced time decoupling, integrators, PhysicsMode state machine → deferred (advanced time/PhysicsMode — not yet specced)
+- Advanced physics mode transitions and multi-rate integrators → deferred
 - Full coordinate frame tree with URDF/USD mapping → `009-coordinate-frame-tree`
 - Full astronomical environment (Lagrange points, n-body, asteroid belts) → `018-astronomical-environment`
 - Environmental hazards (radiation, thermal) → deferred
@@ -55,9 +55,9 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 - Only one `Camera3d` active at a time. Ground View transition deactivates ObserverCamera, activates AvatarCamera.
 **Rationale:** The migration system ensures that the floating origin always operates within the target body's local measurement system, eliminating z-fighting and coordinate drift.
 
-### AD-4: Ephemeris Source
-**Decision:** `celestial-ephemeris` crate (0.1.1-alpha.2), wrapped behind a `trait EphemerisProvider` for swappability.
-**Rationale:** Single dependency provides VSOP2013 (planets), ELP/MPP02 (Moon), and JPL SPK reader (Artemis 2 trajectories). Alpha status accepted because the trait abstraction allows swapping to `vsop87` 3.0.0 + `simple-elpmpp02` 0.1.0 without changing any consuming system code. Fallback crates are stable and proven.
+### AD-4: Natural-body positions
+**Decision:** Use `celestial-ephemeris` for the analytic Sun/Earth/Moon model behind `EphemerisProvider`. Author spacecraft movement as standard USD `double3 xformOp:translate` time samples and let the shared USD animation adapter evaluate them from physical presentation time.
+**Rationale:** Celestial bodies and scene-authored spacecraft motion have different owners: the analytic provider evaluates natural-body state, while USD owns a scene object's authored transform.
 
 ### AD-5: Scenario System
 **Decision:** Feature flags — `sandbox` vs `celestial` (default). `cargo run` → celestial world. `cargo run --features sandbox` → flat-ground rover world.
@@ -65,7 +65,7 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 
 ### AD-6: Coordinate Conversion
 **Decision:** Shared utility module `celestial::coords` providing `ecliptic_to_bevy(pos_au: DVec3) -> DVec3` (in meters).
-**Rationale:** Multiple systems need this conversion (ephemeris updates, trajectory rendering, SOI checks). Centralizing it prevents inconsistencies and bugs. The conversion chain (ecliptic J2000 → equatorial via 23.44° obliquity rotation → Bevy Y-up axes → AU-to-meters) is non-trivial and must be consistent everywhere.
+**Rationale:** Multiple systems need this conversion (ephemeris updates, authored motion, SOI checks). Centralizing it prevents inconsistencies and bugs. The conversion chain (ecliptic J2000 → equatorial via 23.44° obliquity rotation → Bevy Y-up axes → AU-to-meters) is non-trivial and must be consistent everywhere.
 
 ### AD-7: Body Rotation
 **Decision:** The **IAU/WGCCRE** rotation model (`lunco-celestial/src/iau.rs`), authored once as the published elements — pole right ascension and declination (with their per-century rates), the prime-meridian angle `W₀`, the spin rate `Ẇ`, and a body-specific periodic (nutation/libration) series. **The polar axis, the spin rate and the body-fixed rotation quaternion are all *derived* from those elements**, never stored alongside them.
@@ -121,27 +121,41 @@ As a user, I want to seamlessly zoom from a view of the entire Earth-Moon system
 **Acceptance Scenarios**:
 
 1.  **Given** the camera is zooming, **When** the distance to the target changes by orders of magnitude, **Then** `big_space` nestable grids manage coordinate precision — the camera operates within the target body's local grid.
-2.  **Given** the camera is within 1km of the surface, **When** the user selects "Ground View", **Then** the ObserverCamera is deactivated and the AvatarCamera is activated. The Embodiment's movement and the UI animations use **Application Clock (independent of Celestial Clock speed)**.
+2.  **Given** the camera is within 1km of the surface, **When** the user selects "Ground View", **Then** the ObserverCamera is deactivated and the AvatarCamera is activated. The Embodiment and UI remain responsive on interaction time while physical simulation is paused or accelerated.
 3.  **Given** the camera transitions from Earth-focused to Moon-focused, **Then** the `big_space` floating origin smoothly re-parents into the Moon's nested grid without visual discontinuity.
 
-### User Story 3 - Detailed Mission Trajectory & Customizable Overlays (Priority: P2)
+### User Story 3 - Scene-authored Mission Motion (Priority: P2)
 
-As a space enthusiast, I want to see the past and future flight path of Artemis 2, with customizable fading altitudes.
+As a space enthusiast, I want to see Artemis 2 move through its authored scene path as the physical simulation advances.
+
+The mission USD asset owns its path as standard `double3 xformOp:translate`
+time samples. The sample states use NASA's published Artemis II OEM (Earth-
+centered EME2000, UTC); JPL Horizons DE441 Earth-to-Sun geometric ICRF states
+are joined at the OEM epochs, then the combined states are converted to the
+simulator's Y-up metre frame. Sample time zero and the scene epoch use the first
+OEM UTC epoch converted to TDB. The stage's USD time-code rate maps elapsed
+physical seconds to sample codes. The shared USD animation adapter reads the
+asset directly from physical presentation time.
+
+The authored flight interval is 2026-04-02T01:57:37.084 UTC through
+2026-04-10T23:53:16.723 UTC, with 3,262 OEM state samples. The Earth states
+come from 10-minute DE441 vector samples interpolated to those same epochs.
 
 **Acceptance Scenarios**:
 
-1.  **Given** a trajectory dataset is loaded (from JPL SPK kernel via `celestial-ephemeris`), **When** rendered, **Then** past segments are solid lines and future segments are dashed, in the parent body's reference frame.
-2.  **Given** the camera approaches a trajectory, **When** within proximity threshold, **Then** trajectory segments smoothly fade in; when distant, they fade out.
+1.  **Given** the mission prim has standard USD `double3` transform samples, **When** the physical clock advances, **Then** its composed transform follows those samples through the shared animation adapter.
+2.  **Given** the physical clock is paused, **When** rendered, **Then** the mission prim remains at the last physical presentation sample.
+3.  **Given** physical transport is paused or running at 64×, **When** the scene is sampled, **Then** natural-body state and authored mission motion follow the same physical time, and presentation never advances beyond a completed physical tick.
 
-### User Story 4 - Variable Speed Time Scrubbing (Priority: P2)
+### User Story 4 - Physical Time Transport (Priority: P2)
 
-As a mission planner, I want to scrub through time at different speeds (X1 to X1,000,000) and see celestial bodies move to their correct positions.
+As a mission planner, I want one physical clock to control physics, natural-body positions, and authored scene motion.
 
 **Acceptance Scenarios**:
 
-1.  **Given** the simulation is at **X1 speed**, **When** running, **Then** the **Celestial Clock** advances in real-time and body positions update from ephemeris.
-2.  **Given** the simulation is at **≥X100 speed**, **When** time is compressed, **Then** body positions update correctly from ephemeris. High-fidelity physics integration is suspended (the `PhysicsMode` state machine is deferred — advanced time/PhysicsMode, not yet specced).
-3.  **Given** time is scrubbed, **When** UI/Camera input is received, **Then** the **Application Clock** ensures UI remains responsive regardless of celestial time speed.
+1.  **Given** physical transport is running at 1×, **When** simulation ticks complete, **Then** physics, body positions, and authored USD motion advance from the same `WorldTime`.
+2.  **Given** physical transport is running at 64×, **When** simulation ticks complete, **Then** physics and celestial state advance by the same 64× transport without a detached celestial clock.
+3.  **Given** physical transport is paused, **When** a render occurs, **Then** physical state remains fixed, presentation stays between completed ticks, and UI/Camera input remains responsive.
 
 ### User Story 5 - Lightweight Reference Textures (Priority: P2)
 
@@ -187,14 +201,11 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
     -   **Body Grids**: Each major body (Earth, Moon) gets its own nested `Grid` anchor for local entities (rovers, surface features).
     -   **Floating Origin**: `FloatingOriginPlugin` on the camera. When the camera focuses on a body, it re-parents to that body's nested grid.
     -   **The Golden Bridge**: `TransformPlugin` is disabled; UI is maintained via manual transform backfilling for Non-Grid entities.
--   **FR-006**: **Trajectory Rendering**: Render trajectories with past (solid) and future (dashed) segments. Trajectories are computed in the parent body's reference frame. Fade based on camera proximity. Artemis 2 trajectory loadable from SPK kernel via `celestial-ephemeris`.
--   **FR-007**: **Time Scrubber UI**: `egui` panel for mission epoch control and speed multipliers (X1..X1M).
--   **FR-008**: **Customizable Proximity Fading**: Visibility thresholds for overlays, trajectory lines, and **configurable surface grid size** (default 10km sectors).
+-   **FR-006**: **Authored Mission Motion**: Moving mission objects use standard USD `double3 xformOp:translate` time samples, evaluated by the shared USD animation adapter on physical presentation time.
+-   **FR-007**: **Physical Time Controls**: `egui` controls the mission epoch and the supported `TimeTransport` rate ladder.
+-   **FR-008**: **Customizable Proximity Fading**: Visibility thresholds for overlays and **configurable surface grid size** (default 10km sectors).
 -   **FR-009**: **Mouse Interaction**: Select focus targets via raycasting on celestial bodies.
--   **FR-010**: **Basic Clock Architecture**: Two clocks owned by this spec:
-    -   **Celestial Clock**: Julian Date TDB internally, UTC for display. Scrubbable (X1 to X1M). Drives ephemeris queries and body positions.
-    -   **Application Clock**: Standard Bevy `Time` (always 1.0×). Drives UI, Camera, and Embodiment movement.
-    -   *(The Robotics Clock and advanced PhysicsMode transitions are deferred — advanced time/PhysicsMode, not yet specced.)*
+-   **FR-010**: **Physical Clock Architecture**: `TimeTransport` controls causal `WorldTime`; natural-body state and physics use completed fixed ticks. `SimulationPresentationTime` interpolates within completed ticks and holds at pause. Interaction time keeps UI and camera response live independently.
 -   **FR-011**: **Pluggable Gravity Model Architecture**: A `trait GravityModel` interface that allows different gravity implementations per body and per scale. This spec implements **point-mass gravity** as the default. The global avian `Gravity` resource is set by the celestial plugin based on the nearest body (AD-2).
     -   **Surface gravity**: Constant downward vector derived from body's GM and radius.
     -   **Orbital gravity**: Point-mass attraction from the dominant body (SOI parent).
@@ -203,7 +214,7 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
 -   **FR-013**: **Surface Coordinate System**: Each body provides a basic lat/lon/altitude coordinate system. Camera altitude above surface determines "near surface" thresholds for Ground View transitions and terrain tile spawning.
 -   **FR-014**: **Basic Surface Terrain Tiles**: Flat collision-enabled tiles spawned at the surface when camera/avatar is near ground level. Configurable size (1×1 km to 10×10 km). Lives in the body's nested `big_space` grid. Foundation for streaming terrain in a future spec.
 -   **FR-015**: **Lightweight Texturing**: Use <2MB total assets. Earth gets a rasterized continent map (PNG UV-mapped). Moon gets a grayscale feature map. No SVG-on-sphere.
--   **FR-016**: **Ephemeris Integration via `celestial-ephemeris`** (AD-4): Single dependency providing VSOP2013, ELP/MPP02, and SPK reader. Wrapped behind a `trait EphemerisProvider` so the implementation can be swapped to alternative crates (e.g., `vsop87` + `simple-elpmpp02`) without changing consuming systems.
+-   **FR-016**: **Natural-Body Ephemeris** (AD-4): `celestial-ephemeris` supplies VSOP2013 and ELP/MPP02 through `EphemerisProvider`; scene-authored spacecraft motion remains in USD animation data.
 -   **FR-017**: **Server Authority Design**: All celestial state (body positions, clock state) is computed deterministically. All celestial computation is isolated in systems that can run headless. Designed so a future server can own the state and clients receive it.
 -   **FR-018**: **Feature-Flagged Scenario System** (AD-5):
     -   Default (`celestial`): Full celestial world with bodies, grids, observer camera.
@@ -216,7 +227,7 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
 -   **FR-024**: **Sphere-Terrain Layering** (AD-12): When terrain tiles are active, the sphere mesh remains visible underneath. Tiles are offset at `radius + 0.01m` to avoid Z-fighting. Sphere provides the horizon; tiles provide collision and local detail. Curvature error: 7.2m per 10km tile on Moon (acceptable).
 -   **FR-025**: **Dynamic Camera Clip Planes** (AD-13): Camera `near` clip plane adjusts dynamically based on surface distance ($altitude \times 0.001$). CLAMPED to range [0.1, 10000.0]. The 10km maximum limit is essential for maintaining solar visibility at 1 AU scale.
 -   **FR-026**: **System Ordering**: All celestial systems MUST execute in deterministic order: clock tick → ephemeris update → body rotation → sun light → SOI check → gravity update → terrain spawn → camera → clip planes. Registered as `.chain()` in `CelestialPlugin`.
--   **FR-027**: **TimeWarp State Interface**: A `TimeWarpState` resource published by `lunco-celestial` indicates current time compression speed and whether physics should be active (`physics_enabled = false` when `speed > 100×`). Physics crates gate their systems on this resource. Full PhysicsMode state machine deferred (advanced time/PhysicsMode — not yet specced).
+-   **FR-027**: **One Physical Transport**: The same `TimeTransport` rate advances fixed physics ticks and celestial state. A second clock or speed threshold does not suspend physics while the physical transport is running.
 -   **FR-028**: **Input Conflict Resolution**: Only the active camera (ObserverCamera or AvatarCamera) consumes input. An `ActiveCamera` marker component gates input systems. During handoff, the marker is atomically moved between cameras.
 
 ### Key Entities
@@ -225,11 +236,11 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
 -   **CelestialBody**: Component on each body entity. References registry entry.
 -   **ObserverCamera**: Macro-level camera. Focus targets, exponential zoom, `big_space`-aware. Deactivated during Ground View.
 -   **AvatarCamera**: Surface-level camera (existing `lunco-avatar`). Activated during Ground View.
--   **SimulationClockSet**: Resource grouping Celestial and Application clocks.
+-   **WorldTime**: Causal simulation time published after the fixed loop from its latest completed physical tick.
+-   **SimulationPresentationTime**: Bounded sample after `WorldTime`, between completed ticks, for presentation.
 -   **GravityModel**: Trait for pluggable gravity computation.
 -   **SurfaceTile**: Component for flat terrain tiles with collision meshes.
 -   **SurfaceCoordinates**: Component providing lat/lon/alt for entities near a body's surface.
--   **TimeWarpState**: Resource indicating current time compression speed and whether physics is enabled.
 -   **ActiveCamera**: Marker component on the currently active camera entity. Gates input systems.
 
 ---
@@ -237,7 +248,7 @@ As a developer, I want to run the flat-ground sandbox for quick physics iteratio
 ## Success Criteria *(mandatory)*
 
 -   **SC-001**: Zero visual jitter at all scales — verified by rendering at 1 AU, 384,400 km (Earth-Moon), 1 km, and 1 m distances.
--   **SC-002**: UI and Camera remain responsive even when Celestial Clock is at X1,000,000 speed or paused.
+-   **SC-002**: UI and Camera remain responsive while physical transport is accelerated or paused.
 -   **SC-003**: Body positions match reference data within acceptable tolerance (VSOP2013/ELP accuracy) for Sun/Earth/Moon at any epoch in 2020-2030.
 -   **SC-004**: Rover can drive on a terrain tile spawned at the lunar surface with functional collision and Moon gravity (1.625 m/s²).
 -   **SC-005**: Adding a new body to the registry (e.g., Mars) requires only data — no code changes to rendering or positioning.

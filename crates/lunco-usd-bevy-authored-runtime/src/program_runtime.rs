@@ -5,14 +5,16 @@
 //! here lets the visual crate project scene data without owning executable
 //! policy.
 
-use bevy::asset::AssetId;
+use bevy::asset::{AssetId, Assets};
 use bevy::prelude::{Entity, World, warn};
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashSet;
 
 use lunco_usd_bevy_core::program;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
+use lunco_usd_bevy_stage::{
+    UsdInstanceProjection, UsdRead, UsdStageAsset, canonical::CanonicalStages,
+};
 
 /// Re-read the generic program children of one existing owner.
 ///
@@ -25,13 +27,21 @@ pub(crate) fn refresh_program_owner(
     owner: Entity,
 ) {
     let network_members = {
+        let Some(stage_asset) = world
+            .get_resource::<Assets<UsdStageAsset>>()
+            .and_then(|assets| assets.get(stage_id))
+        else {
+            warn!(
+                "[usd] stage asset {stage_id:?} is unavailable while refreshing authored programs"
+            );
+            return;
+        };
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+            warn!("[usd] canonical stage reader is unavailable while refreshing authored programs");
             return;
         };
-        let Some(stage) = stages.get(stage_id) else {
-            return;
-        };
-        program::modelica_network_member_paths(&stage.view())
+        let (reader, _) = stages.reader_for(stage_id, stage_asset);
+        program::modelica_network_member_paths(&reader)
     };
     refresh_program_owner_with_network_members(world, stage_id, owner, &network_members);
 }
@@ -51,16 +61,23 @@ pub(crate) fn refresh_program_owner_with_network_members(
         .get::<UsdPrimPath>(owner)
         .map(|path| path.path.clone())
     else {
+        warn!("[usd] projected owner {owner:?} has no USD path while refreshing authored programs");
         return;
     };
+    let Some(stage_asset) = world
+        .get_resource::<Assets<UsdStageAsset>>()
+        .and_then(|assets| assets.get(stage_id))
+    else {
+        warn!("[usd] stage asset {stage_id:?} is unavailable for projected owner {owner_path}");
+        return;
+    };
+    let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+        warn!("[usd] canonical stage reader is unavailable for projected owner {owner_path}");
+        return;
+    };
+    let instance = world.get::<UsdInstanceProjection>(owner);
     let Some((program_path, resolved, params)) = ({
-        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-            return;
-        };
-        let Some(stage) = stages.get(stage_id) else {
-            return;
-        };
-        let view = stage.view();
+        let (view, _) = stages.reader_for_entity(stage_id, stage_asset, instance);
         let owner = SdfPath::new(&owner_path).expect("projected USD path is valid");
         let mut candidates: Vec<SdfPath> = UsdRead::children(&view, &owner)
             .into_iter()
@@ -72,7 +89,6 @@ pub(crate) fn refresh_program_owner_with_network_members(
         {
             candidates.push(owner.clone());
         }
-
         let mut programs = Vec::new();
         for child in candidates {
             if network_members.contains(child.as_str()) {

@@ -26,10 +26,6 @@ impl EphemerisProvider for StubEphemeris {
     fn maximum_angular_rate_rad_per_day(&self) -> f64 {
         0.0
     }
-
-    fn motion_revision(&self) -> u64 {
-        0
-    }
 }
 
 /// Build the headless celestial app the integration tests share. These tests
@@ -449,56 +445,6 @@ fn each_builtin_orbit_target_has_one_colocated_star_fixed_grid() {
 }
 
 #[test]
-fn spacecraft_mount_only_in_their_declared_inertial_reference_grid() {
-    let mut app = celestial_test_app();
-    app.insert_resource(EphemerisResource {
-        provider: Arc::new(StubEphemeris),
-    });
-    app.update();
-    app.update();
-
-    let moon = lunco_celestial::ephemeris_id::MOON;
-    let spacecraft = app
-        .world_mut()
-        .spawn((
-            lunco_celestial::Spacecraft {
-                name: "Frame probe".into(),
-                ephemeris_id: -10_001,
-                reference_id: moon,
-                user_visible: true,
-                ..Default::default()
-            },
-            Transform::from_scale(Vec3::splat(2.0)),
-            GlobalTransform::default(),
-            Visibility::default(),
-        ))
-        .id();
-
-    app.update();
-
-    let parent = app
-        .world()
-        .get::<ChildOf>(spacecraft)
-        .expect("spacecraft must be mounted atomically in its reference grid")
-        .parent();
-    let inertial = app
-        .world()
-        .get::<lunco_celestial::ReferenceFrame>(parent)
-        .expect("spacecraft state vectors are inertial and require an inertial frame Grid");
-    assert_eq!(
-        *inertial,
-        lunco_celestial::ReferenceFrame::EclipticJ2000 { center: moon }
-    );
-    assert!(app.world().get::<Grid>(parent).is_some());
-    assert!(app.world().get::<CellCoord>(spacecraft).is_some());
-    assert_eq!(
-        app.world().get::<Transform>(spacecraft).unwrap().scale,
-        Vec3::splat(2.0),
-        "atomic frame migration must preserve the authored marker scale"
-    );
-}
-
-#[test]
 fn rendered_and_analytical_orbit_use_the_same_typed_frame_transform() {
     let mut app = celestial_test_app();
     app.insert_resource(EphemerisResource {
@@ -662,9 +608,9 @@ fn test_celestial_startup_and_movement() {
     let earth_pose_1 = (*earth.1, *earth.2);
 
     // 2. Advance the clock by 10 days. The epoch is a *derived* view
-    //    (`WorldTime.epoch_jd`, written by the `lunco-time` spine each frame), so
-    //    seek via the authority — re-anchor the `MissionClock` epoch. The spine
-    //    then re-derives `WorldTime.epoch_jd` and the ephemeris follows.
+    //    (`WorldTime.epoch_jd`, published after the fixed loop), so seek via the
+    //    authority — re-anchor the `MissionClock` epoch. The next time projection
+    //    updates `WorldTime.epoch_jd` and the ephemeris follows.
     {
         let mut mission = app.world_mut().resource_mut::<lunco_time::MissionClock>();
         mission.anchor.epoch0_jd += 10.0;
@@ -753,10 +699,6 @@ fn an_unanchored_celestial_scene_keeps_its_authored_sun() {
 
         fn maximum_angular_rate_rad_per_day(&self) -> f64 {
             0.0
-        }
-
-        fn motion_revision(&self) -> u64 {
-            0
         }
     }
 

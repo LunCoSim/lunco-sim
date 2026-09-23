@@ -358,28 +358,7 @@ class "LunCoCelestialBodyAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """Declares that a prim IS a celestial body — a planet, moon or star whose
-    pose comes from the ephemeris rather than from an authored transform.
-
-    This exists so that celestial content is **scene data, not a code flag**. It used
-    to be `CelestialConfig.spawn_hierarchy`, a boolean in Rust that decided whether a
-    solar system existed, flipped as a side effect of a scene authoring a site anchor.
-    A scene could not say "I want a Moon" — it could only trip a switch. That produced
-    exactly the bug it invites: the trajectory layer ignored the flag and spawned Earth
-    and Moon orbit views into every scene, including the flat sandbox arena, which had
-    asked for no sky at all.
-
-    Now: no prim applies this schema ⇒ no bodies, no globes, no orbit views, no
-    ephemeris. A scene opts in by referencing `assets/celestial/solar_system.usda` (Sun
-    + Earth + Moon, the standard set) or by authoring the prims itself.
-
-    The prim's *transform is not authored* — it is driven each frame from the ephemeris
-    at the current epoch (see the celestial clock, doc 19 §11b). Author an `Xform` and
-    let the sim place it.
-
-    The `big_space` precision scaffolding (grids, reference frames, SOI, gravity, globe
-    LOD) is still built in Rust — it is derived structure, not authored content — but it
-    is built FROM the bodies declared here, rather than from a boolean."""
+    doc = "Declares a natural celestial body whose pose and rotation are evaluated from the selected scene epoch. Referencing the solar-system asset opts a scene into its Sun, Earth, and Moon prims; ordinary scenes remain unchanged. Spatial frames and scene projections derive from those authored prims."
 )
 {
     uniform int lunco:body = 0 (
@@ -1163,13 +1142,11 @@ class "LunCoEpochAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """The scene's mission epoch, authored on the site-anchor root prim.
-    Explicit because the real sun crosses a lunar horizon on a ~monthly cycle: an
-    unlucky "now" default renders the whole scene pitch-black."""
+    doc = "Optional TDB epoch override for the selected scene. The scene-time startup policy reads it only after scene loading and projection settle; when absent or invalid, that policy selects current computer UTC converted to TDB."
 )
 {
-    double lunco:time:epochJd = 0 (
-        doc = "Mission start epoch, Julian date. 0/unauthored = the engine default."
+    double lunco:time:epochJd (
+        doc = "Optional absolute scene epoch in Julian days (TDB). A valid authored value overrides computer time; when omitted or invalid, the scene-time startup policy selects current computer UTC converted to TDB after scene loading and projection settle."
     )
 }
 
@@ -1229,111 +1206,6 @@ class "LunCoLibrationAPI" (
     )
 }
 
-class "LunCoMissionAPI" (
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """Declares the prim a MISSION — presentation metadata for the mission
-    browser. Keyed on `id`: a prim without one is not a half-declared mission, it
-    is simply not a mission."""
-)
-{
-    string lunco:mission:id = "" (
-        doc = "Stable mission identifier (`\"apollo15\"`)."
-    )
-    string lunco:mission:name = "" (
-        doc = "Display name. Empty = the id."
-    )
-    string lunco:mission:description = "" (
-        doc = "One-paragraph mission blurb."
-    )
-    double lunco:mission:start = 0 (
-        doc = "Mission start epoch, Julian date."
-    )
-    double lunco:mission:duration = 0 (
-        doc = "Mission duration, days."
-    )
-}
-
-class "LunCoMissionTrajectoryAPI" (
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """VISUALISATION parameters for a mission trajectory plot. The state
-    vectors are NOT here and never were: the ephemeris provider owns where the
-    spacecraft is. Keyed on `trackedId` — without a target there is nothing to
-    plot."""
-)
-{
-    int lunco:trajectory:trackedId = 0 (
-        doc = "Ephemeris id of the body/spacecraft whose path is plotted."
-    )
-    int lunco:trajectory:referenceId = 301 (
-        doc = "Ephemeris id of the frame's reference body. The default is the Moon."
-    )
-    string lunco:trajectory:name = "" (
-        doc = "Display name. Empty = the prim path."
-    )
-    color4f lunco:trajectory:color = (1, 1, 1, 1) (
-        doc = "Plot colour, linear RGBA."
-    )
-    double lunco:trajectory:samplingDays = 1 (
-        doc = "Span of trajectory sampled around the current epoch, days."
-    )
-    double lunco:trajectory:samplingStep = 0.01 (
-        doc = "Sampling step, days."
-    )
-    token lunco:trajectory:frame = "Inertial" (
-        doc = "Frame the samples are expressed in."
-    )
-    bool lunco:trajectory:userVisible = true (
-        doc = "Whether the plot is offered in the UI's trajectory toggles."
-    )
-    double lunco:trajectory:startEpochJd = 0 (
-        doc = "Clamp: earliest plotted epoch, Julian date. 0 = unclamped."
-    )
-    double lunco:trajectory:endEpochJd = 0 (
-        doc = "Clamp: latest plotted epoch, Julian date. 0 = unclamped."
-    )
-}
-
-class "LunCoMissionSpacecraftAPI" (
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = """A mission spacecraft MARKER — sits where the ephemeris says that body
-    is. Keyed on `ephemerisId`: a prim naming no body is unplaceable, not
-    defaulted."""
-)
-{
-    int lunco:spacecraft:ephemerisId = 0 (
-        doc = "Ephemeris id of the spacecraft this marker follows."
-    )
-    int lunco:spacecraft:referenceId = 301 (
-        doc = "Ephemeris id of the reference body. The default is the Moon."
-    )
-    string lunco:spacecraft:name = "" (
-        doc = "Display name. Empty = the prim path."
-    )
-    float lunco:spacecraft:scale = 1 (
-        doc = "Visual scale multiplier for the marker model."
-    )
-    double lunco:spacecraft:startEpochJd = 0 (
-        doc = "Epoch before which the marker is hidden, Julian date. 0 = always."
-    )
-    double lunco:spacecraft:endEpochJd = 0 (
-        doc = "Epoch after which the marker is hidden, Julian date. 0 = always."
-    )
-    float lunco:spacecraft:markerRadiusKm = 0 (
-        doc = "Marker billboard radius, kilometres. 0 = engine default."
-    )
-    float lunco:spacecraft:hitRadiusKm = 0 (
-        doc = "Click/pick radius, kilometres. 0 = engine default."
-    )
-    color4f lunco:spacecraft:markerColor = (1, 1, 1, 1) (
-        doc = "Marker colour, linear RGBA."
-    )
-}
 
 # --- Mount sockets and plugs -------------------------------------------------
 #

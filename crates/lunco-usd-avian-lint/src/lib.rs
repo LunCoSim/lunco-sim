@@ -1262,6 +1262,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             "stage",
             H::map([
                 (
+                    "default_prim",
+                    reader.default_prim().map(H::str).unwrap_or(H::Unit),
+                ),
+                (
                     "meters_per_unit_authored",
                     H::Bool(
                         reader

@@ -36,8 +36,8 @@ pub use purpose::{
 pub use read::{UsdRead, UsdReadObject, UsdReadSource};
 pub use transform::{
     RESET_XFORM_STACK, TransformReadError, compose_xform_order_at, euler_xyz_deg_to_quat,
-    local_transform_at, read_transform_from_usd, read_xform_op_order, transform_in_body_frame,
-    world_transform,
+    grid_translation_d_at, local_transform_at, read_transform_from_usd, read_xform_op_order,
+    transform_in_body_frame, world_transform,
 };
 pub(crate) use transform::{compose_live_xform_order_at, stage_prim_is_invisible_or_guide};
 pub use units::stage_convention;

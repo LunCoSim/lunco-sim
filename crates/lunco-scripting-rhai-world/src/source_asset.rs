@@ -8,7 +8,7 @@
 #[cfg(feature = "rhai")]
 use bevy::asset::AssetPath;
 #[cfg(feature = "rhai")]
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 #[cfg(feature = "rhai")]
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
@@ -36,6 +36,12 @@ pub struct RhaiSource {
 #[cfg(feature = "rhai")]
 #[derive(Default, TypePath)]
 pub struct RhaiSourceLoader;
+
+/// Schedule boundary for admitting manifest candidates through the authored
+/// source-classification policy.
+#[cfg(feature = "rhai")]
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RhaiSourceAdmissionSet;
 
 /// Schedule boundary for publishing loaded Rhai source into the synchronous
 /// import registry. Consumers that compile file-backed programs from an asset
@@ -163,6 +169,12 @@ fn request_builtin_rhai_assets(
         warn_once!("[rhai] built-in sources cannot load: AssetServer is not installed");
         return;
     };
+    if lunco_hooks::get(crate::tool_libs::SOURCE_CLASSIFY_HOOK).is_none() {
+        warn_once!(
+            "[rhai] built-in source admission is waiting for the required authored classification policy"
+        );
+        return;
+    }
 
     let policy_revision = policy.as_deref().map_or(0, |policy| policy.revision);
     let manifest_revision = manifest.revision();
@@ -352,7 +364,11 @@ impl Plugin for RhaiSourceAssetPlugin {
             .init_asset_loader::<RhaiSourceLoader>()
             .init_resource::<BuiltinRhaiAssets>()
             .init_resource::<RhaiSourceAssetRevision>()
-            .add_systems(Update, request_builtin_rhai_assets)
+            .configure_sets(Update, (RhaiSourceAdmissionSet, RhaiSourceAssetSet).chain())
+            .add_systems(
+                Update,
+                request_builtin_rhai_assets.in_set(RhaiSourceAdmissionSet),
+            )
             .add_systems(
                 Update,
                 (publish_rhai_sources,)

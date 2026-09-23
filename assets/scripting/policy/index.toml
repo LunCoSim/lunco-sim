@@ -23,6 +23,13 @@ entry = "readiness_action"
 deterministic = true
 
 [[policies]]
+hook = "scene.time.select"
+source = "scene_time.rhai"
+entry = "select_scene_time"
+deterministic = true
+required = true
+
+[[policies]]
 hook = "physics.body_escape"
 source = "physics_escape.rhai"
 entry = "escaped_body_policy"
@@ -85,7 +92,7 @@ entry = "twin_lifecycle"
 
 [[policies]]
 hook = "application.asset.lifecycle"
-source = "tutorial_catalog_menu.rhai"
+source = "application_asset_lifecycle.rhai"
 entry = "application_asset_lifecycle"
 required = true
 

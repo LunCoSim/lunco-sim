@@ -528,8 +528,7 @@ mod tests {
     use super::*;
     use lunco_assets_datasets::DatasetRegistry;
 
-    /// A dataset with no `[*.body]` table is simply not imagery — the ephemeris
-    /// CSVs share this registry and must not be mistaken for textures.
+    /// A dataset with no `[*.body]` table is simply not body imagery.
     #[test]
     fn a_dataset_without_a_body_table_declares_no_imagery() {
         let mut r = DatasetRegistry::default();
@@ -537,8 +536,8 @@ mod tests {
             r#"
 [some_vectors]
 name = "Vectors"
-url = "https://example.invalid/v.csv"
-dest = "ephemeris/v.csv"
+url = "https://example.invalid/data.csv"
+dest = "data/v.csv"
 "#,
             "other",
         );

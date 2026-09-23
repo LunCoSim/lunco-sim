@@ -62,6 +62,14 @@ lesson's resolved source across `RestartScene`, then recreates its host and HUD
 on the restarted scene; a failed restart clears that lesson and reports the
 typed failure.
 
+Scene-time selection runs once at the completed load/restart edge, after the
+stage dependency load and queued visual/mesh projection work have drained. A
+completion notification without a matching loading phase is ignored; reloading
+the already-active stage therefore leaves its selected time unchanged. The time
+owner holds the physical loop, USD animation sampling, celestial
+placement, and USD DEM construction until the composed root policy result is
+installed. A clear or failed load leaves the scene-time gate closed.
+
 ## Everything else — the `SceneTeardown` schedule
 
 Resources, caches, worker-side handles, and subsystem-derived entity trees are
@@ -79,6 +87,13 @@ replacement surface scene present as orbital without a valid return transaction.
 Scene-scoped `RuntimeDiagnostics` is cleared at the same boundary. Each producer
 then repopulates only its own findings, so a camera, environment, or physics
 error from the outgoing scene cannot be displayed as a fact about the replacement.
+
+Scene-requested dataset reads follow the same boundary. Rhai selects datasets
+at scene completion; the generic asset runtime loads their canonical URIs and
+retires outstanding read completions at `SceneTransitionStarted`. Domain-owned
+data derived from delivered text is cleared during `SceneTeardown`. The
+application asset lifecycle policy requests only the declared artifacts needed
+by the completed scene.
 
 Windowed presentation state follows the same ownership rule. A scene authors
 its initial camera selection through `CameraTrack` or a unique `LocalEmbodiment`;
@@ -151,6 +166,11 @@ stage remains generation-fenced and is discarded when its source changes.
 is retained until the queue is empty. The workbench reports the indeterminate
 loading/projecting phase, and a clear transaction reports unloading, rather than
 presenting a partially projected scene as ready.
+
+Authored control and program projection use the same composed reader contract:
+the prepared projection plan supplies facts before the live canonical stage is
+installed, and the canonical reader supplies later edits. Referenced instances
+read through their path-remapped plan until their canonical generation changes.
 
 Doc-backed Twin admission is event-driven at the asset boundary. The Twin source
 is loaded as `UsdSourceText`; `AssetEvent` marks successful availability and

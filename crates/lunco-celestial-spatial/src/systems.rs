@@ -11,19 +11,18 @@ use lunco_celestial_spatial_core::{
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::{pose_in_grid, world_position_seeded};
-use lunco_time::{CelestialTime, WorldTime};
+use lunco_time::{SimulationPresentationTime, WorldTime};
 
 use crate::big_space_setup::CelestialPresentationGrid;
 
-/// Move visual globe frames from the detached presentation clock.
+/// Move render-only globe frames from the interpolated physical-time sample.
 ///
 /// This is intentionally separate from [`ephemeris_update_system`] and
-/// [`body_rotation_system`]. A detached celestial clock is a presentation
-/// timeline: it may move the rendered Earth/Moon through the sky while the
-/// causal WorldTime branch continues to own physics, surface terrain, and
-/// picking. When a surface observer remains on WorldTime, the presentation
-/// branch is rigidly mapped so the observer's body-fixed site coincides with
-/// that camera while relative celestial poses still come from CelestialTime.
+/// [`body_rotation_system`]. The causal WorldTime branch owns physics, surface
+/// terrain, and picking; this render-only branch samples the same physical
+/// timeline one fixed step behind and interpolates within completed steps.
+/// When a surface observer remains on WorldTime, the presentation branch is
+/// rigidly mapped so the observer's body-fixed site coincides with that camera.
 /// Keeping the marker out of `ReferenceFrame` makes that ownership boundary
 /// structural rather than dependent on a query filter convention.
 pub fn presentation_observer_needs_sync() -> impl bevy::ecs::schedule::SystemCondition<()> {
@@ -87,7 +86,7 @@ fn presentation_observer_inputs_changed(
 }
 
 pub fn presentation_celestial_frame_system(
-    celestial: Res<CelestialTime>,
+    presentation_time: Res<SimulationPresentationTime>,
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
@@ -128,8 +127,9 @@ pub fn presentation_celestial_frame_system(
                     pose_in_grid(camera, solar_grid, &q_parents, &q_grids, &presentation.p2())?.0;
                 let body_sky = ephemeris
                     .provider
-                    .global_position(surface_pose.body, celestial.epoch_jd)?;
-                let sky_rotation = lunco_celestial::geo::body_rotation(body, celestial.epoch_jd);
+                    .global_position(surface_pose.body, presentation_time.epoch_jd)?;
+                let sky_rotation =
+                    lunco_celestial::geo::body_rotation(body, presentation_time.epoch_jd);
                 let world_rotation = lunco_celestial::geo::body_rotation(body, world.epoch_jd);
                 let camera_sky = ecliptic_to_bevy(body_sky).raw()
                     + sky_rotation * surface_pose.body_fixed_position.0;
@@ -140,7 +140,10 @@ pub fn presentation_celestial_frame_system(
     };
 
     for (frame, mut cell, mut tf, child_of) in &mut presentation.p0() {
-        let Some(rel_pos_au) = ephemeris.provider.position(frame.body, celestial.epoch_jd) else {
+        let Some(rel_pos_au) = ephemeris
+            .provider
+            .position(frame.body, presentation_time.epoch_jd)
+        else {
             // The causal branch follows the same data contract: no ephemeris
             // means no new pose. Never substitute the parent's origin.
             continue;
@@ -176,7 +179,8 @@ pub fn presentation_celestial_frame_system(
             continue;
         };
         if frame.body_fixed && desc.spins() {
-            let next = lunco_celestial::geo::body_rotation(desc, celestial.epoch_jd).as_quat();
+            let next =
+                lunco_celestial::geo::body_rotation(desc, presentation_time.epoch_jd).as_quat();
             if tf.rotation != next {
                 tf.rotation = next;
             }
@@ -184,58 +188,11 @@ pub fn presentation_celestial_frame_system(
     }
 }
 
-/// Project the detached-epoch solar direction into the active camera's view frame.
+/// Project the interpolated physical-time solar direction into the active camera's view frame.
 /// The sky shader consumes view-space rays, so this conversion avoids mixing its
 /// camera-relative render frame with BigSpace's floating-origin world frame.
-const DETACHED_SUN_RENDER_EPOCH_EPSILON_SECS: f64 = 0.5;
-
-fn replace_celestial_sun_diagnostic(
-    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
-    message: Option<String>,
-) {
-    if let Some(diagnostics) = diagnostics.as_deref_mut() {
-        diagnostics.replace_producer(
-            "celestial-sun-presentation",
-            message
-                .into_iter()
-                .map(|message| lunco_core::RuntimeDiagnostic {
-                    code: "celestial-sun-presentation".to_string(),
-                    severity: lunco_core::DiagnosticSeverity::Error,
-                    producer: "celestial-sun-presentation".to_string(),
-                    subject: "scene-sun".to_string(),
-                    message,
-                }),
-        );
-    }
-}
-
-fn fail_celestial_sun_projection(
-    sky: &mut CelestialSunPresentation,
-    render: &mut lunco_environment::SunRenderPresentation,
-    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
-    celestial_render_requested: bool,
-    message: Option<String>,
-) {
-    sky.clear();
-    if celestial_render_requested {
-        render.invalidate();
-    } else {
-        render.select_semantic();
-    }
-    replace_celestial_sun_diagnostic(diagnostics, message);
-}
-
-fn fail_celestial_render_projection(
-    render: &mut lunco_environment::SunRenderPresentation,
-    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
-    message: String,
-) {
-    render.invalidate();
-    replace_celestial_sun_diagnostic(diagnostics, Some(message));
-}
-
 pub fn presentation_sun_system(
-    celestial: Res<CelestialTime>,
+    presentation_time: Res<SimulationPresentationTime>,
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Res<CelestialBodyRegistry>,
@@ -246,143 +203,57 @@ pub fn presentation_sun_system(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     mut sun_presentation: ResMut<CelestialSunPresentation>,
-    mut render_presentation: ResMut<lunco_environment::SunRenderPresentation>,
-    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
-    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
-    let detached_clock = celestial.epoch_jd.is_finite()
-        && world.epoch_jd.is_finite()
-        && (celestial.epoch_jd - world.epoch_jd).abs() * 86_400.0
-            > DETACHED_SUN_RENDER_EPOCH_EPSILON_SECS;
-    let site_count = surface_poses.site_count();
+    let Some(ephemeris) = ephemeris else {
+        sun_presentation.clear();
+        return;
+    };
+
     let mut active_cameras = cameras.iter().filter(|(_, camera)| camera.is_active);
     let Some((camera, _)) = active_cameras.next() else {
-        let detached_surface_render_requested = detached_clock && site_count > 0;
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            detached_surface_render_requested,
-            detached_surface_render_requested
-                .then(|| "detached celestial Sun has no active scene camera".into()),
-        );
+        sun_presentation.clear();
         return;
     };
     if active_cameras.next().is_some() {
         error_once!("[celestial] multiple active scene cameras; solar sky disc is disabled");
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            detached_clock && site_count > 0,
-            Some("multiple active scene cameras make the celestial Sun observer ambiguous".into()),
-        );
+        sun_presentation.clear();
         return;
     }
-    if site_count > 1 {
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            detached_clock,
-            Some(format!(
-                "expected at most one active site anchor for the celestial Sun, found {site_count}"
-            )),
-        );
-        return;
-    }
-    let surface_pose = surface_poses.get(camera);
-    if site_count == 1 && surface_pose.is_none() {
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            detached_clock,
-            Some("the active surface camera has no complete site/body-fixed pose".into()),
-        );
-        return;
-    }
-    let celestial_render_requested = detached_clock && surface_pose.is_some();
 
-    let Some(ephemeris) = ephemeris else {
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            celestial_render_requested,
-            celestial_render_requested
-                .then(|| "detached celestial Sun has no ephemeris provider".into()),
-        );
-        return;
-    };
     let Ok(solar_grid) = q_solar_grid.single() else {
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            celestial_render_requested,
-            celestial_render_requested
-                .then(|| "detached celestial Sun has no unique solar-system grid".into()),
-        );
+        sun_presentation.clear();
         return;
     };
     let Some((camera_position, camera_rotation)) =
         pose_in_grid(camera, solar_grid, &q_parents, &q_grids, &q_spatial)
     else {
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            celestial_render_requested,
-            celestial_render_requested
-                .then(|| "active camera has no complete pose in the solar-system grid".into()),
-        );
+        sun_presentation.clear();
         return;
     };
 
-    let Some(sun_au) = ephemeris
-        .provider
-        .global_position(lunco_celestial::ephemeris_id::SUN, celestial.epoch_jd)
-    else {
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            celestial_render_requested,
-            celestial_render_requested
-                .then(|| "detached celestial Sun has no ephemeris position".into()),
-        );
+    let Some(sun_au) = ephemeris.provider.global_position(
+        lunco_celestial::ephemeris_id::SUN,
+        presentation_time.epoch_jd,
+    ) else {
+        sun_presentation.clear();
         return;
     };
     let sun_position = ecliptic_to_bevy(sun_au).raw();
-    let (direction_world, distance) = if let Some(surface_pose) = surface_pose {
+    let (direction_world, distance) = if let Some(surface_pose) = surface_poses.get(camera) {
         let Some(body) = registry.get(surface_pose.body) else {
-            fail_celestial_sun_projection(
-                &mut sun_presentation,
-                &mut render_presentation,
-                &mut diagnostics,
-                celestial_render_requested,
-                celestial_render_requested
-                    .then(|| "surface observer body is absent from the celestial registry".into()),
-            );
+            sun_presentation.clear();
             return;
         };
         let Some(body_au) = ephemeris
             .provider
-            .global_position(surface_pose.body, celestial.epoch_jd)
+            .global_position(surface_pose.body, presentation_time.epoch_jd)
         else {
-            fail_celestial_sun_projection(
-                &mut sun_presentation,
-                &mut render_presentation,
-                &mut diagnostics,
-                celestial_render_requested,
-                celestial_render_requested
-                    .then(|| "surface observer has no detached-epoch ephemeris position".into()),
-            );
+            sun_presentation.clear();
             return;
         };
         let body_position = ecliptic_to_bevy(body_au).raw();
-        let body_rotation_at_sky = lunco_celestial::geo::body_rotation(body, celestial.epoch_jd);
+        let body_rotation_at_sky =
+            lunco_celestial::geo::body_rotation(body, presentation_time.epoch_jd);
         let to_sun_in_body_fixed = body_rotation_at_sky.inverse() * (sun_position - body_position)
             - surface_pose.body_fixed_position.0;
         let distance = to_sun_in_body_fixed.length();
@@ -397,72 +268,18 @@ pub fn presentation_sun_system(
     };
 
     let Some(sun) = registry.get(lunco_celestial::ephemeris_id::SUN) else {
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            celestial_render_requested,
-            celestial_render_requested
-                .then(|| "Sun is absent from the celestial body registry".into()),
-        );
+        sun_presentation.clear();
         return;
     };
     if !distance.is_finite() || distance <= sun.radius_m {
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            celestial_render_requested,
-            celestial_render_requested
-                .then(|| "detached-epoch observer/Sun distance is invalid".into()),
-        );
+        sun_presentation.clear();
         return;
     }
     let angular_radius = (sun.radius_m / distance).asin();
     let direction_view = camera_rotation.inverse() * direction_world;
     if !sun_presentation.publish(direction_view, angular_radius.tan()) {
-        fail_celestial_sun_projection(
-            &mut sun_presentation,
-            &mut render_presentation,
-            &mut diagnostics,
-            celestial_render_requested,
-            celestial_render_requested
-                .then(|| "detached-epoch solar presentation is invalid".into()),
-        );
-        return;
+        sun_presentation.clear();
     }
-
-    if celestial_render_requested {
-        let Some(active_frame) = active_frame else {
-            fail_celestial_render_projection(
-                &mut render_presentation,
-                &mut diagnostics,
-                "detached celestial Sun has no active physics frame for light projection".into(),
-            );
-            return;
-        };
-        let Some((_, active_frame_rotation)) =
-            pose_in_grid(active_frame.0, solar_grid, &q_parents, &q_grids, &q_spatial)
-        else {
-            fail_celestial_render_projection(
-                &mut render_presentation,
-                &mut diagnostics,
-                "active physics frame has no complete pose in the solar-system grid".into(),
-            );
-            return;
-        };
-        if !render_presentation.publish(active_frame_rotation.inverse() * direction_world) {
-            fail_celestial_render_projection(
-                &mut render_presentation,
-                &mut diagnostics,
-                "detached celestial Sun direction is invalid in the active physics frame".into(),
-            );
-            return;
-        }
-    } else {
-        render_presentation.select_semantic();
-    }
-    replace_celestial_sun_diagnostic(&mut diagnostics, None);
 }
 
 /// Update body and frame positions based on ephemeris data.
@@ -479,26 +296,17 @@ pub fn ephemeris_update_system(
         return;
     };
 
-    // The epoch gate is NOT here. It used to be a private
-    // `Local<f64>` comparing against 1e-9 JD — i.e. "did the epoch change at
-    // all" — which meant a running clock re-projected the whole body/frame
-    // hierarchy every single frame. It is now the shared
-    // `cadence::celestial_needs_solve` run condition, on an angular error
-    // budget, applied at registration alongside the other four celestial
-    // systems.
-    //
-    // Deliberately shared and not re-derived locally: two gates with two
-    // `Local`s drift, and a half-advanced celestial tree puts the sun and the
-    // bodies at different instants.
+    // The shared angular-error cadence gate is registered with the other
+    // celestial systems so the body hierarchy and Sun projection solve at one
+    // epoch.
 
     for (mut cell, mut tf, frame, child_of) in &mut q_frames {
         let Some(ephemeris_id) = frame.center() else {
             continue;
         };
 
-        // EphemerisProvider::position returns position relative to its parent defined in registry/hierarchy
-        // P8(d): no data ⇒ leave the body where it is. It used to be teleported to its
-        // parent's centre — a failed CSV fetch put the body inside the Sun, and nothing said so.
+        // EphemerisProvider::position returns position relative to its parent
+        // in the body registry hierarchy.
         let Some(rel_pos_au) = ephemeris.provider.position(ephemeris_id, world.epoch_jd) else {
             continue;
         };
@@ -592,17 +400,16 @@ pub fn sun_emit_direction(
 ///
 /// The Sun sits at the heliocentre, so the Moon→Sun direction is just
 /// `-ecliptic_to_bevy(global_position(Moon)).raw()` (mirrors the solar-panel pointing
-/// in the mission integration). A `DirectionalLight` emits along its local forward
+/// in the surface integration). A `DirectionalLight` emits along its local forward
 /// (`-Z`) and rays travel FROM the Sun INTO the scene, so the semantic state
 /// stores the opposite look direction. The scene sun is identified structurally
 /// by excluding Earthshine and scoped preview lights; ambiguity is an authored
 /// contract error, never a brightness-based choice.
 ///
 /// This is the physical-surface lighting provider. It deliberately reads
-/// [`WorldTime`], not [`CelestialTime`]: the latter is a detached presentation
-/// clock and may be fast-forwarded to move globe imagery while the active
-/// terrain, shadows, and physics remain at the causal world epoch. Without an
-/// explicit ephemeris provider the system leaves authored lighting untouched;
+/// [`WorldTime`], not the interpolated render sample: physics and surface
+/// lighting remain at the causal tick while render-only celestial poses are
+/// interpolated for display. Without an explicit ephemeris provider the system leaves authored lighting untouched;
 /// manual lighting remains a separate explicit operator command.
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,

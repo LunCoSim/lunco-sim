@@ -41,7 +41,7 @@
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use big_space::prelude::CellCoord;
+use big_space::prelude::{CellCoord, Grid};
 // Appearance **intent**, not a material: this crate must never name
 // `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
 // `lunco-render-bevy` observes these and binds the real material.
@@ -77,8 +77,9 @@ use lunco_usd_bevy_stage::{
     UsdStageAsset,
 };
 use lunco_usd_bevy_stage::{
-    canonical::CanonicalStages, local_transform_at, parent_prim_path, read_transform_from_usd,
-    resolve_bound_shader, resolve_stage_prim_path, stage_convention, UsdRead, UsdReadObject,
+    canonical::CanonicalStages, grid_translation_d_at, local_transform_at, parent_prim_path,
+    read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path, stage_convention,
+    UsdRead, UsdReadObject,
 };
 /// Bevy plugin for USD visual synchronization.
 ///
@@ -412,7 +413,7 @@ fn instantiate_usd_prim(
     inherited_member: Option<&UsdInstanceMember>,
     instance_projection: Option<&UsdInstanceProjection>,
     is_high_precision_parent: bool,
-    parent_is_grid: bool,
+    parent_grid: Option<&Grid>,
     is_grid_entity: bool,
     preview_only: bool,
     commands: &mut Commands,
@@ -443,7 +444,7 @@ fn instantiate_usd_prim(
         inherited_member,
         instance_projection,
         is_high_precision_parent,
-        parent_is_grid,
+        parent_grid,
         is_grid_entity,
         preview_only,
         commands,
@@ -471,7 +472,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
     inherited_member: Option<&UsdInstanceMember>,
     instance_projection: Option<&UsdInstanceProjection>,
     is_high_precision_parent: bool,
-    parent_is_grid: bool,
+    parent_grid: Option<&Grid>,
     is_grid_entity: bool,
     preview_only: bool,
     commands: &mut Commands,
@@ -1171,8 +1172,32 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             existing_vis.cloned().unwrap_or(Visibility::Inherited)
         };
 
-        if parent_is_grid {
-            commands.entity(entity).try_insert(CellCoord::default());
+        let high_precision_grid_pose = if let Some(grid) = parent_grid {
+            match grid_translation_d_at(reader, &sdf_path, 0.0) {
+                Ok(Some(position)) => Some(grid.translation_to_grid(position)),
+                Ok(None) => None,
+                Err(error) => {
+                    error!(
+                        "[usd-bevy] {} has a double-precision translation that cannot be represented by its authored xform stack: {}",
+                        sdf_path.as_str(), error
+                    );
+                    commands.entity(entity).try_insert((
+                        UsdSceneProjectionFailed(error.to_string()),
+                        Visibility::Hidden,
+                    ));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let mut cell = CellCoord::default();
+        if let Some((next_cell, local_translation)) = high_precision_grid_pose {
+            cell = next_cell;
+            transform.translation = local_translation;
+        }
+        if parent_grid.is_some() {
+            commands.entity(entity).try_insert(cell);
         }
         commands.entity(entity).try_insert((
             transform,
@@ -1182,11 +1207,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             ViewVisibility::default(),
         ));
 
-        // Tag entities carrying ANY animated channel (xform, visibility, or a
-        // bound-shader / displayColor material input) so the animation adapter's
-        // per-frame samplers drive them (doc 19). The query stays empty for static scenes.
-        // `lunco_usd_bevy_animation::bind_animated_to_preview` then binds the tagged entity to the
-        // animation-preview domain so the transport (play/pause/scrub/rate) reaches it.
+        // Tag entities carrying any authored animated channel (xform, visibility,
+        // or a bound-shader/displayColor material input) for the animation adapter.
+        // Unbound scene animation samples the interpolated physical timeline; an
+        // explicit TimeBinding remains available to editor-owned playback.
         if prim_is_animated(reader, &sdf_path) {
             commands.entity(entity).try_insert(UsdAnimated);
         }
@@ -1898,7 +1922,7 @@ fn process_queued_usd_visuals(
             With<big_space::prelude::CellCoord>,
         )>,
     >,
-    q_grid: Query<(), With<big_space::prelude::Grid>>,
+    q_grid: Query<&Grid>,
     q_child_of: Query<&ChildOf>,
     q_live_paths: Query<(Entity, &UsdPrimPath, Option<&ChildOf>)>,
     q_scene_root: Query<(), With<UsdSceneRoot>>,
@@ -1984,10 +2008,10 @@ fn process_queued_usd_visuals(
                 .get(entity)
                 .ok()
                 .is_some_and(|c| q_high_precision.contains(c.parent()));
-        let parent_is_grid = q_child_of
+        let parent_grid = q_child_of
             .get(entity)
             .ok()
-            .is_some_and(|c| q_grid.contains(c.parent()));
+            .and_then(|c| q_grid.get(c.parent()).ok());
         instantiate_usd_prim(
             entity,
             prim_path,
@@ -1997,7 +2021,7 @@ fn process_queued_usd_visuals(
             member,
             instance_projection,
             is_high_precision_parent,
-            parent_is_grid,
+            parent_grid,
             q_grid.contains(entity),
             preview_only,
             &mut commands,

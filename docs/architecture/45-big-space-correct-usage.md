@@ -153,22 +153,20 @@ projection only. Do not use a render-relative global X/Z directly for an
 authored site grid, and do not move the terrain or physics frame to compensate
 for a visual pattern.
 
-The same render boundary applies to terrain sun consumers. `SunState` remains
-the physical semantic source. A detached celestial clock can provide a typed
-`SunRenderPresentation` direction to the same light projection without changing
-`SunState`. The selected light-local pose is projected before BigSpace
-propagation, and `SunRenderState` is published from the finalized scene-sun
-`GlobalTransform` afterward. Every consumer that converts that direction
-through a terrain `GlobalTransform` runs after `PropagateLowPrecision`. This
-includes static terrain material wiring, horizon-cache bake decisions, and
-streamed-tile cache validity. Streamed-tile shadow intent is then bound through
-`TerrainSurfaceSet::RenderShadowBinding`, so the tile material never combines a
-finalized mesh transform with a previous-frame terrain-local sun direction.
-The projection is change-gated by the selected source revision, active frame identity,
-the exact BigSpace ancestor chains, and the light's authored local transform;
-unchanged frames do not rebuild f64 world poses. The finalizer rejects a
-light/frame disagreement; there is one projection boundary and no render-frame
-correction or offset.
+The same render boundary applies to terrain sun consumers. `SunState` is the
+semantic source for both physics and the render light. The light-local pose is
+projected before BigSpace propagation, and `SunRenderState` is published from
+the finalized scene-sun `GlobalTransform` afterward. Every consumer that
+converts that direction through a terrain `GlobalTransform` runs after
+`PropagateLowPrecision`. This includes static terrain material wiring,
+horizon-cache bake decisions, and streamed-tile cache validity. Streamed-tile
+shadow intent is then bound through `TerrainSurfaceSet::RenderShadowBinding`, so
+the tile material never combines a finalized mesh transform with a
+previous-frame terrain-local sun direction. The projection is change-gated by
+the semantic source revision, active frame identity, the exact BigSpace
+ancestor chains, and the light's authored local transform; unchanged frames do
+not rebuild f64 world poses. The finalizer rejects a light/frame disagreement;
+there is one projection boundary and no render-frame correction or offset.
 
 ## Physics boundary
 
@@ -292,27 +290,27 @@ The body hierarchy has two intentionally separate surface-grid identities:
 
 - `GlobeLod.surface_grid` is the body-fixed physical grid. Site placement uses
   it for authored terrain, vehicles, physics, and surface cameras.
-- `GlobeLod.globe_grid` is the detached presentation grid. The globe LOD
+- `GlobeLod.globe_grid` is the render presentation grid. The globe LOD
   selector, streamed tile parents, and presentation-time camera projection use
   it for derived planetary imagery.
 
-The presentation grid may be updated by an accelerated celestial clock. It must
+The presentation grid samples physical time between completed ticks. It must
 never be used as the physical site parent, and physical content must never be
 reparented into it as a way to make a view look aligned. Keeping the ownership
 split in the component contract makes an invalid wiring a compile-time field
 initialization error rather than a runtime timing symptom.
 
-The detached sky also drives the rendered solar direction and globe pose. A
+The render presentation sample also drives the rendered solar direction and
+globe pose. A
 surface station remains a causal entity on the physical body-fixed grid; its
 screen marker is mirrored as render-only geometry under the matching
 presentation grid, so the marker follows the fast globe without changing
 station, terrain, physics, or link coordinates. The physical marker is shown
 from its own body's surface view; orbit and other-body views use the moving
 copy, avoiding a stationary duplicate. Celestial body shader looks retain
-installed dataset albedo unless USD authors an explicit albedo map. If the
-camera stays on a WorldTime surface while CelestialTime advances, the detached
-solar presentation hierarchy is rigidly aligned at the active body-fixed camera
-pose; this preserves the CelestialTime Earth/Moon/Sun directions in the local
+installed dataset albedo unless USD authors an explicit albedo map. The solar
+presentation hierarchy is rigidly aligned at the active body-fixed camera
+pose; this preserves the interpolated Earth/Moon/Sun directions in the local
 sky without reposing the causal body or site.
 
 The procedural Sun disc uniform uses the active camera's view coordinates,
@@ -321,7 +319,7 @@ camera's `CellCoord` and `Transform` through the canonical
 `lunco_spatial::pose_in_grid` helper before publishing it; it never compares a
 floating-origin world vector with camera-relative rays. BigSpace still owns
 `GlobalTransform` propagation to the rendered camera and presentation grids.
-Camera pose changes reopen this projection even while CelestialTime is paused.
+Camera pose changes reopen this projection while physical time is paused.
 
 Focused regression coverage lives beside the owning crates, notably
 `lunco-celestial` frame/placement tests, `lunco-usd-avian` bridge tests, and

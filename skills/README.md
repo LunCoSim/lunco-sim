@@ -161,9 +161,12 @@ parse check into runtime evidence.
   another explicit free port when needed). Every controllable, visual, realtime,
   or scene-test luncosim process must carry
   an explicit `--api PORT`. Only parse-only `--validate` invocations are exempt.
-- **Exit the previous session before launching the next**: send the API `Exit` command,
-  verify the process and port are gone, then start the replacement. Never overlap luncosim
-  GUI/API sessions or reuse a port while the old session is still alive.
+- **Session ownership**: each agent doing runtime work owns one explicit free API
+  port; different agents may run concurrently on different ports. Launch from
+  the same checkout and working directory as the agent terminal, and use that
+  checkout's production binary. Before replacing your own session, send API
+  `Exit` and verify its process and port are gone. Never control another agent's
+  session or reuse an occupied port.
 - **curl-first** over the `mcp__lunco__*` tools; drive the app over `POST /api/commands`.
 - **Discover, don't hardcode** the command set — `DiscoverSchema` enumerates it live.
 - **Discover before declaring a gap**: search the relevant skills and docs first,
@@ -184,10 +187,14 @@ parse check into runtime evidence.
   installed, and accepts `--check` for compile-only feedback, `--no-run` to
   build without running, or `--lib` for inline library tests. Select the owning
   crate instead of invoking every workspace test target.
-- **Tutorial world/time contract → USD** — choose fixed `DistantLight`, explicit
-  ephemeris (`LunCoEpochAPI` plus authored `lunco:time:epochJd`), an existing
-  world, or no payload. Do not leave orbital time implicit; the authored
-  `epoch-api-missing-time` lint catches an epoch API without its field. See
+- **Tutorial world/time contract → USD** — choose fixed `DistantLight`, celestial
+  sources, an existing world, or no payload. The startup-installed
+  `scene.time.select` Rhai policy uses a valid non-zero root
+  `lunco:time:epochJd` when authored and current computer UTC converted to TDB
+  otherwise, once the USD scene and queued visual/mesh projections settle.
+  Physics, animation, celestial placement, and DEM construction wait for that
+  decision. Missing or invalid time for celestial sources warns at runtime and
+  through `epoch-api-missing-time` lint. See
   [`build-usd-scene`](build-usd-scene/SKILL.md) and
   [`assets/tutorials/README.md`](../assets/tutorials/README.md).
 - **USD is the source of truth; the ECS is a projection of it.** An authored

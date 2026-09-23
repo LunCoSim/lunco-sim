@@ -271,10 +271,9 @@ installed state continue to come from `DatasetRegistry`. This is a rule about
 trust, not bandwidth: a simulator that phones home when you open a file has to
 be *explained* rather than *read*.
 
-That rule is also why fetching lives in the explicit provisioning package
-family and nowhere else. A domain crate owning its own downloader inevitably
-grows a "just fetch it at startup" line — the ephemeris crate had exactly that,
-`ureq` and all, and the guarantee dies one crate at a time.
+Fetching lives in the explicit provisioning package family. Domain crates
+consume artifacts delivered by the shared asset runtime and do not choose
+network behavior.
 
 | Concern | Owner |
 |---|---|
@@ -287,7 +286,9 @@ grows a "just fetch it at startup" line — the ephemeris crate had exactly that
 | per-transaction network/cache/replacement/backup decision | `assets.download.prepare` Rhai policy through `lunco-assets-download` |
 | decode, raster math, external glTF processing, and baked sidecars | `lunco-assets-processing` |
 | Bevy worker lifecycle and CLI composition | `lunco-assets` |
-| declaring datasets + reporting what it loaded | the domain crate |
+| selecting scene dataset artifacts | `application.asset.lifecycle` Rhai policy |
+| registry-validated asynchronous text artifact reads through canonical asset URIs | `lunco-assets-runtime::DatasetArtifactPlugin` |
+| parsing delivered text into domain data | the consuming domain crate |
 | listing and requesting | the UI (knows no dataset by name) |
 | engine Modelica source URI | `lunco-assets-core::engine_model_asset_uri` |
 | engine scene-test root | `lunco-assets-core::engine_scene_tests_root` |
@@ -369,47 +370,29 @@ atomic commit, rollback, and bounded cleanup under the install-backup prefix.
 An absent optional policy uses the downloader's documented generic default; an
 installed but malformed policy is a terminal transaction error.
 
-### Domain metadata rides with the declaration
+### Dataset meaning and scene selection
 
-A dataset's transport (`url`, `dest`, `sha256`) and its *meaning* belong in one
-place, because the meaning describes those exact bytes. `AssetEntry` keeps every
-unrecognised key verbatim and hands it back through `AssetEntry::domain::<T>()`,
-so the owning crate reads a sub-table this crate never interprets:
-
-```toml
-[artemis2_vectors]
-url  = "https://ssd.jpl.nasa.gov/api/horizons.api?…&CENTER='500%40399'&…"
-dest = "ephemeris/target_-1024_….csv"
-
-[artemis2_vectors.ephemeris]      # read by lunco-celestial-ephemeris
-naif_id = -1024
-center  = "500@399"               # the CENTER= of the query above
-```
-
-This replaced `assets/missions/*.ephemeris.json`, which restated the id and
-centre next to a second copy of the Horizons query. Two files describing one
-product is one too many: they drift, and the drift is silent — a mismatched
-`center` places a spacecraft around the wrong body while looking like data.
-
-The split that remains is deliberate: **USD says WHICH body**
-(`lunco:body` / `lunco:spacecraft:ephemerisId`, a NAIF id — the join key the
-schema already documents), the **dataset says what its own numbers mean**. A
-scene does not author `center`, because two scenes could then disagree about the
-same file and one would be wrong. And the prim names no path: unlike a `.mo`
-behind `info:sourceAsset`, an ephemeris body has an identity of its own, so
-binding by id is both stronger and immune to the download's date range changing.
+Dataset transport facts and domain meaning stay together in the manifest.
+`AssetEntry` preserves domain tables and exposes them to the owning Rust
+consumer through `AssetEntry::domain::<T>()`; for example,
+`lunco-celestial-spatial` reads body imagery metadata. The dataset layer does
+not select scene assets. When a scene needs a declared text artifact, the
+authored `application.asset.lifecycle` Rhai policy returns its dataset id in
+`dataset_text_artifacts`; the generic asset runtime resolves and reads it.
+Missing requested assets are reported by that owner. A scene with no authored
+dataset request does not probe for unrelated data during startup.
 
 ### Still open
 
 1. present under the owning root (`assets/` or the Twin) → serve it — **done**
 2. else present in that owner's cache → serve it — **done**
 3. else declared in an `Assets.toml` → offer it; materialise **on request** — **done**
-4. else → unresolved: report it on the `StatusBus` — **open**
+4. else → unresolved: report it on the `StatusBus` — **open for unrequested USD references**
 
-Step 4 still matters: a missing payload yields a prim with no geometry and no
-error, indistinguishable from a modelling mistake. Silence is the expensive
-part. Note step 3 is deliberately *not* automatic materialisation — see the rule
-above; the resolver offers, the user decides.
+Step 4 still matters for asset references that have no dataset declaration.
+Declared datasets selected by scene policy are reported by the generic artifact
+reader when unavailable. Step 3 is deliberately *not* automatic materialisation
+— see the rule above; the resolver offers, the user decides.
 
 Content addressing by `sha256` (rather than URL hash) remains open, and buys
 what path-keyed caches cannot: a changed URL with an unchanged hash is a cache

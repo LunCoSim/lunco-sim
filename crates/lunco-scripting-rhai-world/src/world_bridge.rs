@@ -2848,6 +2848,15 @@ pub fn prepare_builtin_rhai_assets(
     if !manifest.ready() {
         return;
     }
+    if lunco_hooks::get(crate::tool_libs::SOURCE_CLASSIFY_HOOK).is_none() {
+        let message = "required authored Rhai source-classification policy is unavailable";
+        if status.ready || status.error.as_deref() != Some(message) {
+            error!("[rhai] {message}");
+            status.ready = false;
+            status.error = Some(message.to_owned());
+        }
+        return;
+    }
 
     if asset_revision.0 == builtins.prepared_asset_revision
         && builtins.prepared_revision == builtins.admission_revision

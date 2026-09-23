@@ -137,11 +137,11 @@ lunco-luncosim-presentation owns the final status/environment, terrain-horizon,
 USD camera/light, capture, and scene-presentation bridges, while
 lunco-luncosim-ui owns window/plugin composition and installs that package at
 the boundary. Native updater startup and its rendered surface belong to the
-optional lunco-updater package, not to the ordinary UI closure. Similarly,
-celestial trajectory rendering belongs to lunco-celestial-presentation;
-the spatial runtime owns cadence and headless-safe scene projection, gravity,
-links, and commands. Do not add a forwarding module or public re-export in the
-host crate when the owning presentation package can be installed directly.
+optional `lunco-updater` package, not to the ordinary UI closure. Celestial
+body projection and cadence belong to `lunco-celestial-spatial`; ordinary
+moving scene objects use standard USD `timeSamples` through
+`lunco-usd-bevy-animation`. Do not create a mission-only trajectory component
+or clock when composed USD animation expresses the motion.
 
 ### Runtime scopes, cycles, and publication boundaries
 
@@ -396,20 +396,12 @@ easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
-Celestial `CelestialTime` may move a detached globe and sky for a time-lapse.
-Keep physical bodies, terrain, stations, and links on the causal `WorldTime`
-frames, and have the sky clock readout display the same `CelestialTime` epoch.
-When that epoch diverges, render the Sun direction through the environment's
-`SunRenderPresentation` input and existing `SunRenderState` shadow pipeline;
-keep `SunState` and co-simulation on `WorldTime`.
-When a surface camera remains on `WorldTime`, rigidly align the render-only
-celestial hierarchy at its body-fixed camera pose so Earth and Sun keep their
-correct local-sky directions as the epochs diverge.
-If a body-fixed station needs to appear on the accelerated globe,
-project a render-only marker copy beneath its presentation grid. Show its
-causal marker on its own surface and the copy from orbit or other-body views;
-never reparent the station or use presentation coordinates for physics or link
-calculations.
+Celestial render frames, the sky-time readout, and unbound USD animation use
+the interpolated physical-time sample. Physical bodies, terrain, stations, and
+links use causal `WorldTime` at completed ticks. A body-fixed station that
+needs a render marker on a globe uses a render-only copy beneath the matching
+presentation grid; never reparent the station or use presentation coordinates
+for physics or link calculations.
 
 Scenario telemetry is collected only while `ScenarioExecutionGate` is open.
 That gate waits for all initial scene readiness holds because scenarios may

@@ -1454,62 +1454,34 @@ actually call, with the fields the deserializer actually accepts. See the
 | `playing` | `Option < bool >` |  Play (`Some(true)`) / pause (`Some(false)`) the animation; `None` leaves it. |
 | `seek_secs` | `Option < f64 >` |  Seek the playhead to this time in **seconds**; `None` leaves it. |
 | `rate` | `Option < f64 >` |  Playback rate (1.0 = realtime); `None` leaves it. |
-| `looping` | `Option < bool >` |  Wrap at the range end instead of clamping (`None` leaves it). Honoured by  [`step_playhead`], and only meaningful once the range is bounded — an  unbounded `Playback` ignores it, so a looping cutscene needs authored  clip spans (grown by `bind_animated_to_preview`). |
+| `looping` | `Option < bool >` |  Wrap at the range end instead of clamping (`None` leaves it). Honoured by  [`step_playhead`], and only meaningful once the range is bounded — an  unbounded `Playback` ignores it, so a looping cutscene needs an explicit binding and authored clip span. |
 
 #### `ResetTime`
 
- Reset the **entire clock tree** to defaults — fired on every scene load.
+ Reset the time controls to the epoch selected for the settled active scene.
+ Scene loading invokes `scene.time.select` once after the USD stage and scene
+ projections settle; this command reuses that retained result.
 
- This command restores the standing clock shape across scene reloads (doc 19
- §11b):
+ This command restores the standing time shape across scene reloads (doc 19):
 
- * **celestial** → back on the `Epoch` root, affine identity;
  * **interaction** → wall-rooted identity (its default);
  * **animation preview** → playhead 0, playing, 1×;
  * **transport** → Playing at 1×, except for an explicit pause requested while
    the scene transition was pending, which is applied once to the replacement;
- * **mission calendar** → the authored mission epoch at tick zero. The epoch
-   itself is preserved so a scene load can apply its `SetMissionEpoch` afterward.
+ * **mission calendar** → the retained policy-selected scene epoch at tick zero.
 
 - *defined in:* `crates/lunco-time/src/domain.rs`
 - *fields:* none — call with `ResetTime` (no params)
-
-#### `SetClock`
-
- Re-point, rate-scale or seek one clock —
- `{"type":"ExecuteCommand","command":"SetClock","params":{"clock":"Celestial","parent":"Real","scale":1000}}`
- runs the sky 1000× **while the simulation stays paused**.
-
- One verb covers every case, because in an affine tree they are the same case:
- * **detach / re-attach** — `parent` (the pause story: a clock freezes because of
-   *where it hangs*, so unfreezing one clock is a re-parent, not a flag),
- * **time-dilate** — `scale` (`1000` = the sky at 1000×; the sim is untouched),
- * **seek** — `epoch_jd` on the celestial clock, or `offset` in seconds.
-
- World state, not a view preference: it goes through the command/journal path, so
- every client sees the same sky and a replay reproduces it. The command publishes
- the presentation-only `CelestialTime`; it does not overwrite causal
- `WorldTime`, advance physics, or re-pose the active surface frame.
-
-- *defined in:* `crates/lunco-time/src/domain.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `clock` | `ClockId` |  Which clock to edit. |
-| `parent` | `Option < ClockParent >` |  Re-parent it (`"sim"` = freezes with the sim; `"real"` = free-running). |
-| `scale` | `Option < f64 >` |  Rate relative to the parent (1.0 = follow, 1000.0 = 1000×). |
-| `offset` | `Option < f64 >` |  Affine offset over the parent, seconds. |
-| `epoch_jd` | `Option < f64 >` |  Seek the CELESTIAL clock to an absolute date (Julian Date, TDB). Ignored on  other clocks — they have no epoch mapping. |
 
 #### `SetMissionEpoch`
 
  Re-anchor the world clock at an absolute epoch (Julian Date, TDB) —
  `{"type":"ExecuteCommand","command":"SetMissionEpoch","params":{"epoch_jd":2461253.0}}`. Sets both
  the mission origin and the calendar anchor at the CURRENT tick, so the sim
- jumps to that date without a tick discontinuity. This is how a scene picks
- its date: a site-anchored USD stage authors `double lunco:time:epochJd` on
- its root prim (e.g. an epoch where the Shackleton site is sunlit) and the
- USD bridge fires this command on load.
+ jumps to that date without a tick discontinuity. Scene loading uses the
+ required `scene.time.select` Rhai policy after the scene transaction settles;
+ this command is an explicit time re-anchor operation and does not select the
+ default scene epoch.
 
 - *defined in:* `crates/lunco-time/src/domain.rs`
 
@@ -1538,9 +1510,7 @@ not change that rate.
  one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
  "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
  `{"rate":4.0}` runs it 4× realtime, and the bounded causal ladder ends at
- 64×. Rates below 0.1× or above 64× are rejected. Use `SetClock` for a
- presentation-only celestial rate when a detached clock is explicitly needed.
- This is THE pause command:
+ 64×. Rates below 0.1× or above 64× are rejected. This is the pause command:
  exposed on the API/MCP and wrapped by the rhai prelude verbs
  `pause()`/`play()`/`set_rate()`, so a cutscene or a "reload-then-pause"
  one-liner can freeze the world.
@@ -2693,6 +2663,10 @@ not change that rate.
 #### `ApplyUsdOp`
 
  Apply one [`UsdOp`] to a document through the typed command bus.
+
+ The operation set includes standard stage, prim, and attribute `doc` metadata
+ through `SetStageDocumentation`, `SetPrimDocumentation`, and
+ `SetAttributeDocumentation`.
 
  The `lunco-usd-commands` runtime observes this command and routes it through the
  document registry so undo/redo, change notification, and read-only

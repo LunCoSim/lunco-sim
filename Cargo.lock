@@ -7226,6 +7226,7 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-assets-path",
  "lunco-core",
  "lunco-settings",
@@ -7456,28 +7457,7 @@ dependencies = [
  "celestial-core",
  "celestial-ephemeris",
  "celestial-time",
- "lunco-assets-datasets",
- "lunco-assets-runtime",
  "lunco-celestial",
- "lunco-settings",
- "serde",
-]
-
-[[package]]
-name = "lunco-celestial-presentation"
-version = "0.1.0-dev"
-dependencies = [
- "bevy",
- "bevy_mesh",
- "big_space",
- "futures-lite",
- "lunco-assets-runtime",
- "lunco-celestial",
- "lunco-celestial-spatial",
- "lunco-celestial-spatial-core",
- "lunco-render",
- "lunco-spatial",
- "lunco-time",
 ]
 
 [[package]]
@@ -8004,7 +7984,6 @@ dependencies = [
  "lunco-api-core",
  "lunco-camera-core",
  "lunco-canvas",
- "lunco-celestial-presentation",
  "lunco-celestial-spatial-core",
  "lunco-command-contracts",
  "lunco-control-core",
@@ -8102,7 +8081,6 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-capture",
- "lunco-celestial-presentation",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-cosim-core",
@@ -9202,7 +9180,6 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-assets-core",
- "lunco-celestial-presentation",
  "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-runtime",
@@ -9734,6 +9711,7 @@ dependencies = [
  "chrono",
  "lunco-core",
  "lunco-core-runtime",
+ "lunco-hooks",
  "serde",
 ]
 
@@ -9973,6 +9951,7 @@ name = "lunco-usd-bevy-animation"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "big_space",
  "lunco-render",
  "lunco-time",
  "lunco-usd-bevy-core",
@@ -10133,7 +10112,6 @@ dependencies = [
  "lunco-spatial",
  "lunco-storage",
  "lunco-telemetry-core",
- "lunco-time",
  "lunco-twin",
  "lunco-usd-authoring",
  "lunco-usd-avian-contracts",
@@ -10401,7 +10379,9 @@ dependencies = [
  "bevy",
  "lunco-celestial",
  "lunco-celestial-spatial-core",
+ "lunco-core",
  "lunco-environment",
+ "lunco-hooks",
  "lunco-time",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
@@ -10568,6 +10548,7 @@ dependencies = [
  "lunco-telemetry-core",
  "lunco-terrain-globe",
  "lunco-terrain-surface",
+ "lunco-time",
  "lunco-usd-authoring",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",

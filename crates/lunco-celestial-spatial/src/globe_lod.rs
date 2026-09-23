@@ -7,7 +7,7 @@
 //! the selection with body-owned textures, grids, and appearance intent.
 //!
 //! Per body, [`GlobeLod`] carries the params + the physical surface grid + the
-//! detached presentation grid + look;
+//! render presentation grid + look;
 //! [`GlobeTiles`] tracks residency, the bounded mesh cache, and the cached
 //! selection inputs; [`update_globe_lod`] reconciles that state with the camera.
 //! Tile placement uses the grid's `translation_to_grid` together with a
@@ -40,15 +40,15 @@ pub struct GlobeLod {
     pub radius_m: f64,
     /// Body-fixed physical grid for sites, terrain, cameras, and vehicles.
     ///
-    /// This grid is intentionally outside the detached presentation branch.
+    /// This grid is intentionally outside the render interpolation branch.
     /// It is the authoritative local frame for authored surface content and
-    /// must not be moved by the accelerated celestial presentation clock.
+    /// remains at the authoritative physical tick.
     pub surface_grid: Entity,
-    /// Detached presentation grid that owns streamed globe tiles.
+    /// Interpolated presentation grid that owns streamed globe tiles.
     ///
     /// Globe tiles are visual derived data. Keeping their grid separate from
-    /// [`Self::surface_grid`] prevents presentation-time ephemeris updates from
-    /// reposing the physical surface scene.
+    /// [`Self::surface_grid`] lets render interpolation update globe tiles
+    /// without reposing the physical surface scene.
     pub globe_grid: Entity,
     /// Appearance intent applied to every tile (the body's blueprint look). Cloned
     /// onto each tile; the binder's content-keyed cache shares one
@@ -388,9 +388,8 @@ pub(crate) struct GlobeTiles {
     /// is provably nothing for another pass to do.
     ///
     /// Entity-scoped (a field on the body's own component) rather than a
-    /// `Local<HashMap<Entity, _>>` in the system, for the same reason
-    /// `MissionSpawned` is (missions.rs): a `Local` outlives scene teardown and
-    /// would keep stale keys for despawned bodies, while this dies with the body.
+    /// `Local<HashMap<Entity, _>>` in the system, because a `Local` outlives
+    /// teardown and would keep stale keys for despawned bodies.
     pub last_solve_cam: Option<DVec3>,
     /// Presentation camera that produced [`last_solve_cam`]. The camera entity
     /// is part of the solve input even when two cameras currently share a pose.

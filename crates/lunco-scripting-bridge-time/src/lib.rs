@@ -7,8 +7,10 @@
 
 use bevy::prelude::*;
 use lunco_physics::PhysicsTime;
-use lunco_scripting_bridge_core::{ValueBuilder, execution_context, with_world};
-use lunco_time::{Clocks, MissionClock, ResolvedDomains, TimeTransport, WorldTime};
+use lunco_scripting_bridge_core::{execution_context, with_world, ValueBuilder};
+use lunco_time::{
+    Clocks, MissionClock, ResolvedDomains, SimulationPresentationTime, TimeTransport, WorldTime,
+};
 
 /// `sim_tick()` — current admitted FixedUpdate tick. The caller must be inside
 /// the simulation cycle; an out-of-cycle call fails only its current Rhai
@@ -291,6 +293,7 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             .get_resource::<WorldTime>()
             .copied()
             .unwrap_or_default();
+        let presentation_time = world.get_resource::<SimulationPresentationTime>().copied();
         let mission = world
             .get_resource::<MissionClock>()
             .copied()
@@ -377,6 +380,22 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             ("world_met_s".to_owned(), b.float(world_time.met_secs)),
             ("epoch_jd".to_owned(), b.float(world_time.epoch_jd)),
             (
+                "presentation_time_available".to_owned(),
+                b.bool(presentation_time.is_some()),
+            ),
+            (
+                "presentation_sim_s".to_owned(),
+                presentation_time.map_or_else(|| b.unit(), |time| b.float(time.sim_secs)),
+            ),
+            (
+                "presentation_epoch_jd".to_owned(),
+                presentation_time.map_or_else(|| b.unit(), |time| b.float(time.epoch_jd)),
+            ),
+            (
+                "presentation_interpolation".to_owned(),
+                presentation_time.map_or_else(|| b.unit(), |time| b.float(time.interpolation)),
+            ),
+            (
                 "mission_tick0".to_owned(),
                 b.int(mission.mission_tick0 as i64),
             ),
@@ -423,7 +442,6 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                 ("real", clocks.real),
                 ("sim", clocks.sim),
                 ("interaction", clocks.interaction),
-                ("celestial", clocks.celestial),
             ] {
                 if let Some(sample) = resolved.sample(entity) {
                     domains.push(b.map(vec![
@@ -469,17 +487,13 @@ mod tests {
         };
         let _scope = WorldScope::enter(&mut world, context);
 
-        assert!(
-            sim_tick()
-                .unwrap_err()
-                .contains("only in the simulation cycle")
-        );
+        assert!(sim_tick()
+            .unwrap_err()
+            .contains("only in the simulation cycle"));
         assert!(dt().unwrap_err().contains("only in the simulation cycle"));
-        assert!(
-            elapsed_seconds()
-                .unwrap_err()
-                .contains("only in the simulation cycle")
-        );
+        assert!(elapsed_seconds()
+            .unwrap_err()
+            .contains("only in the simulation cycle"));
         assert!(!world.resource::<lunco_core::RuntimeFaults>().active());
     }
 

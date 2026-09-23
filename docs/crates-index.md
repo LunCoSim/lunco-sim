@@ -30,7 +30,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets-path`** | Platform-neutral URI and relative-path algebra: scheme parsing, canonicalization, separator normalization, and traversal checks. It has no Bevy, filesystem, storage, or application dependency. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, traversal-safe path/cache operations, and storage-facing identity contracts. It excludes source catalogs, scripting, text loaders, discovery, network, and archive/runtime integration. |
-| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, library/model/script/text loaders, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
+| **`lunco-assets-runtime`** | Bevy asset-source and authored-text runtime: source registration, discovery/catalogs, library/model/script/text loaders, policy-requested dataset artifact reads, web fetch integration, and the asset-manifest tool. It consumes `lunco-assets-core` without making the identity layer depend on runtime services. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, process-output ownership validation, lifecycle state, and the typed request/process/cancel command contracts. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
 | **`lunco-assets-transport`** | Small native HTTP transport boundary: shared timeout, retry/backoff, and resumable byte-transfer primitives. It has no manifest, archive, raster, or Bevy dependency. |
 | **`lunco-assets-download`** | Manifest-aware native download, SHA-256 verification, archive extraction, staging, and atomic source installation. It has no Bevy or raster-processing dependency. |
@@ -41,7 +41,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
 | **`lunco-settings`** | Centralised user-settings: one JSON file (`<OS config dir>/lunco/settings.json`), namespaced sections, auto-persist on change; also owns the shared `DownloadSettings` retry/backoff policy. |
 | **`lunco-theme`** | Centralized design tokens (Catppuccin-based) for consistent UI across all panels and domains. |
-| **`lunco-time`** | Unified mission-time spine (architecture doc 19): `MissionClock`/`TimeTransport`/`WorldTime`, the `TimeDomain` clock tree + animation transport, and the `scales` projection layer over `celestial-time`. |
+| **`lunco-time`** | Unified mission-time spine (architecture doc 19): `MissionClock`/`TimeTransport`/causal `WorldTime`, interpolated `SimulationPresentationTime`, explicitly bound `TimeDomain` preview transport, and the `scales` projection layer over `celestial-time`. |
 | **`lunco-worker-transport`** | Generic Web Worker pool transport (wasm-only): spawn / lazy-grow, boot wire-id handshake, byte + Transferable-`ArrayBuffer` post, crash respawn. Payload-agnostic (the caller supplies decode/route callbacks); shared by the Modelica Fast-Run workers and the DEM bake worker so neither reimplements the plumbing. |
 | **`lunco-status-core`** | Renderer-independent lifecycle, progress, and status infrastructure: `StatusBus`, scoped busy handles, tracked tasks, discrete diagnostics, and telemetry mirroring. Consumers such as the workbench status bar, busy widgets, and headless diagnostics read the same contract. |
 
@@ -54,10 +54,9 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | :--- | :--- |
 | **`lunco-celestial`** | Headless celestial semantics: canonical body catalog/NAIF identities, ephemeris contracts, typed f64 frame transforms, geodesy, body rotation, and Kepler propagation. |
 | **`lunco-celestial-data`** | Dependency-free authoritative celestial constants shared by semantic and asset-processing packages without making the general core depend on the celestial domain. |
-| **`lunco-celestial-spatial-core`** | Lightweight Bevy/BigSpace contracts shared by celestial consumers: semantic frame lookup, canonical surface poses, surface axes, scene body declarations, orbital-view state, cached local-gravity facts, detached celestial Sun presentation state, and render-independent connectivity state. |
-| **`lunco-celestial-spatial`** | Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, detached-time globe and Sun projection, render-only body-fixed marker copies, links, cadence, and runtime celestial commands. It consumes the separate presentation package for trajectory rendering. |
-| **`lunco-celestial-presentation`** | Render-facing trajectory sampling and presentation for celestial runtime facts. It depends on the spatial contracts but keeps mesh/material and presentation scheduling out of the semantic spatial runtime. |
-| **`lunco-celestial-ephemeris`** | Concrete high-fidelity ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
+| **`lunco-celestial-spatial-core`** | Lightweight Bevy/BigSpace contracts shared by celestial consumers: semantic frame lookup, canonical surface poses, surface axes, scene body declarations, orbital-view state, cached local-gravity facts, celestial Sun presentation state, and render-independent connectivity state. |
+| **`lunco-celestial-spatial`** | Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, physical-time globe and Sun projection, render-only body-fixed marker copies, links, cadence, and runtime celestial commands. |
+| **`lunco-celestial-ephemeris`** | Analytic natural-body ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
 | **`lunco-terrain-core`** | Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde), shared by both the planar DEM streamer and the cube-sphere planetary tiler. |
 | **`lunco-terrain-globe`** | Whole-body cube-sphere terrain tiling (orbital/planetary scale): quadtree-CDLOD globe, avian heightfield collision ring, `big_space` anchoring; the "globe" projection of the terrain family over the shared `lunco-terrain-core` LOD spine. |
@@ -342,7 +341,7 @@ after `LunCoCoreRuntimePlugin`; headless consumers that only need core
 primitives do not compile this policy layer.
 
 **`lunco-time`**
-The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/`WorldTime` (the world animation clock that also gates physics via `Time<Virtual>`), the `TimeDomain` clock tree (`Playback`, `TimeBinding`, `ResolvedDomains`) with the `AnimationPreview` domain + `ControlAnimation` transport, and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**
+The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/causal `WorldTime`, `SimulationPresentationTime` (interpolated between completed physical ticks), explicitly bound `TimeDomain` previews (`Playback`, `TimeBinding`, `ResolvedDomains`, `ControlAnimation`), and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**
 
 **`lunco-doc`**
 Foundation for structured, mutable artifacts (Modelica, USD, etc.) with built-in undo/redo logic. Defines the `DocumentHost` container and the atomic `DocumentOp` pattern for state mutation and inversion.
@@ -369,10 +368,11 @@ does not own source catalogs, discovery, scripting, text loaders, HTTP,
 archives, raster, SVG, GeoTIFF, or native processing.
 
 **`lunco-assets-runtime`**
-The Bevy asset-source and authored-text runtime. It owns source registration,
-discovery/catalogs, library/model/script/text loaders, web fetch integration,
-and the asset-manifest tool while consuming identity and storage contracts from
-`lunco-assets-core`.
+The Bevy asset-source, authored-text, and selected-dataset runtime. It owns
+source registration, discovery/catalogs, library/model/script/text loaders,
+policy-requested dataset artifact reads, web fetch integration, and the
+asset-manifest tool while consuming identity and storage contracts from
+`lunco-assets-core` and dataset declarations from `lunco-assets-datasets`.
 
 **`lunco-assets-datasets`**
 The lightweight dataset contract boundary. It owns `Assets.toml` declarations,
@@ -434,36 +434,27 @@ The generic Web Worker pool transport (wasm-only; `#![cfg(target_arch = "wasm32"
 ### Simulation Engine
 
 **`lunco-celestial`**
-Headless celestial semantics. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, geodesy, Kepler propagation, and the `EphemerisResource` abstraction. It has no scene hierarchy, BigSpace, terrain, rendering, or UI dependency. The concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
+Headless celestial semantics. Owns the canonical natural-body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, geodesy, Kepler propagation, and the `EphemerisResource` abstraction. It has no scene hierarchy, BigSpace, terrain, rendering, or UI dependency. The analytic natural-body provider lives in `lunco-celestial-ephemeris`.
 
 **`lunco-celestial-spatial-core`**
 The lightweight ECS boundary for celestial spatial facts. It owns the semantic
 frame-to-grid index, canonical site/body-fixed pose query, ENU surface-frame
 helpers, scene body declarations, orbital-view state, the cached local gravity
-fact, detached celestial Sun presentation state, authored mission declarations,
-the solar-tracking marker, and the
+fact, celestial Sun presentation state, the solar-tracking marker, and the
 published `LinkNode`, `LinkState`, `LinkGeometryState`, Wi-Fi, peer, and
 occluder components consumed by cameras, avatars, networking, scripting,
 telemetry, USD projection, and UI. It depends only on the semantic celestial
 package, generic spatial coordinates, and the Bevy/BigSpace types required by
 those contracts. It does not install a celestial runtime or pull terrain,
 globe, link solving, imagery, trajectory sampling, cadence, or asset
-integration. It also owns the render-independent trajectory view/frame/path
-contracts consumed by both the spatial mission projector and the optional
-trajectory presentation package.
+integration. Scene-authored spacecraft motion stays in standard USD transform
+time samples and uses the generic USD animation adapter.
 
 **`lunco-celestial-spatial`**
-Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, globe/imagery integration, detached-time globe and solar-disc projection, render-only body-fixed marker copies, links, cadence, and runtime commands. Physical stations and links remain on the causal `WorldTime` tree; only their marker geometry is copied beneath a detached presentation grid. Trajectory data contracts live in `lunco-celestial-spatial-core`; mesh sampling and trajectory alignment are installed by `lunco-celestial-presentation`. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
-
-**`lunco-celestial-presentation`**
-Presentation adapter for celestial runtime facts. It owns trajectory sampling,
-mesh/view construction, alignment, and visibility, while `lunco-celestial-spatial` remains the
-headless-safe owner of scene projection, gravity, links, and commands. This
-boundary prevents rendering-oriented changes from rebuilding the semantic
-spatial package's consumers.
+Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity derivation, surface placement, SOI migration, globe/imagery integration, render-time globe and solar-disc projection, render-only body-fixed marker copies, links, cadence, and runtime commands. Physical stations and links remain on the causal `WorldTime` tree; only their marker geometry is copied beneath a presentation grid. Consumers that need only shared frame or surface facts should depend on `lunco-celestial-spatial-core`; hosts that install celestial runtime behavior use this package.
 
 **`lunco-celestial-ephemeris`**
-Concrete high-fidelity ephemeris provider for `lunco-celestial`. The heavy half of the celestial split and the one place `celestial-time` is allowed: pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real planetary positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`.
+Analytic natural-body ephemeris provider for `lunco-celestial`. Pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real natural-body positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`; scene-authored motion remains standard USD animation.
 
 **`lunco-environment`**
 Position-dependent environmental state (gravity, atmosphere, radiation, etc.). Uses a provider-consumer pattern to compute local conditions for each entity based on its proximity to celestial bodies and their specific environment models.

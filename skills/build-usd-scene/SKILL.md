@@ -71,15 +71,28 @@ the short version is below.
 
 | Scene contract | Author | Use it when |
 |---|---|---|
-| Fixed instructional world | A real `DistantLight` reference such as `lunco://lighting/sun.usda`, with an authored rotation; omit `LunCoEpochAPI` and `SolarSystem`. | Teaching UI, spawning, or basic controls where changing sunlight is not the subject. |
-| Ephemeris world | Apply `LunCoEpochAPI`, author `double lunco:time:epochJd = …`, and reference `lunco://celestial/solar_system.usda` under `SolarSystem`; author the site anchor on the scene root when needed. | Teaching a real lunar day, Earth tracking, orbital motion, or any feature whose result depends on celestial time. |
+| Fixed instructional world | A real `DistantLight` reference such as `lunco://lighting/sun.usda`, with an authored rotation; omit the celestial payload. | Teaching UI, spawning, or basic controls where changing sunlight is not the subject. |
+| Ephemeris world | Reference `lunco://celestial/solar_system.usda` under `SolarSystem`; author the site anchor on the scene root when needed. Add `LunCoEpochAPI` and a non-zero `double lunco:time:epochJd` on the scene root when a repeatable date is required. | Teaching a real lunar day, Earth tracking, orbital motion, or any feature whose result depends on celestial time. |
 | Existing world | Reference or payload the authoritative scene that already owns gravity, lighting, time, and celestial content. | Adding a lesson or assembly whose subject is behaviour, not scenery. |
 | UI-only lesson | Omit the payload; the tutorial launcher clears an outgoing lesson scene before showing the UI-only lesson. | Teaching menus, commands, or workbench concepts. |
 
-Do not combine a fixed light with an implicit orbital provider. `LunCoEpochAPI`
-without an authored `lunco:time:epochJd` is a lint error (`epoch-api-missing-time`):
-set the epoch on the same scene root, or remove the celestial opt-in. A fixed
-light is a complete scene contract, not a temporary fallback.
+After the USD scene and queued visual/mesh projections settle,
+`scene.time.select` runs once. It selects the authored non-zero root epoch when
+present; otherwise it selects current computer UTC converted to TDB. Physics,
+celestial placement, USD animation sampling, and DEM construction wait for
+that result. Missing time for a celestial source and an invalid
+`LunCoEpochAPI` value produce runtime warnings and `epoch-api-missing-time`
+lint findings. Author a root epoch when the scene must reproduce the same
+celestial date across launches. A fixed light is a complete scene contract
+without an orbital provider.
+
+Moving scene objects use ordinary USD animation. Author their translation as
+`double3 xformOp:translate` time samples in the scene's USD asset; each sample
+time is elapsed seconds from the scene's TDB epoch multiplied by the stage's
+`timeCodesPerSecond` (USD uses 24 when the metadata is omitted). The shared USD
+animation adapter samples these values from physical presentation time, with
+BigSpace splitting for a direct Grid child. Do not add a mission-specific
+trajectory component or downloader for authored motion.
 
 For tutorial payloads, use the fixed contract for onboarding scenes such as
 `first_drive.usda`, and the ephemeris contract for `driving_basics.usda` and
@@ -157,7 +170,7 @@ runtime prim or caching an entity id.
   light; it is a separate lighting contract.
 - **Custom-shader inputs are snake_case** — the ShaderMaterial reflection binds the WGSL struct's field names (`star_density`, `point_size`, `brightness`). A camelCase `inputs:starDensity` is a dead wire: no error, no effect, and hours of "why does tuning the sky do nothing".
 - **Exposure and illuminance only mean something together.** The frame's brightness is `illuminance / 2^EV100`, so a scene that copies a `DistantLight` intensity from one file and an `exposureEv100` from another lands stops away from either. Author both on purpose: the sun prim's `inputs:intensity` and the `LunCoEnvironment` prim's `lunco:env:exposureEv100`.
-- **Celestial time is an explicit scene choice.** A `SolarSystem` reference makes body poses ephemeris-driven; `LunCoEpochAPI` makes the scene responsible for choosing the mission epoch. Author both the API and `lunco:time:epochJd` together. If the lesson needs repeatable light but not astronomy, use the fixed `DistantLight` contract instead.
+- **Celestial time comes from one scene-time policy.** After the scene transaction settles, a `SolarSystem` reference makes body poses ephemeris-driven. The policy uses a valid non-zero `lunco:time:epochJd` on the selected scene root, or current computer UTC converted to TDB when no epoch is authored. Time-dependent consumers wait for the decision. Missing or invalid authored time warns and is linted; author a root epoch for repeatable scenes.
 - **`LoadScene` path must be root-qualified** — use `lunco://scenes/luncosim/lander_ops.usda` for a shipped asset or `twin://<name>/…` for an opened Twin. Use `OpenFile` for a filesystem path.
 - **Spawn `entry_id` must be in the catalog** — an unknown id logs `unknown entry '…'` and no-ops. List first with `list_bundled`.
 - **Empty spawn path / root_prim → the `defaultPrim` sentinel**: an empty path means "the stage's default prim". A stage without `defaultPrim` is an invalid scene mount and fails visibly.

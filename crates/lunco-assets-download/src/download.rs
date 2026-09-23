@@ -18,11 +18,11 @@
 //!
 //! ## Versioning Strategies
 //!
-//! | Asset | Strategy | Example |
-//! |-------|----------|---------|
-//! | Libraries (source library) | `version` (semver) | `"4.1.0"` → `library/4.1.0/` |
+//! | Asset | Identity and integrity | Example |
+//! |-------|----------------------|---------|
+//! | Libraries (source library) | manifest `version` (semver) | `"4.1.0"` → `library/4.1.0/` |
+//! | Declared datasets | manifest `dest`, with optional `sha256` | `data/vectors.csv` |
 //! | Textures | `sha256` (content hash) | `"abc123..."` |
-//! | Ephemeris | date in filename | `target_-1024_2026-04-02.csv` |
 
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_datasets::{

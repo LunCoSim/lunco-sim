@@ -59,7 +59,8 @@ impl Plugin for LunCoSimRuntimePlugin {
         app.add_systems(
             Update,
             project_usd_policies
-                .after(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetSet),
+                .after(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetSet)
+                .before(lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets),
         );
 
         #[cfg(feature = "networking")]

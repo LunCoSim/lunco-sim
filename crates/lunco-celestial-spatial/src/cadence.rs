@@ -24,15 +24,15 @@
 //! advances together within the declared geometric error.
 //!
 //! Measured cost of solving every frame on `sandbox_scene.usda`: ~10 ms/frame
-//! across `ephemeris_update_system`, `update_solar_poses`,
-//! `trajectory_alignment_system` and `update_sun_light_system`. See
+//! across `ephemeris_update_system`, `update_solar_poses`, and
+//! `update_sun_light_system`. See
 //! `docs/architecture/42-ui-frame-discipline.md` §6.
 
 use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, KeplerOrbit};
 use lunco_celestial_spatial_core::{CelestialBodyDecl, SolarSystemRoot};
 use lunco_settings::SettingsSection;
-use lunco_time::{CelestialTime, WorldTime};
+use lunco_time::{SimulationPresentationTime, WorldTime};
 use serde::{Deserialize, Serialize};
 
 /// How much celestial angular error is acceptable before the tree is re-solved.
@@ -101,14 +101,12 @@ impl SettingsSection for CelestialCadenceSettings {
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct CelestialMotionBound {
     pub maximum_rate_rad_per_day: f64,
-    pub provider_revision: u64,
 }
 
 impl Default for CelestialMotionBound {
     fn default() -> Self {
         Self {
             maximum_rate_rad_per_day: 0.0,
-            provider_revision: 0,
         }
     }
 }
@@ -134,9 +132,6 @@ pub fn refresh_motion_bound(
     q_orbits: Query<&KeplerOrbit>,
     mut bound: ResMut<CelestialMotionBound>,
 ) {
-    let provider_revision = ephemeris
-        .as_ref()
-        .map_or(0, |e| e.provider.motion_revision());
     let provider_rate = ephemeris
         .as_ref()
         .map_or(0.0, |e| e.provider.maximum_angular_rate_rad_per_day());
@@ -158,17 +153,7 @@ pub fn refresh_motion_bound(
     }
     *bound = CelestialMotionBound {
         maximum_rate_rad_per_day: maximum_rate,
-        provider_revision,
     };
-}
-
-pub fn provider_motion_changed(
-    ephemeris: Option<Res<lunco_celestial::ephemeris::EphemerisResource>>,
-    bound: Res<CelestialMotionBound>,
-) -> bool {
-    ephemeris
-        .as_ref()
-        .is_some_and(|e| e.provider.motion_revision() != bound.provider_revision)
 }
 
 /// The epoch the celestial tree was last solved at.
@@ -189,9 +174,8 @@ pub struct CelestialSolvedEpoch {
 }
 
 /// The epoch and structural revision used by the render-only celestial sun
-/// projection. It is separate from [`CelestialSolvedEpoch`]: a detached
-/// celestial clock may move the sky while the causal body/frame hierarchy and
-/// active surface remain fixed at [`WorldTime`].
+/// projection. It follows the physical tick at the render interpolation point;
+/// the causal body/frame hierarchy remains at the integral [`WorldTime`] tick.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct CelestialPresentationSolvedEpoch {
     /// Julian date of the last sun presentation solve.
@@ -333,9 +317,9 @@ pub fn tracked_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
     lunco_core_runtime::gate::tracked("celestial_needs_solve", celestial_needs_solve)
 }
 
-/// Gate the render-only celestial sun projection using the same certified
-/// angular error budget as the causal celestial solve, but against the
-/// detached presentation epoch. Structural changes always reopen it.
+/// Gate the render-only celestial projection using the same certified angular
+/// error budget as the causal solve, against the interpolated physical sample.
+/// Structural changes always reopen it.
 pub fn presentation_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
     lunco_core_runtime::gate::tracked(
         "celestial_presentation_needs_solve",
@@ -382,7 +366,7 @@ pub(crate) fn celestial_needs_solve(
 }
 
 pub(crate) fn celestial_presentation_needs_solve(
-    celestial: Option<Res<CelestialTime>>,
+    presentation: Option<Res<SimulationPresentationTime>>,
     solved: Res<CelestialPresentationSolvedEpoch>,
     settings: Option<Res<CelestialCadenceSettings>>,
     motion: Res<CelestialMotionBound>,
@@ -396,11 +380,11 @@ pub(crate) fn celestial_presentation_needs_solve(
     if let Some(activity) = activity {
         activity.expect_open("celestial_presentation_needs_solve", step <= 0.0);
     }
-    let Some(celestial) = celestial else {
+    let Some(presentation) = presentation else {
         return true;
     };
     epoch_requires_solve(
-        celestial.epoch_jd,
+        presentation.epoch_jd,
         solved.jd,
         revision.0,
         solved.revision,
@@ -483,14 +467,14 @@ pub fn commit_celestial_epoch(
 
 /// Commit the presentation epoch only after the gated sun projection has run.
 pub fn commit_celestial_presentation_epoch(
-    celestial: Option<Res<CelestialTime>>,
+    presentation: Option<Res<SimulationPresentationTime>>,
     revision: Res<CelestialInputsRevision>,
     mut solved: ResMut<CelestialPresentationSolvedEpoch>,
 ) {
-    let Some(celestial) = celestial else {
+    let Some(presentation) = presentation else {
         return;
     };
-    solved.jd = celestial.epoch_jd;
+    solved.jd = presentation.epoch_jd;
     solved.revision = revision.0;
 }
 

@@ -52,7 +52,6 @@ members = [
     "crates/lunco-celestial-data",
     "crates/lunco-celestial-spatial-core",
     "crates/lunco-celestial-spatial",
-    "crates/lunco-celestial-presentation",
     "crates/lunco-celestial-ephemeris",
     "crates/lunco-hardware",
     "crates/lunco-mobility",

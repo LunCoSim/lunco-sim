@@ -16,7 +16,7 @@ tutorial-specific route after the task shape is clear.
 
 At startup, the application policy manifest installs
 `application.asset.lifecycle` from
-`assets/scripting/policy/tutorial_catalog_menu.rhai`. The shared text-asset
+`assets/scripting/policy/application_asset_lifecycle.rhai`. The shared text-asset
 layer emits loading and changed events for the engine JSON scope and each
 opened Twin. Rhai receives complete snapshots, parses them with the shared
 `parse_json` function, selects and validates the unique catalog, groups entries

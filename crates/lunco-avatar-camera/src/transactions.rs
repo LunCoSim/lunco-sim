@@ -15,7 +15,7 @@ use lunco_camera_core::{
     AdaptiveNearPlane, CameraZoomInput, FocusTarget, FreeFlightCamera, OrbitCamera,
     ReturnFromOrbit, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
 };
-use lunco_celestial::{CelestialBody, Spacecraft};
+use lunco_celestial::CelestialBody;
 use lunco_control_core::{IntentAnalogState, UserIntent};
 use lunco_core::on_command;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
@@ -252,7 +252,6 @@ pub(crate) fn on_focus_command(
     q_bodies: Query<&CelestialBody>,
     q_body_decls: Query<&lunco_celestial_spatial_core::CelestialBodyDecl>,
     q_body_entities: Query<(Entity, &CelestialBody)>,
-    q_sc: Query<&Spacecraft>,
     q_children: Query<&Children>,
     local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
@@ -347,8 +346,6 @@ pub(crate) fn on_focus_command(
     }
     if let Ok(body) = q_bodies.get(physical_target) {
         distance = body.radius_m * 3.0;
-    } else if let Ok(sc) = q_sc.get(cmd.target) {
-        distance = (sc.hit_radius_m as f64 * 5.0).max(100.0);
     }
 
     let (yaw, pitch, _) = cam_tf.rotation.to_euler(EulerRot::YXZ);

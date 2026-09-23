@@ -30,6 +30,10 @@ Read the focused contract when implementing one:
   In an external Twin session, verify admission with `ListToolLibraries` after
   `/api/ready`; a policy-layer handoff must re-admit standard tools when the
   classifier returns.
+  Startup admission, Bevy source publication, and runtime preparation are
+  ordered. The runtime keeps the current admitted sources and closes script
+  execution while the required classifier is temporarily unavailable during a
+  policy replacement.
 - Put a Twin-specific builder, component lint, or requirement helper in
   `<twin>/tools/<name>.rhai`. It is persisted with that Twin and must not leak
   into unrelated Twins.

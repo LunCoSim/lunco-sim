@@ -25,7 +25,7 @@ use lunco_camera_core::{
     math::{apply_scroll_zoom, camera_decay_alpha, surface_camera_angles, surface_camera_rotation},
 };
 use lunco_camera_core::{FocusTarget, ReturnFromOrbit};
-use lunco_celestial::{CelestialBody, Spacecraft};
+use lunco_celestial::CelestialBody;
 use lunco_celestial_spatial::{CelestialPresentationGrid, LeaveSurface, TeleportToSurface};
 use lunco_celestial_spatial_core::{
     LocalGravityField, surface_axes_for_grid_position, surface_axes_in_grid,
@@ -781,7 +781,6 @@ fn orbit_system(
         Query<(Entity, &CelestialPresentationGrid)>,
         Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     )>,
-    q_sc: Query<&Spacecraft>,
     q_dragging: Query<(), With<lunco_interaction_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -818,12 +817,11 @@ fn orbit_system(
             lunco_spatial::find_descendant_or_self(orbit.target, &q_children, &q_bodies)
                 .unwrap_or(orbit.target);
         let body = q_bodies.get(physical_target).ok().map(|(_, body)| body);
-        // Orbit view is a presentation concern. When a scene detaches the
-        // celestial clock, the rendered globe follows that clock while the
-        // physical body remains on WorldTime. Resolve the camera into the
-        // co-located presentation inertial anchor so it follows the visible
-        // globe. The physical ReferenceFrame remains the fallback for scenes
-        // that do not provide presentation content.
+        // Orbit view is a presentation concern. When a scene provides the
+        // render-only celestial hierarchy, resolve the camera into its
+        // co-located inertial anchor so the camera follows the rendered globe.
+        // The physical ReferenceFrame remains the fallback when no presentation
+        // content is available.
         let presentation_orbit_grid = body.and_then(|body| {
             q_presentation_and_spatial
                 .p0()
@@ -914,8 +912,6 @@ fn orbit_system(
 
         let min_dist = if let Some(body) = body {
             body.radius_m + SURFACE_ORBIT_HANDOFF_ALTITUDE_M
-        } else if let Ok(spacecraft) = q_sc.get(orbit.target) {
-            (spacecraft.hit_radius_m as f64).max(10.0)
         } else {
             10.0
         };

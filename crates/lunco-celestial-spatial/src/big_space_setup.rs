@@ -46,11 +46,11 @@
 //!         └── Other planets (simple entities)
 //! ```
 //!
-//! Each body also has a detached presentation branch below the solar grid. Its
+//! Each body also has a render presentation branch below the solar grid. Its
 //! globe presentation surface owns streamed planetary tiles only. `GlobeLod`
-//! keeps that grid separate from the physical surface grid so accelerated
-//! presentation time can move globe imagery without moving a site, terrain,
-//! rover, or surface camera.
+//! keeps that grid separate from the physical surface grid so fixed-step
+//! interpolation can smooth globe motion without changing a site's physics
+//! frame, terrain, rover, or surface camera.
 //!
 //! ## Why an inertial anchor
 //!
@@ -200,14 +200,15 @@ pub struct EarthSurfaceRoot;
 #[derive(Component)]
 pub struct MoonSurfaceRoot;
 
-/// A render-only celestial frame driven by [`CelestialTime`].
+/// A render-only celestial frame driven by
+/// [`lunco_time::SimulationPresentationTime`].
 ///
 /// Physical bodies and surface scenes stay under the [`ReferenceFrame`] tree
 /// driven by [`WorldTime`]. Globe imagery is presentation content, however:
-/// when an operator detaches the celestial clock for a time-lapse, the visible
-/// Earth/Moon must move without teleporting the physical body, terrain, or
-/// Avian frame. This marker deliberately is *not* a `ReferenceFrame`, so the
-/// causal ephemeris and body-rotation systems cannot accidentally write it.
+/// the visible Earth/Moon need interpolated poses without moving the physical
+/// body, terrain, or Avian frame. This marker deliberately is *not* a
+/// `ReferenceFrame`, so the causal ephemeris and body-rotation systems cannot
+/// accidentally write it.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct CelestialPresentationGrid {
     /// NAIF id whose position is relative to this grid's parent.
@@ -575,8 +576,8 @@ pub fn setup_big_space_hierarchy(
         ))
         .id();
 
-    // Globe imagery follows the detached celestial presentation clock. Keep it
-    // on a separate high-precision branch: the physical body, picker collider,
+    // Globe imagery follows the interpolated physical presentation sample. Keep
+    // it on a separate high-precision branch: the physical body, picker collider,
     // and surface scene remain in the causal WorldTime branch above. The
     // presentation branch must preserve the complete ephemeris ancestry: an
     // Earth child below the causal EMB would only follow the Earth-vs-EMB
@@ -647,7 +648,7 @@ pub fn setup_big_space_hierarchy(
         .id();
 
     // Earth terrain: camera-driven cube-sphere LOD (replaces the old fixed 24-tile
-    // shell). `update_globe_lod` streams tiles parented to the detached Earth
+    // shell). `update_globe_lod` streams tiles parented to the Earth
     // Globe Presentation Surface, not the physical Earth Surface Grid.
     // The authored `UsdShade` look supplies the base globe appearance. An
     // installed body-imagery dataset supplies its albedo map unless the scene

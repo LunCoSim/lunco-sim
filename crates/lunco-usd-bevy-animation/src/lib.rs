@@ -6,11 +6,11 @@
 //! plugin after that visual adapter.
 
 use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_usd_bevy_core::animation::animated_time_range;
 use lunco_usd_bevy_scene::{UsdAnimated, UsdPrimPath};
 use lunco_usd_bevy_stage::canonical::CanonicalStages;
 use lunco_usd_bevy_stage::read::{
@@ -18,7 +18,8 @@ use lunco_usd_bevy_stage::read::{
     stage_time_codes_per_second,
 };
 use lunco_usd_bevy_stage::{
-    compose_xform_order_at, resolve_bound_shader, stage_convention, UsdReadObject, UsdStageAsset,
+    compose_xform_order_at, grid_translation_d_at, resolve_bound_shader, stage_convention,
+    UsdReadObject, UsdStageAsset,
 };
 
 /// Install the USD animation planner and samplers.
@@ -36,15 +37,20 @@ impl Plugin for UsdAnimationPlugin {
         app.add_systems(
             Update,
             (
-                bind_animated_to_preview,
                 clear_animation_plans_on_stage_reload.run_if(
                     bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>,
                 ),
                 plan_usd_animation,
-                (sample_usd_animation, sample_usd_material_animation)
-                    .after(lunco_time::DomainResolveSet),
             )
                 .chain(),
+        );
+        app.add_systems(
+            PostUpdate,
+            (sample_usd_animation, sample_usd_material_animation)
+                .chain()
+                .run_if(lunco_time::scene_time_ready)
+                .after(lunco_time::SimulationPresentationTimeSet)
+                .before(bevy::transform::TransformSystems::Propagate),
         );
     }
 }
@@ -174,7 +180,7 @@ pub fn clear_animation_plans_on_stage_reload(
 
 /// Sample authored xform and visibility channels at each entity's resolved time.
 pub fn sample_usd_animation(
-    world: Res<lunco_time::WorldTime>,
+    presentation_time: Res<lunco_time::SimulationPresentationTime>,
     resolved: Res<lunco_time::ResolvedDomains>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
@@ -184,18 +190,25 @@ pub fn sample_usd_animation(
             &AnimationPlan,
             &mut Transform,
             &mut Visibility,
+            Option<&mut CellCoord>,
+            Option<&ChildOf>,
             Option<&lunco_time::TimeBinding>,
         ),
         With<UsdAnimated>,
     >,
+    grids: Query<&Grid>,
 ) {
-    for (prim, plan, mut transform, mut visibility, binding) in &mut q {
+    for (prim, plan, mut transform, mut visibility, cell, parent, binding) in &mut q {
         let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
         let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
         let reader = &reader;
-        let time = lunco_time::domain_time(&resolved, binding, &world) * plan.time_codes_per_second;
+        let Some(time_secs) = animation_time(binding, &resolved, &presentation_time) else {
+            warn_once!("[usd-animation] a bound animation domain has no resolved sample");
+            continue;
+        };
+        let time = time_secs * plan.time_codes_per_second;
         let Ok(convention) = stage_convention(reader) else {
             error!(
                 "[usd-animation] animated prim {} has invalid stage convention metadata; refusing sample",
@@ -205,10 +218,44 @@ pub fn sample_usd_animation(
         };
         if matches!(plan.xform, XformDrive::OpOrder) {
             if let Ok(Some(local)) = compose_xform_order_at(reader, &plan.path, time) {
+                let grid_pose = parent
+                    .and_then(|parent| grids.get(parent.parent()).ok())
+                    .and_then(
+                        |grid| match grid_translation_d_at(reader, &plan.path, time) {
+                            Ok(Some(position)) => Some(Ok(grid.translation_to_grid(position))),
+                            Ok(None) => None,
+                            Err(error) => Some(Err(error)),
+                        },
+                    );
+                if let Some(Err(error)) = grid_pose.as_ref() {
+                    error_once!(
+                        "[usd-animation] {} has a double-precision translation that cannot be represented by its authored xform stack: {}",
+                        plan.path.as_str(), error
+                    );
+                    continue;
+                }
                 let local = convention.local_transform(local);
-                transform.translation = local.translation;
-                transform.rotation = local.rotation;
-                transform.scale = local.scale;
+                let mut next = Transform {
+                    translation: local.translation,
+                    rotation: local.rotation,
+                    scale: local.scale,
+                };
+                if let Some(Ok((next_cell, local_translation))) = grid_pose {
+                    let Some(mut cell) = cell else {
+                        error_once!(
+                            "[usd-animation] {} is a grid-direct animated double3 transform without CellCoord",
+                            plan.path.as_str()
+                        );
+                        continue;
+                    };
+                    if *cell != next_cell {
+                        *cell = next_cell;
+                    }
+                    next.translation = local_translation;
+                }
+                if *transform != next {
+                    *transform = next;
+                }
             }
         }
         if plan.visibility {
@@ -228,7 +275,7 @@ pub fn sample_usd_animation(
 
 /// Sample authored shader and display-color animation into [`PbrLook`] intent.
 pub fn sample_usd_material_animation(
-    world: Res<lunco_time::WorldTime>,
+    presentation_time: Res<lunco_time::SimulationPresentationTime>,
     resolved: Res<lunco_time::ResolvedDomains>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
@@ -251,7 +298,11 @@ pub fn sample_usd_material_animation(
         };
         let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
         let reader = &reader;
-        let time = lunco_time::domain_time(&resolved, binding, &world) * plan.time_codes_per_second;
+        let Some(time_secs) = animation_time(binding, &resolved, &presentation_time) else {
+            warn_once!("[usd-animation] a bound animation domain has no resolved sample");
+            continue;
+        };
+        let time = time_secs * plan.time_codes_per_second;
         let color_source = if material.diffuse {
             material.shader.as_ref()
         } else if material.geom_color {
@@ -267,8 +318,11 @@ pub fn sample_usd_material_animation(
             };
             if let Some(color) = sampled {
                 let alpha = look.base_color.alpha;
-                look.base_color =
+                let next =
                     LinearRgba::new(color[0] as f32, color[1] as f32, color[2] as f32, alpha);
+                if look.base_color != next {
+                    look.base_color = next;
+                }
             }
         }
         if material.opacity {
@@ -278,51 +332,26 @@ pub fn sample_usd_material_animation(
                 "inputs:opacity",
                 time,
             ) {
-                look.base_color.alpha = opacity;
+                let mut next = look.base_color;
+                next.alpha = opacity;
                 if opacity < 1.0 && look.alpha == SurfaceAlpha::Opaque {
                     look.alpha = SurfaceAlpha::Blend;
+                }
+                if look.base_color != next {
+                    look.base_color = next;
                 }
             }
         }
     }
 }
 
-/// Bind newly projected animated prims to the shared animation preview domain.
-pub fn bind_animated_to_preview(
-    preview: Option<Res<lunco_time::AnimationPreview>>,
-    stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<CanonicalStages>,
-    mut commands: Commands,
-    q: Query<(Entity, &UsdPrimPath), (Added<UsdAnimated>, Without<lunco_time::TimeBinding>)>,
-    mut playback: Query<&mut lunco_time::Playback>,
-) {
-    let Some(preview) = preview else {
-        return;
-    };
-    let mut span: Option<(f64, f64)> = None;
-    for (entity, prim) in &q {
-        commands.entity(entity).try_insert(lunco_time::TimeBinding {
-            domain: preview.domain,
-        });
-        if let Some(stage_asset) = stages.get(&prim.stage_handle) {
-            let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
-            if let Ok(path) = SdfPath::new(prim.path.as_str()) {
-                if let Some((start, end)) = animated_time_range(&reader, &path) {
-                    span = Some(match span {
-                        Some((lo, hi)) => (lo.min(start), hi.max(end)),
-                        None => (start, end),
-                    });
-                }
-            }
-        }
-    }
-    if let (Some((start, end)), Ok(mut playback)) = (span, playback.get_mut(preview.domain)) {
-        let (start, end) = if playback.bounded() {
-            (playback.start.min(start), playback.end.max(end))
-        } else {
-            (start, end)
-        };
-        playback.start = start;
-        playback.end = end;
+fn animation_time(
+    binding: Option<&lunco_time::TimeBinding>,
+    resolved: &lunco_time::ResolvedDomains,
+    presentation_time: &lunco_time::SimulationPresentationTime,
+) -> Option<f64> {
+    match binding {
+        Some(binding) => resolved.get(binding.domain),
+        None => Some(presentation_time.sim_secs),
     }
 }

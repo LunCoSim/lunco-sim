@@ -28,16 +28,6 @@ Push heavy work off-thread or behind a cache; profile before optimizing.
 >   decision (input latency, vsync interaction, web `requestAnimationFrame`), a
 >   different axis from the per-frame-work discipline below. Don't conflate them.
 
-The celestial presentation system holds one realtime pacing request while
-`CelestialTime` advances, celestial presentation frames exist, and the
-`SceneViewport` is visible with a resolved active camera. Use that viewport
-binding as the presentation owner; do not derive cadence demand from the later
-render-side `Camera::is_active` actuation. This keeps accelerated Earth, Moon,
-and Sun samples moving smoothly when the window is unfocused. The request selects
-the bounded fixed cadence; it does not bypass vsync while focused or switch the
-host into continuous max-speed updates. It is released when the clock pauses,
-the presentation frames or viewport leave, or the scene tears down.
-
 The app ships with a real-time 3D scene, a Modelica simulator, and a
 heavyweight egui UI on top. The frame budget is shared — UI work that
 looks "cheap in isolation" still competes with the physics step and
@@ -391,23 +381,6 @@ frame (8.6 ms) with nothing changing. If a system's gate is satisfied by the
 system's own output, it is not a gate. (`lunco-usd-sim-cosim/src/lib.rs`)
 
 **Solve on a cadence when the answer changes slowly.** Ephemeris, solar poses,
-trajectory alignment, sun light and solar-frame anchoring cost ~10 ms/frame
+sun light and solar-frame anchoring cost ~10 ms/frame
 solved every frame, for increments too small to see.
 (`lunco-celestial-spatial/src/cadence.rs`)
-
-Trajectory overlays have an additional presentation boundary. Their ephemeris
-sampling and mesh rebuild run only for an active `TrajectoryView` (`is_visible &&
-user_visible`); a hidden authored orbit must not consume orbital or GPU budget.
-The sampled path owns a geometry revision, while the runtime state owns separate
-sampling, frame/provider, and presentation revisions. Mesh and fade tasks carry
-those revisions and stale results are discarded; empty or failed inputs are
-resolved once until an input revision changes. This prevents an unchanged or
-paused clock from reallocating and re-uploading trajectory buffers, and prevents
-missing frame/data from retrying every frame. An existing active curve also holds
-its stamped fade during high-rate Celestial transport, including an independently
-scaled Celestial clock. The body and frame poses continue to use the current
-epoch. Ephemeris sampling, spline tessellation, and alpha-buffer construction
-are compute tasks; the main schedule performs one non-blocking poll and commits
-only a current, prepared result. Anchored curve alignment reads the already-
-solved tracked/reference frame pose through `lunco_spatial::coords::pose_in_grid`;
-it does not evaluate ephemeris endpoints again for presentation.

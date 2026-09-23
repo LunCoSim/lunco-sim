@@ -374,8 +374,8 @@ pub fn place_celestial_bound_entities(
         // `tag_low_precision_roots` does NOT fix this — it only fires on the
         // CHILD's `Changed<ChildOf>`/`Added<Transform>`, and reparenting the
         // parent changes neither on the children. Same spawn-order window the
-        // trajectory/mission/link-beam spawn paths hit and fix the same way
-        // (trajectories.rs, missions.rs, link_beams.rs): explicitly stamp the
+        // spacecraft/link-beam spawn paths hit and fix the same way
+        // (trajectories.rs, celestial_views.rs, link_beams.rs): explicitly stamp the
         // marker on every spatial descendant here.
         stamp_low_precision_roots(entity, &q_children, &q_spatial, &mut commands);
         if let Some(mut vis) = visibility {

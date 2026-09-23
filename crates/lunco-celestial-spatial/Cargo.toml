@@ -35,14 +35,9 @@ lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 # the glyphs are built by `lunco-render-bevy`.
 #
 # KEPT: `bevy_mesh` (Mesh3d/PrimitiveTopology — render-free), `bevy_camera`
-# (Camera/Projection/Exposure/Visibility/Hdr), `bevy_light` (DirectionalLight,
-# NotShadowCaster), and `bevy_picking`.
-#
-# `bevy_picking`, NOT `mesh_picking`: the only use here is `Pickable::IGNORE` on
-# trajectory lines, a COMPONENT from picking's core. `mesh_picking` additionally
-# pulls the mesh raycast backend, which is cursor hit-testing — nothing a
-# headless server can do, and nothing this crate asks for.
-bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_light", "bevy_picking"] }
+# (Camera/Projection/Exposure/Visibility/Hdr), and `bevy_light` (DirectionalLight,
+# NotShadowCaster).
+bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_light"] }
 big_space = { workspace = true }
 # Headless astronomy and semantic frame types. This is intentionally a
 # one-way dependency: `lunco-celestial` does not depend on this adapter.
@@ -72,7 +67,6 @@ lunco-input-core = { path = "../lunco-input-core" }
 futures-lite = { workspace = true }
 serde = { workspace = true }
 # `bevy_asset`, `bevy_shader` and `uuid` are GONE: they existed only for the
-# `load_internal_asset!` + const-UUID `Handle<Shader>` of the dead trajectory
 # `MaterialExtension` (removed 2026-07-13). Nothing here holds a shader handle now.
 #
 # `ShaderLook` + `ParamValue` — the custom-shader appearance INTENT the globe tiles
@@ -88,9 +82,8 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-terrain-core = { path = "../lunco-terrain-core" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 
-# NOTE: `ureq` used to live here for an ephemeris-download path that no longer
-# exists in this crate (zero references in `src/`). Ephemeris fetching is
-# `lunco-celestial-ephemeris`'s job. Do not re-add without a call site.
+# Dataset artifact reads and provisioning use the shared asset runtime; this
+# crate does not own a downloader.
 
 [dev-dependencies]
 # `HeightGrid`, to build the minimal `SurfaceOracle` a terrain entity needs in

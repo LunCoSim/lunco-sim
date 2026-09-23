@@ -1,9 +1,7 @@
 //! Solar environment domain — the sun's direction as a co-simulation source.
 //!
 //! The lighting analog of the gravity bridge. Semantic [`SunState`] is the
-//! provider contract for physics and co-simulation. A detached celestial view
-//! can supply a separate render-only [`SunRenderPresentation`]. The render
-//! `DirectionalLight` is the projection of the selected render direction.
+//! provider contract; the render `DirectionalLight` is only its projection.
 //! This module caches the semantic direction per-entity as [`LocalSolar`] and
 //! publishes it into the co-sim graph as ordinary `SimComponent` **outputs**,
 //! so a sun-tracking model receives it through a plain output→input wire — the
@@ -22,20 +20,16 @@
 //! later, exactly as `GravityProvider` carries the gravity model — the
 //! [`LocalSolar`] cache already gives each entity its own slot for that.
 
-use bevy::{
-    math::{DQuat, DVec3},
-    prelude::*,
-};
+use bevy::{math::DQuat, prelude::*};
 
 use crate::Earthshine;
 use lunco_cosim_core::{SUN_MOUNT_X_CONNECTOR, SUN_MOUNT_Y_CONNECTOR, SUN_MOUNT_Z_CONNECTOR};
 
 /// Semantic sun state produced by the selected physical/provider model.
 ///
-/// `LocalSolar` and co-simulation ports project this resource. A detached
-/// celestial render direction is selected independently through
-/// [`SunRenderPresentation`]. `None` means the provider has not produced a
-/// valid direction for the current scene/epoch.
+/// Render lights and co-simulation ports are projections of this resource;
+/// neither is read back as a source of truth. `None` means the provider has not
+/// produced a valid direction for the current scene/epoch.
 #[derive(Resource, Debug, Clone, PartialEq, Default)]
 pub struct SunState {
     /// Unit direction from the observed site toward the sun, in the active
@@ -97,88 +91,16 @@ impl SunState {
 
 /// Render-facing snapshot of the finalized scene-sun direction.
 ///
-/// The environment boundary projects either [`SunState`] or a detached
-/// [`SunRenderPresentation`] into the light's local pose before BigSpace
-/// propagation. This resource is then published from that light's finalized
-/// `GlobalTransform`, so horizon baking and shader wiring consume the same
-/// render-space direction as Bevy's shadow extractor. It is never used as a
-/// provider input.
+/// The environment boundary projects [`SunState`] into the light's local pose
+/// before BigSpace propagation. This resource is then published from that
+/// light's finalized `GlobalTransform`, so horizon baking and shader wiring
+/// consume the same render-space direction as Bevy's shadow extractor. It is
+/// never used as a provider input.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Default)]
 pub struct SunRenderState {
     /// Unit direction toward the Sun in the canonical render/world frame.
     pub direction_to_sun_world: Option<Vec3>,
     pub revision: u64,
-}
-
-/// Render-direction selection owned by the celestial presentation producer.
-///
-/// The selection is a closed state: semantic provider direction, a complete
-/// detached celestial direction, or unavailable input. A detached selection
-/// always carries its direction, so the renderer cannot mistake missing
-/// presentation data for a request to use physical-time state. Celestial
-/// directions are expressed in the active physics frame and remain `f64` until
-/// the existing render-transform boundary. This resource never replaces
-/// [`SunState`] and is never read by physics or co-simulation consumers.
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Default)]
-pub struct SunRenderPresentation {
-    selection: SunRenderSelection,
-    pub revision: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-enum SunRenderSelection {
-    #[default]
-    Semantic,
-    Celestial(DVec3),
-    Unavailable,
-}
-
-impl SunRenderPresentation {
-    /// Publish a complete finite, nonzero celestial direction without narrowing
-    /// precision. Invalid input moves the render source to `Unavailable`.
-    pub fn publish(&mut self, direction_to_sun_active_frame: DVec3) -> bool {
-        let length_squared = direction_to_sun_active_frame.length_squared();
-        if !direction_to_sun_active_frame.is_finite()
-            || !length_squared.is_finite()
-            || length_squared < 1.0e-24
-        {
-            self.invalidate();
-            return false;
-        }
-        let direction_to_sun_active_frame = direction_to_sun_active_frame.normalize();
-        self.set_selection(SunRenderSelection::Celestial(direction_to_sun_active_frame));
-        true
-    }
-
-    /// Select the physical/provider direction for render epochs that track the
-    /// world clock or have no active surface presentation.
-    pub fn select_semantic(&mut self) {
-        self.set_selection(SunRenderSelection::Semantic);
-    }
-
-    /// Mark detached render input unavailable. The renderer reports the missing
-    /// source and never substitutes a physical-time direction.
-    pub fn invalidate(&mut self) {
-        self.set_selection(SunRenderSelection::Unavailable);
-    }
-
-    /// Clear scene-owned presentation data at teardown.
-    pub fn clear(&mut self) {
-        self.invalidate();
-    }
-
-    fn set_selection(&mut self, selection: SunRenderSelection) {
-        if self.selection != selection {
-            self.selection = selection;
-            self.revision = self.revision.wrapping_add(1);
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SunProjectionSource {
-    Semantic,
-    CelestialPresentation,
 }
 
 impl SunRenderState {
@@ -365,14 +287,13 @@ pub fn compute_local_solar(
     }
 }
 
-/// Project the selected semantic or detached render Sun direction into the
-/// unique unscoped render light's local pose.
+/// Project semantic [`SunState`] into the unique unscoped render sun's local pose.
 ///
-/// This is the only system that writes the scene light's direction. It runs
-/// before BigSpace transform propagation so the finalized light
-/// `GlobalTransform` and every shadow consumer describe the same render epoch.
-/// Zero or multiple candidate lights is a contract error for the render host;
-/// no arbitrary light is selected.
+/// This is the only system that writes the render light's direction from
+/// semantic sun state. It runs before BigSpace transform propagation so the
+/// finalized light `GlobalTransform` and every shadow consumer describe the
+/// same render epoch. Zero or multiple candidate lights is a contract error
+/// for the render host; no arbitrary light is selected.
 fn replace_sun_diagnostic(
     diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     finding: Option<lunco_core::RuntimeDiagnostic>,
@@ -393,9 +314,7 @@ pub struct SunProjectionCache {
     scene_sun: Option<Entity>,
     sun_parent: Option<Entity>,
     active_frame: Option<Entity>,
-    direction_revision: Option<u64>,
-    provider_revision: Option<u64>,
-    sun_source: Option<SunProjectionSource>,
+    sun_revision: Option<u64>,
     frame_rotation: Option<DQuat>,
     parent_rotation: Option<DQuat>,
     initialized: bool,
@@ -414,9 +333,8 @@ fn spatial_rotation(
         .map(|(_, rotation)| rotation.0)
 }
 
-pub fn project_sun_render_to_light(
-    sun: Res<SunState>,
-    presentation: Res<SunRenderPresentation>,
+pub fn project_sun_state_to_light(
+    sun: Option<Res<SunState>>,
     mount: Option<Res<lunco_core::SceneMountState>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_parents: Query<&ChildOf>,
@@ -495,50 +413,20 @@ pub fn project_sun_render_to_light(
     }
     let mut diagnostics = diagnostics;
     replace_sun_diagnostic(&mut diagnostics, None);
-    let (source, direction_to_sun) = match presentation.selection {
-        SunRenderSelection::Celestial(direction) => {
-            (SunProjectionSource::CelestialPresentation, direction)
+    let Some(direction_to_sun) = sun.as_deref().and_then(|state| state.direction_to_sun) else {
+        if active_scene {
+            replace_sun_diagnostic(
+                &mut diagnostics,
+                Some(lunco_core::RuntimeDiagnostic {
+                    code: "sun-state".to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "environment-sun".to_string(),
+                    subject: "semantic-sun".to_string(),
+                    message: "active scene has no valid semantic SunState direction".to_string(),
+                }),
+            );
         }
-        SunRenderSelection::Semantic => {
-            let Some(direction) = sun
-                .direction_to_sun
-                .and_then(SunState::normalized_direction)
-            else {
-                if active_scene {
-                    replace_sun_diagnostic(
-                        &mut diagnostics,
-                        Some(lunco_core::RuntimeDiagnostic {
-                            code: "sun-state".to_string(),
-                            severity: lunco_core::DiagnosticSeverity::Error,
-                            producer: "environment-sun".to_string(),
-                            subject: "semantic-sun".to_string(),
-                            message: "active scene has no valid semantic Sun direction".to_string(),
-                        }),
-                    );
-                }
-                return;
-            };
-            (SunProjectionSource::Semantic, direction.as_dvec3())
-        }
-        SunRenderSelection::Unavailable => {
-            if active_scene {
-                replace_sun_diagnostic(
-                    &mut diagnostics,
-                    Some(lunco_core::RuntimeDiagnostic {
-                        code: "sun-presentation".to_string(),
-                        severity: lunco_core::DiagnosticSeverity::Error,
-                        producer: "environment-sun".to_string(),
-                        subject: "celestial-presentation".to_string(),
-                        message: "render Sun direction is unavailable from its selected presentation owner".to_string(),
-                    }),
-                );
-            }
-            return;
-        }
-    };
-    let source_revision = match source {
-        SunProjectionSource::CelestialPresentation => presentation.revision,
-        SunProjectionSource::Semantic => sun.revision,
+        return;
     };
     let Some(active_frame) = active_frame else {
         if active_scene {
@@ -548,19 +436,19 @@ pub fn project_sun_render_to_light(
                     code: "physics-frame".to_string(),
                     severity: lunco_core::DiagnosticSeverity::Error,
                     producer: "environment-sun".to_string(),
-                    subject: "sun-direction".to_string(),
-                    message:
-                        "active scene has a selected Sun direction but no bound ActivePhysicsFrame"
-                            .to_string(),
+                    subject: "semantic-sun".to_string(),
+                    message: "active scene has semantic sun state but no bound ActivePhysicsFrame"
+                        .to_string(),
                 }),
             );
         }
         return;
     };
-    let invalid_irradiance = sun
-        .irradiance_lux
-        .is_some_and(|lux| !lux.is_finite() || lux < 0.0);
-    if invalid_irradiance {
+    if sun
+        .as_deref()
+        .and_then(|state| state.irradiance_lux)
+        .is_some_and(|lux| !lux.is_finite() || lux < 0.0)
+    {
         if active_scene {
             replace_sun_diagnostic(
                 &mut diagnostics,
@@ -573,11 +461,25 @@ pub fn project_sun_render_to_light(
                 }),
             );
         }
-        if source == SunProjectionSource::Semantic {
-            return;
-        }
+        return;
     }
+    let Some(direction_to_sun) = SunState::normalized_direction(direction_to_sun) else {
+        if active_scene {
+            replace_sun_diagnostic(
+                &mut diagnostics,
+                Some(lunco_core::RuntimeDiagnostic {
+                    code: "sun-state".to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "environment-sun".to_string(),
+                    subject: "semantic-sun".to_string(),
+                    message: "semantic SunState direction is non-finite or zero".to_string(),
+                }),
+            );
+        }
+        return;
+    };
     let sun_parent = parent.map(ChildOf::parent);
+    let sun_revision = sun.as_deref().map(|state| state.revision);
     let frame_changed = !projection_cache.initialized
         || projection_cache.active_frame != Some(active_frame.0)
         || lunco_spatial::coords::world_pose_changed(active_frame.0, &q_parents, &q_changed);
@@ -588,9 +490,7 @@ pub fn project_sun_render_to_light(
         });
     let sun_changed = !projection_cache.initialized
         || projection_cache.scene_sun != Some(scene_sun)
-        || projection_cache.direction_revision != Some(source_revision)
-        || projection_cache.provider_revision != Some(sun.revision)
-        || projection_cache.sun_source != Some(source)
+        || projection_cache.sun_revision != sun_revision
         || transform.is_changed()
         || light.is_changed();
     if !(frame_changed || parent_changed || sun_changed) {
@@ -611,7 +511,7 @@ pub fn project_sun_render_to_light(
                             code: "physics-frame".to_string(),
                             severity: lunco_core::DiagnosticSeverity::Error,
                             producer: "environment-sun".to_string(),
-                            subject: "sun-direction".to_string(),
+                            subject: "semantic-sun".to_string(),
                             message: format!(
                                 "ActivePhysicsFrame {:?} has no complete BigSpace pose",
                                 active_frame.0
@@ -650,7 +550,7 @@ pub fn project_sun_render_to_light(
             }
         }
     };
-    let direction_to_sun_world = frame_rotation * direction_to_sun;
+    let direction_to_sun_world = frame_rotation * direction_to_sun.as_dvec3();
     if !direction_to_sun_world.is_finite() || direction_to_sun_world.length_squared() < 1.0e-24 {
         if active_scene {
             replace_sun_diagnostic(
@@ -659,9 +559,10 @@ pub fn project_sun_render_to_light(
                     code: "sun-state".to_string(),
                     severity: lunco_core::DiagnosticSeverity::Error,
                     producer: "environment-sun".to_string(),
-                    subject: "sun-direction".to_string(),
-                    message: "selected render Sun direction is non-finite or zero after active-frame projection"
-                        .to_string(),
+                    subject: "semantic-sun".to_string(),
+                    message:
+                        "semantic SunState direction is non-finite or zero after frame projection"
+                            .to_string(),
                 }),
             );
         }
@@ -682,7 +583,7 @@ pub fn project_sun_render_to_light(
     if transform.forward().angle_between(emit_direction) > 2.0e-5 {
         transform.look_to(emit_direction, up);
     }
-    if let Some(irradiance) = sun.irradiance_lux {
+    if let Some(irradiance) = sun.as_deref().and_then(|state| state.irradiance_lux) {
         if (light.illuminance - irradiance).abs() > irradiance.abs().max(1.0) * 5.0e-3 {
             light.illuminance = irradiance;
         }
@@ -691,9 +592,7 @@ pub fn project_sun_render_to_light(
         scene_sun: Some(scene_sun),
         sun_parent,
         active_frame: Some(active_frame.0),
-        direction_revision: Some(source_revision),
-        provider_revision: Some(sun.revision),
-        sun_source: Some(source),
+        sun_revision,
         frame_rotation: Some(frame_rotation),
         parent_rotation,
         initialized: true,
@@ -716,13 +615,12 @@ fn clear_render_sun_if_scene_is_idle(
 /// Publish the render sun only after BigSpace has finalized the scene light's
 /// `GlobalTransform`.
 ///
-/// The selected render direction and the light-local projection are
-/// intentionally separate from this render snapshot. Publishing the pre-propagation
+/// The semantic provider and the light-local projection are intentionally
+/// separate from this render snapshot. Publishing the pre-propagation
 /// direction would allow terrain materials and the shadow map to observe
 /// different floating-origin render epochs during recentering.
 pub fn finalize_sun_render_state(
-    sun: Res<SunState>,
-    presentation: Res<SunRenderPresentation>,
+    sun: Option<Res<SunState>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_frames: Query<&GlobalTransform>,
     q_sun: Query<
@@ -737,15 +635,11 @@ pub fn finalize_sun_render_state(
     coordinator: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
-    let direction_to_sun = match presentation.selection {
-        SunRenderSelection::Celestial(direction) => Some(direction),
-        SunRenderSelection::Semantic => sun
-            .direction_to_sun
-            .and_then(SunState::normalized_direction)
-            .map(Vec3::as_dvec3),
-        SunRenderSelection::Unavailable => None,
-    };
-    let Some(direction_to_sun) = direction_to_sun else {
+    let Some(direction_to_sun) = sun
+        .as_deref()
+        .and_then(|state| state.direction_to_sun)
+        .and_then(SunState::normalized_direction)
+    else {
         clear_render_sun_if_scene_is_idle(&mut render_state, coordinator.as_deref());
         return;
     };
@@ -762,11 +656,7 @@ pub fn finalize_sun_render_state(
         return;
     };
 
-    // The finalized transform is the explicit f32 render boundary. The source
-    // direction and frame projection above remain in f64 until this comparison.
-    let expected = (frame_gt.rotation().as_dquat() * direction_to_sun)
-        .as_vec3()
-        .normalize_or_zero();
+    let expected = (frame_gt.rotation() * direction_to_sun).normalize_or_zero();
     let actual = -(sun_gt.rotation() * Vec3::NEG_Z).normalize_or_zero();
     if expected.length_squared() < 0.5
         || actual.length_squared() < 0.5
@@ -833,23 +723,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn celestial_render_selection_stores_a_normalized_direction() {
-        let mut presentation = SunRenderPresentation::default();
-        assert!(presentation.publish(DVec3::new(0.0, 4.0, 0.0)));
-        assert_eq!(
-            presentation.selection,
-            SunRenderSelection::Celestial(DVec3::Y)
-        );
-    }
-
-    #[test]
-    fn invalid_celestial_direction_marks_the_render_source_unavailable() {
-        let mut presentation = SunRenderPresentation::default();
-        assert!(!presentation.publish(DVec3::splat(f64::MAX)));
-        assert_eq!(presentation.selection, SunRenderSelection::Unavailable);
-    }
-
-    #[test]
     fn missing_sun_removes_cached_local_direction() {
         let mut app = App::new();
         app.add_systems(Update, compute_local_solar);
@@ -877,10 +750,9 @@ mod tests {
         mount.register_root(root, true);
         app.insert_resource(mount);
         app.init_resource::<SunState>();
-        app.init_resource::<SunRenderPresentation>();
         app.init_resource::<SunRenderState>();
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
-        app.add_systems(Update, project_sun_render_to_light);
+        app.add_systems(Update, project_sun_state_to_light);
 
         app.update();
 
@@ -1019,12 +891,7 @@ mod tests {
             direction_to_sun: Some(Vec3::NEG_Z),
             ..Default::default()
         });
-        app.init_resource::<SunRenderPresentation>();
         app.init_resource::<SunRenderState>();
-        assert!(app
-            .world_mut()
-            .resource_mut::<SunRenderPresentation>()
-            .publish(DVec3::X));
         let sun = app
             .world_mut()
             .spawn((
@@ -1033,36 +900,17 @@ mod tests {
                 DirectionalLight::default(),
             ))
             .id();
-        app.add_systems(Update, project_sun_render_to_light);
+        app.add_systems(Update, project_sun_state_to_light);
 
         app.update();
 
         let light = app.world().get::<Transform>(sun).unwrap();
-        let expected = -(frame_rotation * Vec3::X);
+        let expected = -(frame_rotation * Vec3::NEG_Z);
         assert!(
             light.forward().abs_diff_eq(expected.normalize(), 1.0e-5),
-            "celestial Sun direction must use the current f64 frame pose: got {:?}, expected {:?}",
+            "sun light must use the current f64 frame pose: got {:?}, expected {:?}",
             light.forward(),
             expected
-        );
-
-        assert!(app
-            .world_mut()
-            .resource_mut::<SunRenderPresentation>()
-            .publish(DVec3::Y));
-        app.update();
-
-        let light = app.world().get::<Transform>(sun).unwrap();
-        let expected = -(frame_rotation * Vec3::Y);
-        assert!(
-            light.forward().abs_diff_eq(expected.normalize(), 1.0e-5),
-            "updated celestial direction must drive the rendered light without replacing SunState: got {:?}, expected {:?}",
-            light.forward(),
-            expected
-        );
-        assert_eq!(
-            app.world().resource::<SunState>().direction_to_sun,
-            Some(Vec3::NEG_Z)
         );
 
         app.world_mut()
@@ -1073,7 +921,7 @@ mod tests {
 
         let light = app.world().get::<Transform>(sun).unwrap();
         assert!(
-            light.forward().abs_diff_eq(Vec3::NEG_Y, 1.0e-5),
+            light.forward().abs_diff_eq(Vec3::Z, 1.0e-5),
             "a changed frame ancestor must invalidate the cached pose: got {:?}",
             light.forward()
         );
@@ -1099,11 +947,6 @@ mod tests {
             direction_to_sun: Some(Vec3::NEG_Z),
             ..Default::default()
         });
-        app.init_resource::<SunRenderPresentation>();
-        assert!(app
-            .world_mut()
-            .resource_mut::<SunRenderPresentation>()
-            .publish(DVec3::NEG_Z));
         let sun = app
             .world_mut()
             .spawn((
@@ -1112,7 +955,7 @@ mod tests {
                 ChildOf(parent),
             ))
             .id();
-        app.add_systems(Update, project_sun_render_to_light);
+        app.add_systems(Update, project_sun_state_to_light);
 
         app.update();
 
@@ -1142,22 +985,23 @@ mod tests {
             ..Default::default()
         });
         app.init_resource::<SunRenderState>();
-        app.init_resource::<SunRenderPresentation>();
-        assert!(app
-            .world_mut()
-            .resource_mut::<SunRenderPresentation>()
-            .publish(DVec3::Y));
+        app.insert_resource(lunco_core::RuntimeDiagnostics {
+            findings: vec![lunco_core::RuntimeDiagnostic {
+                code: "sun-state".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "environment-sun".to_string(),
+                subject: "semantic-sun".to_string(),
+                message: "upstream validation failure".to_string(),
+            }],
+        });
 
         // The local Transform is deliberately stale. The render snapshot must
         // follow the finalized GlobalTransform that shadow extraction uses.
-        let sun = app
-            .world_mut()
-            .spawn((
-                Transform::IDENTITY,
-                GlobalTransform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-                DirectionalLight::default(),
-            ))
-            .id();
+        app.world_mut().spawn((
+            Transform::IDENTITY,
+            GlobalTransform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+            DirectionalLight::default(),
+        ));
         app.add_systems(PostUpdate, finalize_sun_render_state);
 
         app.update();
@@ -1166,21 +1010,10 @@ mod tests {
             .world()
             .resource::<SunRenderState>()
             .direction_to_sun_world
-            .expect("finalized celestial render direction");
-        assert!(actual.abs_diff_eq(Vec3::Y, 1.0e-6), "got {actual:?}");
-
-        app.world_mut()
-            .resource_mut::<SunRenderPresentation>()
-            .publish(DVec3::X);
-        *app.world_mut().get_mut::<GlobalTransform>(sun).unwrap() =
-            GlobalTransform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
-        app.update();
-
-        let actual = app
-            .world()
-            .resource::<SunRenderState>()
-            .direction_to_sun_world
-            .expect("updated finalized celestial render direction");
+            .expect("finalized render sun direction");
         assert!(actual.abs_diff_eq(Vec3::X, 1.0e-6), "got {actual:?}");
+        let diagnostics = app.world().resource::<lunco_core::RuntimeDiagnostics>();
+        assert_eq!(diagnostics.findings.len(), 1);
+        assert_eq!(diagnostics.findings[0].code, "sun-state");
     }
 }

@@ -2,44 +2,37 @@
 (
     defaultPrim = "Orion"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
 def Xform "Orion" (
-    doc = "Orion crew capsule marker used for spacecraft placement and mission references."
+    documentation = "Orion crew capsule."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = "LunCoCatalogAPI"
     displayName = "Orion Capsule"
 )
 {
     uniform bool lunco:spawnable = true
-    int lunco:spacecraft:ephemerisId = -1024
-    # 1000 m as authored = 1.0 km. See the note in `missions/artemis_2_mission.usda`
-    # </Artemis2Mission/Orion>, which authors 1000.0 KM for the same pick target.
-    float lunco:spacecraft:hitRadiusKm = 1.0
-
     def Sphere "Capsule"
     {
         double radius = 1.0
-        double3 xformOp:translate = (0, 2.5, 0)
+        double3 xformOp:translate = (0.0, 2.5, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(1.0, 1.0, 1.0)]
     }
-
     def Cube "Body"
     {
         double size = 1.0
-        double3 xformOp:translate = (0, 0, 0)
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
         double3 xformOp:scale = (3.0, 3.0, 3.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.2, 0.8, 0.2)]
+        color3f[] primvars:displayColor = [(0.20000000298023224, 0.800000011920929, 0.20000000298023224)]
     }
-
     def Cylinder "ServiceModule"
     {
         double radius = 1.25
         double height = 4.0
-        double3 xformOp:translate = (0, -3.5, 0)
+        double3 xformOp:translate = (0.0, -3.5, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         color3f[] primvars:displayColor = [(0.5, 0.5, 0.5)]
     }

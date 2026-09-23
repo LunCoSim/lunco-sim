@@ -236,9 +236,8 @@ impl ApiQueryProvider for QueryTelemetryHistoryProvider {
         let limit = optional_limit(params, "limit", "QueryTelemetryHistory")?;
 
         // The query label must use the same authoritative mapping as samples and
-        // events. `WorldTime` is a derived frame view; `MissionClock(SimTick)`
-        // remains correct even when several fixed steps have completed since the
-        // last rendered frame.
+        // events. Derive its epoch directly from the current fixed tick instead
+        // of the `WorldTime` frame view, which is published after the fixed loop.
         let tick = world.resource::<lunco_core_runtime::SimTick>().0;
         let epoch_jd = world.resource::<lunco_time::MissionClock>().epoch_jd(tick);
         if !epoch_jd.is_finite() {

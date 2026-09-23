@@ -1,11 +1,11 @@
 //! Generic UTF-8 text assets for small runtime-authored catalogs and policies.
 //!
 //! The asset type is intentionally language-neutral. Modelica and Rhai keep
-//! their richer loaders, while JSON/TOML catalogs can use one asynchronous
-//! Bevy path on native and wasm instead of a synchronous filesystem read or a
-//! compiled-in snapshot.
+//! their richer loaders, while small catalogs and text datasets can use one
+//! asynchronous Bevy path on native and wasm instead of synchronous file reads
+//! or compiled-in snapshots.
 
-use bevy::asset::{io::Reader, AssetEvent, AssetLoadFailedEvent, AssetLoader, LoadContext};
+use bevy::asset::{AssetEvent, AssetLoadFailedEvent, AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -18,7 +18,7 @@ pub struct TextAsset {
     pub text: String,
 }
 
-/// Loader for small UTF-8 catalog/configuration files.
+/// Loader for UTF-8 text assets.
 #[derive(Default, TypePath)]
 pub struct TextAssetLoader;
 
@@ -41,7 +41,7 @@ impl AssetLoader for TextAssetLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["json", "toml"]
+        &["json", "toml", "csv"]
     }
 }
 
@@ -118,7 +118,7 @@ impl TextAssetCatalog {
         self.ready
     }
 
-    /// All discovered JSON/TOML text assets in the engine library and open Twins.
+    /// All discovered JSON/TOML catalog assets in the engine library and open Twins.
     pub fn entries(&self) -> &[TextAssetEntry] {
         &self.entries
     }

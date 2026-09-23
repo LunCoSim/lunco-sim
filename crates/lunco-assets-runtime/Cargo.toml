@@ -9,6 +9,7 @@ description = "Bevy asset sources, discovery, libraries, and authored text runti
 anyhow = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-core = { path = "../lunco-core" }
 lunco-settings = { path = "../lunco-settings" }

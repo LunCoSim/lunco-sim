@@ -52,7 +52,7 @@ lunco_hooks::declare_hook! {
 lunco_hooks::declare_hook! {
     id: APPLICATION_ASSET_HOOK,
     owner: "lunco-assets-runtime",
-    description: "Project a changed application or Twin text asset into authored application UI contributions.",
+    description: "Select scene dataset text assets and project application or Twin text assets into generic UI contributions.",
     signature: [event: String, ctx: Map],
     output: Map,
     deterministic: false,
@@ -436,6 +436,37 @@ pub fn handle_application_json_scope_changed(
     );
 }
 
+/// Let the application asset policy select dataset text assets required by the
+/// newly completed scene.
+pub fn handle_application_scene_asset_lifecycle(
+    trigger: On<lunco_core::SceneTransitionCompleted>,
+    mut commands: Commands,
+) {
+    let (event, path, root_prim) = match &trigger.event().transition {
+        lunco_core::SceneTransition::Load { path, root_prim }
+        | lunco_core::SceneTransition::Restart {
+            path, root_prim, ..
+        } => ("scene_loaded", Some(path.clone()), Some(root_prim.clone())),
+        lunco_core::SceneTransition::Clear => ("scene_cleared", None, None),
+    };
+    let payload = HookValue::map([
+        ("path", path.clone().map_or(HookValue::Unit, HookValue::str)),
+        (
+            "root_prim",
+            root_prim.map_or(HookValue::Unit, HookValue::str),
+        ),
+    ]);
+    apply_application_asset_policy(
+        event,
+        "application:scene-assets",
+        None,
+        None,
+        path.unwrap_or_default(),
+        payload,
+        &mut commands,
+    );
+}
+
 fn asset_menu_provider(
     twin_id: Option<lunco_workspace::TwinId>,
     twin_name: Option<&str>,
@@ -484,20 +515,20 @@ fn apply_application_asset_policy(
         APPLICATION_ASSET_HOOK,
         &[HookValue::str(event.to_owned()), context],
     );
-    let menus = match result {
-        None => Ok(Vec::new()),
-        Some(Ok(value @ HookValue::Map(_))) => parse_script_workbench_menus(&value),
+    let actions = match result {
+        None => Ok((Vec::new(), Vec::new())),
+        Some(Ok(value @ HookValue::Map(_))) => parse_application_asset_actions(&value),
         Some(Ok(value)) => Err(format!(
             "asset lifecycle policy returned {}, expected map",
             value.type_name()
         )),
         Some(Err(error)) => Err(error.to_string()),
     };
-    let menus = match menus {
-        Ok(menus) => menus,
+    let (menus, dataset_text_artifacts) = match actions {
+        Ok(actions) => actions,
         Err(error) => {
             warn!("[application-assets] `{provider}` policy failed: {error}");
-            Vec::new()
+            (Vec::new(), Vec::new())
         }
     };
     commands.trigger(
@@ -507,6 +538,53 @@ fn apply_application_asset_policy(
             menus,
         },
     );
+    for id in dataset_text_artifacts {
+        commands.trigger(lunco_assets_runtime::ReadDatasetTextArtifact { id });
+    }
+}
+
+fn parse_application_asset_actions(
+    value: &HookValue,
+) -> Result<
+    (
+        Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>,
+        Vec<String>,
+    ),
+    String,
+> {
+    let menus = parse_script_workbench_menus(value)?;
+    let artifacts = match value.get("dataset_text_artifacts") {
+        None => Vec::new(),
+        Some(HookValue::Array(items)) => {
+            if items.len() > 64 {
+                return Err("one policy result may request at most 64 dataset text assets".into());
+            }
+            let mut seen = HashSet::new();
+            let mut artifacts = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                let HookValue::Str(id) = item else {
+                    return Err(format!(
+                        "dataset_text_artifacts[{index}] must be a dataset id string, got {}",
+                        item.type_name()
+                    ));
+                };
+                if id.trim().is_empty() {
+                    return Err(format!("dataset_text_artifacts[{index}] must not be empty"));
+                }
+                if seen.insert(id.clone()) {
+                    artifacts.push(id.clone());
+                }
+            }
+            artifacts
+        }
+        Some(other) => {
+            return Err(format!(
+                "`dataset_text_artifacts` must be an array, got {}",
+                other.type_name()
+            ));
+        }
+    };
+    Ok((menus, artifacts))
 }
 
 fn parse_script_workbench_menus(
@@ -974,10 +1052,9 @@ fn rebuild_active_policy_registry(
     let active = effective_policy_definitions(registry);
     registry.policies = active.values().cloned().collect();
 
-    // Reconcile only the seams whose effective implementation changed. A
-    // Twin load commonly shadows the application layer with the same policy
-    // set; tearing down and rebuilding every hook here used to create one
-    // asset-admission wave per intermediate registry generation.
+    // Reconcile only the seams whose effective implementation changed. Compare
+    // callable identity rather than wrapper registration: restoring a retained
+    // lower layer wraps its same callable in a fresh registration.
     for id in ids {
         let Some(_definition) = active.get(&id) else {
             lunco_hooks::unregister(&id);
@@ -986,10 +1063,15 @@ fn rebuild_active_policy_registry(
         };
         let desired = layer_hook(registry, &id);
         let current = lunco_hooks::get(&id);
-        let same_registration = desired
-            .as_ref()
-            .zip(current.as_ref())
-            .is_some_and(|(desired, current)| Arc::ptr_eq(&desired.0, current));
+        let same_registration =
+            desired
+                .as_ref()
+                .zip(current.as_ref())
+                .is_some_and(|(desired, current)| {
+                    desired.0.backend == current.backend
+                        && desired.0.deterministic == current.deterministic
+                        && Arc::ptr_eq(&desired.0.hook, &current.hook)
+                });
         if !same_registration {
             if let Some((hook, _)) = desired.as_ref() {
                 lunco_hooks::register(copy_registered_hook(hook));
@@ -1208,11 +1290,10 @@ pub fn project_policies(
         })
         .into_values()
         .collect::<Vec<_>>();
-    let old_ids = all_policy_ids(registry);
-    for id in old_ids {
-        lunco_hooks::unregister(&id);
-        lunco_hooks::unbind_policy(&id);
-    }
+    // Keep unrelated active hooks registered while the USD layer changes. This
+    // projection runs on source-asset events as well as stage edits; clearing
+    // the global hook registry first made unchanged application policies
+    // briefly unavailable to concurrent source admission.
     registry.usd_policies.clear();
     registry.usd_hooks.clear();
     registry.usd_bindings.clear();

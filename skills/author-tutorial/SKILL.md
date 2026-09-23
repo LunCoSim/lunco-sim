@@ -39,7 +39,7 @@ examples under `assets/tutorials/`.
 
 The `track` value determines the submenu containing the lesson. Reuse an
 existing track when the lesson belongs to that learning path. The Rhai policy
-at `assets/scripting/policy/tutorial_catalog_menu.rhai` discovers the unique
+at `assets/scripting/policy/application_asset_lifecycle.rhai` discovers the unique
 marked catalog from generic asset-scope events and uses the shared `parse_json`
 function; do not add tutorial-specific Rust loading or menu code.
 
@@ -92,10 +92,13 @@ submits a `SceneTransitionIntent`; the USD owner resolves and composes it, and
 the generic scenario driver waits for the completion/readiness edge.
 
 Use standard USD composition and schemas: `subLayers`, `references`,
-`payloads`, `UsdPhysics`, and `UsdLux`. For a celestial lesson, author an
-explicit epoch together with the celestial payload. For a basic or UI lesson,
-author a fixed `DistantLight` or omit the world. Do not add tutorial-specific
-API schemas or repair missing authored facts with runtime defaults.
+`payloads`, `UsdPhysics`, and `UsdLux`. For a repeatable celestial lesson,
+author a non-zero epoch on the scene root with the celestial payload. Otherwise
+the startup-installed scene-time policy selects current computer UTC converted
+to TDB after the scene and its queued projections settle. Time-dependent
+consumers wait for that result. Missing time with celestial sources is reported
+by runtime warning and lint. For a basic or UI lesson, author a fixed
+`DistantLight` or omit the world. Do not add tutorial-specific API schemas.
 
 ## Test without a Rust rebuild
 

@@ -400,6 +400,7 @@ impl Plugin for LunCoSimSimulationPlugin {
         // installing it only in the headless constructor leaves the windowed
         // production app with a missing-resource panic during its first update.
         app.add_plugins(lunco_assets_datasets::DatasetRegistryPlugin);
+        app.add_plugins(lunco_assets_runtime::DatasetArtifactPlugin);
         app.init_resource::<InputBindingsDefaults>()
             .add_systems(Update, load_input_bindings_defaults);
 
@@ -580,11 +581,10 @@ impl Plugin for LunCoSimSimulationPlugin {
         // Core (not GUI-gated): the headless server needs the collider for
         // deterministic physics, and the crate links no render code.
         app.add_plugins(lunco_usd_terrain::UsdTerrainPlugin);
-        // A site-authored mission epoch is part of scene admission, not a late
-        // terrain side effect. Celestial projection must seed the causal clock
-        // before terrain starts its DEM/georef build; otherwise the first
-        // renderable terrain is produced at the default epoch and the sun then
-        // jumps when the authored epoch arrives.
+        // Scene-time selection runs at the settled scene-transition boundary.
+        // Until that result resets the time spine, celestial projection and
+        // DEM/georeference construction stay gated; the first consumers then
+        // share the selected scene epoch.
         app.configure_sets(
             Update,
             (

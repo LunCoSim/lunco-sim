@@ -26,14 +26,12 @@
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
 use lunco_avatar_camera_core::{CurrentRegionArrival, OrbitUserInput, OrbitViewHistory};
-use lunco_camera_core::FocusTarget;
 use lunco_camera_core::{
     AdaptiveNearPlane, CameraUpdateSet, FreeFlightCamera, OrbitCamera, SpringArmCamera,
     SurfaceRelativeMode,
 };
-use lunco_celestial::{CelestialBody, Spacecraft};
 use lunco_control_core::{
-    AcquireControl, ControlLink, IntentAnalogState, IntentState, ReleaseControlSource, UserIntent,
+    AcquireControl, ControlLink, IntentAnalogState, ReleaseControlSource, UserIntent,
 };
 use lunco_core::{on_command, register_commands};
 use lunco_core_session::commands::UpdateProfile;
@@ -391,63 +389,6 @@ fn is_vessel_control_endpoint(
         .is_ok_and(|surface| !surface.values.is_empty())
 }
 
-/// Raycasts possession against actual collider geometry.
-///
-/// Uses Avian3D SpatialQuery to hit real mesh colliders, not invisible spheres.
-/// Walks up the parent chain to find the owning vessel control endpoint for
-/// possession. An avatar endpoint is never a vessel target.
-/// Celestial bodies still use sphere intersection (they have no colliders).
-/// Plain-click dispatcher: routes a left-click on a world entity to one of
-/// two typed commands.
-///
-/// | Hit                         | Command          |
-/// |-----------------------------|------------------|
-/// | opened input-port surface   | `AcquireControl`  |
-/// | `CelestialBody`             | `FocusTarget`    |
-/// | everything else             | no action        |
-///
-/// Idempotency lives in each observer (no-op if state already matches).
-/// `DragModeActive` blocks clicks while a transform gizmo is up so the user
-/// can drag a handle without flipping the camera.
-/// Whether a plain left-click may focus a **celestial body** (the analytic
-/// hit-sphere branch of [`avatar_raycast_possession`]).
-///
-/// **OFF, deliberately — TODO: fix the occlusion test and turn this back on.**
-///
-/// # The bug this switches off
-///
-/// Standing on the surface at a site twin (summer-space-school), every click that
-/// did not land on a rover flung the camera into lunar orbit. The body hit-sphere
-/// is the Moon itself — radius 1737 km, centred below your feet — so a
-/// surface camera's ray ALWAYS intersects it. The only thing that was ever meant to
-/// stop that is the occlusion test above: `min_t` starts at `click.hit.depth` so the
-/// ground shadows the sphere.
-///
-/// That test silently stopped working for DEM terrain. `min_t` falls back to
-/// `f32::INFINITY` when `click.hit.position` is `None`, and a streamed terrain tile
-/// can never produce a mesh hit: `stream_viz.rs` bakes LOD tile meshes with
-/// `RenderAssetUsages::RENDER_WORLD` only ("picking rides the oracle"), so
-/// `MeshPickingPlugin` has no CPU vertex data to hit-test. The ground is therefore
-/// invisible to picking, `min_t` stays infinite, and the Moon wins every click —
-/// exactly the leak the comment above documents for Earth, via a route it did not
-/// anticipate.
-///
-/// # The real fix (why this is a switch and not a patch)
-///
-/// Occlusion must not depend on a mesh pick. The analytic spheres should be tested
-/// against the terrain the same way every other placement tool already does — cast
-/// the click ray at the surface oracle (`lunco_terrain_surface::GridSurfaceQuery::raycast`,
-/// which the generic placement tools use) and fold that distance into
-/// `min_t` before the sphere loop. That fixes Earth-through-the-ground too, and stops
-/// the behaviour depending on whether a terrain happens to be tile-streamed.
-///
-/// Doing it here means giving this observer a `GridSurfaceQuery`, which pulls
-/// `lunco-terrain-surface` into `lunco-avatar`'s dependency set — a call the crate
-/// boundary owner should make, not something to slip into a bug fix. Until then:
-/// off. Focus is still reachable through the `FocusTarget` command and the
-/// `focus_target` API/MCP verb; only the click gesture is suppressed.
-const CELESTIAL_CLICK_FOCUS: bool = false;
-
 #[derive(bevy::ecs::system::SystemParam)]
 /// Shared scene-click mode and egui gate for the avatar pointer observer.
 pub struct SceneInteractionGate<'w> {
@@ -456,26 +397,19 @@ pub struct SceneInteractionGate<'w> {
     input_bindings: Res<'w, lunco_input_core::InputBindingsSettings>,
 }
 
+/// Plain scene clicks acquire control for a hit entity whose authored hierarchy
+/// resolves to a valid input-port endpoint. Camera focus remains an explicit
+/// command; a model's domain label does not make it possessable.
 pub fn avatar_raycast_possession(
-    // Driven by bevy_picking: a global `On<Pointer<Click>>` observer. The
-    // egui-vs-scene guard is `EguiFocus.wants_pointer` (via `scene_click_ray`) —
-    // a global flag, fed by the workbench's egui-authoritative `pointer_over_scene`
-    // signal, so a click on any real chrome is stood down here even though this
-    // global observer can fire on a scene entity behind the panel.
     mut click: On<bevy::picking::events::Pointer<bevy::picking::events::Click>>,
     keys: Res<ButtonInput<KeyCode>>,
-    camera_q: Query<
-        (&Camera, &GlobalTransform, Entity, &IntentState),
-        (With<Embodiment>, With<LocalEmbodiment>),
-    >,
+    local_avatar: Query<Entity, (With<Embodiment>, With<LocalEmbodiment>)>,
     scene_interaction: SceneInteractionGate,
     drag_mode_active: Res<lunco_interaction_core::DragModeActive>,
     spawn_tool_active: Res<lunco_interaction_core::SpawnToolActive>,
     terrain_tool_active: Res<lunco_interaction_core::TerrainToolActive>,
     armed_script_tool: Res<lunco_interaction_core::ArmedScriptTool>,
     mut commands: Commands,
-    q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
-    q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
     q_input_ports: Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
     q_parents: Query<&ChildOf>,
     q_vehicle_roots: Query<
@@ -489,142 +423,45 @@ pub fn avatar_raycast_possession(
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
     use bevy::picking::pointer::PointerButton;
-    // Left button only.
     if click.button != PointerButton::Primary {
         return;
     }
-    // Authored policy and the possession resolver share the semantic pointer
-    // map. Possession runs only when ordinary selection is the sole intent, so
-    // overlapping bindings cannot make both listeners consume one gesture.
     let intents = scene_interaction.input_bindings.pointer_intents(
         "primary",
         keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
         keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
         keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
     );
-    if !scene_interaction.mode.possession_owns_pointer(&intents) {
+    if !scene_interaction.mode.possession_owns_pointer(&intents)
+        || drag_mode_active.active
+        || spawn_tool_active.0
+        || terrain_tool_active.0
+        || armed_script_tool.armed()
+    {
         return;
     }
-    let Some((camera, cam_gtf, avatar_entity, _intents)) = camera_q.single().ok() else {
-        return;
-    };
-    // Mid-drag on a transform gizmo: don't flip the camera under the user.
-    if drag_mode_active.active {
-        return;
-    }
-    // Spawn placement tool armed: clicks place objects, don't possess.
-    if spawn_tool_active.0 {
-        return;
-    }
-    // Terrain brush armed: clicks sculpt the terrain, don't possess.
-    if terrain_tool_active.0 {
-        return;
-    }
-    // A script tool is armed: that click belongs to the tool, don't possess.
-    if armed_script_tool.armed() {
-        return;
-    }
-    // This observer handles the plain click now (it passed every guard above), so
-    // stop the auto-propagation to ancestor entities — otherwise a global
-    // observer re-fires once per ancestor. The analytic spacecraft/celestial
-    // sphere tests below depend on the ray, not on `click.entity`, so they'd
-    // re-trigger `AcquireControl`/`FocusTarget` for every ancestor in the chain
-    // (we must not gate this on a *mesh* hit being found, the earlier bug).
     click.propagate(false);
-
-    // Shared egui-vs-scene guard + camera ray (replaces the old
-    // `hit.position.is_none()` chrome check). Returns `None` on an egui-chrome
-    // click; the ray drives the analytic hit-sphere tests (celestial bodies /
-    // spacecraft, which have no pickable mesh) alongside the mesh pick.
-    let Some(ray) = lunco_viewport_core::scene_click_ray(
-        scene_interaction.egui_focus.wants_pointer,
-        camera,
-        cam_gtf,
-        click.pointer_location.position,
-    ) else {
+    if scene_interaction.egui_focus.wants_pointer {
+        return;
+    }
+    let Some(avatar_entity) = local_avatar.single().ok() else {
         return;
     };
-
-    // The mesh the pick resolved to (rover, prop, ground, …). `hit.depth` is
-    // the along-ray distance to compare against the analytic spheres below.
-    // Depth is recorded for ANY real mesh hit, clickable or not. Occlusion is a
-    // geometric fact, not a property of being click-targetable: the terrain has no
-    // `SelectableRoot`, but it is still solid, and a click on it must still shadow
-    // the analytic spheres below. Coupling the two (recording `depth` only when a
-    // root was found) left `min_t = INFINITY` on every ground click, so the Earth
-    // hit-sphere — which a camera standing on the surface ALWAYS intersects —
-    // passed `t < min_t` and the click "leaked" through the ground into a
-    // `FocusTarget` on the planet.
-    let mut min_t = if click.hit.position.is_some() {
-        click.hit.depth
-    } else {
-        f32::INFINITY
-    };
-
-    let control_target = find_control_owner_from_hit(
+    let Some(target) = find_control_owner_from_hit(
         click.entity,
         &q_parents,
         &q_input_ports,
         &q_vehicle_roots,
         &q_preview_only,
         &q_ground,
-    );
-
-    // Spacecraft hit-spheres (no real colliders) — possessable, not selectable.
-    let mut spacecraft_hit: Option<Entity> = None;
-    for (entity, gtf, sc) in q_spacecraft.iter() {
-        let oc = ray.origin - gtf.translation();
-        let b = oc.dot(ray.direction.as_vec3());
-        let c = oc.dot(oc) - sc.hit_radius_m.powi(2);
-        let discr = b * b - c;
-        if discr >= 0.0 {
-            let t = -b - discr.sqrt();
-            if t > 0.0 && t < min_t {
-                min_t = t;
-                spacecraft_hit = Some(entity);
-            }
-        }
-    }
-
-    // Celestial bodies — focus only (orbit-distance scale).
-    //
-    // TEMPORARILY DISABLED. See `CELESTIAL_CLICK_FOCUS`.
-    let mut body_hit: Option<Entity> = None;
-    if CELESTIAL_CLICK_FOCUS {
-        for (entity, gtf, body) in q_bodies.iter() {
-            let oc = ray.origin - gtf.translation();
-            let b = oc.dot(ray.direction.as_vec3());
-            let c = oc.dot(oc) - (body.radius_m as f32).powi(2);
-            let discr = b * b - c;
-            if discr >= 0.0 {
-                let t = -b - discr.sqrt();
-                if t > 0.0 && t < min_t {
-                    min_t = t;
-                    spacecraft_hit = None;
-                    body_hit = Some(entity);
-                }
-            }
-        }
-    }
-
-    if let Some(target) = body_hit {
-        commands.trigger(FocusTarget {
-            camera: Some(avatar_entity),
-            target,
-        });
-    } else if let Some(target) = spacecraft_hit {
-        commands.trigger(AcquireControl {
-            source: Some(avatar_entity),
-            target,
-            bind_camera: true,
-        });
-    } else if let Some(target) = control_target {
-        commands.trigger(AcquireControl {
-            source: Some(avatar_entity),
-            target,
-            bind_camera: true,
-        });
-    }
+    ) else {
+        return;
+    };
+    commands.trigger(AcquireControl {
+        source: Some(avatar_entity),
+        target,
+        bind_camera: true,
+    });
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────

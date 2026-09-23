@@ -364,9 +364,8 @@ impl Plugin for LunCoSimUiPlugin {
                     }
                 },
             )
-            // The sky clock remains native egui because the deliberately minimal
-            // HUI contract has no equivalent text-input semantics for its UTC seek
-            // field. Its state still flows through the typed SetClock command.
+            // The physical sky-time readout remains native egui because the
+            // deliberately minimal HUI contract does not provide its overlay layout.
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (

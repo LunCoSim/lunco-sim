@@ -24,7 +24,6 @@
 //! ```text
 //! ~/.cache/lunco/             # Shared across ALL worktrees and Twins
 //! ├── textures/               # Large binaries (earth.jpg, moon.png)
-//! ├── ephemeris/              # JPL Horizons CSVs
 //! ├── remote/                 # HTTP-downloaded assets
 //! └── processed/              # AssetProcessor output
 //! ```
@@ -315,7 +314,6 @@ pub fn temp_dir() -> PathBuf {
 ///
 /// # Categories
 /// - `textures` — Generated or downloaded textures (Earth, Moon, terrain maps)
-/// - `ephemeris` — JPL Horizons CSV ephemeris data
 /// - `remote` — HTTP-downloaded assets with integrity hashes
 /// - `processed` — Preprocessed asset output (optimized USD, compressed textures)
 /// - `modelica` — Modelica compilation output (`.cache/modelica/`)
@@ -333,14 +331,6 @@ pub fn cache_subdir(name: &str) -> PathBuf {
 /// fallback — authored content names that address, never this directory.
 pub fn textures_dir() -> PathBuf {
     cache_subdir("textures")
-}
-
-/// Returns the `ephemeris` subdirectory within the cache.
-///
-/// Shorthand for `cache_subdir("ephemeris")`. Used by JPL Horizons
-/// download systems and ephemeris lookup.
-pub fn ephemeris_dir() -> PathBuf {
-    cache_subdir("ephemeris")
 }
 
 /// Returns the `remote` subdirectory within the cache.

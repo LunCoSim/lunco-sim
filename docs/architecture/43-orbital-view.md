@@ -1,19 +1,16 @@
-# 43 — Celestial bodies, anchors, and orbital views
+# 43 — Celestial bodies and orbital views
 
 > Status: Active · Audience: contributors adding celestial bodies, sites,
-> spacecraft, trajectories, or body-relative views.
+> spacecraft, or body-relative views.
 
-`lunco-celestial` owns the solar-system semantic model. `lunco-celestial-
-ephemeris` supplies the concrete ephemeris provider. The
-`lunco-celestial-spatial` adapter projects those semantics into the scene
-hierarchy. Its reusable frame lookup and surface-coordinate contracts live in
+`lunco-celestial` owns natural-body facts, reference frames, and analytic
+propagation contracts. `lunco-celestial-ephemeris` supplies the built-in
+Sun/Earth/Moon analytic model. `lunco-celestial-spatial` projects those facts
+into BigSpace. Reusable frame lookup and surface-coordinate contracts live in
 `lunco-celestial-spatial-core`, so camera, avatar, networking, telemetry, and
-USD projection consumers do not install the terrain/globe/link runtime merely
-to read or publish a celestial fact. The core also carries authored mission
-declarations, the solar-tracking marker, and Wi-Fi endpoint contracts; the
-runtime adapter alone samples trajectories, updates poses, and projects radio
-state. USD authors the physical intent; the engine resolves it into the
-existing reference-frame hierarchy.
+USD projection consumers do not install terrain/globe/link runtime merely to
+read or publish a celestial fact. USD owns scene composition and authored
+motion; Rhai owns any scene-specific asset selection.
 
 ## Body catalog
 
@@ -43,7 +40,34 @@ User-facing components describe physical intent:
 - `GeodeticAnchor` places a point on a named body's surface;
 - `KeplerOrbit` describes a body-centred orbit;
 - `LibrationAnchor` describes an Earth–Moon/Sun–body libration point;
-- `MissionTrajectoryDecl` selects an inertial or body-fixed trajectory view.
+Natural bodies are evaluated from the shared `EphemerisResource`; moving scene
+objects use ordinary USD time-sampled transforms. A model's catalog and geometry
+do not make it a control target: possession follows its authored control surface,
+and camera framing operates on the requested scene entity.
+
+### Authored scene motion
+
+A moving scene object is an ordinary `UsdGeomXformable` prim with a standard
+`double3 xformOp:translate` time-sample channel. A long mission path may live in
+a separate USD asset referenced by the scene; the referenced prim owns its
+samples and remains addressable through normal USD composition.
+
+`UsdAnimationPlugin` samples unbound USD animation from
+`SimulationPresentationTime`, derived from completed physical ticks. The
+presentation sample stays between completed states and holds when the physical
+clock pauses. After the scene and queued projections settle, the scene-time
+policy uses the TDB epoch authored on the physical scene root, or current
+computer UTC converted to TDB when the root has no epoch. Time-sampled motion
+waits for that selection. Author `LunCoEpochAPI` and its non-zero
+`lunco:time:epochJd` for a repeatable sample origin. USD time codes map to elapsed
+seconds through the stage's `timeCodesPerSecond` metadata (24 when omitted by
+USD); authored sample codes are elapsed seconds multiplied by that rate.
+Keep source timestamps and state values in USD's native double precision.
+For a moving prim directly beneath the world `Grid`, keep translation in a
+`double3 xformOp:translate`; the USD projection splits that f64 position into
+BigSpace cells before narrowing the cell-local render transform. More complex
+double-precision transform stacks that cannot be split without losing their
+meaning fail visibly at projection.
 
 `FrameTree` is the f64 hub-and-spoke conversion layer. It converts through the
 solar inertial frame and requires the epoch, body registry, and ephemeris.
@@ -57,10 +81,10 @@ The concrete hierarchy is:
 ```text
 WorldRoot / Solar inertial
 ├── body inertial grid (non-rotating)
-│   └── spacecraft and inertial trajectories
+│   └── spacecraft and other inertial scene objects
 └── body-fixed grid (rotates with IAU body rotation)
     └── surface grid
-        └── terrain, ground stations, rovers, surface trajectories
+        └── terrain, ground stations, rovers
 ```
 
 The body entity is an identity child of its body-fixed grid. The grid, not the
@@ -69,27 +93,10 @@ frame to one unique concrete grid and fails closed for missing/duplicate
 declarations.
 
 Surface terrain and rovers use the body's body-fixed frame. A star-fixed
-camera or orbit trajectory uses the body's inertial sibling. A view request
-names the semantic target/frame; camera and placement systems resolve the grid
-and use the common f64 conversion/migration path.
-
-Orbit lines are presentation views, not an implicit consequence of loading a
-celestial body. USD controls whether a trajectory is user-visible, and the
-trajectory owner samples ephemeris only while the view is active. Its mesh and
-per-vertex fade projections are change-gated. The path owns the committed
-geometry revision; runtime state owns the view, frame/provider, and presentation
-revisions. Every compute result carries those revisions and is discarded when
-stale. Missing or empty data is an explicit failed/empty state, not a per-frame
-retry. When the Celestial domain enters high-rate transport, including through
-an independent Celestial clock scale, an already-sampled active curve and its
-fade buffer are held while body/frame alignment follows the current epoch; a
-high-rate clock therefore cannot trigger periodic trajectory geometry or
-color-buffer rebuilds. Sampling, spline tessellation, and alpha construction
-happen in compute tasks; the UI/update schedule only performs non-blocking polls
-and commits current prepared buffers. Anchored alignment uses the existing
-BigSpace `pose_in_grid` machinery to read the current tracked/reference frame
-relationship, so the presentation path does not perform another orbital
-propagation.
+camera or inertially moving scene object uses the body's inertial sibling.
+Camera and placement systems resolve the semantic frame and use the common f64
+conversion/migration path. Orbital camera views remain avatar presentation
+state; moving scene objects use the USD animation path above.
 
 ## Orbital camera poses
 
@@ -132,3 +139,6 @@ reinterpreted.
 
 Do not add a second body catalog, cached rotation-rate copy, raw f32 absolute
 position, guessed grid parent, or fallback for missing ephemeris data.
+
+The production scene gate exercises authored double-precision USD animation,
+its BigSpace cell split, and its physical-clock pause behavior.

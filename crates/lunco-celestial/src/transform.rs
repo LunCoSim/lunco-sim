@@ -374,10 +374,6 @@ mod tests {
         fn maximum_angular_rate_rad_per_day(&self) -> f64 {
             std::f64::consts::TAU / 365.25
         }
-
-        fn motion_revision(&self) -> u64 {
-            0
-        }
     }
 
     /// The real catalog — the stub supplies POSITIONS, the registry supplies the
@@ -541,10 +537,6 @@ mod tests {
 
             fn maximum_angular_rate_rad_per_day(&self) -> f64 {
                 0.0
-            }
-
-            fn motion_revision(&self) -> u64 {
-                0
             }
         }
 

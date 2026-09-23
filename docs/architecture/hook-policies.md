@@ -118,16 +118,24 @@ policy to install successfully. Its context carries the stable `provider`, the
 provide `has_json_assets`; changed events provide the complete array of
 `{asset_uri, text, error}` records for that scope. Both contexts include the
 asset owner's canonical `asset_root_uri` for scope-relative references.
-`parse_json(text)` is shared
-by the world-bound Rhai engine and Rhai policy hooks. Rhai returns
-`#{ menus: [...] }`; Rust validates the generic menu tree, the workbench
-replaces that provider's contribution, and selected actions route through the
-existing Rhai tool hook. Twin contributions are cleared on `TwinClosed`, and a
-late contribution for an already-closed Twin is discarded. An absent optional
-hook clears its contribution; a fault or malformed menu is warned and clears
-that provider instead of retaining stale UI. This is the startup-to-menu path
-used by the authored tutorial catalog policy, so no Rust tutorial menu or
-catalog parser is needed.
+`parse_json(text)` is shared by the world-bound Rhai engine and Rhai policy
+hooks. Rhai returns `#{ menus: [...], dataset_text_artifacts: [...] }`. The
+optional `dataset_text_artifacts` array contains declared dataset ids to read.
+The scene completion context provides the loaded `path` and `root_prim`; the
+Rhai policy chooses which artifacts that scene uses. Rust validates the
+complete action map, then the generic asset runtime resolves registry ids to
+canonical `lunco://` or `twin://` URIs and loads text through the shared
+`TextAsset` loader. Missing or unreadable requested datasets are reported;
+unrequested datasets remain quiet. `SceneTransitionStarted` retires outstanding reads and
+`SceneTeardown` removes domain data derived from the outgoing scene.
+
+Rust also validates the generic menu tree and replaces that provider's
+contribution; selected actions route through the existing Rhai tool hook. Twin
+contributions are cleared on `TwinClosed`, and a late contribution for an
+already-closed Twin is discarded. An absent optional hook clears its
+contribution; a fault or malformed action map is warned and queues no asset
+reads. This is the startup-to-menu path used by the authored tutorial catalog
+policy, so no Rust tutorial menu or catalog parser is needed.
 
 Physics owns the required deterministic `physics.body_escape(ctx: Map) ->
 String` seam, installed by the application policy bootstrap during `PreStartup`
@@ -185,9 +193,13 @@ The startup function is the only bootstrap convention in each scope. It is
 authored behavior and can choose installation order/reporting, while Rust
 retains the generic typed installer, owner-contract validation, and cleanup
 boundary. There is no second hardcoded list of policy files or source roles in
-the engine. The `scripting.source.classify` policy classifies engine-library
-sources as preludes or unrelated scenario content; Twin tool libraries are
-selected and loaded by the `twin.lifecycle` action plan.
+the engine. The required `scripting.source.classify` policy classifies
+engine-library sources as preludes or unrelated scenario content; admission,
+asset publication, and runtime preparation run in that order. During a policy
+replacement, a temporarily unavailable classifier leaves the current admitted
+sources intact and closes script execution until the authored policy returns.
+Twin tool libraries are selected and loaded by the `twin.lifecycle` action
+plan.
 
 ### Tool layers and shutdown
 

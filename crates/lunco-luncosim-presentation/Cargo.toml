@@ -10,7 +10,6 @@ bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", 
 big_space = { workspace = true }
 lunco-capture = { path = "../lunco-capture", features = ["api"] }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
-lunco-celestial-presentation = { path = "../lunco-celestial-presentation" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-environment = { path = "../lunco-environment" }

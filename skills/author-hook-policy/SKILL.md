@@ -122,11 +122,15 @@ For application UI contributions, reuse the optional
 `application.asset.lifecycle(event, ctx)` hook. The shared asset layer emits
 JSON-scope loading/changed events after asynchronous reads, including the
 canonical `asset_root_uri`; the Rhai policy can parse each record with
-`parse_json(text)` and return a generic `menus` tree.
-The Rust workbench host validates and renders that tree and routes leaf actions
-through the existing Rhai tool hook. Keep asset selection and menu policy in
-Rhai; Rust owns only async asset delivery, menu-shape validation, rendering,
-provider replacement, and Twin-close cleanup.
+`parse_json(text)` and return a generic `menus` tree. Scene completion is also
+delivered with the canonical loaded `path` and `root_prim`; return selected declared
+dataset ids in `dataset_text_artifacts` when the scene needs their text. The
+Rust host validates the complete action map, while `DatasetArtifactPlugin`
+resolves each registry id to its canonical asset URI and reads through the
+shared `TextAsset` loader. Missing or unreadable requested datasets are
+reported; unrequested datasets remain quiet. `SceneTransitionStarted` retires pending reads. Keep
+asset selection and menu policy in Rhai; Rust owns typed lifecycle facts, safe
+asset delivery, action-shape validation, rendering, and provider cleanup.
 
 Put policy and observable runtime assertions in an authored Rhai production
 scene test. Cover the declared signature, successful binding/invocation,

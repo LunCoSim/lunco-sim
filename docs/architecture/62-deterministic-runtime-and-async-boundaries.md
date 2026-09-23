@@ -20,7 +20,7 @@ This is an ordering and admission guarantee. It is not a promise of bitwise
 identical floating-point physics or adaptive Modelica results across different
 architectures, compiler versions, or solver profiles. Those numerical promises
 need an explicit deterministic profile and their own cross-platform evidence.
-Rendering and detached presentation clocks are outside authoritative state.
+Rendering and interpolated presentation samples are outside authoritative state.
 
 The runtime remains event driven. It does not poll for readiness on every
 simulation tick, and it does not add a second authoritative time source.

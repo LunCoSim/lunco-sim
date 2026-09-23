@@ -1,4 +1,4 @@
-//! Mission Control panel — single unified panel for time, bodies, spacecraft, rovers, and actions.
+//! Mission Control panel — unified panel for time, bodies, control targets, and actions.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -7,7 +7,6 @@ use lunco_workbench_widgets::{icon_text_button, UiIcon};
 
 use lunco_camera_core::FocusTarget;
 use lunco_celestial::CelestialBody;
-use lunco_celestial::Spacecraft;
 use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_control_core::{AcquireControl, ReleaseControlSource};
 use lunco_control_core::{ControlBinding, UserIntent};
@@ -61,7 +60,6 @@ impl Panel for MissionControl {
         let avatar_ent;
         let clock_state;
         let bodies: Vec<(Entity, String, String)>;
-        let spacecraft: Vec<(Entity, String)>;
         let rovers_display: Vec<(Entity, String, bool, bool, Option<u64>)>;
         let on_surface;
         let gravity_body;
@@ -109,21 +107,11 @@ impl Panel for MissionControl {
                         .collect()
                 })
                 .unwrap_or_default();
-            spacecraft = view
-                .map(|v| {
-                    v.spacecraft
-                        .iter()
-                        .map(|r| (r.entity, r.name.clone()))
-                        .collect()
-                })
-                .unwrap_or_default();
             on_surface = view.map(|v| v.on_surface).unwrap_or(false);
             gravity_body = view.and_then(|v| v.gravity_body);
 
-            // Epoch from the derived `WorldTime`; play/rate from the
-            // `TimeTransport` authority (doc 19 — the `CelestialClock` middleman is
-            // gone). Both are inserted together by `TimePlugin`, so the tuple is
-            // `Some` iff the spine is present.
+            // Epoch, play state, and rate are all projections of the unified
+            // mission-time spine installed by `TimePlugin`.
             clock_state = ctx.resource::<WorldTime>().and_then(|w| {
                 ctx.resource::<TimeTransport>()
                     .map(|t| (w.epoch_jd, matches!(t.mode, TransportMode::Paused), t.rate))
@@ -232,18 +220,6 @@ impl Panel for MissionControl {
                         }
                         if ui.small_button("Surface").clicked() {
                             teleport_body = Some(*entity);
-                        }
-                    });
-                }
-            });
-
-            // ── Spacecraft ──
-            ui.collapsing("Spacecraft", |ui| {
-                for (entity, name) in &spacecraft {
-                    ui.horizontal(|ui| {
-                        ui.label(name);
-                        if ui.small_button("Focus").clicked() {
-                            focus = Some(*entity);
                         }
                     });
                 }
@@ -407,8 +383,8 @@ impl Panel for MissionControl {
 
 /// Change-gated view-model for [`MissionControl`].
 ///
-/// The panel used to run ~5 world scans per frame (avatar, bodies,
-/// spacecraft, rovers, surface-camera). None depend on per-frame UI state,
+/// The panel used to run ~5 world scans per frame (avatar, bodies, rovers,
+/// surface-camera). None depend on per-frame UI state,
 /// so [`populate_mission_control_view`] flattens them into this resource —
 /// rebuilt only when the relevant components change / despawn or the avatar,
 /// surface mode, or gravity body change — and the panel reads it via
@@ -418,13 +394,12 @@ impl Panel for MissionControl {
 pub struct MissionControlView {
     avatar: Option<Entity>,
     bodies: Vec<EntityRow>,
-    spacecraft: Vec<EntityRow>,
     rovers: Vec<RoverRow>,
     on_surface: bool,
     gravity_body: Option<Entity>,
 }
 
-/// A focusable entity row (body or spacecraft).
+/// A focusable celestial-body row.
 struct EntityRow {
     entity: Entity,
     name: String,
@@ -445,7 +420,6 @@ pub fn populate_mission_control_view(
     mut view: ResMut<MissionControlView>,
     local_avatar: Option<Res<lunco_embodiment_core::roles::TheLocalEmbodiment>>,
     bodies: Query<(Entity, &Name, &CelestialBody)>,
-    spacecraft: Query<(Entity, &Name), With<Spacecraft>>,
     // The local avatar carries a `ControlBinding` too (it's a controllable), so
     // exclude it from the *rover* list.
     //
@@ -463,14 +437,12 @@ pub fn populate_mission_control_view(
         (),
         Or<(
             Changed<CelestialBody>,
-            Changed<Spacecraft>,
             Changed<ControlBinding>,
             Changed<Name>,
             Changed<lunco_core::GlobalEntityId>,
         )>,
     >,
     mut removed_body: RemovedComponents<CelestialBody>,
-    mut removed_sc: RemovedComponents<Spacecraft>,
     mut removed_rover: RemovedComponents<ControlBinding>,
 ) {
     let avatar_ent = local_avatar.as_deref().and_then(|avatar| avatar.0);
@@ -479,7 +451,6 @@ pub fn populate_mission_control_view(
 
     let dirty = !changed.is_empty()
         || removed_body.read().next().is_some()
-        || removed_sc.read().next().is_some()
         || removed_rover.read().next().is_some()
         || view.avatar != avatar_ent
         || view.on_surface != on_surface
@@ -497,14 +468,6 @@ pub fn populate_mission_control_view(
             entity: e,
             name: n.as_str().to_string(),
             label: format!("{:.0} km", b.radius_m / 1000.0),
-        })
-        .collect();
-    view.spacecraft = spacecraft
-        .iter()
-        .map(|(e, n)| EntityRow {
-            entity: e,
-            name: n.as_str().to_string(),
-            label: String::new(),
         })
         .collect();
     view.rovers = rovers

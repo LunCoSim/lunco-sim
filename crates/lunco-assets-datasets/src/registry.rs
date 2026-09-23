@@ -743,7 +743,7 @@ mod tests {
 [demo_vectors]
 name = "Demo vectors"
 url = "https://example.invalid/vectors.csv"
-dest = "ephemeris/demo.csv"
+dest = "data/demo.csv"
 "#;
 
     #[test]
@@ -753,7 +753,7 @@ dest = "ephemeris/demo.csv"
         let entry = &registry.entries()[0];
         assert_eq!(entry.id, "engine/demo/demo_vectors");
         assert_eq!(entry.state, DatasetState::Missing);
-        assert_eq!(entry.artifact_uri(), "lunco://ephemeris/demo.csv");
+        assert_eq!(entry.artifact_uri(), "lunco://data/demo.csv");
     }
 
     #[test]
@@ -794,7 +794,7 @@ dest = "ephemeris/demo.csv"
             1
         );
         assert!(registry
-            .declared_artifact(&scope, Path::new("ephemeris/demo.csv"))
+            .declared_artifact(&scope, Path::new("data/demo.csv"))
             .is_some());
     }
 

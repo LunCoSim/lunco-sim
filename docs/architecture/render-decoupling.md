@@ -256,7 +256,8 @@ The USD projection reads the registered `LunCoProceduralSkyAPI` on its `Xform`
 owner, stamps this intent, and projects no `UsdGeomGprim` for that background.
 The sky shader remains an ordinary bound `UsdShade.Material`; it opts into
 celestial Sun uniforms by declaring `sun_dir_view` and `sun_tan_radius` as
-`//!@engine` inputs. The engine writes those uniforms from `CelestialTime` and
+`//!@engine` inputs. The engine writes those uniforms from the physical-time
+presentation sample and
 the active camera's BigSpace pose, only when their reflected values change.
 This is continuous render data, so the Rust render adapter owns the update;
 Rhai remains available for authored scene and lesson policy. There is no

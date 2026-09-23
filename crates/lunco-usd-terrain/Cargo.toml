@@ -19,6 +19,7 @@ lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 bevy = { workspace = true }
 openusd = { workspace = true }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-core = { path = "../lunco-usd-core" }

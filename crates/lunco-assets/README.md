@@ -122,7 +122,7 @@ All worktrees and Twins share the OS-global cache returned by `cache_dir()`:
 ~/.cache/lunco/            # Linux; OS equivalent on macOS/Windows
 ├── textures/               (downloaded and processed)
 ├── library/                (extracted source library)
-└── ephemeris/              (runtime-generated CSVs)
+└── processed/              (reproducible generated outputs)
 ```
 
 The user configuration path is owned by `lunco-settings`; it is not another

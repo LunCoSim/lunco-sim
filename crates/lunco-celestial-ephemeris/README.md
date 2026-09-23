@@ -1,52 +1,23 @@
 # lunco-celestial-ephemeris
 
-Concrete **high-fidelity ephemeris provider** for `lunco-celestial`.
+Analytic natural-body position provider for `lunco-celestial`.
 
-This is the "heavy half" of the celestial split. `lunco-celestial` defines the
-`EphemerisProvider` trait + a default resource; this crate supplies a real
-implementation backed by analytical theories and external mission data.
+The semantic crate defines the `EphemerisProvider` trait and default resource.
+This crate supplies the maintained VSOP2013 Earth/EMB and ELP/MPP02 Moon
+models through `celestial-ephemeris`, `celestial-time`, and `celestial-core`.
+It evaluates natural-body positions at the requested epoch and does not load
+scene assets or evaluate spacecraft motion.
 
-## What it provides
-
-- **`CelestialEphemerisProvider`** — concrete `EphemerisProvider`. Combines
-  built-in analytical modules (VSOP2013 Earth/Sun/EMB, ELP/MPP02 Moon, via the
-  `celestial-ephemeris` / `celestial-time` / `celestial-core` crates) with
-  external mission vectors (JPL Horizons CSV) held behind `Arc<RwLock<…>>`, so a
-  dataset downloaded mid-session is visible to `position()` without a restart.
-- **`EphemerisPlugin`** — apps that need real planetary positions add this; it
-  **overwrites** the `EphemerisResource` installed by the semantic/runtime
-  setup, registers this crate's `Assets.toml` with
-  `lunco_assets_datasets`, and adopts each declared dataset once its file is on
-  disk.
-
-## Mission data is DECLARED, never fetched here
-
-This crate opens no sockets and builds no URLs. `Assets.toml` declares each
-mission dataset — transport (`url`, `dest`) for `lunco-assets`, and an
-`[<key>.ephemeris]` sub-table (`naif_id`, `center`) for us. Downloading happens
-only when a user asks (Settings ▸ Downloadable data); until then the mission
-simply has no trajectory and `position()` answers `None`, which is the honest
-answer offline.
-
-It used to fetch from JPL at startup, driven by a second file
-(`assets/missions/*.ephemeris.json`) that repeated the query. Both are gone —
-see `docs/architecture/56-asset-resolution-and-cache.md`.
-
-## Platform note
-
-Does **not** build on Windows MSVC: a transitive dependency
-(`celestial-eop-data`'s `build.rs`) shells out to the Unix `date` command. The
-split exists precisely so the rest of `lunco-celestial` stays portable while the
-high-fidelity provider is opt-in.
-
-## Usage
+Apps that need the analytic natural-body model install:
 
 ```rust
 app.add_plugins(lunco_celestial_spatial::CelestialPlugin);
-app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin); // overrides the default provider
+app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin);
 ```
 
-## Status
+Scene-authored spacecraft motion uses ordinary USD transform `timeSamples`
+through `lunco-usd-bevy-animation`.
 
-Working. Analytical positions plus declared mission datasets loaded through
-the runtime asset and dataset pipelines on every platform.
+This crate does not build on Windows MSVC because the transitive
+`celestial-eop-data` build script shells out to the Unix `date` command. The
+split keeps the rest of `lunco-celestial` portable.

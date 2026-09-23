@@ -29,6 +29,7 @@
 //! it grounds every scene-local endpoint (rover masts) on the body.
 
 use bevy::prelude::*;
+use lunco_hooks::HookValue as H;
 
 use lunco_celestial::frames::LPoint;
 use lunco_celestial::geo::{Geodetic, GeodeticAnchor, SiteAnchor};
@@ -53,10 +54,13 @@ pub struct CelestialProjectionPlugin;
 impl Plugin for CelestialProjectionPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, CelestialProjectionSet::Projection)
+            .init_resource::<lunco_time::SceneTimeState>()
+            .add_observer(select_scene_time_on_transition_completed)
             .add_systems(
                 Update,
                 project_celestial_comms_prims
                     .run_if(any_unprojected_celestial)
+                    .run_if(lunco_time::scene_time_ready)
                     .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
                     .in_set(CelestialProjectionSet::Projection),
             )
@@ -64,10 +68,170 @@ impl Plugin for CelestialProjectionPlugin {
                 Update,
                 remove_nested_link_nodes
                     .run_if(any_nested_link_nodes)
+                    .run_if(lunco_time::scene_time_ready)
                     .after(project_celestial_comms_prims)
                     .in_set(CelestialProjectionSet::Projection),
             );
     }
+}
+
+fn scene_time_facts(
+    event: &str,
+    scene_path: Option<&str>,
+    root_prim: Option<&str>,
+    reader: Option<&ComposedReader<'_>>,
+    root_path: Option<&SdfPath>,
+) -> H {
+    let mut epoch_api = false;
+    let mut epoch_status = "not_applied";
+    let mut authored_epoch_jd = H::Unit;
+    let mut has_celestial_source = false;
+    if let (Some(reader), Some(root_path)) = (reader, root_path) {
+        has_celestial_source = reader
+            .prim_paths()
+            .iter()
+            .any(|path| reader.has_api_schema(path, "LunCoCelestialBodyAPI"));
+        epoch_api = reader.has_api_schema(root_path, "LunCoEpochAPI");
+        if epoch_api {
+            match read_real_strict(reader, root_path, "lunco:time:epochJd") {
+                Ok(Some(epoch_jd)) => {
+                    authored_epoch_jd = H::Float(epoch_jd);
+                    epoch_status = if epoch_jd == 0.0 { "zero" } else { "valid" };
+                }
+                Ok(None) => epoch_status = "missing",
+                Err(()) => epoch_status = "malformed",
+            }
+        }
+    }
+    H::map([
+        ("event", H::str(event)),
+        ("scene_path", scene_path.map_or(H::Unit, H::str)),
+        ("root_prim", root_prim.map_or(H::Unit, H::str)),
+        ("epoch_api", H::Bool(epoch_api)),
+        ("epoch_status", H::str(epoch_status)),
+        ("authored_epoch_jd", authored_epoch_jd),
+        ("has_celestial_source", H::Bool(has_celestial_source)),
+        (
+            "computer_time_tdb_jd",
+            H::Float(lunco_time::utc_now_tdb_jd()),
+        ),
+    ])
+}
+
+fn select_scene_time_on_transition_completed(
+    trigger: On<lunco_core::SceneTransitionCompleted>,
+    mut commands: Commands,
+    scene_time: Res<lunco_time::SceneTimeState>,
+    roots: Query<(
+        &lunco_usd_bevy_scene::UsdPrimPath,
+        Has<lunco_usd_bevy_scene::UsdSceneRoot>,
+    )>,
+    stages: Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>,
+    canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    mut transport: ResMut<lunco_time::TimeTransport>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+) {
+    if scene_time.phase != lunco_time::SceneTimePhase::Loading {
+        return;
+    }
+    let (scene_path, transition_kind) = match &trigger.event().transition {
+        lunco_core::SceneTransition::Load { path, .. } => (path.as_str(), "scene_load"),
+        lunco_core::SceneTransition::Restart { path, .. } => (path.as_str(), "scene_restart"),
+        lunco_core::SceneTransition::Clear => return,
+    };
+    let mut scene_roots = roots.iter().filter(|(_, is_root)| *is_root);
+    let Some((scene_root, _)) = scene_roots.next() else {
+        let error = format!("settled scene `{scene_path}` has no USD scene root");
+        transport.mode = lunco_time::TransportMode::Paused;
+        faults.raise(
+            "scene-time-root-missing",
+            None,
+            "scene.time.select",
+            error.clone(),
+        );
+        error!("[usd-time] {error}");
+        return;
+    };
+    if scene_roots.next().is_some() {
+        let error = format!("settled scene `{scene_path}` has multiple USD scene roots");
+        transport.mode = lunco_time::TransportMode::Paused;
+        faults.raise(
+            "scene-time-root-ambiguous",
+            None,
+            "scene.time.select",
+            error.clone(),
+        );
+        error!("[usd-time] {error}");
+        return;
+    }
+    let Some(stage_asset) = stages.get(&scene_root.stage_handle) else {
+        let error = format!("settled scene `{scene_path}` has no loaded composed USD stage");
+        transport.mode = lunco_time::TransportMode::Paused;
+        faults.raise(
+            "scene-time-stage-missing",
+            None,
+            "scene.time.select",
+            error.clone(),
+        );
+        error!("[usd-time] {error}");
+        return;
+    };
+    let (reader, _generation) = canonical.reader_for(scene_root.stage_handle.id(), stage_asset);
+    let Some(root_path) = lunco_usd_bevy_stage::resolve_stage_prim_path(&reader, &scene_root.path)
+    else {
+        let error = format!("settled scene `{scene_path}` has no resolvable USD default root");
+        transport.mode = lunco_time::TransportMode::Paused;
+        faults.raise(
+            "scene-time-root-unresolved",
+            None,
+            "scene.time.select",
+            error.clone(),
+        );
+        error!("[usd-time] {error}");
+        return;
+    };
+    let Ok(root_path_sdf) = SdfPath::new(&root_path) else {
+        let error =
+            format!("settled scene `{scene_path}` resolved an invalid USD root `{root_path}`");
+        transport.mode = lunco_time::TransportMode::Paused;
+        faults.raise(
+            "scene-time-root-invalid",
+            None,
+            "scene.time.select",
+            error.clone(),
+        );
+        error!("[usd-time] {error}");
+        return;
+    };
+    let facts = scene_time_facts(
+        transition_kind,
+        Some(scene_path),
+        Some(&root_path),
+        Some(&reader),
+        Some(&root_path_sdf),
+    );
+    let selection = match lunco_time::select_scene_time(&facts) {
+        Ok(selection) => selection,
+        Err(error) => {
+            transport.mode = lunco_time::TransportMode::Paused;
+            faults.raise(
+                "scene-time-policy-invalid",
+                None,
+                "scene.time.select",
+                error.clone(),
+            );
+            error!("[usd-time] {error}");
+            return;
+        }
+    };
+    if let Some(message) = selection.warning.as_deref().filter(|s| !s.is_empty()) {
+        warn!("[usd-time] {message}");
+    }
+    info!(
+        "[usd-time] settled scene `{scene_path}` selected {} epoch JD {:.8}",
+        selection.source, selection.epoch_jd
+    );
+    commands.trigger(lunco_time::ApplySceneTimeSelection { selection });
 }
 
 type ComposedReader<'a> = dyn lunco_usd_bevy_stage::read::UsdReadObject + 'a;
@@ -123,19 +287,6 @@ fn read_authored_i32(
         .map(Some)
 }
 
-fn read_authored_real(
-    reader: &ComposedReader<'_>,
-    path: &SdfPath,
-    attribute: &str,
-) -> Result<Option<f64>, ()> {
-    if !reader.has_authored_attribute(path, attribute) {
-        return Ok(None);
-    }
-    read_real_strict(reader, path, attribute)?
-        .ok_or(())
-        .map(Some)
-}
-
 fn read_authored_bool(
     reader: &ComposedReader<'_>,
     path: &SdfPath,
@@ -179,47 +330,6 @@ fn read_authored_token(
     match reader.attr_value(path, attribute) {
         Some(Value::Token(value)) => Ok(Some(value.to_string())),
         _ => Err(()),
-    }
-}
-
-fn rgba_from_value(value: Value) -> Option<[f32; 4]> {
-    let rgba = match value {
-        Value::Vec4f(value) => [value.x, value.y, value.z, value.w],
-        Value::Vec4d(value) => [
-            value.x as f32,
-            value.y as f32,
-            value.z as f32,
-            value.w as f32,
-        ],
-        _ => return None,
-    };
-    rgba.iter().all(|value| value.is_finite()).then_some(rgba)
-}
-
-fn read_authored_rgba(
-    reader: &ComposedReader<'_>,
-    path: &SdfPath,
-    attribute: &str,
-) -> Result<Option<[f32; 4]>, ()> {
-    if !reader.has_authored_attribute(path, attribute) {
-        return Ok(None);
-    }
-    reader
-        .attr_value(path, attribute)
-        .and_then(rgba_from_value)
-        .ok_or(())
-        .map(Some)
-}
-
-fn read_positive_optional_real(
-    reader: &ComposedReader<'_>,
-    path: &SdfPath,
-    attribute: &str,
-) -> Result<Option<f64>, ()> {
-    match read_authored_real(reader, path, attribute)? {
-        None | Some(0.0) => Ok(None),
-        Some(value) if value.is_finite() && value > 0.0 => Ok(Some(value)),
-        Some(_) => Err(()),
     }
 }
 
@@ -309,15 +419,14 @@ pub fn insert_celestial_comms_components(
     entity: Entity,
     prim_path_str: &str,
     sdf_path: &SdfPath,
+    is_scene_root: bool,
     commands: &mut Commands,
 ) {
     // --- Celestial body declaration (LunCoCelestialBodyAPI) ---
     //
-    // The scene says which bodies exist; Rust does not. A prim authoring
-    // `int lunco:body = 399` IS the Earth, and its presence is what turns the whole
-    // celestial stack on (`lunco_celestial_spatial_core::celestial_declared`). No such prim ⇒ no
-    // sky. This replaces `CelestialConfig.spawn_hierarchy`, a code-side boolean that
-    // a scene could only trip as a side effect, never actually *request*.
+    // The scene declares which bodies exist. A prim with a non-zero
+    // `lunco:body` value participates in celestial projection and its presence
+    // activates the scene's celestial hierarchy.
     match read_i32_strict(reader, sdf_path, "lunco:body") {
         Ok(Some(naif)) if naif != 0 => {
             commands
@@ -349,8 +458,6 @@ pub fn insert_celestial_comms_components(
     // the wrong light whenever a scene had two, and picked by archetype
     // iteration order whenever two were equally bright.
     //
-    // The fill used to be spawned from Rust at startup, which is why it had no
-    // USD identity to filter on in the first place.
     if reader.type_name(sdf_path).as_deref() == Some("DistantLight") {
         let parent_is_body = match sdf_path.parent() {
             Some(parent) => match read_i32_strict(reader, &parent, "lunco:body") {
@@ -417,8 +524,7 @@ pub fn insert_celestial_comms_components(
         Ok(Some(anchor)) => {
             commands.entity(entity).try_insert(anchor);
             // Root prim anchor = the scene's site frame.
-            let is_root = prim_path_str.matches('/').count() == 1 && prim_path_str.starts_with('/');
-            if is_root {
+            if is_scene_root {
                 commands.entity(entity).try_insert(SiteAnchor);
                 info!(
                     "[usd-celestial] site anchor {}: body {} lat {:.4} lon {:.4} h {:.1} m",
@@ -428,21 +534,6 @@ pub fn insert_celestial_comms_components(
                     anchor.geodetic.lon_deg,
                     anchor.geodetic.height_m
                 );
-                // Scene-authored date: `double lunco:time:epochJd` picks the world
-                // epoch (e.g. one where a polar site is sunlit — at Shackleton the
-                // real sun crosses the horizon on a ~monthly cycle, so an unlucky
-                // "now" default renders the whole demo pitch-black).
-                match read_real_strict(reader, sdf_path, "lunco:time:epochJd") {
-                    Ok(Some(epoch_jd)) if epoch_jd != 0.0 => {
-                        info!("[usd-celestial] scene epoch: JD {epoch_jd:.4}");
-                        commands.trigger(lunco_time::SetMissionEpoch { epoch_jd });
-                    }
-                    Ok(_) => {}
-                    Err(()) => warn!(
-                        "[usd-celestial] {} has malformed `lunco:time:epochJd`; authored epoch ignored",
-                        prim_path_str
-                    ),
-                }
             }
         }
         Ok(None) => {}
@@ -452,243 +543,14 @@ pub fn insert_celestial_comms_components(
         ),
     }
 
-    // --- Mission declaration (LunCoMissionAPI) ---
-    //
-    // A mission is OPT-IN per scene, and separately from the sky: declaring bodies
-    // says "this world has a Moon", not "spawn Artemis II into my landing film".
-    // Missions used to be loaded by scanning `assets/missions/*.json` whenever ANY
-    // celestial body was declared, so every lunar scene silently acquired every
-    // mission on disk. Now a scene asks by referencing the mission's USD file, the
-    // same way it asks for a sky by referencing `solar_system.usda`.
-    //
-    // Keyed on `lunco:mission:id` — the identifying attribute, following the
-    // libration/orbit convention above. A prim without one is not a half-declared
-    // mission, it is simply not a mission.
-    let mission_id = match read_authored_string(reader, sdf_path, "lunco:mission:id") {
-        Ok(Some(id)) if !id.is_empty() => Some(id),
-        Ok(None) => None,
-        Ok(Some(_)) => {
-            warn!(
-                "[usd-celestial] {} has an empty mission id; declaration ignored",
-                prim_path_str
-            );
-            None
-        }
-        Err(()) => {
-            warn!(
-                "[usd-celestial] {} has malformed mission attributes; declaration ignored",
-                prim_path_str
-            );
-            None
-        }
-    };
-    if let Some(id) = mission_id {
-        let mission = (|| {
-            let name = read_authored_string(reader, sdf_path, "lunco:mission:name")?
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| id.clone());
-            let description = read_authored_string(reader, sdf_path, "lunco:mission:description")?
-                .unwrap_or_default();
-            Ok(lunco_celestial_spatial_core::MissionDecl {
-                id: id.clone(),
-                name,
-                description,
-            })
-        })();
-        match mission {
-            Ok(mission) => {
-                let name = mission.name.clone();
-                commands.entity(entity).try_insert(mission);
-                info!("[usd-celestial] scene declares mission {name} ({id}) at {prim_path_str}");
-            }
-            Err(()) => warn!(
-                "[usd-celestial] {} has invalid mission attributes; declaration ignored",
-                prim_path_str
-            ),
-        }
-    }
-
-    // --- Mission trajectory (LunCoMissionTrajectoryAPI) ---
-    //
-    // VISUALISATION parameters only. The state vectors are NOT here and never were:
-    // the curve is sampled at runtime from the ephemeris provider keyed by
-    // `trackedId`/`referenceId`, so this prim says how to DRAW a trajectory, not
-    // where the spacecraft is. Keyed on `trackedId` — without a target there is
-    // nothing to plot.
-    let trajectory_target = match read_authored_i32(reader, sdf_path, "lunco:trajectory:trackedId")
-    {
-        Ok(Some(id)) if id != 0 => Some(id),
-        Ok(None) => None,
-        Ok(Some(id)) => {
-            warn!(
-                "[usd-celestial] {} has invalid trajectory tracked id {}; declaration ignored",
-                prim_path_str, id
-            );
-            None
-        }
-        Err(()) => {
-            warn!(
-                "[usd-celestial] {} has malformed trajectory attributes; declaration ignored",
-                prim_path_str
-            );
-            None
-        }
-    };
-    if let Some(tracked_id) = trajectory_target {
-        let trajectory = (|| {
-            let reference_id = read_authored_i32(reader, sdf_path, "lunco:trajectory:referenceId")?
-                .unwrap_or(DEFAULT_ANCHOR_BODY);
-            if reference_id == 0 {
-                return Err(());
-            }
-            let color = read_authored_rgba(reader, sdf_path, "lunco:trajectory:color")?
-                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
-            let sampling_days =
-                read_authored_real(reader, sdf_path, "lunco:trajectory:samplingDays")?
-                    .unwrap_or(1.0);
-            let sampling_step =
-                read_authored_real(reader, sdf_path, "lunco:trajectory:samplingStep")?
-                    .unwrap_or(0.01);
-            if !sampling_days.is_finite()
-                || sampling_days <= 0.0
-                || !sampling_step.is_finite()
-                || sampling_step <= 0.0
-            {
-                return Err(());
-            }
-            let frame = read_authored_token(reader, sdf_path, "lunco:trajectory:frame")?
-                .unwrap_or_else(|| "Inertial".to_string());
-            if !matches!(frame.as_str(), "Inertial" | "BodyFixed") {
-                return Err(());
-            }
-            let user_visible =
-                read_authored_bool(reader, sdf_path, "lunco:trajectory:userVisible")?;
-            let start_epoch_jd =
-                read_authored_real(reader, sdf_path, "lunco:trajectory:startEpochJd")?
-                    .and_then(|value| (value != 0.0).then_some(value));
-            let end_epoch_jd = read_authored_real(reader, sdf_path, "lunco:trajectory:endEpochJd")?
-                .and_then(|value| (value != 0.0).then_some(value));
-            if start_epoch_jd.is_some() != end_epoch_jd.is_some()
-                || matches!((start_epoch_jd, end_epoch_jd), (Some(start), Some(end)) if end < start)
-            {
-                return Err(());
-            }
-            let name = read_authored_string(reader, sdf_path, "lunco:trajectory:name")?
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| prim_path_str.to_string());
-            Ok(lunco_celestial_spatial_core::MissionTrajectoryDecl {
-                name,
-                tracked_id,
-                reference_id,
-                color,
-                sampling_days,
-                sampling_step,
-                frame,
-                user_visible,
-                start_epoch_jd,
-                end_epoch_jd,
-            })
-        })();
-        match trajectory {
-            Ok(trajectory) => {
-                commands.entity(entity).try_insert(trajectory);
-                info!("[usd-celestial] mission trajectory {prim_path_str}: target {tracked_id}");
-            }
-            Err(()) => warn!(
-                "[usd-celestial] {} has invalid mission trajectory attributes; declaration ignored",
-                prim_path_str
-            ),
-        }
-    }
-
-    // --- Mission spacecraft marker (LunCoMissionSpacecraftAPI) ---
-    //
-    // Keyed on `ephemerisId`: the marker's whole job is to sit where the ephemeris
-    // says that body is, so a prim naming no body is unplaceable, not defaulted.
-    let spacecraft_id = match read_authored_i32(reader, sdf_path, "lunco:spacecraft:ephemerisId") {
-        Ok(Some(id)) if id != 0 => Some(id),
-        Ok(None) => None,
-        Ok(Some(id)) => {
-            warn!(
-                "[usd-celestial] {} has invalid spacecraft ephemeris id {}; declaration ignored",
-                prim_path_str, id
-            );
-            None
-        }
-        Err(()) => {
-            warn!(
-                "[usd-celestial] {} has malformed spacecraft attributes; declaration ignored",
-                prim_path_str
-            );
-            None
-        }
-    };
-    if let Some(ephemeris_id) = spacecraft_id {
-        let spacecraft = (|| {
-            let reference_id = read_authored_i32(reader, sdf_path, "lunco:spacecraft:referenceId")?
-                .unwrap_or(DEFAULT_ANCHOR_BODY);
-            if reference_id == 0 {
-                return Err(());
-            }
-            let scale =
-                read_real_strict(reader, sdf_path, "lunco:spacecraft:scale")?.unwrap_or(1.0);
-            if !scale.is_finite() || scale <= 0.0 {
-                return Err(());
-            }
-            let scale = scale as f32;
-            if !scale.is_finite() || scale <= 0.0 {
-                return Err(());
-            }
-            let start_epoch_jd =
-                read_authored_real(reader, sdf_path, "lunco:spacecraft:startEpochJd")?
-                    .and_then(|value| (value != 0.0).then_some(value));
-            let end_epoch_jd = read_authored_real(reader, sdf_path, "lunco:spacecraft:endEpochJd")?
-                .and_then(|value| (value != 0.0).then_some(value));
-            if start_epoch_jd.is_some() != end_epoch_jd.is_some()
-                || matches!((start_epoch_jd, end_epoch_jd), (Some(start), Some(end)) if end < start)
-            {
-                return Err(());
-            }
-            let marker_radius_km =
-                read_positive_optional_real(reader, sdf_path, "lunco:spacecraft:markerRadiusKm")?;
-            let hit_radius_km =
-                read_positive_optional_real(reader, sdf_path, "lunco:spacecraft:hitRadiusKm")?;
-            let name = read_authored_string(reader, sdf_path, "lunco:spacecraft:name")?
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| prim_path_str.to_string());
-            let marker_color =
-                read_authored_rgba(reader, sdf_path, "lunco:spacecraft:markerColor")?;
-            let marker_radius_km = marker_radius_km.map(|value| value as f32);
-            let hit_radius_km = hit_radius_km.map(|value| value as f32);
-            if marker_radius_km.is_some_and(|value| !value.is_finite() || value <= 0.0)
-                || hit_radius_km.is_some_and(|value| !value.is_finite() || value <= 0.0)
-            {
-                return Err(());
-            }
-            Ok(lunco_celestial_spatial_core::MissionSpacecraftDecl {
-                name,
-                ephemeris_id,
-                reference_id,
-                scale,
-                start_epoch_jd,
-                end_epoch_jd,
-                marker_radius_km,
-                hit_radius_km,
-                marker_color,
-            })
-        })();
-        match spacecraft {
-            Ok(spacecraft) => {
-                commands.entity(entity).try_insert(spacecraft);
-                info!(
-                    "[usd-celestial] mission spacecraft {prim_path_str}: ephemeris {ephemeris_id}"
-                );
-            }
-            Err(()) => warn!(
-                "[usd-celestial] {} has invalid mission spacecraft attributes; declaration ignored",
-                prim_path_str
-            ),
-        }
+    // Epoch selection runs once from the completed scene transition, after the
+    // composed root and all scene prim projections have settled.
+    let epoch_api = reader.has_api_schema(sdf_path, "LunCoEpochAPI");
+    if epoch_api && !is_scene_root {
+        warn!(
+            "[usd-celestial] {} applies LunCoEpochAPI outside the selected scene root; the authored epoch has no effect",
+            prim_path_str
+        );
     }
 
     // --- Keplerian orbit (satellites) ---
@@ -991,20 +853,26 @@ fn any_unprojected_celestial(
 
 fn project_celestial_comms_prims(
     mut commands: Commands,
-    query: Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath), Without<CelestialProjected>>,
+    query: Query<
+        (
+            Entity,
+            &lunco_usd_bevy_scene::UsdPrimPath,
+            Has<lunco_usd_bevy_scene::UsdSceneRoot>,
+        ),
+        Without<CelestialProjected>,
+    >,
     stages: Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
 ) {
-    for (entity, prim_path) in query.iter() {
+    for (entity, prim_path, is_scene_root) in query.iter() {
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
         // An ordinary scene mount keeps the empty path as a documented
         // defaultPrim sentinel until the visual projector writes the concrete
-        // root path. Resolve that sentinel here from the same loaded plan so
-        // the root's authored mission epoch is projected before child domains
-        // (notably terrain) begin building from the default clock epoch.
+        // root path. Resolve it here from the same loaded plan before projecting
+        // the root's celestial and link facts.
         let (reader, _generation) = canonical.reader_for(id, stage_asset);
         let Some(resolved_path) =
             lunco_usd_bevy_stage::resolve_stage_prim_path(&reader, &prim_path.path)
@@ -1023,6 +891,7 @@ fn project_celestial_comms_prims(
             entity,
             &resolved_path,
             &sdf_path,
+            is_scene_root,
             &mut commands,
         );
         commands.entity(entity).try_insert(CelestialProjected);
@@ -1156,46 +1025,6 @@ def Xform "World"
         assert_eq!(orbit.elements.semi_major_axis_m, 7000000.0);
         assert_eq!(orbit.elements.eccentricity, 0.0);
         assert_eq!(orbit.elements.epoch_jd, lunco_time::J2000_JD);
-    }
-
-    #[test]
-    fn color4f_is_read_as_a_fixed_usd_vector() {
-        let (stage, path) = view(
-            r#"#usda 1.0
-def Xform "World"
-{
-    def Xform "Body"
-    {
-        color4f lunco:trajectory:color = (0.1, 0.2, 0.3, 0.4)
-    }
-}
-"#,
-        );
-        assert_eq!(
-            read_authored_rgba(&stage.view(), &path, "lunco:trajectory:color")
-                .expect("valid color"),
-            Some([0.1, 0.2, 0.3, 0.4])
-        );
-    }
-
-    #[test]
-    fn negative_ephemeris_ids_are_preserved() {
-        let (stage, path) = view(
-            r#"#usda 1.0
-def Xform "World"
-{
-    def Xform "Body"
-    {
-        int lunco:trajectory:trackedId = -1024
-    }
-}
-"#,
-        );
-        assert_eq!(
-            read_authored_i32(&stage.view(), &path, "lunco:trajectory:trackedId")
-                .expect("valid ephemeris id"),
-            Some(-1024)
-        );
     }
 
     #[test]

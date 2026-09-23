@@ -2,29 +2,27 @@
 
 > Status: Active · Audience: contributors working on time, simulation clocks, and animation
 
-`lunco-time` owns the mission-time spine. It provides one transport authority,
-the deterministic simulation tick, calendar projections, a rooted clock tree, and
-the animation transport used by USD and editor surfaces.
+`lunco-time` owns the mission-time spine: the fixed simulation tick, transport,
+calendar anchor, causal `WorldTime`, and the physical-time sample used by
+presentation.
 
 ## 1. Master time and transport
 
-`SimTick` is the deterministic master for the causal simulation. `TimeTransport`
-is the single internal authority for play/pause and rate; UI, API, and input
-surfaces dispatch its typed command rather than maintaining another pause or rate
-state.
+`SimTick` is the deterministic master for causal simulation. `TimeTransport` is
+the single authority for play/pause and rate; UI, API, and input surfaces use
+`SetTimeTransport` rather than keeping another pause or rate state.
 
-The live transport exposes one bounded causal ladder: `0.1x, 0.25x, 0.5x, 1x,
-2x, 4x, 8x, 16x, 32x, 64x`. Every accepted positive rate advances the
-deterministic fixed-step world; pause is a separate transport mode and higher or
-lower rates are rejected. The fixed timestep remains unchanged, so 32x and 64x
-perform more solver iterations per render frame rather than switching to a
-second time meaning. A presentation-only celestial clock can use its own
-`SetClock` scale when a larger rate is useful.
+The live transport exposes one bounded ladder: `0.1x, 0.25x, 0.5x, 1x, 2x,
+4x, 8x, 16x, 32x, 64x`. Every accepted positive rate advances the fixed-step
+world. The fixed timestep does not change, so a higher rate performs more
+completed physics ticks per rendered frame.
 
-`WorldTime` is a derived view. Calendar and Julian-date values are computed from
-the transport anchor and tick; they are not independently accumulated by a
-consumer. A re-anchor is an explicit transport event and must remain
-host-authoritative in a networked run.
+`TimeTransport` is projected onto Bevy's virtual clock before the fixed loop.
+After that loop drains its admitted ticks, `WorldTime` is published from the
+latest completed `SimTick`. Its mission seconds, elapsed seconds, and epoch are
+derived from `MissionClock`; no consumer accumulates its own calendar time.
+`SetMissionEpoch` re-anchors the calendar at the current tick without creating
+another running clock.
 
 Fixed-step producers use the shared `SimTickSet` ordering anchor. The scripting
 set runs after that anchor, so lifecycle hooks and event delivery read the tick
@@ -32,50 +30,71 @@ for the step they are changing. Telemetry records the tick and the `MissionClock
 seconds derived from it, so collection does not use a render or wall-clock
 accumulator.
 
-`CelestialTime` is a separate presentation projection of the celestial clock.
-It normally equals `WorldTime.epoch_jd`, but a `SetClock` re-parent onto `Real`
-may advance it while the causal simulation is paused. Only explicitly
-presentation-owned celestial consumers may read it (for example detached globe
-imagery and the rendered sky). The physical solar provider, active surface
-frame, body state, and other causal consumers read `WorldTime` and must never be
-driven by `CelestialTime`. When the two epochs diverge, a typed render-only Sun
-direction from the celestial presentation drives the scene key light. Its
-finalized `SunRenderState` continues through the existing directional-shadow,
-terrain-material, and horizon-cache consumers. The detached clock therefore
-changes visible illumination and shadows without changing `SunState`, physics,
-or co-simulation inputs. Static scenes continue to render from `SunState`.
-The sky clock UI displays this same `CelestialTime` epoch, so its date readout
-tracks the globe and sky while the independent rate is active. Its per-frame
-delta comes from the resolved celestial clock sample, not from subtracting
-Julian-date projections; a step longer than one day is valid at presentation
-rates such as 100,000×.
+Scene time selection is one application policy: `scene.time.select`, installed
+by `assets/scripting/policy/startup.rhai` from `policy/index.toml`. Startup
+installs the policy; it does not choose an epoch before a scene exists. The USD
+scene lifecycle invokes it once at `SceneTransitionCompleted`, after the
+composed stage dependencies and queued visual/mesh projection work have
+settled. A completion notification that did not enter the loading phase is
+ignored, so an idempotent load of the active scene does not select or apply time
+again. Its typed facts include the selected root path, composed epoch API and
+value status, celestial-source presence, and a fresh computer UTC→TDB candidate.
+Rhai selects a valid non-zero root `lunco:time:epochJd` when present; otherwise
+it selects current computer time. Rust verifies that the returned epoch matches
+one of those candidates and passes the result to the time owner.
 
-Rendered globe imagery is also presentation-owned. Earth and Moon globe tiles
-are placed under dedicated visual celestial frames that consume
-`CelestialTime`; the physical body, picking collider, surface terrain, and
-active BigSpace/Avian frame remain in the `WorldTime` hierarchy. This is the
-required boundary for a high-rate sky time-lapse: it moves the visible globe
-without teleporting the simulated body or invalidating the surface scene. When
-the active camera remains on a physical surface, the render-only hierarchy is
-rigidly mapped so the CelestialTime body-fixed observer coincides with that
-WorldTime camera; relative celestial positions and body rotations still follow
-CelestialTime. This keeps Earth and the Sun in the right local sky as the two
-epochs diverge, without moving terrain, stations, links, or physics.
-The procedural Sun disc direction is published in the active camera's view
-coordinates, matching the starfield's view-space rays; camera motion also
-refreshes that direction while the celestial clock is paused.
+Until the selection is installed, `SceneTimeState` holds the physical fixed
+loop and gates USD time-sample animation, celestial placement/presentation, and
+USD DEM terrain construction. Applying the selection resets `SimTick`, the
+mission calendar, and clock-domain samples before releasing those consumers.
+`ResetTime` uses the retained selection and never invokes the policy. This
+keeps a replacement scene from consuming the outgoing scene's epoch while its
+assets and projections are still arriving. A missing epoch warns when celestial
+sources are present; an invalid `LunCoEpochAPI` value always warns. Both select
+current computer time, and the `epoch-api-missing-time` lint reports the issue
+before runtime. A valid root epoch makes celestial scenes repeatable across
+launches.
 
-An active celestial presentation requests the shared bounded realtime frame
-cadence while its clock advances. Focused rendering remains vsync-paced, and
-unfocused rendering uses the same fixed 60 Hz cadence as other realtime work;
-celestial animation does not force an unbounded max-speed render loop.
+The hook owner is `lunco-time`; its typed input is the settled scene event, root
+path, authored epoch status/value, celestial-source presence, and sampled
+computer time. Its output is a source, the selected candidate, and an optional
+warning. A missing or invalid policy result faults the application and leaves
+time-dependent consumers held. The production Rhai hook test checks both
+selections; `artemis_motion` and `lint_selftest` cover authored and
+computer-time scene behavior through the production scene-test runner.
 
 The rate ceiling and fixed-step catch-up budget live in `lunco-time`; consumers
 must not add another rate path or silently drain an unbounded fixed-step burst.
 The canonical labels are supplied by `lunco-time` so fractional slow-motion
 rates are rendered consistently by every UI.
 
-## 2. Clock tree
+## 2. Physical-time presentation sample
+
+Render-only consumers read `SimulationPresentationTime`, published after
+`WorldTime` and the fixed loop, before transform propagation. If the latest
+completed tick is `n`, the running presentation sample is:
+
+```text
+sample tick = n - 1 + Time<Fixed>.overstep_fraction()
+```
+
+The fraction is bounded to `[0, 1]`, so the sample stays between two completed
+physics states and never predicts beyond `SimTick`. On pause or a simulation
+barrier it presents the upper endpoint, `n`, then remains fixed. The sample's
+simulation seconds, MET, and Julian date all come from the same `MissionClock`
+mapping as `WorldTime`.
+
+Ordinary USD time-sampled transforms, visibility, and material channels use
+this physical presentation sample. Celestial render frames and solar
+presentation use the same sample. Causal physics and body state continue to
+read `WorldTime` at integer ticks; render-only consumers may interpolate between
+those completed states, but they do not advance on wall time.
+
+Pausing the fixed simulation holds the sky, authored scene animation, and other
+simulation-time presentation together. The sky-time UI reads
+`SimulationPresentationTime`.
+
+## 3. Clock tree
 
 A `TimeDomain` is an affine child:
 
@@ -83,92 +102,86 @@ A `TimeDomain` is an affine child:
 local_t = offset + scale * parent_t
 ```
 
-Root clocks are the only places raw time enters the tree:
+The only raw roots are:
 
-- `Tick` reads the deterministic simulation time and freezes with the sim;
-- `Wall` reads `Time<Real>` and is non-deterministic but never pauses;
-- `Epoch` exposes the mission/calendar projection used by celestial consumers.
+- `Tick`: deterministic simulation time, frozen by the physical transport;
+- `Wall`: `Time<Real>`, non-deterministic and never paused.
 
-The well-known `Clocks` resource publishes handles for `real`, `sim`,
-`interaction`, and `celestial`. `interaction` is wall-rooted for avatar and
-camera presentation. Physics and celestial time are separate concerns; a physics
-readiness hold must not accidentally become a solar-system clock dependency.
+`Clocks` publishes the `real`, `sim`, and wall-rooted `interaction` handles.
+The interaction domain drives camera, avatar, and UI easing that must remain
+responsive while the simulation is paused. It does not drive scene animation,
+celestial state, or physics.
 
 A derived domain follows its parent. A driven domain adds `Playback` with its
-own playhead, range, rate, loop, seek, and user pause state. `TimeBinding` attaches
-an entity to a domain. Per-object, per-project, and preview playback therefore use
-one mechanism rather than separate clock types.
+own seekable head, range, rate, loop, and pause state. `TimeBinding` attaches an
+entity to a domain. `ResolvedDomains` resolves these explicit bindings once per
+frame; missing required bindings are reported by their owner.
 
-`ResolvedDomains` contains the resolved `{ t, dt }` sample for each domain once
-per frame. Clock arithmetic is pure and unit-testable; Bevy systems only advance
-the roots, resolve the tree, and publish the sample.
+## 4. Animation funnel
 
-## 3. Animation funnel
-
-All authored animation follows one path:
+Authored animation has one projection path:
 
 ```text
-TimeDomain / Playback
-        -> authored value source
-           (USD timeSamples or a live time-domain driver)
-        -> projection / write
+physical presentation time or an explicit TimeBinding
+        -> USD timeSamples
+        -> visual projection
 ```
 
-`lunco-usd-bevy-animation::UsdAnimationPlugin` binds ordinary USD animation to the
-`AnimationPreview` driven domain and writes the supported visual channels. The
-preview domain can play, pause, seek, rate-scale, and loop without touching the
-physics transport.
+Unbound USD animation follows the interpolated physical timeline. A deliberate
+editor or cinematic preview can bind its entities to `AnimationPreview` or a
+camera-track domain and use `ControlAnimation`; this binding is explicit and
+does not replace the scene's physical-time default.
 
-Camera paths are a separate live driver over the same domain machinery. A
-`UsdGeomBasisCurves` path owns a driven domain and a `Playback`; its explicit
-`CameraPathTransport` command controls that path. See
-[`51-cinematic-camera.md`](51-cinematic-camera.md).
+The USD animation adapter samples authored xform, visibility, and supported
+material channels in `PostUpdate`, after the physical presentation sample is
+published and before transform propagation. Camera paths remain an explicit
+driven-domain feature; see [`51-cinematic-camera.md`](51-cinematic-camera.md).
 
-Pure tweens and state machines may be authored as behavior over a domain. They
-must not introduce a second playback clock. If a result must be recorded or
-scrubbed as authored animation, bake it through the USD operation path.
+Pure tweens and state machines may use a domain, but must not add another
+independent clock resource. Authored time samples remain USD data and are
+evaluated by the shared adapter.
 
-## 4. Coupling and rates
+## 5. Coupling and rates
 
 `DomainRegime` distinguishes the reason a domain exists:
 
 | Regime | Meaning |
 |---|---|
-| `Kinematic` | pure function of time; may seek and rate-scale freely |
-| `Causal` | integrates state; rate is bounded by solver stability and communication points |
+| `Kinematic` | Pure function of time; may seek and rate-scale when explicitly bound. |
+| `Causal` | Integrates state; rate is bounded by solver stability and communication points. |
 
-The classification is informational for current animation consumers but is the
-boundary for future Modelica/co-simulation domains. A causal participant must
-advance at its declared communication point; it must not be made a kinematic
-playback shortcut merely to simplify UI controls.
+A causal participant advances on its declared communication point. It must not
+be turned into a kinematic playback shortcut to simplify UI controls.
 
-## 5. Pause, re-parenting, and bodies
+## 6. Pause and cadence
 
-### 5.1 Pause propagates structurally
+Pausing the physical transport freezes `SimTick`, physics, and every render
+sample derived from that tick. The interaction schedule remains available for
+camera and UI response. It is a separate presentation cadence, not another
+simulation clock. A terminal runtime fault also holds the shared fixed clock;
+otherwise Rhai, celestial presentation, and co-simulation could advance from an
+invalid state.
 
-There is no second `paused` flag to propagate through the tree. If a parent stops,
-its resolved time stops and every child follows. Running one clock while another
-is paused is a `SetClock` re-parenting operation, not a special-case branch.
+The fixed-step catch-up budget lives in `lunco-time`; consumers must not add a
+second rate path or drain an unbounded burst. Celestial recomputation may use
+its shared geometric error budget, but that cadence selects when derived
+presentation is refreshed, not a new time source.
 
-### 5.2 A body is not a clock
-
-Per-body physics suspension uses the authored/runtime body mechanism such as
+Per-body physics suspension uses the body mechanism such as
 `RigidBodyDisabled` and `ColliderDisabled`. It does not create a clock per body:
 contact islands and one solver step require a coherent physics cadence.
 
-The required `physics.body_escape` Rhai policy uses this same boundary. Its
-application default disables the affected dynamic joint island and its
-colliders for both finite world exits and non-finite position or velocity,
-leaving other bodies and the simulation clock running. A Twin may author a
-world-wide physics hold when that is its intended response; missing or invalid
-policy results remain visible safety faults.
+## 7. Networking and determinism
 
-### 5.3 Cadence is not clock
+Only deterministic simulation state and authoritative transport decisions are
+network state. Local animation-preview seeks are presentation decisions, not
+physics ticks. A camera path's playback is local unless its authored shot is
+part of the shared scene contract.
 
-The schedule answers how often a system runs; the domain answers which time it
-reads. Causal simulation runs on the fixed schedule. Embodiment, camera, and UI
-presentation use `InteractionSchedule` and `InteractionEased`, so their stable
-presentation cadence does not become a second simulation clock.
+Physics determinism also requires the Avian compute order to be pinned. The
+production headless/server builder publishes `PhysicsDeterminism`; the
+`clock_snapshot()` query exposes that contract and reports a missing admission
+resource as a runtime fault rather than treating the world as deterministic.
 
 `RuntimeCycleSet` supplies ordering vocabulary, not an active clock sample or
 an independent cadence driver. Every system and callback must use the clock
@@ -190,115 +203,34 @@ application cadence. `sim_tick()`, `dt()`, and `elapsed_seconds()` reject calls
 outside the simulation cycle as a Rhai invocation error; missing mandatory
 simulation clock resources remain a runtime fault.
 
-## 6. Networking and determinism
+Never replicate a private floating-origin cell/local split as the time
+contract. Coordinate projection and time authority are separate boundaries.
 
-Only deterministic simulation state and its authoritative transport decisions are
-network state. A local animation-preview seek is a presentation decision, not a
-physics tick. A camera path's clock is local unless its authored shot is part of
-the shared scene contract; the path still uses the same explicit domain and
-transport rules.
-
-Physics determinism has a second admission requirement beyond the fixed clock:
-the Avian compute order must be pinned. The production headless/server builder
-uses one compute thread and publishes `PhysicsDeterminism { deterministic: true }`;
-`clock_snapshot()` exposes `physics_contract_ok`, the admission error (if any),
-and the selected `physics_compute_threads` to Rhai. A multi-threaded pool is still
-available only as an explicit diagnostic/divergence configuration and reports
-`physics_deterministic: false`. Fixed `dt` alone is not evidence of a
-reproducible contact solve. If the admission resource is absent,
-`clock_snapshot()` records a `physics-determinism-missing` runtime fault rather
-than silently treating the world as deterministic.
-
-Never replicate a private floating-origin cell/local split as the time contract.
-Coordinate projection and time authority are separate boundaries.
-
-## 7. Invariants
+## 8. Invariants and owners
 
 1. Store one causal master (`SimTick`); derive calendar and consumer views.
-2. Every derived or driven domain names its parent and its `(offset, scale)`.
-3. Every independent playhead is a `Playback` on a `TimeDomain`, not a parallel
-   resource or a boolean flag.
-4. Causal state advances only on the causal cadence; kinematic preview can seek.
-5. The USD sampler is the one generic authored-animation funnel.
-6. A new clock must state its root, coupling regime, pause behavior, and owner.
-7. A consumer reports its resolved time/delta rather than reading a raw clock to
-   bypass the spine.
-
-## 8. System mapping
-
-The production split is:
+2. Presentation samples completed physical ticks and never advances beyond the
+   latest one.
+3. Scene animation and celestial presentation use the physical-time sample by
+   default; independent playback requires an explicit `TimeBinding`.
+4. Causal state advances only on the fixed simulation cadence.
+5. The USD sampler is the shared authored-animation funnel.
+6. Interaction cadence serves camera/avatar/UI response and remains separate
+   from the physical simulation cadence.
 
 | Layer | Owner |
 |---|---|
-| master tick, transport, anchor, `WorldTime` | `lunco-time` / `lunco-core` |
-| domain tree, playheads, bindings, resolved samples | `lunco-time` |
-| USD value evaluation and visual projection | `lunco-usd-bevy` and `lunco-usd-bevy-camera` |
+| master tick and transport | `lunco-core` / `lunco-time` |
+| mission/calendar anchor and `WorldTime` | `lunco-time` |
+| physical presentation sample | `lunco-time` |
+| explicit domains, playheads, and bindings | `lunco-time` |
+| USD value evaluation and visual projection | `lunco-usd-bevy-animation` |
+| celestial render projection | `lunco-celestial-spatial` |
 | Modelica stepping and communication points | Modelica/cosim owners |
 | physics stepping | Avian and the fixed simulation schedule |
 | avatar/camera/UI presentation cadence | `InteractionSchedule` |
-| calendar scales, sidereal and ephemeris projections | celestial/time consumers |
 
-The API surface is `SetTimeTransport` for the bounded live world and
-`ControlAnimation` for the preview or an explicitly addressed driven domain.
-Consumers do not invent aliases for either command. `SetClock` is the separate
-API for a pure celestial presentation clock, including scales above the live
-transport ceiling; it publishes `CelestialTime` and does not overwrite
-`WorldTime`.
-
-`SetSimulationExecutionMode` is the separate host-pacing command. `Realtime`
-means that the host admits the fixed lattice on a wall-clock cadence;
-`MaxSpeed` means that a headless, recording, or test host may run without an
-intentional wait. It never changes `TimeTransport.rate`: a run can therefore
-be realtime at `1x`, realtime at `4x`, or max-speed with an explicitly authored
-transport rate. The host adapter owns the wait (`ScheduleRunner` or Winit),
-while a deterministic recorder owns its `TimeUpdateStrategy`; no subsystem may
-write both knobs as a shortcut.
-
-## 11. Current clock-tree boundaries
-
-These boundaries are part of the contract and are retained here because they
-prevent the most common regressions.
-
-### 11a. Pause propagation is free
-
-`child_t = offset + scale * parent_t`. A frozen ancestor freezes its subtree.
-To detach celestial or interaction behavior from a pause, re-parent its clock;
-do not add a propagated pause bit or a duplicate paused system.
-
-### 11b. Root placement carries meaning
-
-`real` is for non-deterministic interaction. `sim` is for causal, replicated
-world state. `interaction` is the wall-rooted presentation clock. Celestial
-placement is explicit and must not be downstream of a physics readiness hold.
-
-### 11e. Celestial content is authored
-
-Whether a scene contains celestial bodies is a USD composition decision. Runtime
-code projects declared body prims and their authored references; it does not turn
-the solar system on as an incidental side effect of a generic scene or site
-anchor. The precision scaffolding and physical constants remain engine-owned
-derived state.
-
-### 11e-bis. Cadence is independent of clock
-
-Presentation systems use the interaction cadence and its `InteractionEased`
-history. Causal systems use the fixed simulation cadence. A system must not be
-duplicated merely because it needs a different pause behavior; put it on the
-correct cadence and bind it to the correct domain.
-
-### 5.4 Pause is an admission barrier
-
-`SetTimeTransport { playing: false }` projects to `Time<Virtual>` synchronously
-at the command boundary. If the command was raised from inside `FixedUpdate`,
-the time spine also discards only the unspent `Time<Fixed>` overstep, preserving
-the completed tick without admitting another fixed iteration from the same render
-frame. The physics owner mirrors the paused virtual clock immediately before
-Avian's solver schedule and zeroes `Time<Physics>`'s delta. This is the pause
-contract; a one-tick delay, wall-clock guess, or UI-only flag is not equivalent.
-
-Scene teardown resets the fixed-clock admission state, physics holds and step
-debt, simulation tick, and prediction/control buffers before the replacement
-scene integrates. A pause explicitly issued while a scene transition is
-admitted is carried through that reset and consumed once, so a queued
-`restart_scene(); pause();` pauses the replacement rather than being overwritten
-by the reset's normal playing default.
+`SetTimeTransport` controls the physical simulation. `SetMissionEpoch` changes
+the calendar anchor at the current tick. `ControlAnimation` controls explicitly
+bound preview or driven domains. `SetSimulationExecutionMode` controls host
+pacing only; it does not change `TimeTransport.rate`.

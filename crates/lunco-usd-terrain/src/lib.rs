@@ -153,13 +153,20 @@ impl Plugin for UsdTerrainPlugin {
         app.add_systems(
             Update,
             (
-                release_pending_dem_datasets.before(UsdTerrainSet::Bridge),
+                release_pending_dem_datasets
+                    .run_if(lunco_time::scene_time_ready)
+                    .before(UsdTerrainSet::Bridge),
                 bridge_usd_dem_terrain
                     .in_set(UsdTerrainSet::Bridge)
+                    .run_if(lunco_time::scene_time_ready)
                     .run_if(terrain_schema_is_valid),
-                refresh_layered_terrain_layers.run_if(terrain_schema_is_valid),
+                refresh_layered_terrain_layers
+                    .run_if(lunco_time::scene_time_ready)
+                    .run_if(terrain_schema_is_valid),
                 cache_terrain_document,
-                refresh_docbacked_terrain_from_doc.run_if(terrain_schema_is_valid),
+                refresh_docbacked_terrain_from_doc
+                    .run_if(lunco_time::scene_time_ready)
+                    .run_if(terrain_schema_is_valid),
             ),
         );
         // Authoring tier: doc-backed terrains route live edits to their USD document's

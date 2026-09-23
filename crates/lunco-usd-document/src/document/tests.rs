@@ -105,6 +105,195 @@ fn a_canonical_stage_authors_the_value_verbatim() {
     );
 }
 
+#[test]
+fn stage_and_prim_documentation_use_typed_reversible_operations() {
+    let mut doc = UsdDocument::with_origin(
+        DocumentId::new(79),
+        TINY_USDA,
+        DocumentOrigin::writable_file("/tmp/documentation.usda"),
+    );
+    let root = SdfPath::abs_root();
+    let world = SdfPath::new("/World").unwrap();
+
+    let stage_inverse = doc
+        .apply(UsdOp::SetStageDocumentation {
+            edit_target: LayerId::root(),
+            documentation: Some("Scene documentation".into()),
+        })
+        .expect("stage documentation applies");
+    assert_eq!(
+        doc.data()
+            .field(&root, sdf::FieldKey::Documentation.as_str()),
+        Some(&sdf::Value::String("Scene documentation".into()))
+    );
+    doc.apply(stage_inverse)
+        .expect("stage documentation restores");
+    assert_eq!(
+        doc.data()
+            .field(&root, sdf::FieldKey::Documentation.as_str()),
+        None
+    );
+
+    doc.apply(UsdOp::SetPrimDocumentation {
+        edit_target: LayerId::root(),
+        path: "/World".into(),
+        documentation: Some("World documentation".into()),
+    })
+    .expect("prim documentation applies");
+    assert_eq!(
+        doc.data()
+            .field(&world, sdf::FieldKey::Documentation.as_str()),
+        Some(&sdf::Value::String("World documentation".into()))
+    );
+    doc.apply(UsdOp::SetPrimDocumentation {
+        edit_target: LayerId::root(),
+        path: "/World".into(),
+        documentation: None,
+    })
+    .expect("prim documentation clears");
+    assert_eq!(
+        doc.data()
+            .field(&world, sdf::FieldKey::Documentation.as_str()),
+        None
+    );
+}
+
+#[test]
+fn schema_documentation_edits_preserve_unrelated_source_text() {
+    let source = r#"#usda 1.0
+# Keep this source comment and its surrounding layout.
+(
+)
+
+class "ExampleAPI" (
+    doc = """Old class documentation."""
+)
+{
+    # Keep this attribute comment too.
+    double example:epoch (
+        doc = "Old attribute documentation."
+    )
+}
+"#;
+    let mut doc = UsdDocument::with_origin(
+        DocumentId::new(80),
+        source,
+        DocumentOrigin::writable_file("/tmp/schema-documentation.usda"),
+    );
+
+    doc.apply(UsdOp::SetPrimDocumentation {
+        edit_target: LayerId::root(),
+        path: "/ExampleAPI".into(),
+        documentation: Some("New class documentation with \"quotes\".".into()),
+    })
+    .expect("class documentation applies");
+    doc.apply(UsdOp::SetAttributeDocumentation {
+        edit_target: LayerId::root(),
+        path: "/ExampleAPI".into(),
+        name: "example:epoch".into(),
+        documentation: Some("New attribute documentation.".into()),
+    })
+    .expect("attribute documentation applies");
+
+    let expected = source
+        .replace(
+            "doc = \"\"\"Old class documentation.\"\"\"",
+            "doc = \"New class documentation with \\\"quotes\\\".\"",
+        )
+        .replace(
+            "Old attribute documentation.",
+            "New attribute documentation.",
+        );
+    assert_eq!(doc.source(), expected);
+    usda_to_data(&doc.source()).expect("patched USDA source remains valid");
+}
+
+#[test]
+fn removing_authored_specs_preserves_unrelated_source_text() {
+    let source = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+
+# Schema spec selected for removal.
+class "RemoveMe" {
+    double removeMe:value = 1
+}
+
+def "World"
+{
+    # Keep the neighboring scene source intact.
+    over "Earth"
+    {
+        # This local opinion is removed with RemoveMeChild.
+        over "RemoveMeChild"
+        {
+            bool test:removeMe = true
+        }
+        def Sphere "Keep"
+        {
+        }
+    }
+}
+"#;
+    let mut doc = UsdDocument::with_origin(
+        DocumentId::new(81),
+        source,
+        DocumentOrigin::writable_file("/tmp/remove-authored-spec.usda"),
+    );
+
+    doc.apply(UsdOp::RemovePrim {
+        edit_target: LayerId::root(),
+        path: "/RemoveMe".into(),
+    })
+    .expect("root class removal applies");
+    doc.apply(UsdOp::RemovePrim {
+        edit_target: LayerId::root(),
+        path: "/World/Earth/RemoveMeChild".into(),
+    })
+    .expect("nested over removal applies");
+
+    let result = doc.source();
+    assert!(!result.contains("RemoveMe"));
+    assert!(!result.contains("test:removeMe"));
+    assert!(result.contains("# Keep the neighboring scene source intact."));
+    assert!(result.contains("def Sphere \"Keep\""));
+    usda_to_data(&result).expect("remaining USDA source reparses cleanly");
+}
+
+#[test]
+fn attribute_documentation_uses_a_typed_reversible_operation() {
+    let src = "#usda 1.0\ndef Xform \"World\"\n{\n    double size = 2\n}\n";
+    let mut doc = UsdDocument::with_origin(
+        DocumentId::new(80),
+        src,
+        DocumentOrigin::writable_file("/tmp/attribute_documentation.usda"),
+    );
+    let world = SdfPath::new("/World").unwrap();
+    let size = world.append_property("size").unwrap();
+
+    let inverse = doc
+        .apply(UsdOp::SetAttributeDocumentation {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "size".into(),
+            documentation: Some("Authored size in metres.".into()),
+        })
+        .expect("attribute documentation applies");
+    assert_eq!(
+        doc.data()
+            .field(&size, sdf::FieldKey::Documentation.as_str()),
+        Some(&sdf::Value::String("Authored size in metres.".into()))
+    );
+    doc.apply(inverse)
+        .expect("attribute documentation undo applies");
+    assert_eq!(
+        doc.data()
+            .field(&size, sdf::FieldKey::Documentation.as_str()),
+        None
+    );
+}
+
 /// UNDO MUST LAND WHERE IT STARTED on a non-canonical stage.
 ///
 /// The inverse op is built from a value read raw out of the layer — i.e. in the
@@ -605,8 +794,7 @@ fn view_layer_composes_without_entering_persistent_runtime_source() {
     assert_eq!(document.runtime_revision(), 1);
     assert_eq!(document.view_revision(), 1);
 
-    let persistent =
-        usda_to_data(&document.persistent_composed_source().unwrap()).unwrap();
+    let persistent = usda_to_data(&document.persistent_composed_source().unwrap()).unwrap();
     assert!(persistent.spec(&points).is_some());
     assert!(persistent.spec(&ribbon).is_none());
 

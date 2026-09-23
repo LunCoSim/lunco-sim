@@ -92,6 +92,12 @@ fn on_tick(me, ctx) {
 
     let f = [];
 
+    let clock = clock_snapshot();
+    f.push(t_true(clock != () && clock.clock_contract_ok == true
+            && clock.mission_epoch0_jd > 2460000.0
+            && clock.mission_epoch0_jd < 2488000.0,
+        "scene without an authored epoch did not select current computer time"));
+
     let invalid_controls = by_rule(findings, "control-binding-unknown-intent");
     f.push(t_true(invalid_controls.len() == 1,
         "control-binding-unknown-intent fired " + invalid_controls.len() +
@@ -115,23 +121,24 @@ fn on_tick(me, ctx) {
     }
 
     let missing_epoch = by_rule(findings, "epoch-api-missing-time");
-    f.push(t_true(missing_epoch.len() == 2,
+    f.push(t_true(missing_epoch.len() == 3,
         "epoch-api-missing-time fired " + missing_epoch.len() +
-        " time(s), expected exactly 2 (/LintSelftest/MissingEpoch and ZeroEpoch)"));
-    if missing_epoch.len() == 2 {
+        " time(s), expected warnings for missing, zero, and misplaced root epochs"));
+    if missing_epoch.len() == 3 {
         f.push(t_true(mentions(missing_epoch, "/LintSelftest/MissingEpoch"),
             "epoch-api-missing-time did not name the opt-in without an authored epoch"));
         f.push(t_true(mentions(missing_epoch, "/LintSelftest/ZeroEpoch"),
-            "epoch-api-missing-time did not reject the schema's zero compatibility default"));
-        f.push(t_true(missing_epoch[0].severity == "error",
-            "epoch-api-missing-time is severity " + missing_epoch[0].severity +
-            ", expected error because orbital time must not be implicit"));
+            "epoch-api-missing-time did not reject an explicitly authored zero epoch"));
+        f.push(t_true(mentions(missing_epoch, "/LintSelftest/AuthoredEpoch"),
+            "epoch-api-missing-time did not reject an epoch API outside the scene root"));
+        for finding in missing_epoch {
+            f.push(t_true(finding.severity == "warn",
+                "epoch-api-missing-time is severity " + finding.severity +
+                ", expected warn because runtime selects current computer time"));
+        }
         f.push(t_true(missing_epoch[0].message.contains("lunco:time:epochJd"),
-            "epoch-api-missing-time did not name the field the author must set"));
+            "epoch-api-missing-time did not name the field to author"));
     }
-    f.push(t_true(!mentions(findings, "/LintSelftest/AuthoredEpoch"),
-        "a finding names /LintSelftest/AuthoredEpoch — an explicit epoch on the " +
-        "LunCoEpochAPI opt-in is the valid control"));
 
     // The motor bug, by rule id and by subject.
     let nested = by_rule(findings, "nested-body-no-joint");
@@ -270,10 +277,11 @@ fn on_tick(me, ctx) {
         missing_telemetry_target[0].subject == "/LintSelftest/BrokenTelemetry",
         "telemetry-target-required must name the targetless declaration exactly once"));
 
-    let thin_clearance = by_rule(findings, "sprung-foot-thin-clearance");
-    f.push(t_true(thin_clearance.len() == 1 &&
-        thin_clearance[0].subject == "/LintSelftest/Leg/Foot_Gimbal",
-        "sprung-foot-thin-clearance must catch the authored leg geometry at its joint"));
+    let struts_below_feet = by_rule(findings, "sprung-foot-not-lowest");
+    f.push(t_true(struts_below_feet.len() == 2 &&
+        mentions(struts_below_feet, "/LintSelftest/Leg/Strut_Spring") &&
+        mentions(struts_below_feet, "/LintSelftest/Leg/Strut_NegativeStiffness"),
+        "sprung-foot-not-lowest must inspect each authored driven strut against its foot"));
 
     // A collision group whose collection matches no prim, and whose
     // `filteredGroups` names a body instead of a group. Both are ERRORs: the

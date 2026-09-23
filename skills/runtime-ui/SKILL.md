@@ -327,10 +327,11 @@ For a markup/style-only change:
    `CaptureScreenshot` when the visual result matters.
 5. Check logs for HUI/Flair parse or asset errors.
 
-For a Rust change, build the production binary in this worktree, set
-`LUNCOSIM_BIN` to it, send API `Exit`, verify the existing process and port are
-gone, then launch the replacement.
-Never overlap sessions or use `pkill`.
+For a Rust change, build the production binary in this worktree and set
+`LUNCOSIM_BIN` to it. Each agent owns a distinct free API port and launches from
+the same checkout and working directory as its terminal. Before replacing your
+own session, send API `Exit` and verify its process and port are gone. Do not
+control another agent's session or use `pkill`.
 
 Useful diagnosis order:
 

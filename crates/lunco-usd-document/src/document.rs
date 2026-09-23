@@ -108,9 +108,438 @@ use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecType};
 /// generous for realistic edit cadences without growing unbounded.
 const CHANGE_HISTORY_CAPACITY: usize = 256;
 
-/// Minimal valid USDA, used as the canonical-data fallback when a document's
-/// source text fails to parse (see [`UsdDocument::with_origin`]).
-const EMPTY_USDA: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\n";
+/// Minimal valid USDA for internal empty layers and the canonical-data fallback
+/// when a document's source text fails to parse (see [`UsdDocument::with_origin`]).
+/// Internal layers carry no stage metadata, so they cannot override the authored
+/// root layer's coordinate or time contract.
+const EMPTY_USDA: &str = "#usda 1.0\n";
+
+#[derive(Clone, Copy)]
+enum UsdaTokenKind {
+    Identifier,
+    String,
+    Punctuation(u8),
+}
+
+#[derive(Clone, Copy)]
+struct UsdaToken {
+    start: usize,
+    end: usize,
+    kind: UsdaTokenKind,
+}
+
+fn usda_tokens(source: &str) -> Option<Vec<UsdaToken>> {
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' | b'\t' | b'\r' | b'\n' => i += 1,
+            b'#' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'"' => {
+                let start = i;
+                let triple = bytes.get(i..i + 3) == Some(b"\"\"\"");
+                let width = if triple { 3 } else { 1 };
+                i += width;
+                let mut closed = false;
+                while i < bytes.len() {
+                    if !triple && bytes[i] == b'\\' {
+                        i = (i + 2).min(bytes.len());
+                    } else if triple && bytes.get(i..i + 3) == Some(b"\"\"\"") {
+                        i += 3;
+                        closed = true;
+                        break;
+                    } else if !triple && bytes[i] == b'"' {
+                        i += 1;
+                        closed = true;
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+                tokens.push(UsdaToken {
+                    start,
+                    end: i,
+                    kind: UsdaTokenKind::String,
+                });
+            }
+            b'@' => {
+                i += 1;
+                let mut closed = false;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        i = (i + 2).min(bytes.len());
+                    } else if bytes[i] == b'@' {
+                        i += 1;
+                        closed = true;
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            byte if byte.is_ascii_alphabetic() || byte == b'_' => {
+                let start = i;
+                i += 1;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'_' | b':'))
+                {
+                    i += 1;
+                }
+                tokens.push(UsdaToken {
+                    start,
+                    end: i,
+                    kind: UsdaTokenKind::Identifier,
+                });
+            }
+            punctuation => {
+                tokens.push(UsdaToken {
+                    start: i,
+                    end: i + 1,
+                    kind: UsdaTokenKind::Punctuation(punctuation),
+                });
+                i += 1;
+            }
+        }
+    }
+    Some(tokens)
+}
+
+fn token_is_punctuation(token: UsdaToken, punctuation: u8) -> bool {
+    matches!(token.kind, UsdaTokenKind::Punctuation(value) if value == punctuation)
+}
+
+fn token_is_identifier(source: &str, token: UsdaToken, identifier: &str) -> bool {
+    matches!(token.kind, UsdaTokenKind::Identifier) && &source[token.start..token.end] == identifier
+}
+
+fn matching_usda_delimiter(tokens: &[UsdaToken], open: usize) -> Option<usize> {
+    let UsdaTokenKind::Punctuation(first) = tokens.get(open)?.kind else {
+        return None;
+    };
+    let mut stack = vec![first];
+    for (index, token) in tokens.iter().enumerate().skip(open + 1) {
+        let UsdaTokenKind::Punctuation(punctuation) = token.kind else {
+            continue;
+        };
+        match punctuation {
+            b'{' | b'[' | b'(' => stack.push(punctuation),
+            b'}' | b']' | b')' => {
+                let expected = match punctuation {
+                    b'}' => b'{',
+                    b']' => b'[',
+                    b')' => b'(',
+                    _ => return None,
+                };
+                if stack.pop() != Some(expected) {
+                    return None;
+                }
+                if stack.is_empty() {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn documentation_string_token(
+    source: &str,
+    tokens: &[UsdaToken],
+    start: usize,
+    end: usize,
+) -> Option<usize> {
+    (start..end.saturating_sub(2))
+        .find(|index| {
+            token_is_identifier(source, tokens[*index], "doc")
+                && token_is_punctuation(tokens[*index + 1], b'=')
+                && matches!(tokens[*index + 2].kind, UsdaTokenKind::String)
+        })
+        .map(|index| index + 2)
+}
+
+fn usda_class_metadata(
+    source: &str,
+    tokens: &[UsdaToken],
+    class_name: &str,
+) -> Option<(usize, usize)> {
+    let mut depth = Vec::new();
+    for (index, token) in tokens.iter().copied().enumerate() {
+        if depth.is_empty()
+            && token_is_identifier(source, token, "class")
+            && tokens.get(index + 1).is_some_and(|name| {
+                matches!(name.kind, UsdaTokenKind::String)
+                    && &source[name.start + 1..name.end - 1] == class_name
+            })
+            && tokens
+                .get(index + 2)
+                .is_some_and(|open| token_is_punctuation(*open, b'('))
+        {
+            let close = matching_usda_delimiter(tokens, index + 2)?;
+            return Some((index + 2, close));
+        }
+        if let UsdaTokenKind::Punctuation(punctuation) = token.kind {
+            match punctuation {
+                b'{' | b'[' | b'(' => depth.push(punctuation),
+                b'}' | b']' | b')' => {
+                    let expected = match punctuation {
+                        b'}' => b'{',
+                        b']' => b'[',
+                        b')' => b'(',
+                        _ => return None,
+                    };
+                    if depth.pop() != Some(expected) {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn schema_attribute_documentation_token(
+    source: &str,
+    tokens: &[UsdaToken],
+    body_open: usize,
+    body_close: usize,
+    name: &str,
+) -> Option<usize> {
+    let mut nesting = Vec::new();
+    for index in body_open + 1..body_close {
+        let token = tokens[index];
+        if nesting.is_empty()
+            && token_is_identifier(source, token, name)
+            && index > body_open + 1
+            && matches!(tokens[index - 1].kind, UsdaTokenKind::Identifier)
+            && tokens.get(index + 1).is_some_and(|next| {
+                token_is_punctuation(*next, b'(') || token_is_punctuation(*next, b'=')
+            })
+        {
+            let mut cursor = index + 1;
+            while cursor < body_close {
+                if token_is_punctuation(tokens[cursor], b'(') {
+                    let close = matching_usda_delimiter(tokens, cursor)?;
+                    if close >= body_close {
+                        return None;
+                    }
+                    if let Some(doc) = documentation_string_token(source, tokens, cursor + 1, close)
+                    {
+                        return Some(doc);
+                    }
+                    cursor = close + 1;
+                } else {
+                    cursor += 1;
+                }
+            }
+            return None;
+        }
+        if let UsdaTokenKind::Punctuation(punctuation) = token.kind {
+            match punctuation {
+                b'{' | b'[' | b'(' => nesting.push(punctuation),
+                b'}' | b']' | b')' => {
+                    let expected = match punctuation {
+                        b'}' => b'{',
+                        b']' => b'[',
+                        b')' => b'(',
+                        _ => return None,
+                    };
+                    if nesting.pop() != Some(expected) {
+                        return None;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn quote_usda_string(value: &str) -> Option<String> {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for character in value.chars() {
+        match character {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            character if character.is_control() => return None,
+            character => quoted.push(character),
+        }
+    }
+    quoted.push('"');
+    Some(quoted)
+}
+
+fn patch_class_documentation(
+    source: &str,
+    path: &str,
+    attribute: Option<&str>,
+    documentation: Option<&str>,
+) -> Option<String> {
+    let documentation = documentation?;
+    let class_name = path.strip_prefix('/')?;
+    if class_name.is_empty() || class_name.contains('/') {
+        return None;
+    }
+    let tokens = usda_tokens(source)?;
+    let (metadata_open, metadata_close) = usda_class_metadata(source, &tokens, class_name)?;
+    let doc_token = if let Some(attribute) = attribute {
+        let body_open = metadata_close + 1;
+        if !tokens
+            .get(body_open)
+            .is_some_and(|token| token_is_punctuation(*token, b'{'))
+        {
+            return None;
+        }
+        let body_close = matching_usda_delimiter(&tokens, body_open)?;
+        schema_attribute_documentation_token(source, &tokens, body_open, body_close, attribute)?
+    } else {
+        documentation_string_token(source, &tokens, metadata_open + 1, metadata_close)?
+    };
+    let replacement = quote_usda_string(documentation)?;
+    let token = tokens[doc_token];
+    let mut patched = String::with_capacity(source.len() + replacement.len());
+    patched.push_str(&source[..token.start]);
+    patched.push_str(&replacement);
+    patched.push_str(&source[token.end..]);
+    Some(patched)
+}
+
+fn patch_stage_documentation(source: &str, documentation: Option<&str>) -> Option<String> {
+    let documentation = documentation?;
+    let tokens = usda_tokens(source)?;
+    let metadata_open = tokens
+        .iter()
+        .position(|token| token_is_punctuation(*token, b'('))?;
+    let metadata_close = matching_usda_delimiter(&tokens, metadata_open)?;
+    let doc_token = documentation_string_token(source, &tokens, metadata_open + 1, metadata_close)?;
+    let replacement = quote_usda_string(documentation)?;
+    let token = tokens[doc_token];
+    let mut patched = String::with_capacity(source.len() + replacement.len());
+    patched.push_str(&source[..token.start]);
+    patched.push_str(&replacement);
+    patched.push_str(&source[token.end..]);
+    Some(patched)
+}
+
+fn remove_usda_prim_spec(source: &str, path: &str) -> Option<String> {
+    let tokens = usda_tokens(source)?;
+    let mut specs = Vec::new();
+    for (index, token) in tokens.iter().copied().enumerate() {
+        let (name_index, has_type) = if token_is_identifier(source, token, "def") {
+            match tokens.get(index + 1) {
+                Some(next) if matches!(next.kind, UsdaTokenKind::String) => (index + 1, false),
+                Some(next) if matches!(next.kind, UsdaTokenKind::Identifier) => (index + 2, true),
+                _ => continue,
+            }
+        } else if token_is_identifier(source, token, "over")
+            || token_is_identifier(source, token, "class")
+        {
+            (index + 1, false)
+        } else {
+            continue;
+        };
+        if has_type
+            && !tokens
+                .get(index + 1)
+                .is_some_and(|token| matches!(token.kind, UsdaTokenKind::Identifier))
+        {
+            continue;
+        }
+        let Some(name) = tokens.get(name_index).copied() else {
+            continue;
+        };
+        if !matches!(name.kind, UsdaTokenKind::String) {
+            continue;
+        }
+        let name = source.get(name.start + 1..name.end - 1)?.to_owned();
+        let mut body_open = name_index + 1;
+        if tokens
+            .get(body_open)
+            .is_some_and(|token| token_is_punctuation(*token, b'('))
+        {
+            body_open = matching_usda_delimiter(&tokens, body_open)? + 1;
+        }
+        if !tokens
+            .get(body_open)
+            .is_some_and(|token| token_is_punctuation(*token, b'{'))
+        {
+            continue;
+        }
+        let body_close = matching_usda_delimiter(&tokens, body_open)?;
+        specs.push((index, body_close, name));
+    }
+
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    let mut matches = Vec::new();
+    for (start, close, name) in specs {
+        while stack
+            .last()
+            .is_some_and(|(parent_close, _)| *parent_close < start)
+        {
+            stack.pop();
+        }
+        let current_path = stack
+            .last()
+            .map(|(_, parent)| format!("{parent}/{name}"))
+            .unwrap_or_else(|| format!("/{name}"));
+        if current_path == path {
+            matches.push((tokens[start].start, tokens[close].end));
+        }
+        stack.push((close, current_path));
+    }
+    if matches.len() != 1 {
+        return None;
+    }
+
+    let (mut start, mut end) = matches[0];
+    let mut indentation = String::new();
+    if let Some(line_start) = source[..start].rfind('\n').map(|index| index + 1)
+        && source[line_start..start].trim().is_empty()
+    {
+        indentation = source[line_start..start].to_owned();
+        start = line_start;
+    }
+    while start > 0 {
+        let previous_line_end = start - 1;
+        let previous_line_start = source[..previous_line_end]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let previous_line = &source[previous_line_start..previous_line_end];
+        let Some(comment) = previous_line.strip_prefix(&indentation) else {
+            break;
+        };
+        if !comment.trim_start().starts_with('#') {
+            break;
+        }
+        start = previous_line_start;
+    }
+    if let Some(relative_end) = source[end..].find('\n') {
+        let line_end = end + relative_end;
+        if source[end..line_end].trim().is_empty() {
+            end = line_end + 1;
+        }
+    }
+    let mut patched = String::with_capacity(source.len() - (end - start));
+    patched.push_str(&source[..start]);
+    patched.push_str(&source[end..]);
+    Some(patched)
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // LayerId — names a layer in a stage's layer stack
@@ -411,6 +840,18 @@ pub enum UsdOp {
         /// USD-compliant literal. See the variant doc for the split.
         value: String,
     },
+    /// Set standard USD `doc` metadata on an existing attribute in the selected
+    /// layer. This edits documentation without replacing the authored layer.
+    SetAttributeDocumentation {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose attribute to document.
+        path: String,
+        /// Existing attribute name.
+        name: String,
+        /// Documentation text, or `None` to clear this layer's opinion.
+        documentation: Option<String>,
+    },
     /// Generate a mesh from a typed 2D profile of revolution at the USD
     /// authoring boundary.
     ///
@@ -592,6 +1033,22 @@ pub enum UsdOp {
         /// Positive finite metres per authored unit, plus the typed up axis.
         metrics: StageMetrics,
     },
+    /// Author standard USD `doc` metadata on the layer pseudo-root.
+    SetStageDocumentation {
+        /// Layer to write.
+        edit_target: LayerId,
+        /// Documentation text, or `None` to clear this layer's opinion.
+        documentation: Option<String>,
+    },
+    /// Author standard USD `doc` metadata on one prim.
+    SetPrimDocumentation {
+        /// Layer to write.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// Documentation text, or `None` to clear this layer's opinion.
+        documentation: Option<String>,
+    },
     /// Author the standard USD `kind` metadata on an existing prim.
     ///
     /// `None` removes the selected layer's opinion and lets composition reveal
@@ -740,6 +1197,7 @@ impl UsdOp {
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
+            | Self::SetAttributeDocumentation { edit_target, .. }
             | Self::RevolveProfileMesh { edit_target, .. }
             | Self::ExtrudeProfileMesh { edit_target, .. }
             | Self::TaperedBeamMesh { edit_target, .. }
@@ -749,6 +1207,8 @@ impl UsdOp {
             | Self::SetConnection { edit_target, .. }
             | Self::SetDefaultPrim { edit_target, .. }
             | Self::SetStageMetrics { edit_target, .. }
+            | Self::SetStageDocumentation { edit_target, .. }
+            | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
@@ -782,6 +1242,7 @@ impl UsdOp {
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
+            | Self::SetAttributeDocumentation { edit_target, .. }
             | Self::RevolveProfileMesh { edit_target, .. }
             | Self::ExtrudeProfileMesh { edit_target, .. }
             | Self::TaperedBeamMesh { edit_target, .. }
@@ -791,6 +1252,8 @@ impl UsdOp {
             | Self::SetConnection { edit_target, .. }
             | Self::SetDefaultPrim { edit_target, .. }
             | Self::SetStageMetrics { edit_target, .. }
+            | Self::SetStageDocumentation { edit_target, .. }
+            | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
@@ -824,6 +1287,7 @@ impl UsdOp {
             | Self::SetRotate { path, .. }
             | Self::SetScale { path, .. }
             | Self::SetAttribute { path, .. }
+            | Self::SetAttributeDocumentation { path, .. }
             | Self::RevolveProfileMesh { path, .. }
             | Self::ExtrudeProfileMesh { path, .. }
             | Self::TaperedBeamMesh { path, .. }
@@ -832,6 +1296,7 @@ impl UsdOp {
             | Self::SetRelationship { path, .. }
             | Self::SetConnection { path, .. }
             | Self::SetPrimKind { path, .. }
+            | Self::SetPrimDocumentation { path, .. }
             | Self::SetApiSchemas { path, .. }
             | Self::SetVariantSelection { path, .. }
             | Self::SetPayload { path, .. }
@@ -841,7 +1306,9 @@ impl UsdOp {
             Self::MovePrim {
                 from_path, to_path, ..
             } => vec![from_path.clone(), to_path.clone()],
-            Self::SetDefaultPrim { .. } | Self::SetStageMetrics { .. } => {
+            Self::SetDefaultPrim { .. }
+            | Self::SetStageMetrics { .. }
+            | Self::SetStageDocumentation { .. } => {
                 vec!["/".to_owned()]
             }
         }
@@ -893,6 +1360,10 @@ pub struct UsdDocument {
     /// the file rather than silently emptying it. While `Some`, structural ops
     /// are rejected; a base [`UsdOp::ReplaceSource`] clears it.
     parse_error: Option<String>,
+    /// Original source text while supported edits can preserve it: documentation
+    /// edits patch existing USDA strings, and `RemovePrim` deletes one uniquely
+    /// located spec. Other base-layer edits use canonical SDF serialization.
+    authored_source: Option<String>,
     generation: u64,
     /// Revision of the authored base layer. It is independent from the
     /// document generation so derived caches can name every layer input.
@@ -948,6 +1419,7 @@ impl Clone for UsdDocument {
             runtime: self.runtime.clone(),
             view: self.view.clone(),
             parse_error: self.parse_error.clone(),
+            authored_source: self.authored_source.clone(),
             generation: self.generation,
             base_revision: self.base_revision,
             runtime_revision: self.runtime_revision,
@@ -981,15 +1453,19 @@ impl UsdDocument {
     /// until a [`UsdOp::ReplaceSource`] supplies valid source.
     pub fn with_origin(id: DocumentId, source: impl Into<String>, origin: DocumentOrigin) -> Self {
         let source = source.into();
-        let (base, parse_error) = match usda_to_data(&source) {
-            Ok(data) => (data, None),
+        let (base, parse_error, authored_source) = match usda_to_data(&source) {
+            Ok(data) => (data, None, Some(source.clone())),
             Err(e) => {
                 warn!(
                     "[usd] document {} source did not parse as USDA ({e}); \
                      keeping raw text, edits disabled until replaced",
                     id.raw()
                 );
-                (usda_to_data(EMPTY_USDA).unwrap_or_default(), Some(source))
+                (
+                    usda_to_data(EMPTY_USDA).unwrap_or_default(),
+                    Some(source),
+                    None,
+                )
             }
         };
         let last_saved_base_revision = match &origin {
@@ -1003,6 +1479,7 @@ impl UsdDocument {
             runtime: usda_to_data(EMPTY_USDA).unwrap_or_default(),
             view: usda_to_data(EMPTY_USDA).unwrap_or_default(),
             parse_error,
+            authored_source,
             generation: 0,
             base_revision: 0,
             runtime_revision: 0,
@@ -1015,18 +1492,21 @@ impl UsdDocument {
         }
     }
 
-    /// The current source text, serialized from the **base** layer on demand.
-    /// This is what Save writes to disk and what the viewport preview / session
-    /// snapshot consume. Runtime and view overlays are deliberately excluded — sim
-    /// state must never reach the authored file. Round-trips losslessly with
-    /// [`new`](Self::new) (references and structure survive); only formatting is
-    /// normalized.
+    /// The current source text for the **base** layer. Save, viewport previews,
+    /// and session snapshots use this text; runtime and view overlays are
+    /// excluded. Original source text remains available until a structural edit
+    /// requires canonical SDF serialization. Documentation edits patch their
+    /// existing metadata strings, and `RemovePrim` deletes one uniquely located
+    /// authored spec in place.
     ///
     /// If the document was opened from un-parseable source, the verbatim
     /// original text is returned instead so the file is never corrupted.
     pub fn source(&self) -> String {
         if let Some(raw) = &self.parse_error {
             return raw.clone();
+        }
+        if let Some(source) = &self.authored_source {
+            return source.clone();
         }
         author::data_to_usda(&self.base).unwrap_or_else(|e| {
             warn!("[usd] failed to serialize document {}: {e}", self.id.raw());
@@ -1321,6 +1801,7 @@ impl UsdDocument {
                     text: String::new(),
                 });
                 self.parse_error = None;
+                self.authored_source = Some(source.to_owned());
                 // Matches disk as of this generation ⇒ clean.
                 self.last_saved_base_revision = Some(self.base_revision);
                 true
@@ -1365,6 +1846,7 @@ impl UsdDocument {
             text: String::new(),
         });
         self.parse_error = None;
+        self.authored_source = Some(source.to_owned());
         self.last_saved_base_revision = Some(self.base_revision);
         true
     }
@@ -1560,6 +2042,7 @@ impl UsdDocument {
             TargetLayer::Base => {
                 self.base = data;
                 self.base_revision += 1;
+                self.authored_source = None;
             }
             TargetLayer::Runtime => {
                 self.runtime = data;
@@ -1972,6 +2455,7 @@ impl Document for UsdDocument {
             | UsdOp::SetRotate { edit_target, .. }
             | UsdOp::SetScale { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
+            | UsdOp::SetAttributeDocumentation { edit_target, .. }
             | UsdOp::RevolveProfileMesh { edit_target, .. }
             | UsdOp::ExtrudeProfileMesh { edit_target, .. }
             | UsdOp::TaperedBeamMesh { edit_target, .. }
@@ -1981,6 +2465,8 @@ impl Document for UsdDocument {
             | UsdOp::SetConnection { edit_target, .. }
             | UsdOp::SetDefaultPrim { edit_target, .. }
             | UsdOp::SetStageMetrics { edit_target, .. }
+            | UsdOp::SetStageDocumentation { edit_target, .. }
+            | UsdOp::SetPrimDocumentation { edit_target, .. }
             | UsdOp::SetPrimKind { edit_target, .. }
             | UsdOp::MovePrim { edit_target, .. }
             | UsdOp::SetApiSchemas { edit_target, .. }
@@ -2017,6 +2503,9 @@ impl Document for UsdDocument {
                     self.parse_error = None;
                 }
                 self.commit(target, new_data, UsdChange::FullReload);
+                if target == TargetLayer::Base {
+                    self.authored_source = Some(text);
+                }
                 Ok(inverse)
             }
 
@@ -2113,11 +2602,21 @@ impl Document for UsdDocument {
                 // Can only remove what the target layer itself authored — and not
                 // a prim that layer authors only inside a variant selection.
                 self.require_movable_prim_in(target, &path)?;
+                let authored_source = if target == TargetLayer::Base {
+                    self.authored_source
+                        .as_deref()
+                        .and_then(|source| remove_usda_prim_spec(source, &path))
+                } else {
+                    None
+                };
                 let inverse = self.coarse_inverse(target, &id);
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage.remove_prim(path.as_str()).map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
+                if target == TargetLayer::Base {
+                    self.authored_source = authored_source;
+                }
                 Ok(inverse)
             }
 
@@ -2663,6 +3162,86 @@ impl Document for UsdDocument {
                 Ok(inverse)
             }
 
+            UsdOp::SetAttributeDocumentation {
+                path,
+                name,
+                documentation,
+                ..
+            } => {
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                if prim_sdf.is_property_path() {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "SetAttributeDocumentation target {path} must name a prim"
+                    )));
+                }
+                let attr_sdf = prim_sdf.append_property(name.as_str()).map_err(|error| {
+                    DocumentError::ValidationFailed(format!(
+                        "SetAttributeDocumentation has invalid attribute `{name}`: {error}"
+                    ))
+                })?;
+                if !self.layer(target).has_spec(&attr_sdf) {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "SetAttributeDocumentation requires `{path}.{name}` in the selected edit layer"
+                    )));
+                }
+                let documentation_field = sdf::FieldKey::Documentation.as_str();
+                let prior = self
+                    .layer(target)
+                    .field(&attr_sdf, documentation_field)
+                    .cloned();
+                let inverse = match prior.as_ref() {
+                    Some(sdf::Value::String(text)) => UsdOp::SetAttributeDocumentation {
+                        edit_target: id,
+                        path: path.clone(),
+                        name: name.clone(),
+                        documentation: Some(text.clone()),
+                    },
+                    None => UsdOp::SetAttributeDocumentation {
+                        edit_target: id,
+                        path: path.clone(),
+                        name: name.clone(),
+                        documentation: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                if documentation.is_none() && prior.is_none() {
+                    return Ok(inverse);
+                }
+                let mut new_data = self.layer(target).clone();
+                match &documentation {
+                    Some(text) => new_data.set_field(
+                        &attr_sdf,
+                        documentation_field,
+                        sdf::Value::String(text.clone()),
+                    ),
+                    None => new_data.erase_field(&attr_sdf, documentation_field),
+                };
+                let authored_source = if target == TargetLayer::Base {
+                    self.authored_source.as_deref().and_then(|source| {
+                        patch_class_documentation(
+                            source,
+                            &path,
+                            Some(&name),
+                            documentation.as_deref(),
+                        )
+                    })
+                } else {
+                    None
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: format!("{name}.doc"),
+                    },
+                );
+                if target == TargetLayer::Base {
+                    self.authored_source = authored_source;
+                }
+                Ok(inverse)
+            }
+
             UsdOp::RevolveProfileMesh { path, .. } => {
                 Err(DocumentError::ValidationFailed(format!(
                     "RevolveProfileMesh at `{path}` must be expanded by the USD command owner before document apply"
@@ -3057,6 +3636,137 @@ impl Document for UsdDocument {
                     sdf::Value::Token(metrics.up_axis.as_token().into()),
                 );
                 self.commit(target, new_data, UsdChange::Resync { path: "/".into() });
+                Ok(inverse)
+            }
+
+            UsdOp::SetStageDocumentation { documentation, .. } => {
+                let root = SdfPath::abs_root();
+                let prior = self
+                    .layer(target)
+                    .field(&root, sdf::FieldKey::Documentation.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::String(text)) => UsdOp::SetStageDocumentation {
+                        edit_target: id,
+                        documentation: Some(text),
+                    },
+                    None => UsdOp::SetStageDocumentation {
+                        edit_target: id,
+                        documentation: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                let mut new_data = self.layer(target).clone();
+                if !new_data.has_spec(&root) {
+                    return Err(DocumentError::ValidationFailed(
+                        "SetStageDocumentation requires an authored USD pseudo-root".into(),
+                    ));
+                }
+                match &documentation {
+                    Some(text) => new_data.set_field(
+                        &root,
+                        sdf::FieldKey::Documentation.as_str(),
+                        sdf::Value::String(text.clone()),
+                    ),
+                    None => new_data.erase_field(&root, sdf::FieldKey::Documentation.as_str()),
+                };
+                let authored_source = if target == TargetLayer::Base {
+                    self.authored_source.as_deref().and_then(|source| {
+                        patch_stage_documentation(source, documentation.as_deref())
+                    })
+                } else {
+                    None
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path: "/".into(),
+                        attr: sdf::FieldKey::Documentation.as_str().to_owned(),
+                    },
+                );
+                if target == TargetLayer::Base {
+                    self.authored_source = authored_source;
+                }
+                Ok(inverse)
+            }
+
+            UsdOp::SetPrimDocumentation {
+                path,
+                documentation,
+                ..
+            } => {
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) if !prim.is_property_path() => prim,
+                    Ok(_) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetPrimDocumentation target {path} must name a prim, not a property"
+                        )));
+                    }
+                    Err(_)
+                        if self.path_is_under_composed_arc_path(
+                            &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
+                        ) =>
+                    {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetPrimDocumentation target {path} is composed/read-only; author the owning prim or a local override"
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                };
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::Documentation.as_str())
+                    .cloned();
+                let prior_is_absent = prior.is_none();
+                let inverse = match prior {
+                    Some(sdf::Value::String(text)) => UsdOp::SetPrimDocumentation {
+                        edit_target: id,
+                        path: path.clone(),
+                        documentation: Some(text),
+                    },
+                    None => UsdOp::SetPrimDocumentation {
+                        edit_target: id,
+                        path: path.clone(),
+                        documentation: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                if documentation.is_none() && prior_is_absent {
+                    return Ok(inverse);
+                }
+                let mut new_data = self.layer(target).clone();
+                if documentation.is_some() && !new_data.has_spec(&prim_sdf) {
+                    let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                    stage.override_prim(path.as_str()).map_err(author_err)?;
+                    new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                }
+                match &documentation {
+                    Some(text) => new_data.set_field(
+                        &prim_sdf,
+                        sdf::FieldKey::Documentation.as_str(),
+                        sdf::Value::String(text.clone()),
+                    ),
+                    None => new_data.erase_field(&prim_sdf, sdf::FieldKey::Documentation.as_str()),
+                };
+                let authored_source = if target == TargetLayer::Base {
+                    self.authored_source.as_deref().and_then(|source| {
+                        patch_class_documentation(source, &path, None, documentation.as_deref())
+                    })
+                } else {
+                    None
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: sdf::FieldKey::Documentation.as_str().to_owned(),
+                    },
+                );
+                if target == TargetLayer::Base {
+                    self.authored_source = authored_source;
+                }
                 Ok(inverse)
             }
 

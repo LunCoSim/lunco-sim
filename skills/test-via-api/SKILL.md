@@ -217,17 +217,20 @@ placement/dock ownership, font rules, and performance gates.
 
 ## Session lifecycle
 
-Before launching another luncosim, send `Exit` to the existing API session and verify that
-its process and port are gone. Never overlap GUI/API sessions or reuse a port while the
-session is alive. Keep the current process for live shader/Rhai edits; restart only when a
-rebuilt binary or an explicit clean session is required.
+Each agent doing runtime work owns a luncosim session on a distinct explicit free
+API port. Concurrent agent sessions are allowed on different ports. Launch from
+the same repository checkout and working directory as that agent's terminal,
+using that checkout's production binary. Before replacing your own session, send
+`Exit` and verify its process and port are gone; never control another agent's
+session or reuse an occupied port. Keep your current process for live shader/Rhai
+edits; restart only when a rebuilt binary or an explicit clean session is required.
 
 ## Lifecycle (start → drive → stop)
 
 ```bash
-# 1. After the existing session is confirmed stopped, start the production
-#    binary built in this worktree. Keep it alive in the runner's background
-#    session.
+# 1. Resolve the production binary in this checkout, choose a free API port
+#    owned by this agent, and start it from this checkout's working directory.
+#    Keep it alive in the runner's background session.
 "$LUNCOSIM_BIN" --api 4101
 
 # 2. Wait for the readiness contract, not just an open socket:
