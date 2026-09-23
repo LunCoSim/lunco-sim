@@ -1164,12 +1164,8 @@ fn process_usd_cosim_prim_read(
         // driver) is somebody else's to run.
         _ => return,
     };
-    let has_ports = reader
-        .attr_names(sdf_path)
-        .iter()
-        .any(|n| n.starts_with("inputs:") || n.starts_with("outputs:"));
-    if !has_ports {
-        let (inputs, outputs) = declared_interface(reader, sdf_path);
+    let (mut inputs, outputs) = declared_interface(reader, sdf_path);
+    if inputs.is_empty() && outputs.is_empty() {
         let model_name = modelica_path.as_deref().map_or_else(
             || format!("Python:{}", python_path.as_deref().unwrap_or("<source>")),
             |path| format!("Modelica:{path}"),
@@ -1211,10 +1207,8 @@ fn process_usd_cosim_prim_read(
     let communication_period_result = match modelica_path.as_ref() {
         None => Ok(None),
         Some(_) => {
-            let authored = reader
-                .attr_names(sdf_path)
-                .iter()
-                .any(|name| name == "lunco:program:communicationPeriod");
+            let authored =
+                reader.has_authored_attribute(sdf_path, "lunco:program:communicationPeriod");
             lunco_modelica_runtime::resolve_communication_period_secs(
                 authored,
                 reader.real(sdf_path, "lunco:program:communicationPeriod"),
@@ -1231,7 +1225,6 @@ fn process_usd_cosim_prim_read(
     let communication_period_secs = match communication_period_result {
         Ok(value) => value,
         Err(reason) => {
-            let (inputs, outputs) = declared_interface(reader, sdf_path);
             let model_name = modelica_path
                 .as_deref()
                 .map_or_else(|| "Modelica".to_string(), |path| format!("Modelica:{path}"));
@@ -1281,7 +1274,6 @@ fn process_usd_cosim_prim_read(
             let reason =
                 format!("Python runtime unavailable; cannot run `{asset_path}` in this binary");
             python_unavailable.paths.insert(prim_path.path.clone());
-            let (inputs, outputs) = declared_interface(reader, sdf_path);
             commands.entity(entity).try_insert((
                 UsdSimProcessed,
                 lunco_core_session::NotPredictable,
@@ -1368,7 +1360,6 @@ fn process_usd_cosim_prim_read(
     // `dispatch_loaded_{modelica,python}_sources` flips the status live once the
     // source has loaded/compiled; until then `can_step()` holds a `Compiling`
     // component.
-    let (mut inputs, outputs) = declared_interface(reader, sdf_path);
     strip_rigid_body_inputs(reader, sdf_path, &mut inputs);
     let model_name = match (&modelica_path, &python_path) {
         (Some(path), _) => {
@@ -2551,6 +2542,21 @@ mod tests {
 
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 0);
+
+        let non_usd_model = app
+            .world_mut()
+            .spawn(lunco_cosim_core::SimComponent::default())
+            .id();
+        app.update();
+        app.world_mut()
+            .entity_mut(non_usd_model)
+            .remove::<lunco_cosim_core::SimComponent>();
+        app.update();
+        assert_eq!(
+            app.world().resource::<WiringRuns>().0,
+            0,
+            "a non-USD SimComponent lifecycle cannot dirty the USD wiring projection"
+        );
 
         let visual_only = app.world_mut().spawn(UsdPrimPath::default()).id();
         app.update();
