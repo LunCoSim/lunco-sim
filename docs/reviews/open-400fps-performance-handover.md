@@ -71,7 +71,8 @@ capability belonged to an authored USD prim; unrelated `SimComponent` teardown
 no longer triggers a whole wiring pass. These are source-level work reductions
 only. Program binding extracts its declared input/output maps once and reuses
 them for the admission verdict and published interface; the communication
-period is read through a direct authored-property query.
+period is read through a direct authored-property query. Orphan acausal
+admission also derives declaration and connection presence in one attribute pass.
 Their CPU benefit is not yet measured, and the next clean settled Apollo run
 remains necessary before claiming an FPS improvement.
 

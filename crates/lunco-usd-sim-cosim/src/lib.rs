@@ -1107,8 +1107,10 @@ fn process_usd_cosim_prim_read(
     // and makes no topology claim until a `.connect` opinion is authored. Skip
     // both forms here; report only the connected form because that one is an
     // actionable topology error.
-    if has_acausal_connector(reader, sdf_path) {
-        if has_connected_acausal_connector(reader, sdf_path) {
+    let (has_acausal_connectors, has_connected_acausal_connectors) =
+        acausal_connector_state(reader, sdf_path);
+    if has_acausal_connectors {
+        if has_connected_acausal_connectors {
             warn!(
                 "[usd-cosim] {}: declares acausal `connectors:*` but belongs to no \
                  CollectionAPI:components network, so no Modelica model is generated for it and it \
@@ -1426,21 +1428,20 @@ fn process_usd_cosim_prim_read(
     info!("[usd-cosim] program {} bound ({backend:?})", prim_path.path);
 }
 
-/// A `connectors:*` property declares an acausal Modelica interface. Such a
-/// program is only executable as a member of a component network.
-fn has_acausal_connector(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> bool {
-    reader
-        .attr_names(sdf_path)
-        .iter()
-        .any(|name| name.starts_with("connectors:"))
-}
-
-/// A bare `connectors:*` property declares an interface; only its connection
-/// list makes an authoring claim about circuit topology.
-fn has_connected_acausal_connector(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> bool {
-    reader.attr_names(sdf_path).iter().any(|name| {
-        name.starts_with("connectors:") && !reader.connections(sdf_path, name).is_empty()
-    })
+/// A `connectors:*` property declares an acausal Modelica interface, while its
+/// connection list makes the topology claim that warrants an orphan warning.
+/// Read both facts from one attribute-name traversal.
+fn acausal_connector_state(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> (bool, bool) {
+    let mut has_connector = false;
+    for name in reader.attr_names(sdf_path) {
+        if name.starts_with("connectors:") {
+            has_connector = true;
+            if !reader.connections(sdf_path, &name).is_empty() {
+                return (true, true);
+            }
+        }
+    }
+    (has_connector, false)
 }
 
 /// Return an actionable discrepancy between USD's public causal boundary and
