@@ -28,6 +28,10 @@ fn own_gnc(me) {
     find(lander_path + "/GNC")
 }
 
+fn simulation_dependencies(me, ctx) {
+    [own_gnc(me)]
+}
+
 fn on_event(me, evt, ctx) {
     if evt.name == "lander_engine_cutoff"
         || evt.name == "lander_flight_handoff"

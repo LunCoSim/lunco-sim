@@ -59,6 +59,10 @@ fn first_set_failure(id: u64, path: &str) -> bool {
         .insert((id, path.to_string()))
 }
 
+fn script_runtime_error(message: String) -> Box<EvalAltResult> {
+    EvalAltResult::ErrorRuntime(message.into(), rhai::Position::NONE).into()
+}
+
 use rhai::{AST, Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map, NativeCallContext};
 
 use lunco_doc::Diagnostic;
@@ -1081,15 +1085,24 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     engine.register_fn(
         "cmd",
         |name: ImmutableString, params: Map| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
             let params =
                 dynamic_to_hook_value(&Dynamic::from_map(params)).map_err(value_boundary_error)?;
             Ok(bridge_core::cmd(&RhaiBuilder, name.as_str(), params))
         },
     );
     // cmd(name) -> #{...} — convenience for unit/all-defaulted commands.
-    engine.register_fn("cmd", |name: ImmutableString| -> Dynamic {
-        bridge_core::cmd(&RhaiBuilder, name.as_str(), HookValue::Map(Vec::new()))
-    });
+    engine.register_fn(
+        "cmd",
+        |name: ImmutableString| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            Ok(bridge_core::cmd(
+                &RhaiBuilder,
+                name.as_str(),
+                HookValue::Map(Vec::new()),
+            ))
+        },
+    );
 
     // command_result(id) -> #{ id, ok, status, data, error }. A deferred
     // command is not successful merely because it was accepted; scripts can
@@ -1104,6 +1117,10 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     engine.register_fn(
         "open_context_menu",
         |screen_position: Dynamic, items: Dynamic| -> bool {
+            if let Err(error) = bridge_core::ensure_script_mutation_allowed() {
+                warn!("[rhai-ui] context menu rejected: {error}");
+                return false;
+            }
             let Some(screen_position) = screen_position_array(&screen_position) else {
                 warn!("[rhai-ui] context menu rejected: screen position must be [x, y]");
                 return false;
@@ -1507,46 +1524,64 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
 
     // get(id, "Component.field") -> Dynamic (f64/i64/bool/string/array/map) or ().
     // The generic reflection read — built native (reflect → Dynamic, one hop).
-    engine.register_fn("get", |id: i64, path: ImmutableString| -> Dynamic {
-        // An unqualified name is the canonical co-simulation port spelling.
-        // Resolve it before reflection: otherwise a port name that happens to
-        // match a registered reflected type can be captured by the component
-        // namespace and return that type's default scalar instead of the live
-        // producer value. Reflected component fields stay explicitly qualified
-        // as `Component.field`, so the two namespaces remain unambiguous.
-        if !path.contains('.') {
-            if let Some(p) = bridge_core::read_port(id as u64, path.as_str()) {
-                return Dynamic::from_float(p);
+    engine.register_fn(
+        "get",
+        |id: i64, path: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
+            bridge_core::validate_simulation_port_access(
+                id as u64,
+                path.as_str(),
+                bridge_core::ScriptPortAccess::Read,
+            )
+            .map_err(script_runtime_error)?;
+            // An unqualified name is the canonical co-simulation port spelling.
+            // Resolve it before reflection: otherwise a port name that happens to
+            // match a registered reflected type can be captured by the component
+            // namespace and return that type's default scalar instead of the live
+            // producer value. Reflected component fields stay explicitly qualified
+            // as `Component.field`, so the two namespaces remain unambiguous.
+            if !path.contains('.') {
+                if let Some(p) = bridge_core::read_port(id as u64, path.as_str()) {
+                    return Ok(Dynamic::from_float(p));
+                }
             }
-        }
-        if let Some(v) = bridge_core::get_field(&RhaiBuilder, id as u64, path.as_str()) {
-            return v;
-        }
-        // Reflection missed — use the co-sim port registry (Modelica vars,
-        // avian state, joint angles, hardware ports). Same surface the
-        // wire engine and the API read, so a script sees what the sim exchanges.
-        match bridge_core::read_port(id as u64, path.as_str()) {
-            Some(p) => Dynamic::from_float(p),
-            None => Dynamic::UNIT,
-        }
-    });
+            if let Some(v) = bridge_core::get_field(&RhaiBuilder, id as u64, path.as_str()) {
+                return Ok(v);
+            }
+            // Reflection missed — use the co-sim port registry (Modelica vars,
+            // avian state, joint angles, hardware ports). Same surface the
+            // wire engine and the API read, so a script sees what the sim exchanges.
+            match bridge_core::read_port(id as u64, path.as_str()) {
+                Some(p) => Ok(Dynamic::from_float(p)),
+                None => Ok(Dynamic::UNIT),
+            }
+        },
+    );
 
     // set(id, "Component.field", value) -> bool — a host-side tuning write, not
     // the authoritative command bus. Applies `value` straight onto a supported
     // reflected field (native → reflect, no JSON) and is authority-gated. Use
     // cmd() for changes that must be replicated, undoable, or owned by a domain
     // command. Returns false (and logs why) on a bad entity/path/type.
-    engine.register_fn("set", |id: i64, path: ImmutableString, value: Dynamic| -> bool {
+    engine.register_fn(
+        "set",
+        |id: i64, path: ImmutableString, value: Dynamic| -> Result<bool, Box<EvalAltResult>> {
+        bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
         match bridge_core::set_component_field(id as u64, path.as_str(), |f| apply_dynamic(f, &value)) {
-            Ok(()) => true,
+            Ok(()) => Ok(true),
             Err(e) => {
                 // Reflection missed — use the co-sim port registry (the same path
                 // wires and `SetPorts` use). Ports are scalar, so coerce
                 // the value to f64; a non-numeric set genuinely failed.
                 let scalar = value.as_float().ok().or_else(|| value.as_int().ok().map(|i| i as f64));
                 if let Some(v) = scalar {
+                    bridge_core::validate_simulation_port_access(
+                        id as u64,
+                        path.as_str(),
+                        bridge_core::ScriptPortAccess::Write,
+                    )
+                    .map_err(script_runtime_error)?;
                     if bridge_core::write_port(id as u64, path.as_str(), v) {
-                        return true;
+                        return Ok(true);
                     }
                 }
                 // ONCE per (entity, path). A failing `set` in a scenario's
@@ -1557,7 +1592,7 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
                 if first_set_failure(id as u64, path.as_str()) {
                     warn!("[rhai] set({id}, \"{path}\") failed: {e} (further identical failures silenced)");
                 }
-                false
+                Ok(false)
             }
         }
     });
@@ -1567,15 +1602,31 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     // use the same PortRegistry as wires and the API, but stay native across
     // the Rhai boundary so a high-rate controller never builds a JSON map for
     // every actuator write. Unknown ports fail visibly; no port is created.
-    engine.register_fn("port", |id: i64, name: ImmutableString| -> Dynamic {
-        bridge_core::read_port(id as u64, name.as_str())
-            .map(Dynamic::from_float)
-            .unwrap_or(Dynamic::UNIT)
-    });
+    engine.register_fn(
+        "port",
+        |id: i64, name: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
+            bridge_core::validate_simulation_port_access(
+                id as u64,
+                name.as_str(),
+                bridge_core::ScriptPortAccess::Read,
+            )
+            .map_err(script_runtime_error)?;
+            Ok(bridge_core::read_port(id as u64, name.as_str())
+                .map(Dynamic::from_float)
+                .unwrap_or(Dynamic::UNIT))
+        },
+    );
     engine.register_fn(
         "port_set",
-        |id: i64, name: ImmutableString, value: f64| -> bool {
-            bridge_core::write_port(id as u64, name.as_str(), value)
+        |id: i64, name: ImmutableString, value: f64| -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            bridge_core::validate_simulation_port_access(
+                id as u64,
+                name.as_str(),
+                bridge_core::ScriptPortAccess::Write,
+            )
+            .map_err(script_runtime_error)?;
+            Ok(bridge_core::write_port(id as u64, name.as_str(), value))
         },
     );
 
@@ -1593,31 +1644,35 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
             }
         }
     });
-    engine.register_fn("set_physics_substeps", |value: i64| -> bool {
-        if value < 0 || value > u32::MAX as i64 {
-            warn!("[rhai] set_physics_substeps rejected out-of-range integer {value}");
-            return false;
-        }
-        let result = bridge_core::with_world(|world| {
-            bridge_core::enforce_script_authority(
-                world,
-                bridge_core::capability::SETTING_MUTATE,
-                None,
-            )?;
-            lunco_physics::set_solver_substeps(world, value as u32)
-        });
-        match result {
-            Some(Ok(())) => true,
-            Some(Err(error)) => {
-                warn!("[rhai] set_physics_substeps failed: {error}");
-                false
+    engine.register_fn(
+        "set_physics_substeps",
+        |value: i64| -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            if value < 0 || value > u32::MAX as i64 {
+                warn!("[rhai] set_physics_substeps rejected out-of-range integer {value}");
+                return Ok(false);
             }
-            None => {
-                warn!("[rhai] set_physics_substeps failed: no world in scope");
-                false
-            }
-        }
-    });
+            let result = bridge_core::with_world(|world| {
+                bridge_core::enforce_script_mutation(
+                    world,
+                    bridge_core::capability::SETTING_MUTATE,
+                    None,
+                )?;
+                lunco_physics::set_solver_substeps(world, value as u32)
+            });
+            Ok(match result {
+                Some(Ok(())) => true,
+                Some(Err(error)) => {
+                    warn!("[rhai] set_physics_substeps failed: {error}");
+                    false
+                }
+                None => {
+                    warn!("[rhai] set_physics_substeps failed: no world in scope");
+                    false
+                }
+            })
+        },
+    );
 
     // contact_friction(id) / set_contact_friction(id, dynamic, static) — live
     // material diagnostics. These mutate the projected Avian component in
@@ -1643,13 +1698,14 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     });
     engine.register_fn(
         "set_contact_friction",
-        |id: i64, dynamic: f64, static_coefficient: f64| -> bool {
+        |id: i64, dynamic: f64, static_coefficient: f64| -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
             if id < 0 {
                 warn!("[rhai] set_contact_friction rejected negative entity id {id}");
-                return false;
+                return Ok(false);
             }
             let result = bridge_core::with_world(|world| {
-                bridge_core::enforce_script_authority(
+                bridge_core::enforce_script_mutation(
                     world,
                     bridge_core::capability::FIELD_MUTATE,
                     Some(id as u64),
@@ -1665,7 +1721,7 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
                     },
                 )
             });
-            match result {
+            Ok(match result {
                 Some(Ok(())) => true,
                 Some(Err(error)) => {
                     warn!("[rhai] set_contact_friction({id}) failed: {error}");
@@ -1675,7 +1731,7 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
                     warn!("[rhai] set_contact_friction({id}) failed: no world in scope");
                     false
                 }
-            }
+            })
         },
     );
 
@@ -1700,13 +1756,14 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     });
     engine.register_fn(
         "set_joint_damping",
-        |id: i64, linear: f64, angular: f64| -> bool {
+        |id: i64, linear: f64, angular: f64| -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
             if id < 0 {
                 warn!("[rhai] set_joint_damping rejected negative entity id {id}");
-                return false;
+                return Ok(false);
             }
             let result = bridge_core::with_world(|world| {
-                bridge_core::enforce_script_authority(
+                bridge_core::enforce_script_mutation(
                     world,
                     bridge_core::capability::FIELD_MUTATE,
                     Some(id as u64),
@@ -1719,7 +1776,7 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
                     lunco_physics::JointDampingParameters { linear, angular },
                 )
             });
-            match result {
+            Ok(match result {
                 Some(Ok(())) => true,
                 Some(Err(error)) => {
                     warn!("[rhai] set_joint_damping({id}) failed: {error}");
@@ -1729,7 +1786,7 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
                     warn!("[rhai] set_joint_damping({id}) failed: no world in scope");
                     false
                 }
-            }
+            })
         },
     );
 
@@ -1849,13 +1906,18 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     });
     engine.register_fn(
         "set_joint_drive",
-        |id: i64, stiffness: f64, damping: f64, max_force: f64| -> bool {
+        |id: i64,
+         stiffness: f64,
+         damping: f64,
+         max_force: f64|
+         -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
             if id < 0 {
                 warn!("[rhai] set_joint_drive rejected negative entity id {id}");
-                return false;
+                return Ok(false);
             }
             let result = bridge_core::with_world(|world| {
-                bridge_core::enforce_script_authority(
+                bridge_core::enforce_script_mutation(
                     world,
                     bridge_core::capability::FIELD_MUTATE,
                     Some(id as u64),
@@ -1872,7 +1934,7 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
                     },
                 )
             });
-            match result {
+            Ok(match result {
                 Some(Ok(())) => true,
                 Some(Err(error)) => {
                     warn!("[rhai] set_joint_drive({id}) failed: {error}");
@@ -1882,7 +1944,7 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
                     warn!("[rhai] set_joint_drive({id}) failed: no world in scope");
                     false
                 }
-            }
+            })
         },
     );
 
@@ -2214,13 +2276,21 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     // it immediately, and scripts receive it on the next scenario pass via
     // on_event. `value`
     // may be float / int / bool / string.
-    engine.register_fn("emit", |name: ImmutableString, value: Dynamic| -> bool {
-        bridge_core::emit(name.as_str(), rhai_to_telemetry(&value))
-    });
+    engine.register_fn(
+        "emit",
+        |name: ImmutableString, value: Dynamic| -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            Ok(bridge_core::emit(name.as_str(), rhai_to_telemetry(&value)))
+        },
+    );
     // emit(name) — a bare pulse (no payload).
-    engine.register_fn("emit", |name: ImmutableString| -> bool {
-        bridge_core::emit(name.as_str(), TelemetryValue::Bool(true))
-    });
+    engine.register_fn(
+        "emit",
+        |name: ImmutableString| -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            Ok(bridge_core::emit(name.as_str(), TelemetryValue::Bool(true)))
+        },
+    );
 
     // subscribe(name) — call in on_start to receive ONLY the named events in
     // on_event (default with no subscribe = all events). An optimisation: skips
@@ -2453,8 +2523,8 @@ pub fn validate_tool_library(
 // teardown, diagnostics) is language-neutral and lives in
 // [`lunco_scripting::scenario::ScenarioDriver`]. This is the rhai BACKEND: it implements
 // [`lunco_scripting::scenario::ScenarioRuntime`], supplying only the mechanics — compile
-// source → `AST` (running top-level into a persistent `Scope` for `const`s), and
-// call a hook via `call_fn_raw`. Per-entity tick-to-tick state lives in a `this`
+// source → `AST`, resolve its dependency hook, run top-level initialization after
+// admission, and call hooks via `call_fn_raw`. Per-entity tick-to-tick state lives in a `this`
 // object-map (rhai functions are pure — they can't see top-level `let`s). One
 // shared `Engine` carries the world-bridge verbs, so a hook can `cmd()`/`get()`.
 
@@ -2471,6 +2541,7 @@ struct ProgramMask {
     tick: bool,
     stop: bool,
     event: bool,
+    simulation_dependencies: bool,
 }
 
 impl ProgramMask {
@@ -2484,6 +2555,7 @@ impl ProgramMask {
                 ("on_tick", 2) => m.tick = true,
                 ("on_stop", 2) => m.stop = true,
                 ("on_event", 3) => m.event = true,
+                ("simulation_dependencies", 2) => m.simulation_dependencies = true,
                 _ => {}
             }
         }
@@ -2520,6 +2592,9 @@ impl ProgramMask {
         }
         if self.event {
             v.push("on_event".into());
+        }
+        if self.simulation_dependencies {
+            v.push("simulation_dependencies".into());
         }
         v
     }
@@ -2825,6 +2900,7 @@ pub fn prepare_builtin_rhai_assets(
     asset_server: Option<Res<AssetServer>>,
     sources: Option<Res<lunco_assets_runtime::script_source::ScriptSources>>,
     driver: Option<ResMut<lunco_scripting::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
+    barrier_participants: Option<ResMut<lunco_core_runtime::SimulationBarrierParticipants>>,
     asset_revision: Option<Res<crate::source_asset::RhaiSourceAssetRevision>>,
     mut status: ResMut<RhaiRuntimeStatus>,
 ) {
@@ -2835,6 +2911,7 @@ pub fn prepare_builtin_rhai_assets(
         Some(asset_server),
         Some(sources),
         Some(mut driver),
+        barrier_participants,
         Some(asset_revision),
     ) = (
         manifest,
@@ -2843,6 +2920,7 @@ pub fn prepare_builtin_rhai_assets(
         asset_server,
         sources,
         driver,
+        barrier_participants,
         asset_revision,
     )
     else {
@@ -3018,7 +3096,12 @@ pub fn prepare_builtin_rhai_assets(
     status.ready = false;
     match driver.runtime.install_prelude(prelude) {
         Ok(()) => {
-            driver.invalidate();
+            let invalidated = driver.invalidate();
+            if let Some(mut participants) = barrier_participants {
+                for entity in invalidated {
+                    participants.remove_scenario_dependencies(entity);
+                }
+            }
             status.ready = true;
             status.error = None;
             info!("[rhai] authored prelude is ready");
@@ -3093,7 +3176,8 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         // every other prelude helper) are resolvable by `call_fn`.
                         // Merging prelude←user lets a user function win on any
                         // name/arity clash; the prelude has no top-level body, so
-                        // the seed-run below still executes only the user's top level.
+                        // the later initialization pass executes only the user's
+                        // top-level body after its dependency plan is committed.
                         //
                         // Order matters for identity too: `AST::merge` takes the
                         // source of the RIGHT operand (`merge_filtered_impl` in
@@ -3140,17 +3224,8 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // ── State: seed a FRESH scope + `this` for THIS entity — never shared.
         // Parameters are instance state, so they stay out of the shared AST and
         // are passed explicitly to every lifecycle/program hook.
-        let mut scope = rhai::Scope::new();
+        let scope = rhai::Scope::new();
         let params_value = bridge_core::telemetry_value(&RhaiBuilder, &params.as_telemetry_value());
-        // Run the top-level body once to seed `const` globals; a runtime error
-        // there is non-fatal (hooks still run) — surface it.
-        let top_level = match self.engine.run_ast_with_scope(&mut scope, &program.ast) {
-            Ok(()) => None,
-            Err(e) => {
-                error!("[rhai] entity {entity:?} top-level failed: {e}");
-                Some(rhai_diagnostic(e.to_string(), e.position()))
-            }
-        };
         self.states.insert(
             entity,
             RhaiScenarioState {
@@ -3163,7 +3238,21 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 pending_events: Vec::new(),
             },
         );
-        CompileOutcome::Ready { top_level }
+        CompileOutcome::Ready
+    }
+
+    fn initialize(&mut self, entity: Entity) -> Option<Diagnostic> {
+        let st = self.states.get_mut(&entity)?;
+        match self
+            .engine
+            .run_ast_with_scope(&mut st.scope, &st.program.ast)
+        {
+            Ok(()) => None,
+            Err(error) => {
+                error!("[rhai] entity {entity:?} top-level initialization failed: {error}");
+                Some(rhai_diagnostic(error.to_string(), error.position()))
+            }
+        }
     }
 
     fn call_hook(
@@ -3276,6 +3365,61 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             st.pending_events = pending_events;
         }
         diagnostic
+    }
+
+    fn simulation_dependencies(
+        &mut self,
+        entity: Entity,
+        self_gid: i64,
+    ) -> Result<Vec<i64>, Diagnostic> {
+        let st = self.states.get_mut(&entity).ok_or_else(|| {
+            Diagnostic::error(
+                "scenario dependency plan requested without a compiled program",
+                None,
+                None,
+            )
+        })?;
+        if !st.program.mask.simulation_dependencies {
+            return Ok(Vec::new());
+        }
+        bridge_core::rng_begin(self_gid as u64, time_bridge::logical_sequence(), 4);
+        let (hook_ast, eval_ast) = st.program.hook_target();
+        let args = [Dynamic::from_int(self_gid), st.params.clone()];
+        let options = rhai::CallFnOptions::new()
+            .eval_ast(eval_ast)
+            .rewind_scope(false)
+            .bind_this_ptr(&mut st.this);
+        let value = self
+            .engine
+            .call_fn_with_options::<Dynamic>(
+                options,
+                &mut st.scope,
+                hook_ast,
+                "simulation_dependencies",
+                args,
+            )
+            .map_err(|error| rhai_diagnostic(error.to_string(), error.position()))?;
+        let values = value.into_array().map_err(|error| {
+            Diagnostic::error(
+                format!("simulation_dependencies must return an array of entity ids: {error}"),
+                None,
+                None,
+            )
+        })?;
+        values
+            .into_iter()
+            .map(|value| {
+                value.as_int().map_err(|error| {
+                    Diagnostic::error(
+                        format!(
+                            "simulation_dependencies entries must be integer entity ids: {error}"
+                        ),
+                        None,
+                        None,
+                    )
+                })
+            })
+            .collect()
     }
 
     fn deliver_event(

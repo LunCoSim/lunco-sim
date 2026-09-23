@@ -2,6 +2,10 @@
 // Coordinates camera cuts and subtitles. The sun, panel tracking, and battery
 // dynamics are physics — they run without any cinematic involvement.
 
+fn simulation_dependencies(me, ctx) {
+    [find("/SolarRoverTest/SolarRover")]
+}
+
 fn on_event(me, evt, ctx) {
     let route = find("/SolarRoverTest/Route");
     if evt.name != "route_point_reached" || evt.source != route { return; }

@@ -259,6 +259,25 @@ assigns each callback to its Rust-owned cycle. Event handlers read both the
 event's origin stamp and the consumer's current cycle. Source metadata may
 validate an author's required cadence, but it does not install or move a hook.
 
+Before a scenario's first lifecycle hook, a source may define the optional,
+scenario-scoped `simulation_dependencies(me, ctx)` hook. The second argument is
+the validated scenario parameter map. It returns an array of nonnegative
+integer global entity ids. The owner evaluates it once for each source/parameter
+revision in the `DependencyPlan` phase, resolves every id against the live
+entity registry, and adds the scenario's set to the shared simulation barrier.
+Omitting the hook declares no Rhai dependencies; the USD causal graph still
+applies. The hook resolves identities from the composed world and parameters;
+commands, direct mutations, emitted events, and live port access are rejected
+in this phase. An unresolved plan keeps every Modelica participant synchronized
+until commit. A non-array result, invalid id, or unresolved entity is a terminal
+scenario diagnostic for that revision. This hook runs before mutable top-level
+initialization, so derive its result from `me`, scenario parameters, and
+read-only world queries rather than top-level initialization effects. Once the
+plan is committed, the owner runs top-level initialization in the
+`Initialization` phase and then dispatches `on_start` in stable actor order.
+The production sensor scene verifies declared Modelica reads and rejects a
+live port read during planning.
+
 Current Rhai world verbs can read and mutate live ECS/port state, and `cmd()`
 effects are visible to later actors in the same pass. Their existing stable
 actor order is therefore a behavior contract. Parallel scenario execution is
@@ -277,17 +296,18 @@ failure behavior as required by the hook review.
 ## 6. Co-simulation and dependency closure
 
 The causal barrier is only sound when it contains every path by which a
-participant result can affect authoritative state. `SimConnection` is the
-declared data plane. Dynamic Rhai `get`/`port` reads and `set`/`port_set` writes
-currently bypass that graph. Before whole-simulation determinism is claimed,
-those accesses must either:
-
-- declare typed dependencies that feed the same causal graph, or
-- use a tick snapshot/action plan whose admitted reads and writes are explicit.
-
-Choosing one of these policies belongs to Rhai and co-simulation owners. Rust
-provides the typed snapshot, dependency fact, barrier, and validated application
-mechanisms. Continuous calculations and physics remain in their domain owners.
+participant result can affect authoritative state. USD `SimConnection`s and
+Rhai scenario dependencies both contribute to the same barrier projection. A
+scenario that reads or writes a Modelica port, or consumes a Modelica-produced
+event that can affect its behavior, lists that producer entity in
+`simulation_dependencies(me, ctx)`. Rhai keeps the selection policy; Rust
+resolves and validates the returned ids and adds that scenario's contribution
+to the shared barrier. While a dependency plan is pending, all Modelica
+participants are synchronized. After admission, direct simulation-clock access
+to an unbarriered Modelica port or event fails at the scripting owner with a
+diagnostic that names the missing hook. Presentation reads continue to observe
+committed state without joining the authoritative barrier. Continuous
+calculations and physics remain in their domain owners.
 
 The composed dependency graph also defines safe parallelism. Participants in
 the same dependency layer may calculate concurrently from one immutable input

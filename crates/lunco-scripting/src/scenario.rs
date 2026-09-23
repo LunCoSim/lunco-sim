@@ -427,12 +427,8 @@ pub enum ScenarioHook {
 pub enum CompileOutcome {
     /// Parse/compile failed — no runnable program this tick. Fatal diagnostic.
     Failed(Diagnostic),
-    /// Compiled. `top_level` carries a non-fatal init-time error if the
-    /// top-level body ran but errored (the hooks still run).
-    Ready {
-        /// Init-time runtime error from running the top-level body, if any.
-        top_level: Option<Diagnostic>,
-    },
+    /// Compiled successfully. Initialization runs after dependency admission.
+    Ready,
 }
 
 /// A read-only view of a running scenario's live state, for introspection. The
@@ -498,9 +494,9 @@ pub struct ScenarioIntrospection<V> {
 // script should be able to CALL a registered hook", which is a small ADDITIVE
 // bridge (invoke a `HookId` from a scenario verb), not a migration of this trait.
 pub trait ScenarioRuntime: Send + Sync + 'static {
-    /// (Re)compile `source` for `entity`, replacing any prior program and running
-    /// its top-level init. The driver guarantees the previous program's
-    /// `on_stop` has already been called before this. `params` is the validated,
+    /// (Re)compile `source` for `entity`, replacing any prior program without
+    /// executing its top-level body. The driver guarantees the previous
+    /// program's `on_stop` has already been called before this. `params` is the validated,
     /// instance-owned launch context; the backend exposes it through its native
     /// value model.
     ///
@@ -518,6 +514,15 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
         asset_id: Option<&str>,
     ) -> CompileOutcome;
 
+    /// Run mutable top-level initialization after the program's dependency plan
+    /// has been resolved and committed. This is the first executable world
+    /// phase for a newly compiled program. Runtime errors are non-fatal
+    /// diagnostics; lifecycle hooks still run, matching the scenario's authored
+    /// contract.
+    fn initialize(&mut self, _entity: Entity) -> Option<Diagnostic> {
+        None
+    }
+
     /// Call a lifecycle hook for `entity` — a no-op if the scenario doesn't
     /// define it or has no compiled program. Returns a runtime-error diagnostic
     /// if the hook ran and failed.
@@ -527,6 +532,18 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
         hook: ScenarioHook,
         self_gid: i64,
     ) -> Option<Diagnostic>;
+
+    /// Resolve the program's cross-entity simulation dependencies after
+    /// compilation and before its first lifecycle hook. Returned ids identify
+    /// Modelica participants whose state or ports the scenario consumes or
+    /// writes. Backends without a dependency hook declare an empty set.
+    fn simulation_dependencies(
+        &mut self,
+        _entity: Entity,
+        _self_gid: i64,
+    ) -> Result<Vec<i64>, Diagnostic> {
+        Ok(Vec::new())
+    }
 
     /// Deliver one event to `entity`'s event hook (no-op if undefined).
     fn deliver_event(
@@ -704,9 +721,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     /// as the authored Rhai prelude, has changed. The scene entities remain
     /// attached; their programs are rebuilt on the next enabled pass.
     #[cfg(feature = "rhai")]
-    pub fn invalidate(&mut self) {
+    pub fn invalidate(&mut self) -> Vec<Entity> {
+        let entities = self.fsm.keys().copied().collect();
         self.fsm.clear();
         self.runtime.invalidate();
+        entities
     }
 
     /// Stop one scenario synchronously at an ownership boundary.
@@ -751,6 +770,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             }
             driver.runtime.forget(entity);
         });
+        if let Some(mut participants) =
+            world.get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+        {
+            participants.remove_scenario_dependencies(entity);
+        }
         if let Some(diagnostic) = stop_error {
             publish_scenario_stop_error(world, document_id, diagnostic);
         }
@@ -1105,6 +1129,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         None
                     };
                     runtime.forget(entity);
+                    if let Some(mut participants) = world
+                        .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+                    {
+                        participants.remove_scenario_dependencies(entity);
+                    }
                     st.gid = gid;
                     st.started = false;
                     st.compiled = false;
@@ -1138,7 +1167,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 let receive_events = st.started && maybe_src.is_none();
                 st.gid = gid;
                 let mut recompiled = false;
-                let mut compile_diag: Option<Diagnostic> = None;
+                let mut initialization_diag: Option<Diagnostic> = None;
                 let mut transition_error: Option<Diagnostic> = None;
                 let scene_restart = reload_policy
                     == crate::doc::ScenarioReloadPolicy::Restart
@@ -1152,6 +1181,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     recompiled = true;
                     st.attempted_generation = Some(generation);
                     st.parameters_revision = parameters_revision;
+                    if let Some(mut participants) = world
+                        .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+                    {
+                        participants.mark_scenario_plan_pending(entity);
+                    }
                     // Hot-reload teardown: the OUTGOING program cleans up first.
                     if scene_restart {
                         // The old scene is already gone. Discard the backend
@@ -1183,16 +1217,62 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 diag.message,
                             );
                             st.compiled = false;
+                            if let Some(mut participants) = world
+                                .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+                            {
+                                participants.remove_scenario_dependencies(entity);
+                            }
                             let mut diagnostics = Vec::new();
                             diagnostics.extend(transition_error.take());
                             diagnostics.push(diag);
                             diag_updates.push((raw, Some(diagnostics)));
                             continue;
                         }
-                        CompileOutcome::Ready { top_level } => {
+                        CompileOutcome::Ready => {
                             st.compiled = true;
                             st.generation = generation;
-                            compile_diag = top_level;
+                        }
+                    }
+
+                    if st.compiled {
+                        let dependency_result = {
+                            let _phase = bridge_core::ExecutionContextScope::enter(
+                                pass_context.with_phase(lunco_core::RuntimePhase::DependencyPlan),
+                            );
+                            runtime
+                                .simulation_dependencies(entity, gid)
+                                .and_then(|ids| resolve_simulation_dependencies(world, ids))
+                        };
+                        match dependency_result {
+                            Ok(dependencies) => {
+                                if let Some(mut participants) = world.get_resource_mut::<
+                                    lunco_core_runtime::SimulationBarrierParticipants,
+                                >() {
+                                    participants.replace_scenario_dependencies(
+                                        entity,
+                                        dependencies,
+                                    );
+                                }
+                                let _phase = bridge_core::ExecutionContextScope::enter(
+                                    pass_context
+                                        .with_phase(lunco_core::RuntimePhase::Initialization),
+                                );
+                                initialization_diag = runtime.initialize(entity);
+                            }
+                            Err(diagnostic) => {
+                                runtime.forget(entity);
+                                st.compiled = false;
+                                if let Some(mut participants) = world.get_resource_mut::<
+                                    lunco_core_runtime::SimulationBarrierParticipants,
+                                >() {
+                                    participants.remove_scenario_dependencies(entity);
+                                }
+                                let mut diagnostics = Vec::new();
+                                diagnostics.extend(transition_error.take());
+                                diagnostics.push(diagnostic);
+                                diag_updates.push((raw, Some(diagnostics)));
+                                continue;
+                            }
                         }
                     }
                 }
@@ -1218,6 +1298,27 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 }
                 if receive_events {
                     for ev in &events {
+                        if let Some(source) = bridge_core::resolve_entity(world, ev.source) {
+                            let unbarriered_modelica_event = world
+                                .get_resource::<
+                                    lunco_core_runtime::SimulationBarrierParticipants,
+                                >()
+                                .is_some_and(|participants| {
+                                    participants.is_modelica_participant(source)
+                                        && !participants.requires_barrier(source)
+                                });
+                            if unbarriered_modelica_event {
+                                runtime_errors.push(Diagnostic::error(
+                                    format!(
+                                        "scenario received event {:?} from unbarriered Modelica entity {}; include the producer in simulation_dependencies(me, ctx)",
+                                        ev.name, ev.source
+                                    ),
+                                    None,
+                                    None,
+                                ));
+                                continue;
+                            }
+                        }
                         let _phase = bridge_core::ExecutionContextScope::enter(
                             pass_context
                                 .with_phase(lunco_core::RuntimePhase::Event)
@@ -1251,7 +1352,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 // Publish status: any Error diagnostic → Error state; a warning-only
                 // set stays Ready. Cleared to OK only when a (re)compile ran clean.
                 let mut diags = Vec::new();
-                diags.extend(compile_diag);
+                diags.extend(initialization_diag);
                 diags.extend(runtime_errors);
                 if !dropped.is_empty() {
                     diags.push(Diagnostic::warning(
@@ -1300,6 +1401,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         }
                     }
                     runtime.forget(entity);
+                    if let Some(mut participants) = world
+                        .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+                    {
+                        participants.remove_scenario_dependencies(entity);
+                    }
                 }
             }
         });
@@ -1357,6 +1463,36 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             hooks,
         })
     }
+}
+
+fn resolve_simulation_dependencies(
+    world: &World,
+    ids: Vec<i64>,
+) -> Result<Vec<Entity>, Diagnostic> {
+    let mut ids = ids;
+    ids.sort_unstable();
+    ids.dedup();
+    let mut entities = Vec::with_capacity(ids.len());
+    for id in ids {
+        let raw = u64::try_from(id).map_err(|_| {
+            Diagnostic::error(
+                format!("simulation_dependencies returned invalid entity id {id}"),
+                None,
+                None,
+            )
+        })?;
+        let entity = bridge_core::resolve_entity(world, raw).ok_or_else(|| {
+            Diagnostic::error(
+                format!("simulation_dependencies returned unresolved entity id {id}"),
+                None,
+                None,
+            )
+        })?;
+        entities.push(entity);
+    }
+    entities.sort_unstable_by_key(|entity| entity.to_bits());
+    entities.dedup();
+    Ok(entities)
 }
 
 // ── Event inbox (neutral) ───────────────────────────────────────────────────
@@ -1784,7 +1920,7 @@ mod lifecycle_readiness_tests {
                 .lock()
                 .unwrap()
                 .push(bridge_core::execution_context());
-            CompileOutcome::Ready { top_level: None }
+            CompileOutcome::Ready
         }
 
         fn call_hook(
