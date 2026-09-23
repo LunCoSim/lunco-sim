@@ -332,6 +332,9 @@ owns only precision representation and derived transform propagation.
 Celestial `CelestialTime` may move a detached globe and sky for a time-lapse.
 Keep physical bodies, terrain, stations, and links on the causal `WorldTime`
 frames, and have the sky clock readout display the same `CelestialTime` epoch.
+When that epoch diverges, render the Sun direction through the environment's
+`SunRenderPresentation` input and existing `SunRenderState` shadow pipeline;
+keep `SunState` and co-simulation on `WorldTime`.
 When a surface camera remains on `WorldTime`, rigidly align the render-only
 celestial hierarchy at its body-fixed camera pose so Earth and Sun keep their
 correct local-sky directions as the epochs diverge.

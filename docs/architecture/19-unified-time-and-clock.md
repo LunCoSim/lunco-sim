@@ -34,10 +34,14 @@ does not use a render or wall-clock accumulator.
 It normally equals `WorldTime.epoch_jd`, but a `SetClock` re-parent onto `Real`
 may advance it while the causal simulation is paused. Only explicitly
 presentation-owned celestial consumers may read it (for example detached globe
-imagery). The physical scene sun, terrain shadow direction, active surface
+imagery and the rendered sky). The physical solar provider, active surface
 frame, body state, and other causal consumers read `WorldTime` and must never be
-driven by `CelestialTime`. Fast-forwarding the presentation clock therefore
-cannot rotate the physical sun or repeatedly invalidate a terrain shadow cache.
+driven by `CelestialTime`. When the two epochs diverge, a typed render-only Sun
+direction from the celestial presentation drives the scene key light. Its
+finalized `SunRenderState` continues through the existing directional-shadow,
+terrain-material, and horizon-cache consumers. The detached clock therefore
+changes visible illumination and shadows without changing `SunState`, physics,
+or co-simulation inputs. Static scenes continue to render from `SunState`.
 The sky clock UI displays this same `CelestialTime` epoch, so its date readout
 tracks the globe and sky while the independent rate is active. Its per-frame
 delta comes from the resolved celestial clock sample, not from subtracting
@@ -58,6 +62,11 @@ epochs diverge, without moving terrain, stations, links, or physics.
 The procedural Sun disc direction is published in the active camera's view
 coordinates, matching the starfield's view-space rays; camera motion also
 refreshes that direction while the celestial clock is paused.
+
+An active celestial presentation requests the shared bounded realtime frame
+cadence while its clock advances. Focused rendering remains vsync-paced, and
+unfocused rendering uses the same fixed 60 Hz cadence as other realtime work;
+celestial animation does not force an unbounded max-speed render loop.
 
 The rate ceiling and fixed-step catch-up budget live in `lunco-time`; consumers
 must not add another rate path or silently drain an unbounded fixed-step burst.

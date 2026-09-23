@@ -124,22 +124,32 @@ recomputes it every frame from the Sun–Earth–site geometry as
 its own driver on the next frame. There is correspondingly no slider — the inspector shows
 a readout, and what moves it is the sim clock.
 
-> The Sun's shipped values are the documented calibration for scenes without a live solar
-> distance model. An ephemeris-driven scene publishes semantic direction/irradiance through
-> `SunState`; the render light is only a projection and no runtime path falls back from a
-> missing semantic sample to a render transform.
+The Sun's shipped values are the documented calibration for scenes without a live solar
+distance model. `SunState` remains the `WorldTime` provider for physical direction,
+irradiance, and co-simulation. `SunRenderPresentation` owns a closed render selection:
+semantic direction, a complete celestial direction, or unavailable input. Each selected
+source is consumed as authored by its owner.
 
-The solar dataflow has one authority:
+The physical and rendered solar dataflows stay separate:
 
 ```
-ephemeris + site frame → SunState → DirectionalLight projection
-                              └──→ LocalSolar → EnvironmentProbe → Modelica controller
+WorldTime ephemeris + site frame → SunState → LocalSolar → EnvironmentProbe → Modelica controller
+                                      │
+                                      └── static/causal DirectionalLight input
+
+detached CelestialTime + surface observer → SunRenderPresentation
+                                               → DirectionalLight projection
+                                               → SunRenderState → renderer and terrain shadows
 ```
 
-`DirectionalLight` is not a provider endpoint, and a Modelica source does not
-drive it. Controllers such as `SunTracker` consume the environment-probe
-outputs and drive their actuators. This keeps physical environment production,
-render presentation, and vehicle control as separate graph domains.
+`SunRenderPresentation` is consumed only by the render projection. It does not
+replace the provider sample or feed co-simulation. The finalized light direction
+continues through the existing `SunRenderState` path, including terrain shadow
+projection and the asynchronous horizon cache. `DirectionalLight` is not a
+provider endpoint, and a Modelica source does not drive it. Controllers such as
+`SunTracker` consume the environment-probe outputs and drive their actuators.
+This keeps physical environment production, render presentation, and vehicle
+control as separate graph domains.
 
 For a scene without a celestial site, the composed USD `DistantLight` is still
 the authored source of its fixed sun direction. `lunco-usd-sim` seeds that

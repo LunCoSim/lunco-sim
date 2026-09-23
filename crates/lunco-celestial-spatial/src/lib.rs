@@ -12,6 +12,7 @@ use lunco_celestial_spatial_core::{
     update_reference_frame_index, AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSunPresentation,
     LocalGravityField, OrbitalViewPin, ReferenceFrameIndex, SolarSystemRoot,
 };
+use lunco_render::SceneCamera;
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
@@ -121,8 +122,49 @@ fn tag_existing_world_reference_frame(
     }
 }
 
-fn clear_celestial_sun_presentation(mut sun: ResMut<CelestialSunPresentation>) {
+#[derive(Resource, Default)]
+struct CelestialPresentationPacing {
+    requested: bool,
+}
+
+fn refresh_celestial_presentation_pacing(
+    celestial: Res<lunco_time::CelestialTime>,
+    frames: Query<(), With<big_space_setup::CelestialPresentationGrid>>,
+    cameras: Query<&Camera, With<SceneCamera>>,
+    mut demand: ResMut<lunco_core_runtime::FramePacingDemand>,
+    mut pacing: ResMut<CelestialPresentationPacing>,
+) {
+    let requested = celestial.delta_secs.is_finite()
+        && celestial.delta_secs != 0.0
+        && !frames.is_empty()
+        && cameras.iter().any(|camera| camera.is_active);
+    if requested == pacing.requested {
+        return;
+    }
+    if requested {
+        demand.acquire_realtime();
+    } else {
+        demand.release_realtime();
+    }
+    pacing.requested = requested;
+}
+
+fn release_celestial_presentation_pacing(
+    mut demand: ResMut<lunco_core_runtime::FramePacingDemand>,
+    mut pacing: ResMut<CelestialPresentationPacing>,
+) {
+    if pacing.requested {
+        demand.release_realtime();
+        pacing.requested = false;
+    }
+}
+
+fn clear_celestial_presentation(
+    mut sun: ResMut<CelestialSunPresentation>,
+    mut render_sun: ResMut<lunco_environment::SunRenderPresentation>,
+) {
     sun.clear();
+    render_sun.clear();
 }
 
 impl Plugin for CelestialPlugin {
@@ -147,7 +189,16 @@ impl Plugin for CelestialPlugin {
         }
         app.init_resource::<CelestialConfig>();
         app.init_resource::<CelestialSunPresentation>();
-        app.add_systems(lunco_core::SceneTeardown, clear_celestial_sun_presentation);
+        app.init_resource::<lunco_environment::SunRenderPresentation>();
+        app.init_resource::<lunco_core_runtime::FramePacingDemand>()
+            .init_resource::<CelestialPresentationPacing>();
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            (
+                clear_celestial_presentation,
+                release_celestial_presentation_pacing,
+            ),
+        );
         app.init_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .init_resource::<lunco_port_core::ports::PortTopologyState>();
         // Globe LOD consumes the shared presentation binding, not Bevy's
@@ -406,6 +457,11 @@ impl Plugin for CelestialPlugin {
                 .after(lunco_time::TimeSpineSet),
         );
 
+        app.add_systems(
+            PreUpdate,
+            refresh_celestial_presentation_pacing.after(lunco_time::TimeSpineSet),
+        );
+
         app.add_systems(Update, celestial_visuals_system);
         app.add_systems(
             Update,
@@ -474,7 +530,7 @@ impl Plugin for CelestialPlugin {
             Update,
             update_sun_light_system
                 .run_if(cadence::tracked_needs_solve())
-                .before(lunco_environment::project_sun_state_to_light),
+                .before(lunco_environment::project_sun_render_to_light),
         );
     }
 }
@@ -693,5 +749,65 @@ mod scene_teardown_tests {
             *app.world().resource::<OrbitalViewPin>(),
             OrbitalViewPin::default()
         );
+    }
+}
+
+#[cfg(test)]
+mod pacing_tests {
+    use super::*;
+
+    #[test]
+    fn moving_celestial_presentation_requests_and_releases_realtime_cadence() {
+        let mut app = App::new();
+        app.init_resource::<lunco_time::CelestialTime>()
+            .init_resource::<lunco_core_runtime::FramePacingDemand>()
+            .init_resource::<CelestialPresentationPacing>();
+        app.add_systems(Update, refresh_celestial_presentation_pacing);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            release_celestial_presentation_pacing,
+        );
+        let mut camera = Camera::default();
+        camera.is_active = true;
+        app.world_mut().spawn((camera, SceneCamera::default()));
+        app.world_mut()
+            .spawn(big_space_setup::CelestialPresentationGrid {
+                body: lunco_celestial::ephemeris_id::EARTH,
+                body_fixed: true,
+            });
+
+        app.world_mut()
+            .resource_mut::<lunco_time::CelestialTime>()
+            .delta_secs = 1.0;
+        app.update();
+        let demand = app
+            .world()
+            .resource::<lunco_core_runtime::FramePacingDemand>();
+        assert!(demand.realtime_wanted());
+        assert!(!demand.continuous_wanted());
+
+        app.world_mut()
+            .resource_mut::<lunco_time::CelestialTime>()
+            .delta_secs = 0.0;
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<lunco_core_runtime::FramePacingDemand>()
+            .realtime_wanted());
+
+        app.world_mut()
+            .resource_mut::<lunco_time::CelestialTime>()
+            .delta_secs = -1.0;
+        app.update();
+        assert!(app
+            .world()
+            .resource::<lunco_core_runtime::FramePacingDemand>()
+            .realtime_wanted());
+
+        lunco_core::run_scene_teardown(app.world_mut());
+        assert!(!app
+            .world()
+            .resource::<lunco_core_runtime::FramePacingDemand>()
+            .realtime_wanted());
     }
 }

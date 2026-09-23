@@ -95,7 +95,7 @@ impl Plugin for ScreenshotPlugin {
             .add_observer(deliver_screenshot);
 
         // Offline Frame-by-Frame Recording Mode
-        app.init_resource::<lunco_core_runtime::KeepAwake>()
+        app.init_resource::<lunco_core_runtime::FramePacingDemand>()
             .init_resource::<lunco_core_runtime::SimulationExecutionMode>()
             .init_resource::<OfflineRenderReadiness>()
             .init_resource::<OfflineRecordingState>()
@@ -788,7 +788,8 @@ use bevy::time::TimeUpdateStrategy;
 //   locked to `fps` no matter how fast or slow the machine renders.
 // * **Whether the app may sleep** — `WinitSettings`, written only by the pacer
 //   (`lunco-modelica-core`'s `sim_focus_pace`). Recording states intent by holding a
-//   `lunco_core_runtime::KeepAwake` token; it never writes the setting itself.
+//   continuous `lunco_core_runtime::FramePacingDemand` request; it never writes
+//   the setting itself.
 // * **How fast frames present** — `Window::present_mode`, written only here.
 //   Uncapped while recording so rendering runs at max speed.
 //
@@ -1161,7 +1162,7 @@ fn activate_recording(
     pending: &PendingShotStart,
     state: &mut OfflineRecordingState,
     execution_mode: &mut lunco_core_runtime::SimulationExecutionMode,
-    keep_awake: &mut lunco_core_runtime::KeepAwake,
+    pacing_demand: &mut lunco_core_runtime::FramePacingDemand,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     commands: &mut Commands,
     offscreen: bool,
@@ -1223,8 +1224,8 @@ fn activate_recording(
     //
     // This states intent and stops there; the pacer applies it. Writing
     // `WinitSettings` from here would be reverted on the very next frame anyway.
-    keep_awake.acquire();
-    info!("[offline-record] power saving disabled (KeepAwake acquired)");
+    pacing_demand.acquire_continuous();
+    info!("[offline-record] power saving disabled (continuous frame pacing acquired)");
 
     // Uncap the presentation rate for the same reason: recording wants frames as
     // fast as the machine can render them. Under `Fifo` (vsync) the render loop is
@@ -1269,7 +1270,7 @@ fn activate_recording(
 fn teardown_recording(
     state: &mut OfflineRecordingState,
     execution_mode: &mut lunco_core_runtime::SimulationExecutionMode,
-    keep_awake: &mut lunco_core_runtime::KeepAwake,
+    pacing_demand: &mut lunco_core_runtime::FramePacingDemand,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     virtual_time: &mut bevy::time::Time<bevy::time::Virtual>,
     video_sink: &mut OfflineVideoSink,
@@ -1286,7 +1287,7 @@ fn teardown_recording(
     video_sink.finalize(state.frame_index);
 
     // Drop the wake request; the pacer restores the binary's idle policy.
-    keep_awake.release();
+    pacing_demand.release_continuous();
     if let (Ok(mut window), Some(prev)) = (windows.single_mut(), state.prev_present_mode.take()) {
         window.present_mode = prev;
     }
@@ -1305,7 +1306,7 @@ fn on_stop_offline_recording(
     _trigger: On<StopOfflineRecording>,
     mut state: ResMut<OfflineRecordingState>,
     mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
-    mut keep_awake: ResMut<lunco_core_runtime::KeepAwake>,
+    mut pacing_demand: ResMut<lunco_core_runtime::FramePacingDemand>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut video_sink: ResMut<OfflineVideoSink>,
@@ -1320,7 +1321,7 @@ fn on_stop_offline_recording(
         teardown_recording(
             &mut state,
             &mut execution_mode,
-            &mut keep_awake,
+            &mut pacing_demand,
             &mut windows,
             &mut virtual_time,
             &mut video_sink,
@@ -1524,7 +1525,7 @@ fn start_recording_when_scene_ready(
     pending: Option<ResMut<PendingShotStart>>,
     mut state: ResMut<OfflineRecordingState>,
     mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
-    mut keep_awake: ResMut<lunco_core_runtime::KeepAwake>,
+    mut pacing_demand: ResMut<lunco_core_runtime::FramePacingDemand>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     meshes: Query<&bevy::mesh::Mesh3d>,
     asset_server: Res<AssetServer>,
@@ -1568,7 +1569,7 @@ fn start_recording_when_scene_ready(
         &pending,
         &mut state,
         &mut execution_mode,
-        &mut keep_awake,
+        &mut pacing_demand,
         &mut windows,
         &mut commands,
         capture_target.is_some(),
@@ -1725,7 +1726,7 @@ fn deliver_offline_frame(
     requests: Query<&PendingCapture>,
     mut state: ResMut<OfflineRecordingState>,
     mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
-    mut keep_awake: ResMut<lunco_core_runtime::KeepAwake>,
+    mut pacing_demand: ResMut<lunco_core_runtime::FramePacingDemand>,
     mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut video_sink: ResMut<OfflineVideoSink>,
@@ -1788,7 +1789,7 @@ fn deliver_offline_frame(
                     teardown_recording(
                         &mut state,
                         &mut execution_mode,
-                        &mut keep_awake,
+                        &mut pacing_demand,
                         &mut windows,
                         &mut virtual_time,
                         &mut video_sink,
@@ -1808,7 +1809,7 @@ fn deliver_offline_frame(
             teardown_recording(
                 &mut state,
                 &mut execution_mode,
-                &mut keep_awake,
+                &mut pacing_demand,
                 &mut windows,
                 &mut virtual_time,
                 &mut video_sink,
@@ -1824,7 +1825,7 @@ fn deliver_offline_frame(
             teardown_recording(
                 &mut state,
                 &mut execution_mode,
-                &mut keep_awake,
+                &mut pacing_demand,
                 &mut windows,
                 &mut virtual_time,
                 &mut video_sink,
@@ -1847,7 +1848,7 @@ fn deliver_offline_frame(
             teardown_recording(
                 &mut state,
                 &mut execution_mode,
-                &mut keep_awake,
+                &mut pacing_demand,
                 &mut windows,
                 &mut virtual_time,
                 &mut video_sink,
@@ -1873,7 +1874,7 @@ fn deliver_offline_frame(
             teardown_recording(
                 &mut state,
                 &mut execution_mode,
-                &mut keep_awake,
+                &mut pacing_demand,
                 &mut windows,
                 &mut virtual_time,
                 &mut video_sink,

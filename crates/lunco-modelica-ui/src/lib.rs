@@ -152,7 +152,7 @@ fn sim_focus_pace(
     pending: Option<Res<lunco_modelica_runner::PendingHandles>>,
     models: Query<&lunco_modelica_runtime::ModelicaModel>,
     execution_mode: Option<Res<lunco_core_runtime::SimulationExecutionMode>>,
-    keep_awake: Option<Res<lunco_core_runtime::KeepAwake>>,
+    pacing_demand: Option<Res<lunco_core_runtime::FramePacingDemand>>,
     mut idle: Local<Option<bevy::winit::UpdateMode>>,
 ) {
     let Some(mut settings) = settings else { return };
@@ -163,17 +163,20 @@ fn sim_focus_pace(
         || models.iter().any(|m| !m.paused && m.is_compiled);
     let max_speed = execution_mode
         .is_some_and(|mode| *mode == lunco_core_runtime::SimulationExecutionMode::MaxSpeed);
-    let keep_awake = keep_awake.map(|request| request.wanted()).unwrap_or(false);
+    let (realtime_demand, continuous_demand) = pacing_demand.map_or((false, false), |demand| {
+        (demand.realtime_wanted(), demand.continuous_wanted())
+    });
     let idle_mode = idle.expect("snapshot set above");
-    let desired = if max_speed || keep_awake {
+    let desired = if max_speed || continuous_demand {
         bevy::winit::UpdateMode::Continuous
-    } else if sim_active && !matches!(idle_mode, bevy::winit::UpdateMode::Continuous) {
-        // An unfocused active simulator still needs a wall-clock cadence, but
-        // `Continuous` turns it into an unbounded max-speed loop as soon as the
-        // compositor stops pacing the window. Keep background simulation at the
-        // fixed realtime cadence so one Twin cannot starve the desktop or other
-        // Twin windows. Focused rendering is still paced by the focused mode's
-        // presentation setting.
+    } else if (sim_active || realtime_demand)
+        && !matches!(idle_mode, bevy::winit::UpdateMode::Continuous)
+    {
+        // Unfocused simulation and visible animation need a wall-clock cadence,
+        // but `Continuous` turns them into an unbounded max-speed loop as soon
+        // as the compositor stops pacing the window. Keep them at the fixed
+        // realtime cadence so one Twin cannot starve the desktop or other
+        // Twin windows. Focused rendering follows the focused presentation mode.
         bevy::winit::UpdateMode::reactive(std::time::Duration::from_secs_f64(
             1.0 / lunco_core_runtime::FIXED_HZ,
         ))

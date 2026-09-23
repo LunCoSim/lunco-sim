@@ -154,7 +154,7 @@ impl Plugin for LunCoSimUiPlugin {
         app.insert_resource(InitialScenePath(self.config.initial_scene.clone()));
         // Winit frame pacing. Continuous while focused lets vsync (Fifo present /
         // requestAnimationFrame on web) act as the frame timer; ReactiveLowPower
-        // keeps fans quiet when backgrounded. Networked windows stay Continuous
+        // keeps fans quiet when backgrounded and idle. Networked windows stay Continuous
         // unfocused so lightyear keepalives keep flowing (one of two side-by-side
         // windows is always unfocused; the default ~1 FPS throttle starves the
         // link past timeout). `--no-throttle` forces Continuous for automated
@@ -169,10 +169,10 @@ impl Plugin for LunCoSimUiPlugin {
             // `WinitSettings::unfocused_mode`. Keep the CLI's continuous-rate
             // contract in the shared pacing plane so that pacer cannot restore
             // reactive-low-power after the scene becomes idle.
-            app.init_resource::<lunco_core_runtime::KeepAwake>();
+            app.init_resource::<lunco_core_runtime::FramePacingDemand>();
             app.world_mut()
-                .resource_mut::<lunco_core_runtime::KeepAwake>()
-                .acquire();
+                .resource_mut::<lunco_core_runtime::FramePacingDemand>()
+                .acquire_continuous();
         }
         {
             use bevy::winit::{UpdateMode, WinitSettings};

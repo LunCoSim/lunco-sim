@@ -73,6 +73,9 @@ presentation. A visible surface marker may be copied under the
 matching presentation body-fixed grid, but that copy is render-only. Show the
 causal marker on its own body's surface and the copy in orbit or other-body
 views so the fast globe has no stationary duplicate.
+When the celestial epoch diverges from `WorldTime`, terrain and key-light
+shadows follow the same render-only Sun direction through `SunRenderState`;
+physical `SunState` and co-simulation remain on `WorldTime`.
 Procedural sky materials opt into the live Sun disc by declaring both
 `sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
 the behavior. The direction is in the active camera's view coordinates, the

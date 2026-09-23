@@ -6,14 +6,12 @@
 //! a background realtime Twin gets a bounded cadence while recording/tests can
 //! deliberately request Continuous updates.
 //!
-//! [`KeepAwake`] is how a subsystem states the intent instead of fighting over the
-//! knob: whoever paces winit ORs these requests in. It is a counter, not a bool, so
-//! overlapping requesters cannot clobber one another — each takes a token and drops
-//! it when done.
+//! [`FramePacingDemand`] is how a subsystem states its cadence intent instead of
+//! fighting over the knob. Overlapping requests are counted independently; callers
+//! release only the cadence token they acquired.
 //!
-//! It lives in `lunco-core` because both the requester (`lunco-workbench`'s offline
-//! recorder) and the pacer (`lunco-modelica-core`) depend on core, and neither depends on
-//! the other.
+//! It lives in `lunco-core-runtime`, shared by animation/capture requesters and
+//! the application pacer, without introducing a dependency between them.
 
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
@@ -47,30 +45,69 @@ pub enum SimulationExecutionMode {
     MaxSpeed,
 }
 
-/// Outstanding requests to keep the app updating continuously, ignoring the
-/// unfocused power-saving throttle.
+/// Outstanding cadence requests from systems that animate or record frames.
 ///
-/// The canonical requester is offline frame recording: an unattended capture run
-/// has no focused window, and under `reactive_low_power` the app sleeps between
-/// redraws, stretching a frame from ~50 ms to whole seconds.
+/// Realtime requests select the host's bounded fixed-Hz cadence while unfocused.
+/// Continuous requests are reserved for explicit max-speed work such as offline
+/// frame recording. Focused windows remain paced by the focused update mode.
 #[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct KeepAwake(pub u32);
+pub struct FramePacingDemand {
+    realtime: u32,
+    continuous: u32,
+}
 
-impl KeepAwake {
-    /// Take a token — the app should update continuously until it is released.
-    pub fn acquire(&mut self) {
-        self.0 = self.0.saturating_add(1);
+impl FramePacingDemand {
+    /// Request the bounded realtime cadence until this request is released.
+    pub fn acquire_realtime(&mut self) {
+        self.realtime = self.realtime.saturating_add(1);
     }
 
-    /// Release a previously taken token. Saturating, so an unbalanced release
-    /// cannot wrap into "everyone wants to stay awake forever".
-    pub fn release(&mut self) {
-        self.0 = self.0.saturating_sub(1);
+    /// Release one bounded realtime cadence request.
+    pub fn release_realtime(&mut self) {
+        self.realtime = self.realtime.saturating_sub(1);
     }
 
-    /// Whether anything currently wants continuous updates.
-    pub fn wanted(&self) -> bool {
-        self.0 > 0
+    /// Request continuous updates until this request is released.
+    pub fn acquire_continuous(&mut self) {
+        self.continuous = self.continuous.saturating_add(1);
+    }
+
+    /// Release one continuous update request.
+    pub fn release_continuous(&mut self) {
+        self.continuous = self.continuous.saturating_sub(1);
+    }
+
+    /// Whether at least one subsystem needs the bounded realtime cadence.
+    pub fn realtime_wanted(&self) -> bool {
+        self.realtime > 0
+    }
+
+    /// Whether at least one subsystem explicitly needs continuous updates.
+    pub fn continuous_wanted(&self) -> bool {
+        self.continuous > 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FramePacingDemand;
+
+    #[test]
+    fn cadence_requests_are_independent_and_saturating() {
+        let mut demand = FramePacingDemand::default();
+        demand.acquire_realtime();
+        demand.acquire_realtime();
+        demand.acquire_continuous();
+
+        assert!(demand.realtime_wanted());
+        assert!(demand.continuous_wanted());
+
+        demand.release_realtime();
+        assert!(demand.realtime_wanted());
+        demand.release_realtime();
+        demand.release_realtime();
+        assert!(!demand.realtime_wanted());
+        assert!(demand.continuous_wanted());
     }
 }
 

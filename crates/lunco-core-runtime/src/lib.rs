@@ -17,7 +17,7 @@ pub mod sync;
 pub use cadence::{ApplicationCadence, CadenceClock};
 pub use health::{ENGINE_HEALTH_HISTORY_LEN, EngineHealthSnapshot, PhysicsHealthSnapshot};
 pub use pacing::{
-    KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
+    FramePacingDemand, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };
 pub use sync::LockExt;
 

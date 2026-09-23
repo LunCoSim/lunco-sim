@@ -154,7 +154,9 @@ authored site grid, and do not move the terrain or physics frame to compensate
 for a visual pattern.
 
 The same render boundary applies to terrain sun consumers. `SunState` remains
-the semantic source: its light-local pose is projected before BigSpace
+the physical semantic source. A detached celestial clock can provide a typed
+`SunRenderPresentation` direction to the same light projection without changing
+`SunState`. The selected light-local pose is projected before BigSpace
 propagation, and `SunRenderState` is published from the finalized scene-sun
 `GlobalTransform` afterward. Every consumer that converts that direction
 through a terrain `GlobalTransform` runs after `PropagateLowPrecision`. This
@@ -162,7 +164,7 @@ includes static terrain material wiring, horizon-cache bake decisions, and
 streamed-tile cache validity. Streamed-tile shadow intent is then bound through
 `TerrainSurfaceSet::RenderShadowBinding`, so the tile material never combines a
 finalized mesh transform with a previous-frame terrain-local sun direction.
-The projection is change-gated by the semantic revision, active frame identity,
+The projection is change-gated by the selected source revision, active frame identity,
 the exact BigSpace ancestor chains, and the light's authored local transform;
 unchanged frames do not rebuild f64 world poses. The finalizer rejects a
 light/frame disagreement; there is one projection boundary and no render-frame
