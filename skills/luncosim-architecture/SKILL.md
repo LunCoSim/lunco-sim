@@ -190,6 +190,14 @@ scope, cycle, and generation as unit instead of inventing an owner. Add a
 separate schedule driver only when a cycle needs independent cadence or
 overload semantics, and keep expensive calculations off
 the UI/physics-critical thread.
+
+Native immutable preparation uses `lunco_core_runtime::AsyncWorkAdmission`;
+do not add another per-crate priority queue. Each request carries its scope
+generation, stable owner identity, source revision, and operation id. Priority
+selects which queued job starts; the owner still validates and commits its
+typed result at its own boundary. WebAssembly's Bevy async-compute pool runs
+cooperatively on the browser main thread, so expensive web work needs an
+explicit worker transport rather than this native dispatcher.
 Telemetry samples are captured with the fixed tick, then delivered through the
 plugin-owned bounded `Telemetry` cycle. Never run subscription, retention, or
 logging observers inline with fixed physics; report queue loss through the

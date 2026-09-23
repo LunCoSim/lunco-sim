@@ -99,7 +99,10 @@ the first entity, a fabricated value, or an older behavior.
 3. Minimize dependency fan-out. A new Rust edge must provide a reusable engine
    contract, not one convenience function. Split core/UI or API adapters at
    the actual dependency boundary; do not pull Bevy, rendering, physics, or a
-   scripting host into a small contract crate.
+   scripting host into a small contract crate. Native immutable preparation
+   uses `lunco_core_runtime::AsyncWorkAdmission`; domain owners keep their
+   typed result and deterministic commit boundary instead of adding a local
+   priority scheduler.
 4. Place tests at the observable owner. Keep Rust tests for pure lowering,
    math, parsing, schema/composition, serialization, and generic lifecycle or
    interpreter seams. Put behavior, policy, asset, long-USD, and model-backed

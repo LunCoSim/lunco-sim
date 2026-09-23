@@ -7,6 +7,7 @@
 //! and diagnostic contracts remain in `lunco_core` because shared domains use
 //! them without requiring this runtime plugin.
 
+pub mod async_work;
 pub mod cadence;
 pub mod gate;
 pub mod health;
@@ -14,6 +15,10 @@ pub mod pacing;
 pub mod subsystems;
 pub mod sync;
 
+pub use async_work::{
+    AsyncWorkAdmission, AsyncWorkAdmissionPlugin, AsyncWorkKey, AsyncWorkKind, AsyncWorkLimitError,
+    AsyncWorkPriority, AsyncWorkRejection, AsyncWorkSnapshot,
+};
 pub use cadence::{ApplicationCadence, CadenceClock};
 pub use health::{ENGINE_HEALTH_HISTORY_LEN, EngineHealthSnapshot, PhysicsHealthSnapshot};
 pub use pacing::{
@@ -93,6 +98,9 @@ pub struct LunCoCoreRuntimePlugin;
 
 impl Plugin for LunCoCoreRuntimePlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<AsyncWorkAdmissionPlugin>() {
+            app.add_plugins(AsyncWorkAdmissionPlugin);
+        }
         app.register_type::<lunco_core::PhysicsPoseAuthoritative>()
             .register_type::<lunco_core::ModelStateRevision>()
             .register_type::<lunco_core::MobilityRoot>()
