@@ -1,8 +1,8 @@
 use crate::registry::ApiEntityRegistry;
 use bevy::prelude::*;
 use lunco_api_core::{
-    api_value_from_serializable, api_value_from_u64, ApiErrorCode, ApiResponse, ApiValue,
-    ApiValueError, IntoApiValue,
+    ApiErrorCode, ApiResponse, ApiValue, ApiValueError, IntoApiValue, api_value_from_serializable,
+    api_value_from_u64,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -98,17 +98,9 @@ pub fn execute_query_response(
 
 /// Read a required unsigned integer parameter.
 pub fn api_param_u64(params: &ApiValue, name: &str) -> Option<u64> {
-    params
-        .get(name)
-        .and_then(ApiValue::as_i64)
-        .and_then(|value| u64::try_from(value).ok())
-}
-
-/// Read an unsigned integer parameter that also accepts decimal text.
-pub fn api_param_u64_or_string(params: &ApiValue, name: &str) -> Option<u64> {
     match params.get(name)? {
         ApiValue::Int(value) => u64::try_from(*value).ok(),
-        ApiValue::Str(value) => value.parse().ok(),
+        ApiValue::UInt(value) => Some(*value),
         _ => None,
     }
 }
@@ -199,7 +191,7 @@ impl ApiQueryProvider for ReadPortsProvider {
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
-        let Some(api_id) = api_param_u64_or_string(params, "api_id") else {
+        let Some(api_id) = api_param_u64(params, "api_id") else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 "ReadPorts: `api_id` (u64) required",

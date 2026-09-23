@@ -8,11 +8,11 @@
 //! - `On<SetPorts>` for internal triggers
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
-use crate::queries::{execute_query_response, ApiQueryRegistry};
+use crate::queries::{ApiQueryRegistry, execute_query_response};
 use crate::{
     discovery::{
-        discover_commands, discover_hooks, discover_queries, find_api_command,
-        ApiCommandLookupError,
+        ApiCommandLookupError, discover_commands, discover_hooks, discover_queries,
+        find_api_command,
     },
     queries::ApiVisibility,
     registry::ApiEntityRegistry,
@@ -21,8 +21,8 @@ use crate::{
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistry;
 use lunco_api_core::{
-    api_value, api_value_from_serializable, api_value_from_u64, validate_reflection_value,
-    ApiErrorCode, ApiRequest, ApiResponse, ApiSchema, ApiValue, ApiValueDeserializer,
+    ApiErrorCode, ApiRequest, ApiResponse, ApiSchema, ApiValue, ApiValueDeserializer, api_value,
+    api_value_from_serializable, api_value_from_u64, validate_reflection_value,
 };
 use lunco_celestial::CelestialBody;
 
@@ -592,7 +592,7 @@ enum EntityIdDirection {
 fn api_value_u64(value: &ApiValue) -> Option<u64> {
     match value {
         ApiValue::Int(value) => u64::try_from(*value).ok(),
-        ApiValue::Str(value) => value.parse().ok(),
+        ApiValue::UInt(value) => Some(*value),
         _ => None,
     }
 }
@@ -605,7 +605,7 @@ fn convert_value_node(
     direction: EntityIdDirection,
     sync_local: bool,
 ) -> Result<(), String> {
-    use bevy::reflect::{enums::VariantInfo, TypeInfo};
+    use bevy::reflect::{TypeInfo, enums::VariantInfo};
     use std::any::TypeId;
 
     if type_id == TypeId::of::<Entity>() {
@@ -1172,7 +1172,7 @@ impl Plugin for ApiExecutorPlugin {
 mod tests {
     use super::*;
     use lunco_command_contracts::{Ack, OpId};
-    use lunco_core::{on_command, ActiveCommandId, Command, CommandOutcome, CommandResults};
+    use lunco_core::{ActiveCommandId, Command, CommandOutcome, CommandResults, on_command};
 
     #[test]
     fn internal_command_id_generation() {
@@ -1351,14 +1351,16 @@ mod tests {
     fn valid_params_pass_validation() {
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        assert!(validate_command_params_value(
-            "TestEcho",
-            &api_value!({ "fail": true }),
-            registration,
-            &reg,
-            &ApiEntityRegistry::default(),
-        )
-        .is_ok());
+        assert!(
+            validate_command_params_value(
+                "TestEcho",
+                &api_value!({ "fail": true }),
+                registration,
+                &reg,
+                &ApiEntityRegistry::default(),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1367,14 +1369,16 @@ mod tests {
         // All fields default, so this is legitimately valid.
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        assert!(validate_command_params_value(
-            "TestEcho",
-            &ApiValue::Unit,
-            registration,
-            &reg,
-            &ApiEntityRegistry::default(),
-        )
-        .is_ok());
+        assert!(
+            validate_command_params_value(
+                "TestEcho",
+                &ApiValue::Unit,
+                registration,
+                &reg,
+                &ApiEntityRegistry::default(),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1397,14 +1401,16 @@ mod tests {
         // The headline case: a typo'd param name. This used to return 200 OK.
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        assert!(validate_command_params_value(
-            "TestEcho",
-            &api_value!({ "nope": true }),
-            registration,
-            &reg,
-            &ApiEntityRegistry::default(),
-        )
-        .is_err());
+        assert!(
+            validate_command_params_value(
+                "TestEcho",
+                &api_value!({ "nope": true }),
+                registration,
+                &reg,
+                &ApiEntityRegistry::default(),
+            )
+            .is_err()
+        );
     }
 }
 
@@ -1414,7 +1420,7 @@ mod id_codec_tests {
     use crate::registry::ApiEntityRegistry;
     use bevy::prelude::*;
     use bevy::reflect::TypeRegistry;
-    use lunco_api_core::{api_value_from_u64, ApiValue};
+    use lunco_api_core::{ApiValue, api_value_from_u64};
     use lunco_core::GlobalEntityId;
     use std::any::TypeId;
 

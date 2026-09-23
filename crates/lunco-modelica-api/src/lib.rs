@@ -13,9 +13,9 @@ pub mod edit;
 pub mod run;
 
 use bevy::prelude::*;
-use lunco_api::queries::{api_param_array, api_param_u64, ApiQueryError, ApiQueryResult};
+use lunco_api::queries::{ApiQueryError, ApiQueryResult, api_param_array, api_param_u64};
 use lunco_api::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_doc::{Document, DocumentOrigin};
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_workspace::WorkspaceResource;
@@ -210,30 +210,22 @@ impl ApiQueryProvider for ListLibraryProvider {
     }
 
     fn execute(&self, _world: &World, params: &ApiValue) -> ApiQueryResult {
-        // Pagination + filter params. All optional. `cursor` is an
-        // opaque decimal string carrying the offset to start from
-        // (returned by the previous page); v1 does not validate that
-        // the caller's filter matches the cursor — changing filter
-        // mid-pagination is undefined behaviour and the agent's
-        // responsibility to avoid. Filter-hash invalidation is a v2
-        // nicety (see spec 032 FR-004).
+        // Pagination + filter params. All optional. `cursor` is the numeric
+        // offset returned by the previous page. The caller must keep the
+        // filter stable while paginating.
         let cursor = match params.get("cursor") {
             None => 0,
-            Some(ApiValue::Str(value)) => match value.parse::<usize>() {
-                Ok(cursor) => cursor,
-                Err(_) => {
+            Some(_) => match api_param_u64(params, "cursor")
+                .and_then(|value| usize::try_from(value).ok())
+            {
+                Some(cursor) => cursor,
+                None => {
                     return query_error(
                         ApiErrorCode::DeserializationError,
-                        "ListLibrary: `cursor` must be a decimal offset string",
+                        "ListLibrary: `cursor` must be an unsigned offset",
                     );
                 }
             },
-            Some(_) => {
-                return query_error(
-                    ApiErrorCode::DeserializationError,
-                    "ListLibrary: `cursor` must be a decimal offset string",
-                );
-            }
         };
 
         let limit = match params.get("limit") {
@@ -314,7 +306,7 @@ impl ApiQueryProvider for ListLibraryProvider {
             .collect();
 
         let total = matched.len();
-        let end = (cursor + limit).min(total);
+        let end = cursor.saturating_add(limit).min(total);
         let page_slice = if cursor >= total {
             &[][..]
         } else {
@@ -334,11 +326,7 @@ impl ApiQueryProvider for ListLibraryProvider {
             })
             .collect();
 
-        let next_cursor = if end < total {
-            Some(end.to_string())
-        } else {
-            None
-        };
+        let next_cursor = if end < total { Some(end) } else { None };
 
         let count = items.len();
         query_ok(api_value!({
@@ -1722,12 +1710,7 @@ fn score(q: &str, label: &str, secondary: &str) -> Option<f32> {
 // ─── Provider helpers ──────────────────────────────────────────────────
 
 fn parse_doc_id(params: &ApiValue, field: &str) -> Option<DocumentId> {
-    params
-        .get(field)
-        .and_then(|value| match value {
-            ApiValue::Int(value) => u64::try_from(*value).ok(),
-            _ => None,
-        })
+    api_param_u64(params, field)
         .filter(|id| *id != 0)
         .map(DocumentId::new)
 }

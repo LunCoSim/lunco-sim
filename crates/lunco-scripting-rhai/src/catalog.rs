@@ -662,6 +662,7 @@ impl ApiQueryProvider for ScriptCompleteProvider {
         let limit = match params.get("limit") {
             None => 50,
             Some(ApiValue::Int(limit)) if *limit >= 0 => (*limit as usize).clamp(1, 200),
+            Some(ApiValue::UInt(limit)) => (*limit).min(200) as usize,
             Some(_) => {
                 return query_error(
                     ApiErrorCode::DeserializationError,

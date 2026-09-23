@@ -125,7 +125,7 @@ event retains its producer stamp while its consumer also knows its execution
 cycle. A discrete callback must not infer its timing from whichever Bevy
 `Time<T>` happens to be accessible. Rust owns this typed contract; Rhai gets a
 read-only `execution_context()` view beside the existing `clock_snapshot()`. The
-Rhai map preserves `u64` route generations and sequences as decimal strings.
+Rhai map preserves route generations and sequences as native `u64` values.
 An unclassified bridge call has no owner route; its `scope`, `cycle`, and
 `generation` map values are Rhai unit instead of an invented Application route.
 `sim_tick()`, `dt()`, and `elapsed_seconds()` return a Rhai error outside

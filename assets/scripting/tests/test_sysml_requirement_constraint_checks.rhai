@@ -17,7 +17,7 @@ let source = if analyzed != () && analyzed.analysis != () {
       warnings: analyzed.warnings,
       requirement_records: analyzed.analysis.requirements,
       verification_records: analyzed.analysis.verifications,
-      source_revision_hex: analyzed.analysis.source_revision_hex,
+      source_revision: analyzed.analysis.source_revision,
       source_files: analyzed.analysis.source_files}
 } else { #{} };
 checks.push(t_true(analyzed != () && analyzed.ok == true

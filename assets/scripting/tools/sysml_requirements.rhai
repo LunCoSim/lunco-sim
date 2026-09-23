@@ -347,6 +347,14 @@ fn number(report, name) {
     ()
 }
 
+fn boolean(report, name) {
+    let resolved = attribute(report, name);
+    if resolved.ok != true { return resolved; }
+    if resolved.record.value == ()
+        || resolved.record.value.boolean_value == () { return (); }
+    resolved.record.value.boolean_value
+}
+
 // Return a numeric SysML vector as a native Rhai array. The provider parses
 // the authored collection once; callers never split CSV strings or round-trip
 // through JSON. A non-numeric vector is rejected as a typed-source error.
@@ -641,13 +649,13 @@ fn _check_constraint(report, check, model) {
             kind: check.kind, constraint: check.constraint, verdict: "error",
             error: "source-pinned SysML model is unavailable"};
     }
-    if model.source_revision_hex != report.source_revision_hex {
+    if model.source_revision != report.source_revision {
         return #{ok: false, id: check.id, component: check.component,
             requirement: check.requirement, verification: check.verification,
             kind: check.kind, constraint: check.constraint, verdict: "error",
             error: "SysML source revision changed between requirement analysis and constraint binding",
-            analyzed_source_revision: report.source_revision_hex,
-            constraint_source_revision: model.source_revision_hex};
+            analyzed_source_revision: report.source_revision,
+            constraint_source_revision: model.source_revision};
     }
     let membership = _constraint_is_required(report, check.requirement,
         check.constraint);
@@ -656,7 +664,7 @@ fn _check_constraint(report, check, model) {
             requirement: check.requirement, verification: check.verification,
             kind: check.kind, constraint: check.constraint, verdict: "error",
             error: membership.error,
-            source_revision: report.source_revision_hex};
+            source_revision: report.source_revision};
     }
     let bound = _constraint_observations(model, check);
     if bound.ok != true {
@@ -695,7 +703,7 @@ fn _check_constraint(report, check, model) {
       expression_results: evaluation.expression_results,
       diagnostics: evaluation.diagnostics,
       observations: bound.observations,
-      source_revision: report.source_revision_hex,
+      source_revision: report.source_revision,
       tolerance: tolerance}
 }
 
@@ -726,6 +734,38 @@ fn _check_one(report, check, indexes, model) {
         return _failure(check, expected_result.error);
     }
     if check.kind == "coverage" { return #{ok: true, id: check.id, component: check.component, requirement: check.requirement}; }
+
+    if check.kind == "source_reference_available" {
+        let resolved = referenced_attribute(report, check.source_owner,
+            check.reference_feature);
+        if resolved.ok != true {
+            return _failure(check, resolved.error);
+        }
+        if resolved.record.value == () {
+            return _failure(check, "referenced SysML source value is missing");
+        }
+        return #{ok: true, id: check.id, component: check.component,
+            requirement: check.requirement,
+            source_feature: resolved.record.handle,
+            source_span: #{file: resolved.record.file,
+                start: resolved.record.start, end: resolved.record.end}};
+    }
+
+    if check.kind == "source_collection_count" {
+        if check.actual_count == () || check.expected_count == ()
+            || !_numeric(check.actual_count) || !_numeric(check.expected_count) {
+            return _failure(check, "typed source collection/count values are unavailable");
+        }
+        if check.actual_count != check.expected_count {
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement,
+                error: "typed source collection length disagrees with its declared count",
+                actual: check.actual_count, expected: check.expected_count};
+        }
+        return #{ok: true, id: check.id, component: check.component,
+            requirement: check.requirement,
+            actual: check.actual_count, expected: check.expected_count};
+    }
 
     // Compare a typed SysML collection with its declared count. This is a
     // generic source-side check: Twin tests still verify every composed USD
@@ -1063,7 +1103,7 @@ fn evaluate(source_report, checks) {
       requirement_names: requirement_names,
       requirement_summary: requirement_summary,
       failure_count: total_failures, verification: verification,
-      source_revision: source_report.source_revision_hex,
+      source_revision: source_report.source_revision,
       source_files: source_report.source_files}
 }
 
@@ -1120,8 +1160,7 @@ fn evaluate_stream(source_report, checks, channel, title) {
         if channel != () && channel != "" {
             emit(channel + "_EVIDENCE_RESULT", #{schema_version: 1,
                 title: title, channel: channel, verification: verification,
-                source_revision: source_report.source_revision_hex,
-                source_revision_hex: source_report.source_revision_hex,
+                source_revision: source_report.source_revision,
                 result_count: checks.len(), failure_count: (),
                 result_index: result_index, result: result});
         }
@@ -1143,8 +1182,7 @@ fn evaluate_stream(source_report, checks, channel, title) {
     if channel != () && channel != "" {
         emit(channel + "_EVIDENCE_STREAM_SUMMARY", #{schema_version: 1,
             title: title, channel: channel, verification: verification,
-            source_revision: source_report.source_revision_hex,
-            source_revision_hex: source_report.source_revision_hex,
+            source_revision: source_report.source_revision,
             result_count: checks.len(), failure_count: failure_count,
             requirement_count: requirement_names.len(),
             requirement_names: requirement_names,
@@ -1155,7 +1193,7 @@ fn evaluate_stream(source_report, checks, channel, title) {
       check_count: checks.len(), requirement_count: requirement_names.len(),
       requirement_names: requirement_names, requirement_summary: requirement_summary,
       failure_count: failure_count, verification: verification,
-      source_revision: source_report.source_revision_hex,
+      source_revision: source_report.source_revision,
       source_files: source_report.source_files}
 }
 
@@ -1265,7 +1303,7 @@ fn _paged_twin_source(path, tables) {
     let page_limit = 16;
     let offset = 0;
     let page_count = 0;
-    let revision = "";
+    let revision = ();
     let requirement_total = ();
     let verification_total = ();
     let assembled = ();
@@ -1278,12 +1316,12 @@ fn _paged_twin_source(path, tables) {
             return #{ok: false, path: path, error: _report_error(page,
                 "AnalyzeSysml page omitted its semantic facts")};
         }
-        let page_revision = page.analysis.source_revision_hex;
-        if page_revision == () || page_revision == "" {
+        let page_revision = page.analysis.source_revision;
+        if page_revision == () {
             return #{ok: false, path: path,
                 error: "AnalyzeSysml page omitted its source revision"};
         }
-        if revision == "" {
+        if revision == () {
             revision = page_revision;
             assembled = page;
         } else if revision != page_revision {
@@ -1318,7 +1356,7 @@ fn _paged_twin_source(path, tables) {
         offset += page_limit;
     }
     assembled.analysis = #{source_files: assembled.analysis.source_files,
-        source_revision_hex: revision,
+        source_revision: revision,
         requirements: requirements, verifications: verifications};
     assembled.source_page_count = page_count;
     assembled.source_fact_totals = #{requirements: requirement_total,
@@ -1370,7 +1408,7 @@ fn _source_projection(names, requirement_names, verification_names,
     let report = #{path: analyzed.path, kind: analyzed.kind,
         ok: analyzed.ok, errors: analyzed.errors, warnings: analyzed.warnings,
         source_files: analyzed.analysis.source_files,
-        source_revision_hex: analyzed.analysis.source_revision_hex,
+        source_revision: analyzed.analysis.source_revision,
         source_page_count: if analyzed.source_page_count == () { 1 } else { analyzed.source_page_count },
         source_fact_totals: if analyzed.source_fact_totals == () { () } else { analyzed.source_fact_totals },
         requirement_records: analyzed.analysis.requirements,
@@ -1445,174 +1483,274 @@ fn _literal_text(attribute) {
     ()
 }
 
-// Read evidence from typed SysML attributes and group it by its owning
-// semantic element. This is a requirements-policy projection, not a Rust
-// report format or a comment-string convention.
-fn provenance(report, requirement_id) {
-    if type_of(report) != "map" || report.path == () || report.path == "" {
-        return #{ok: false,
-            error: _report_error(report, "SysML source report is unavailable")};
+// Resolve a standard SysML short name to a source-revision-scoped element
+// handle. The short name is only a lookup key; subsequent queries follow
+// model references by typed handle.
+fn requirement_handle_by_short_name(report, short_name) {
+    if type_of(report) != "map" || short_name == () || short_name == "" {
+        return #{ok: false, error: "SysML requirement short name is missing"};
     }
-    if requirement_id == () || requirement_id == "" {
-        return #{ok: false, error: "SysML provenance requirement ID is missing"};
+    let records = report.requirement_records;
+    if records == () && report.analysis != () {
+        records = report.analysis.requirements;
     }
-    // Resolve exactly one evidence owner by the typed requirement ID, then
-    // fetch only that owner's evidence fields. A Twin-wide query for common
-    // local names such as `rationale` needlessly returns hundreds of records
-    // and can exceed Rhai's bounded value budget.
-    let identity = query("AnalyzeSysml", #{
-        path: report.path, tables: ["attributes"],
-        attribute_names: ["requirementId"],
-        attribute_string_values: [requirement_id]
-    });
-    if identity == () || identity.analysis == ()
-        || identity.analysis.attributes == () {
-        return #{ok: false,
-            error: _report_error(identity, "SysML provenance owner is unavailable")};
-    }
-    if identity.analysis.attributes.len() != 1 {
-        return #{ok: false, error: if identity.analysis.attributes.len() == 0 {
-            "SysML provenance record is missing: " + requirement_id
-        } else { "ambiguous SysML provenance record: " + requirement_id }};
-    }
-    let owner = identity.analysis.attributes[0].owner;
-    let selected = query("AnalyzeSysml", #{
-        path: report.path, tables: ["attributes"],
-        attribute_names: [owner + "::requirementId",
-            owner + "::qualifiedRequirement", owner + "::sourceReference",
-            owner + "::rationale", owner + "::status"],
-        attribute_owners: [owner]
-    });
-    if selected == () || selected.analysis == () {
-        return #{ok: false,
-            error: _report_error(selected, "SysML provenance source is unavailable")};
-    }
-    let owners = #{};
-    for attribute in selected.analysis.attributes {
-        if owners[attribute.owner] == () { owners[attribute.owner] = #{}; }
-        owners[attribute.owner][attribute.name] = attribute;
+    if records == () {
+        return #{ok: false, error: "SysML requirement records are unavailable"};
     }
     let found = ();
-    for owner in owners.keys() {
-        let fields = owners[owner];
-        let id = _literal_text(fields.requirementId);
-        let qualified = _literal_text(fields.qualifiedRequirement);
-        if id == requirement_id || qualified == requirement_id {
-            if found != () {
-                return #{ok: false,
-                    error: "ambiguous SysML provenance record: " + requirement_id};
-            }
-            let source_records = [];
-            for field_name in fields.keys() { source_records.push(fields[field_name]); }
-            if source_records.len() == 0 { continue; }
-            let source_start = source_records[0].start;
-            let source_end = source_records[0].end;
-            let source_file = source_records[0].file;
-            for record in source_records {
-                if record.start < source_start { source_start = record.start; }
-                if record.end > source_end { source_end = record.end; }
-            }
-            let evidence = #{owner: owner, requirement_id: id,
-                qualified_requirement: qualified,
-                source_span: #{file: source_file, start: source_start, end: source_end}};
-            let source_reference = _literal_text(fields.sourceReference);
-            let rationale = _literal_text(fields.rationale);
-            let status = _literal_text(fields.status);
-            if source_reference != () { evidence.source_reference = source_reference; }
-            if rationale != () { evidence.rationale = rationale; }
-            if status != () { evidence.status = status; }
-            found = evidence;
+    for record in records {
+        if record.element == () || record.element.handle == ()
+            || record.element.short_name != short_name { continue; }
+        if found != () {
+            return #{ok: false,
+                error: "ambiguous SysML requirement short name: " + short_name};
         }
+        found = record.element.handle;
     }
     if found == () {
         return #{ok: false,
-            error: "SysML provenance record is missing: " + requirement_id};
+            error: "SysML requirement short name is missing: " + short_name};
     }
-    let revision = report.source_revision_hex;
-    let files = report.source_files;
-    if report.analysis != () {
-        if revision == () { revision = report.analysis.source_revision_hex; }
-        if files == () { files = report.analysis.source_files; }
-    }
-    #{ok: true, evidence: found,
-      source_revision: revision, source_revision_hex: revision,
-      source_files: files}
+    #{ok: true, handle: found}
 }
 
-// Resolve a provenance catalog record by the canonical SysML requirement
-// identity. This keeps generic check tools independent of Twin-specific ID
-// prefix tables such as GRR- or FSR-.
-fn provenance_for_requirement(report, qualified_requirement) {
+// Follow one authored reference feature to its resolved target attribute.
+// This preserves element identity through the generic API instead of storing
+// a qualified feature name in another String-valued model attribute.
+fn referenced_attribute(report, owner_handle, reference_feature) {
+    if type_of(report) != "map" || report.path == () || report.path == ""
+        || owner_handle == () || reference_feature == () || reference_feature == "" {
+        return #{ok: false, error: "SysML attribute reference is incomplete"};
+    }
+    let links = query("AnalyzeSysml", #{
+        path: report.path,
+        tables: ["references"],
+        reference_from_owner_handles: [owner_handle],
+        reference_from_features: [reference_feature]
+    });
+    if links == () || links.analysis == () || links.analysis.references == () {
+        return #{ok: false,
+            error: _report_error(links, "SysML attribute reference is unavailable")};
+    }
+    let targets = [];
+    for link in links.analysis.references {
+        if link.target_feature != () { targets.push(link.target_feature); }
+    }
+    if targets.len() != 1 {
+        return #{ok: false, error: if targets.len() == 0 {
+            "SysML attribute reference does not resolve to a feature"
+        } else { "SysML attribute reference resolves ambiguously" }};
+    }
+    let selected = query("AnalyzeSysml", #{
+        path: report.path,
+        tables: ["attributes"],
+        attribute_handles: [targets[0]]
+    });
+    if selected == () || selected.analysis == () || selected.analysis.attributes == ()
+        || selected.analysis.attributes.len() != 1 {
+        return #{ok: false,
+            error: _report_error(selected, "referenced SysML attribute is unavailable")};
+    }
+    #{ok: true, record: selected.analysis.attributes[0]}
+}
+
+fn number_from_reference(report, owner_handle, reference_feature) {
+    let resolved = referenced_attribute(report, owner_handle, reference_feature);
+    if resolved.ok != true { return resolved; }
+    let record = resolved.record;
+    if record.value == () || record.value.number_value == ()
+        || !_numeric_sysml_type(record.declared_type) {
+        return #{ok: false, error: "referenced SysML attribute is not numeric"};
+    }
+    #{ok: true, value: record.value.number_value, record: record}
+}
+
+fn vector_from_reference(report, owner_handle, reference_feature) {
+    let resolved = referenced_attribute(report, owner_handle, reference_feature);
+    if resolved.ok != true { return resolved; }
+    let record = resolved.record;
+    if record.value == () || record.value.elements == ()
+        || record.declared_type == () || record.declared_type.dimensions == ()
+        || record.declared_type.dimensions.len() != 1
+        || !_numeric_sysml_type(record.declared_type)
+        || record.declared_type.dimensions[0] != record.value.elements.len() {
+        return #{ok: false, error: "referenced SysML attribute is not a numeric vector"};
+    }
+    let result = [];
+    for element in record.value.elements {
+        if element.number_value == () {
+            return #{ok: false, error: "referenced SysML vector contains a non-numeric value"};
+        }
+        result.push(element.number_value);
+    }
+    #{ok: true, value: result, record: record}
+}
+
+fn string_vector_from_reference(report, owner_handle, reference_feature) {
+    let resolved = referenced_attribute(report, owner_handle, reference_feature);
+    if resolved.ok != true { return resolved; }
+    let record = resolved.record;
+    if record.value == () || record.value.elements == ()
+        || record.declared_type == () || record.declared_type.dimensions == ()
+        || record.declared_type.dimensions.len() != 1
+        || !_string_sysml_type(record.declared_type)
+        || record.declared_type.dimensions[0] != record.value.elements.len() {
+        return #{ok: false, error: "referenced SysML attribute is not a String vector"};
+    }
+    let result = [];
+    for element in record.value.elements {
+        if element.string_value == () {
+            return #{ok: false, error: "referenced SysML String vector contains a non-text value"};
+        }
+        result.push(element.string_value);
+    }
+    #{ok: true, value: result, record: record}
+}
+
+fn text_from_reference(report, owner_handle, reference_feature) {
+    let resolved = referenced_attribute(report, owner_handle, reference_feature);
+    if resolved.ok != true { return resolved; }
+    if !_string_sysml_type(resolved.record.declared_type)
+        || resolved.record.value == ()
+        || resolved.record.value.string_value == () {
+        return #{ok: false, error: "referenced SysML attribute is not textual"};
+    }
+    #{ok: true, value: resolved.record.value.string_value, record: resolved.record}
+}
+
+// Follow resolved SysML references from a requirement element handle to its
+// evidence item and then to atomic SourceLocator values. No model identity or
+// collection of sources is flattened into String data.
+fn provenance(report, requirement_handle) {
+    provenance_for_requirement(report, requirement_handle)
+}
+
+fn provenance_for_requirement(report, requirement_handle) {
     if type_of(report) != "map" || report.path == () || report.path == "" {
         return #{ok: false,
             error: _report_error(report, "SysML source report is unavailable")};
     }
-    if qualified_requirement == () || qualified_requirement == "" {
-        return #{ok: false, error: "qualified SysML requirement identity is missing"};
+    if type_of(requirement_handle) != "map"
+        || requirement_handle.element_id == ()
+        || requirement_handle.source_revision == ()
+        || requirement_handle.source_fingerprint == () {
+        return #{ok: false,
+            error: "SysML provenance requires a source-scoped requirement element handle"};
     }
-    let identity = query("AnalyzeSysml", #{
-        path: report.path, tables: ["attributes"],
-        attribute_names: ["qualifiedRequirement"],
-        attribute_string_values: [qualified_requirement]
+
+    let requirement_links = query("AnalyzeSysml", #{
+        path: report.path,
+        tables: ["references"],
+        reference_target_handles: [requirement_handle],
+        reference_from_features: ["targetRequirement"]
     });
-    if identity == () || identity.analysis == ()
-        || identity.analysis.attributes == () {
+    if requirement_links == () || requirement_links.analysis == ()
+        || requirement_links.analysis.references == () {
         return #{ok: false,
-            error: _report_error(identity, "SysML provenance owner is unavailable")};
+            error: _report_error(requirement_links, "requirement evidence link is unavailable")};
     }
-    if identity.analysis.attributes.len() != 1 {
-        return #{ok: false, error: if identity.analysis.attributes.len() == 0 {
-            "SysML provenance record is missing: " + qualified_requirement
-        } else { "ambiguous SysML provenance record: " + qualified_requirement }};
+    if requirement_links.analysis.references.len() != 1 {
+        return #{ok: false, error: if requirement_links.analysis.references.len() == 0 {
+            "SysML requirement evidence link is missing for the selected element"
+        } else { "ambiguous SysML requirement evidence links for the selected element" }};
     }
-    let owner = identity.analysis.attributes[0].owner;
-    let selected = query("AnalyzeSysml", #{
-        path: report.path, tables: ["attributes"],
-        attribute_names: [owner + "::requirementId", owner + "::qualifiedRequirement",
-            owner + "::sourceReference", owner + "::rationale", owner + "::status"],
-        attribute_owners: [owner]
+    let requirement_link = requirement_links.analysis.references[0];
+    let evidence_owner = requirement_link.from_owner;
+    if evidence_owner == () {
+        return #{ok: false, error: "requirement evidence reference has no owning element"};
+    }
+
+    let source_links = query("AnalyzeSysml", #{
+        path: report.path,
+        tables: ["references"],
+        reference_from_owner_handles: [evidence_owner]
     });
-    if selected == () || selected.analysis == () {
+    if source_links == () || source_links.analysis == ()
+        || source_links.analysis.references == () {
         return #{ok: false,
-            error: _report_error(selected, "SysML provenance source is unavailable")};
+            error: _report_error(source_links, "evidence source links are unavailable")};
     }
-    let fields = #{};
-    for attribute in selected.analysis.attributes {
-        if attribute.owner == owner { fields[attribute.name] = attribute; }
+
+    let sources = [];
+    for link in source_links.analysis.references {
+        if link.from_feature_name != "sources" { continue; }
+        let source_handle = link.target;
+        if source_handle == () {
+            return #{ok: false, error: "evidence source reference has no resolved target"};
+        }
+        let source_attributes = query("AnalyzeSysml", #{
+            path: report.path,
+            tables: ["attributes"],
+            attribute_names: ["locator", "role"],
+            attribute_owner_handles: [source_handle]
+        });
+        if source_attributes == () || source_attributes.analysis == ()
+            || source_attributes.analysis.attributes == () {
+            return #{ok: false,
+                error: _report_error(source_attributes, "source metadata is unavailable")};
+        }
+        let locator_attribute = ();
+        let role_attribute = ();
+        for attribute in source_attributes.analysis.attributes {
+            if attribute.name == "locator" {
+                if locator_attribute != () {
+                    return #{ok: false, error: "source locator is ambiguous on a linked source element"};
+                }
+                locator_attribute = attribute;
+            } else if attribute.name == "role" {
+                if role_attribute != () {
+                    return #{ok: false, error: "source role is ambiguous on a linked source element"};
+                }
+                role_attribute = attribute;
+            }
+        }
+        if locator_attribute == () || role_attribute == () {
+            return #{ok: false,
+                error: "linked evidence source requires one locator and one role"};
+        }
+        let locator = _literal_text(locator_attribute);
+        let locator_type = if locator_attribute.declared_type != ()
+            && locator_attribute.declared_type.resolved_type != () {
+            locator_attribute.declared_type.resolved_type.qualified_name
+        } else { () };
+        let role_type = if role_attribute.declared_type != ()
+            && role_attribute.declared_type.category == "Enumeration"
+            && role_attribute.declared_type.resolved_type != () {
+            role_attribute.declared_type.resolved_type.qualified_name
+        } else { () };
+        let role_literal = if role_attribute.value != ()
+            && role_attribute.value.string_value != () {
+            role_attribute.value.string_value
+        } else { () };
+        if locator == () || locator == "" || locator_type == ()
+            || role_type == () || role_literal == () || role_literal == "" {
+            return #{ok: false,
+                error: "source locator or enumeration role is not a typed value"};
+        }
+        sources.push(#{
+            element: source_handle,
+            role: #{type: role_type, literal: role_literal},
+            locator_type: locator_type,
+            locator: locator,
+            source_span: #{file: locator_attribute.file,
+                start: locator_attribute.start, end: locator_attribute.end}
+        });
     }
-    let qualified = _literal_text(fields.qualifiedRequirement);
-    if qualified != qualified_requirement {
-        return #{ok: false,
-            error: "SysML provenance identity disagrees with the selected requirement"};
-    }
-    let source_records = [];
-    for field_name in fields.keys() { source_records.push(fields[field_name]); }
-    if source_records.len() == 0 {
-        return #{ok: false, error: "SysML provenance fields are unavailable"};
-    }
-    let source_start = source_records[0].start;
-    let source_end = source_records[0].end;
-    let source_file = source_records[0].file;
-    for record in source_records {
-        if record.start < source_start { source_start = record.start; }
-        if record.end > source_end { source_end = record.end; }
-    }
-    let evidence = #{owner: owner,
-        requirement_id: _literal_text(fields.requirementId),
-        qualified_requirement: qualified,
-        source_span: #{file: source_file, start: source_start, end: source_end}};
-    let source_reference = _literal_text(fields.sourceReference);
-    let rationale = _literal_text(fields.rationale);
-    let status = _literal_text(fields.status);
-    if source_reference != () { evidence.source_reference = source_reference; }
-    if rationale != () { evidence.rationale = rationale; }
-    if status != () { evidence.status = status; }
-    let revision = report.source_revision_hex;
+
+    let evidence = #{
+        element: evidence_owner,
+        requirement: requirement_handle,
+        sources: sources,
+        source_span: #{file: requirement_link.file,
+            start: requirement_link.start, end: requirement_link.end}
+    };
+    let revision = report.source_revision;
     let files = report.source_files;
     if report.analysis != () {
-        if revision == () { revision = report.analysis.source_revision_hex; }
+        if revision == () { revision = report.analysis.source_revision; }
         if files == () { files = report.analysis.source_files; }
     }
-    #{ok: true, evidence: evidence, source_revision: revision,
-      source_revision_hex: revision, source_files: files}
+    #{ok: true, evidence: evidence,
+      source_revision: revision,
+      source_files: files}
 }

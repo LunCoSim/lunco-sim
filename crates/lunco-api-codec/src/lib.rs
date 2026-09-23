@@ -13,9 +13,7 @@ pub fn value_from_json(value: &serde_json::Value) -> Result<ApiValue, String> {
             if let Some(value) = value.as_i64() {
                 Ok(ApiValue::Int(value))
             } else if let Some(value) = value.as_u64() {
-                i64::try_from(value)
-                    .map(ApiValue::Int)
-                    .or_else(|_| Ok(ApiValue::Str(value.to_string())))
+                Ok(lunco_api_core::api_value_from_u64(value))
             } else {
                 value
                     .as_f64()
@@ -45,6 +43,7 @@ pub fn value_to_json(value: &ApiValue) -> Result<serde_json::Value, String> {
     match value {
         ApiValue::Unit => Ok(Value::Null),
         ApiValue::Int(value) => Ok(Value::from(*value)),
+        ApiValue::UInt(value) => Ok(Value::from(*value)),
         ApiValue::Float(value) => serde_json::Number::from_f64(*value)
             .map(Value::Number)
             .ok_or_else(|| "typed API value contains a non-finite f64".to_string()),
@@ -89,11 +88,11 @@ mod tests {
             .expect_err("binary data needs an explicit byte transport");
         assert!(error.contains("binary API values"));
         let large_unsigned = value_from_json(&serde_json::json!(u64::MAX))
-            .expect("large unsigned IDs use the typed API decimal-string representation");
-        assert_eq!(large_unsigned, ApiValue::Str(u64::MAX.to_string()));
+            .expect("large unsigned IDs remain typed unsigned values");
+        assert_eq!(large_unsigned, ApiValue::UInt(u64::MAX));
         assert_eq!(
-            value_to_json(&large_unsigned).expect("decimal string has a JSON representation"),
-            serde_json::json!(u64::MAX.to_string())
+            value_to_json(&large_unsigned).expect("unsigned integer has a JSON representation"),
+            serde_json::json!(u64::MAX)
         );
     }
 }

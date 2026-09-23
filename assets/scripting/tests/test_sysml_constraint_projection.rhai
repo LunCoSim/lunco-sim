@@ -227,7 +227,7 @@ checks.push(t_true(upper_vector.ok == true && type_of(upper_vector.value) == "Ve
 let assembled = geometry_constraints::assemble_segment(report,
     "ConstraintProjection::StrutAssembly::loadPath");
 checks.push(t_true(assembled.ok == true
-    && assembled.source_revision_hex == report.analysis.source_revision_hex
+    && assembled.source_revision == report.analysis.source_revision
     && assembled.constraint == "ConstraintProjection::SegmentMember"
     && assembled.usage == "ConstraintProjection::StrutAssembly::loadPath"
     && assembled.modelica_class == "LunCo.Geometry.Segment3D"
@@ -250,7 +250,7 @@ checks.push(t_true(assembled.ok == true
 let coincidence = geometry_constraints::assemble_coincident_translation(report,
     "ConstraintProjection::StrutAssembly::alignMount");
 checks.push(t_true(coincidence.ok == true
-    && coincidence.source_revision_hex == report.analysis.source_revision_hex
+    && coincidence.source_revision == report.analysis.source_revision
     && coincidence.constraint == "ConstraintProjection::CoincidentPointTranslation"
     && coincidence.usage == "ConstraintProjection::StrutAssembly::alignMount"
     && coincidence.modelica_class == "SysmlCoincidentPointTranslationSetSolve"

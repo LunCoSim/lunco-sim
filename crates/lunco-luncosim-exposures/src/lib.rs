@@ -24,7 +24,7 @@ use lunco_core_runtime::{ApplicationCadence, EngineHealthSnapshot, PhysicsHealth
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_exposure_core::{
-    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
+    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
 };
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
@@ -33,7 +33,7 @@ use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use lunco_usd_bevy_stage::read::UsdReadObject;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
@@ -276,6 +276,7 @@ fn hook_value_to_exposure(
         HookValue::Str(value) => Some(ExposureValue::Text(value)),
         HookValue::Bool(value) => Some(ExposureValue::Bool(value)),
         HookValue::Int(value) => Some(ExposureValue::Number(value as f64)),
+        HookValue::UInt(value) => Some(ExposureValue::Number(value as f64)),
         HookValue::Float(value) if value.is_finite() => Some(ExposureValue::Number(value)),
         HookValue::Float(_) => {
             warn!(

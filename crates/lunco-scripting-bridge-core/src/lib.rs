@@ -66,6 +66,8 @@ pub trait ValueBuilder {
     fn float(&self, f: f64) -> Self::Value;
     /// An integer.
     fn int(&self, i: i64) -> Self::Value;
+    /// An unsigned 64-bit integer.
+    fn uint(&self, value: u64) -> Self::Value;
     /// A boolean.
     fn bool(&self, b: bool) -> Self::Value;
     /// A string.
@@ -228,14 +230,7 @@ pub fn build_from_reflect<B: ValueBuilder>(
             return Some(b.int(*v as i64));
         }
         if let Some(v) = any.downcast_ref::<u64>() {
-            // Rhai (and the generic `ValueBuilder` contract) has a signed
-            // native integer. Never cast a wide unsigned value through it:
-            // values above `i64::MAX` would wrap and silently lose identity.
-            return Some(if *v <= i64::MAX as u64 {
-                b.int(*v as i64)
-            } else {
-                b.string(&v.to_string())
-            });
+            return Some(b.uint(*v));
         }
         if let Some(v) = any.downcast_ref::<bool>() {
             return Some(b.bool(*v));
@@ -307,6 +302,7 @@ pub fn build_from_value<B: ValueBuilder>(b: &B, value: &ApiValue) -> B::Value {
     match value {
         HookValue::Unit => b.unit(),
         HookValue::Int(value) => b.int(*value),
+        HookValue::UInt(value) => b.uint(*value),
         HookValue::Float(value) => b.float(*value),
         HookValue::Bool(value) => b.bool(*value),
         HookValue::Str(value) => b.string(value),
@@ -350,6 +346,9 @@ impl ValueBuilder for ApiValueBuilder {
     }
     fn int(&self, value: i64) -> Self::Value {
         HookValue::Int(value)
+    }
+    fn uint(&self, value: u64) -> Self::Value {
+        lunco_api_core::api_value_from_u64(value)
     }
     fn bool(&self, value: bool) -> Self::Value {
         HookValue::Bool(value)
@@ -1560,6 +1559,11 @@ mod tests {
                 HookValue::Float(0.0),
                 HookValue::Float(1.0),
             ])
+        );
+
+        assert_eq!(
+            build_from_reflect(&ApiValueBuilder, &u64::MAX),
+            Some(HookValue::UInt(u64::MAX))
         );
     }
 

@@ -6,12 +6,10 @@
 //! their typed intent into the generic document registry.
 
 use bevy::prelude::*;
-use lunco_api::{
-    api_param_u64_or_string, ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult,
-};
-use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
+use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_u64};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_command_contracts::Ack;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document, DocumentId, FileBacked, OpenOutcome};
 use lunco_doc_bevy::{
     DocumentRegistry, DocumentSaved, NewDocument, OpenFile, RedoDocument, SaveAsDocument,
@@ -420,7 +418,7 @@ impl ApiQueryProvider for InspectSysmlDocumentProvider {
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
-        let Some(doc_id) = api_param_u64_or_string(params, "doc_id").map(DocumentId::new) else {
+        let Some(doc_id) = api_param_u64(params, "doc_id").map(DocumentId::new) else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 "InspectSysmlDocument requires an explicit numeric `doc_id`",

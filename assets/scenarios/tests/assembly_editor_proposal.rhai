@@ -352,7 +352,7 @@ fn on_tick(me, ctx) {
             t_true(vlen(solution.translation) > 0.1
                 && solution.experiment_id == advanced.ticket.experiment_id
                 && type_of(solution.experiment_id) == "string"
-                && solution.source_revision_hex == this.generated.source_revision_hex,
+                && solution.source_revision == this.generated.source_revision,
                 "the readback preserves a nonzero solved value, command-returned run identity, and SysML source revision"),
             t_true(solution.sample_time >= 0.01 - 1.0e-9
                 && solution.result.times.len() >= 2,

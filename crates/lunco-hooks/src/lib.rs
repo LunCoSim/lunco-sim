@@ -60,6 +60,8 @@ pub enum HookValue {
     Unit,
     /// A 64-bit signed integer.
     Int(i64),
+    /// A 64-bit unsigned integer.
+    UInt(u64),
     /// A 64-bit float.
     Float(f64),
     /// A boolean.
@@ -103,11 +105,19 @@ impl HookValue {
             _ => None,
         }
     }
+    /// This value as a `u64`, if it is an unsigned integer.
+    pub fn as_u64(&self) -> Option<u64> {
+        match self {
+            HookValue::UInt(value) => Some(*value),
+            _ => None,
+        }
+    }
     /// This value as an `f64`, if numeric.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             HookValue::Float(f) => Some(*f),
             HookValue::Int(i) => Some(*i as f64),
+            HookValue::UInt(value) => Some(*value as f64),
             _ => None,
         }
     }
@@ -116,6 +126,7 @@ impl HookValue {
         match self {
             HookValue::Bool(b) => Some(*b),
             HookValue::Int(i) => Some(*i != 0),
+            HookValue::UInt(value) => Some(*value != 0),
             _ => None,
         }
     }
@@ -146,6 +157,7 @@ impl HookValue {
         match self {
             HookValue::Unit => HookValueType::Unit.as_str(),
             HookValue::Int(_) => HookValueType::Int.as_str(),
+            HookValue::UInt(_) => HookValueType::UInt.as_str(),
             HookValue::Float(_) => HookValueType::Float.as_str(),
             HookValue::Bool(_) => HookValueType::Bool.as_str(),
             HookValue::Str(_) => HookValueType::String.as_str(),
@@ -168,7 +180,7 @@ pub mod wire {
     use super::HookValue;
 
     /// Current wire format version.
-    pub const VERSION: u8 = 1;
+    pub const VERSION: u8 = 2;
     /// Maximum complete encoded value accepted by the host.
     pub const MAX_BYTES: usize = 64 * 1024 * 1024;
     /// Maximum number of elements in one array or map.
@@ -187,6 +199,7 @@ pub mod wire {
     const ARRAY: u8 = 5;
     const MAP: u8 = 6;
     const BYTES: u8 = 7;
+    const UINT: u8 = 8;
 
     /// An error produced while encoding or decoding a native hook value.
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -266,6 +279,10 @@ pub mod wire {
                 out.push(INT);
                 out.extend_from_slice(&value.to_le_bytes());
             }
+            HookValue::UInt(value) => {
+                out.push(UINT);
+                out.extend_from_slice(&value.to_le_bytes());
+            }
             HookValue::Float(value) => {
                 out.push(FLOAT);
                 out.extend_from_slice(&value.to_bits().to_le_bytes());
@@ -334,6 +351,7 @@ pub mod wire {
         match reader.byte()? {
             UNIT => Ok(HookValue::Unit),
             INT => Ok(HookValue::Int(i64::from_le_bytes(reader.array()?))),
+            UINT => Ok(HookValue::UInt(u64::from_le_bytes(reader.array()?))),
             FLOAT => Ok(HookValue::Float(f64::from_bits(u64::from_le_bytes(
                 reader.array()?,
             )))),
@@ -433,6 +451,7 @@ pub mod wire {
         fn round_trips_typed_arguments_without_json() {
             let value = HookValue::Array(vec![
                 HookValue::Int(-7),
+                HookValue::UInt(u64::MAX),
                 HookValue::Float(f64::from_bits(0x3ff0_0000_0000_0001)),
                 HookValue::Bool(true),
                 HookValue::str("terrain"),
@@ -559,6 +578,8 @@ pub enum HookValueType {
     Unit,
     /// Signed integer.
     Int,
+    /// Unsigned 64-bit integer.
+    UInt,
     /// 64-bit floating-point number.
     Float,
     /// Boolean.
@@ -588,6 +609,7 @@ impl HookValueType {
         match self {
             Self::Unit => "unit",
             Self::Int => "int",
+            Self::UInt => "u64",
             Self::Float => "float",
             Self::Bool => "bool",
             Self::String => "string",
@@ -914,6 +936,7 @@ fn matches_value_type(expected: HookValueType, value: &HookValue) -> bool {
     match (expected, value) {
         (HookValueType::Unit, HookValue::Unit)
         | (HookValueType::Int, HookValue::Int(_))
+        | (HookValueType::UInt, HookValue::UInt(_))
         | (HookValueType::Float, HookValue::Float(_))
         | (HookValueType::Bool, HookValue::Bool(_))
         | (HookValueType::String, HookValue::Str(_))

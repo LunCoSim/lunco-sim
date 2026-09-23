@@ -16,7 +16,7 @@
 pub mod rhai_limits;
 
 use lunco_hooks::{HookError, HookResult, HookValue, RegisteredHook, ScriptHook};
-use rhai::{Dynamic, Engine, Scope, AST};
+use rhai::{AST, Dynamic, Engine, Scope};
 
 /// Register the shared JSON-to-Rhai value bridge on an engine.
 ///
@@ -269,6 +269,7 @@ pub fn hook_to_dynamic(v: &HookValue) -> Dynamic {
     match v {
         HookValue::Unit => Dynamic::UNIT,
         HookValue::Int(i) => Dynamic::from_int(*i),
+        HookValue::UInt(value) => Dynamic::from(*value),
         HookValue::Float(f) => Dynamic::from_float(*f),
         HookValue::Bool(b) => Dynamic::from_bool(*b),
         HookValue::Str(s) => s.clone().into(),
@@ -294,6 +295,8 @@ pub fn hook_to_dynamic(v: &HookValue) -> Dynamic {
 pub fn dynamic_to_hook(d: &Dynamic) -> HookResult {
     if d.is_unit() {
         Ok(HookValue::Unit)
+    } else if d.is::<u64>() {
+        Ok(HookValue::UInt(d.clone().cast::<u64>()))
     } else if d.is_int() {
         d.as_int()
             .map(HookValue::Int)
@@ -327,7 +330,7 @@ pub fn dynamic_to_hook(d: &Dynamic) -> HookResult {
             .map(HookValue::Map)
     } else {
         Err(HookError(format!(
-            "unsupported Rhai value type `{}`",
+            "unsupported Rhai hook return type `{}`",
             d.type_name()
         )))
     }
@@ -336,6 +339,23 @@ pub fn dynamic_to_hook(d: &Dynamic) -> HookResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsigned_values_round_trip_without_string_coercion() {
+        let value = HookValue::UInt(u64::MAX);
+        let dynamic = hook_to_dynamic(&value);
+        assert_eq!(dynamic.type_name(), "u64");
+        assert_eq!(dynamic_to_hook(&dynamic).unwrap(), value);
+
+        let engine = Engine::new();
+        let mut scope = Scope::new();
+        scope.push_dynamic("revision", dynamic);
+        assert!(
+            engine
+                .eval_with_scope::<bool>(&mut scope, "revision == revision")
+                .expect("Rhai compares typed unsigned values")
+        );
+    }
 
     #[test]
     fn roundtrip_and_invoke_a_rhai_hook() {

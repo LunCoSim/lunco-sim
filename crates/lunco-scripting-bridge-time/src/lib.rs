@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 use lunco_physics::PhysicsTime;
-use lunco_scripting_bridge_core::{execution_context, with_world, ValueBuilder};
+use lunco_scripting_bridge_core::{ValueBuilder, execution_context, with_world};
 use lunco_time::{
     Clocks, MissionClock, ResolvedDomains, SimulationPresentationTime, TimeTransport, WorldTime,
 };
@@ -138,16 +138,13 @@ pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
         ),
         (
             "generation".to_owned(),
-            optional_sequence(b, route.map(|route| route.generation)),
+            optional_u64(b, route.map(|route| route.generation)),
         ),
         (
             "clock".to_owned(),
             b.string(&format!("{:?}", context.clock).to_ascii_lowercase()),
         ),
-        (
-            "sequence".to_owned(),
-            optional_sequence(b, context.sequence),
-        ),
+        ("sequence".to_owned(), optional_u64(b, context.sequence)),
         (
             "producer".to_owned(),
             context.producer.map_or_else(
@@ -162,14 +159,8 @@ pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
                             "cycle".to_owned(),
                             b.string(&format!("{:?}", producer.route.cycle).to_ascii_lowercase()),
                         ),
-                        (
-                            "generation".to_owned(),
-                            b.string(&producer.route.generation.to_string()),
-                        ),
-                        (
-                            "sequence".to_owned(),
-                            b.string(&producer.sequence.to_string()),
-                        ),
+                        ("generation".to_owned(), b.uint(producer.route.generation)),
+                        ("sequence".to_owned(), b.uint(producer.sequence)),
                     ])
                 },
             ),
@@ -186,10 +177,8 @@ pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
     b.map(entries)
 }
 
-fn optional_sequence<B: ValueBuilder>(b: &B, value: Option<u64>) -> B::Value {
-    value
-        .map(|value| b.string(&value.to_string()))
-        .unwrap_or_else(|| b.unit())
+fn optional_u64<B: ValueBuilder>(b: &B, value: Option<u64>) -> B::Value {
+    value.map(|value| b.uint(value)).unwrap_or_else(|| b.unit())
 }
 
 fn optional_float<B: ValueBuilder>(b: &B, value: Option<f64>) -> B::Value {
@@ -487,13 +476,17 @@ mod tests {
         };
         let _scope = WorldScope::enter(&mut world, context);
 
-        assert!(sim_tick()
-            .unwrap_err()
-            .contains("only in the simulation cycle"));
+        assert!(
+            sim_tick()
+                .unwrap_err()
+                .contains("only in the simulation cycle")
+        );
         assert!(dt().unwrap_err().contains("only in the simulation cycle"));
-        assert!(elapsed_seconds()
-            .unwrap_err()
-            .contains("only in the simulation cycle"));
+        assert!(
+            elapsed_seconds()
+                .unwrap_err()
+                .contains("only in the simulation cycle")
+        );
         assert!(!world.resource::<lunco_core::RuntimeFaults>().active());
     }
 

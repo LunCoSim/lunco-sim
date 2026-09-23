@@ -783,6 +783,9 @@ fn hook_to_telemetry(
     use lunco_telemetry_core::TelemetryValue;
     Ok(match value {
         HookValue::Int(value) => TelemetryValue::I64(*value),
+        HookValue::UInt(value) => i64::try_from(*value)
+            .map(TelemetryValue::I64)
+            .map_err(|_| format!("{path} exceeds the telemetry integer range"))?,
         HookValue::Float(value) => TelemetryValue::F64(*value),
         HookValue::Bool(value) => TelemetryValue::Bool(*value),
         HookValue::Str(value) => TelemetryValue::String(value.clone()),

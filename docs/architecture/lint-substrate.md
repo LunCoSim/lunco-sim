@@ -206,7 +206,9 @@ active Twin's indexed files and existing resolver owners:
   USD stage; `Shader` prims remain full USD identities rather than becoming
   global basenames.
 - Rhai tool libraries are scoped to the active tool registry, including Twin
-  `tools/*.rhai` modules and the native/bundled modules they can shadow.
+  `tools/*.rhai` modules and the Standard/Core/Application modules they can
+  shadow. Twin-scoped live registrations are represented by the indexed Twin
+  files and are not counted a second time as engine owners.
 - WGSL shader modules and other Twin assets use their containing directory as
   the resolver scope, so equal names in independent directories are legal.
 

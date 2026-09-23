@@ -84,7 +84,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `ListTwin` | `{"offset": u64, "limit": u64}` | List files in the currently active Twin folder. |
 | `ListSpawnCatalog` | `{}` | List authored spawnable USD entries, including their standard `doc` description, provenance, and spawn source. |
 | `ListUsdAssetMetadata` | `{}` | List the scanned USD metadata projection used by the Scenarios menu and scripts; `ready` distinguishes an incomplete asynchronous scan from an empty result, while each settled entry reports `read_ok`, `parse_ok`, and any corresponding error. |
-| `ListLibrary` | `{"cursor": string, "limit": u64, "filter": {...}}` | Search and list classes from admitted Modelica source libraries. |
+| `ListLibrary` | `{"cursor": u64, "limit": u64, "filter": {...}}` | Search and list classes from admitted Modelica source libraries. |
 | `ListCompileCandidates` | `{"doc_id": u64}` | List all non-package classes in a document that can be compiled. |
 | `QueryExperimentBounds` | `{"doc_id": u64, "class": string?}` | Resolve simulation bounds (start, end, dt) for a class. |
 | `CompileStatus` | `{"doc_id": u64}` | Get the current compilation and run state of a document. |

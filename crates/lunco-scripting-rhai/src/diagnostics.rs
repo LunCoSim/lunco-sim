@@ -9,7 +9,7 @@
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::{ApiQueryError, ApiQueryResult, api_param_u64, api_param_u64_or_string};
+use lunco_api::{ApiQueryError, ApiQueryResult, api_param_u64};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_core::GlobalEntityId;
 use lunco_doc::{DocDiagnostics, Document, DocumentId, document_status};
@@ -75,7 +75,7 @@ impl ApiQueryProvider for InspectScriptDocumentProvider {
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
-        let Some(raw) = api_param_u64_or_string(params, "doc_id") else {
+        let Some(raw) = api_param_u64(params, "doc_id") else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 "InspectScriptDocument requires an explicit numeric `doc_id`",
