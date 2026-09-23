@@ -578,6 +578,14 @@ clears the reverse index, stage-generation cursor, and pending
 discovery/projection candidate sets; resolved member-class facts remain
 reusable because they belong to shared Modelica source assets, not a scene.
 
+Generated Modelica source documents use the same lifecycle discipline: source
+insert/replace queues only that wrapper for document synchronization, while a
+one-time bootstrap covers pre-existing wrappers. Source insertion/removal and
+document-link owners set the generated-metadata dirty flag consumed by the
+publisher; plugin startup marks the first publication dirty as well. Solver
+output does not invalidate generated source metadata, and no per-update
+`Changed<GeneratedModelicaSource>` population scan is required.
+
 The result: a multi-component, multi-language cosim is a USD edit, not
 a Rust edit. `assets/scenes/tests/cosim_chain.usda` and its Rhai scenario
 exercise the canonical chain (Modelica oscillator → Python amplifier → Avian

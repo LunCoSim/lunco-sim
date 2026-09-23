@@ -59,6 +59,9 @@ Keep invalidation domains distinct: a wiring/topology latch may be raised by
 endpoint arrivals and must not automatically trigger whole-stage domain
 discovery. Use the canonical stage generation or authored-stage asset change
 for that broader pass; keep entity arrivals on their queued-entity path.
+Generated-source document sync should share the `PendingEntityWork` contract,
+and its metadata publisher should consume the owner-published dirty flag rather
+than adding a parallel change query.
 
 When gating a dependency's multi-system transform schedule, distinguish its
 per-update output flags from authoritative input changes. Preserve any required

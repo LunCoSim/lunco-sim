@@ -57,9 +57,11 @@ work and the origin-settle pass is unchanged. Physics-validation and telemetry
 scratch buffers also retain capacity across calls. Domain member-class
 discovery now uses the existing canonical-stage generations and USD-asset
 change signal for whole-scene rediscovery; endpoint wiring invalidation keeps
-using the narrower queued-entity path. These are source-level work reductions
-only. Their CPU benefit is not yet measured, and the next clean settled Apollo
-run remains necessary before claiming an FPS improvement.
+using the narrower queued-entity path. Generated Modelica document sync also
+uses lifecycle-queued wrappers and a dirty publisher latch rather than per-frame
+`Changed` filters. These are source-level work reductions only. Their CPU
+benefit is not yet measured, and the next clean settled Apollo run remains
+necessary before claiming an FPS improvement.
 
 ## Verification
 

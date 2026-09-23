@@ -2201,12 +2201,16 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_usd_sim_domain::DomainClassUsers>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjectionCandidates>()
+            .init_resource::<lunco_usd_sim_domain::PendingGeneratedSourceDocuments>()
             .init_resource::<PendingUsdCosimPrimWork>()
             .init_resource::<PendingModelicaWrapWork>()
             .init_resource::<WiringFactsCache>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>();
         app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
+        app.world_mut()
+            .resource_mut::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
+            .dirty = true;
         app.add_observer(request_binding_epoch::<UsdPrimPath>)
             .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
             .add_observer(invalidate_usd_telemetry_projection_index_on_insert::<UsdPrimPath>)
@@ -2255,6 +2259,10 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(lunco_usd_sim_domain::queue_added_domain_instance_projection)
             .add_observer(lunco_usd_sim_domain::queue_removed_domain_instance_projection)
             .add_observer(lunco_usd_sim_domain::forget_domain_projection_entity)
+            .add_observer(lunco_usd_sim_domain::queue_generated_source_document_sync)
+            .add_observer(lunco_usd_sim_domain::queue_model_document_sync_for_generated_source)
+            .add_observer(lunco_usd_sim_domain::forget_generated_source_document_sync)
+            .add_observer(lunco_usd_sim_domain::mark_generated_sources_dirty_on_insert)
             // Link port names are derived from the classes of the other authored
             // LinkNodes. A node arriving after its wire must therefore reopen the
             // same binding transaction as any other projected endpoint.
@@ -2386,6 +2394,7 @@ impl Plugin for UsdSimCosimPlugin {
             Update,
             lunco_usd_sim_domain::sync_generated_network_documents
                 .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
+                .run_if(lunco_usd_sim_domain::generated_source_document_sync_due)
                 .in_set(CosimUpdateSet::Projection),
         );
         app.add_systems(

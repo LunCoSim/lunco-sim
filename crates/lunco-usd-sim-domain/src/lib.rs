@@ -28,6 +28,7 @@ use lunco_usd_bevy_core::program::{
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::read::UsdReadObject as ComposedReader;
 use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
+use lunco_usd_sim_core::PendingEntityWork;
 use openusd::sdf::Path as SdfPath;
 
 pub mod network;
@@ -134,7 +135,9 @@ pub struct DomainProjectionState {
 /// compiler input beside the run entity makes a compiler line actionable: the
 /// worker reports errors against `generated://<model>.mo`, a document that
 /// exists nowhere on disk, so without a read path those line numbers name text
-/// nobody can obtain.
+/// nobody can obtain. Projection metadata is replaced as one component when it
+/// changes; consumers use that lifecycle edge for document and telemetry
+/// invalidation.
 #[derive(Component, Clone, Debug)]
 pub struct GeneratedModelicaSource {
     /// Composed USD network root that owns this compilation unit.
@@ -305,6 +308,53 @@ impl PendingDomainProjectionCandidates {
     }
 }
 
+/// Generated-source owners that still need their inspectable Modelica document
+/// synchronized. Insert/remove observers feed this queue; one bootstrap pass
+/// covers owners that predate observer installation.
+#[derive(Resource)]
+pub struct PendingGeneratedSourceDocuments(PendingEntityWork);
+
+impl Default for PendingGeneratedSourceDocuments {
+    fn default() -> Self {
+        Self(PendingEntityWork::with_initial_discovery())
+    }
+}
+
+pub fn queue_generated_source_document_sync(
+    trigger: On<Insert, GeneratedModelicaSource>,
+    mut pending: ResMut<PendingGeneratedSourceDocuments>,
+) {
+    pending.0.queue(trigger.entity);
+}
+
+pub fn queue_model_document_sync_for_generated_source(
+    trigger: On<Insert, ModelicaModel>,
+    generated_sources: Query<(), With<GeneratedModelicaSource>>,
+    mut pending: ResMut<PendingGeneratedSourceDocuments>,
+) {
+    if generated_sources.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+pub fn forget_generated_source_document_sync(
+    trigger: On<Remove, GeneratedModelicaSource>,
+    mut pending: ResMut<PendingGeneratedSourceDocuments>,
+) {
+    pending.0.forget(trigger.entity);
+}
+
+pub fn generated_source_document_sync_due(pending: Res<PendingGeneratedSourceDocuments>) -> bool {
+    pending.0.has_work()
+}
+
+pub fn mark_generated_sources_dirty_on_insert(
+    _: On<Insert, GeneratedModelicaSource>,
+    mut generated: ResMut<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>,
+) {
+    generated.dirty = true;
+}
+
 pub fn domain_projection_due(candidates: Res<PendingDomainProjectionCandidates>) -> bool {
     candidates.has_projection_work()
 }
@@ -362,9 +412,11 @@ impl DomainClassUsers {
 pub fn reset_scene_projection_work(
     mut users: ResMut<DomainClassUsers>,
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
+    mut generated_documents: ResMut<PendingGeneratedSourceDocuments>,
 ) {
     users.clear();
     candidates.reset_for_scene();
+    generated_documents.0 = PendingEntityWork::with_initial_discovery();
 }
 
 pub fn queue_added_domain_prim(
@@ -977,13 +1029,9 @@ pub fn poll_domain_projection_tasks(
 /// owns synthesis, while the document registry owns inspectable source and the
 /// scene-to-document link used by the standard Modelica UI and API.
 pub fn sync_generated_network_documents(
-    mut generated: Query<
-        (Entity, &GeneratedModelicaSource, &mut ModelicaModel),
-        Or<(
-            Added<GeneratedModelicaSource>,
-            Changed<GeneratedModelicaSource>,
-        )>,
-    >,
+    mut generated: Query<(Entity, &GeneratedModelicaSource, &mut ModelicaModel)>,
+    source_entities: Query<Entity, With<GeneratedModelicaSource>>,
+    mut pending: ResMut<PendingGeneratedSourceDocuments>,
     mut documents: ResMut<
         lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
     >,
@@ -991,7 +1039,16 @@ pub fn sync_generated_network_documents(
         lunco_modelica_runtime::generated_source::GeneratedModelicaSources,
     >,
 ) {
-    for (entity, source, mut model) in &mut generated {
+    let mut entities = pending.0.take_queued();
+    if pending.0.take_initial_discovery() {
+        entities.extend(source_entities.iter());
+    }
+    let mut entities: Vec<_> = entities.into_iter().collect();
+    entities.sort_unstable();
+    for entity in entities {
+        let Ok((entity, source, mut model)) = generated.get_mut(entity) else {
+            continue;
+        };
         // Projection errors are represented by an empty diagnostic source and
         // must not create a misleading editable-looking blank document.
         if source.source.is_empty() {
@@ -1140,15 +1197,13 @@ pub fn publish_generated_sources(
     generated.dirty = false;
 }
 
-/// Change gate for the generated metadata publisher. The resource flag covers
-/// document-link and removal changes, while ECS change detection covers the
-/// generated source projection itself. Runtime solver output is deliberately
-/// outside this metadata contract.
+/// Change gate for the generated metadata publisher. Generated-source
+/// lifecycle observers and document-link/removal owners set the shared dirty
+/// flag; runtime solver output is deliberately outside this metadata contract.
 pub fn generated_sources_need_publish(
-    changed: Query<(), Changed<GeneratedModelicaSource>>,
     generated: Res<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>,
 ) -> bool {
-    generated.dirty || !changed.is_empty()
+    generated.dirty
 }
 
 /// Stable, path-qualified identity for a generated network model.
@@ -1843,6 +1898,7 @@ mod tests {
 
         app.insert_resource(users)
             .insert_resource(candidates)
+            .insert_resource(PendingGeneratedSourceDocuments::default())
             .insert_resource(classes)
             .add_systems(Update, reset_scene_projection_work);
         app.update();
@@ -1854,6 +1910,11 @@ mod tests {
         assert!(candidates.discovery.is_empty());
         assert!(candidates.projection.is_empty());
         assert!(candidates.initial_discovery);
+        assert!(app
+            .world()
+            .resource::<PendingGeneratedSourceDocuments>()
+            .0
+            .has_work());
         assert_eq!(
             app.world().resource::<MemberClasses>().resolve("motor.mo"),
             Ok(Some("LunCo.Electrical.Motor".into()))
@@ -1903,6 +1964,68 @@ mod tests {
             .resource::<PendingDomainProjectionCandidates>()
             .discovery
             .contains(&entity));
+    }
+
+    #[test]
+    fn generated_document_sync_queues_source_and_model_lifecycle() {
+        fn source() -> GeneratedModelicaSource {
+            GeneratedModelicaSource {
+                network_root: "/Rig".into(),
+                doc_uri: "generated://Rig.mo".into(),
+                source: "model Rig end Rig;".into(),
+                component_paths: Vec::new(),
+                members: Vec::new(),
+                source_roots: Vec::new(),
+                member_output_aliases: Vec::new(),
+                units: Vec::new(),
+                boundary_inputs: Vec::new(),
+                boundary_outputs: Vec::new(),
+                layout: SynthesisLayout::default(),
+                projection_error: None,
+            }
+        }
+
+        let mut app = App::new();
+        app.init_resource::<PendingGeneratedSourceDocuments>()
+            .add_observer(queue_generated_source_document_sync)
+            .add_observer(queue_model_document_sync_for_generated_source)
+            .add_observer(forget_generated_source_document_sync);
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(ModelicaModel::default());
+        assert!(!app
+            .world()
+            .resource::<PendingGeneratedSourceDocuments>()
+            .0
+            .contains(entity));
+
+        app.world_mut().entity_mut(entity).insert(source());
+        assert!(app
+            .world()
+            .resource::<PendingGeneratedSourceDocuments>()
+            .0
+            .contains(entity));
+
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<GeneratedModelicaSource>();
+        assert!(!app
+            .world()
+            .resource::<PendingGeneratedSourceDocuments>()
+            .0
+            .contains(entity));
+
+        app.world_mut().entity_mut(entity).insert(source());
+        app.world_mut().entity_mut(entity).remove::<ModelicaModel>();
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(ModelicaModel::default());
+        assert!(app
+            .world()
+            .resource::<PendingGeneratedSourceDocuments>()
+            .0
+            .contains(entity));
     }
 
     fn component(path: &str, target: Option<&str>) -> DomainComponent {
@@ -2504,13 +2627,20 @@ def Scope "Rig"
         #[derive(Resource, Default)]
         struct PublicationCount(usize);
 
-        fn count_publications(mut count: ResMut<PublicationCount>) {
+        fn count_publications(
+            mut count: ResMut<PublicationCount>,
+            mut generated: ResMut<
+                lunco_modelica_runtime::generated_source::GeneratedModelicaSources,
+            >,
+        ) {
             count.0 += 1;
+            generated.dirty = false;
         }
 
         let mut app = App::new();
         app.init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .init_resource::<PublicationCount>()
+            .add_observer(mark_generated_sources_dirty_on_insert)
             .add_systems(
                 Update,
                 count_publications.run_if(generated_sources_need_publish),
@@ -2550,11 +2680,13 @@ def Scope "Rig"
             "solver output changes are not generated-source metadata changes"
         );
 
-        app.world_mut()
-            .get_mut::<GeneratedModelicaSource>(entity)
+        let mut updated_source = app
+            .world()
+            .get::<GeneratedModelicaSource>(entity)
             .unwrap()
-            .source
-            .push(' ');
+            .clone();
+        updated_source.source.push(' ');
+        app.world_mut().entity_mut(entity).insert(updated_source);
         app.update();
         assert_eq!(app.world().resource::<PublicationCount>().0, 2);
 

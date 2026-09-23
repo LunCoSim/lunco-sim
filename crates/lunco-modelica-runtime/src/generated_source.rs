@@ -24,10 +24,9 @@ pub fn is_generated_origin(origin: &DocumentOrigin) -> bool {
 pub struct GeneratedModelicaSources {
     /// Current generated network documents.
     pub entries: Vec<GeneratedModelicaSourceEntry>,
-    /// Change-driven publication gate. Producers set this when generated
-    /// document links or entities change; generated-source changes are
-    /// detected by the publisher's ECS query. Solver output is not this
-    /// registry's invalidation input.
+    /// Change-driven publication gate. The projector bootstraps it once, and
+    /// generated-source lifecycle observers plus document-link/removal owners
+    /// set it when exposed metadata changes. Solver output is not an input.
     pub dirty: bool,
 }
 
