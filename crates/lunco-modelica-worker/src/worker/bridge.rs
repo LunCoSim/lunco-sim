@@ -71,7 +71,11 @@ pub(crate) fn plan_macro_step(target_time: f64, current_time: f64, in_flight: bo
 pub fn spawn_modelica_requests(
     channels: Res<ModelicaChannels>,
     mut fixed_time: ResMut<Time<Fixed>>,
-    mut q_models: Query<(Entity, &mut ModelicaModel)>,
+    mut q_models: Query<(
+        Entity,
+        &mut ModelicaModel,
+        Option<&lunco_core::GlobalEntityId>,
+    )>,
     mut lag: ResMut<CosimLag>,
     participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
     coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
@@ -92,7 +96,19 @@ pub fn spawn_modelica_requests(
     let mut coupling_held = false;
     let mut faults = faults;
 
-    for (entity, mut model) in q_models.iter_mut() {
+    // The worker owns one serialized command stream. Stable identity ordering
+    // makes compile/step service order independent of ECS archetype layout.
+    // Unaddressable local models use their world-local entity key only as a
+    // tie-breaker; networked/authored participants carry GlobalEntityId.
+    let mut models: Vec<_> = q_models.iter_mut().collect();
+    models.sort_unstable_by_key(|(entity, _, global_id)| {
+        (
+            global_id.map(lunco_core::GlobalEntityId::get),
+            entity.to_bits(),
+        )
+    });
+
+    for (entity, mut model, _) in models {
         let shared_clock_participant = participants
             .as_deref()
             .is_none_or(|participants| participants.requires_barrier(entity));

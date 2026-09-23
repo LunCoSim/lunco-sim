@@ -30,6 +30,7 @@
 #![cfg(any(feature = "rhai", feature = "python"))]
 
 use bevy::prelude::*;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use lunco_api::registry::ApiEntityRegistry;
@@ -756,6 +757,16 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             }
         }
 
+        // Query/archetype order is not a simulation contract. `cmd()` is
+        // synchronous inside each hook, so the actor order is observable by
+        // later actors in this same pass. Addressable actors use their stable
+        // API identity; local-only hosts (identity 0 in the script ABI) use
+        // their stable-for-this-world ECS entity key as the final tie-breaker.
+        work.sort_unstable_by(|a, b| {
+            a.2.cmp(&b.2)
+                .then_with(|| a.0.to_bits().cmp(&b.0.to_bits()))
+        });
+
         // A fixed-step event is eligible after SimTickSet only when its recorded
         // tick precedes the current tick. That boundary determines when the
         // event becomes visible; events stamped at the current tick remain
@@ -772,6 +783,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     let Some(current_tick) = current_sim_tick else {
                         return Vec::new();
                     };
+                    if inbox.pending.len() > 1 {
+                        inbox.pending.sort_by(compare_telemetry_events);
+                    }
                     let ready_count = inbox
                         .pending
                         .iter()
@@ -793,6 +807,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 }
             })
             .unwrap_or_default();
+        if events.len() > 1 {
+            events.sort_by(compare_telemetry_events);
+        }
 
         // Run if there's work OR a tracked entity vanished (needs on_stop).
         let needs_teardown = world
@@ -961,7 +978,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             // cleanup only, never ongoing behaviour.
             bridge_core::set_script_authority(None);
             bridge_core::set_script_client_local(false);
-            let dead: Vec<Entity> = fsm.keys().copied().filter(|e| !live.contains(e)).collect();
+            let mut dead: Vec<Entity> = fsm.keys().copied().filter(|e| !live.contains(e)).collect();
+            dead.sort_unstable_by(|a, b| {
+                fsm.get(a)
+                    .map(|state| state.gid)
+                    .cmp(&fsm.get(b).map(|state| state.gid))
+                    .then_with(|| a.to_bits().cmp(&b.to_bits()))
+            });
             for entity in dead {
                 if let Some(st) = fsm.remove(&entity) {
                     if st.started && st.compiled {
@@ -1099,7 +1122,7 @@ impl ScriptEventInbox {
         self.dropped = 0;
     }
 
-    /// Enqueue one event while preserving FIFO order.
+    /// Enqueue one event. The driver assigns canonical order at the pass boundary.
     ///
     /// `false` is an explicit overflow signal. The caller owns the policy for
     /// surfacing it; no event is silently evicted from the front of the queue.
@@ -1120,6 +1143,61 @@ impl ScriptEventInbox {
         self.overflowed = false;
         self.dropped = 0;
         self.faulted = false;
+    }
+}
+
+fn compare_telemetry_events(a: &TelemetryEvent, b: &TelemetryEvent) -> Ordering {
+    a.sim_tick
+        .cmp(&b.sim_tick)
+        .then_with(|| a.source.cmp(&b.source))
+        .then_with(|| a.name.cmp(&b.name))
+        .then_with(|| a.severity.cmp(&b.severity))
+        .then_with(|| a.sim_secs.total_cmp(&b.sim_secs))
+        .then_with(|| a.timestamp.total_cmp(&b.timestamp))
+        .then_with(|| compare_telemetry_values(&a.data, &b.data))
+}
+
+fn compare_telemetry_values(
+    a: &lunco_telemetry_core::TelemetryValue,
+    b: &lunco_telemetry_core::TelemetryValue,
+) -> Ordering {
+    use lunco_telemetry_core::TelemetryValue as Value;
+
+    match (a, b) {
+        (Value::F64(a), Value::F64(b)) => a.total_cmp(b),
+        (Value::I64(a), Value::I64(b)) => a.cmp(b),
+        (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+        (Value::String(a), Value::String(b)) => a.cmp(b),
+        (Value::Array(a), Value::Array(b)) => {
+            for (a, b) in a.iter().zip(b) {
+                let order = compare_telemetry_values(a, b);
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            a.len().cmp(&b.len())
+        }
+        (Value::Map(a), Value::Map(b)) => {
+            for ((a_key, a_value), (b_key, b_value)) in a.iter().zip(b) {
+                let order = a_key
+                    .cmp(b_key)
+                    .then_with(|| compare_telemetry_values(a_value, b_value));
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            a.len().cmp(&b.len())
+        }
+        (Value::F64(_), _) => Ordering::Less,
+        (_, Value::F64(_)) => Ordering::Greater,
+        (Value::I64(_), _) => Ordering::Less,
+        (_, Value::I64(_)) => Ordering::Greater,
+        (Value::Bool(_), _) => Ordering::Less,
+        (_, Value::Bool(_)) => Ordering::Greater,
+        (Value::String(_), _) => Ordering::Less,
+        (_, Value::String(_)) => Ordering::Greater,
+        (Value::Array(_), _) => Ordering::Less,
+        (_, Value::Array(_)) => Ordering::Greater,
     }
 }
 
