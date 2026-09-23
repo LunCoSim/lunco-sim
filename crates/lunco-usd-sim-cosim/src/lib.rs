@@ -1430,8 +1430,12 @@ fn process_usd_cosim_prim_read(
 
 /// A `connectors:*` property declares an acausal Modelica interface, while its
 /// connection list makes the topology claim that warrants an orphan warning.
-/// Read both facts from one attribute-name traversal.
+/// Avoid allocating attribute names for the common connectorless program.
 fn acausal_connector_state(reader: &dyn UsdReadObject, sdf_path: &SdfPath) -> (bool, bool) {
+    if !reader.any_attr_with_prefix(sdf_path, "connectors:") {
+        return (false, false);
+    }
+
     let mut has_connector = false;
     for name in reader.attr_names(sdf_path) {
         if name.starts_with("connectors:") {
