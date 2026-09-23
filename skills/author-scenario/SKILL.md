@@ -47,6 +47,11 @@ When a source is hot-swapped, the program emits the generic typed
 that lifecycle edge rather than relying on a timer. Sensor events may carry a
 nested collider; match the entrant through the generic `parent()` chain to the
 authored subject instead of adding a route-specific child relationship.
+Physics can produce sensor events while scene participants are still becoming
+ready, before scenario hooks are allowed to run. Those pre-start event edges
+are discarded by the lifecycle gate. In `on_start`, query current state from
+the owning subsystem when startup behavior depends on it; use `on_event` for
+transitions after the scenario starts.
 
 The reusable route marker is a translucent, unlit, shadowless annotation. Its
 unvisited colour is bright green and its visited colour is gray in standard
