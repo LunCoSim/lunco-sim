@@ -55,6 +55,11 @@ stage-generation and asset-store invalidation as scalar checks. Do not repeat
 the same `Added`/`Changed` population filters in both the run condition and the
 projector, and do not reproject until the index is invalidated.
 
+Keep invalidation domains distinct: a wiring/topology latch may be raised by
+endpoint arrivals and must not automatically trigger whole-stage domain
+discovery. Use the canonical stage generation or authored-stage asset change
+for that broader pass; keep entity arrivals on their queued-entity path.
+
 When gating a dependency's multi-system transform schedule, distinguish its
 per-update output flags from authoritative input changes. Preserve any required
 settle pass after a floating-origin change, and test the change → settle → idle

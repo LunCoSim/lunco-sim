@@ -264,6 +264,7 @@ pub struct PendingDomainProjectionCandidates {
     discovery: HashSet<Entity>,
     projection: HashSet<Entity>,
     initial_discovery: bool,
+    observed_stage_generations: HashMap<AssetId<UsdStageAsset>, u64>,
 }
 
 impl Default for PendingDomainProjectionCandidates {
@@ -272,6 +273,7 @@ impl Default for PendingDomainProjectionCandidates {
             discovery: HashSet::new(),
             projection: HashSet::new(),
             initial_discovery: true,
+            observed_stage_generations: HashMap::new(),
         }
     }
 }
@@ -279,6 +281,23 @@ impl Default for PendingDomainProjectionCandidates {
 impl PendingDomainProjectionCandidates {
     pub fn has_projection_work(&self) -> bool {
         !self.projection.is_empty()
+    }
+
+    fn observe_canonical_stage_generations(&mut self, stages: &CanonicalStages) -> bool {
+        let mut changed = false;
+        for (asset, stage) in stages.iter() {
+            let generation = stage.generation();
+            if self.observed_stage_generations.get(&asset) != Some(&generation) {
+                self.observed_stage_generations.insert(asset, generation);
+                changed = true;
+            }
+        }
+        if self.observed_stage_generations.len() != stages.len() {
+            self.observed_stage_generations
+                .retain(|asset, _| stages.get(*asset).is_some());
+            changed = true;
+        }
+        changed
     }
 
     fn reset_for_scene(&mut self) {
@@ -1538,7 +1557,6 @@ pub fn resolve_member_classes(
     mut classes: ResMut<MemberClasses>,
     mut class_users: ResMut<DomainClassUsers>,
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
-    dirty: Res<lunco_usd_bevy_stage::UsdWiringDirty>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
@@ -1563,7 +1581,13 @@ pub fn resolve_member_classes(
         .read()
         .map(|event| (event.id, event.error.to_string()))
         .collect();
-    let full_discovery = candidates.initial_discovery || dirty.0;
+    // `UsdWiringDirty` also covers endpoint additions/removals, which already
+    // arrive through `candidates.discovery`. Only authored canonical-stage
+    // generations and USD asset changes can invalidate composed member
+    // membership for every network root.
+    let canonical_stage_changed = candidates.observe_canonical_stage_generations(&canonical);
+    let full_discovery =
+        candidates.initial_discovery || canonical_stage_changed || stages.is_changed();
     let discover = full_discovery || !candidates.discovery.is_empty();
     if !discover && loaded.is_empty() && modified.is_empty() && failed.is_empty() {
         return;
@@ -1783,6 +1807,28 @@ mod tests {
     }
 
     #[test]
+    fn full_domain_discovery_tracks_canonical_stage_generations() {
+        let asset = AssetId::<UsdStageAsset>::default();
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
+            "domain.usda",
+            "#usda 1.0\ndef Xform \"Root\" {}\n",
+        );
+        let mut stages = CanonicalStages::default();
+        stages.insert(
+            asset,
+            CanonicalStage::from_recipe(&recipe).expect("canonical stage builds"),
+        );
+        let mut candidates = PendingDomainProjectionCandidates::default();
+
+        assert!(candidates.observe_canonical_stage_generations(&stages));
+        assert!(!candidates.observe_canonical_stage_generations(&stages));
+
+        assert!(stages.rebuild(asset, &recipe));
+        assert!(candidates.observe_canonical_stage_generations(&stages));
+        assert!(!candidates.observe_canonical_stage_generations(&stages));
+    }
+
+    #[test]
     fn scene_teardown_resets_domain_projection_work_but_not_asset_class_facts() {
         let mut app = App::new();
         let root = Entity::from_bits(4);
@@ -1821,6 +1867,7 @@ mod tests {
             discovery: HashSet::new(),
             projection: HashSet::new(),
             initial_discovery: false,
+            observed_stage_generations: HashMap::new(),
         })
         .add_observer(queue_added_domain_prim)
         .add_observer(queue_added_domain_identity)

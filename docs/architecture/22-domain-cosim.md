@@ -571,8 +571,10 @@ projection work set until every referenced member source has a terminal class
 verdict; asset arrival waves therefore do not repeatedly traverse a partially
 resolved network. Invalid source verdicts are terminal and still reach
 synthesis so the authored error is reported. A full discovery is reserved for
-initial admission or a live stage/wiring revision that can change composed
-network membership. Scene teardown clears the reverse index and pending
+initial admission, a USD-stage asset change, or a changed generation on a live
+canonical stage. Endpoint lifecycle continues to requeue only its entity; the
+broader `UsdWiringDirty` latch is not a domain-membership signal. Scene teardown
+clears the reverse index, stage-generation cursor, and pending
 discovery/projection candidate sets; resolved member-class facts remain
 reusable because they belong to shared Modelica source assets, not a scene.
 
