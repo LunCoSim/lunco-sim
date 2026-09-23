@@ -160,9 +160,10 @@ runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 `BillboardIndex` fact to the shared marker root. Keep both paths on this one
 renderer; do not overwrite `Name` or add a waypoint-specific overlay.
 
-For terrain sun and shadow consumers, keep `SunState` as the semantic source
-and use `SunRenderState` for the single render projection. Project the light's
-local pose before BigSpace propagation, then publish `SunRenderState` from the
+For physics and co-simulation, keep `SunState` on `WorldTime`. If the detached
+celestial presentation diverges, publish its render-only direction through
+`SunRenderPresentation`; do not overwrite the semantic provider. Both sources
+use the same scene-light projection. Publish `SunRenderState` from the
 finalized scene-sun `GlobalTransform` after
 `BigSpaceSystems::PropagateLowPrecision`. Any conversion of that direction
 through a terrain `GlobalTransform` belongs after that phase in `PostUpdate`:
@@ -171,8 +172,8 @@ streamed-tile shadow intent binding all consume that finalized frame. Put
 streamed-tile binding in the public `TerrainSurfaceSet::RenderShadowBinding`
 phase so it cannot observe a previous-frame terrain transform. Do not repair a
 stale projection with an offset or another per-frame transform writer. The
-semantic-to-light projection is change-gated by `SunState.revision` and the
-changed BigSpace ancestor chains, so stable frames do not rebuild f64 poses.
+projection is change-gated by the selected source revision and changed BigSpace
+ancestor chains, so stable frames do not rebuild f64 poses.
 
 The render backend samples the resulting cascades with Bevy's hardware 2x2
 comparison filter in standard and high profiles. Keep that choice separate from

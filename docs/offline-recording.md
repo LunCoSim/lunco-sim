@@ -130,10 +130,11 @@ system has run.
 
 > [!IMPORTANT]
 > **To keep the app awake, select `MaxSpeed` through the execution policy and hold a
-> `lunco_core_runtime::KeepAwake` token — never write `WinitSettings` directly.**
+> continuous `lunco_core_runtime::FramePacingDemand` request — never write
+> `WinitSettings` directly.**
 > `sim_focus_pace` is the sole Winit writer and applies the policy every frame. An
-> unattended capture has no focused window, and under the `reactive_low_power` throttle
-> the app sleeps between redraws: **measured 2–10 s per frame versus ~50 ms awake.**
+> unattended capture has no focused window, so the continuous request keeps the
+> capture loop running at the selected execution mode.
 
 ---
 

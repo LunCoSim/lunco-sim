@@ -59,15 +59,14 @@ pub mod lighting;
 pub use lighting::{drive_earthshine_from_phase, LunarSun, FULL_EARTH_EARTHSHINE_LUX};
 
 /// Solar direction as a co-simulation source (`LocalSolar` + the sun→cosim
-/// bridge). The lighting-direction analog of the gravity bridge.
-///
-/// **Render-free.** It reads semantic [`SunState`], not a render light. The
-/// render light is a projection of that state, so a headless provider and a
-/// GUI cannot silently disagree about the direction.
+/// bridge). `LocalSolar` always reads semantic [`SunState`]. The scene-light
+/// projection may additionally consume the typed render-only
+/// [`SunRenderPresentation`] without feeding that direction into physics or
+/// co-simulation.
 pub mod solar;
 pub use solar::{
     compute_local_solar, finalize_sun_render_state, inject_local_solar_into_cosim,
-    project_sun_state_to_light, LocalSolar, SunRenderState, SunState,
+    project_sun_render_to_light, LocalSolar, SunRenderPresentation, SunRenderState, SunState,
 };
 
 /// Explicit USD-authored source of mount-local environmental signals.
@@ -789,6 +788,7 @@ impl Plugin for EnvironmentPlugin {
         app.init_resource::<EarthDirectionWorld>();
         app.init_resource::<SunState>();
         app.init_resource::<SunRenderState>();
+        app.init_resource::<SunRenderPresentation>();
 
         // SunState is scene-owned semantic state. Clear it at the same
         // lifecycle edge as the authored light entities so a replacement
@@ -798,7 +798,7 @@ impl Plugin for EnvironmentPlugin {
         // Semantic sun state is the provider boundary. The light's local pose
         // is projected before BigSpace propagation; its finalized world
         // direction is published afterwards for render consumers.
-        app.add_systems(Update, project_sun_state_to_light);
+        app.add_systems(Update, project_sun_render_to_light);
         app.add_systems(
             PostUpdate,
             finalize_sun_render_state

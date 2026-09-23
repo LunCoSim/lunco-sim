@@ -5,15 +5,17 @@
 **TL;DR:** Per-frame work is the anti-default; prefer observers / change-detection / fingerprints / generation-gates.
 Push heavy work off-thread or behind a cache; profile before optimizing.
 
-> **Frame *count* is fixed at vsync by design — the lever is per-frame *cost*, not
+> **Focused frame *count* is fixed at vsync by design — the lever is per-frame *cost*, not
 > redraw frequency.** While focused, both binaries run
 > `WinitSettings { focused_mode: UpdateMode::Continuous }`
 > (`lunco-luncosim-ui/src/ui/mod.rs:225`, `lunco-modelica-ui/src/bin/lunica.rs:177`), so
 > the app redraws *every* vsync interval and never idles while focused — this is
 > deliberate (vsync = Fifo present / `requestAnimationFrame` acts as the frame
-> timer; see the comment at `ui/mod.rs:41-49`). Reactive/low-power kicks in only
-> when **unfocused and not networked**. Consequences a would-be optimizer must
-> internalize:
+> timer; see the comment at `ui/mod.rs:41-49`). Unfocused windows use low-power
+> updates while idle; active simulation and explicit realtime animation demands
+> request the shared fixed 60 Hz cadence. Continuous unfocused updates remain
+> reserved for explicit max-speed, recording, and network contracts.
+> Consequences a would-be optimizer must internalize:
 > - **"Idle FPS spikes" is a misnomer while focused** — there is no idle; every
 >   frame renders. A spike is one frame doing too much *work*, not the app failing
 >   to sleep. Chase per-frame cost (this whole doc + the caching substrates), not
@@ -25,6 +27,14 @@ Push heavy work off-thread or behind a cache; profile before optimizing.
 >   and left Continuous on purpose. If you revisit it, it's a frame-*pacing*
 >   decision (input latency, vsync interaction, web `requestAnimationFrame`), a
 >   different axis from the per-frame-work discipline below. Don't conflate them.
+
+The celestial presentation system holds one realtime pacing request while
+`CelestialTime` advances and a scene camera can see celestial presentation
+frames. This keeps accelerated Earth, Moon, and Sun samples moving smoothly when
+the window is unfocused. The request selects the bounded fixed cadence; it does
+not bypass vsync while focused or switch the host into continuous max-speed
+updates. It is released when the clock pauses, the presentation frames or camera
+leave, or the scene tears down.
 
 The app ships with a real-time 3D scene, a Modelica simulator, and a
 heavyweight egui UI on top. The frame budget is shared — UI work that
