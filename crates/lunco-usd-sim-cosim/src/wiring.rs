@@ -522,7 +522,7 @@ pub(super) fn rewire_usd_connections(
     //
     // The instance key still keeps two runtime spawns of one stage distinct;
     // the stage key keeps independently composed stages distinct.
-    let mut by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, Option<u64>, String), Entity> =
+    let mut by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, Option<u64>, &str), Entity> =
         HashMap::new();
     // A generated network is one Modelica participant, while its composed
     // member paths remain valid USD addresses for presentation and external
@@ -531,29 +531,20 @@ pub(super) fn rewire_usd_connections(
     // from generated source metadata, not from any vehicle, sensor, or renderer
     // type, so every generated domain gets the same boundary behavior.
     let mut generated_member_outputs: HashMap<
-        (
-            bevy::asset::AssetId<UsdStageAsset>,
-            Option<u64>,
-            String,
-            String,
-        ),
-        (Entity, String),
+        (bevy::asset::AssetId<UsdStageAsset>, Option<u64>, &str, &str),
+        (Entity, &str),
     > = HashMap::new();
-    let environment_probe_entities: std::collections::HashSet<Entity> = wiring
-        .endpoints
-        .iter()
-        .filter_map(|(entity, _, _, _, is_probe, _, _)| is_probe.then_some(entity))
-        .collect();
-    let port_surfaces: HashMap<Entity, lunco_port_core::PortSurface> = wiring
-        .endpoints
-        .iter()
-        .filter_map(|(entity, _, _, _, _, surface, _)| {
-            surface.cloned().map(|surface| (entity, surface))
-        })
-        .collect();
-    for (e, p, _, generated, _, _, projection) in wiring.endpoints.iter() {
+    let mut environment_probe_entities = HashSet::new();
+    let mut port_surfaces = HashMap::new();
+    for (e, p, _, generated, is_probe, surface, projection) in wiring.endpoints.iter() {
+        if is_probe {
+            environment_probe_entities.insert(e);
+        }
+        if let Some(surface) = surface {
+            port_surfaces.insert(e, surface);
+        }
         let instance = instance_of(e, projection);
-        let key = (p.stage_handle.id(), instance, p.path.clone());
+        let key = (p.stage_handle.id(), instance, p.path.as_str());
         by_path.insert(key, e);
         if let Some(generated) = generated {
             for (member, output, alias) in &generated.member_output_aliases {
@@ -561,10 +552,10 @@ pub(super) fn rewire_usd_connections(
                     (
                         p.stage_handle.id(),
                         instance,
-                        member.clone(),
-                        output.clone(),
+                        member.as_str(),
+                        output.as_str(),
                     ),
-                    (e, alias.clone()),
+                    (e, alias.as_str()),
                 );
             }
         }
@@ -833,17 +824,17 @@ pub(super) fn rewire_usd_connections(
                         generated_member_outputs.get(&(
                             prim_path.stage_handle.id(),
                             sink_instance,
-                            src_prim.to_string(),
-                            src_conn.to_string(),
+                            src_prim,
+                            src_conn,
                         ))
                     })
                     .flatten()
-                    .cloned();
+                    .copied();
                 let generated_alias_present = generated_alias.is_some();
                 let (mut start_element, mut src_conn) = if let Some((wrapper, alias)) =
                     generated_alias
                 {
-                    (wrapper, alias)
+                    (wrapper, alias.to_string())
                 } else {
                     // A source path is absolute in the composed USD stage. An
                     // instance-local source must resolve in the sink's instance,
@@ -852,13 +843,8 @@ pub(super) fn rewire_usd_connections(
                     // the local namespace first, then the authored scene namespace.
                     // This keeps duplicated assets isolated without making a
                     // scene-level connection depend on which asset consumes it.
-                    let source_key = (
-                        prim_path.stage_handle.id(),
-                        sink_instance,
-                        src_prim.to_string(),
-                    );
-                    let scene_source_key =
-                        (prim_path.stage_handle.id(), None, src_prim.to_string());
+                    let source_key = (prim_path.stage_handle.id(), sink_instance, src_prim);
+                    let scene_source_key = (prim_path.stage_handle.id(), None, src_prim);
                     let source_entity = by_path.get(&source_key).copied().or_else(|| {
                         sink_instance
                             .is_some()

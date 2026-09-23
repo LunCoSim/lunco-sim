@@ -96,12 +96,12 @@ struct UsdTelemetryChannel;
 
 /// Runtime index for the one-time USD telemetry projection.
 ///
-/// The declaration projector is triggered by scene/projection changes and by
-/// newly spawned prims. Its wrapper-port index therefore belongs to the
-/// projection lifecycle, not to the per-frame query. Keeping
-/// them here makes the steady state an empty gated system instead of a full
-/// ECS scan and a set of cloned USD-path keys every Update.
-#[derive(Resource, Default)]
+/// `dirty` admits a projection pass; `invalidation_pending` is the coalesced
+/// lifecycle signal that makes the index and its output channels stale. The
+/// first pass is also the one-time discovery for entities that predate this
+/// plugin. Normal invalidation is fed by component lifecycle observers rather
+/// than population queries in Update.
+#[derive(Resource)]
 struct UsdTelemetryProjectionIndex {
     generated_outputs: HashMap<
         (
@@ -116,24 +116,40 @@ struct UsdTelemetryProjectionIndex {
     generated_entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     diagnostics: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), RuntimeDiagnostic>,
     observed_stage_revision: u64,
+    invalidation_pending: bool,
     dirty: bool,
+}
+
+impl Default for UsdTelemetryProjectionIndex {
+    fn default() -> Self {
+        Self {
+            generated_outputs: HashMap::new(),
+            entities_by_path: HashMap::new(),
+            generated_entities_by_path: HashMap::new(),
+            diagnostics: HashMap::new(),
+            observed_stage_revision: 0,
+            invalidation_pending: false,
+            dirty: true,
+        }
+    }
+}
+
+fn invalidate_usd_telemetry_projection_index_on_insert<T: Component>(
+    _: On<Insert, T>,
+    mut index: ResMut<UsdTelemetryProjectionIndex>,
+) {
+    index.invalidation_pending = true;
+}
+
+fn invalidate_usd_telemetry_projection_index_on_remove<T: Component>(
+    _: On<Remove, T>,
+    mut index: ResMut<UsdTelemetryProjectionIndex>,
+) {
+    index.invalidation_pending = true;
 }
 
 fn mark_usd_telemetry_projection_index_dirty(
     mut index: ResMut<UsdTelemetryProjectionIndex>,
-    added_prims: Query<(), Added<UsdPrimPath>>,
-    changed_wrappers: Query<
-        (),
-        Or<(
-            Added<GeneratedModelicaSource>,
-            Changed<GeneratedModelicaSource>,
-            Added<ModelicaSignalLayout>,
-            Changed<ModelicaSignalLayout>,
-            Added<SimComponent>,
-            Added<lunco_port_core::PortSurface>,
-            Added<lunco_port_core::PortSurfaceReady>,
-        )>,
-    >,
     stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
     projected: Query<Entity, With<UsdTelemetryProjected>>,
     channels: Query<Entity, With<UsdTelemetryChannel>>,
@@ -146,45 +162,30 @@ fn mark_usd_telemetry_projection_index_dirty(
     let stage_assets_changed = stage_assets
         .as_ref()
         .is_some_and(|assets| assets.is_changed());
-    if !added_prims.is_empty()
-        || !changed_wrappers.is_empty()
-        || revision_changed
-        || stage_assets_changed
-    {
-        index.dirty = true;
-        index.diagnostics.clear();
-        if let Some(revision) = stage_revision {
-            index.observed_stage_revision = revision.0;
-        }
-        for entity in &projected {
-            commands.entity(entity).remove::<UsdTelemetryProjected>();
-        }
-        for entity in &channels {
-            commands.entity(entity).try_despawn();
-        }
+    let lifecycle_changed = std::mem::take(&mut index.invalidation_pending);
+    if !lifecycle_changed && !revision_changed && !stage_assets_changed {
+        return;
+    }
+
+    index.dirty = true;
+    index.diagnostics.clear();
+    if let Some(revision) = stage_revision {
+        index.observed_stage_revision = revision.0;
+    }
+    for entity in &projected {
+        commands.entity(entity).remove::<UsdTelemetryProjected>();
+    }
+    for entity in &channels {
+        commands.entity(entity).try_despawn();
     }
 }
 
-fn telemetry_projection_index_changed(
-    added_prims: Query<(), Added<UsdPrimPath>>,
-    changed_wrappers: Query<
-        (),
-        Or<(
-            Added<GeneratedModelicaSource>,
-            Changed<GeneratedModelicaSource>,
-            Added<ModelicaSignalLayout>,
-            Changed<ModelicaSignalLayout>,
-            Added<SimComponent>,
-            Added<lunco_port_core::PortSurface>,
-            Added<lunco_port_core::PortSurfaceReady>,
-        )>,
-    >,
+fn telemetry_projection_index_invalidation_due(
     index: Res<UsdTelemetryProjectionIndex>,
     stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
     stage_assets: Option<Res<Assets<UsdStageAsset>>>,
 ) -> bool {
-    !added_prims.is_empty()
-        || !changed_wrappers.is_empty()
+    index.invalidation_pending
         || stage_revision
             .as_ref()
             .is_some_and(|revision| revision.0 != index.observed_stage_revision)
@@ -203,6 +204,7 @@ fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjection
     index.generated_entities_by_path.clear();
     index.diagnostics.clear();
     index.observed_stage_revision = 0;
+    index.invalidation_pending = false;
     index.dirty = true;
 }
 
@@ -2199,14 +2201,50 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_usd_sim_domain::DomainClassUsers>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjectionCandidates>()
+            .init_resource::<lunco_usd_sim_domain::PendingGeneratedSourceDocuments>()
             .init_resource::<PendingUsdCosimPrimWork>()
             .init_resource::<PendingModelicaWrapWork>()
             .init_resource::<WiringFactsCache>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>();
         app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
+        app.world_mut()
+            .resource_mut::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
+            .dirty = true;
         app.add_observer(request_binding_epoch::<UsdPrimPath>)
             .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
+            .add_observer(invalidate_usd_telemetry_projection_index_on_insert::<UsdPrimPath>)
+            .add_observer(invalidate_usd_telemetry_projection_index_on_remove::<UsdPrimPath>)
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_insert::<GeneratedModelicaSource>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_remove::<GeneratedModelicaSource>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_insert::<ModelicaSignalLayout>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_remove::<ModelicaSignalLayout>,
+            )
+            .add_observer(invalidate_usd_telemetry_projection_index_on_insert::<SimComponent>)
+            .add_observer(invalidate_usd_telemetry_projection_index_on_remove::<SimComponent>)
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_insert::<lunco_port_core::PortSurface>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_remove::<lunco_port_core::PortSurface>,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_insert::<
+                    lunco_port_core::PortSurfaceReady,
+                >,
+            )
+            .add_observer(
+                invalidate_usd_telemetry_projection_index_on_remove::<
+                    lunco_port_core::PortSurfaceReady,
+                >,
+            )
             .add_observer(queue_added_usd_cosim_prim)
             .add_observer(forget_removed_usd_cosim_prim)
             .add_observer(queue_removed_usd_sourced_cosim)
@@ -2221,6 +2259,10 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(lunco_usd_sim_domain::queue_added_domain_instance_projection)
             .add_observer(lunco_usd_sim_domain::queue_removed_domain_instance_projection)
             .add_observer(lunco_usd_sim_domain::forget_domain_projection_entity)
+            .add_observer(lunco_usd_sim_domain::queue_generated_source_document_sync)
+            .add_observer(lunco_usd_sim_domain::queue_model_document_sync_for_generated_source)
+            .add_observer(lunco_usd_sim_domain::forget_generated_source_document_sync)
+            .add_observer(lunco_usd_sim_domain::mark_generated_sources_dirty_on_insert)
             // Link port names are derived from the classes of the other authored
             // LinkNodes. A node arriving after its wire must therefore reopen the
             // same binding transaction as any other projected endpoint.
@@ -2352,6 +2394,7 @@ impl Plugin for UsdSimCosimPlugin {
             Update,
             lunco_usd_sim_domain::sync_generated_network_documents
                 .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
+                .run_if(lunco_usd_sim_domain::generated_source_document_sync_due)
                 .in_set(CosimUpdateSet::Projection),
         );
         app.add_systems(
@@ -2402,10 +2445,10 @@ impl Plugin for UsdSimCosimPlugin {
                 // Run the lifecycle trigger after wrapper/source publication,
                 // because those systems may add the runtime surface in this
                 // same chain after the domain projection pass has completed.
-                // This keeps the index correct without restoring a steady-state
-                // scan for every unprojected prim.
+                // Component observers and scalar USD revisions admit this work;
+                // the steady state does not query the entity population.
                 mark_usd_telemetry_projection_index_dirty
-                    .run_if(telemetry_projection_index_changed),
+                    .run_if(telemetry_projection_index_invalidation_due),
                 // The wrapper publishes the generic SimComponent surface and the
                 // authored output contract in this same lifecycle transaction.
                 // Project authored telemetry only after that publication, so the
@@ -2755,21 +2798,29 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<UsdTelemetryProjectionIndex>()
             .init_resource::<TelemetryProjectionRuns>()
+            .add_observer(invalidate_usd_telemetry_projection_index_on_insert::<UsdPrimPath>)
+            .add_observer(invalidate_usd_telemetry_projection_index_on_remove::<UsdPrimPath>)
             .add_systems(
                 Update,
                 (
-                    mark_usd_telemetry_projection_index_dirty,
+                    mark_usd_telemetry_projection_index_dirty
+                        .run_if(telemetry_projection_index_invalidation_due),
                     count_telemetry_projection_runs.run_if(telemetry_projection_needed),
                 )
                     .chain(),
             );
 
+        // Initial dirty state performs one bootstrap projection for entities
+        // that existed before the plugin and its observers were installed.
         app.update();
-        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 0);
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+        app.world_mut()
+            .resource_mut::<UsdTelemetryProjectionIndex>()
+            .dirty = false;
 
         let entity = app.world_mut().spawn(UsdPrimPath::default()).id();
         app.update();
-        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 2);
 
         // The production projector clears the dirty bit after rebuilding its
         // indexes. This focused gate test models that ownership edge without
@@ -2782,7 +2833,11 @@ mod tests {
             .entity_mut(entity)
             .insert(UsdTelemetryProjected);
         app.update();
-        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 1);
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 2);
+
+        app.world_mut().entity_mut(entity).remove::<UsdPrimPath>();
+        app.update();
+        assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 3);
     }
 
     #[test]

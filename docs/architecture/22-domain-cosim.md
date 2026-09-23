@@ -360,6 +360,24 @@ a producer through `inputs:<name>`, and a produced setpoint leaves through
 only stores values for an imperative producer; it is not a second signal graph
 and must not shadow a generated Modelica output.
 
+### USD telemetry projection lifecycle
+
+USD telemetry declarations and generated Modelica output aliases are projected
+into the shared telemetry sampler once per relevant scene state. The projector
+owns one initial discovery pass for prims that predate plugin installation;
+after that, insert/remove observers for `UsdPrimPath`, generated-source and
+signal-layout metadata, `SimComponent`, and ready port surfaces coalesce into a
+single invalidation bit. Stage revisions and USD asset changes are checked as
+scalar invalidation sources. The dirty projector rebuilds its path/output maps
+and channels only after one of those sources changes; stable updates do not
+scan the entity population to rediscover lifecycle changes.
+
+The telemetry index and its emitted channels are derived scene state. Scene
+teardown clears the index, and the next initial projection is the only bootstrap
+for entities that existed before observer installation. Writers that replace
+projection metadata must publish it through ECS insertion/removal lifecycle;
+continuous Modelica output values stay outside this invalidation contract.
+
 ## Backend registry (dynamic, plugin-driven)
 
 Backends self-register at app boot. Each domain crate ships a Bevy
@@ -553,10 +571,20 @@ projection work set until every referenced member source has a terminal class
 verdict; asset arrival waves therefore do not repeatedly traverse a partially
 resolved network. Invalid source verdicts are terminal and still reach
 synthesis so the authored error is reported. A full discovery is reserved for
-initial admission or a live stage/wiring revision that can change composed
-network membership. Scene teardown clears the reverse index and pending
+initial admission, a USD-stage asset change, or a changed generation on a live
+canonical stage. Endpoint lifecycle continues to requeue only its entity; the
+broader `UsdWiringDirty` latch is not a domain-membership signal. Scene teardown
+clears the reverse index, stage-generation cursor, and pending
 discovery/projection candidate sets; resolved member-class facts remain
 reusable because they belong to shared Modelica source assets, not a scene.
+
+Generated Modelica source documents use the same lifecycle discipline: source
+insert/replace queues only that wrapper for document synchronization, while a
+one-time bootstrap covers pre-existing wrappers. Source insertion/removal and
+document-link owners set the generated-metadata dirty flag consumed by the
+publisher; plugin startup marks the first publication dirty as well. Solver
+output does not invalidate generated source metadata, and no per-update
+`Changed<GeneratedModelicaSource>` population scan is required.
 
 The result: a multi-component, multi-language cosim is a USD edit, not
 a Rust edit. `assets/scenes/tests/cosim_chain.usda` and its Rhai scenario
