@@ -18,7 +18,16 @@ fn verdict(pass, reason) {
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
+    this.event_order = [];
+    this.event_order_checked = false;
     subscribe("MISSION_COMPLETE");
+    subscribe("ORDER_A");
+    subscribe("ORDER_Z");
+
+    // Deliberately enqueue the reverse of the canonical same-tick order.
+    // Event delivery must use event identity, not observer arrival order.
+    emit("ORDER_Z", 0);
+    emit("ORDER_A", 0);
 }
 
 fn mission(me, ctx) {
@@ -29,9 +38,23 @@ fn mission(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
+    if evt.name == "ORDER_A" || evt.name == "ORDER_Z" {
+        this.event_order.push(evt.name);
+        if this.event_order.len() == 2 {
+            this.event_order_checked = true;
+            if this.event_order[0] != "ORDER_A" || this.event_order[1] != "ORDER_Z" {
+                this.done = true;
+                verdict(false, "same-tick scenario events were delivered in arrival order");
+            }
+        }
+    }
     if evt.name == "MISSION_COMPLETE" && !this.done {
         this.done = true;
-        verdict(true, "");
+        if this.event_order_checked {
+            verdict(true, "");
+        } else {
+            verdict(false, "the same-tick event ordering assertion did not complete");
+        }
     }
 }
 

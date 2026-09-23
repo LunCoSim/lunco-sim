@@ -279,7 +279,8 @@ pub fn fire_connected_events(
             (component, gid.map(|id| id.get()).unwrap_or(0)),
         );
     }
-    for (entity, _, mut binding) in &mut bindings {
+    let mut pending_events = Vec::new();
+    for (entity, prim_path, mut binding) in &mut bindings {
         let Some((value, source)) = by_path
             .get(&(instance_of(entity), binding.source_path.as_str()))
             .and_then(|(component, source)| {
@@ -307,7 +308,7 @@ pub fn fire_connected_events(
             value,
             delta_s,
         ) {
-            commands.trigger(lunco_telemetry_core::TelemetryEvent {
+            let event = lunco_telemetry_core::TelemetryEvent {
                 name: binding.name.clone(),
                 source,
                 severity: binding.severity,
@@ -315,7 +316,21 @@ pub fn fire_connected_events(
                 timestamp: world_time.epoch_jd,
                 sim_secs: 0.0,
                 sim_tick: 0,
-            });
+            };
+            // Events are observed by more than the script inbox. Sort before
+            // triggering so status/API observers also see one scene-defined
+            // order, independent of ECS query layout.
+            let order = (
+                instance_of(entity),
+                prim_path.path.clone(),
+                source,
+                event.name.clone(),
+            );
+            pending_events.push((order, event));
         }
+    }
+    pending_events.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    for (_, event) in pending_events {
+        commands.trigger(event);
     }
 }

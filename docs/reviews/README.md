@@ -38,3 +38,6 @@ lesson, which belongs in the architecture doc for that subsystem.
   Griffin's migration from flat SysML attributes and Rhai reconstruction to
   standard typed topology, bindings, constraints, and provenance over the
   neutral SysML IR.
+- [`open-deterministic-simulation-contract.md`](open-deterministic-simulation-contract.md) —
+  cross-domain tick determinism, async preparation/admission, physics profile,
+  and replay evidence still required after stable execution ordering landed.

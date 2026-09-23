@@ -829,11 +829,15 @@ No direct cross-VM calls are offered — by design.
 behavior) vs *centralized* (one scenario `cmd()`s many entities).
 
 **Determinism — pass-delayed actor model:**
-1. Iterate `ScriptedModel`s in deterministic order (by `GlobalEntityId`).
+1. Iterate `ScriptedModel`s by `GlobalEntityId`, with the world-local Bevy
+   entity key as a tie-breaker for local hosts that have no API identity. A
+   cross-peer or replayable actor must have a stable `GlobalEntityId`.
 2. Events emitted in one driver pass are delivered at the start of the next
-   driver pass (queued, drained deterministically) → "A emits, B reacts" is
-   order-independent. Paused simulations continue discrete delivery from
-   `Update`, while fixed-step behavior remains stopped.
+   driver pass. Each eligible batch is ordered by simulation tick, source,
+   event name, severity, time, then a recursive typed payload order; arrival
+   order from ECS observers does not select which `on_event` runs first.
+   Paused simulations continue discrete delivery from `Update`, while
+   fixed-step behavior remains stopped.
 
 ## 8. Design decisions
 

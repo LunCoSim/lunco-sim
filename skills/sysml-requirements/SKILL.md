@@ -355,6 +355,12 @@ let facts = query("AnalyzeSysml", #{
 if facts.ok != true { throw(facts.errors); }
 ```
 
+`AnalyzeSysml` currently discovers the Twin source set and obtains its analysis
+synchronously. Use it for preflight, authoring, or explicit verification work;
+do not call it from a high-rate `on_tick` hook. Revision-stamped async analysis
+and admission are part of the cross-domain runtime contract in
+[`62-deterministic-runtime-and-async-boundaries.md`](../../docs/architecture/62-deterministic-runtime-and-async-boundaries.md).
+
 `ValidateSysml` and `AnalyzeSysml` accept either a filesystem path or a
 `twin://` URI. `AnalyzeSysml` supports `elements`, `references`,
 `relationships`, `constraints`, `attributes`, `requirements`, `verifications`,
