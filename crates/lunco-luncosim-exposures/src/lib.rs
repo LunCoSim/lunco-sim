@@ -24,7 +24,7 @@ use lunco_core_runtime::{ApplicationCadence, EngineHealthSnapshot, PhysicsHealth
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_exposure_core::{
-    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
+    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
 };
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
@@ -33,7 +33,7 @@ use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use lunco_usd_bevy_stage::read::UsdReadObject;
-use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
@@ -1483,25 +1483,26 @@ mod exposure_tests {
 /// HUD dirty, but the publisher below coalesces those changes to the presentation
 /// cadence. Static scenes, paused simulations, and idle frames do not rebuild the
 /// view model.
+type DrivenExposureChanges = Or<(
+    (
+        With<LocalEmbodiment>,
+        Or<(
+            Changed<ControlLink>,
+            Changed<Embodiment>,
+            Changed<LocalEmbodiment>,
+        )>,
+    ),
+    Changed<LinearVelocity>,
+    Or<(Changed<CellCoord>, Changed<Transform>, Changed<ChildOf>)>,
+    Changed<LinkState>,
+    Changed<WheelRaycast>,
+    Changed<ComputedCenterOfMass>,
+    Changed<SimComponent>,
+    Changed<InputPorts>,
+)>;
+
 pub(crate) fn mark_exposure_dirty(
-    q_avatar: Query<
-        (),
-        (
-            With<LocalEmbodiment>,
-            Or<(
-                Changed<ControlLink>,
-                Changed<Embodiment>,
-                Changed<LocalEmbodiment>,
-            )>,
-        ),
-    >,
-    q_velocity: Query<(), Changed<LinearVelocity>>,
-    q_spatial: Query<(), Or<(Changed<CellCoord>, Changed<Transform>, Changed<ChildOf>)>>,
-    q_links: Query<(), Changed<LinkState>>,
-    q_wheels: Query<(), Or<(Changed<WheelRaycast>, Changed<Transform>)>>,
-    q_com: Query<(), Changed<ComputedCenterOfMass>>,
-    q_sim: Query<(), Changed<SimComponent>>,
-    q_inputs: Query<(), Changed<InputPorts>>,
+    driven_changes: Query<(), DrivenExposureChanges>,
     q_bodies: Query<(), Or<(Added<CelestialBody>, Changed<CelestialBody>)>>,
     selected: Res<SelectedEntities>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
@@ -1511,14 +1512,7 @@ pub(crate) fn mark_exposure_dirty(
     overlays: RuntimeOverlayInputs,
     mut refresh: ResMut<ExposureRefresh>,
 ) {
-    let driven_changed = !q_avatar.is_empty()
-        || !q_velocity.is_empty()
-        || !q_spatial.is_empty()
-        || !q_links.is_empty()
-        || !q_wheels.is_empty()
-        || !q_com.is_empty()
-        || !q_sim.is_empty()
-        || !q_inputs.is_empty();
+    let driven_changed = !driven_changes.is_empty();
 
     let schema_changed = selected.is_changed();
     let celestial_changed = !q_bodies.is_empty()

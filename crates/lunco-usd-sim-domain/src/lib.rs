@@ -544,10 +544,7 @@ pub fn project_domain_islands(
         Query<&ChildOf>,
         Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     ),
-    triggers: (
-        Query<(), Added<UsdPrimPath>>,
-        Query<(), Added<lunco_core::GlobalEntityId>>,
-    ),
+    triggers: Query<(), Or<(Added<UsdPrimPath>, Added<lunco_core::GlobalEntityId>)>>,
     prims: Query<(
         Entity,
         &UsdPrimPath,
@@ -574,17 +571,10 @@ pub fn project_domain_islands(
     channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
-    let started = web_time::Instant::now();
-    let (added, identity_added) = triggers;
-    let mut projected = 0usize;
+    let has_added_projection_entity = !triggers.is_empty();
     let full_reprojection = {
         let mut projection_dirty = projection.p0();
-        if !projection_is_due_from_flags(
-            !added.is_empty(),
-            !identity_added.is_empty(),
-            dirty.0,
-            projection_dirty.0,
-        ) {
+        if !projection_is_due_from_flags(has_added_projection_entity, dirty.0, projection_dirty.0) {
             return;
         }
         // Identity assignment is per prim during a runtime-instance spawn. Do
@@ -596,6 +586,8 @@ pub fn project_domain_islands(
         projection_dirty.0 = false;
         full_reprojection
     };
+    let started = web_time::Instant::now();
+    let mut projected = 0usize;
     let mut pending = projection.p1();
     if full_reprojection {
         // A pending task captured the previous class/source and wiring view.
@@ -610,7 +602,7 @@ pub fn project_domain_islands(
         if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
             continue;
         }
-        if !full_reprojection && !added.contains(entity) && !identity_added.contains(entity) {
+        if !full_reprojection && !triggers.contains(entity) {
             continue;
         }
         // Scope every authored path to the same USD instance as the generated
@@ -1389,31 +1381,11 @@ impl MemberClasses {
 pub struct ProjectionDirty(pub bool);
 
 fn projection_is_due_from_flags(
-    has_added_prim: bool,
-    has_added_identity: bool,
+    has_added_projection_entity: bool,
     wiring_dirty: bool,
     projection_dirty: bool,
 ) -> bool {
-    has_added_prim || has_added_identity || wiring_dirty || projection_dirty
-}
-
-/// Run condition for the generated-domain projector.
-///
-/// Projection is an authoring/lifecycle transaction, not a frame service. Keep
-/// the trigger set beside [`project_domain_islands`] so the scheduler can avoid
-/// constructing its stage, identity, and synthesizer queries on stable frames.
-pub fn domain_projection_due(
-    added: Query<(), Added<UsdPrimPath>>,
-    identity_added: Query<(), Added<lunco_core::GlobalEntityId>>,
-    dirty: Res<lunco_usd_bevy_stage::UsdWiringDirty>,
-    projection_dirty: Res<ProjectionDirty>,
-) -> bool {
-    projection_is_due_from_flags(
-        !added.is_empty(),
-        !identity_added.is_empty(),
-        dirty.0,
-        projection_dirty.0,
-    )
+    has_added_projection_entity || wiring_dirty || projection_dirty
 }
 
 /// Resolve every member source's DECLARED class before synthesis.
@@ -1602,11 +1574,10 @@ mod tests {
 
     #[test]
     fn domain_projection_schedule_requires_an_authoring_trigger() {
-        assert!(!projection_is_due_from_flags(false, false, false, false));
-        assert!(projection_is_due_from_flags(true, false, false, false));
-        assert!(projection_is_due_from_flags(false, true, false, false));
-        assert!(projection_is_due_from_flags(false, false, true, false));
-        assert!(projection_is_due_from_flags(false, false, false, true));
+        assert!(!projection_is_due_from_flags(false, false, false));
+        assert!(projection_is_due_from_flags(true, false, false));
+        assert!(projection_is_due_from_flags(false, true, false));
+        assert!(projection_is_due_from_flags(false, false, true));
     }
 
     fn component(path: &str, target: Option<&str>) -> DomainComponent {
