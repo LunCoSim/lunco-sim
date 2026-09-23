@@ -163,6 +163,12 @@ pub enum RuntimePhase {
     Unclassified,
     /// Synchronous preparation or initialization.
     Preparation,
+    /// Resolution of a scenario's declared simulation dependencies before its
+    /// lifecycle hooks may access live model state.
+    DependencyPlan,
+    /// Run a compiled scenario's mutable top-level body after its dependency
+    /// plan has been committed.
+    Initialization,
     /// Scenario or owner startup.
     Start,
     /// Delivery of one producer-stamped event.

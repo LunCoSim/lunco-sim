@@ -15,7 +15,7 @@
 
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// How the host drives the simulation application.
 ///
@@ -91,7 +91,8 @@ impl FramePacingDemand {
 
 #[cfg(test)]
 mod tests {
-    use super::FramePacingDemand;
+    use super::{FramePacingDemand, SimulationBarrierParticipants};
+    use bevy::prelude::Entity;
 
     #[test]
     fn cadence_requests_are_independent_and_saturating() {
@@ -109,6 +110,48 @@ mod tests {
         demand.release_realtime();
         assert!(!demand.realtime_wanted());
         assert!(demand.continuous_wanted());
+    }
+
+    #[test]
+    fn scenario_dependencies_join_the_barrier_and_replace_per_owner() {
+        let scenario_a = Entity::from_raw_u32(1).unwrap();
+        let scenario_b = Entity::from_raw_u32(2).unwrap();
+        let modelica_a = Entity::from_raw_u32(11).unwrap();
+        let modelica_b = Entity::from_raw_u32(12).unwrap();
+        let independent = Entity::from_raw_u32(13).unwrap();
+        let mut participants = SimulationBarrierParticipants::default();
+        participants.replace([modelica_a]);
+
+        participants.replace_scenario_dependencies(scenario_a, [modelica_a]);
+        participants.replace_scenario_dependencies(scenario_b, [modelica_b]);
+        assert!(participants.requires_barrier(modelica_a));
+        assert!(participants.requires_barrier(modelica_b));
+        assert!(!participants.requires_barrier(independent));
+
+        participants.remove_scenario_dependencies(scenario_a);
+        assert!(participants.requires_barrier(modelica_a));
+        assert!(participants.requires_barrier(modelica_b));
+
+        participants.remove_scenario_dependencies(scenario_b);
+        assert!(!participants.requires_barrier(modelica_b));
+    }
+
+    #[test]
+    fn unresolved_scenario_plan_holds_all_participants_until_commit() {
+        let scenario = Entity::from_raw_u32(1).unwrap();
+        let modelica_a = Entity::from_raw_u32(11).unwrap();
+        let modelica_b = Entity::from_raw_u32(12).unwrap();
+        let mut participants = SimulationBarrierParticipants::default();
+        participants.replace(std::iter::empty());
+        participants.replace_modelica_entities([modelica_a, modelica_b]);
+
+        participants.mark_scenario_plan_pending(scenario);
+        assert!(participants.requires_barrier(modelica_a));
+        assert!(participants.requires_barrier(modelica_b));
+
+        participants.replace_scenario_dependencies(scenario, [modelica_b]);
+        assert!(!participants.requires_barrier(modelica_a));
+        assert!(participants.requires_barrier(modelica_b));
     }
 }
 
@@ -159,6 +202,20 @@ pub struct SimulationBarrier {
 pub struct SimulationBarrierParticipants {
     pub topology_ready: bool,
     pub entities: EntityHashSet,
+    /// Live Modelica participants, projected by the co-simulation owner. This
+    /// lets generic scripting validate that a declared dependency is covered
+    /// by the shared fixed-step barrier without depending on Modelica types.
+    pub modelica_entities: EntityHashSet,
+    /// Modelica participants named by each active scenario's typed
+    /// `simulation_dependencies` hook. Kept by scenario owner so recompiles,
+    /// detach, and despawn can replace exactly their own contribution.
+    scenario_entities: HashMap<Entity, EntityHashSet>,
+    /// Flattened membership for the per-step barrier read path.
+    scenario_participants: EntityHashSet,
+    /// A scenario whose source revision is compiling or resolving its
+    /// dependency plan. Until the plan is committed, all Modelica participants
+    /// are synchronized conservatively.
+    pending_scenario_plans: EntityHashSet,
 }
 
 /// Owner namespace for an operation that must finish before authoritative
@@ -254,12 +311,69 @@ impl SimulationProgress {
 impl SimulationBarrierParticipants {
     #[inline]
     pub fn requires_barrier(&self, entity: Entity) -> bool {
-        !self.topology_ready || self.entities.contains(&entity)
+        !self.topology_ready
+            || (!self.pending_scenario_plans.is_empty() && self.modelica_entities.contains(&entity))
+            || self.entities.contains(&entity)
+            || self.scenario_participants.contains(&entity)
     }
 
     pub fn replace(&mut self, entities: impl IntoIterator<Item = Entity>) {
         self.entities.clear();
         self.entities.extend(entities);
         self.topology_ready = true;
+    }
+
+    /// Replace the current Modelica population while preserving the independent
+    /// causal graph and scenario dependency contributions.
+    pub fn replace_modelica_entities(&mut self, entities: impl IntoIterator<Item = Entity>) {
+        self.modelica_entities.clear();
+        self.modelica_entities.extend(entities);
+    }
+
+    /// Hold all Modelica participants while one scenario source revision is
+    /// being compiled and its dependency hook is resolved.
+    pub fn mark_scenario_plan_pending(&mut self, scenario: Entity) {
+        self.pending_scenario_plans.insert(scenario);
+    }
+
+    /// Commit one scenario's resolved dependency set and release its admission
+    /// hold. Entity membership is used only by Modelica barrier queries.
+    pub fn replace_scenario_dependencies(
+        &mut self,
+        scenario: Entity,
+        entities: impl IntoIterator<Item = Entity>,
+    ) {
+        self.scenario_entities
+            .insert(scenario, entities.into_iter().collect());
+        self.pending_scenario_plans.remove(&scenario);
+        self.rebuild_scenario_participants();
+    }
+
+    /// Remove one scenario's dependency contribution and pending-plan hold.
+    pub fn remove_scenario_dependencies(&mut self, scenario: Entity) {
+        self.scenario_entities.remove(&scenario);
+        self.pending_scenario_plans.remove(&scenario);
+        self.rebuild_scenario_participants();
+    }
+
+    /// Clear all scenario contributions after a shared scripting contract is
+    /// replaced. The next lifecycle pass will rebuild them from current source.
+    pub fn clear_scenario_dependencies(&mut self) {
+        self.scenario_entities.clear();
+        self.scenario_participants.clear();
+        self.pending_scenario_plans.clear();
+    }
+
+    /// Whether this entity is a live Modelica participant in the latest
+    /// co-simulation projection.
+    pub fn is_modelica_participant(&self, entity: Entity) -> bool {
+        self.modelica_entities.contains(&entity)
+    }
+
+    fn rebuild_scenario_participants(&mut self) {
+        self.scenario_participants.clear();
+        for entities in self.scenario_entities.values() {
+            self.scenario_participants.extend(entities.iter().copied());
+        }
     }
 }

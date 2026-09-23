@@ -222,8 +222,11 @@ fn system_acceptance(evidence) {
     if evidence.readiness.faulted == true {
         errors.push("readiness reports a runtime fault");
     }
-    if evidence.diagnostics.errors != () && evidence.diagnostics.errors > 0 {
-        errors.push("runtime diagnostics contain errors");
+    for finding in evidence.diagnostics.findings {
+        if finding.severity == "error" {
+            errors.push("runtime diagnostics contain errors");
+            break;
+        }
     }
     if evidence.bindings.runtime_fault != () {
         errors.push("binding status reports a runtime fault");

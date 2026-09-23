@@ -11,6 +11,26 @@
 const EXPECT_RANGE = 0.8;    // box centre 0.5 + altimeter mount translation 0.3
 const EXPECT_FORCE = 162.0;  // 100 kg * 1.62 m/s^2 lunar gravity
 
+fn simulation_dependencies(me, ctx) {
+    let imu = find("/SandboxScene/Box/IMU");
+    let altimeter = find("/SandboxScene/Box/Altimeter/Model");
+    let port_read_rejected = false;
+    let mutation_rejected = false;
+    try {
+        get(imu, "specific_force_x");
+    } catch (error) {
+        port_read_rejected = true;
+    }
+    try {
+        set_physics_substeps(1);
+    } catch (error) {
+        mutation_rejected = true;
+    }
+    this.dependency_port_read_rejected = port_read_rejected;
+    this.dependency_mutation_rejected = mutation_rejected;
+    [imu, altimeter]
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 4.0;
@@ -52,12 +72,16 @@ fn on_tick(me, ctx) {
             physics: physics,
             contact_acceptance: contact_acceptance,
             system_acceptance: system_acceptance,
-        });
+        }, this.dependency_port_read_rejected, this.dependency_mutation_rejected);
     }
 }
 
-fn verdict(s) {
+fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected) {
     let f = [];
+    f.push(t_true(dependency_port_read_rejected == true,
+        "dependency planning allowed a live Modelica port read"));
+    f.push(t_true(dependency_mutation_rejected == true,
+        "dependency planning allowed a direct world mutation"));
     f.push(t_present(s.fx, "IMU specific_force_x output"));
     f.push(t_present(s.fy, "IMU specific_force_y output"));
     f.push(t_present(s.fz, "IMU specific_force_z output"));

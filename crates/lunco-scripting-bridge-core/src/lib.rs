@@ -536,12 +536,50 @@ pub fn enforce_script_mutation(
     capability: &str,
     target_gid: Option<u64>,
 ) -> Result<(), String> {
+    ensure_script_mutation_allowed()?;
+    validate_simulation_target_dependency(world, target_gid, capability)?;
     if script_is_client_local() {
         return Err(format!(
             "'{capability}' denied: direct script mutations are not available from a client-scoped script; use an allowed typed command"
         ));
     }
     enforce_script_authority(world, capability, target_gid)
+}
+
+fn validate_simulation_target_dependency(
+    world: &World,
+    target_gid: Option<u64>,
+    operation: &str,
+) -> Result<(), String> {
+    if execution_context().clock != lunco_core::RuntimeClock::Simulation {
+        return Ok(());
+    }
+    let Some(gid) = target_gid else {
+        return Ok(());
+    };
+    let Some(entity) = resolve_entity(world, gid) else {
+        return Ok(());
+    };
+    let Some(participants) =
+        world.get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+    else {
+        return Ok(());
+    };
+    if participants.is_modelica_participant(entity) && !participants.requires_barrier(entity) {
+        return Err(format!(
+            "{operation} targets unbarriered Modelica entity {gid}; include the entity in simulation_dependencies(me, ctx)"
+        ));
+    }
+    Ok(())
+}
+
+/// Keep dependency planning free of commands and direct world mutations.
+pub fn ensure_script_mutation_allowed() -> Result<(), String> {
+    if execution_context().phase == lunco_core::RuntimePhase::DependencyPlan {
+        Err("simulation_dependencies is read-only; it may resolve dependency identities but cannot mutate the world".into())
+    } else {
+        Ok(())
+    }
 }
 
 /// The §3.4 authority gate, shared by [`cmd`] and the structural verbs so every
@@ -686,6 +724,9 @@ fn insert_map_value(value: &mut ApiValue, key: &str, replacement: ApiValue) -> b
 pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
     let id = OpId::new().0;
     with_world(|world| {
+        if let Err(error) = ensure_script_mutation_allowed() {
+            return command_result_error(id, "rejected", error);
+        }
         if world
             .get_resource::<IgnoredScenarioCommands>()
             .is_some_and(|commands| commands.accepts(name))
@@ -726,6 +767,9 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
             Ok(target_gid) => target_gid,
             Err(error) => return command_result_error(id, "rejected", error),
         };
+        if let Err(error) = validate_simulation_target_dependency(world, target_gid, name) {
+            return command_result_error(id, "rejected", error);
+        }
 
         // Client-scoped scenario on a predicting client: allow ONLY the
         // client-local surface (HUD / notifications / camera). Anything else is
@@ -919,6 +963,71 @@ pub fn read_port(gid: u64, name: &str) -> Option<f64> {
         registry.read_port(world, entity, name)
     })
     .flatten()
+}
+
+/// Direction of a scenario's direct port access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptPortAccess {
+    /// Read a published output or the current input value.
+    Read,
+    /// Write an input port.
+    Write,
+}
+
+/// Reject live-port access during dependency planning and simulation-clock
+/// access to an unbarriered Modelica port.
+///
+/// A scenario may declare its cross-entity Modelica participants through
+/// `simulation_dependencies(me, ctx)`. Existing USD causal edges also satisfy
+/// this contract. Port access from application/presentation cycles is a view of
+/// committed state and does not join the authoritative simulation barrier.
+pub fn validate_simulation_port_access(
+    gid: u64,
+    name: &str,
+    access: ScriptPortAccess,
+) -> Result<(), String> {
+    if execution_context().clock != lunco_core::RuntimeClock::Simulation {
+        return Ok(());
+    }
+    let phase = execution_context().phase;
+    with_world(|world| {
+        let Some(entity) = resolve_entity(world, gid) else {
+            return Ok(());
+        };
+        let Some(registry) = world.get_resource::<lunco_port_core::ports::PortRegistry>() else {
+            return Ok(());
+        };
+        let is_port = match access {
+            ScriptPortAccess::Read => {
+                registry.has_output_port(world, entity, name)
+                    || registry.has_input_port(world, entity, name)
+            }
+            ScriptPortAccess::Write => registry.has_input_port(world, entity, name),
+        };
+        if !is_port {
+            return Ok(());
+        }
+        if phase == lunco_core::RuntimePhase::DependencyPlan {
+            return Err(format!(
+                "simulation_dependencies may resolve entity ids but cannot read or write live port {name:?} on entity {gid}"
+            ));
+        }
+        let Some(participants) =
+            world.get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+        else {
+            return Ok(());
+        };
+        if !participants.is_modelica_participant(entity) {
+            return Ok(());
+        }
+        if participants.requires_barrier(entity) {
+            return Ok(());
+        }
+        Err(format!(
+            "Modelica port {name:?} on entity {gid} is outside the shared simulation barrier; include the entity in simulation_dependencies(me, ctx)"
+        ))
+    })
+    .unwrap_or(Ok(()))
 }
 
 /// Write a co-sim port input on entity `gid` — the same path `SetPorts` and wires
@@ -1470,6 +1579,9 @@ pub fn hash_str(s: &str) -> u64 {
 /// was in scope.
 pub fn emit(name: &str, value: TelemetryValue) -> bool {
     with_world(|world| {
+        if ensure_script_mutation_allowed().is_err() {
+            return;
+        }
         world.trigger(TelemetryEvent {
             name: name.to_string(),
             // The emitter = the script whose hook is running (set by rng_begin).

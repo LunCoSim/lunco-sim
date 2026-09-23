@@ -31,9 +31,21 @@ For cross-domain execution, read
 Keep parsing, source resolution, and immutable preparation off the UI/fixed
 schedule when inputs can be captured by revision. Admit results only at an
 owner boundary in stable identity order. Keep live-world hooks and physics
-inside their deterministic schedule. Do not claim whole-simulation replay
-determinism while dynamic script reads bypass the causal graph or production
-physics uses an unpinned parallel profile.
+inside their deterministic schedule. A Rhai scenario that depends on Modelica
+ports or events declares the participating entity ids in
+`simulation_dependencies(me, ctx)`, where `ctx` is the validated scenario
+parameter map. The optional hook returns nonnegative integer global entity ids;
+the owner resolves it once per source/parameter revision before the first
+lifecycle hook and adds it to the shared causal barrier. Omitting it declares
+no Rhai dependencies. The plan runs before mutable top-level initialization,
+so derive it from `me`, scenario parameters, and read-only world queries.
+Top-level initialization runs in its own `Initialization` phase after the plan
+commits. Dependency planning may resolve identities but cannot access live
+ports, issue commands, mutate the world, or emit events. Invalid or unresolved
+ids fail that source revision with a diagnostic. Unbarriered port access and
+Modelica event delivery fail visibly. Do not claim
+whole-simulation replay determinism while other reviewed gaps remain, including
+production physics using an unpinned parallel profile.
 
 Lifecycle work that changes authoritative scene state participates in
 `lunco-core-runtime::SimulationProgress`. Acquire with a typed owner/operation

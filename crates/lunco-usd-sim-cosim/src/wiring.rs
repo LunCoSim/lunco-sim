@@ -1180,6 +1180,7 @@ pub(super) fn derive_causal_barrier_participants(world: &mut World) {
         && bindings_terminal;
 
     let mut projection = world.resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>();
+    projection.replace_modelica_entities(modelica_entities.iter().copied());
     if topology_ready {
         projection.replace(participants);
     } else {
