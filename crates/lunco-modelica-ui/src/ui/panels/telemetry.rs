@@ -537,37 +537,79 @@ impl Panel for TelemetryPanel {
                         format!("{} ({})", group_name, names.len())
                     };
                     let default_open = !filter_lower.is_empty() || picked_in_group > 0;
-                    egui::CollapsingHeader::new(header)
-                        .id_salt(format!("telem_var_group_{group_name}"))
-                        .default_open(default_open)
-                        .show(ui, |ui| {
+                    let group_id = ui.make_persistent_id(("telem_var_group", group_name));
+                    let _ = lunco_workbench_widgets::tree::branch(
+                        ui,
+                        group_id,
+                        default_open,
+                        None,
+                        |ui| {
+                            let width = ui.available_width();
+                            lunco_workbench_widgets::tree::label(
+                                ui,
+                                header,
+                                width,
+                                egui::Sense::click(),
+                            )
+                            .clicked()
+                        },
+                        |ui| {
                             for name in names {
                                 let mut is_picked =
                                     plotted.contains(name) || picked_exp.contains(name);
-                                ui.horizontal(|ui| {
+                                let _ = lunco_workbench_widgets::tree::leaf(ui, |ui| {
                                     if ui.checkbox(&mut is_picked, "").changed() {
                                         toggles.push((name.clone(), is_picked));
                                     }
                                     let short = name
                                         .strip_prefix(&format!("{group_name}."))
                                         .unwrap_or(name);
-                                    let label = egui::Label::new(short).sense(egui::Sense::hover());
-                                    let resp = ui.add(label);
-                                    if let Some(desc) =
-                                        var_desc.get(name).filter(|d| !d.trim().is_empty())
-                                    {
+                                    let desc = var_desc
+                                        .get(name)
+                                        .filter(|d| !d.trim().is_empty())
+                                        .map(|d| d.trim());
+                                    let available_width = ui.available_width();
+                                    let desc_gap = if desc.is_some() {
+                                        ui.spacing().item_spacing.x
+                                    } else {
+                                        0.0
+                                    };
+                                    let desc_width = desc.map_or(0.0, |desc| {
+                                        ui.painter()
+                                            .layout_no_wrap(
+                                                desc.to_owned(),
+                                                egui::FontId::proportional(11.0),
+                                                muted,
+                                            )
+                                            .size()
+                                            .x
+                                            .min((available_width - desc_gap).max(0.0))
+                                    });
+                                    let label_width =
+                                        (available_width - desc_width - desc_gap).max(0.0);
+                                    let resp = lunco_workbench_widgets::tree::label(
+                                        ui,
+                                        short,
+                                        label_width,
+                                        egui::Sense::hover(),
+                                    );
+                                    if let Some(desc) = desc {
                                         resp.on_hover_text(desc);
-                                        ui.label(
-                                            egui::RichText::new(desc.trim())
+                                        lunco_workbench_widgets::tree::label(
+                                            ui,
+                                            egui::RichText::new(desc)
                                                 .italics()
                                                 .color(muted)
                                                 .size(11.0),
+                                            desc_width,
+                                            egui::Sense::hover(),
                                         )
                                         .on_hover_text(desc);
                                     }
                                 });
                             }
-                        });
+                        },
+                    );
                 }
                 if groups.is_empty() {
                     ui.weak("No variables match the filter.");
@@ -731,8 +773,7 @@ fn render_selected_components_inspector(
                 return;
             }
             let class = editing_class.expect("class is Some by the branch above");
-            // Per-node block. CollapsingHeader so multi-select stays
-            // navigable on tall lists.
+            // Per-node branches keep multi-select navigable on tall lists.
             for row in &rows {
                 let leaf_type = row
                     .qualified_type
@@ -740,62 +781,78 @@ fn render_selected_components_inspector(
                     .next()
                     .unwrap_or(&row.qualified_type)
                     .to_string();
-                egui::CollapsingHeader::new(
-                    egui::RichText::new(format!("{} — {}", row.instance, leaf_type)).strong(),
-                )
-                .id_salt(("selected_component", row.instance.as_str()))
-                .default_open(true)
-                .show(ui, |ui| {
-                    if row.parameters.is_empty() {
-                        ui.label(
-                            egui::RichText::new("(no parameters)")
-                                .size(11.0)
-                                .color(muted)
-                                .italics(),
-                        );
-                        return;
-                    }
-                    // Two-pass: collect edits during the row loop, apply
-                    // after the immutable borrow on `rows` is done. Using
-                    // a String value keeps the editor general — Modelica
-                    // params can be Real / Integer / Boolean / enumeration,
-                    // and `SetParameter` accepts a textual replacement.
-                    let mut edits: Vec<(String, String)> = Vec::new();
-                    for (name, value) in &row.parameters {
-                        let mut buf = value.clone();
-                        let desc = row.param_desc.get(name);
-                        ui.horizontal(|ui| {
-                            let name_resp = ui.add(
-                                egui::Label::new(format!("{name:14}")).sense(egui::Sense::hover()),
+                let row_id = ui.make_persistent_id(("selected_component", row.instance.as_str()));
+                let _ = lunco_workbench_widgets::tree::branch(
+                    ui,
+                    row_id,
+                    true,
+                    None,
+                    |ui| {
+                        let width = ui.available_width();
+                        lunco_workbench_widgets::tree::label(
+                            ui,
+                            egui::RichText::new(format!("{} — {}", row.instance, leaf_type))
+                                .strong(),
+                            width,
+                            egui::Sense::click(),
+                        )
+                        .clicked()
+                    },
+                    |ui| {
+                        if row.parameters.is_empty() {
+                            ui.label(
+                                egui::RichText::new("(no parameters)")
+                                    .size(11.0)
+                                    .color(muted)
+                                    .italics(),
                             );
-                            if let Some(d) = desc {
-                                name_resp.on_hover_text(d);
-                            }
-                            let resp = ui.add(
-                                lunco_workbench_widgets::text_editor::singleline(&mut buf)
-                                    .desired_width(120.0),
-                            );
-                            if let Some(d) = desc {
-                                resp.clone().on_hover_text(d);
-                            }
-                            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                if buf != *value {
+                            return;
+                        }
+                        // Two-pass: collect edits during the row loop, apply
+                        // after the immutable borrow on `rows` is done. Using
+                        // a String value keeps the editor general — Modelica
+                        // params can be Real / Integer / Boolean / enumeration,
+                        // and `SetParameter` accepts a textual replacement.
+                        let mut edits: Vec<(String, String)> = Vec::new();
+                        for (name, value) in &row.parameters {
+                            let mut buf = value.clone();
+                            let desc = row.param_desc.get(name);
+                            ui.horizontal(|ui| {
+                                let name_resp = ui.add(
+                                    egui::Label::new(format!("{name:14}"))
+                                        .sense(egui::Sense::hover()),
+                                );
+                                if let Some(d) = desc {
+                                    name_resp.on_hover_text(d);
+                                }
+                                let resp = ui.add(
+                                    lunco_workbench_widgets::text_editor::singleline(&mut buf)
+                                        .desired_width(120.0),
+                                );
+                                if let Some(d) = desc {
+                                    resp.clone().on_hover_text(d);
+                                }
+                                if resp.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                {
+                                    if buf != *value {
+                                        edits.push((name.clone(), buf.clone()));
+                                    }
+                                } else if resp.lost_focus() && buf != *value {
                                     edits.push((name.clone(), buf.clone()));
                                 }
-                            } else if resp.lost_focus() && buf != *value {
-                                edits.push((name.clone(), buf.clone()));
-                            }
-                        });
-                    }
-                    for (param, value) in edits {
-                        collected_ops.push(ModelicaOp::SetParameter {
-                            class: class.clone(),
-                            component: row.instance.clone(),
-                            param,
-                            value,
-                        });
-                    }
-                });
+                            });
+                        }
+                        for (param, value) in edits {
+                            collected_ops.push(ModelicaOp::SetParameter {
+                                class: class.clone(),
+                                component: row.instance.clone(),
+                                param,
+                                value,
+                            });
+                        }
+                    },
+                );
             }
         });
     if !collected_ops.is_empty() {

@@ -824,6 +824,7 @@ impl Panel for EntityList {
 fn render_node(
     ui: &mut egui::Ui,
     entity: Entity,
+    depth: usize,
     view: &EntityTreeView,
     selected: &lunco_scene_selection::SelectedEntities,
     to_select: &mut Option<(Entity, bool)>,
@@ -853,10 +854,12 @@ fn render_node(
             let id = ui.make_persistent_id(("entity_tree", entity));
             let mut header_select = None;
             let mut header_focus = None;
+            // Match Telemetry's initial presentation: reveal two levels while
+            // leaving deeper sub-part detail collapsed.
             lunco_workbench_widgets::tree::branch(
                 ui,
                 id,
-                false,
+                lunco_workbench_widgets::tree::default_open_at_depth(depth),
                 None,
                 |ui| {
                     select_label(
@@ -871,7 +874,7 @@ fn render_node(
                 },
                 |ui| {
                     for &child in children {
-                        render_node(ui, child, view, selected, to_select, to_focus);
+                        render_node(ui, child, depth + 1, view, selected, to_select, to_focus);
                     }
                 },
             );
@@ -903,12 +906,14 @@ fn select_label(
         ),
         None => "Click to select · Shift+Click to multiselect · double-click to focus".to_owned(),
     };
-    let resp = ui
-        .add_sized(
-            [ui.available_width(), ui.spacing().interact_size.y],
-            egui::Button::selectable(selected.entities.contains(&entity), label),
-        )
-        .on_hover_text(hint);
+    let width = ui.available_width();
+    let resp = lunco_workbench_widgets::tree::selectable_label(
+        ui,
+        selected.entities.contains(&entity),
+        label,
+        width,
+    )
+    .on_hover_text(hint);
 
     let shift_held = ui.input(|i| i.modifiers.shift);
 
@@ -960,7 +965,7 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 for &root in &view.roots {
-                    render_node(ui, root, view, &selected, &mut to_select, &mut to_focus);
+                    render_node(ui, root, 0, view, &selected, &mut to_select, &mut to_focus);
                 }
             });
         if selected

@@ -404,10 +404,16 @@ impl BrowserSection for FilesSection {
                 true,
                 None,
                 |ui| {
-                    ui.add(egui::Label::new(header_label).sense(egui::Sense::click()))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(hover_path.as_str())
-                        .clicked()
+                    let width = ui.available_width();
+                    lunco_workbench_widgets::tree::label(
+                        ui,
+                        header_label,
+                        width,
+                        egui::Sense::click(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(hover_path.as_str())
+                    .clicked()
                 },
                 |ui| {
                     let files: Vec<lunco_twin::FileEntry> = twin
@@ -573,9 +579,14 @@ fn render_dir(
                 false,
                 None,
                 |ui| {
-                    let resp = ui
-                        .add(egui::Label::new(dir_name).sense(egui::Sense::click()))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    let width = ui.available_width();
+                    let resp = lunco_workbench_widgets::tree::label(
+                        ui,
+                        dir_name,
+                        width,
+                        egui::Sense::click(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
                     // Header double-click → enter rename mode for this directory.
                     if resp.double_clicked() {
                         header_begin_rename = Some(RenameInProgress {
@@ -640,9 +651,11 @@ fn render_dir(
                 Some(m) => format!("{m}{leaf}"),
                 None => leaf.clone(),
             };
-            let r =
-                lunco_workbench_widgets::tree::leaf(ui, |ui| ui.selectable_label(false, &label))
-                    .inner;
+            let r = lunco_workbench_widgets::tree::leaf(ui, |ui| {
+                let width = ui.available_width();
+                lunco_workbench_widgets::tree::selectable_label(ui, false, label.as_str(), width)
+            })
+            .inner;
             if r.double_clicked() {
                 state
                     .clicks

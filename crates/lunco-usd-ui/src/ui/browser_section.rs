@@ -190,13 +190,23 @@ impl BrowserSection for UsdSceneSection {
                         "{}{}{}{}",
                         row.name, writable_badge, dirty_badge, review_badge
                     );
+                    let width = ui.available_width();
                     if viewport_doc.is_none() {
-                        ui.label(label);
+                        lunco_workbench_widgets::tree::label(
+                            ui,
+                            label,
+                            width,
+                            egui::Sense::hover(),
+                        );
                         return false;
                     }
-                    let resp = ui
-                        .add(egui::Label::new(label).sense(egui::Sense::click()))
-                        .on_hover_text("Click to show in 3D viewport");
+                    let resp = lunco_workbench_widgets::tree::label(
+                        ui,
+                        label,
+                        width,
+                        egui::Sense::click(),
+                    )
+                    .on_hover_text("Click to show in 3D viewport");
                     header_clicked = resp.clicked();
                     resp.clicked()
                 },
@@ -445,7 +455,8 @@ fn render_prim(
 
     if children.is_empty() {
         let resp = lunco_workbench_widgets::tree::leaf(ui, |ui| {
-            ui.add(egui::Label::new(&label).sense(egui::Sense::click()))
+            let width = ui.available_width();
+            lunco_workbench_widgets::tree::label(ui, label.as_str(), width, egui::Sense::click())
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
         })
         .inner;
@@ -464,9 +475,14 @@ fn render_prim(
             false,
             None,
             |ui| {
-                let resp = ui
-                    .add(egui::Label::new(&label).sense(egui::Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                let width = ui.available_width();
+                let resp = lunco_workbench_widgets::tree::label(
+                    ui,
+                    label.as_str(),
+                    width,
+                    egui::Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
                 row_clicked = resp.clicked();
                 row_clicked
             },

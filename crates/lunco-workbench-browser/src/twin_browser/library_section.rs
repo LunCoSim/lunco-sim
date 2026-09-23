@@ -160,7 +160,8 @@ fn render_dir(
             false,
             query.is_active().then_some(true),
             |ui| {
-                ui.add(egui::Label::new(directory).sense(egui::Sense::click()))
+                let width = ui.available_width();
+                lunco_workbench_widgets::tree::label(ui, directory, width, egui::Sense::click())
                     .clicked()
             },
             |ui| {
@@ -193,12 +194,14 @@ fn render_dir(
                     .split_whitespace()
                     .next()
                     .is_some_and(|first| first == asset.stem));
+        let label = if is_loaded {
+            format!("● {}", asset.file_name)
+        } else {
+            asset.file_name.clone()
+        };
         let response = lunco_workbench_widgets::tree::leaf(ui, |ui| {
-            if is_loaded {
-                ui.selectable_label(false, format!("● {}", asset.file_name))
-            } else {
-                ui.selectable_label(false, &asset.file_name)
-            }
+            let width = ui.available_width();
+            lunco_workbench_widgets::tree::selectable_label(ui, false, label, width)
         })
         .inner;
         if response.clicked() {
