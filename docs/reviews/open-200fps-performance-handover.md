@@ -139,6 +139,19 @@ but the first fix must address the CPU propagation/scheduling fan-out and its
 interaction with render and async terrain work. Do not lower quality merely to
 hide the CPU problem.
 
+### 2026-09-22 optimization sandbox diagnostic
+
+The separate debug sandbox capture
+`scripts/perf/captures/optimization-sandbox-debug-current-20260922.tracy`
+attributed approximately **0.595 ms/frame** to
+`project_authored_runtime_components`. That function constructed an exclusive
+`Added<UsdSceneProjected>` query in every Update, so its non-archetypal Added
+filter walked the projected owner set while idle. The resolver now queues each
+non-preview owner from the existing `UsdSceneProjected` add event and runs only
+while that typed pending set is non-empty. The capture is a different workload
+from Apollo and is diagnostic only; no post-change Tracy or clean-FPS result has
+been recorded yet.
+
 ## Root-cause hypothesis, ranked by evidence
 
 ### 1. BigSpace propagation creates a full worker/channel scope every frame

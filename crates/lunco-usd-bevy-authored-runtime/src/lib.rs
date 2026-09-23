@@ -16,10 +16,12 @@ pub struct UsdAuthoredRuntimePlugin;
 impl Plugin for UsdAuthoredRuntimePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<lunco_camera_core::CameraFollow>();
+        app.add_observer(control_runtime::queue_authored_runtime_projection);
         app.add_systems(
             Update,
             control_runtime::project_authored_runtime_components
-                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),
+                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
+                .run_if(control_runtime::has_pending_authored_runtime_projection),
         );
     }
 }

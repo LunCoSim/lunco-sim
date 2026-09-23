@@ -8,7 +8,7 @@
 //! visual-only consumers do not compile or install control behavior.
 
 use crate::program_runtime::refresh_program_owner_with_network_members;
-use bevy::prelude::{Added, Entity, Without, World};
+use bevy::prelude::{Add, Commands, Component, Entity, On, Query, With, Without, World};
 use lunco_camera_core::{CameraFollow, parse_camera_follow};
 use lunco_control_core::ControlBinding;
 use lunco_port_core::InputPorts;
@@ -22,6 +22,33 @@ struct AuthoredControlSurface {
     binding: ControlBinding,
     inputs: InputPorts,
     follow: Option<CameraFollow>,
+}
+
+/// Marks projected USD owners whose authored runtime surfaces have not yet
+/// been resolved. The marker is published by the `UsdSceneProjected` observer
+/// so steady-state frames do not poll the complete projected scene.
+#[derive(Component)]
+pub(crate) struct AuthoredRuntimeProjectionPending;
+
+/// Queue one newly projected authored owner for the shared runtime resolver.
+pub(crate) fn queue_authored_runtime_projection(
+    trigger: On<Add, UsdSceneProjected>,
+    owners: Query<(), (With<UsdPrimPath>, Without<UsdPreviewOnly>)>,
+    mut commands: Commands,
+) {
+    let entity = trigger.entity;
+    if owners.get(entity).is_ok() {
+        commands
+            .entity(entity)
+            .try_insert(AuthoredRuntimeProjectionPending);
+    }
+}
+
+/// Keep the exclusive resolver dormant when no projected owner is pending.
+pub(crate) fn has_pending_authored_runtime_projection(
+    pending: Query<(), With<AuthoredRuntimeProjectionPending>>,
+) -> bool {
+    !pending.is_empty()
 }
 
 /// Read the composed `Controls` scope belonging to `owner`.
@@ -55,13 +82,15 @@ fn read_control_surface<R: UsdRead>(reader: &R, owner: &SdfPath) -> Option<Autho
     })
 }
 
-/// Project authored runtime behavior after the visual projector has admitted a
-/// USD prim. The `Added<UsdSceneProjected>` fence makes this event-driven: idle
-/// scenes do not rescan their hierarchy, and visual-only preview entities are
-/// never given executable behavior.
+/// Project authored runtime behavior for owners queued by the
+/// `UsdSceneProjected` add observer. The pending marker limits this exclusive
+/// pass to new projections, and visual-only preview entities are excluded.
 pub(crate) fn project_authored_runtime_components(world: &mut World) {
     let owners: Vec<_> = world
-        .query_filtered::<(Entity, &UsdPrimPath), (Added<UsdSceneProjected>, Without<UsdPreviewOnly>)>()
+        .query_filtered::<(Entity, &UsdPrimPath), (
+            With<AuthoredRuntimeProjectionPending>,
+            Without<UsdPreviewOnly>,
+        )>()
         .iter(world)
         .map(|(entity, path)| (entity, path.stage_handle.id(), path.path.clone()))
         .collect();
@@ -81,6 +110,9 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
     }
 
     for (entity, stage_id, owner_path) in owners {
+        if let Ok(mut owner) = world.get_entity_mut(entity) {
+            owner.remove::<AuthoredRuntimeProjectionPending>();
+        }
         let surface = {
             let Some(stages) = world.get_non_send::<CanonicalStages>() else {
                 continue;
@@ -116,5 +148,38 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
             continue;
         };
         refresh_program_owner_with_network_members(world, stage_id, entity, network_members);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::prelude::App;
+
+    #[test]
+    fn projected_owner_additions_queue_only_live_owners() {
+        let mut app = App::new();
+        app.add_observer(queue_authored_runtime_projection);
+
+        let live_owner = app
+            .world_mut()
+            .spawn((UsdPrimPath::default(), UsdSceneProjected))
+            .id();
+        let preview_owner = app
+            .world_mut()
+            .spawn((UsdPrimPath::default(), UsdPreviewOnly, UsdSceneProjected))
+            .id();
+        app.world_mut().flush();
+
+        assert!(
+            app.world()
+                .get::<AuthoredRuntimeProjectionPending>(live_owner)
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get::<AuthoredRuntimeProjectionPending>(preview_owner)
+                .is_none()
+        );
     }
 }
