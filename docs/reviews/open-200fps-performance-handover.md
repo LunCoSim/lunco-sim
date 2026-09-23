@@ -1028,6 +1028,36 @@ Any implementation proposed from this handover must satisfy all of these:
 4. Inspect the Apollo terrain at close range to ensure the brightness/moon
    stability fixes remain intact while optimizing the frame loop.
 
+### 2026-09-23 — Apollo wheel ray-query scheduling (diagnostic)
+
+The Apollo scene has 24 mobility-owned `WheelRaycast` casters. Tracy attributed
+18.91 s across 1,335 calls to Avian's serial `spatial_query::raycast` in the
+pre-change `summer-space-school-domain-zones-20260923-4191-after-index.tracy`
+capture (14.16 ms mean, 28.38 ms maximum). The application now leaves Avian's
+caster-pose propagation and `SpatialQuery` implementation intact, but performs
+the mobility wheel queries through that same `SpatialQuery` in Bevy's parallel
+query iterator. Generic `RayCaster` components remain on Avian's native path;
+wheel filters, solid mode, range, hit limit, disabled behavior, and `RayHits`
+output are preserved. `WheelRaycastResultsSet` is the reader-ordering boundary
+for fixed-post-update consumers.
+
+An initial 20.28 s trace using fixed batches of four attributed 3.36 ms mean
+(10.02 ms maximum) to `cast_wheel_ray_hits_parallel`. Replacing that arbitrary
+batch size with Bevy's default automatic batching produced a second 20.36 s
+trace: 1.86 ms mean and 4.33 ms maximum over 497 calls. The second trace
+contained 622 rendered frames and 3.63 million zones. These are diagnostic
+profile timings from separate runs, not a controlled settled A/B.
+
+Neither run passed the runtime readiness gate: the latest API sample was still
+`ready=false`, `world_hold=true`, with `USD physics admission` pending after
+14.6 s. Its transient Tracy FPS is not acceptance evidence. The focused
+`lunco-mobility` regression test verifies the parallel wheel result against a
+known collider, confirms the untouched generic caster still uses Avian's
+native path, and checks that a disabled wheel remains disabled with empty hits.
+The Tracy-enabled production binary and that focused test pass. Both captures
+are local ignored diagnostics; a settled, non-Tracy production window remains
+required before claiming an FPS gain.
+
 ## Acceptance criteria
 
 The issue is closed only when all of the following are recorded from a real

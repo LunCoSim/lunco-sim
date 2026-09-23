@@ -33,7 +33,9 @@ impl Plugin for PhysicsTelemetryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PhysicsTelemetryState>().add_systems(
             FixedPostUpdate,
-            retain_physics_telemetry.after(PhysicsSystems::StepSimulation),
+            retain_physics_telemetry
+                .after(PhysicsSystems::StepSimulation)
+                .after(lunco_mobility::WheelRaycastResultsSet),
         );
     }
 }

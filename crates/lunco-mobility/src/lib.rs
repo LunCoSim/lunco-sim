@@ -64,6 +64,11 @@ use wheel_kinematics::wheel_hub_pose;
 /// Manages the integration of mobility physics and control observers.
 pub struct LunCoMobilityPlugin;
 
+/// Post-step boundary after the mobility-owned wheel ray hits are current.
+/// Readers of `RayHits` in `FixedPostUpdate` can order after this set.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WheelRaycastResultsSet;
+
 fn mark_wheel_ports_causal(
     trigger: On<Add, WheelRaycast>,
     query: Query<&WheelRaycast>,
@@ -216,6 +221,24 @@ impl Plugin for LunCoMobilityPlugin {
             sync_raycast_wheel_physics_pose
                 .after(PhysicsSystems::StepSimulation)
                 .before(SpatialQuerySystems),
+        );
+        // Avian keeps ownership of caster pose propagation and the shared
+        // SpatialQuery implementation. Suspend only mobility wheel casts in
+        // its serial component loop, then recast through the same query API
+        // after Avian has refreshed global ray poses. Other casters stay native.
+        app.add_systems(
+            FixedPostUpdate,
+            suppress_native_wheel_raycasts
+                .after(sync_raycast_wheel_physics_pose)
+                .before(SpatialQuerySystems)
+                .run_if(any_with_component::<WheelRaycast>),
+        )
+        .add_systems(
+            FixedPostUpdate,
+            cast_wheel_ray_hits_parallel
+                .after(SpatialQuerySystems)
+                .in_set(WheelRaycastResultsSet)
+                .run_if(any_with_component::<WheelRaycast>),
         );
 
         // ── Rollback replay ──────────────────────────────────────────────────
@@ -1195,7 +1218,13 @@ fn suspension_force_mag(compression: f64, spring_k: f64, relative_vel: f64, damp
 }
 
 /// equation, simulating the behavior of a physical tire and strut.
+#[derive(Component, Debug, Default)]
+struct WheelRaycastParallelState {
+    enabled_before_native_cast: bool,
+}
+
 #[derive(Component, Debug, Clone, Reflect)]
+#[require(WheelRaycastParallelState)]
 #[reflect(Component, Default)]
 pub struct WheelRaycast {
     /// Port mapping for suspension telemetry.
@@ -1609,6 +1638,87 @@ fn sync_raycast_wheel_physics_pose(
                 wrot.0 = DQuat::IDENTITY;
             }
         }
+    }
+}
+
+/// Keep Avian's generic ray-pose update but prevent its serial ray loop from
+/// doing the wheel casts. The configured enabled state is restored immediately
+/// after the shared query pass.
+fn suppress_native_wheel_raycasts(
+    mut wheels: Query<(&mut RayCaster, &mut WheelRaycastParallelState), With<WheelRaycast>>,
+) {
+    for (mut caster, mut state) in &mut wheels {
+        state.enabled_before_native_cast = caster.enabled;
+        caster.enabled = false;
+    }
+}
+
+/// Cast wheel rays through Avian's canonical collider trees using Bevy's
+/// automatic parallel-query batching. This mirrors Avian's `RayCaster`
+/// semantics (filter, solid mode, distance, hit limit, and disabled clearing)
+/// while retaining the `RayHits` component consumed by mobility and telemetry.
+fn cast_wheel_ray_hits_parallel(
+    mut wheels: Query<
+        (
+            Entity,
+            &mut RayCaster,
+            &mut RayHits,
+            &WheelRaycastParallelState,
+        ),
+        With<WheelRaycast>,
+    >,
+    spatial_query: SpatialQuery,
+    diagnostics: Option<ResMut<SpatialQueryDiagnostics>>,
+) {
+    let started = bevy::platform::time::Instant::now();
+    wheels
+        .par_iter_mut()
+        .for_each(|(entity, mut caster, mut hits, state)| {
+            if state.enabled_before_native_cast {
+                if caster.ignore_self {
+                    caster.query_filter.excluded_entities.insert(entity);
+                } else {
+                    caster.query_filter.excluded_entities.remove(&entity);
+                }
+
+                hits.clear();
+                let origin = caster.global_origin();
+                let direction = caster.global_direction();
+                if caster.max_hits == 1 {
+                    if let Some(hit) = spatial_query.cast_ray(
+                        origin,
+                        direction,
+                        caster.max_distance,
+                        caster.solid,
+                        &caster.query_filter,
+                    ) {
+                        hits.push(hit);
+                    }
+                } else {
+                    spatial_query.ray_hits_callback(
+                        origin,
+                        direction,
+                        caster.max_distance,
+                        caster.solid,
+                        &caster.query_filter,
+                        |hit| {
+                            if hits.len() < caster.max_hits as usize {
+                                hits.push(hit);
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                    );
+                }
+            } else if !hits.is_empty() {
+                hits.clear();
+            }
+
+            caster.enabled = state.enabled_before_native_cast;
+        });
+    if let Some(mut diagnostics) = diagnostics {
+        diagnostics.update_ray_casters = started.elapsed();
     }
 }
 
@@ -2086,6 +2196,104 @@ fn solve_differential_gear(
         {
             body.angular_velocity += *inv * (*gradient * impulse);
         }
+    }
+}
+
+#[cfg(test)]
+mod wheel_raycast_parallel_tests {
+    use super::*;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    #[test]
+    fn parallel_wheel_cast_matches_native_query_and_preserves_disabled_state() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            TransformPlugin,
+            PhysicsPlugins::default(),
+            bevy::asset::AssetPlugin::default(),
+            bevy::mesh::MeshPlugin,
+        ))
+        .add_systems(
+            FixedPostUpdate,
+            suppress_native_wheel_raycasts
+                .before(SpatialQuerySystems)
+                .run_if(any_with_component::<WheelRaycast>),
+        )
+        .add_systems(
+            FixedPostUpdate,
+            cast_wheel_ray_hits_parallel
+                .after(SpatialQuerySystems)
+                .run_if(any_with_component::<WheelRaycast>),
+        );
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            34,
+        )));
+        app.finish();
+
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Position(DVec3::new(0.0, -0.5, 0.0)),
+            Rotation(DQuat::IDENTITY),
+            Transform::from_xyz(0.0, -0.5, 0.0),
+            Collider::cuboid(10.0, 1.0, 10.0),
+        ));
+        let wheel = app
+            .world_mut()
+            .spawn((
+                WheelRaycast::default(),
+                Position(DVec3::new(0.0, 2.0, 0.0)),
+                Rotation(DQuat::IDENTITY),
+                Transform::from_xyz(0.0, 2.0, 0.0),
+                RayCaster::new(DVec3::ZERO, Dir3::NEG_Y)
+                    .with_max_distance(5.0)
+                    .with_max_hits(1),
+            ))
+            .id();
+        let generic = app
+            .world_mut()
+            .spawn((
+                Position(DVec3::new(2.0, 2.0, 0.0)),
+                Rotation(DQuat::IDENTITY),
+                Transform::from_xyz(2.0, 2.0, 0.0),
+                RayCaster::new(DVec3::ZERO, Dir3::NEG_Y)
+                    .with_max_distance(5.0)
+                    .with_max_hits(1),
+            ))
+            .id();
+
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let wheel_hits = app.world().get::<RayHits>(wheel).unwrap();
+        assert_eq!(wheel_hits.len(), 1);
+        assert!(
+            (wheel_hits[0].distance - 2.0).abs() < 1.0e-9,
+            "wheel hit distance was {}; position={:?}; origin={:?}; direction={:?}",
+            wheel_hits[0].distance,
+            app.world().get::<Position>(wheel).unwrap().0,
+            app.world().get::<RayCaster>(wheel).unwrap().global_origin(),
+            app.world()
+                .get::<RayCaster>(wheel)
+                .unwrap()
+                .global_direction()
+        );
+        assert_eq!(app.world().get::<RayHits>(generic).unwrap().len(), 1);
+        assert_eq!(wheel_hits, app.world().get::<RayHits>(generic).unwrap());
+        assert!(app.world().get::<RayCaster>(wheel).unwrap().enabled);
+
+        app.world_mut()
+            .get_mut::<RayCaster>(wheel)
+            .unwrap()
+            .disable();
+        for _ in 0..2 {
+            app.update();
+        }
+        assert!(app.world().get::<RayHits>(wheel).unwrap().is_empty());
+        assert!(!app.world().get::<RayCaster>(wheel).unwrap().enabled);
+        assert_eq!(app.world().get::<RayHits>(generic).unwrap().len(), 1);
     }
 }
 
