@@ -66,7 +66,10 @@ endpoint paths, generated aliases, and port surfaces in its temporary indexes
 instead of cloning them; it builds those indexes in one endpoint sweep instead
 of three separate population scans. Earth-direction demand now reconciles its
 existing and desired marker sets, avoiding remove/re-add events on unrelated
-rewires. These are source-level work reductions only.
+rewires. Endpoint removals now dirty USD wiring only when the removed
+capability belonged to an authored USD prim; unrelated `SimComponent` teardown
+no longer triggers a whole wiring pass. These are source-level work reductions
+only.
 Their CPU benefit is not yet measured, and the next clean settled Apollo run
 remains necessary before claiming an FPS improvement.
 

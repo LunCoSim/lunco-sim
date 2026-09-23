@@ -64,6 +64,8 @@ Build compatible per-entity indexes in one query traversal rather than running
 separate full-population passes for each index.
 For derived marker sets, compare current membership with the desired set and
 apply only additions/removals; unrelated rebuilds must not emit lifecycle churn.
+Removal invalidation should be qualified by the entity's authored USD identity
+and relevant endpoint capability, not by a generic component removal alone.
 
 Keep invalidation domains distinct: a wiring/topology latch may be raised by
 endpoint arrivals and must not automatically trigger whole-stage domain

@@ -2552,6 +2552,21 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 0);
 
+        let non_usd_model = app
+            .world_mut()
+            .spawn(lunco_cosim_core::SimComponent::default())
+            .id();
+        app.update();
+        app.world_mut()
+            .entity_mut(non_usd_model)
+            .remove::<lunco_cosim_core::SimComponent>();
+        app.update();
+        assert_eq!(
+            app.world().resource::<WiringRuns>().0,
+            0,
+            "a non-USD SimComponent lifecycle cannot dirty the USD wiring projection"
+        );
+
         let visual_only = app.world_mut().spawn(UsdPrimPath::default()).id();
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 0);

@@ -180,10 +180,13 @@ pub(super) fn wiring_due(
 }
 
 pub(super) fn mark_wiring_dirty_on_remove<T: Component>(
-    _trigger: On<Remove, T>,
+    trigger: On<Remove, T>,
+    usd_endpoints: Query<(), (With<UsdPrimPath>, With<T>)>,
     mut dirty: ResMut<UsdWiringDirty>,
 ) {
-    dirty.0 = true;
+    if usd_endpoints.contains(trigger.entity) {
+        dirty.0 = true;
+    }
 }
 
 fn mark_wiring_dirty_for_endpoint_add<T: Component>(
