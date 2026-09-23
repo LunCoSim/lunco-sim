@@ -267,6 +267,14 @@ impl ModelicaEngine {
         self.completed.push((doc_id, gen));
     }
 
+    /// Cancel a parse that was not admitted to a worker queue.
+    ///
+    /// Unlike `finish_parse`, rejection has no result to publish and must not
+    /// create a completion that can never be installed by the adapter.
+    pub fn cancel_parse(&mut self, doc_id: DocumentId) {
+        self.pending.remove(&doc_id);
+    }
+
     /// Whether `doc_id` has async parse work that the adapter has not fully
     /// consumed yet. A worker completion remains busy until it is drained;
     /// otherwise a bounded completion batch could requeue the same document

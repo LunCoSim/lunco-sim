@@ -8454,6 +8454,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",

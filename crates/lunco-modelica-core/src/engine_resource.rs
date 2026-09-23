@@ -203,8 +203,8 @@ impl ModelicaEngineHandle {
         true
     }
 
-    /// Spawn an off-thread strict parse for `doc_id`'s `source` and
-    /// install the resulting AST into the session when it completes.
+    /// Admit an off-thread parse for `doc_id`'s immutable `source` snapshot
+    /// and install its result into the engine when it completes.
     ///
     /// Returns immediately; the lock is held only briefly to mark
     /// `doc_id` as pending. The parse itself runs OUTSIDE the lock,
@@ -215,10 +215,9 @@ impl ModelicaEngineHandle {
     /// drain completions can compare it against the doc's current
     /// generation and discard stale results.
     ///
-    /// `spawn_fn` is the platform task spawner: native callers pass
-    /// `|task| AsyncComputeTaskPool::get().spawn(async move { task() }).detach()`.
-    /// WASM can pass an equivalent. Decoupling the spawner keeps this
-    /// crate Bevy-agnostic at the engine layer.
+    /// `admit_fn` must enqueue the task and return `true`, or reject it without
+    /// running it and return `false`. Native callers use the shared async
+    /// admission resource; wasm parsing uses the dedicated Web Worker path.
     ///
     /// No-op if a parse for `doc_id` is already in flight (dedupe).
     /// Mark a doc as pending-parse and return its URI without spawning
@@ -277,14 +276,20 @@ impl ModelicaEngineHandle {
         self.wake_sync();
     }
 
+    /// Reserve a document parse and offer its immutable job to an admission owner.
+    ///
+    /// Returns `true` only when the job is accepted. A duplicate parse or a
+    /// rejected queue submission releases the pending slot so the owner can
+    /// retry after its normal capacity-change signal.
     pub fn upsert_document_async<F>(
         &self,
         doc_id: DocumentId,
         gen: u64,
         source: std::sync::Arc<str>,
-        spawn_fn: F,
-    ) where
-        F: FnOnce(Box<dyn FnOnce() + Send + 'static>),
+        admit_fn: F,
+    ) -> bool
+    where
+        F: FnOnce(Box<dyn FnOnce() + Send + 'static>) -> bool,
     {
         // Reserve the in-flight slot. Bail if another parse is running
         // for this doc — the next sync tick will pick up newer source
@@ -292,13 +297,13 @@ impl ModelicaEngineHandle {
         let uri = {
             let mut engine = self.lock();
             if !engine.mark_pending(doc_id) {
-                return;
+                return false;
             }
             engine.uri_for(doc_id)
         };
         let me = self.clone();
         let bytes = source.len();
-        spawn_fn(Box::new(move || {
+        let accepted = admit_fn(Box::new(move || {
             let t_total = web_time::Instant::now();
             // Lenient parser: always produces a usable tree.
             let t_parse = web_time::Instant::now();
@@ -333,6 +338,12 @@ impl ModelicaEngineHandle {
                 has_errors,
             );
         }));
+        if !accepted {
+            let mut engine = self.lock();
+            engine.cancel_parse(doc_id);
+            self.wake_sync();
+        }
+        accepted
     }
 }
 
@@ -348,6 +359,9 @@ pub struct EngineSyncCursor {
     /// completions advance the registry revision through `mark_changed`, so
     /// stale completions also reopen the scan.
     registry_revision: u64,
+    /// Last shared async-admission revision observed by the document driver.
+    /// Queue capacity changes wake deferred document work without polling.
+    admission_capacity_revision: u64,
     /// Earliest time at which a debounced edit may be reparsed. Keeping this
     /// deadline in the cursor lets the run condition sleep between the edit
     /// and the debounce boundary instead of polling the whole registry.
@@ -366,11 +380,11 @@ pub struct ParsePacing {
     /// True while the user is actively typing — defers the edit-reparse
     /// debounce so a keystroke burst settles before paying for a parse.
     pub input_active: bool,
-    /// The focused document, prioritised first in the async parse queue so
-    /// the tab the user is staring at reparses ahead of background tabs.
+    /// The focused document, submitted at interactive priority across the
+    /// shared async queue.
     pub active_document: Option<DocumentId>,
-    /// Maximum number of documents parsed concurrently. This keeps the
-    /// shared compute pool available to scene loading and rendering.
+    /// Maximum number of this engine's parses queued or running. The shared
+    /// admission separately limits work across all opted-in owners.
     pub max_in_flight: usize,
     /// Maximum wall-clock time spent collecting parse completions in one
     /// update. At least one completion is collected when work is available;
@@ -395,8 +409,9 @@ impl Default for ParsePacing {
 /// since last tick are dropped from the engine session via
 /// [`ModelicaEngine::close_document`].
 ///
-/// Runs only when the Modelica document registry or an async engine completion
-/// changes. Reads the registry, mutates the engine, and advances the cursor.
+/// Runs when the Modelica document registry, an async engine completion, or
+/// shared worker capacity changes. Reads the registry, mutates the engine, and
+/// advances the cursor.
 /// Edit-debounce window before re-parsing a document that was
 /// previously parsed. New docs (never parsed) spawn immediately —
 /// only the edit path is debounced. Mirrors the prior `ast_refresh`
@@ -428,8 +443,10 @@ fn engine_sync_is_due(
     registry: &lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
     cursor: &EngineSyncCursor,
     pacing: &ParsePacing,
+    admission: &lunco_core_runtime::AsyncWorkAdmission,
 ) -> bool {
     registry.revision() != cursor.registry_revision
+        || admission.capacity_revision() != cursor.admission_capacity_revision
         || handle.sync_wakeup_pending()
         || (!pacing.input_active
             && cursor
@@ -442,8 +459,9 @@ fn engine_sync_due(
     registry: Res<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
     cursor: Res<EngineSyncCursor>,
     pacing: Res<ParsePacing>,
+    admission: Res<lunco_core_runtime::AsyncWorkAdmission>,
 ) -> bool {
-    engine_sync_is_due(&handle, &registry, &cursor, &pacing)
+    engine_sync_is_due(&handle, &registry, &cursor, &pacing, &admission)
 }
 
 pub fn drive_engine_sync(
@@ -454,6 +472,10 @@ pub fn drive_engine_sync(
     >,
     mut cursor: ResMut<EngineSyncCursor>,
     pacing: Res<ParsePacing>,
+    #[cfg(not(target_arch = "wasm32"))] mut admission: ResMut<
+        lunco_core_runtime::AsyncWorkAdmission,
+    >,
+    #[cfg(target_arch = "wasm32")] admission: Res<lunco_core_runtime::AsyncWorkAdmission>,
     #[cfg(target_arch = "wasm32")] worker_bridge: Res<ModelicaWorkerBridge>,
 ) {
     let completed_roots = {
@@ -593,7 +615,10 @@ pub fn drive_engine_sync(
     // the per-document cursor is authoritative and a full host walk is pure
     // overhead on the render path.
     let registry_revision = registry.revision();
-    if registry_revision == cursor.registry_revision {
+    let admission_capacity_revision = admission.capacity_revision();
+    if registry_revision == cursor.registry_revision
+        && admission_capacity_revision == cursor.admission_capacity_revision
+    {
         handle.clear_sync_wakeup_if_idle();
         return;
     }
@@ -644,6 +669,7 @@ pub fn drive_engine_sync(
 
     if to_upsert.is_empty() && removed.is_empty() {
         cursor.registry_revision = registry_revision;
+        cursor.admission_capacity_revision = admission_capacity_revision;
         handle.clear_sync_wakeup_if_idle();
         return;
     }
@@ -691,14 +717,16 @@ pub fn drive_engine_sync(
     //   - Edit reparse (syntax.generation > 0 but stale) waits for
     //     `AST_DEBOUNCE_MS` of post-edit silence + no input activity.
     //     Lets a typing burst settle before paying for a parse.
-    #[cfg(not(target_arch = "wasm32"))]
-    let pool = bevy::tasks::AsyncComputeTaskPool::get();
     let now = web_time::Instant::now();
-    // Active-doc-first ordering. The active tab's reparse takes
-    // priority over background tabs because the user is staring at
-    // its canvas; any other tab can wait.
+    // Stable submission order keeps the per-owner parse cap from depending on
+    // document-registry iteration. Shared dispatch applies the same active-tab
+    // priority across all producers.
     if let Some(active) = active_doc {
-        async_only.sort_by_key(|(doc_id, _, _)| if *doc_id == active { 0 } else { 1 });
+        async_only.sort_by_key(|(doc_id, gen, _)| {
+            (if *doc_id == active { 0 } else { 1 }, doc_id.raw(), *gen)
+        });
+    } else {
+        async_only.sort_by_key(|(doc_id, gen, _)| (doc_id.raw(), *gen));
     }
     let max_in_flight = pacing.max_in_flight.max(1);
     let mut next_debounce_at: Option<web_time::Instant> = None;
@@ -714,13 +742,12 @@ pub fn drive_engine_sync(
             eng.pending_count()
         };
         if pending_count >= max_in_flight {
-            // Bail out of the *whole loop* — subsequent iterations
-            // would only enqueue more work onto an already-saturated
-            // wasm pool. The next tick will retry the docs we
-            // skipped in the same priority order (active first).
+            // Bail out of the whole loop so this owner does not fill the shared
+            // queue with work beyond its local cap. Capacity changes wake the
+            // document scan again.
             bevy::log::debug!(
-                "[EngineSync] parse queue full ({pending_count} in flight) — \
-                 deferring doc={} gen={} until next tick",
+                "[EngineSync] Modelica parse limit reached ({pending_count} pending) — \
+                 deferring doc={} gen={} until admission capacity changes",
                 doc_id.raw(),
                 gen,
             );
@@ -865,12 +892,44 @@ pub fn drive_engine_sync(
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            handle.upsert_document_async(doc_id, gen, source, |task| {
-                pool.spawn(async move { task() }).detach();
-            });
+            let priority = if Some(doc_id) == active_doc {
+                lunco_core_runtime::AsyncWorkPriority::Interactive
+            } else {
+                lunco_core_runtime::AsyncWorkPriority::Background
+            };
+            // This Modelica handle is application-scoped today; DocumentId is
+            // process-unique, and one source revision has one parse operation.
+            let key = lunco_core_runtime::AsyncWorkKey::new(
+                lunco_core_runtime::AsyncWorkKind::ModelicaSourceParse,
+                0,
+                u128::from(doc_id.raw()),
+                gen,
+                0,
+            );
+            let mut rejection = None;
+            let accepted =
+                handle.upsert_document_async(doc_id, gen, source, |task| {
+                    match admission.submit(priority, key, task) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            rejection = Some(error);
+                            false
+                        }
+                    }
+                });
+            if !accepted {
+                if let Some(error) = rejection {
+                    bevy::log::warn!(
+                        "[EngineSync] shared async admission rejected Modelica parse doc={} gen={}: {error:?}",
+                        doc_id.raw(),
+                        gen,
+                    );
+                }
+                continue;
+            }
         }
         bevy::log::info!(
-            "[EngineSync] async parse spawned doc={} gen={} src={}B (first_parse={}, target={}{})",
+            "[EngineSync] async parse admitted doc={} gen={} src={}B (first_parse={}, target={}{})",
             doc_id.raw(),
             gen,
             src_len,
@@ -881,13 +940,14 @@ pub fn drive_engine_sync(
                 "native-task"
             },
             if Some(doc_id) == active_doc {
-                ", priority=active"
+                ", priority=interactive"
             } else {
                 ""
             },
         );
     }
     cursor.registry_revision = registry.revision();
+    cursor.admission_capacity_revision = admission.capacity_revision();
     cursor.next_debounce_at = next_debounce_at;
     handle.clear_sync_wakeup_if_idle();
 }
@@ -964,6 +1024,9 @@ pub struct ModelicaEnginePlugin;
 
 impl Plugin for ModelicaEnginePlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
+            app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+        }
         // Install the resource and mirror it into the process-wide
         // `GLOBAL_ENGINE` slot so static helpers (`class_cache`,
         // off-thread projection tasks) read the same handle the
@@ -1013,6 +1076,22 @@ mod tests {
     }
 
     #[test]
+    fn rejected_parse_admission_releases_the_owner_pending_slot() {
+        let handle = ModelicaEngineHandle::default();
+        let doc_id = DocumentId::new(77);
+        let accepted = handle.upsert_document_async(
+            doc_id,
+            4,
+            std::sync::Arc::from("model M end M;"),
+            |_task| false,
+        );
+
+        assert!(!accepted);
+        assert!(!handle.lock().has_parse_work(doc_id));
+        assert!(handle.sync_wakeup_pending());
+    }
+
+    #[test]
     fn engine_sync_due_waits_for_registry_or_engine_work() {
         let handle = ModelicaEngineHandle::default();
         let mut registry = lunco_doc_bevy::DocumentRegistry::<
@@ -1020,20 +1099,53 @@ mod tests {
         >::default();
         let mut cursor = EngineSyncCursor::default();
         let pacing = ParsePacing::default();
+        let mut admission = lunco_core_runtime::AsyncWorkAdmission::default();
 
-        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+        assert!(!engine_sync_is_due(
+            &handle, &registry, &cursor, &pacing, &admission
+        ));
 
         registry.allocate_untitled("model A end A;".to_string());
-        assert!(engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+        assert!(engine_sync_is_due(
+            &handle, &registry, &cursor, &pacing, &admission
+        ));
         cursor.registry_revision = registry.revision();
-        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+        cursor.admission_capacity_revision = admission.capacity_revision();
+        assert!(!engine_sync_is_due(
+            &handle, &registry, &cursor, &pacing, &admission
+        ));
+
+        admission
+            .submit(
+                lunco_core_runtime::AsyncWorkPriority::Background,
+                lunco_core_runtime::AsyncWorkKey::new(
+                    lunco_core_runtime::AsyncWorkKind::ModelicaSourceParse,
+                    0,
+                    10,
+                    1,
+                    0,
+                ),
+                || {},
+            )
+            .unwrap();
+        assert!(!engine_sync_is_due(
+            &handle, &registry, &cursor, &pacing, &admission
+        ));
+
+        admission.set_limits(256, 3).unwrap();
+        assert!(engine_sync_is_due(
+            &handle, &registry, &cursor, &pacing, &admission
+        ));
+        cursor.admission_capacity_revision = admission.capacity_revision();
 
         {
             let mut engine = handle.lock();
             engine.finish_parse(DocumentId::new(1), 1);
             handle.wake_sync();
         }
-        assert!(engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+        assert!(engine_sync_is_due(
+            &handle, &registry, &cursor, &pacing, &admission
+        ));
     }
 
     #[test]
@@ -1047,14 +1159,19 @@ mod tests {
             ..Default::default()
         };
         let pacing = ParsePacing::default();
+        let admission = lunco_core_runtime::AsyncWorkAdmission::default();
 
-        assert!(engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+        assert!(engine_sync_is_due(
+            &handle, &registry, &cursor, &pacing, &admission
+        ));
 
         let pacing = ParsePacing {
             input_active: true,
             ..ParsePacing::default()
         };
-        assert!(!engine_sync_is_due(&handle, &registry, &cursor, &pacing));
+        assert!(!engine_sync_is_due(
+            &handle, &registry, &cursor, &pacing, &admission
+        ));
     }
 }
 

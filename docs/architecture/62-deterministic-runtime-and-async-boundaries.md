@@ -228,13 +228,25 @@ Independent preparation is allowed to run in parallel on the existing worker
 pools. Submission uses one shared bounded admission policy with three semantic
 priorities: `SimulationRequired` (only work that gates a declared simulation
 boundary), `Interactive` (work for the visible/active Twin or viewport), and
-`Background` (prefetch, inactive documents, and optional analysis). Stable FIFO
-identity orders requests within a class; aging or a reserved background share
-prevents starvation. A priority changes which queued job starts first; it never
-changes simulation order, event order, or which result is valid. Domain owners
+`Background` (prefetch, inactive documents, and optional analysis). Stable
+operation identity orders requests within a class; aging or a reserved
+background share prevents starvation. A priority changes which queued job
+starts first; it never changes simulation order, event order, or which result
+is valid. Domain owners
 keep their typed task handles, payloads, and result validation. The shared
 policy only admits bounded work onto the existing pool and reports queue/in-
 flight status.
+
+Native Bevy hosts install `AsyncWorkAdmission` from `lunco-core-runtime`. Each
+request carries a stable key containing scope generation, owner identity,
+source revision, and operation id. The resource bounds queued and admitted
+work, applies the three priorities with reserved interactive/background
+service, and exposes aggregate queue counters. Owners still validate and
+commit their typed results at their own boundary. Modelica document parsing is
+the first migrated consumer; Rhai, SysML, USD, Modelica library preparation,
+and visualization preparation still need to join this path. On wasm, Bevy's
+async-compute pool is cooperative on the browser main thread; existing Web
+Worker paths remain necessary and are not covered by native admission yet.
 
 Results are committed only by their owner at a named cycle boundary. Results
 for presentation may be adopted when current and useful. Results that change
@@ -458,9 +470,11 @@ These findings and their owner-specific file evidence are maintained in
    scenario and REPL owners to every callback owner, then expose it read-only to
    Rhai. Give UI and visualization independent cadences while keeping both
    presentation-only.
-3. **Async work admission.** Add shared bounded priority admission over the
-   existing worker pools. Move immutable Rhai, SysML, USD, and Modelica
-   preparation to workers; preserve owner-specific typed results and commits.
+3. **Async work admission.** Use shared bounded priority admission over the
+   existing worker pools. Modelica document parsing is the first native
+   consumer; move immutable Rhai, SysML, USD, remaining Modelica, and
+   visualization preparation to workers while preserving owner-specific typed
+   results and commits. Keep Web Worker admission explicit for wasm hosts.
 4. **Telemetry observation boundary.** Keep authoritative event delivery in
    stable simulation order; make continuous sampling due-driven and bounded,
    then move logging, fan-out, encoding, and persistence to the observation
