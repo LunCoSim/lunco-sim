@@ -30,6 +30,7 @@
 #![cfg(any(feature = "rhai", feature = "python"))]
 
 use bevy::prelude::*;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use lunco_api::registry::ApiEntityRegistry;
@@ -47,14 +48,10 @@ use lunco_scripting_bridge_core::{ScenarioAudience, ValueBuilder};
 /// Controls whether persistent scenario programs are allowed to execute their
 /// lifecycle hooks.
 ///
-/// Authored programs attach during scene composition even while this gate is
-/// closed, so their event subscriptions exist before the first physics tick.
-/// The normal runtime leaves this enabled. Headless scene runners may disable
-/// it while an authored scene's asynchronous participants are being compiled
-/// and admitted, so `on_start` cannot begin measuring scenario time against a
-/// world that is still held for readiness. This is a lifecycle boundary, not a
-/// second pause mechanism: once enabled, the ordinary `ScriptedModel::paused`
-/// state remains the only per-program pause control.
+/// Headless scene runners close this gate until the composed scene and its
+/// readiness participants are admitted. Scenario policy can reference entities
+/// other than its attached owner, so startup waits for the complete readiness
+/// set. After admission, the driver idles programs whose own subtree is held.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScenarioExecutionGate {
     /// Whether scenario attachment and lifecycle execution may proceed.
@@ -102,9 +99,9 @@ pub fn arm_scenarios_after_scene_composition(
     generation.0 = generation.0.saturating_add(1);
 }
 
-/// Open scenario lifecycle only after the completed scene's readiness policy
-/// releases every participant. Once opened it stays open: a later dynamically
-/// attached participant must not pause an already-running mission script.
+/// Open scenario lifecycle after all readiness holds for the completed scene
+/// clear. Once opened it stays open: a later dynamically attached participant
+/// must not rewind already-running lifecycle state.
 pub fn open_scenarios_when_scene_ready(
     readiness: Option<Res<lunco_readiness::ReadinessState>>,
     mut gate: ResMut<ScenarioExecutionGate>,
@@ -131,20 +128,28 @@ pub fn scenario_execution_enabled(gate: Option<Res<ScenarioExecutionGate>>) -> b
 
 /// Run condition for the paused-simulation scenario pass.
 ///
-/// `Time<Virtual>` is the single owner of simulation pause. The paused pass
-/// keeps discrete lifecycle events responsive while the fixed simulation clock
-/// is stopped; it never advances `on_tick`, task, or mission work.
-pub fn simulation_is_paused(time: Option<Res<Time<Virtual>>>) -> bool {
-    time.is_some_and(|time| time.is_paused())
+/// `Time<Virtual>` owns pause and `SimTick` must be installed by the simulation
+/// runtime. The paused pass keeps discrete lifecycle events responsive while
+/// the fixed simulation clock is stopped; it never advances `on_tick`, task,
+/// or mission work.
+pub fn simulation_is_paused(
+    time: Option<Res<Time<Virtual>>>,
+    tick: Option<Res<lunco_core_runtime::SimTick>>,
+) -> bool {
+    tick.is_some() && time.is_some_and(|time| time.is_paused())
 }
 
 /// Run condition for continuous fixed-step scenario behavior. Every consumer
 /// that mutates simulation state must use the same virtual-clock predicate as
 /// the time spine and co-simulation master; otherwise a residual fixed overstep
 /// can execute `on_tick` while the shared barrier is paused and advance Rhai
-/// state without advancing `SimTick` or physics.
-pub fn simulation_is_running(time: Option<Res<Time<Virtual>>>) -> bool {
-    lunco_time::simulation_is_running(time)
+/// state without advancing `SimTick` or physics. The tick resource is required
+/// because it is the causal ordering boundary for script execution and events.
+pub fn simulation_is_running(
+    time: Option<Res<Time<Virtual>>>,
+    tick: Option<Res<lunco_core_runtime::SimTick>>,
+) -> bool {
+    tick.is_some() && lunco_time::simulation_is_running(time)
 }
 
 #[cfg(test)]
@@ -178,7 +183,19 @@ mod readiness_gate_tests {
         assert!(!app.world().resource::<ScenarioExecutionGate>().enabled);
         assert!(app.world().resource::<ScenarioReadinessArm>().0);
 
-        app.world_mut().resource_mut::<ReadinessState>().world_hold = false;
+        {
+            let mut readiness = app.world_mut().resource_mut::<ReadinessState>();
+            readiness.world_hold = false;
+            readiness.held_entities = vec![Entity::from_raw_u32(12).unwrap()];
+        }
+        app.update();
+        assert!(!app.world().resource::<ScenarioExecutionGate>().enabled);
+        assert!(app.world().resource::<ScenarioReadinessArm>().0);
+
+        app.world_mut()
+            .resource_mut::<ReadinessState>()
+            .held_entities
+            .clear();
         app.update();
         assert!(app.world().resource::<ScenarioExecutionGate>().enabled);
         assert!(!app.world().resource::<ScenarioReadinessArm>().0);
@@ -193,6 +210,40 @@ mod readiness_gate_tests {
             transition: SceneTransition::load("next.usda", ""),
         });
         assert!(!app.world().resource::<ScenarioExecutionGate>().enabled);
+    }
+
+    #[test]
+    fn readiness_holds_only_scenarios_in_the_held_entity_subtree() {
+        let mut world = World::new();
+        let held_root = world.spawn_empty().id();
+        let held_child = world.spawn(ChildOf(held_root)).id();
+        let held_grandchild = world.spawn(ChildOf(held_child)).id();
+        let independent = world.spawn_empty().id();
+
+        assert!(scenario_owner_is_held(&world, held_root, &[held_root]));
+        assert!(scenario_owner_is_held(
+            &world,
+            held_grandchild,
+            &[held_root]
+        ));
+        assert!(!scenario_owner_is_held(&world, independent, &[held_root]));
+        assert!(!scenario_owner_is_held(&world, held_grandchild, &[]));
+    }
+}
+
+fn scenario_owner_is_held(world: &World, entity: Entity, held_roots: &[Entity]) -> bool {
+    let mut current = entity;
+    loop {
+        if held_roots.contains(&current) {
+            return true;
+        }
+        let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) else {
+            return false;
+        };
+        if parent == current {
+            return false;
+        }
+        current = parent;
     }
 }
 
@@ -580,6 +631,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             .copied()
             .unwrap_or_default()
             .0;
+        let current_sim_tick = world
+            .get_resource::<lunco_core_runtime::SimTick>()
+            .map(|tick| tick.0);
+        let held_roots = world
+            .get_resource::<lunco_readiness::ReadinessState>()
+            .map(|state| state.held_entities.clone())
+            .unwrap_or_default();
         let live: HashSet<Entity>;
         {
             let mut q = world.query::<(
@@ -638,6 +696,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 if !scope.runs_on(is_client) {
                     continue;
                 }
+                // Readiness freezes a physical subtree. Scripts owned anywhere
+                // inside that subtree wait with it, while unrelated scenarios
+                // keep participating in the fixed step.
+                if scenario_owner_is_held(world, entity, &held_roots) {
+                    continue;
+                }
                 let Some(raw) = doc_id else { continue };
                 let (generation, maybe_src) = {
                     let registry = world.resource::<ScriptRegistry>();
@@ -693,27 +757,59 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             }
         }
 
-        // Drain events fired since the previous driver pass.
-        // UNCONDITIONALLY, before the early-return below. `collect_script_events`
-        // pushes a clone of every telemetry event into the inbox each frame; if we
-        // returned without draining whenever no scenario is active (the common
-        // case) `pending` would grow without bound (review H1). Dropping events
-        // with no scenario to consume them is correct — there's nothing to deliver.
-        // Move the batch out so script hooks can run without holding a World
-        // resource borrow. The vector is recycled below after the batch has
-        // been delivered; dropping it every fixed pass would force a fresh
-        // allocation for the next render/control event burst.
+        // Query/archetype order is not a simulation contract. `cmd()` is
+        // synchronous inside each hook, so the actor order is observable by
+        // later actors in this same pass. Addressable actors use their stable
+        // API identity; local-only hosts (identity 0 in the script ABI) use
+        // their stable-for-this-world ECS entity key as the final tie-breaker.
+        work.sort_unstable_by(|a, b| {
+            a.2.cmp(&b.2)
+                .then_with(|| a.0.to_bits().cmp(&b.0.to_bits()))
+        });
+
+        // A fixed-step event is eligible after SimTickSet only when its recorded
+        // tick precedes the current tick. That boundary determines when the
+        // event becomes visible; events stamped at the current tick remain
+        // queued until a later tick. The paused Update pass drains all
+        // events to keep discrete lifecycle events responsive while simulation
+        // is stopped. Drain before the no-work return so traffic cannot accrue.
         let mut events: Vec<TelemetryEvent> = world
             .get_resource_mut::<ScriptEventInbox>()
             .map(|mut inbox| {
                 if inbox.faulted {
                     inbox.pending.clear();
                     Vec::new()
+                } else if run_tick {
+                    let Some(current_tick) = current_sim_tick else {
+                        return Vec::new();
+                    };
+                    if inbox.pending.len() > 1 {
+                        inbox.pending.sort_by(compare_telemetry_events);
+                    }
+                    let ready_count = inbox
+                        .pending
+                        .iter()
+                        .take_while(|event| {
+                            lunco_core_runtime::SimTick(current_tick)
+                                .wrapping_diff(lunco_core_runtime::SimTick(event.sim_tick))
+                                > 0
+                        })
+                        .count();
+                    if ready_count == 0 {
+                        Vec::new()
+                    } else {
+                        let mut ready = std::mem::take(&mut inbox.pending);
+                        inbox.pending = ready.split_off(ready_count);
+                        ready
+                    }
                 } else {
                     std::mem::take(&mut inbox.pending)
                 }
             })
             .unwrap_or_default();
+        if events.len() > 1 {
+            events.sort_by(compare_telemetry_events);
+        }
 
         // Run if there's work OR a tracked entity vanished (needs on_stop).
         let needs_teardown = world
@@ -754,13 +850,17 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 authority,
                 reload_policy,
                 scene_generation,
-            ) in work
+                ) in work
             {
                 // Gate this entity's hook `cmd()`s against the launching session
                 // (§3.4). `None` for a host-trusted launch → ungated. Covers the
                 // hot-reload `on_stop` below too (still inside this iteration).
                 bridge_core::set_script_authority(authority);
                 let st = fsm.entry(entity).or_default();
+                // Events accumulated before this program's first `on_start`
+                // belong to the prior lifecycle state. Startup reads current
+                // owner state directly; it must not replay a stale event batch.
+                let receive_events = st.started && maybe_src.is_none();
                 st.gid = gid;
                 let mut recompiled = false;
                 let mut compile_diag: Option<Diagnostic> = None;
@@ -827,9 +927,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         runtime_err.get_or_insert(d);
                     }
                 }
-                for ev in &events {
-                    if let Some(d) = runtime.deliver_event(entity, gid, ev) {
-                        runtime_err.get_or_insert(d);
+                if receive_events {
+                    for ev in &events {
+                        if let Some(d) = runtime.deliver_event(entity, gid, ev) {
+                            runtime_err.get_or_insert(d);
+                        }
                     }
                 }
                 if run_tick {
@@ -876,7 +978,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             // cleanup only, never ongoing behaviour.
             bridge_core::set_script_authority(None);
             bridge_core::set_script_client_local(false);
-            let dead: Vec<Entity> = fsm.keys().copied().filter(|e| !live.contains(e)).collect();
+            let mut dead: Vec<Entity> = fsm.keys().copied().filter(|e| !live.contains(e)).collect();
+            dead.sort_unstable_by(|a, b| {
+                fsm.get(a)
+                    .map(|state| state.gid)
+                    .cmp(&fsm.get(b).map(|state| state.gid))
+                    .then_with(|| a.to_bits().cmp(&b.to_bits()))
+            });
             for entity in dead {
                 if let Some(st) = fsm.remove(&entity) {
                     if st.started && st.compiled {
@@ -984,7 +1092,7 @@ pub const SCRIPT_EVENT_INBOX_CAPACITY: usize = 4096;
 /// the simulation becomes progressively slower or crashing the process.
 #[derive(Resource, Debug)]
 pub struct ScriptEventInbox {
-    /// Events awaiting delivery on the next driver pass.
+    /// Events awaiting a causally later fixed tick or the next paused pass.
     pub pending: Vec<TelemetryEvent>,
     /// Whether the fixed-capacity boundary has been crossed.
     pub overflowed: bool,
@@ -1014,7 +1122,7 @@ impl ScriptEventInbox {
         self.dropped = 0;
     }
 
-    /// Enqueue one event while preserving FIFO order.
+    /// Enqueue one event. The driver assigns canonical order at the pass boundary.
     ///
     /// `false` is an explicit overflow signal. The caller owns the policy for
     /// surfacing it; no event is silently evicted from the front of the queue.
@@ -1035,6 +1143,61 @@ impl ScriptEventInbox {
         self.overflowed = false;
         self.dropped = 0;
         self.faulted = false;
+    }
+}
+
+fn compare_telemetry_events(a: &TelemetryEvent, b: &TelemetryEvent) -> Ordering {
+    a.sim_tick
+        .cmp(&b.sim_tick)
+        .then_with(|| a.source.cmp(&b.source))
+        .then_with(|| a.name.cmp(&b.name))
+        .then_with(|| a.severity.cmp(&b.severity))
+        .then_with(|| a.sim_secs.total_cmp(&b.sim_secs))
+        .then_with(|| a.timestamp.total_cmp(&b.timestamp))
+        .then_with(|| compare_telemetry_values(&a.data, &b.data))
+}
+
+fn compare_telemetry_values(
+    a: &lunco_telemetry_core::TelemetryValue,
+    b: &lunco_telemetry_core::TelemetryValue,
+) -> Ordering {
+    use lunco_telemetry_core::TelemetryValue as Value;
+
+    match (a, b) {
+        (Value::F64(a), Value::F64(b)) => a.total_cmp(b),
+        (Value::I64(a), Value::I64(b)) => a.cmp(b),
+        (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+        (Value::String(a), Value::String(b)) => a.cmp(b),
+        (Value::Array(a), Value::Array(b)) => {
+            for (a, b) in a.iter().zip(b) {
+                let order = compare_telemetry_values(a, b);
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            a.len().cmp(&b.len())
+        }
+        (Value::Map(a), Value::Map(b)) => {
+            for ((a_key, a_value), (b_key, b_value)) in a.iter().zip(b) {
+                let order = a_key
+                    .cmp(b_key)
+                    .then_with(|| compare_telemetry_values(a_value, b_value));
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            a.len().cmp(&b.len())
+        }
+        (Value::F64(_), _) => Ordering::Less,
+        (_, Value::F64(_)) => Ordering::Greater,
+        (Value::I64(_), _) => Ordering::Less,
+        (_, Value::I64(_)) => Ordering::Greater,
+        (Value::Bool(_), _) => Ordering::Less,
+        (_, Value::Bool(_)) => Ordering::Greater,
+        (Value::String(_), _) => Ordering::Less,
+        (_, Value::String(_)) => Ordering::Greater,
+        (Value::Array(_), _) => Ordering::Less,
+        (_, Value::Array(_)) => Ordering::Greater,
     }
 }
 
@@ -1146,5 +1309,159 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.code == "telemetry-event-overflow"));
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_readiness_tests {
+    use super::*;
+    use crate::doc::ScriptDocument;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum RecordedCall {
+        Compile,
+        Start,
+        Tick,
+        Event(String),
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingRuntime(Arc<Mutex<Vec<RecordedCall>>>);
+
+    impl ScenarioRuntime for RecordingRuntime {
+        fn compile(
+            &mut self,
+            _entity: Entity,
+            _source: &str,
+            _params: &ScenarioParameters,
+            _asset_id: Option<&str>,
+        ) -> CompileOutcome {
+            self.0.lock().unwrap().push(RecordedCall::Compile);
+            CompileOutcome::Ready { top_level: None }
+        }
+
+        fn call_hook(
+            &mut self,
+            _entity: Entity,
+            hook: ScenarioHook,
+            _self_gid: i64,
+        ) -> Option<Diagnostic> {
+            let call = match hook {
+                ScenarioHook::Start => RecordedCall::Start,
+                ScenarioHook::Tick => RecordedCall::Tick,
+                ScenarioHook::Stop => return None,
+            };
+            self.0.lock().unwrap().push(call);
+            None
+        }
+
+        fn deliver_event(
+            &mut self,
+            _entity: Entity,
+            _self_gid: i64,
+            event: &TelemetryEvent,
+        ) -> Option<Diagnostic> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(RecordedCall::Event(event.name.clone()));
+            None
+        }
+
+        fn forget(&mut self, _entity: Entity) {}
+    }
+
+    fn event(name: &str, sim_tick: u64) -> TelemetryEvent {
+        TelemetryEvent {
+            name: name.into(),
+            source: 1,
+            severity: lunco_telemetry_core::Severity::Info,
+            data: lunco_telemetry_core::TelemetryValue::Bool(true),
+            timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick,
+        }
+    }
+
+    #[test]
+    fn held_owner_starts_after_release_without_replaying_pre_start_events() {
+        let mut world = World::new();
+        let owner = world.spawn_empty().id();
+        world.spawn((
+            ChildOf(owner),
+            ScriptedModel {
+                document_id: Some(71),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            },
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        world.insert_resource(ScenarioDriver {
+            runtime: RecordingRuntime(calls.clone()),
+            fsm: HashMap::new(),
+        });
+        world.insert_resource(ScriptRegistry::default());
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(71),
+            ScriptDocument::new(71, ScriptLanguage::Rhai, ""),
+        );
+        world.insert_resource(ApiEntityRegistry::default());
+        world.insert_resource(DocumentDiagnostics::default());
+        world.insert_resource(ScriptEventInbox::default());
+        world.insert_resource(lunco_core_runtime::SimTick(5));
+        world.insert_resource(lunco_readiness::ReadinessState {
+            world_hold: false,
+            held_entities: vec![owner],
+        });
+        world
+            .resource_mut::<ScriptEventInbox>()
+            .enqueue(event("before_release", 4));
+
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert!(calls.lock().unwrap().is_empty());
+
+        world
+            .resource_mut::<lunco_readiness::ReadinessState>()
+            .held_entities
+            .clear();
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                RecordedCall::Compile,
+                RecordedCall::Start,
+                RecordedCall::Tick
+            ]
+        );
+
+        world
+            .resource_mut::<ScriptEventInbox>()
+            .enqueue(event("current_tick", 5));
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert!(!calls
+            .lock()
+            .unwrap()
+            .contains(&RecordedCall::Event("current_tick".into())));
+
+        world.resource_mut::<lunco_core_runtime::SimTick>().0 = 6;
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+
+        let recorded_calls = calls.lock().unwrap();
+        assert!(recorded_calls.contains(&RecordedCall::Event("current_tick".into())));
+        assert!(!recorded_calls.contains(&RecordedCall::Event("before_release".into())));
+        drop(recorded_calls);
+
+        world
+            .resource_mut::<ScriptEventInbox>()
+            .enqueue(event("paused_update", 6));
+        ScenarioDriver::<RecordingRuntime>::run_without_simulation_tick(
+            &mut world,
+            ScriptLanguage::Rhai,
+        );
+        assert!(calls
+            .lock()
+            .unwrap()
+            .contains(&RecordedCall::Event("paused_update".into())));
     }
 }

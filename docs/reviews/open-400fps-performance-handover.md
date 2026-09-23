@@ -22,6 +22,13 @@ against the existing `UsdStageRevision`. No second propagation implementation,
 quality reduction, fallback, duplicate cache, or local BigSpace fork is part of
 the implementation.
 
+The shared simulation application admits BigSpace's local-origin and transform
+propagation sets from spatial input changes. A changed floating origin receives
+one follow-up origin computation to settle BigSpace's per-computation unchanged
+flag; that pending settle is tracked between admitted passes, so stable-frame
+admission does not scan every grid. Stable frames then leave propagation closed.
+BigSpace remains the sole owner of transform propagation.
+
 The shared Modelica engine adapter follows the same boundary. Its document
 generation cursor no longer polls the registry and engine queues every `Update`;
 document revisions, completion notifications, and tracked edit-debounce
@@ -70,13 +77,14 @@ Twin from publishing stale results.
 ## Remaining blocker
 
 The 400 FPS acceptance target is not met. The maintained BigSpace dependency
-is pinned to the latest reviewed `bevy-0.19` revision available here
-(`5f255228e9b4…`), whose high-precision propagation path still owns its
-per-frame worker/channel fan-out. The remaining render/update budget is also
-well above the 2.5 ms frame budget required by 400 FPS. Resolving that gap
-requires an upstream BigSpace propagation improvement and further measured
-render-owner reductions; an application-side duplicate or degraded path is
-not an acceptable substitute.
+is pinned to the reviewed `bevy-0.19` revision available here
+(`5f255228e9b4…`). Application admission skips stable propagation frames, but
+an active high-precision pass still uses BigSpace's worker/channel fan-out; the
+available Tracy attribution predates the application gate, so its current cost
+is not established. The remaining render/update budget also needs a clean,
+settled measurement against the 2.5 ms frame budget. Further per-entity
+fan-out reduction belongs in the maintained BigSpace owner, not an application
+duplicate or degraded path.
 
 ## Acceptance
 

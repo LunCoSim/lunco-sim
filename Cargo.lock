@@ -9296,6 +9296,7 @@ dependencies = [
  "lunco-api",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -10607,6 +10608,7 @@ dependencies = [
  "lunco-workbench-widgets",
  "lunco-workspace",
  "openusd",
+ "serde",
  "serde_json",
  "tempfile",
 ]

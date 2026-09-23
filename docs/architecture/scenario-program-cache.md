@@ -55,11 +55,20 @@ completion, plus `rhai_event_delivery_negative`, which proves an absent event
 cannot complete an objective. These fixtures exercise the public scenario
 surface; they do not call an internal event-delivery helper.
 
-The shared `ScenarioExecutionGate` is also an admission boundary for the bus.
-While scene readiness is holding the world, scenario fixed/update passes are
-closed and `TelemetryEvent`s are not copied into the bounded script inbox. This
-prevents startup producer traffic from filling the inbox before any scenario
-can consume it. Once readiness opens the gate, events follow the normal FIFO
+The shared `ScenarioExecutionGate` admits the initial scene lifecycle only after
+all world and entity readiness holds clear. Scenario policy can reference
+entities other than its attached owner, so `on_start` must not observe a partly
+admitted scene. While this gate is closed, scenario passes are disabled and
+events are not copied into the bounded inbox. Once the gate opens, a later
+entity hold idles only scenarios whose owner or an ancestor is held; unrelated
+owners keep running, and a held program resumes without a stop/start cycle.
+
+Fixed-step delivery releases only events whose recorded tick is older than the
+current `SimTick` after `SimTickSet`; events stamped at that boundary wait for
+a later tick. The paused `Update` pass delivers discrete events on its next
+pass without advancing the fixed tick. A program's first or restarted `on_start`
+does not receive the batch accumulated before that lifecycle began; it reads
+current owner state instead. Once the world-level gate opens, events follow FIFO
 delivery. If producers still exceed the fixed capacity, collection latches the
 `scripting-telemetry/telemetry-event-overflow` runtime diagnostic, clears the
 partial batch, and holds event delivery until the next scene transition resets

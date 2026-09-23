@@ -81,9 +81,9 @@ use lunco_usd_viewport_core::{
     ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView, FrameUsdPreviewSelection,
     FrameUsdPreviewView, OpenUsdPreview, OpenUsdPreviewView, OrbitCamera, PanUsdPreviewView,
     ResetUsdPreviewView, SaveUsdInspectionPreset, SetUsdPreviewProjection, SetUsdPreviewTextLayer,
-    SetUsdPreviewViewMode, SetUsdPrimDisplayMode, UsdInspectionPreset, UsdInspectionSettings,
-    UsdPreviewExplodeAction, UsdPreviewExplodeState, UsdPreviewExplodedPart, UsdPreviewId,
-    UsdPreviewProjection, UsdPreviewSession, UsdPreviewView, UsdPreviewViewId,
+    SetUsdPreviewViewMode, SetUsdPrimDisplayMode, USD_PREVIEW_VIEW_PANEL_KIND, UsdInspectionPreset,
+    UsdInspectionSettings, UsdPreviewExplodeAction, UsdPreviewExplodeState, UsdPreviewExplodedPart,
+    UsdPreviewId, UsdPreviewProjection, UsdPreviewSession, UsdPreviewView, UsdPreviewViewId,
     UsdPreviewViewMeasured, UsdPrimDisplayModes, UsdViewportMeasured, UsdViewportOrbitInput,
     UsdViewportState, ZoomUsdPreviewView,
 };
@@ -111,7 +111,7 @@ pub const USD_VIEWPORT_PANEL_ID: PanelId = PanelId("usd::viewport");
 
 /// Instance-panel kind for additional views over an existing USD preview
 /// session. The instance value is [`UsdPreviewViewId::0`].
-pub const USD_PREVIEW_VIEW_PANEL_ID: PanelId = PanelId("usd::preview_view");
+pub const USD_PREVIEW_VIEW_PANEL_ID: PanelId = PanelId(USD_PREVIEW_VIEW_PANEL_KIND);
 
 /// Initial placeholder dimensions for the offscreen render target.
 /// Tiny on purpose: `resize_viewport_image` resizes the asset to the
@@ -248,6 +248,7 @@ impl Plugin for UsdViewportPlugin {
             (
                 reset_preview_view_visibility,
                 drain_preview_view_closes,
+                apply_restored_preview_view_settings,
                 propagate_preview_render_layer,
                 sync_usd_prim_display_mode_intents
                     .run_if(prim_display_mode_inputs_changed)
@@ -524,7 +525,7 @@ fn drain_pending_usd_preview_text_reads(world: &mut World) {
 fn on_usd_document_ready(
     trigger: On<lunco_usd_core::commands::UsdDocumentReady>,
     registry: Res<DocumentRegistry<UsdDocument>>,
-    viewport: Res<UsdViewportState>,
+    mut viewport: ResMut<UsdViewportState>,
     workspace: Option<Res<WorkspaceResource>>,
     mut commands: Commands,
 ) {
@@ -532,6 +533,8 @@ fn on_usd_document_ready(
     let preview = viewport
         .preview_for_document(doc)
         .unwrap_or_else(|| UsdPreviewId::for_document(doc));
+    let suppressed = viewport.take_auto_preview_suppression(doc);
+    let open_preview = !suppressed && !viewport.preview_was_explicitly_closed(doc);
     // Keep USD's two editor surfaces paired: the native 3D preview is the
     // composed/edit-target view, while the source tab is the lossless USDA
     // text view used for inspection and explicit text edits. Resolve the
@@ -560,11 +563,13 @@ fn on_usd_document_ready(
             }
         }
     }
-    commands.trigger(OpenUsdPreview {
-        preview,
-        doc_id: doc,
-        edit_target: LayerId::root(),
-    });
+    if open_preview {
+        commands.trigger(OpenUsdPreview {
+            preview,
+            doc_id: doc,
+            edit_target: LayerId::root(),
+        });
+    }
 }
 
 /// Return true when a preview's authoritative USD projection inputs changed.
@@ -1222,6 +1227,35 @@ fn reset_preview_view_visibility(
     }
 }
 
+/// Apply persisted presentation settings after the requested preview camera
+/// and view state have both been created.
+fn apply_restored_preview_view_settings(
+    mut state: ResMut<UsdViewportState>,
+    mut cameras: Query<(&mut Transform, &mut Projection)>,
+) {
+    let pending = state.pending_restore_views();
+    for id in pending {
+        let Some(camera) = state.view(id).map(UsdPreviewView::camera) else {
+            continue;
+        };
+        let Ok((mut transform, mut projection)) = cameras.get_mut(camera) else {
+            continue;
+        };
+        let Some(settings) = state.take_restore_settings(id) else {
+            continue;
+        };
+        let Some(view) = state.view_mut(id) else {
+            continue;
+        };
+        if let Err(error) = settings.apply(view) {
+            bevy::log::warn!("[UsdPreviewRestore] view {}: {error}", id.0);
+            continue;
+        }
+        *transform = view.orbit.transform();
+        *projection = preview_projection(view.projection, view.orthographic_scale);
+    }
+}
+
 /// Resize visible offscreen render Images to match their panel rects.
 ///
 /// Each active panel writes its view-specific rect during the egui pass. This
@@ -1376,6 +1410,9 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
                 format!("document {doc} is not open"),
             );
         }
+        let requested_view = world
+            .resource_mut::<UsdViewportState>()
+            .take_restore_primary_view(preview);
         let target_valid = world
             .resource::<DocumentRegistry<UsdDocument>>()
             .host(doc)
@@ -1401,6 +1438,7 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
                 if let Some(session) = state.session_mut(preview) {
                     session.edit_target = edit_target;
                 }
+                state.clear_preview_closed(doc);
                 state.focus(preview);
                 state.session(preview).map(UsdPreviewSession::primary_view)
             };
@@ -1430,7 +1468,19 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             );
             return;
         };
-        let Some(primary_view) = world.resource_mut::<UsdViewportState>().reserve_view_id() else {
+        let primary_view = if let Some(view) = requested_view {
+            if view.0 == 0 || world.resource::<UsdViewportState>().view(view).is_some() {
+                report_preview_error(
+                    world,
+                    "usd-preview-open-failed",
+                    format!("USD preview view identity {} is unavailable", view.0),
+                );
+                return;
+            }
+            view
+        } else if let Some(view) = world.resource_mut::<UsdViewportState>().reserve_view_id() {
+            view
+        } else {
             report_preview_error(
                 world,
                 "usd-preview-open-failed",
@@ -1498,6 +1548,9 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             );
             return;
         }
+        world
+            .resource_mut::<UsdViewportState>()
+            .clear_preview_closed(doc);
         world.trigger(OpenTab {
             kind: USD_PREVIEW_VIEW_PANEL_ID,
             instance: primary_view.0,
@@ -1574,6 +1627,15 @@ fn on_open_usd_preview_view(trigger: On<OpenUsdPreviewView>, mut commands: Comma
             );
             return;
         }
+        if let Some(doc) = world
+            .resource::<UsdViewportState>()
+            .session(preview)
+            .map(UsdPreviewSession::doc)
+        {
+            world
+                .resource_mut::<UsdViewportState>()
+                .clear_preview_closed(doc);
+        }
         world.trigger(OpenTab {
             kind: USD_PREVIEW_VIEW_PANEL_ID,
             instance: view.0,
@@ -1647,6 +1709,15 @@ fn on_close_usd_preview(trigger: On<CloseUsdPreview>, mut commands: Commands) {
             );
             return;
         };
+        if world
+            .resource::<UsdViewportState>()
+            .preview_for_document(doc)
+            .is_none()
+        {
+            world
+                .resource_mut::<UsdViewportState>()
+                .mark_preview_closed(doc);
+        }
         release_preview_projection(world, doc);
     });
 }
@@ -2708,6 +2779,15 @@ fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) 
     let closed_twin = event.twin;
     let closed_root = event.root.clone();
     commands.queue(move |world: &mut World| {
+        world
+            .resource_mut::<UsdViewportState>()
+            .clear_restore_settings();
+        world
+            .resource_mut::<UsdViewportState>()
+            .clear_restore_primary_views();
+        world
+            .resource_mut::<UsdViewportState>()
+            .clear_auto_preview_suppressions();
         let closed_docs: HashSet<DocumentId> = world
             .get_resource::<WorkspaceResource>()
             .map(|workspace| {
@@ -2928,6 +3008,15 @@ fn close_preview_view(world: &mut World, view: UsdPreviewViewId) {
         .any(|candidate| candidate.preview() == preview);
     if !has_remaining {
         if let Some(doc) = remove_preview_session(world, preview) {
+            if world
+                .resource::<UsdViewportState>()
+                .preview_for_document(doc)
+                .is_none()
+            {
+                world
+                    .resource_mut::<UsdViewportState>()
+                    .mark_preview_closed(doc);
+            }
             release_preview_projection(world, doc);
         }
     }

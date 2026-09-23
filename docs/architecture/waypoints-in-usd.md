@@ -130,9 +130,11 @@ local route cursor. Physics reports the sensor event; it does not publish a rout
 “target reached” fact and it does not decide mission progression.
 
 Route progress is keyed by canonical USD point path and survives disabling and
-re-enabling the program. Avian's `SensorOccupants` query reads current touching
-moving bodies by stable sensor id. At `on_start`, the route checks the occupied
-sensors and marks their points visited before autopilot is enabled. Later `enter:<zone>`
+re-enabling the program. Initial scenario admission waits for all scene
+readiness holds because the route program references a separate subject through
+`inputs:subject`. Avian's `SensorOccupants` query reads current touching moving
+bodies by stable sensor id. At `on_start`, the route checks the occupied sensors
+and marks their points visited before autopilot is enabled. Later `enter:<zone>`
 events mark visits while the program is disabled and advance the active cursor
 when enabled. Each start resumes at the first unvisited point from the recorded
 visits, including contacts established before the script started.

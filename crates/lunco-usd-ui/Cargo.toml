@@ -33,6 +33,7 @@ lunco-workbench-file-dialog = { path = "../lunco-workbench-file-dialog" }
 lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
 lunco-workspace = { path = "../lunco-workspace" }
 openusd = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

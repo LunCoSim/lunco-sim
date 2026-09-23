@@ -241,8 +241,22 @@ mod big_space_propagation_gate_tests {
     #[derive(Resource, Default)]
     struct GateRuns(u32);
 
+    #[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+    struct BigSpaceGateRuns {
+        local_origins: u32,
+        high_precision: u32,
+    }
+
     fn count_gate_run(mut runs: ResMut<GateRuns>) {
         runs.0 += 1;
+    }
+
+    fn count_local_origin_gate(mut runs: ResMut<BigSpaceGateRuns>) {
+        runs.local_origins += 1;
+    }
+
+    fn count_high_precision_gate(mut runs: ResMut<BigSpaceGateRuns>) {
+        runs.high_precision += 1;
     }
 
     #[test]
@@ -274,6 +288,98 @@ mod big_space_propagation_gate_tests {
             .x += 1.0;
         app.update();
         assert_eq!(app.world().resource::<GateRuns>().0, 2);
+    }
+
+    #[test]
+    fn origin_shift_gets_one_settle_pass_then_high_precision_gate_closes() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, BigSpaceDefaultPlugins))
+            .init_resource::<BigSpaceGateRuns>()
+            .add_systems(
+                PostStartup,
+                (
+                    count_local_origin_gate.in_set(BigSpaceSystems::LocalFloatingOrigins),
+                    count_high_precision_gate.in_set(BigSpaceSystems::PropagateHighPrecision),
+                ),
+            )
+            .add_systems(
+                PostUpdate,
+                (
+                    count_local_origin_gate.in_set(BigSpaceSystems::LocalFloatingOrigins),
+                    count_high_precision_gate.in_set(BigSpaceSystems::PropagateHighPrecision),
+                ),
+            );
+        configure_big_space_propagation_gates(&mut app);
+
+        let root = app.world_mut().spawn(BigSpaceRootBundle::default()).id();
+        let origin = app
+            .world_mut()
+            .spawn((
+                CellCoord::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+                FloatingOrigin,
+            ))
+            .set_parent_in_place(root)
+            .id();
+
+        // Drain startup and first-frame additions before recording the baseline.
+        app.update();
+        app.update();
+        let baseline = app.world().resource::<BigSpaceGateRuns>();
+        let local_origins_before = baseline.local_origins;
+        let high_precision_before = baseline.high_precision;
+
+        app.world_mut()
+            .get_mut::<CellCoord>(origin)
+            .expect("floating origin cell")
+            .x = 1;
+        app.update();
+
+        let after_shift = app.world().resource::<BigSpaceGateRuns>();
+        assert!(after_shift.local_origins > local_origins_before);
+        assert!(after_shift.high_precision > high_precision_before);
+        assert!(app.world().resource::<BigSpaceOriginSettlePending>().0);
+        assert!(
+            !app.world()
+                .get::<Grid>(root)
+                .expect("BigSpace root grid")
+                .local_floating_origin()
+                .is_local_origin_unchanged(),
+            "a changed origin remains unsettled after its first computation"
+        );
+
+        let high_precision_after_shift = after_shift.high_precision;
+        let local_origins_after_shift = after_shift.local_origins;
+        app.update();
+
+        let after_settle = app.world().resource::<BigSpaceGateRuns>();
+        assert_eq!(
+            after_settle.local_origins,
+            local_origins_after_shift + 1,
+            "the changed local origin needs one follow-up compute to restore its unchanged flag"
+        );
+        assert_eq!(
+            after_settle.high_precision, high_precision_after_shift,
+            "settling the origin flag is not another spatial input change"
+        );
+        assert!(
+            app.world()
+                .get::<Grid>(root)
+                .expect("BigSpace root grid")
+                .local_floating_origin()
+                .is_local_origin_unchanged(),
+            "the follow-up computation settles the changed origin"
+        );
+        assert!(!app.world().resource::<BigSpaceOriginSettlePending>().0);
+
+        let settled = *after_settle;
+        app.update();
+        assert_eq!(
+            *app.world().resource::<BigSpaceGateRuns>(),
+            settled,
+            "stable inputs must close both BigSpace propagation gates after settling"
+        );
     }
 }
 
@@ -449,34 +555,6 @@ impl Plugin for LunCoSimSimulationPlugin {
             .add_plugins(LunCoControllerPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_systems(Startup, setup_luncosim)
-            // Keep the application-owned invalidation boundary around
-            // BigSpace's propagation sets. BigSpace remains the sole owner of
-            // propagation and moving physics inputs are allowed to reopen the
-            // sets; the boundary only rejects known non-input output changes.
-            .configure_sets(
-                PostStartup,
-                BigSpaceSystems::LocalFloatingOrigins.run_if(local_origin_propagation_due),
-            )
-            .configure_sets(
-                PostUpdate,
-                BigSpaceSystems::LocalFloatingOrigins.run_if(local_origin_propagation_due),
-            )
-            .configure_sets(
-                PostStartup,
-                BigSpaceSystems::PropagateHighPrecision.run_if(high_precision_propagation_due),
-            )
-            .configure_sets(
-                PostUpdate,
-                BigSpaceSystems::PropagateHighPrecision.run_if(high_precision_propagation_due),
-            )
-            .configure_sets(
-                PostStartup,
-                BigSpaceSystems::PropagateLowPrecision.run_if(low_precision_propagation_due),
-            )
-            .configure_sets(
-                PostUpdate,
-                BigSpaceSystems::PropagateLowPrecision.run_if(low_precision_propagation_due),
-            )
             // Cosim pipeline ordering: worker responses land in Update; the
             // fixed loop then propagates, applies, and dispatches the next
             // Modelica communication point.
@@ -489,6 +567,7 @@ impl Plugin for LunCoSimSimulationPlugin {
                 )
                     .chain(),
             );
+        configure_big_space_propagation_gates(app);
         #[cfg(feature = "sysml")]
         app.add_plugins(lunco_sysml::SysmlPlugin);
         // Dynamic USD bodies are first promoted in `ActivateDynamicBodies`.
@@ -774,18 +853,21 @@ impl Plugin for LunCoSimHeadlessPlugin {
     }
 }
 
-/// Open the high-precision propagation set only when its output can change.
+#[derive(Resource, Default)]
+struct BigSpaceOriginSettlePending(bool);
+
+/// Open the high-precision propagation set only when an input can change its output.
 ///
-/// BigSpace's propagation system already prunes clean subtrees, but its
-/// channeled implementation still creates a compute scope and walks every grid
-/// on each PostUpdate before it can discover that all subtrees are clean. The
-/// application owns the schedule boundary, while BigSpace remains the sole
-/// owner of propagation and its exact per-entity rules. This condition mirrors
-/// only the authoritative inputs that can invalidate a high-precision global
-/// transform; a false positive costs one ordinary propagation pass, while a
-/// false negative would leave rendered GlobalTransforms stale.
+/// BigSpace's propagation system already prunes clean subtrees, but an active
+/// channeled pass still creates a compute scope and walks grids before finding
+/// clean work. The application owns the schedule boundary, while BigSpace
+/// remains the sole owner of propagation and its per-entity rules. This
+/// condition mirrors only authoritative inputs that can invalidate a
+/// high-precision global transform; a false positive costs one ordinary pass,
+/// while a false negative would leave rendered GlobalTransforms stale. The
+/// per-compute local-origin unchanged flag is output, not persistent input.
 fn high_precision_propagation_due(
-    grids: Query<&Grid>,
+    changed_origin_cell: Query<(), (With<FloatingOrigin>, Changed<CellCoord>)>,
     changed_spatial: Query<
         (),
         (
@@ -797,17 +879,15 @@ fn high_precision_propagation_due(
     changed_grid_children: Query<(), (With<Grid>, Changed<Children>)>,
     uninitialized_stationary: Query<(), (With<Stationary>, Without<StationaryInitialized>)>,
 ) -> bool {
-    grids
-        .iter()
-        .any(|grid| !grid.local_floating_origin().is_local_origin_unchanged())
+    !changed_origin_cell.is_empty()
         || !changed_spatial.is_empty()
         || !changed_grid_children.is_empty()
         || !uninitialized_stationary.is_empty()
 }
 
-/// Open BigSpace's local-floating-origin walk only when its reference-frame
-/// inputs can change.
+/// Open BigSpace's local-origin walk for changed inputs or one settle pass.
 fn local_origin_propagation_due(
+    settle_pending: Res<BigSpaceOriginSettlePending>,
     changed_origin_cell: Query<(), (With<FloatingOrigin>, Changed<CellCoord>)>,
     changed_hierarchy: Query<(), Or<(Changed<ChildOf>, Changed<Children>)>>,
     added_origin: Query<(), Added<FloatingOrigin>>,
@@ -819,6 +899,60 @@ fn local_origin_propagation_due(
         || !added_origin.is_empty()
         || !added_grid.is_empty()
         || !added_big_space.is_empty()
+        || settle_pending.0
+}
+
+/// Remember whether BigSpace needs one follow-up local-origin computation.
+/// This scan runs only after an admitted propagation pass, not on idle frames.
+fn update_big_space_origin_settle_pending(
+    mut settle_pending: ResMut<BigSpaceOriginSettlePending>,
+    grids: Query<&Grid>,
+) {
+    settle_pending.0 = grids
+        .iter()
+        .any(|grid| !grid.local_floating_origin().is_local_origin_unchanged());
+}
+
+/// Apply application-owned input admission without replacing BigSpace's systems.
+fn configure_big_space_propagation_gates(app: &mut App) {
+    app.init_resource::<BigSpaceOriginSettlePending>()
+        .add_systems(
+            PostStartup,
+            update_big_space_origin_settle_pending
+                .after(LocalFloatingOrigin::compute_all)
+                .in_set(BigSpaceSystems::LocalFloatingOrigins),
+        )
+        .add_systems(
+            PostUpdate,
+            update_big_space_origin_settle_pending
+                .after(LocalFloatingOrigin::compute_all)
+                .in_set(BigSpaceSystems::LocalFloatingOrigins),
+        );
+
+    app.configure_sets(
+        PostStartup,
+        BigSpaceSystems::LocalFloatingOrigins.run_if(local_origin_propagation_due),
+    )
+    .configure_sets(
+        PostUpdate,
+        BigSpaceSystems::LocalFloatingOrigins.run_if(local_origin_propagation_due),
+    )
+    .configure_sets(
+        PostStartup,
+        BigSpaceSystems::PropagateHighPrecision.run_if(high_precision_propagation_due),
+    )
+    .configure_sets(
+        PostUpdate,
+        BigSpaceSystems::PropagateHighPrecision.run_if(high_precision_propagation_due),
+    )
+    .configure_sets(
+        PostStartup,
+        BigSpaceSystems::PropagateLowPrecision.run_if(low_precision_propagation_due),
+    )
+    .configure_sets(
+        PostUpdate,
+        BigSpaceSystems::PropagateLowPrecision.run_if(low_precision_propagation_due),
+    );
 }
 
 /// Open BigSpace's low-precision walk only when a local transform hierarchy or

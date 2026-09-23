@@ -47,11 +47,15 @@ When a source is hot-swapped, the program emits the generic typed
 that lifecycle edge rather than relying on a timer. Sensor events may carry a
 nested collider; match the entrant through the generic `parent()` chain to the
 authored subject instead of adding a route-specific child relationship.
-Physics can produce sensor events while scene participants are still becoming
-ready, before scenario hooks are allowed to run. Those pre-start event edges
-are discarded by the lifecycle gate. In `on_start`, query current state from
-the owning subsystem when startup behavior depends on it; use `on_event` for
-transitions after the scenario starts.
+Initial scenario admission waits for all world and entity readiness holds
+because a program may depend on entities outside its own hierarchy. After
+admission, an entity hold idles only scenarios attached within that subtree;
+release resumes them without a stop/start cycle. Fixed-step hooks run after
+`SimTickSet` and release only events stamped before the current tick. Paused
+simulations deliver discrete events on the next `Update` without advancing the
+tick. The first `on_start` does not replay events from before the program
+started. Query current state from the owning subsystem for startup decisions,
+then use `on_event` for later transitions.
 
 The reusable route marker is a translucent, unlit, shadowless annotation. Its
 unvisited colour is bright green and its visited colour is gray in standard
@@ -184,7 +188,7 @@ fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / 
 | `world_pos3(id)` / `world_forward3(id)` / `world_rotation_quat(id)` | native glam `Vec3`/`Quat` pose for hot loops; lower explicitly at wire boundaries |
 | `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, `usd_path` is canonical USD topology |
 | `owner_of(id)` / `controller(id)` / `is_controlled(id)` | who's driving (human vs AI vs unowned) |
-| `emit(name, value?)` | fire a `TelemetryEvent` stamped with the simulator `sim_secs` and `sim_tick` (delivered to `on_event` on the **next scenario pass**; events emitted during dispatch are retained for that pass; a paused simulation uses the next `Update` pass); scalar, array, and map payloads keep their typed structure. During scene readiness hold, the shared scenario gate is closed and events are not queued until execution can begin. |
+| `emit(name, value?)` | fire a `TelemetryEvent` stamped with the simulator `sim_secs` and `sim_tick` (fixed-step delivery waits for a later `SimTick`; a paused simulation uses the next `Update` pass); scalar, array, and map payloads keep their typed structure. During a world-level readiness hold, the shared scenario gate is closed and events are not queued. |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | the fixed clock |
 | `rand()` / `rand_range(lo,hi)` | **deterministic** RNG (seeded per `(entity,tick,hook)`) |
 | `despawn(id)` / `add`/`remove`(id,"Comp",…) | structural. **Spawn:** `cmd("SpawnEntity", #{entry_id, position})` — no generic spawn |
@@ -466,11 +470,13 @@ command is required.
 
 ## 5. Events — the reactive spine
 
-`emit(name, value)` fires a `TelemetryEvent`; the target's `on_event` receives it
-on the next simulation pass (the event carries the authoritative `sim_tick`; a
-running simulation therefore reacts one fixed pass later) (deterministic actor model — "A emits, B reacts" is
-order-independent). Scripts interact ONLY through events + shared ECS state,
-never by calling each other's functions (isolated VMs). Producers also include
+`emit(name, value)` fires a `TelemetryEvent`; a running receiver handles it on
+a later fixed step because the event carries the authoritative `sim_tick` and
+scenario emissions occur after that tick boundary. A paused simulation delivers
+discrete events on its next `Update` pass. The deterministic actor model makes
+"A emits, B reacts" order-independent. Scripts interact ONLY through events +
+shared ECS state, never by calling each other's functions (isolated VMs).
+Producers also include
 physics (`COLLISION_START`), lifecycle (`SCENE_LOADED`), and Modelica condition outputs
 connected to `LunCoEvent.inputs:trigger`. The event prim adds the bus-facing name and
 severity; threshold and hysteresis equations remain in Modelica.

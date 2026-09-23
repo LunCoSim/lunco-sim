@@ -204,9 +204,10 @@ revision; selection is not authored into a transient USD prim.
 mnemonic in `name`) — no new event type. External clients receive script events
 via `SubscribeTelemetry` (`lunco-api` `executor.rs` + `subscription.rs`). Scripts
 receive events via `on_event` on the next scenario pass: a running simulation
-delivers at the next fixed pass, while a paused simulation uses the next
-`Update` pass without running fixed-step behavior. Inter-script interaction is
-bus-only (isolated VMs); see §7f. Events emitted while a pass is delivering its
+releases events whose recorded tick precedes current `SimTick` after
+`SimTickSet`; while paused, the next `Update` pass delivers discrete events
+without advancing the fixed tick. Inter-script interaction is bus-only
+(isolated VMs); see §7f. Events emitted while a pass is delivering its
 current batch remain queued for the following pass, so lifecycle hooks can
 publish a readiness edge without losing it at the dispatch boundary. Every
 event carries the simulator's `sim_secs` and `sim_tick` stamp; the absolute
@@ -215,13 +216,15 @@ lifecycle gate is closed, events are not buffered because no scenario can
 consume them and the gated driver cannot drain them. Scene transitions also
 clear pending events from the outgoing scene.
 
-Physics producers can still run before that gate opens: Avian detects contacts
-in `FixedPostUpdate`, while scenario hooks run only after scene readiness
-(`FixedUpdate`, or `Update` when paused). An `enter:<zone>` edge can therefore
-precede a program's `on_start` and be intentionally discarded. Treat events as
-transitions after scenario startup; when a program needs to know what is true at
-startup, read the current state from its owning subsystem (for sensors,
-`SensorOccupants`) in `on_start`.
+Initial scenario admission waits until all world and entity readiness holds
+clear because a program can reference entities outside its own hierarchy. After
+admission, a later entity hold idles scenarios attached in that subtree and
+release resumes them without restarting. Fixed-step hooks run after
+`SimTickSet`; event eligibility follows the recorded tick, and paused `Update`
+delivery does not advance it.
+New or restarted programs do not receive events accumulated before their
+`on_start`; startup policy queries current state from its owning subsystem. For
+sensors, use `SensorOccupants` in `on_start`.
 
 ### Examples
 
@@ -826,11 +829,15 @@ No direct cross-VM calls are offered — by design.
 behavior) vs *centralized* (one scenario `cmd()`s many entities).
 
 **Determinism — pass-delayed actor model:**
-1. Iterate `ScriptedModel`s in deterministic order (by `GlobalEntityId`).
+1. Iterate `ScriptedModel`s by `GlobalEntityId`, with the world-local Bevy
+   entity key as a tie-breaker for local hosts that have no API identity. A
+   cross-peer or replayable actor must have a stable `GlobalEntityId`.
 2. Events emitted in one driver pass are delivered at the start of the next
-   driver pass (queued, drained deterministically) → "A emits, B reacts" is
-   order-independent. Paused simulations continue discrete delivery from
-   `Update`, while fixed-step behavior remains stopped.
+   driver pass. Each eligible batch is ordered by simulation tick, source,
+   event name, severity, time, then a recursive typed payload order; arrival
+   order from ECS observers does not select which `on_event` runs first.
+   Paused simulations continue discrete delivery from `Update`, while
+   fixed-step behavior remains stopped.
 
 ## 8. Design decisions
 

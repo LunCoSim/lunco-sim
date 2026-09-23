@@ -23,16 +23,20 @@
 //!
 //! ## Persistence pattern
 //!
-//! Mirrors recents (`session.rs`): load on Twin activation, save on
+//! Mirrors recents (`session.rs`): load on Twin activation and save on
 //! change via a serialized-snapshot compare (so unrelated
-//! `WorkspaceResource` mutations don't write), atomic tmp+rename, and a
-//! corrupt / missing file degrades to "open with defaults" — never a
-//! panic.
+//! `WorkspaceResource` mutations don't write). The ECS thread schedules
+//! storage reads, domain preparation, serialization, and atomic writes on
+//! Bevy's task pool. A corrupt or missing file degrades to "open with
+//! defaults" — never a panic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_workbench_core::PanelId;
 use serde::{Deserialize, Serialize};
@@ -62,6 +66,7 @@ pub trait WorkspaceStateLayoutProvider: Send + Sync + 'static {
         world: &mut World,
         docks: &HashMap<String, PerspectiveDockSnapshot>,
         id_map: &HashMap<(&'static str, u64), u64>,
+        discard_unmapped_kinds: &HashSet<&'static str>,
     );
 }
 
@@ -138,14 +143,14 @@ pub struct DocumentSnapshot {
     /// [`id`](Self::id) (`DocumentId.raw()`) — they only coincide when docs
     /// and tabs open in lockstep, so the dock remap (5a) must key on this,
     /// not on `id`. The codec fills it in `capture` and reports the live
-    /// replacement via [`DocumentSessionCodec::instance_remap`] on restore.
-    /// 0 when the domain has no dock tab (USD) or for older state files.
+    /// replacement via [`DocumentSessionCodec::instance_remaps`] on restore.
+    /// 0 when the domain has no dock tab or for older state files.
     #[serde(default)]
     pub tab_instance: u64,
-    /// Opaque per-domain view state — canvas zoom/pan, etc. `null` when
-    /// the domain has none. The Modelica codec serializes its per-tab
-    /// `Viewport` here; USD leaves it null. Generic `Value` keeps
-    /// `lunco-workbench` domain-agnostic.
+    /// Opaque per-domain view state — canvas zoom/pan, etc. The Modelica
+    /// codec serializes its per-tab `Viewport` here; domain codecs own any
+    /// other view state. Generic `Value` keeps `lunco-workbench`
+    /// domain-agnostic.
     #[serde(default)]
     pub view_state: serde_json::Value,
 }
@@ -159,7 +164,7 @@ pub trait DocumentSessionCodec: Send + Sync + 'static {
     /// Stable codec id, stored in [`DocumentSnapshot::kind`].
     fn kind(&self) -> &'static str;
     /// Cheap monotonic-ish signal that changes when this domain's open
-    /// set or any buffer changes (fold of doc ids + generations). Lets
+    /// set, buffers, or persisted views change. Lets
     /// capture skip the (allocating) snapshot build in the steady state
     /// — no per-frame buffer clones (AGENTS.md §7.1).
     fn revision(&self, world: &World) -> u64;
@@ -169,35 +174,61 @@ pub trait DocumentSessionCodec: Send + Sync + 'static {
     /// between the registry and the Workspace entry); it is not
     /// persisted — ids aren't stable across runs.
     fn capture(&self, world: &mut World) -> Vec<(u64, DocumentSnapshot)>;
+    /// Prepare one persisted snapshot for restoration without blocking the
+    /// ECS thread. Domain adapters use this to refresh clean file-backed
+    /// buffers from their current source before the synchronous document
+    /// registry admits them. The default keeps the stored snapshot as-is.
+    fn prepare_restore(
+        &self,
+        _world: &World,
+        snapshot: DocumentSnapshot,
+    ) -> Pin<Box<dyn Future<Output = PreparedDocumentSnapshot> + Send>> {
+        Box::pin(async move { PreparedDocumentSnapshot::new(snapshot) })
+    }
     /// Recreate one document from a snapshot, replaying the domain's
     /// normal open path (which opens the tab + registers the entry).
     /// Returns the freshly-allocated `DocumentId.raw()` so the workbench
     /// can remap the persisted dock tree's tab instance ids onto it;
     /// `None` if restore was a no-op (e.g. the registry was missing).
     fn restore(&self, world: &mut World, snap: &DocumentSnapshot) -> Option<u64>;
+    /// Reconcile a saved snapshot with an already-open document that has the
+    /// same origin. Domains can refresh a clean buffer from the prepared
+    /// snapshot while retaining a live dirty buffer. The default preserves the
+    /// already-open document unchanged.
+    fn restore_existing(
+        &self,
+        _world: &mut World,
+        _snap: &DocumentSnapshot,
+        live_id: u64,
+    ) -> Option<u64> {
+        Some(live_id)
+    }
     /// Apply the snapshot's opaque [`view_state`](DocumentSnapshot::view_state)
     /// (canvas zoom/pan, …) to the **live** document identified by
     /// `live_id` (`DocumentId.raw()`). Called for *every* restored doc —
     /// both freshly [`restore`](Self::restore)d ones **and** docs the app
     /// auto-opened that matched a snapshot (so a reopened diagram restores
     /// its camera even when the open itself was deduped). Default no-op for
-    /// domains without per-doc view state (USD). Runs after `restore`.
+    /// domains without additional per-doc view state. Runs after `restore`.
     fn apply_view_state(&self, _world: &mut World, _live_id: u64, _snap: &DocumentSnapshot) {}
-    /// Report how this doc's **dock tab instance id** maps from the saved
-    /// session to this one: `(old, new)` where `old` is
-    /// [`DocumentSnapshot::tab_instance`] (the instance id in the persisted
-    /// dock tree) and `new` is the live instance id after [`restore`] opened
-    /// the tab. Used only by 5a (dock-arrangement restore) to remap
-    /// `TabId::Instance` ids in the deserialized dock onto the live tabs.
-    /// `live_id` is the freshly-restored `DocumentId.raw()`. Returns `None`
-    /// when the domain has no dock tab to remap (USD) — the default.
-    fn instance_remap(
+    /// Whether a dock tab instance belongs to this saved document. The
+    /// default covers domains with one instance stored in `tab_instance`;
+    /// codecs with multiple views can recognize their extra instance ids.
+    fn owns_tab_instance(&self, snapshot: &DocumentSnapshot, instance: u64) -> bool {
+        snapshot.tab_instance == instance
+    }
+    /// Report each saved dock-tab instance remapped to its live instance.
+    /// This allows one document to own several views while keeping one
+    /// canonical document snapshot. `live_id` is the `DocumentId.raw()` after
+    /// [`restore`] (or document deduplication). Domains without instance tabs
+    /// return an empty vector.
+    fn instance_remaps(
         &self,
         _world: &mut World,
         _snap: &DocumentSnapshot,
         _live_id: u64,
-    ) -> Option<(u64, u64)> {
-        None
+    ) -> Vec<(u64, u64)> {
+        Vec::new()
     }
     /// The workbench `PanelId` string of the dock tab kind this codec's
     /// documents use (e.g. `"modelica_model_view"`). The dock remap (5a)
@@ -205,9 +236,40 @@ pub trait DocumentSessionCodec: Send + Sync + 'static {
     /// codec's own kind — different kinds share the `u64` instance space
     /// (e.g. a model-view tab and a plot tab can both be instance 1), so a
     /// flat instance→instance map would cross-rewrite them. `None` (default)
-    /// means [`instance_remap`](Self::instance_remap) is unused.
+    /// means [`instance_remaps`](Self::instance_remaps) is unused.
     fn dock_tab_kind(&self) -> Option<&'static str> {
         None
+    }
+    /// Return a dynamic dock-tab kind whose unmatched instances must be
+    /// discarded during restore. Stable-instance tabs should leave this unset.
+    fn discard_unmapped_dock_tab_kind(&self) -> Option<&'static str> {
+        None
+    }
+}
+
+/// Result of a domain's background preparation of one session document.
+pub struct PreparedDocumentSnapshot {
+    /// Snapshot admitted by the domain's normal restore path.
+    pub snapshot: DocumentSnapshot,
+    /// Read or recovery issue that should be shown in the application log.
+    pub warning: Option<String>,
+}
+
+impl PreparedDocumentSnapshot {
+    /// Create a prepared snapshot without a warning.
+    pub fn new(snapshot: DocumentSnapshot) -> Self {
+        Self {
+            snapshot,
+            warning: None,
+        }
+    }
+
+    /// Create a prepared snapshot with a visible recovery warning.
+    pub fn with_warning(snapshot: DocumentSnapshot, warning: impl Into<String>) -> Self {
+        Self {
+            snapshot,
+            warning: Some(warning.into()),
+        }
     }
 }
 
@@ -496,6 +558,12 @@ impl WorkspaceState {
     /// root, a missing / unreadable / corrupt file, or when the stored
     /// `twin_root` doesn't match (hash collision guard) — all mean "use defaults".
     pub fn load(twin_root: &Path) -> Option<Self> {
+        Self::load_with_json(twin_root).map(|(state, _)| state)
+    }
+
+    /// Load a state and retain the serialized value so the async save gate
+    /// can avoid rewriting an unchanged file after startup.
+    fn load_with_json(twin_root: &Path) -> Option<(Self, String)> {
         if twin_root.as_os_str().is_empty() {
             return None;
         }
@@ -535,7 +603,7 @@ impl WorkspaceState {
             );
             return None;
         }
-        Some(state)
+        Some((state, text))
     }
 
     /// Atomically write this state for its `twin_root` (tmp + rename so a
@@ -580,6 +648,10 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     h
 }
 
+fn workspace_session_key(root: &Path) -> String {
+    format!("{:016x}", fnv1a64(root.to_string_lossy().as_bytes()))
+}
+
 /// Resolve the on-disk path for a Twin's state file (the root must be
 /// non-empty):
 /// `<config>/workspace-state/<fnv1a-hex>.json`. Honours the
@@ -606,15 +678,44 @@ pub fn workspace_state_path(twin_root: &Path) -> PathBuf {
 /// only writes the file when this Twin's state actually changed.
 #[derive(Resource, Default)]
 struct WorkspaceStateLast {
-    /// Hex key of the Twin the snapshot belongs to.
+    /// Process-local key of the Twin root used to compare snapshots.
     key: Option<String>,
-    /// Pretty-printed JSON of the last-saved [`WorkspaceState`].
-    json: String,
+    /// Exact root path of the Twin the snapshot belongs to.
+    root: Option<PathBuf>,
+    /// Serialized value of the last-saved [`WorkspaceState`].
+    json: Option<String>,
     /// Cheap fold gating the (allocating) snapshot build — see
     /// [`gate_value`].
     rev: u64,
     /// Set once `rev` has been computed at least once.
     seeded: bool,
+}
+
+#[derive(Resource, Default)]
+struct PendingWorkspaceRestore(Option<WorkspaceRestoreTask>);
+
+struct WorkspaceRestoreTask {
+    twin: lunco_workspace::TwinId,
+    root: PathBuf,
+    initial_perspective: Option<String>,
+    loaded_json: Option<String>,
+    state: Option<WorkspaceState>,
+    task: WorkspaceRestoreTaskKind,
+}
+
+enum WorkspaceRestoreTaskKind {
+    Loading(Task<Option<(WorkspaceState, String)>>),
+    Preparing(Task<Vec<PreparedDocumentSnapshot>>),
+}
+
+#[derive(Resource, Default)]
+struct PendingWorkspaceSave(Option<WorkspaceSaveTask>);
+
+struct WorkspaceSaveTask {
+    key: String,
+    root: PathBuf,
+    rev: u64,
+    task: Task<Result<String, String>>,
 }
 
 /// Tracks restore progress so it fires once the app's own startup docs
@@ -633,12 +734,8 @@ struct AppliedTwin {
     /// Frames waited overall — a hard cap so restore still fires even if
     /// the doc set never stops churning.
     settle_budget: u32,
-    /// Set when the loaded state had documents but NONE resolved to a live
-    /// doc (restore produced nothing). Guards against the clobber footgun:
-    /// `initialized` is set before the restore body runs, so a restore that
-    /// silently no-ops would otherwise let the next persist overwrite the
-    /// saved session with an empty state. When this is set we skip persist
-    /// for the rest of the session, preserving the file untouched.
+    /// Set when any saved document could not be reconciled. This keeps a
+    /// partial restore from overwriting unresolved snapshot data on save.
     restore_failed: bool,
 }
 
@@ -648,9 +745,10 @@ struct AppliedTwin {
 /// `TabId::Instance` ids in the wrong key space: the dock instance is the
 /// domain's tab id (Modelica `ModelTabs` counter), NOT `DocumentId.raw()`,
 /// so the stale instance pointed at no live tab and rendered empty. Fixed
-/// by [`DocumentSessionCodec::instance_remap`] + [`DocumentSnapshot::tab_instance`]
-/// (old tab id → live tab id); `set_dock_from_json` now remaps mapped
-/// instances and KEEPS unmapped ones (stable-id tabs like the default plot).
+/// by [`DocumentSessionCodec::instance_remaps`] + [`DocumentSnapshot::tab_instance`]
+/// (old tab id → live tab id); `set_dock_from_json` remaps mapped instances,
+/// keeps unmatched stable-id tabs like the default plot, and drops unmatched
+/// document-backed tabs when their codec requests it.
 /// The codec's own `OpenTab` (fired before the dock is re-installed) opens +
 /// focuses the live tab, so the re-installed dock's matching instance
 /// renders. Restore still falls back gracefully (keeps the codec-opened
@@ -768,11 +866,10 @@ fn build_state(world: &mut World) -> Option<WorkspaceState> {
     let twin_root = active_twin_root(world)?;
     let perspective = with_layout(world, |layout, world| layout.active_perspective(world));
     let pairs = capture_documents(world);
-    // Active tab = index of the document whose live id matches the
-    // focused dock tab. The dock's focused leaf is authoritative;
-    // `WorkspaceResource.active_document` is a fallback for the rare
-    // path that sets it but never focuses a tab. Doc tabs carry their
-    // `DocumentId.raw()` as the instance, so this matches `pairs` ids.
+    // Active document = index of the snapshot whose live document or saved
+    // primary tab matches the focused dock tab. The dock's focused leaf is
+    // authoritative; `WorkspaceResource.active_document` is a fallback for
+    // the rare path that sets it but never focuses a tab.
     let active_id = with_layout(world, |layout, world| {
         layout.active_tab_instance(world).or_else(|| {
             world
@@ -781,7 +878,20 @@ fn build_state(world: &mut World) -> Option<WorkspaceState> {
                 .map(|id| id.raw())
         })
     });
-    let active_document = active_id.and_then(|aid| pairs.iter().position(|(id, _)| *id == aid));
+    let active_document = active_id.and_then(|aid| {
+        pairs.iter().position(|(id, snapshot)| {
+            *id == aid
+                || world
+                    .get_resource::<DocumentSessionRegistry>()
+                    .and_then(|registry| {
+                        registry
+                            .codecs
+                            .iter()
+                            .find(|codec| codec.kind() == snapshot.kind)
+                    })
+                    .is_some_and(|codec| codec.owns_tab_instance(snapshot, aid))
+        })
+    });
     // Stamp each snapshot with its live id so the persisted dock tree's
     // tab instances can be remapped onto the restored docs next launch.
     let documents: Vec<DocumentSnapshot> = pairs
@@ -793,9 +903,7 @@ fn build_state(world: &mut World) -> Option<WorkspaceState> {
         .collect();
     // Capture every perspective's dock tree (active live + each cached) —
     // each perspective's chrome is checked individually inside the capture,
-    // so a transient chrome-less dock (a centre-driven perspective whose dock
-    // momentarily lost its side/right/bottom panels — e.g. mid-switch through
-    // the viewport-only rebuild branch) is skipped rather than round-tripping
+    // so a transient chrome-less dock is skipped rather than round-tripping
     // as a layout with missing panels.
     let docks = if RESTORE_DOCK_ARRANGEMENT {
         with_layout(world, |layout, world| {
@@ -825,6 +933,7 @@ fn restore_workspace_state(world: &mut World) {
     // No-folder sessions use the host's startup layout. They do not share a
     // process-wide document snapshot across luncosim, lunica, and other hosts.
     if active.is_none() {
+        world.resource_mut::<PendingWorkspaceRestore>().0 = None;
         let changed = {
             let mut applied = world.resource_mut::<AppliedTwin>();
             if applied.initialized && applied.twin.is_some() {
@@ -842,6 +951,17 @@ fn restore_workspace_state(world: &mut World) {
         }
         return;
     }
+
+    if world
+        .resource::<PendingWorkspaceRestore>()
+        .0
+        .as_ref()
+        .is_some_and(|pending| pending.twin == active.unwrap())
+    {
+        poll_workspace_restore(world);
+        return;
+    }
+    world.resource_mut::<PendingWorkspaceRestore>().0 = None;
 
     // Decide whether to run this frame. Startup restore waits for the
     // doc set to settle (apps auto-open async); a later Twin switch runs
@@ -893,16 +1013,122 @@ fn restore_workspace_state(world: &mut World) {
         .resource_mut::<WorkspaceStateRestorePolicy>()
         .take_initial_perspective();
 
-    let state = WorkspaceState::load(&root);
-    world.resource_mut::<RuntimeSurfaceLayouts>().replace(
-        state
-            .as_ref()
-            .map(|state| state.runtime_surface_layouts.clone())
-            .unwrap_or_default(),
-    );
-    let Some(state) = state else {
+    let load_root = root.clone();
+    let task = AsyncComputeTaskPool::get()
+        .spawn(async move { WorkspaceState::load_with_json(&load_root) });
+    world.resource_mut::<PendingWorkspaceRestore>().0 = Some(WorkspaceRestoreTask {
+        twin: active.unwrap(),
+        root,
+        initial_perspective,
+        loaded_json: None,
+        state: None,
+        task: WorkspaceRestoreTaskKind::Loading(task),
+    });
+}
+
+fn poll_workspace_restore(world: &mut World) {
+    let Some(mut pending) = world.resource_mut::<PendingWorkspaceRestore>().0.take() else {
         return;
     };
+    let active = world.resource::<WorkspaceResource>().active_twin;
+    let current_root = active_twin_root(world);
+    if active != Some(pending.twin) || current_root.as_ref() != Some(&pending.root) {
+        return;
+    }
+
+    if let WorkspaceRestoreTaskKind::Loading(task) = &mut pending.task {
+        let Some(loaded) = block_on(future::poll_once(task)) else {
+            world.resource_mut::<PendingWorkspaceRestore>().0 = Some(pending);
+            return;
+        };
+        let Some((state, json)) = loaded else {
+            world.resource_mut::<RuntimeSurfaceLayouts>().clear();
+            if let Some(perspective) = pending.initial_perspective.take() {
+                with_layout_mut(world, |layout, world| {
+                    layout.activate_perspective_by_str(world, &perspective);
+                });
+            }
+            seed_workspace_state_last(world, &pending.root, None);
+            return;
+        };
+        let preparation = prepare_workspace_documents(world, &state);
+        pending.state = Some(state);
+        pending.loaded_json = Some(json);
+        pending.task = WorkspaceRestoreTaskKind::Preparing(preparation);
+        world.resource_mut::<PendingWorkspaceRestore>().0 = Some(pending);
+        return;
+    }
+
+    let WorkspaceRestoreTaskKind::Preparing(task) = &mut pending.task else {
+        world.resource_mut::<PendingWorkspaceRestore>().0 = Some(pending);
+        return;
+    };
+    let Some(prepared) = block_on(future::poll_once(task)) else {
+        world.resource_mut::<PendingWorkspaceRestore>().0 = Some(pending);
+        return;
+    };
+    let mut state = pending
+        .state
+        .take()
+        .expect("document preparation has a workspace state");
+    for (snapshot, prepared) in state.documents.iter_mut().zip(prepared) {
+        *snapshot = prepared.snapshot;
+        if let Some(warning) = prepared.warning {
+            warn!("[WorkspaceState] {}", warning);
+        }
+    }
+    seed_workspace_state_last(world, &pending.root, pending.loaded_json.take());
+    apply_workspace_state(world, state, pending.initial_perspective.take());
+}
+
+fn prepare_workspace_documents(
+    world: &mut World,
+    state: &WorkspaceState,
+) -> Task<Vec<PreparedDocumentSnapshot>> {
+    let mut preparations = Vec::with_capacity(state.documents.len());
+    world.resource_scope(|world, registry: Mut<DocumentSessionRegistry>| {
+        for snapshot in &state.documents {
+            if let Some(codec) = registry
+                .codecs
+                .iter()
+                .find(|codec| codec.kind() == snapshot.kind)
+            {
+                preparations.push(codec.prepare_restore(world, snapshot.clone()));
+            } else {
+                let snapshot = snapshot.clone();
+                preparations.push(
+                    Box::pin(async move { PreparedDocumentSnapshot::new(snapshot) })
+                        as Pin<Box<dyn Future<Output = PreparedDocumentSnapshot> + Send>>,
+                );
+            }
+        }
+    });
+    AsyncComputeTaskPool::get().spawn(async move {
+        let mut prepared = Vec::with_capacity(preparations.len());
+        for preparation in preparations {
+            prepared.push(preparation.await);
+        }
+        prepared
+    })
+}
+
+fn seed_workspace_state_last(world: &mut World, root: &Path, json: Option<String>) {
+    let mut last = world.resource_mut::<WorkspaceStateLast>();
+    last.key = Some(workspace_session_key(root));
+    last.root = Some(root.to_path_buf());
+    last.json = json;
+    last.rev = 0;
+    last.seeded = false;
+}
+
+fn apply_workspace_state(
+    world: &mut World,
+    state: WorkspaceState,
+    initial_perspective: Option<String>,
+) {
+    world
+        .resource_mut::<RuntimeSurfaceLayouts>()
+        .replace(state.runtime_surface_layouts.clone());
 
     // Perspective: reconcile against the registered set (unknown → drop).
     if let Some(persp) = initial_perspective.or(state.perspective) {
@@ -918,13 +1144,12 @@ fn restore_workspace_state(world: &mut World) {
     // no-op and the per-perspective dock seed still restores panel layouts /
     // split sizes (a no-doc 3D session still has resized panels).
 
-    // Dedup against docs the app already opened on its own (auto-open,
-    // cosim): skip any saved snapshot whose origin is already present.
-    // Untitled origins carry a per-run name so they never collide and
-    // always re-open — exactly right for scratch buffers.
-    let existing: Vec<(u64, DocumentOrigin)> = capture_documents(world)
+    // Reconcile docs the app already opened on its own (auto-open, cosim)
+    // through their domain codec. File-backed codecs use the registry's
+    // same-file identity; untitled origins retain their session names.
+    let mut resolved_documents: Vec<(String, u64, DocumentOrigin)> = capture_documents(world)
         .into_iter()
-        .map(|(id, s)| (id, s.origin))
+        .map(|(id, snapshot)| (snapshot.kind, id, snapshot.origin))
         .collect();
 
     // Restore order: non-active first, the active doc last, so the
@@ -938,56 +1163,73 @@ fn restore_workspace_state(world: &mut World) {
     }
 
     // (dock kind, saved tab instance) → live instance (see
-    // `DocumentSnapshot::tab_instance` / `instance_remap` / `dock_tab_kind`),
+    // `DocumentSnapshot::tab_instance` / `instance_remaps` / `dock_tab_kind`),
     // so the persisted dock tree's `TabId::Instance` ids are remapped onto
     // the live tabs — scoped per kind so a model-view tab and a plot tab that
     // share an instance number aren't cross-rewritten.
     let mut id_map: std::collections::HashMap<(&'static str, u64), u64> =
         std::collections::HashMap::new();
-    let mut any_live = false;
+    let mut discard_unmapped_kinds = HashSet::new();
+    let mut restore_incomplete = false;
 
     world.resource_scope(|world, reg: Mut<DocumentSessionRegistry>| {
+        discard_unmapped_kinds.extend(
+            reg.codecs
+                .iter()
+                .filter_map(|codec| codec.discard_unmapped_dock_tab_kind()),
+        );
         for idx in order {
             let snap = &state.documents[idx];
             let codec = reg.codecs.iter().find(|c| c.kind() == snap.kind);
-            // Resolve the live id: an already-open doc (auto-open / cosim /
-            // dedup) reuses its live id; otherwise the codec recreates it.
-            let live_id = if let Some((live, _)) = existing.iter().find(|(_, o)| o == &snap.origin)
-            {
-                Some(*live)
-            } else if let Some(c) = codec {
-                c.restore(world, snap)
+            // Resolve the live id: same-origin startup docs reconcile through
+            // the domain codec, which can restore saved buffers without
+            // minting a second identity for the file.
+            let existing_id = resolved_documents
+                .iter()
+                .find(|(kind, _, origin)| kind == &snap.kind && origin == &snap.origin)
+                .map(|(_, live, _)| *live);
+            let live_id = if let Some(live) = existing_id {
+                if let Some(codec) = codec {
+                    codec.restore_existing(world, snap, live)
+                } else {
+                    Some(live)
+                }
+            } else if let Some(codec) = codec {
+                codec.restore(world, snap)
             } else {
                 warn!(
                     "[WorkspaceState] no codec for kind {:?}; dropping restored doc {:?}",
                     snap.kind, snap.title
                 );
+                restore_incomplete = true;
                 None
             };
+            if let Some(live_id) = live_id {
+                resolved_documents.push((snap.kind.clone(), live_id, snap.origin.clone()));
+            } else {
+                restore_incomplete = true;
+            }
             // Apply the per-doc view state (zoom/pan) and collect the dock
             // tab-instance remap, regardless of whether the doc was freshly
             // restored or matched an already-open one.
             if let (Some(c), Some(lid)) = (codec, live_id) {
-                any_live = true;
                 c.apply_view_state(world, lid, snap);
-                if let (Some(kind), Some((old_inst, new_inst))) =
-                    (c.dock_tab_kind(), c.instance_remap(world, snap, lid))
-                {
-                    id_map.insert((kind, old_inst), new_inst);
+                if let Some(kind) = c.dock_tab_kind() {
+                    for (old_inst, new_inst) in c.instance_remaps(world, snap, lid) {
+                        id_map.insert((kind, old_inst), new_inst);
+                    }
                 }
             }
         }
     });
 
-    // Clobber guard: the saved state had docs but none resolved live →
-    // restore effectively failed. Flag it so `persist_workspace_state`
-    // skips writing (an empty state would overwrite the good session).
-    if !state.documents.is_empty() && !any_live {
+    // Clobber guard: any unresolved snapshot makes this restore incomplete.
+    // Skip persistence so a partial restore cannot overwrite saved state.
+    if restore_incomplete {
         world.resource_mut::<AppliedTwin>().restore_failed = true;
         warn!(
-            "[WorkspaceState] restore loaded {} doc(s) but none became live; \
-             skipping persist this session to preserve the saved file",
-            state.documents.len()
+            "[WorkspaceState] some saved documents could not be restored; \
+             skipping persist this session to preserve the saved file"
         );
     }
 
@@ -1001,7 +1243,7 @@ fn restore_workspace_state(world: &mut World) {
     // them. See RESTORE_DOCK_ARRANGEMENT.
     if RESTORE_DOCK_ARRANGEMENT {
         with_layout_mut(world, |layout, world| {
-            layout.seed_perspective_docks(world, &state.docks, &id_map);
+            layout.seed_perspective_docks(world, &state.docks, &id_map, &discard_unmapped_kinds);
         });
     }
 }
@@ -1010,6 +1252,19 @@ fn restore_workspace_state(world: &mut World) {
 /// [`gate_value`] (so buffers aren't cloned every frame), then
 /// snapshot-compared like recents before any disk write. Native-only.
 fn persist_workspace_state(world: &mut World) {
+    if world.resource::<PendingWorkspaceRestore>().0.is_some() {
+        return;
+    }
+
+    if let Some(mut pending) = world.resource_mut::<PendingWorkspaceSave>().0.take() {
+        let Some(result) = block_on(future::poll_once(&mut pending.task)) else {
+            world.resource_mut::<PendingWorkspaceSave>().0 = Some(pending);
+            return;
+        };
+        record_workspace_save_result(world, pending.key, pending.root, pending.rev, result);
+        return;
+    }
+
     // Don't persist until the startup restore has run — otherwise the
     // app's own auto-opened docs would overwrite the saved session
     // before `restore_workspace_state` gets to read it (the systems are
@@ -1029,48 +1284,81 @@ fn persist_workspace_state(world: &mut World) {
     let Some(rev) = gate_value(world) else {
         return;
     };
+    let Some(root) = active_twin_root(world) else {
+        return;
+    };
+    let key = workspace_session_key(&root);
     {
         let last = world.resource::<WorkspaceStateLast>();
-        if last.seeded && last.rev == rev {
+        if last.seeded && last.rev == rev && last.root.as_ref() == Some(&root) {
             return;
         }
     }
     let Some(state) = build_state(world) else {
         return;
     };
-    let key = format!(
-        "{:016x}",
-        fnv1a64(
-            lunco_storage::canonicalize_file_path(&state.twin_root)
-                .unwrap_or_else(|_| state.twin_root.clone())
-                .to_string_lossy()
-                .as_bytes(),
-        )
-    );
-    let current = match serde_json::to_string_pretty(&state) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("[WorkspaceState] serialise failed: {e}");
-            return;
+    let previous_key = world.resource::<WorkspaceStateLast>().key.clone();
+    let previous_json = world.resource::<WorkspaceStateLast>().json.clone();
+    let task_key = key.clone();
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        let json = serde_json::to_string_pretty(&state).map_err(|error| error.to_string())?;
+        if previous_key.as_deref() != Some(task_key.as_str())
+            || previous_json.as_deref() != Some(json.as_str())
+        {
+            #[cfg(not(target_arch = "wasm32"))]
+            state
+                .save_serialized(&json)
+                .map_err(|error| error.to_string())?;
         }
-    };
+        Ok(json)
+    });
+    world.resource_mut::<PendingWorkspaceSave>().0 = Some(WorkspaceSaveTask {
+        key,
+        root,
+        rev,
+        task,
+    });
+}
+
+fn record_workspace_save_result(
+    world: &mut World,
+    key: String,
+    root: PathBuf,
+    rev: u64,
+    result: Result<String, String>,
+) {
     let mut last = world.resource_mut::<WorkspaceStateLast>();
+    last.key = Some(key);
+    last.root = Some(root);
     last.rev = rev;
     last.seeded = true;
-    if last.key.as_deref() == Some(key.as_str()) && current == last.json {
+    match result {
+        Ok(json) => last.json = Some(json),
+        Err(error) => warn!("[WorkspaceState] save failed: {error}"),
+    }
+}
+
+/// Keep process shutdown behind the workspace snapshot writer. The task owns
+/// serialized state and uses the normal `lunco-storage` atomic write, so it
+/// can finish without reading or mutating ECS state.
+fn wait_for_workspace_save_before_exit(world: &mut World) {
+    let has_exit = world
+        .get_resource::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+        .is_some_and(|messages| !messages.is_empty());
+    if !has_exit {
         return;
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        // Reuse the string we just serialized for the change-compare —
-        // `save()` would otherwise serialize the same state again (CQ-209).
-        if let Err(e) = state.save_serialized(&current) {
-            warn!("[WorkspaceState] save failed: {e}");
-            return;
-        }
-    }
-    last.key = Some(key);
-    last.json = current;
+    let Some(WorkspaceSaveTask {
+        key,
+        root,
+        rev,
+        task,
+    }) = world.resource_mut::<PendingWorkspaceSave>().0.take()
+    else {
+        return;
+    };
+    let result = block_on(task);
+    record_workspace_save_result(world, key, root, rev, result);
 }
 
 /// Registers per-Twin workspace-state load/save for a host layout.
@@ -1091,6 +1379,8 @@ impl Plugin for WorkspaceStatePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(LayoutProvider(std::sync::Arc::clone(&self.provider)))
             .init_resource::<WorkspaceStateLast>()
+            .init_resource::<PendingWorkspaceRestore>()
+            .init_resource::<PendingWorkspaceSave>()
             .init_resource::<AppliedTwin>()
             .init_resource::<WorkspaceStateRestorePolicy>()
             .init_resource::<RuntimeSurfaceLayouts>()
@@ -1099,7 +1389,8 @@ impl Plugin for WorkspaceStatePlugin {
             .add_systems(
                 Update,
                 (restore_workspace_state, persist_workspace_state).chain(),
-            );
+            )
+            .add_systems(Last, wait_for_workspace_save_before_exit);
     }
 }
 
@@ -1123,6 +1414,38 @@ mod tests {
             Some("sandbox_view")
         );
         assert_eq!(policy.take_initial_perspective(), None);
+    }
+
+    #[test]
+    fn app_exit_waits_for_workspace_snapshot_write() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<bevy::app::AppExit>();
+        app.init_resource::<PendingWorkspaceSave>();
+        app.init_resource::<WorkspaceStateLast>();
+        let task = AsyncComputeTaskPool::get().spawn(async { Ok("saved snapshot".to_owned()) });
+        app.world_mut().resource_mut::<PendingWorkspaceSave>().0 = Some(WorkspaceSaveTask {
+            key: "twin-key".into(),
+            root: PathBuf::from("/twin"),
+            rev: 42,
+            task,
+        });
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+            .write(bevy::app::AppExit::Success);
+
+        wait_for_workspace_save_before_exit(app.world_mut());
+
+        assert!(
+            app.world()
+                .resource::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
+                .len()
+                == 1
+        );
+        let last = app.world().resource::<WorkspaceStateLast>();
+        assert_eq!(last.json.as_deref(), Some("saved snapshot"));
+        assert_eq!(last.rev, 42);
+        assert!(last.seeded);
     }
 
     /// FNV-1a is stable for a given input — the keying must not drift,

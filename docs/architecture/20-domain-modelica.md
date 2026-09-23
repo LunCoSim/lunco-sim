@@ -369,6 +369,13 @@ FixedUpdate:
   ModelicaSet::SpawnRequests      — send next Step command with fixed dt
 ```
 
+The worker command stream is submitted in stable `GlobalEntityId` order, with
+the world-local entity key as a tie-breaker for unaddressable local models.
+That ordering keeps serialized worker service independent of ECS query layout;
+it does not make adaptive-solver trajectories bit-reproducible across machines.
+The remaining cross-domain admission and replay requirements are recorded in
+[`62-deterministic-runtime-and-async-boundaries.md`](62-deterministic-runtime-and-async-boundaries.md).
+
 See [`22-domain-cosim.md`](22-domain-cosim.md) for the full pipeline.
 
 The render/update-side engine synchronizer is separately revision-gated: the

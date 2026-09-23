@@ -12,7 +12,6 @@ use lunco_celestial_spatial_core::{
     update_reference_frame_index, AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSunPresentation,
     LocalGravityField, OrbitalViewPin, ReferenceFrameIndex, SolarSystemRoot,
 };
-use lunco_render::SceneCamera;
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
@@ -130,14 +129,15 @@ struct CelestialPresentationPacing {
 fn refresh_celestial_presentation_pacing(
     celestial: Res<lunco_time::CelestialTime>,
     frames: Query<(), With<big_space_setup::CelestialPresentationGrid>>,
-    cameras: Query<&Camera, With<SceneCamera>>,
+    viewport: Res<lunco_viewport_core::SceneViewport>,
     mut demand: ResMut<lunco_core_runtime::FramePacingDemand>,
     mut pacing: ResMut<CelestialPresentationPacing>,
 ) {
     let requested = celestial.delta_secs.is_finite()
         && celestial.delta_secs != 0.0
         && !frames.is_empty()
-        && cameras.iter().any(|camera| camera.is_active);
+        && viewport.visible
+        && viewport.active_camera.is_some();
     if requested == pacing.requested {
         return;
     }
@@ -761,15 +761,19 @@ mod pacing_tests {
         let mut app = App::new();
         app.init_resource::<lunco_time::CelestialTime>()
             .init_resource::<lunco_core_runtime::FramePacingDemand>()
+            .init_resource::<lunco_viewport_core::SceneViewport>()
             .init_resource::<CelestialPresentationPacing>();
         app.add_systems(Update, refresh_celestial_presentation_pacing);
         app.add_systems(
             lunco_core::SceneTeardown,
             release_celestial_presentation_pacing,
         );
-        let mut camera = Camera::default();
-        camera.is_active = true;
-        app.world_mut().spawn((camera, SceneCamera::default()));
+        let camera = app.world_mut().spawn_empty().id();
+        let mut viewport = app
+            .world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>();
+        viewport.visible = true;
+        viewport.active_camera = Some(camera);
         app.world_mut()
             .spawn(big_space_setup::CelestialPresentationGrid {
                 body: lunco_celestial::ephemeris_id::EARTH,

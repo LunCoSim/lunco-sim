@@ -18,13 +18,13 @@ use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_workbench_core::commands::OpenTab;
 use lunco_workbench_state::{
-    finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot,
+    DocumentSessionCodec, DocumentSnapshot, finalize_revision, revision_term,
 };
 
 use crate::model_tabs::ModelTabs;
-use crate::ui::document_context::{is_generated_document, ModelicaDocuments};
-use crate::ui::panels::canvas_diagram::CanvasDiagramState;
 use crate::ui::MODEL_VIEW_KIND;
+use crate::ui::document_context::{ModelicaDocuments, is_generated_document};
+use crate::ui::panels::canvas_diagram::CanvasDiagramState;
 use lunco_modelica_runtime::generated_source::is_generated_origin;
 
 const KIND: &str = "modelica";
@@ -218,23 +218,28 @@ impl DocumentSessionCodec for ModelicaSessionCodec {
         }
     }
 
-    fn instance_remap(
+    fn instance_remaps(
         &self,
         world: &mut World,
         snap: &DocumentSnapshot,
         live_id: u64,
-    ) -> Option<(u64, u64)> {
+    ) -> Vec<(u64, u64)> {
         // Map the saved dock tab instance (old ModelTabs id) to the live one
         // `restore` just opened for this doc. `restore` calls
         // `ensure_for(doc, None)`, so the live primary tab exists; look it up
         // read-only. No valid id recorded (0, e.g. an older saved workspace) → nothing to
         // remap.
         if snap.tab_instance == 0 {
-            return None;
+            return Vec::new();
         }
         let doc = DocumentId::new(live_id);
-        let new_inst = world.get_resource::<ModelTabs>()?.primary_tab_for(doc)?;
-        Some((snap.tab_instance, new_inst))
+        let Some(new_inst) = world
+            .get_resource::<ModelTabs>()
+            .and_then(|tabs| tabs.primary_tab_for(doc))
+        else {
+            return Vec::new();
+        };
+        vec![(snap.tab_instance, new_inst)]
     }
 
     fn dock_tab_kind(&self) -> Option<&'static str> {

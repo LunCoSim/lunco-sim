@@ -25,8 +25,8 @@ use lunco_usd_data::usd_data::UsdData;
 use lunco_usd_data::usd_data::UsdDataExt;
 use lunco_usd_document::document::LayerId;
 
-use crate::loaded_stages::{UsdBrowserView, UsdStageRow};
 use crate::USD_CONNECTION_CANVAS_PANEL_ID;
+use crate::loaded_stages::{UsdBrowserView, UsdStageRow};
 use lunco_usd_viewport_core::{OpenUsdPreview, UsdPreviewId, UsdViewportState};
 fn stage_in_active_scope(
     row: &UsdStageRow,
