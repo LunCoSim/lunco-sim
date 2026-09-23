@@ -82,7 +82,8 @@ use lunco_usd_sim_authoring::{
     SuspensionParams, WheelParams,
 };
 use lunco_usd_sim_core::{
-    GroundColliderPending, PendingDifferential, PhysicalWheel, UsdSimProcessed, UsdSimSet,
+    GroundColliderPending, PendingDifferential, PendingEntityWork, PhysicalWheel, UsdSimProcessed,
+    UsdSimSet,
 };
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
@@ -99,9 +100,9 @@ mod wheel_runtime;
 /// 2. Generic USD connection derivation — connects authored controller outputs to
 ///    wheel and joint ports through the common co-simulation fabric
 ///
-/// The observer `on_add_usd_sim_prim` intentionally does minimal work. All processing
-/// is deferred to the `process_usd_sim_prims` system so the canonical stage and
-/// render-free appearance intent are available at the projection boundary.
+/// Lifecycle observers coalesce candidate entity IDs. Processing stays in
+/// `process_usd_sim_prims` after visual projection, where canonical stage data
+/// and render-free appearance intent are available.
 ///
 /// # Wheel kind dispatch (no custom schemas)
 ///
@@ -162,6 +163,16 @@ struct StageJointTopology {
 #[derive(Resource, Default)]
 struct JointTopologyIndex {
     by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, StageJointTopology>,
+}
+
+/// Lifecycle-queued USD prims awaiting simulation projection.
+#[derive(Resource)]
+struct PendingUsdSimPrimWork(PendingEntityWork);
+
+impl Default for PendingUsdSimPrimWork {
+    fn default() -> Self {
+        Self(PendingEntityWork::with_initial_discovery())
+    }
 }
 
 impl JointTopologyIndex {
@@ -374,6 +385,8 @@ impl Plugin for UsdSimPlugin {
         .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_runtime_safety);
         app.add_systems(lunco_core::SceneTeardown, retire_scene_cameras);
+        app.init_resource::<PendingUsdSimPrimWork>();
+        app.add_systems(lunco_core::SceneTeardown, reset_usd_sim_prim_work);
         // Client-only: reconstruct a remote rover's wheels from its chassis
         // (kinematic followers — wheels are no longer replicated), then re-derive
         // the cosmetic visual roll. Chained so the visual spin layers on the
@@ -384,19 +397,18 @@ impl Plugin for UsdSimPlugin {
                 .chain()
                 .run_if(|t: Res<Time<Virtual>>| !t.is_paused() && t.relative_speed_f64() > 0.0),
         )
-        .add_observer(on_add_usd_sim_prim)
+        .add_observer(queue_added_usd_sim_prim)
+        .add_observer(queue_projected_usd_sim_prim)
+        .add_observer(forget_removed_usd_sim_prim)
+        .add_observer(forget_unprojected_usd_sim_prim)
+        .add_observer(queue_invalidated_usd_sim_prim)
         .add_systems(PreUpdate, resolve_differential_coupling)
-        // `process_usd_sim_prims` does a per-stage joint scan + per-
-        // entity dispatch — too coupled to fit cleanly into a single
-        // `OnAdd<UsdSceneProjected>` observer. Gating with `run_if`
-        // skips the system entirely on frames with no unprocessed
-        // USD prim (archetype-level check, near-zero cost).
         .init_resource::<GroundColliderPending>()
         .init_resource::<JointTopologyIndex>()
         .add_systems(
             Update,
             (process_usd_sim_prims
-                .run_if(any_unprocessed_usd_sim)
+                .run_if(any_pending_usd_sim)
                 .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),)
                 .in_set(UsdSimSet::Projection),
         );
@@ -448,21 +460,10 @@ pub mod marker;
 ///    - **Joint-based** (joint authored): `RigidBody`, `Collider`, `JointTorqueActuator` (constraint built by `lunco-usd-avian`; torque/speed come from the authored Modelica network)
 ///    - **Raycast** (no joint): `WheelRaycast`, `RayCaster` (entity split into physics + visual child)
 ///
-/// Run condition: true when any visually projected `UsdPrimPath` entity still
-/// lacks `UsdSimProcessed`. The visual marker is the projection boundary: sim
-/// processing must not race the bounded visual pass that applies primitive-axis
-/// presentation transforms.
-fn any_unprocessed_usd_sim(
-    q: Query<
-        (),
-        (
-            With<UsdPrimPath>,
-            With<lunco_usd_bevy_scene::UsdSceneProjected>,
-            Without<UsdSimProcessed>,
-        ),
-    >,
-) -> bool {
-    !q.is_empty()
+/// The observer-fed set makes settled-scene admission constant-time. The
+/// bootstrap flag covers entities that predate plugin installation.
+fn any_pending_usd_sim(pending: Res<PendingUsdSimPrimWork>) -> bool {
+    pending.0.has_work()
 }
 
 fn process_usd_sim_prims(
@@ -487,6 +488,7 @@ fn process_usd_sim_prims(
             Without<UsdSimProcessed>,
         ),
     >,
+    mut pending: ResMut<PendingUsdSimPrimWork>,
     all_prims: Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
     grid_components: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -503,11 +505,23 @@ fn process_usd_sim_prims(
     let started = web_time::Instant::now();
     let mut processed = 0usize;
     let mut authored_diagnostics = Vec::new();
+    let mut entities = pending.0.take_queued();
+    if pending.0.take_initial_discovery() {
+        // One bootstrap query covers prims that existed before this projector
+        // was installed. Normal arrivals are supplied by lifecycle observers.
+        entities.extend(query.iter().map(|(entity, ..)| entity));
+    }
+    let mut unprocessed: Vec<_> = entities
+        .into_iter()
+        .filter_map(|entity| query.get(entity).ok())
+        .collect();
+    unprocessed.sort_by(|left, right| left.1.path.cmp(&right.1.path));
+
     // Build (or refresh) each involved stage's immutable topology once. The
     // canonical generation is the authored-composition invalidation signal;
     // waiting for a mesh or another sibling no longer re-scans every spec.
     let mut seen_stages = HashSet::new();
-    for (_, prim_path, ..) in query.iter() {
+    for (_, prim_path, ..) in &unprocessed {
         let id = prim_path.stage_handle.id();
         if !seen_stages.insert(id) {
             continue;
@@ -525,8 +539,6 @@ fn process_usd_sim_prims(
     // that different order.  Sort by the stable composed USD path before
     // recording any simulation state.  This keeps physics admission independent
     // of loader timing while preserving the existing bounded work path.
-    let mut unprocessed: Vec<_> = query.iter().collect();
-    unprocessed.sort_by(|left, right| left.1.path.cmp(&right.1.path));
     for (
         entity,
         prim_path,
@@ -540,6 +552,18 @@ fn process_usd_sim_prims(
     ) in unprocessed
     {
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
+            let message = format!(
+                "USD simulation prim has an invalid path `{}`",
+                prim_path.path
+            );
+            push_usd_sim_diagnostic(
+                &mut authored_diagnostics,
+                &prim_path.path,
+                "prim-path",
+                message.clone(),
+            );
+            warn!("[usd-sim] {message}");
+            commands.entity(entity).try_insert(UsdSimProcessed);
             continue;
         };
 
@@ -557,11 +581,13 @@ fn process_usd_sim_prims(
 
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
+            pending.0.queue(entity);
             continue;
         };
         let (reader, _generation) =
             canonical.reader_for_entity(id, stage_asset, instance_projection);
         let Some(topology) = topology_index.get(id) else {
+            pending.0.queue(entity);
             continue;
         };
         process_usd_sim_prim_read(
@@ -2678,22 +2704,144 @@ fn seed_authored_sun_state(
     sun_state.publish(direction_to_sun.normalize(), Some(light.illuminance));
 }
 
-/// Observer that fires when a USD prim entity is added.
-///
-/// **Intentionally minimal.** All processing is handled by `process_usd_sim_prims` in
-/// the `Update` schedule to ensure assets are loaded first. This observer exists only
-/// to satisfy the plugin structure — it does nothing.
-fn on_add_usd_sim_prim(
-    _trigger: On<Add, UsdPrimPath>,
-    _query: Query<(Entity, &UsdPrimPath)>,
-    _stages: Res<Assets<UsdStageAsset>>,
-    mut _commands: Commands,
+/// Queue prim identity before its render projection becomes available.
+fn queue_added_usd_sim_prim(
+    trigger: On<Add, UsdPrimPath>,
+    unprocessed: Query<(), Without<UsdSimProcessed>>,
+    mut pending: ResMut<PendingUsdSimPrimWork>,
 ) {
-    // All processing is handled by process_usd_sim_prims in the Update schedule,
-    // AFTER sync_usd_visuals creates meshes. This ensures:
-    // 1. Assets are fully loaded before processing
-    // 2. Meshes exist so we can split wheel entities into physics + visual
-    // 3. No duplicate processing or duplicate FSW ports
+    if unprocessed.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+/// The visual projection marker is the readiness boundary for simulation
+/// projection, so its arrival reopens work even if the path arrived earlier.
+fn queue_projected_usd_sim_prim(
+    trigger: On<Add, lunco_usd_bevy_scene::UsdSceneProjected>,
+    eligible: Query<(), (With<UsdPrimPath>, Without<UsdSimProcessed>)>,
+    mut pending: ResMut<PendingUsdSimPrimWork>,
+) {
+    if eligible.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn forget_removed_usd_sim_prim(
+    trigger: On<Remove, UsdPrimPath>,
+    mut pending: ResMut<PendingUsdSimPrimWork>,
+) {
+    pending.0.forget(trigger.entity);
+}
+
+fn forget_unprojected_usd_sim_prim(
+    trigger: On<Remove, lunco_usd_bevy_scene::UsdSceneProjected>,
+    mut pending: ResMut<PendingUsdSimPrimWork>,
+) {
+    pending.0.forget(trigger.entity);
+}
+
+/// Live USD edits invalidate the processed marker; queue that prim again only
+/// while it still has the visual projection required by this owner.
+fn queue_invalidated_usd_sim_prim(
+    trigger: On<Remove, UsdSimProcessed>,
+    eligible: Query<
+        (),
+        (
+            With<UsdPrimPath>,
+            With<lunco_usd_bevy_scene::UsdSceneProjected>,
+        ),
+    >,
+    mut pending: ResMut<PendingUsdSimPrimWork>,
+) {
+    if eligible.contains(trigger.entity) {
+        pending.0.queue(trigger.entity);
+    }
+}
+
+fn reset_usd_sim_prim_work(mut pending: ResMut<PendingUsdSimPrimWork>) {
+    pending.0.clear();
+}
+
+#[cfg(test)]
+mod pending_sim_work_tests {
+    use super::*;
+
+    #[test]
+    fn simulation_projection_work_tracks_readiness_and_invalidation_edges() {
+        let mut app = App::new();
+        app.init_resource::<PendingUsdSimPrimWork>();
+        app.world_mut()
+            .resource_mut::<PendingUsdSimPrimWork>()
+            .0
+            .take_initial_discovery();
+        app.add_observer(queue_added_usd_sim_prim)
+            .add_observer(queue_projected_usd_sim_prim)
+            .add_observer(forget_removed_usd_sim_prim)
+            .add_observer(forget_unprojected_usd_sim_prim)
+            .add_observer(queue_invalidated_usd_sim_prim);
+
+        let waiting_for_visuals = app.world_mut().spawn(UsdPrimPath::default()).id();
+        assert!(app
+            .world()
+            .resource::<PendingUsdSimPrimWork>()
+            .0
+            .contains(waiting_for_visuals));
+
+        // Once a pass finds the path before visual projection, the visual
+        // lifecycle edge must enqueue it again when the readiness boundary lands.
+        app.world_mut()
+            .resource_mut::<PendingUsdSimPrimWork>()
+            .0
+            .take_queued();
+        app.world_mut()
+            .entity_mut(waiting_for_visuals)
+            .insert(lunco_usd_bevy_scene::UsdSceneProjected);
+        assert!(app
+            .world()
+            .resource::<PendingUsdSimPrimWork>()
+            .0
+            .contains(waiting_for_visuals));
+
+        app.world_mut()
+            .entity_mut(waiting_for_visuals)
+            .remove::<UsdPrimPath>();
+        assert!(!app
+            .world()
+            .resource::<PendingUsdSimPrimWork>()
+            .0
+            .contains(waiting_for_visuals));
+
+        let invalidated = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath::default(),
+                lunco_usd_bevy_scene::UsdSceneProjected,
+                UsdSimProcessed,
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(invalidated)
+            .remove::<UsdSimProcessed>();
+        assert!(app
+            .world()
+            .resource::<PendingUsdSimPrimWork>()
+            .0
+            .contains(invalidated));
+    }
+
+    #[test]
+    fn scene_teardown_clears_sim_projection_work() {
+        let mut app = App::new();
+        let mut pending = PendingUsdSimPrimWork::default();
+        pending.0.queue(Entity::from_bits(1));
+        app.insert_resource(pending)
+            .add_systems(lunco_core::SceneTeardown, reset_usd_sim_prim_work);
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        assert!(!app.world().resource::<PendingUsdSimPrimWork>().0.has_work());
+    }
 }
 
 /// Resolve an authored gear joint into a

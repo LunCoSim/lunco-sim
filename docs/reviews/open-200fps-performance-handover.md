@@ -553,8 +553,26 @@ Endpoint contract and identity observers, relevant removals, composed-stage
 edits, and network-authority changes are the wake sources. This removes the
 steady-update candidate scan without changing the reconciliation transaction;
 a bounded Tracy comparison is still needed to quantify the frame-time effect.
-The focused cosim library and USD-wiring integration tests pass (29 unit tests
-and 4 integration tests); no FPS gain is claimed from that source-level result.
+No FPS gain is claimed from that source-level result.
+
+Vehicle USD simulation discovery now uses its own instance of the same
+`PendingEntityWork` primitive in `lunco-usd-sim-core`. The former run condition
+and active-batch collection both queried every unprocessed projected prim; the
+new idle gate reads the work-set state, and active batches query only queued
+entities. `UsdPrimPath` and `UsdSceneProjected` arrivals, `UsdSimProcessed`
+invalidation, path/projection removal, bootstrap discovery, and `SceneTeardown`
+are covered by the lifecycle wiring. Missing stage assets remain queued until
+their readiness boundary arrives. Per-stage joint topology refresh now visits
+only stages represented in the current batch.
+
+Focused validation passed:
+
+- `nice -n 19 cargo test -j 4 -p lunco-usd-sim-core -p lunco-usd-sim-cosim -p lunco-usd-sim --lib` — 2 shared-contract, 31 cosim, and 23 vehicle tests.
+- `nice -n 19 cargo test -j 4 -p lunco-usd-sim-cosim --test usd_connection_mechanics` — 4 integration tests.
+
+This verifies lifecycle and wiring behavior, not a measured FPS improvement. A
+clean settled Summer Space School window and bounded Tracy attribution remain
+required.
 
 #### Current generated-domain cache and measured baseline
 
