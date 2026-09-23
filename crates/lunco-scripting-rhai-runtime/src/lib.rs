@@ -37,6 +37,10 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         if !app.is_plugin_added::<lunco_scripting::LunCoScriptingPlugin>() {
             app.add_plugins(lunco_scripting::LunCoScriptingPlugin);
         }
+        if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
+            app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+        }
+        app.init_resource::<lunco_core_runtime::SimulationProgress>();
 
         if !app.is_plugin_added::<lunco_scripting_rhai_world::source_asset::RhaiSourceAssetPlugin>()
         {
@@ -110,6 +114,12 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
                     commands::attach_embedded_scenarios,
                 )
                     .chain(),
+            )
+            .add_systems(
+                PreUpdate,
+                lunco_scripting_rhai_world::world_bridge::prepare_rhai_scenario_compiles
+                    .after(commands::attach_embedded_scenarios)
+                    .before(lunco_time::TimeSpineSet),
             )
             .add_systems(
                 FixedUpdate,

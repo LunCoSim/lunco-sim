@@ -38,7 +38,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use lunco_core::DTransform;
 use lunco_hash::Fnv1a;
@@ -1027,6 +1027,38 @@ fn build_task_ast(full: &AST, imports: Option<&AST>, asset_id: Option<&str>) -> 
         base.set_source(id);
     }
     base
+}
+
+fn scenario_compile_key(source: &str, asset_id: Option<&str>) -> u64 {
+    Fnv1a::default()
+        .write_bytes(source.as_bytes())
+        .write_u64(source.len() as u64)
+        .write_bytes(asset_id.unwrap_or("").as_bytes())
+        .finish()
+}
+
+fn prepare_compiled_program(
+    engine: &Engine,
+    prelude_ast: &AST,
+    source: &str,
+    asset_id: Option<&str>,
+) -> Result<Arc<CompiledProgram>, Diagnostic> {
+    let mut ast = compile_with_script_consts(engine, source)
+        .map_err(|error| rhai_diagnostic(error.to_string(), error.position()))?;
+    if let Some(id) = asset_id {
+        ast.set_source(id);
+    }
+    let ast = prelude_ast.merge(&ast);
+    let mask = ProgramMask::from_ast(&ast);
+    let imports_ast = build_hoisted_ast(engine, source, &ast, asset_id)
+        .map_err(|error| rhai_diagnostic(error.to_string(), error.position()))?;
+    let task_ast = build_task_ast(&ast, imports_ast.as_ref(), asset_id);
+    Ok(Arc::new(CompiledProgram {
+        ast,
+        imports_ast,
+        task_ast,
+        mask,
+    }))
 }
 
 fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<AST, String> {
@@ -2601,9 +2633,10 @@ impl ProgramMask {
 }
 
 /// A compiled scenario program: the prelude-merged `AST` + its derived hook mask.
-/// **Pure structure** — a function of `source` alone, so identical sources share
-/// one `Arc` across every entity and every relaunch (content-addressed by
-/// `fnv1a64(source)` in [`RhaiScenarioRuntime::compiled`]). Carries **no**
+/// **Pure structure** — a function of source, asset identity, and the installed
+/// prelude, so identical inputs share one `Arc` across entities and relaunches
+/// (content-addressed by [`scenario_compile_key`] in
+/// [`RhaiScenarioRuntime::compiled`]). Carries **no**
 /// per-instance state: the `scope` (const globals, seeded by a world-touching
 /// top-level run) and `this` map live in [`RhaiScenarioState`] and are never
 /// shared or cached — that firewall is what keeps the memo determinism-safe.
@@ -2644,9 +2677,21 @@ impl CompiledProgram {
 
 /// A memoized compile outcome: a shared program, or the diagnostic a bad source
 /// produced (cached so a fleet sharing one broken source parses + logs once).
+#[derive(Clone)]
 enum CacheEntry {
     Ok(Arc<CompiledProgram>),
     Err(Diagnostic),
+}
+
+type PreparedProgramResult = Result<Arc<CompiledProgram>, Diagnostic>;
+type SharedProgramPreparation = Arc<OnceLock<PreparedProgramResult>>;
+
+/// Worker-owned compilation output awaiting deterministic scenario-boundary
+/// adoption into the shared cache and per-entity runtime state.
+pub struct PreparedRhaiCompile {
+    key: u64,
+    runtime_revision: u64,
+    result: Result<Arc<CompiledProgram>, Diagnostic>,
 }
 
 /// Soft cap on the compile memo (see [`RhaiScenarioRuntime::compiled`]). At the
@@ -2781,15 +2826,18 @@ pub struct RhaiScenarioRuntime {
     /// normally mutates this uniquely-owned engine; if a task context still
     /// holds a clone, maintenance defers the rebuild until the next tick.
     engine: std::sync::Arc<Engine>,
+    /// Changes whenever the engine, prelude, or tool binding snapshot changes.
+    preparation_revision: u64,
     states: std::collections::HashMap<Entity, RhaiScenarioState>,
-    /// Content-addressed memo of compile *outcomes*, keyed by `fnv1a64(source)`.
-    /// The compile step (parse + prelude-merge + mask derive) is pure structure,
+    /// Content-addressed memo of compile outcomes, keyed by source and asset
+    /// identity. The compile step (parse + prelude-merge + mask derive) is pure structure,
     /// so identical sources — every rover with the same controller, every replay
     /// of a tutorial — reuse one `Arc` instead of re-parsing. Failures are cached
     /// too, so a fleet sharing a broken source parses + logs once, not per entity.
     /// A source edit bumps the doc generation → new source → new key → a fresh
-    /// entry. Not keyed on tool-lib/prelude generation: those affect the engine's
-    /// *runtime* module resolution, not the AST parse, so a cached AST stays valid.
+    /// entry. Tool-library changes affect runtime module resolution, not the AST;
+    /// prelude changes invalidate this memo because the prelude is merged into
+    /// each compiled AST.
     ///
     /// Bounded, not GC'd: entries are retained for cross-entity/replay reuse (even
     /// after an entity despawns), so an authoring session that edits a script many
@@ -2797,6 +2845,12 @@ pub struct RhaiScenarioRuntime {
     /// limit the whole map is cleared (a cold rebuild on the next compile, cheap
     /// since the working set is small). A finer LRU is deferred until measured.
     compiled: std::collections::HashMap<u64, CacheEntry>,
+    /// Coalesces concurrent worker misses for the same source identity and
+    /// runtime revision. Every waiting scenario receives the same immutable
+    /// artifact, so a fleet attaching one controller does not parse it once per
+    /// entity. Entries are retired on commit/invalidation and bounded like the
+    /// owner cache if all consumers disappear before a result is committed.
+    preparing: Mutex<std::collections::HashMap<(u64, u64), SharedProgramPreparation>>,
     /// The prelude compiled to an `AST`, merged into every scenario's AST so its
     /// helpers — including the engine-driven `__init_task` / `__run_mission`
     /// drivers — are resolvable by `call_fn` (which searches the AST, NOT the
@@ -2829,8 +2883,10 @@ impl Default for RhaiScenarioRuntime {
         engine.on_print(|s| info!("[rhai] {s}"));
         Self {
             engine: std::sync::Arc::new(engine),
+            preparation_revision: 0,
             states: std::collections::HashMap::new(),
             compiled: std::collections::HashMap::new(),
+            preparing: Mutex::new(std::collections::HashMap::new()),
             prelude_ast: AST::empty(),
             prelude_files: Vec::new(),
             prelude_ready: false,
@@ -2865,6 +2921,7 @@ impl RhaiScenarioRuntime {
         rebuilt.on_print(|s| info!("[rhai] {s}"));
         let prelude_ast = install_prelude_on_engine(&mut rebuilt, files.clone())?;
         self.engine = std::sync::Arc::new(rebuilt);
+        self.preparation_revision = self.preparation_revision.wrapping_add(1);
         self.prelude_ast = prelude_ast;
         self.prelude_files = files;
         self.prelude_ready = true;
@@ -2900,6 +2957,8 @@ pub fn prepare_builtin_rhai_assets(
     asset_server: Option<Res<AssetServer>>,
     sources: Option<Res<lunco_assets_runtime::script_source::ScriptSources>>,
     driver: Option<ResMut<lunco_scripting::scenario::ScenarioDriver<RhaiScenarioRuntime>>>,
+    admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
+    progress: ResMut<lunco_core_runtime::SimulationProgress>,
     barrier_participants: Option<ResMut<lunco_core_runtime::SimulationBarrierParticipants>>,
     asset_revision: Option<Res<crate::source_asset::RhaiSourceAssetRevision>>,
     mut status: ResMut<RhaiRuntimeStatus>,
@@ -2911,6 +2970,8 @@ pub fn prepare_builtin_rhai_assets(
         Some(asset_server),
         Some(sources),
         Some(mut driver),
+        mut admission,
+        mut progress,
         barrier_participants,
         Some(asset_revision),
     ) = (
@@ -2920,6 +2981,8 @@ pub fn prepare_builtin_rhai_assets(
         asset_server,
         sources,
         driver,
+        admission,
+        progress,
         barrier_participants,
         asset_revision,
     )
@@ -3096,7 +3159,7 @@ pub fn prepare_builtin_rhai_assets(
     status.ready = false;
     match driver.runtime.install_prelude(prelude) {
         Ok(()) => {
-            let invalidated = driver.invalidate();
+            let invalidated = driver.invalidate(&mut admission, &mut progress);
             if let Some(mut participants) = barrier_participants {
                 for entity in invalidated {
                     participants.remove_scenario_dependencies(entity);
@@ -3117,107 +3180,127 @@ pub fn prepare_builtin_rhai_assets(
 }
 
 impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
+    type PreparedCompile = PreparedRhaiCompile;
+
+    fn async_work_kind(&self) -> lunco_core_runtime::AsyncWorkKind {
+        lunco_core_runtime::AsyncWorkKind::RhaiCompilation
+    }
+
     fn invalidate(&mut self) {
         self.states.clear();
         self.compiled.clear();
+        self.preparing
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
     }
 
-    fn compile(
+    fn prepare_compile(
+        &self,
+        source: String,
+        asset_id: Option<String>,
+    ) -> lunco_scripting::scenario::CompilePreparation<Self::PreparedCompile> {
+        use lunco_scripting::scenario::CompilePreparation;
+
+        let key = scenario_compile_key(&source, asset_id.as_deref());
+        let runtime_revision = self.preparation_revision;
+        let cached = self.compiled.get(&key).cloned();
+        if let Some(cached) = cached {
+            let result = match cached {
+                CacheEntry::Ok(program) => Ok(program),
+                CacheEntry::Err(diagnostic) => Err(diagnostic),
+            };
+            return CompilePreparation::Ready(PreparedRhaiCompile {
+                key,
+                runtime_revision,
+                result,
+            });
+        }
+
+        let engine = self.engine.clone();
+        let prelude_ast = self.prelude_ast.clone();
+        let preparation = {
+            let mut preparing = self
+                .preparing
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if preparing.len() >= COMPILED_CACHE_CAP {
+                preparing.clear();
+            }
+            preparing
+                .entry((runtime_revision, key))
+                .or_insert_with(|| Arc::new(OnceLock::new()))
+                .clone()
+        };
+        CompilePreparation::Worker(Box::new(move || {
+            let result = preparation
+                .get_or_init(|| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        prepare_compiled_program(
+                            &engine,
+                            &prelude_ast,
+                            &source,
+                            asset_id.as_deref(),
+                        )
+                    }))
+                    .unwrap_or_else(|_| {
+                        Err(Diagnostic::error(
+                            "scenario compilation preparation panicked",
+                            None,
+                            None,
+                        ))
+                    })
+                })
+                .clone();
+            Ok(PreparedRhaiCompile {
+                key,
+                runtime_revision,
+                result,
+            })
+        }))
+    }
+
+    fn commit_compile(
         &mut self,
         entity: Entity,
-        source: &str,
+        prepared: Self::PreparedCompile,
         params: &lunco_scripting::doc::ScenarioParameters,
-        asset_id: Option<&str>,
     ) -> lunco_scripting::scenario::CompileOutcome {
         use lunco_scripting::scenario::CompileOutcome;
-        // ── Structure: the compiled program (parse + prelude-merge + hook mask)
-        // is a pure function of `source` AND of `asset_id` — the id is stamped
-        // onto the AST and is what a relative `import` anchors against, so the
-        // same text loaded from two locations is genuinely two programs. Both go
-        // into the content address; keying on the source alone would serve one
-        // scenario the other's imports.
-        let key = Fnv1a::default()
-            .write_bytes(source.as_bytes())
-            // Length-delimited so ("ab", "c") and ("a", "bc") cannot collide.
-            .write_u64(source.len() as u64)
-            .write_bytes(asset_id.unwrap_or("").as_bytes())
-            .finish();
-        let program = match self.compiled.get(&key) {
-            Some(CacheEntry::Ok(p)) => p.clone(),
-            // Cached failure: return the same diagnostic without re-parsing or
-            // re-logging (each entity still surfaces its own DocumentDiagnostics).
-            Some(CacheEntry::Err(d)) => return CompileOutcome::Failed(d.clone()),
-            None => {
-                // Bound the memo before inserting (see COMPILED_CACHE_CAP).
+        if prepared.runtime_revision != self.preparation_revision {
+            self.preparing
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&(prepared.runtime_revision, prepared.key));
+            return CompileOutcome::Stale;
+        }
+        self.preparing
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&(prepared.runtime_revision, prepared.key));
+        let program = match prepared.result {
+            Ok(program) => {
                 if self.compiled.len() >= COMPILED_CACHE_CAP {
                     self.compiled.clear();
                 }
-                match compile_with_script_consts(&self.engine, source) {
-                    Ok(mut ast) => {
-                        // Stamp the script's IDENTITY onto the AST. rhai reads it
-                        // back via `AST::source()` and hands it to
-                        // `ModuleResolver::resolve` as `source: Option<&str>` —
-                        // the anchor `ScriptSources::canonical_id` resolves a
-                        // relative `import "shot_camera"` against. Without it the
-                        // importer is `None` and a bare import is canonicalized
-                        // against the default root, i.e. the wrong place.
-                        //
-                        // A script with NO asset id (inline `info:sourceCode`, a
-                        // `RunScenario` string, a generated timeline) is left
-                        // unsourced on purpose: rhai then reports `None`, the
-                        // resolver takes its explicit "no anchor" branch, and a
-                        // relative import fails loudly instead of resolving
-                        // somewhere arbitrary. Absolute imports still work.
-                        if let Some(id) = asset_id {
-                            ast.set_source(id);
-                        }
-                        // Merge the prelude's functions into the scenario AST so
-                        // the engine-driven `__init_task`/`__run_mission` (and
-                        // every other prelude helper) are resolvable by `call_fn`.
-                        // Merging prelude←user lets a user function win on any
-                        // name/arity clash; the prelude has no top-level body, so
-                        // the later initialization pass executes only the user's
-                        // top-level body after its dependency plan is committed.
-                        //
-                        // Order matters for identity too: `AST::merge` takes the
-                        // source of the RIGHT operand (`merge_filtered_impl` in
-                        // rhai's `ast/ast.rs`), so prelude←user keeps the user
-                        // script's id and the prelude's absence of one does no harm.
-                        let ast = self.prelude_ast.merge(&ast);
-                        let mask = ProgramMask::from_ast(&ast);
-                        let imports_ast = match build_hoisted_ast(
-                            &self.engine,
-                            source,
-                            &ast,
-                            asset_id,
-                        ) {
-                            Ok(ast) => ast,
-                            Err(e) => {
-                                error!(
-                                    "[rhai] entity {entity:?} generated import scope failed: {e}"
-                                );
-                                let d = rhai_diagnostic(e.to_string(), e.position());
-                                self.compiled.insert(key, CacheEntry::Err(d.clone()));
-                                return CompileOutcome::Failed(d);
-                            }
-                        };
-                        let task_ast = build_task_ast(&ast, imports_ast.as_ref(), asset_id);
-                        let p = Arc::new(CompiledProgram {
-                            ast,
-                            imports_ast,
-                            task_ast,
-                            mask,
-                        });
-                        self.compiled.insert(key, CacheEntry::Ok(p.clone()));
-                        p
-                    }
-                    Err(e) => {
-                        error!("[rhai] entity {entity:?} compile error: {e}");
-                        let d = rhai_diagnostic(e.to_string(), e.position());
-                        self.compiled.insert(key, CacheEntry::Err(d.clone()));
-                        return CompileOutcome::Failed(d);
-                    }
+                self.compiled
+                    .insert(prepared.key, CacheEntry::Ok(program.clone()));
+                program
+            }
+            Err(diagnostic) => {
+                if let Some(CacheEntry::Err(cached)) = self.compiled.get(&prepared.key) {
+                    return CompileOutcome::Failed(cached.clone());
                 }
+                error!(
+                    "[rhai] entity {entity:?} compile error: {}",
+                    diagnostic.message
+                );
+                if self.compiled.len() >= COMPILED_CACHE_CAP {
+                    self.compiled.clear();
+                }
+                self.compiled
+                    .insert(prepared.key, CacheEntry::Err(diagnostic.clone()));
+                return CompileOutcome::Failed(diagnostic);
             }
         };
 
@@ -3239,6 +3322,10 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             },
         );
         CompileOutcome::Ready
+    }
+
+    fn preparation_revision(&self) -> u64 {
+        self.preparation_revision
     }
 
     fn initialize(&mut self, entity: Entity) -> Option<Diagnostic> {
@@ -3517,6 +3604,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 match prelude {
                     Ok(prelude_ast) => {
                         *engine = rebuilt;
+                        self.preparation_revision = self.preparation_revision.wrapping_add(1);
                         self.prelude_ast = prelude_ast;
                         self.tool_gen = cur;
                     }
@@ -3552,6 +3640,28 @@ pub fn tick_rhai_scenarios(world: &mut World) {
 /// startup and queued discrete events without running fixed-step behavior.
 pub fn tick_rhai_scenarios_while_paused(world: &mut World) {
     lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run_without_simulation_tick(
+        world,
+        ScriptLanguage::Rhai,
+    );
+}
+
+/// Admit authored Rhai compilation before the time spine can release the next
+/// simulation tick. A runtime or execution gate that is not ready retires its
+/// exact pending holds so disabled script execution cannot stall physics.
+pub fn prepare_rhai_scenario_compiles(world: &mut World) {
+    let runtime_ready = world
+        .get_resource::<RhaiRuntimeStatus>()
+        .is_some_and(|status| status.ready);
+    let execution_enabled = world
+        .get_resource::<lunco_scripting::scenario::ScenarioExecutionGate>()
+        .is_none_or(|gate| gate.enabled);
+    if !runtime_ready || !execution_enabled {
+        lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::cancel_pending_compiles(
+            world,
+        );
+        return;
+    }
+    lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::prepare_compiles(
         world,
         ScriptLanguage::Rhai,
     );
@@ -4188,7 +4298,113 @@ mod tests {
     use lunco_core::{
         RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeRoute,
     };
+    use lunco_scripting::scenario::{CompileOutcome, CompilePreparation, ScenarioRuntime};
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
+
+    #[test]
+    fn scenario_compile_runs_as_immutable_prep_and_commits_before_initialization() {
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        let entity = bevy::prelude::World::new().spawn_empty().id();
+        let source = "let seeded = 123;".to_owned();
+        let CompilePreparation::Worker(job) = runtime.prepare_compile(source.clone(), None) else {
+            panic!("first source revision must be compiled on the worker");
+        };
+        let prepared = std::thread::spawn(job)
+            .join()
+            .expect("worker compilation must not panic")
+            .expect("worker must return a prepared result");
+        assert!(matches!(
+            runtime.commit_compile(entity, prepared, &Default::default()),
+            CompileOutcome::Ready
+        ));
+        assert_eq!(
+            runtime.states[&entity].scope.get_value::<i64>("seeded"),
+            None,
+            "worker preparation and owner commit must not run authored top-level code"
+        );
+
+        assert!(runtime.initialize(entity).is_none());
+        assert_eq!(
+            runtime.states[&entity].scope.get_value::<i64>("seeded"),
+            Some(123),
+            "top-level code first runs in the explicit initialization phase"
+        );
+        assert!(matches!(
+            runtime.prepare_compile(source, None),
+            CompilePreparation::Ready(_)
+        ));
+
+        let CompilePreparation::Worker(stale_job) =
+            runtime.prepare_compile("let changed = 456;".to_owned(), None)
+        else {
+            panic!("a new source revision must be prepared");
+        };
+        let stale = std::thread::spawn(stale_job)
+            .join()
+            .expect("worker compilation must not panic")
+            .expect("worker must return a prepared result");
+        runtime.preparation_revision = runtime.preparation_revision.wrapping_add(1);
+        assert!(matches!(
+            runtime.commit_compile(entity, stale, &Default::default()),
+            CompileOutcome::Stale
+        ));
+    }
+
+    #[test]
+    fn scenario_compile_concurrent_identical_misses_share_one_prepared_program() {
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        let source = "fn value() { 42 }".to_owned();
+        let CompilePreparation::Worker(first_job) = runtime.prepare_compile(source.clone(), None)
+        else {
+            panic!("first source revision must be prepared");
+        };
+        let CompilePreparation::Worker(second_job) = runtime.prepare_compile(source, None) else {
+            panic!("an uncommitted source revision must join its preparation");
+        };
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let first_barrier = barrier.clone();
+        let first = std::thread::spawn(move || {
+            first_barrier.wait();
+            first_job()
+        });
+        let second_barrier = barrier.clone();
+        let second = std::thread::spawn(move || {
+            second_barrier.wait();
+            second_job()
+        });
+        let first = first
+            .join()
+            .expect("first compile worker must not panic")
+            .expect("first compile worker must return a result");
+        let second = second
+            .join()
+            .expect("second compile worker must not panic")
+            .expect("second compile worker must return a result");
+        assert!(
+            std::sync::Arc::ptr_eq(
+                first.result.as_ref().expect("source must compile"),
+                second.result.as_ref().expect("source must compile")
+            ),
+            "concurrent misses for one source revision must share the prepared AST"
+        );
+
+        let mut world = bevy::prelude::World::new();
+        let first_entity = world.spawn_empty().id();
+        let second_entity = world.spawn_empty().id();
+        assert!(matches!(
+            runtime.commit_compile(first_entity, first, &Default::default()),
+            CompileOutcome::Ready
+        ));
+        assert!(matches!(
+            runtime.commit_compile(second_entity, second, &Default::default()),
+            CompileOutcome::Ready
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &runtime.states[&first_entity].program,
+            &runtime.states[&second_entity].program
+        ));
+    }
 
     #[test]
     fn rhai_clock_api_rejects_repl_calls_and_exposes_owner_context() {

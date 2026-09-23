@@ -32,6 +32,7 @@
 use bevy::prelude::*;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::sync::{mpsc, Mutex};
 
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_command_contracts::SessionId;
@@ -429,6 +430,18 @@ pub enum CompileOutcome {
     Failed(Diagnostic),
     /// Compiled successfully. Initialization runs after dependency admission.
     Ready,
+    /// The artifact was prepared against an obsolete shared runtime revision.
+    Stale,
+}
+
+/// Whether source preparation has an immutable cache result or needs shared
+/// background admission. A cache hit skips worker dispatch, while the driver
+/// keeps the same progress hold through activation for both paths.
+pub enum CompilePreparation<P: Send + 'static> {
+    /// Immutable artifact already available from the backend's owner cache.
+    Ready(P),
+    /// Pure worker operation required to produce the immutable artifact.
+    Worker(Box<dyn FnOnce() -> Result<P, Diagnostic> + Send + 'static>),
 }
 
 /// A read-only view of a running scenario's live state, for introspection. The
@@ -494,25 +507,38 @@ pub struct ScenarioIntrospection<V> {
 // script should be able to CALL a registered hook", which is a small ADDITIVE
 // bridge (invoke a `HookId` from a scenario verb), not a migration of this trait.
 pub trait ScenarioRuntime: Send + Sync + 'static {
-    /// (Re)compile `source` for `entity`, replacing any prior program without
-    /// executing its top-level body. The driver guarantees the previous
-    /// program's `on_stop` has already been called before this. `params` is the validated,
-    /// instance-owned launch context; the backend exposes it through its native
-    /// value model.
-    ///
-    /// `asset_id` is the canonical id the source was loaded from
-    /// (`twin://ep1/main.rhai`), or `None` when it is not file-backed. It is the
-    /// script's IDENTITY, and a backend with a module system needs it to anchor
-    /// relative imports (rhai: `AST::set_source`, which rhai hands to
-    /// `ModuleResolver::resolve` as the importing script). Backends without one
-    /// ignore it.
-    fn compile(
+    /// Immutable output of compiling one source revision. It crosses from a
+    /// background worker to the owning scenario boundary and therefore cannot
+    /// contain live ECS references or per-entity interpreter state.
+    type PreparedCompile: Send + 'static;
+
+    /// Shared admission category for this backend's immutable preparation.
+    fn async_work_kind(&self) -> lunco_core_runtime::AsyncWorkKind;
+
+    /// Capture every runtime setting needed by pure compilation and return a
+    /// worker job. The job may parse and build immutable artifacts; it must not
+    /// run top-level script statements or access the live World.
+    fn prepare_compile(
+        &self,
+        source: String,
+        asset_id: Option<String>,
+    ) -> CompilePreparation<Self::PreparedCompile>;
+
+    /// Commit a prepared artifact into this backend's owner-thread cache and
+    /// seed fresh per-entity state. This must not execute the script's top-level
+    /// body; initialization remains an explicit lifecycle phase.
+    fn commit_compile(
         &mut self,
         entity: Entity,
-        source: &str,
+        prepared: Self::PreparedCompile,
         params: &ScenarioParameters,
-        asset_id: Option<&str>,
     ) -> CompileOutcome;
+
+    /// Revision of the engine, prelude, or module snapshot used for preparation.
+    /// A changed value makes all older compile artifacts stale.
+    fn preparation_revision(&self) -> u64 {
+        0
+    }
 
     /// Run mutable top-level initialization after the program's dependency plan
     /// has been resolved and committed. This is the first executable world
@@ -601,6 +627,11 @@ struct Fsm {
     started: bool,
     /// Whether the backend currently holds a compiled program for this entity.
     compiled: bool,
+    /// Runtime engine/prelude revision used for the current compiled program.
+    preparation_revision: Option<u64>,
+    /// Whether the dependency plan and executable top-level initialization
+    /// completed for the current prepared program.
+    initialized: bool,
     /// Last-known host gid — so `on_stop` has a meaningful `self` after despawn.
     /// The derived default `0` is the telemetry bus' explicit global/no-entity
     /// source. A local script host has no GlobalEntityId, so `-1` would leak
@@ -614,6 +645,39 @@ struct Fsm {
     directives: ScenarioDirectives,
     /// Source generation whose unsupported directives were diagnosed.
     directives_diagnostic_generation: Option<u64>,
+    /// Compilation currently admitted for this scenario, if any.
+    pending_compile: Option<PendingCompile>,
+    /// Admission hold that remains until dependency planning, initialization,
+    /// and the first start hook have committed for the prepared program.
+    initialization_progress_key: Option<lunco_core_runtime::SimulationProgressKey>,
+    /// Error from the outgoing program's stop hook during a revision change.
+    pending_transition_error: Option<Diagnostic>,
+    /// A prepared program has not yet completed its first lifecycle pass.
+    newly_compiled: bool,
+}
+
+struct PendingCompile {
+    key: lunco_core_runtime::AsyncWorkKey,
+    progress_key: lunco_core_runtime::SimulationProgressKey,
+    generation: u64,
+    parameters_revision: u64,
+    scene_generation: u64,
+    runtime_revision: u64,
+    queued: bool,
+    result_ready: bool,
+    capacity_revision: u64,
+}
+
+struct CompileCompletion<P> {
+    key: lunco_core_runtime::AsyncWorkKey,
+    entity: Entity,
+    document_id: u64,
+    gid: i64,
+    generation: u64,
+    parameters_revision: u64,
+    scene_generation: u64,
+    runtime_revision: u64,
+    result: Result<P, Diagnostic>,
 }
 
 fn publish_scenario_stop_error(
@@ -705,24 +769,548 @@ pub struct ScenarioDriver<R: ScenarioRuntime> {
     pub runtime: R,
     /// Per-entity lifecycle state.
     fsm: HashMap<Entity, Fsm>,
+    compile_sender: mpsc::Sender<CompileCompletion<R::PreparedCompile>>,
+    compile_receiver: Mutex<mpsc::Receiver<CompileCompletion<R::PreparedCompile>>>,
+    ready_compiles: Mutex<Vec<CompileCompletion<R::PreparedCompile>>>,
+    next_progress_operation: u64,
 }
 
 impl<R: ScenarioRuntime + Default> Default for ScenarioDriver<R> {
     fn default() -> Self {
-        Self {
-            runtime: R::default(),
-            fsm: HashMap::new(),
-        }
+        Self::with_runtime(R::default())
     }
 }
 
 impl<R: ScenarioRuntime> ScenarioDriver<R> {
+    /// Construct a scenario driver around an explicit runtime backend.
+    pub fn with_runtime(runtime: R) -> Self {
+        let (compile_sender, compile_receiver) = mpsc::channel();
+        Self {
+            runtime,
+            fsm: HashMap::new(),
+            compile_sender,
+            compile_receiver: Mutex::new(compile_receiver),
+            ready_compiles: Mutex::new(Vec::new()),
+            next_progress_operation: 0,
+        }
+    }
+
+    /// Admit immutable scenario compilation before the time spine and commit
+    /// completed artifacts in stable actor order. All active compile holds are
+    /// released only by their exact current completion or explicit retirement.
+    pub fn prepare_compiles(world: &mut World, language: ScriptLanguage) {
+        let Some(scene_generation) = world
+            .get_resource::<ScenarioSceneGeneration>()
+            .map(|generation| generation.0)
+        else {
+            Self::cancel_pending_compiles(world);
+            report_missing_scenario_generation(world);
+            return;
+        };
+        if !world
+            .get_resource::<ScenarioExecutionGate>()
+            .is_none_or(|gate| gate.enabled)
+        {
+            Self::cancel_pending_compiles(world);
+            return;
+        }
+
+        let is_client = matches!(
+            world.get_resource::<lunco_core_session::NetworkRole>(),
+            Some(lunco_core_session::NetworkRole::Client)
+        );
+        let held_roots = world
+            .get_resource::<lunco_readiness::ReadinessState>()
+            .map(|state| state.held_entities.clone())
+            .unwrap_or_default();
+        let mut models = {
+            let mut query = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
+            query
+                .iter(world)
+                .filter(|(_, model, _)| model.language == Some(language))
+                .map(|(entity, model, authority)| {
+                    (
+                        entity,
+                        model.paused,
+                        model.document_id,
+                        authority.and_then(|authority| authority.0),
+                        model.reload_policy,
+                        model.parameters_revision,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        models.sort_unstable_by(|left, right| {
+            let left_gid = world
+                .get_resource::<ApiEntityRegistry>()
+                .and_then(|registry| registry.api_id_for(left.0))
+                .map(|gid| gid.get())
+                .unwrap_or(0);
+            let right_gid = world
+                .get_resource::<ApiEntityRegistry>()
+                .and_then(|registry| registry.api_id_for(right.0))
+                .map(|gid| gid.get())
+                .unwrap_or(0);
+            left_gid
+                .cmp(&right_gid)
+                .then_with(|| left.0.to_bits().cmp(&right.0.to_bits()))
+        });
+        let live: HashSet<Entity> = models.iter().map(|model| model.0).collect();
+
+        world.resource_scope(|world, mut driver: Mut<ScenarioDriver<R>>| {
+            driver.runtime.maintain();
+            let runtime_revision = driver.runtime.preparation_revision();
+            let work_kind = driver.runtime.async_work_kind();
+            let mut completions = {
+                let mut ready = driver
+                    .ready_compiles
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let mut completions = std::mem::take(&mut *ready);
+                completions.extend(
+                    driver
+                        .compile_receiver
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .try_iter(),
+                );
+                completions
+            };
+            for completion in completions.drain(..) {
+                let pending_matches = driver
+                    .fsm
+                    .get(&completion.entity)
+                    .and_then(|state| state.pending_compile.as_ref())
+                    .is_some_and(|pending| pending.key == completion.key);
+                if !pending_matches {
+                    continue;
+                }
+                let input_is_current = world
+                    .get_resource::<ScriptRegistry>()
+                    .and_then(|registry| {
+                        registry
+                            .documents
+                            .get(&DocumentId::new(completion.document_id))
+                    })
+                    .is_some_and(|host| host.document().generation == completion.generation)
+                    && world
+                        .get::<ScriptedModel>(completion.entity)
+                        .is_some_and(|model| {
+                            model.parameters_revision == completion.parameters_revision
+                        })
+                    && world
+                        .get_resource::<ScenarioSceneGeneration>()
+                        .is_some_and(|generation| generation.0 == completion.scene_generation)
+                    && runtime_revision == completion.runtime_revision;
+                if !input_is_current {
+                    retire_pending_compile(world, &mut driver, completion.entity, true);
+                    continue;
+                }
+                if let Some(pending) = driver
+                    .fsm
+                    .get_mut(&completion.entity)
+                    .and_then(|state| state.pending_compile.as_mut())
+                {
+                    pending.result_ready = true;
+                }
+                driver
+                    .ready_compiles
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push(completion);
+            }
+
+            let capacity_revision = world
+                .get_resource::<lunco_core_runtime::AsyncWorkAdmission>()
+                .map(lunco_core_runtime::AsyncWorkAdmission::capacity_revision)
+                .unwrap_or(0);
+            for (entity, paused, raw, authority, reload_policy, parameters_revision) in &models {
+                let Some(raw) = *raw else {
+                    retire_pending_compile(world, &mut driver, *entity, true);
+                    continue;
+                };
+                let Some(document) = world
+                    .get_resource::<ScriptRegistry>()
+                    .and_then(|registry| registry.documents.get(&DocumentId::new(raw)))
+                    .map(|host| host.document().clone())
+                else {
+                    // Closing or detaching a document is terminal for this
+                    // preparation. Release its exact hold even if queued work
+                    // never reaches a worker or activation boundary.
+                    retire_pending_compile(world, &mut driver, *entity, true);
+                    continue;
+                };
+                if document.language != language {
+                    retire_pending_compile(world, &mut driver, *entity, true);
+                    continue;
+                }
+                let generation = document.generation;
+                let prior = driver.fsm.get(entity);
+                let directives = prior
+                    .filter(|state| state.directives_generation == Some(generation))
+                    .map(|state| state.directives)
+                    .unwrap_or_else(|| ScenarioDirectives::from_source(&document.source));
+                let eligible = !paused
+                    && directives.is_supported()
+                    && directives.scope.runs_on(is_client)
+                    && !scenario_owner_is_held(world, *entity, &held_roots);
+                if !eligible {
+                    let remove_dependencies = prior
+                        .filter(|state| {
+                            state.pending_compile.is_some()
+                                || state.initialization_progress_key.is_some()
+                        })
+                        .map(|state| !state.initialized);
+                    if let Some(remove_dependencies) = remove_dependencies {
+                        retire_pending_compile(world, &mut driver, *entity, remove_dependencies);
+                    }
+                    continue;
+                }
+
+                let scene_restart = *reload_policy == crate::doc::ScenarioReloadPolicy::Restart
+                    && prior.is_some_and(|state| {
+                        state.started && state.scene_generation != scene_generation
+                    });
+                let needs_recompile = prior.is_none_or(|state| {
+                    state.attempted_generation != Some(generation)
+                        || state.parameters_revision != *parameters_revision
+                        || state.preparation_revision != Some(runtime_revision)
+                        || scene_restart
+                });
+                let pending_same = prior.is_some_and(|state| {
+                    state.pending_compile.as_ref().is_some_and(|pending| {
+                        pending.generation == generation
+                            && pending.parameters_revision == *parameters_revision
+                            && pending.scene_generation == scene_generation
+                            && pending.runtime_revision == runtime_revision
+                    })
+                });
+                let retry_queued = prior.is_some_and(|state| {
+                    state.pending_compile.as_ref().is_some_and(|pending| {
+                        !pending.queued
+                            && !pending.result_ready
+                            && pending.capacity_revision != capacity_revision
+                    })
+                });
+                if pending_same && !retry_queued || !needs_recompile && !retry_queued {
+                    continue;
+                }
+
+                let gid = world
+                    .get_resource::<ApiEntityRegistry>()
+                    .and_then(|registry| registry.api_id_for(*entity))
+                    .map(|gid| gid.get() as i64)
+                    .unwrap_or(0);
+                retire_pending_compile(world, &mut driver, *entity, false);
+
+                let context = scenario_execution_context(world, false, Some(scene_generation));
+                let mut stop_error = None;
+                let (started, compiled) = driver
+                    .fsm
+                    .get(entity)
+                    .map(|state| (state.started, state.compiled))
+                    .unwrap_or_default();
+                bridge_core::set_script_client_local(is_client);
+                bridge_core::set_script_authority(*authority);
+                if scene_restart {
+                    driver.runtime.forget(*entity);
+                } else if started && compiled {
+                    let _scope = bridge_core::WorldScope::enter(world, context);
+                    let _phase = bridge_core::ExecutionContextScope::enter(
+                        context.with_phase(lunco_core::RuntimePhase::Stop),
+                    );
+                    stop_error = driver.runtime.call_hook(*entity, ScenarioHook::Stop, gid);
+                }
+                driver.runtime.forget(*entity);
+
+                let state = driver.fsm.entry(*entity).or_default();
+                state.started = false;
+                state.compiled = false;
+                state.initialized = false;
+                state.gid = gid;
+                state.document_id = Some(raw);
+                state.directives_generation = Some(generation);
+                state.directives = directives;
+                state.directives_diagnostic_generation = None;
+                state.attempted_generation = Some(generation);
+                state.parameters_revision = *parameters_revision;
+                state.preparation_revision = Some(runtime_revision);
+                state.scene_generation = scene_generation;
+                state.pending_transition_error = stop_error;
+                state.newly_compiled = false;
+
+                if let Some(mut participants) =
+                    world.get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+                {
+                    participants.mark_scenario_plan_pending(*entity);
+                }
+                let key = lunco_core_runtime::AsyncWorkKey::new(
+                    work_kind,
+                    scene_generation,
+                    ((raw as u128) << 64) | u128::from(entity.to_bits()),
+                    generation,
+                    *parameters_revision,
+                );
+                let preparation = driver
+                    .runtime
+                    .prepare_compile(document.source, document.asset_id);
+                let operation_id = driver.next_progress_operation;
+                driver.next_progress_operation = operation_id.wrapping_add(1);
+                let progress_key = lunco_core_runtime::SimulationProgressKey {
+                    owner: lunco_core_runtime::SimulationProgressOwner::ScriptPreparation,
+                    operation_id,
+                };
+                driver.fsm.get_mut(entity).unwrap().pending_compile = Some(PendingCompile {
+                    key,
+                    progress_key,
+                    generation,
+                    parameters_revision: *parameters_revision,
+                    scene_generation,
+                    runtime_revision,
+                    queued: false,
+                    result_ready: false,
+                    capacity_revision,
+                });
+                let Some(mut progress) =
+                    world.get_resource_mut::<lunco_core_runtime::SimulationProgress>()
+                else {
+                    driver
+                        .fsm
+                        .get_mut(entity)
+                        .and_then(|state| state.pending_compile.as_mut())
+                        .expect("compile preparation owns a pending result")
+                        .result_ready = true;
+                    driver
+                        .ready_compiles
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .push(CompileCompletion {
+                            key,
+                            entity: *entity,
+                            document_id: raw,
+                            gid,
+                            generation,
+                            parameters_revision: *parameters_revision,
+                            scene_generation,
+                            runtime_revision,
+                            result: Err(Diagnostic::error(
+                                "scenario compilation requires SimulationProgress",
+                                None,
+                                None,
+                            )),
+                        });
+                    continue;
+                };
+                progress.acquire(
+                    progress_key,
+                    format!(
+                        "Preparing {language:?} scenario document {raw} generation {generation}"
+                    ),
+                );
+                drop(progress);
+                match preparation {
+                    CompilePreparation::Ready(prepared) => {
+                        driver
+                            .fsm
+                            .get_mut(entity)
+                            .expect("scenario FSM was installed above")
+                            .pending_compile
+                            .as_mut()
+                            .expect("compile preparation owns a pending result")
+                            .result_ready = true;
+                        driver
+                            .ready_compiles
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .push(CompileCompletion {
+                                key,
+                                entity: *entity,
+                                document_id: raw,
+                                gid,
+                                generation,
+                                parameters_revision: *parameters_revision,
+                                scene_generation,
+                                runtime_revision,
+                                result: Ok(prepared),
+                            });
+                    }
+                    CompilePreparation::Worker(job) => {
+                        submit_scenario_compile(
+                            world,
+                            &mut driver,
+                            *entity,
+                            raw,
+                            gid,
+                            generation,
+                            *parameters_revision,
+                            scene_generation,
+                            runtime_revision,
+                            job,
+                        );
+                    }
+                }
+            }
+
+            let dead: Vec<Entity> = driver
+                .fsm
+                .keys()
+                .copied()
+                .filter(|entity| !live.contains(entity))
+                .collect();
+            for entity in dead {
+                retire_pending_compile(world, &mut driver, entity, true);
+            }
+
+            // Worker completion order and frame timing are not commit order.
+            // Keep every prepared result behind the scene-wide compile barrier,
+            // then adopt the complete set by stable owner identity in one
+            // lifecycle boundary before TimeSpineSet releases simulation time.
+            let has_unready_compile = driver.fsm.values().any(|state| {
+                state
+                    .pending_compile
+                    .as_ref()
+                    .is_some_and(|pending| !pending.result_ready)
+            });
+            if !has_unready_compile {
+                let mut ready = std::mem::take(
+                    &mut *driver
+                        .ready_compiles
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()),
+                );
+                for completion in &mut ready {
+                    completion.gid = world
+                        .get_resource::<ApiEntityRegistry>()
+                        .and_then(|registry| registry.api_id_for(completion.entity))
+                        .map(|gid| gid.get() as i64)
+                        .unwrap_or(0);
+                }
+                ready.sort_unstable_by(|left, right| {
+                    left.gid
+                        .cmp(&right.gid)
+                        .then_with(|| left.entity.to_bits().cmp(&right.entity.to_bits()))
+                        .then_with(|| left.key.cmp(&right.key))
+                });
+                for completion in ready {
+                    let pending_matches = driver
+                        .fsm
+                        .get(&completion.entity)
+                        .and_then(|state| state.pending_compile.as_ref())
+                        .is_some_and(|pending| pending.key == completion.key);
+                    if !pending_matches {
+                        continue;
+                    }
+                    let input_is_current = world
+                        .get_resource::<ScriptRegistry>()
+                        .and_then(|registry| {
+                            registry
+                                .documents
+                                .get(&DocumentId::new(completion.document_id))
+                        })
+                        .is_some_and(|host| host.document().generation == completion.generation)
+                        && world
+                            .get::<ScriptedModel>(completion.entity)
+                            .is_some_and(|model| {
+                                model.parameters_revision == completion.parameters_revision
+                            })
+                        && world
+                            .get_resource::<ScenarioSceneGeneration>()
+                            .is_some_and(|generation| generation.0 == completion.scene_generation)
+                        && driver.runtime.preparation_revision() == completion.runtime_revision;
+                    if !input_is_current {
+                        retire_pending_compile(world, &mut driver, completion.entity, true);
+                        continue;
+                    }
+                    let params = world
+                        .get::<ScriptedModel>(completion.entity)
+                        .map(|model| model.parameters.clone())
+                        .unwrap_or_default();
+                    let outcome = match completion.result {
+                        Ok(prepared) => {
+                            let context = scenario_execution_context(
+                                world,
+                                false,
+                                Some(completion.scene_generation),
+                            );
+                            let _scope = bridge_core::WorldScope::enter(world, context);
+                            let _phase = bridge_core::ExecutionContextScope::enter(
+                                context.with_phase(lunco_core::RuntimePhase::Preparation),
+                            );
+                            driver
+                                .runtime
+                                .commit_compile(completion.entity, prepared, &params)
+                        }
+                        Err(diagnostic) => CompileOutcome::Failed(diagnostic),
+                    };
+                    finish_compile_completion(
+                        world,
+                        &mut driver,
+                        completion.key,
+                        completion.entity,
+                        completion.document_id,
+                        completion.gid,
+                        completion.generation,
+                        completion.parameters_revision,
+                        completion.scene_generation,
+                        completion.runtime_revision,
+                        outcome,
+                    );
+                }
+            }
+        });
+    }
+
+    /// Retire queued scenario work when the owning runtime or scene is not
+    /// available to accept a result. In-flight jobs are allowed to finish; their
+    /// completions are ignored because the exact pending key has been removed.
+    pub fn cancel_pending_compiles(world: &mut World) {
+        if !world.contains_resource::<Self>() {
+            return;
+        }
+        world.resource_scope(|world, mut driver: Mut<Self>| {
+            let entities: Vec<Entity> = driver
+                .fsm
+                .iter()
+                .filter_map(|(entity, state)| {
+                    (state.pending_compile.is_some() || state.initialization_progress_key.is_some())
+                        .then_some(*entity)
+                })
+                .collect();
+            for entity in entities {
+                let remove_dependencies = driver
+                    .fsm
+                    .get(&entity)
+                    .is_some_and(|state| !state.initialized);
+                retire_pending_compile(world, &mut driver, entity, remove_dependencies);
+            }
+        });
+    }
+
     /// Invalidate every attached program after a shared runtime contract, such
     /// as the authored Rhai prelude, has changed. The scene entities remain
     /// attached; their programs are rebuilt on the next enabled pass.
     #[cfg(feature = "rhai")]
-    pub fn invalidate(&mut self) -> Vec<Entity> {
+    pub fn invalidate(
+        &mut self,
+        admission: &mut lunco_core_runtime::AsyncWorkAdmission,
+        progress: &mut lunco_core_runtime::SimulationProgress,
+    ) -> Vec<Entity> {
         let entities = self.fsm.keys().copied().collect();
+        for state in self.fsm.values_mut() {
+            if let Some(pending) = state.pending_compile.take() {
+                if pending.queued {
+                    admission.cancel_queued(pending.key);
+                }
+                progress.release(pending.progress_key);
+            }
+            if let Some(key) = state.initialization_progress_key.take() {
+                progress.release(key);
+            }
+        }
+        self.ready_compiles
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
         self.fsm.clear();
         self.runtime.invalidate();
         entities
@@ -747,6 +1335,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         let mut stop_error = None;
         let mut document_id = None;
         world.resource_scope(|world, mut driver: Mut<ScenarioDriver<R>>| {
+            retire_pending_compile(world, &mut driver, entity, false);
             let Some(state) = driver.fsm.remove(&entity) else {
                 return;
             };
@@ -805,6 +1394,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             return;
         };
         let pass_context = scenario_execution_context(world, run_tick, Some(scene_generation));
+        // Startup remains a simulation-domain operation even when a progress
+        // hold routes the driver through the paused Update cycle. Discrete
+        // event delivery keeps the pass's lifecycle context below.
+        let activation_context = scenario_execution_context(world, true, Some(scene_generation));
         // 1. Snapshot (entity, doc_id, gid, source revision, parameter revision),
         //    releasing every
         //    World borrow before we execute scripts. `live` = all THIS-LANGUAGE
@@ -834,6 +1427,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             world.get_resource::<lunco_core_session::NetworkRole>(),
             Some(lunco_core_session::NetworkRole::Client)
         );
+        let preparation_revision = world
+            .get_resource::<ScenarioDriver<R>>()
+            .map(|driver| driver.runtime.preparation_revision())
+            .unwrap_or_default();
         let current_sim_tick = world
             .get_resource::<lunco_core_runtime::SimTick>()
             .map(|tick| tick.0);
@@ -913,6 +1510,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         && state.is_none_or(|state| {
                             state.attempted_generation != Some(generation)
                                 || state.parameters_revision != parameters_revision
+                                || state.preparation_revision != Some(preparation_revision)
                                 || (reload_policy == crate::doc::ScenarioReloadPolicy::Restart
                                     && state.started
                                     && state.scene_generation != scene_generation)
@@ -1085,7 +1683,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 pass_context.with_phase(lunco_core::RuntimePhase::Preparation),
             );
             driver.runtime.maintain();
-            let ScenarioDriver { runtime, fsm } = &mut *driver;
+            let ScenarioDriver { runtime, fsm, .. } = &mut *driver;
 
             // Live client hooks are restricted to the client-local command
             // surface. Invalid or newly rerouted scenarios may also reach this
@@ -1166,113 +1764,59 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 // owner state directly; it must not replay a stale event batch.
                 let receive_events = st.started && maybe_src.is_none();
                 st.gid = gid;
-                let mut recompiled = false;
                 let mut initialization_diag: Option<Diagnostic> = None;
-                let mut transition_error: Option<Diagnostic> = None;
-                let scene_restart = reload_policy
-                    == crate::doc::ScenarioReloadPolicy::Restart
-                    && st.started
-                    && st.scene_generation != scene_generation;
+                let recompiled = st.newly_compiled;
+                if maybe_src.is_some() {
+                    // The PreUpdate preparation owner admits the source before
+                    // TimeSpineSet. A late or unadmitted revision cannot execute
+                    // against this tick.
+                    continue;
+                }
 
-                // (Re)compile on first sight or generation bump. Phase 1 provides
-                // `maybe_src` exactly when this is due (Some ⟺ recompile), so the
-                // presence of the source IS the gate — no per-tick source clone.
-                if let Some((source, params, asset_id)) = &maybe_src {
-                    recompiled = true;
-                    st.attempted_generation = Some(generation);
-                    st.parameters_revision = parameters_revision;
-                    if let Some(mut participants) = world
-                        .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
-                    {
-                        participants.mark_scenario_plan_pending(entity);
-                    }
-                    // Hot-reload teardown: the OUTGOING program cleans up first.
-                    if scene_restart {
-                        // The old scene is already gone. Discard the backend
-                        // state directly instead of calling the outgoing
-                        // program's cleanup against the replacement scene.
-                        runtime.forget(entity);
-                        st.compiled = false;
-                    } else if st.started && st.compiled {
+                if st.compiled && !st.initialized {
+                    let dependency_result = {
                         let _phase = bridge_core::ExecutionContextScope::enter(
-                            pass_context.with_phase(lunco_core::RuntimePhase::Stop),
+                            activation_context
+                                .with_phase(lunco_core::RuntimePhase::DependencyPlan),
                         );
-                        transition_error = runtime.call_hook(entity, ScenarioHook::Stop, gid);
-                    }
-                    st.started = false;
-                    st.scene_generation = scene_generation;
-                    let _phase = bridge_core::ExecutionContextScope::enter(
-                        pass_context.with_phase(lunco_core::RuntimePhase::Preparation),
-                    );
-                    match runtime.compile(entity, source, params, asset_id.as_deref()) {
-                        CompileOutcome::Failed(diag) => {
-                            let program = world
-                                .get::<lunco_core::ScenarioProgramPrim>(entity)
-                                .map(|prim| prim.0.as_str())
-                                .unwrap_or("<interactive scenario>");
-                            error!(
-                                "[scenario] {:?} compile failed for program {} on entity {entity:?}: {}",
-                                language,
-                                program,
-                                diag.message,
+                        runtime
+                            .simulation_dependencies(entity, gid)
+                            .and_then(|ids| resolve_simulation_dependencies(world, ids))
+                    };
+                    match dependency_result {
+                        Ok(dependencies) => {
+                            if let Some(mut participants) = world.get_resource_mut::<
+                                lunco_core_runtime::SimulationBarrierParticipants,
+                            >() {
+                                participants.replace_scenario_dependencies(entity, dependencies);
+                            }
+                            let _phase = bridge_core::ExecutionContextScope::enter(
+                                activation_context
+                                    .with_phase(lunco_core::RuntimePhase::Initialization),
                             );
+                            initialization_diag = runtime.initialize(entity);
+                            st.initialized = true;
+                        }
+                        Err(diagnostic) => {
+                            runtime.forget(entity);
                             st.compiled = false;
-                            if let Some(mut participants) = world
-                                .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
-                            {
+                            if let Some(mut participants) = world.get_resource_mut::<
+                                lunco_core_runtime::SimulationBarrierParticipants,
+                            >() {
                                 participants.remove_scenario_dependencies(entity);
                             }
                             let mut diagnostics = Vec::new();
-                            diagnostics.extend(transition_error.take());
-                            diagnostics.push(diag);
+                            diagnostics.extend(st.pending_transition_error.take());
+                            diagnostics.push(diagnostic);
                             diag_updates.push((raw, Some(diagnostics)));
+                            if let Some(key) = st.initialization_progress_key.take() {
+                                if let Some(mut progress) = world.get_resource_mut::<
+                                    lunco_core_runtime::SimulationProgress,
+                                >() {
+                                    progress.release(key);
+                                }
+                            }
                             continue;
-                        }
-                        CompileOutcome::Ready => {
-                            st.compiled = true;
-                            st.generation = generation;
-                        }
-                    }
-
-                    if st.compiled {
-                        let dependency_result = {
-                            let _phase = bridge_core::ExecutionContextScope::enter(
-                                pass_context.with_phase(lunco_core::RuntimePhase::DependencyPlan),
-                            );
-                            runtime
-                                .simulation_dependencies(entity, gid)
-                                .and_then(|ids| resolve_simulation_dependencies(world, ids))
-                        };
-                        match dependency_result {
-                            Ok(dependencies) => {
-                                if let Some(mut participants) = world.get_resource_mut::<
-                                    lunco_core_runtime::SimulationBarrierParticipants,
-                                >() {
-                                    participants.replace_scenario_dependencies(
-                                        entity,
-                                        dependencies,
-                                    );
-                                }
-                                let _phase = bridge_core::ExecutionContextScope::enter(
-                                    pass_context
-                                        .with_phase(lunco_core::RuntimePhase::Initialization),
-                                );
-                                initialization_diag = runtime.initialize(entity);
-                            }
-                            Err(diagnostic) => {
-                                runtime.forget(entity);
-                                st.compiled = false;
-                                if let Some(mut participants) = world.get_resource_mut::<
-                                    lunco_core_runtime::SimulationBarrierParticipants,
-                                >() {
-                                    participants.remove_scenario_dependencies(entity);
-                                }
-                                let mut diagnostics = Vec::new();
-                                diagnostics.extend(transition_error.take());
-                                diagnostics.push(diagnostic);
-                                diag_updates.push((raw, Some(diagnostics)));
-                                continue;
-                            }
                         }
                     }
                 }
@@ -1286,14 +1830,21 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
 
                 // Preserve each runtime failure from teardown and this pass.
                 let mut runtime_errors = Vec::new();
-                runtime_errors.extend(transition_error.take());
+                runtime_errors.extend(st.pending_transition_error.take());
                 if !st.started {
                     st.started = true;
                     let _phase = bridge_core::ExecutionContextScope::enter(
-                        pass_context.with_phase(lunco_core::RuntimePhase::Start),
+                        activation_context.with_phase(lunco_core::RuntimePhase::Start),
                     );
                     if let Some(d) = runtime.call_hook(entity, ScenarioHook::Start, gid) {
                         runtime_errors.push(d);
+                    }
+                }
+                if let Some(key) = st.initialization_progress_key.take() {
+                    if let Some(mut progress) =
+                        world.get_resource_mut::<lunco_core_runtime::SimulationProgress>()
+                    {
+                        progress.release(key);
                     }
                 }
                 if receive_events {
@@ -1371,6 +1922,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 } else if recompiled {
                     diag_updates.push((raw, None));
                 }
+                st.newly_compiled = false;
             }
 
             // Teardown: any tracked entity no longer live (despawned / detached)
@@ -1462,6 +2014,286 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             state,
             hooks,
         })
+    }
+}
+
+fn retire_pending_compile<R: ScenarioRuntime>(
+    world: &mut World,
+    driver: &mut ScenarioDriver<R>,
+    entity: Entity,
+    remove_dependencies: bool,
+) {
+    let pending = driver
+        .fsm
+        .get_mut(&entity)
+        .and_then(|state| state.pending_compile.take());
+    if let Some(pending) = pending {
+        driver
+            .ready_compiles
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|completion| completion.key != pending.key);
+        if pending.queued {
+            if let Some(mut admission) =
+                world.get_resource_mut::<lunco_core_runtime::AsyncWorkAdmission>()
+            {
+                admission.cancel_queued(pending.key);
+            }
+        }
+        if let Some(mut progress) =
+            world.get_resource_mut::<lunco_core_runtime::SimulationProgress>()
+        {
+            progress.release(pending.progress_key);
+        }
+        if let Some(state) = driver.fsm.get_mut(&entity) {
+            if !state.compiled {
+                state.attempted_generation = None;
+                state.preparation_revision = None;
+            }
+        }
+    }
+    let initialization_key = driver
+        .fsm
+        .get_mut(&entity)
+        .and_then(|state| state.initialization_progress_key.take());
+    if let Some(key) = initialization_key {
+        if let Some(mut progress) =
+            world.get_resource_mut::<lunco_core_runtime::SimulationProgress>()
+        {
+            progress.release(key);
+        }
+    }
+    if remove_dependencies {
+        if let Some(mut participants) =
+            world.get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+        {
+            participants.remove_scenario_dependencies(entity);
+        }
+    }
+}
+
+fn submit_scenario_compile<R: ScenarioRuntime>(
+    world: &mut World,
+    driver: &mut ScenarioDriver<R>,
+    entity: Entity,
+    document_id: u64,
+    gid: i64,
+    generation: u64,
+    parameters_revision: u64,
+    scene_generation: u64,
+    runtime_revision: u64,
+    job: Box<dyn FnOnce() -> Result<R::PreparedCompile, Diagnostic> + Send + 'static>,
+) {
+    let Some(pending) = driver
+        .fsm
+        .get(&entity)
+        .and_then(|state| state.pending_compile.as_ref())
+    else {
+        return;
+    };
+    let key = pending.key;
+    let sender = driver.compile_sender.clone();
+    let worker = move || {
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).unwrap_or_else(|_| {
+                Err(Diagnostic::error(
+                    "scenario compilation worker panicked",
+                    None,
+                    None,
+                ))
+            });
+        let _ = sender.send(CompileCompletion {
+            key,
+            entity,
+            document_id,
+            gid,
+            generation,
+            parameters_revision,
+            scene_generation,
+            runtime_revision,
+            result,
+        });
+    };
+
+    let Some(mut admission) = world.get_resource_mut::<lunco_core_runtime::AsyncWorkAdmission>()
+    else {
+        if let Some(pending) = driver
+            .fsm
+            .get_mut(&entity)
+            .and_then(|state| state.pending_compile.as_mut())
+        {
+            pending.result_ready = true;
+        }
+        driver
+            .ready_compiles
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(CompileCompletion {
+                key,
+                entity,
+                document_id,
+                gid,
+                generation,
+                parameters_revision,
+                scene_generation,
+                runtime_revision,
+                result: Err(Diagnostic::error(
+                    "scenario compilation requires AsyncWorkAdmission",
+                    None,
+                    None,
+                )),
+            });
+        return;
+    };
+    let capacity_revision = admission.capacity_revision();
+    let result = admission.submit(
+        lunco_core_runtime::AsyncWorkPriority::SimulationRequired,
+        key,
+        worker,
+    );
+    drop(admission);
+
+    match result {
+        Ok(()) | Err(lunco_core_runtime::AsyncWorkRejection::DuplicateKey) => {
+            if let Some(pending) = driver
+                .fsm
+                .get_mut(&entity)
+                .and_then(|state| state.pending_compile.as_mut())
+            {
+                pending.queued = true;
+                pending.capacity_revision = capacity_revision;
+            }
+        }
+        Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+            if let Some(pending) = driver
+                .fsm
+                .get_mut(&entity)
+                .and_then(|state| state.pending_compile.as_mut())
+            {
+                pending.queued = false;
+                pending.capacity_revision = capacity_revision;
+            }
+        }
+        Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable) => {
+            if let Some(pending) = driver
+                .fsm
+                .get_mut(&entity)
+                .and_then(|state| state.pending_compile.as_mut())
+            {
+                pending.queued = false;
+                pending.result_ready = true;
+                pending.capacity_revision = capacity_revision;
+            }
+            driver
+                .ready_compiles
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(CompileCompletion {
+                    key,
+                    entity,
+                    document_id,
+                    gid,
+                    generation,
+                    parameters_revision,
+                    scene_generation,
+                    runtime_revision,
+                    result: Err(Diagnostic::error(
+                        "scenario compilation requires a host worker transport",
+                        None,
+                        None,
+                    )),
+                });
+        }
+    }
+}
+
+fn finish_compile_completion<R: ScenarioRuntime>(
+    world: &mut World,
+    driver: &mut ScenarioDriver<R>,
+    key: lunco_core_runtime::AsyncWorkKey,
+    entity: Entity,
+    document_id: u64,
+    gid: i64,
+    generation: u64,
+    parameters_revision: u64,
+    scene_generation: u64,
+    runtime_revision: u64,
+    outcome: CompileOutcome,
+) {
+    let Some(pending) = driver
+        .fsm
+        .get_mut(&entity)
+        .and_then(|state| state.pending_compile.take())
+    else {
+        return;
+    };
+    if pending.key != key {
+        if let Some(state) = driver.fsm.get_mut(&entity) {
+            state.pending_compile = Some(pending);
+        }
+        return;
+    }
+    let awaiting_activation = matches!(&outcome, CompileOutcome::Ready);
+    if !awaiting_activation {
+        if let Some(mut progress) =
+            world.get_resource_mut::<lunco_core_runtime::SimulationProgress>()
+        {
+            progress.release(pending.progress_key);
+        }
+    }
+
+    let state = driver.fsm.entry(entity).or_default();
+    state.gid = gid;
+    state.document_id = Some(document_id);
+    state.scene_generation = scene_generation;
+    match outcome {
+        CompileOutcome::Ready => {
+            state.generation = generation;
+            state.attempted_generation = Some(generation);
+            state.parameters_revision = parameters_revision;
+            state.preparation_revision = Some(runtime_revision);
+            state.compiled = true;
+            state.initialized = false;
+            state.newly_compiled = true;
+            state.initialization_progress_key = Some(pending.progress_key);
+        }
+        CompileOutcome::Failed(diagnostic) => {
+            bevy::log::error!(
+                "[scenario] compilation failed for document {document_id}: {}",
+                diagnostic.message
+            );
+            state.attempted_generation = Some(generation);
+            state.parameters_revision = parameters_revision;
+            state.preparation_revision = Some(runtime_revision);
+            state.compiled = false;
+            state.initialized = false;
+            state.newly_compiled = false;
+            state.initialization_progress_key = None;
+            let mut diagnostics = Vec::new();
+            diagnostics.extend(state.pending_transition_error.take());
+            diagnostics.push(diagnostic);
+            if let Some(mut store) = world.get_resource_mut::<DocumentDiagnostics>() {
+                store.set_diagnostics(DocumentId::new(document_id), diagnostics);
+            }
+            if let Some(mut participants) =
+                world.get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+            {
+                participants.remove_scenario_dependencies(entity);
+            }
+        }
+        CompileOutcome::Stale => {
+            state.attempted_generation = None;
+            state.preparation_revision = None;
+            state.compiled = false;
+            state.initialized = false;
+            state.newly_compiled = false;
+            state.initialization_progress_key = None;
+            if let Some(mut participants) =
+                world.get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+            {
+                participants.remove_scenario_dependencies(entity);
+            }
+        }
     }
 }
 
@@ -1761,7 +2593,7 @@ mod tests {
 mod lifecycle_readiness_tests {
     use super::*;
     use crate::doc::ScriptDocument;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{mpsc, Arc, Condvar, Mutex};
 
     #[test]
     fn scenario_directives_bind_only_to_supported_peer_and_timing_values() {
@@ -1802,7 +2634,7 @@ mod lifecycle_readiness_tests {
         let mut world = World::new();
         world.init_resource::<lunco_core::RuntimeFaults>();
 
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
 
         let fault = world
             .resource::<lunco_core::RuntimeFaults>()
@@ -1810,6 +2642,73 @@ mod lifecycle_readiness_tests {
             .as_ref()
             .expect("missing owner generation is visible as a runtime fault");
         assert_eq!(fault.kind, "scenario-generation-missing");
+    }
+
+    #[test]
+    fn closing_a_pending_scenario_document_releases_its_progress_hold() {
+        let mut world = World::new();
+        world.insert_resource(ScenarioSceneGeneration(2));
+        world.insert_resource(ScriptRegistry::default());
+        world.init_resource::<lunco_core_runtime::SimulationProgress>();
+        let entity = world
+            .spawn(ScriptedModel {
+                document_id: Some(404),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            })
+            .id();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        world.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls,
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(false)),
+        )));
+
+        let key = lunco_core_runtime::AsyncWorkKey::new(
+            lunco_core_runtime::AsyncWorkKind::RhaiCompilation,
+            2,
+            (u128::from(404u64) << 64) | u128::from(entity.to_bits()),
+            1,
+            0,
+        );
+        let progress_key = lunco_core_runtime::SimulationProgressKey {
+            owner: lunco_core_runtime::SimulationProgressOwner::ScriptPreparation,
+            operation_id: 42,
+        };
+        world
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .acquire(progress_key, "preparing scenario");
+        world
+            .resource_mut::<ScenarioDriver<RecordingRuntime>>()
+            .fsm
+            .insert(
+                entity,
+                Fsm {
+                    pending_compile: Some(PendingCompile {
+                        key,
+                        progress_key,
+                        generation: 1,
+                        parameters_revision: 0,
+                        scene_generation: 2,
+                        runtime_revision: 0,
+                        queued: false,
+                        result_ready: false,
+                        capacity_revision: 0,
+                    }),
+                    ..Default::default()
+                },
+            );
+
+        ScenarioDriver::<RecordingRuntime>::prepare_compiles(&mut world, ScriptLanguage::Rhai);
+
+        assert!(world
+            .resource::<ScenarioDriver<RecordingRuntime>>()
+            .fsm
+            .get(&entity)
+            .is_some_and(|state| state.pending_compile.is_none()));
+        assert!(!world
+            .resource::<lunco_core_runtime::SimulationProgress>()
+            .is_held());
     }
 
     #[test]
@@ -1834,10 +2733,11 @@ mod lifecycle_readiness_tests {
         ));
         let calls = Arc::new(Mutex::new(Vec::new()));
         let contexts = Arc::new(Mutex::new(Vec::new()));
-        world.insert_resource(ScenarioDriver {
-            runtime: RecordingRuntime(calls.clone(), contexts, Arc::new(Mutex::new(false))),
-            fsm: HashMap::new(),
-        });
+        world.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls.clone(),
+            contexts,
+            Arc::new(Mutex::new(false)),
+        )));
         world.insert_resource(ScriptRegistry::default());
         world.resource_mut::<ScriptRegistry>().insert_document(
             DocumentId::new(72),
@@ -1861,7 +2761,7 @@ mod lifecycle_readiness_tests {
         world.insert_resource(ScenarioSceneGeneration::default());
         world.insert_resource(lunco_core_runtime::SimTick(4));
 
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
         assert_eq!(
             *calls.lock().unwrap(),
             vec![
@@ -1882,7 +2782,7 @@ mod lifecycle_readiness_tests {
             .message
             .contains("unsupported scenario @timing"));
 
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
         assert_eq!(calls.lock().unwrap().len(), 4);
         let status = world
             .resource::<DocumentDiagnostics>()
@@ -1908,12 +2808,25 @@ mod lifecycle_readiness_tests {
     );
 
     impl ScenarioRuntime for RecordingRuntime {
-        fn compile(
+        type PreparedCompile = ();
+
+        fn async_work_kind(&self) -> lunco_core_runtime::AsyncWorkKind {
+            lunco_core_runtime::AsyncWorkKind::RhaiCompilation
+        }
+
+        fn prepare_compile(
+            &self,
+            _source: String,
+            _asset_id: Option<String>,
+        ) -> CompilePreparation<Self::PreparedCompile> {
+            CompilePreparation::Ready(())
+        }
+
+        fn commit_compile(
             &mut self,
             _entity: Entity,
-            _source: &str,
+            _prepared: Self::PreparedCompile,
             _params: &ScenarioParameters,
-            _asset_id: Option<&str>,
         ) -> CompileOutcome {
             self.0.lock().unwrap().push(RecordedCall::Compile);
             self.1
@@ -1966,6 +2879,235 @@ mod lifecycle_readiness_tests {
         fn forget(&mut self, _entity: Entity) {}
     }
 
+    fn run_scenarios(world: &mut World) {
+        world.init_resource::<lunco_core_runtime::SimulationProgress>();
+        ScenarioDriver::<RecordingRuntime>::prepare_compiles(world, ScriptLanguage::Rhai);
+        ScenarioDriver::<RecordingRuntime>::run(world, ScriptLanguage::Rhai);
+    }
+
+    fn run_scenarios_without_simulation_tick(world: &mut World) {
+        world.init_resource::<lunco_core_runtime::SimulationProgress>();
+        ScenarioDriver::<RecordingRuntime>::prepare_compiles(world, ScriptLanguage::Rhai);
+        ScenarioDriver::<RecordingRuntime>::run_without_simulation_tick(
+            world,
+            ScriptLanguage::Rhai,
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    struct CompileGate {
+        released: Mutex<bool>,
+        changed: Condvar,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl CompileGate {
+        fn new() -> Self {
+            Self {
+                released: Mutex::new(false),
+                changed: Condvar::new(),
+            }
+        }
+
+        fn wait(&self) {
+            let mut released = self.released.lock().unwrap();
+            while !*released {
+                released = self.changed.wait(released).unwrap();
+            }
+        }
+
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.changed.notify_all();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[derive(Clone)]
+    struct GatedRuntime {
+        gates: Arc<HashMap<String, Arc<CompileGate>>>,
+        started: mpsc::Sender<String>,
+        committed: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl ScenarioRuntime for GatedRuntime {
+        type PreparedCompile = String;
+
+        fn async_work_kind(&self) -> lunco_core_runtime::AsyncWorkKind {
+            lunco_core_runtime::AsyncWorkKind::RhaiCompilation
+        }
+
+        fn prepare_compile(
+            &self,
+            source: String,
+            _asset_id: Option<String>,
+        ) -> CompilePreparation<Self::PreparedCompile> {
+            let gate = self.gates[&source].clone();
+            let started = self.started.clone();
+            CompilePreparation::Worker(Box::new(move || {
+                started.send(source.clone()).unwrap();
+                gate.wait();
+                Ok(source)
+            }))
+        }
+
+        fn commit_compile(
+            &mut self,
+            _entity: Entity,
+            prepared: Self::PreparedCompile,
+            _params: &ScenarioParameters,
+        ) -> CompileOutcome {
+            self.committed.lock().unwrap().push(prepared);
+            CompileOutcome::Ready
+        }
+
+        fn call_hook(
+            &mut self,
+            _entity: Entity,
+            _hook: ScenarioHook,
+            _self_gid: i64,
+        ) -> Option<Diagnostic> {
+            None
+        }
+
+        fn deliver_event(
+            &mut self,
+            _entity: Entity,
+            _self_gid: i64,
+            _event: &TelemetryEvent,
+        ) -> Option<Diagnostic> {
+            None
+        }
+
+        fn forget(&mut self, _entity: Entity) {}
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepare_gated_scenarios(world: &mut World) {
+        ScenarioDriver::<GatedRuntime>::prepare_compiles(world, ScriptLanguage::Rhai);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn async_compiles_commit_as_one_stable_batch_after_reverse_completion() {
+        use std::time::{Duration, Instant};
+
+        let alpha_gate = Arc::new(CompileGate::new());
+        let beta_gate = Arc::new(CompileGate::new());
+        let gates = Arc::new(HashMap::from([
+            ("alpha".to_owned(), alpha_gate.clone()),
+            ("beta".to_owned(), beta_gate.clone()),
+        ]));
+        let (started_tx, started_rx) = mpsc::channel();
+        let committed = Arc::new(Mutex::new(Vec::new()));
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, lunco_core_runtime::AsyncWorkAdmissionPlugin));
+        app.init_resource::<lunco_core_runtime::SimulationProgress>()
+            .init_resource::<ScriptRegistry>()
+            .init_resource::<ApiEntityRegistry>()
+            .init_resource::<DocumentDiagnostics>()
+            .init_resource::<ScriptEventInbox>()
+            .insert_resource(ScenarioSceneGeneration::default());
+        app.insert_resource(ScenarioDriver::with_runtime(GatedRuntime {
+            gates,
+            started: started_tx,
+            committed: committed.clone(),
+        }));
+
+        let alpha = app
+            .world_mut()
+            .spawn(ScriptedModel {
+                document_id: Some(81),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            })
+            .id();
+        let beta = app
+            .world_mut()
+            .spawn(ScriptedModel {
+                document_id: Some(82),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            })
+            .id();
+        {
+            let mut registry = app.world_mut().resource_mut::<ScriptRegistry>();
+            registry.insert_document(
+                DocumentId::new(81),
+                ScriptDocument::new(81, ScriptLanguage::Rhai, "alpha"),
+            );
+            registry.insert_document(
+                DocumentId::new(82),
+                ScriptDocument::new(82, ScriptLanguage::Rhai, "beta"),
+            );
+        }
+        {
+            let mut registry = app.world_mut().resource_mut::<ApiEntityRegistry>();
+            registry.assign(alpha, lunco_core::GlobalEntityId::from_raw(10));
+            registry.assign(beta, lunco_core::GlobalEntityId::from_raw(20));
+        }
+        app.add_systems(PreUpdate, prepare_gated_scenarios);
+
+        app.update();
+        let started = [
+            started_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            started_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        ];
+        assert_eq!(started.iter().collect::<HashSet<_>>().len(), 2);
+        assert!(app
+            .world()
+            .resource::<lunco_core_runtime::SimulationProgress>()
+            .is_held());
+
+        beta_gate.release();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while app
+            .world()
+            .resource::<lunco_core_runtime::AsyncWorkAdmission>()
+            .snapshot()
+            .finished
+            < 1
+        {
+            assert!(Instant::now() < deadline, "beta compile did not complete");
+            std::thread::yield_now();
+        }
+        app.update();
+        assert!(committed.lock().unwrap().is_empty());
+        assert!(app
+            .world()
+            .resource::<lunco_core_runtime::SimulationProgress>()
+            .is_held());
+
+        alpha_gate.release();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while app
+            .world()
+            .resource::<lunco_core_runtime::AsyncWorkAdmission>()
+            .snapshot()
+            .finished
+            < 2
+        {
+            assert!(Instant::now() < deadline, "alpha compile did not complete");
+            std::thread::yield_now();
+        }
+        app.update();
+
+        assert_eq!(*committed.lock().unwrap(), ["alpha", "beta"]);
+        assert!(app
+            .world()
+            .resource::<lunco_core_runtime::SimulationProgress>()
+            .is_held());
+        ScenarioDriver::<GatedRuntime>::run_without_simulation_tick(
+            app.world_mut(),
+            ScriptLanguage::Rhai,
+        );
+        assert!(!app
+            .world()
+            .resource::<lunco_core_runtime::SimulationProgress>()
+            .is_held());
+    }
+
     #[test]
     fn edited_directives_stop_the_old_program_and_skip_the_new_revision() {
         let mut world = World::new();
@@ -1979,14 +3121,11 @@ mod lifecycle_readiness_tests {
             },
         ));
         let calls = Arc::new(Mutex::new(Vec::new()));
-        world.insert_resource(ScenarioDriver {
-            runtime: RecordingRuntime(
-                calls.clone(),
-                Arc::new(Mutex::new(Vec::new())),
-                Arc::new(Mutex::new(true)),
-            ),
-            fsm: HashMap::new(),
-        });
+        world.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls.clone(),
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(true)),
+        )));
         world.insert_resource(ScriptRegistry::default());
         world.resource_mut::<ScriptRegistry>().insert_document(
             DocumentId::new(73),
@@ -2002,7 +3141,7 @@ mod lifecycle_readiness_tests {
         world.insert_resource(ScenarioSceneGeneration::default());
         world.insert_resource(lunco_core_runtime::SimTick(1));
 
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
         assert_eq!(
             *calls.lock().unwrap(),
             vec![
@@ -2018,7 +3157,7 @@ mod lifecycle_readiness_tests {
                 DocumentId::new(73),
                 "// @scope clinet\n// @timing presentation\n",
             ));
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
 
         assert_eq!(
             *calls.lock().unwrap(),
@@ -2038,7 +3177,7 @@ mod lifecycle_readiness_tests {
             .message
             .contains("on_stop failed"));
 
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
         assert_eq!(calls.lock().unwrap().len(), 4);
         assert_eq!(
             world
@@ -2077,10 +3216,11 @@ mod lifecycle_readiness_tests {
         ));
         let calls = Arc::new(Mutex::new(Vec::new()));
         let contexts = Arc::new(Mutex::new(Vec::new()));
-        world.insert_resource(ScenarioDriver {
-            runtime: RecordingRuntime(calls.clone(), contexts.clone(), Arc::new(Mutex::new(false))),
-            fsm: HashMap::new(),
-        });
+        world.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls.clone(),
+            contexts.clone(),
+            Arc::new(Mutex::new(false)),
+        )));
         world.insert_resource(ScriptRegistry::default());
         world.resource_mut::<ScriptRegistry>().insert_document(
             DocumentId::new(71),
@@ -2099,14 +3239,14 @@ mod lifecycle_readiness_tests {
             .resource_mut::<ScriptEventInbox>()
             .enqueue(event("before_release", 4));
 
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
         assert!(calls.lock().unwrap().is_empty());
 
         world
             .resource_mut::<lunco_readiness::ReadinessState>()
             .held_entities
             .clear();
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
         assert_eq!(
             *calls.lock().unwrap(),
             vec![
@@ -2119,14 +3259,14 @@ mod lifecycle_readiness_tests {
         world
             .resource_mut::<ScriptEventInbox>()
             .enqueue(event("current_tick", 5));
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
         assert!(!calls
             .lock()
             .unwrap()
             .contains(&RecordedCall::Event("current_tick".into())));
 
         world.resource_mut::<lunco_core_runtime::SimTick>().0 = 6;
-        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        run_scenarios(&mut world);
 
         let recorded_calls = calls.lock().unwrap();
         assert!(recorded_calls.contains(&RecordedCall::Event("current_tick".into())));
@@ -2136,10 +3276,7 @@ mod lifecycle_readiness_tests {
         world
             .resource_mut::<ScriptEventInbox>()
             .enqueue(event("paused_update", 6));
-        ScenarioDriver::<RecordingRuntime>::run_without_simulation_tick(
-            &mut world,
-            ScriptLanguage::Rhai,
-        );
+        run_scenarios_without_simulation_tick(&mut world);
         assert!(calls
             .lock()
             .unwrap()

@@ -104,7 +104,19 @@ the first entity, a fabricated value, or an older behavior.
    typed result and deterministic commit boundary instead of adding a local
    priority scheduler. Superseded work may be withdrawn while queued. A running
    job is not preempted; reject its stale result at the owner and release only
-   the exact progress operation it owns.
+   the exact progress operation it owns. Rhai scenario cache misses prepare
+   root-source ASTs through shared admission before `TimeSpineSet`. Coalesce
+   identical source, asset, and runtime-revision misses into one immutable AST
+   result. Buffer all currently pending results and commit them in stable actor
+   order; keep exact progress holds through dependency planning, initialization,
+   and the first `on_start`. Cache hits skip worker dispatch but use the same
+   activation boundary. If activation runs from paused `Update`, dependency
+   planning, initialization, and `on_start` retain `Simulation` context at the
+   current tick; discrete event hooks retain `Lifecycle` context. Imported
+   modules remain on the synchronous resolver until their complete source/tool
+   graph can be captured immutably. Native admission does
+   not serve wasm; use an explicit Web Worker path instead of compiling on the
+   browser main thread.
 4. Place tests at the observable owner. Keep Rust tests for pure lowering,
    math, parsing, schema/composition, serialization, and generic lifecycle or
    interpreter seams. Put behavior, policy, asset, long-USD, and model-backed

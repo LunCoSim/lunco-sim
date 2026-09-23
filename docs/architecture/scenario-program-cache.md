@@ -10,27 +10,46 @@ A compiled scenario has three parts, split by the discriminator *"is it in `key(
 
 | Part | Kind | Function of | Shared / cached? |
 |---|---|---|---|
-| `AST` (prelude-merged) | **structure** | `source` only | ✅ one `Arc`, content-addressed |
+| `AST` (prelude-merged) | **structure** | source, asset identity, installed prelude | ✅ one `Arc`, content-addressed |
 | hook mask (`on_start/tick/stop/event` present bits) | **structure** | `AST` | ✅ derived with the AST |
-| `scope` (top-level `const` globals) | **state** | seed-run — **touches the world, varies per scenario context** | ❌ never |
+| `scope` (top-level initialization) | **state** | one explicit run per scenario instance; may touch the world | ❌ never |
 | `this` (per-entity map) | **state** | runtime | ❌ never |
 | event `filter` (`subscribe`) | **state** | `on_start` | ❌ never |
 
-The trap the old code fell into: `compile()` *parsed and ran the top-level body* in one step and stored all of it per-`Entity`. Identical source was re-parsed N times (every rover with the same controller; every tutorial replay). **The AST is pure structure and shareable; the scope is stateful and must not be.** Keeping the parse (shared) strictly apart from the seed-run (per-instance) is what makes the memo determinism-safe.
+Compilation builds only immutable structure. The top-level body runs later, once
+per attached scenario, after dependency planning at the owner boundary. The AST
+is shareable; the scope and `this` state are not.
 
 ## What's cached
 
-`RhaiScenarioRuntime` holds `compiled: HashMap<u64, Arc<CompiledProgram>>`, keyed by `fnv1a64(source)` — the [Substrate E](efficiency-and-maintainability.md#substrate-e--lunco-hash-one-hashing-primitive) *fast tier* (local/ephemeral, **never on the wire**; not a CID). `compile()`:
+`RhaiScenarioRuntime` holds `compiled: HashMap<u64, CacheEntry>`, keyed by the
+[Substrate E](efficiency-and-maintainability.md#substrate-e--lunco-hash-one-hashing-primitive)
+fast-tier hash of source bytes, source length, and asset identity. Asset identity
+is part of the key because it anchors relative imports. The key is local and
+ephemeral; it is never sent over the wire.
 
-1. `key = fnv1a64(source)` → hit? clone the `Arc` (refcount bump, zero parse). Miss? `engine.compile` + prelude-merge + derive the hook mask → insert.
-2. **Always, per entity:** seed a fresh `scope` + `this` (the stateful part).
+On a hit, preparation returns the cached immutable artifact without dispatching
+worker work. On a miss, the owner captures the engine, prelude AST, source, and
+asset identity, then submits pure parsing/lowering through bounded
+`AsyncWorkAdmission`. Concurrent misses for the same key and runtime revision
+share one prepared program. Workers do not access the World or execute the
+scenario top-level body.
 
-`CompiledProgram { ast, mask }` carries no per-instance state.
+The owner accepts a result only if scene generation, document generation,
+parameter revision, and runtime preparation revision still match. It buffers
+the complete pending compile set and commits in stable actor order before
+`TimeSpineSet`. Both cache hits and misses hold simulation progress through
+dependency planning, per-instance initialization, and the first `on_start`.
+`CompiledProgram` carries no per-instance state.
+
+`CompiledProgram` includes the full AST, the imports-only hook AST when needed,
+the task AST, and the derived hook mask.
 
 ### Invalidation
 - **Source edit** bumps the document generation → the driver recompiles with new source → new key → a fresh entry. The old entry is *not* dropped (it's retained for reuse — a replay of the prior version hits it); it goes away only when the whole memo is cleared at the cap (below).
-- **Tool-lib / prelude generation** is *not* in the key: it changes the engine's *runtime* module resolution, not the AST parse, so the cached AST stays valid (tool calls resolve at call-time). `maintain()` rebuilds the engine and rebinds the current tools; it does **not** clear the memo. (If a future change hot-reloads the *prelude source* merged into every AST, that path must `compiled.clear()`.)
-- **Both outcomes cached.** A miss caches the compiled `Arc` *or* the compile-error `Diagnostic`, so a fleet sharing one broken source parses + logs once, not per entity.
+- **Tool-library generation** changes the runtime preparation revision and rebuilds the engine. It does not change the source AST; tool modules resolve through the current engine at execution time, so an existing compiled entry remains reusable. In-flight artifacts stamped with the old revision are rejected.
+- **Prelude generation** changes the AST itself because prelude functions are merged into scenario programs. Installing a new prelude invalidates the scenario cache and pending work before scenarios compile against it.
+- **Both outcomes cached.** A committed miss caches the compiled `Arc` or compile diagnostic. Concurrent identical misses share the same worker result, and a shared compile error is logged once while each affected document receives its diagnostic.
 - **Eviction:** the memo is retained across entity despawns (for replay reuse), so it is **bounded, not GC'd** — a `COMPILED_CACHE_CAP` (512) triggers a full `clear()` when hit (a cold re-parse on the next compile; the distinct-source working set is far below the cap, so this is rare). A finer byte-budget/LRU is a deferral, same status as the precompute cache's eviction.
 
 ### Why no disk tier
