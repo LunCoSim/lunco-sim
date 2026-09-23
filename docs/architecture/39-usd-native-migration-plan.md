@@ -111,17 +111,18 @@ live stage on the UI thread.
   multi-source input shares one transform — per-source factors would need per-list-element metadata (deferred;
   no current asset needs it, all migrated wires are identity).
 - **P1.3 [in place] — cached connection derivation and differential reconciliation.** `rewire_usd_connections`
-  reconciles the derived `SimConnection` set from native `connectionPaths` on endpoint-contract arrivals or a
-  live edit (`UsdWiringDirty`). Immutable endpoint facts and Modelica membership are cached by stage,
-  canonical generation, and instance identity; a live edit selects its new canonical generation. Each
-  reconciliation checks current endpoint availability, but unchanged edges retain their entity and binding
-  state; only changed or removed edges are replaced through normal lifecycle observers. Fan-in remains one
-  runtime edge per resolved source, and `propagate` sums them. Scene teardown clears the cache. The hot loop
-  (`RebuildOnChange` → `CompiledWiring` → `propagate_connections` by-slot) and `SimConnection` shape are
-  unchanged. `usd_connection_mechanics.rs` covers load derivation, clear, affine factors, and retention of an
-  unchanged bound edge when an unrelated endpoint arrives. Production Rhai
-  scenarios exercise asset-specific authored edges through `QueryUsdPrim` and
-  `GeneratedModelicaSource`.
+  reconciles the derived `SimConnection` set from native `connectionPaths` on endpoint-contract/identity
+  observer invalidation or a live edit (`UsdWiringDirty`). Its run condition reads that latch rather than
+  polling the endpoint population with `Added<T>` filters. Immutable endpoint facts and Modelica
+  membership are cached by stage, canonical generation, and instance identity; a live edit selects its
+  new canonical generation. Each reconciliation checks current endpoint availability, but unchanged edges
+  retain their entity and binding state; only changed or removed edges are replaced through normal
+  lifecycle observers. Fan-in remains one runtime edge per resolved source, and `propagate` sums them.
+  Scene teardown clears the cache. The hot loop (`RebuildOnChange` → `CompiledWiring` →
+  `propagate_connections` by-slot) and `SimConnection` shape are unchanged.
+  `usd_connection_mechanics.rs` covers load derivation, clear, affine factors, and retention of an unchanged
+  bound edge when an unrelated endpoint arrives. Production Rhai scenarios exercise asset-specific authored
+  edges through `QueryUsdPrim` and `GeneratedModelicaSource`.
 - **P1.4 🟡 — Every asset authors its wiring as `connectionPaths`** (via `SetConnection`, so the authoring is
   journaled), and **no code path spawns a `SimConnection` outside the reconcile** (the bypass of requirement 3).
   One canonical form, no shim.

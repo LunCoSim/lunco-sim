@@ -522,6 +522,11 @@ cache. The connection system therefore waits for both entities **and** the
 target's runtime contract; it never creates an edge merely to discover on a later
 fixed tick that the port surface was absent.
 
+Wiring admission uses the existing `UsdWiringDirty` latch. Endpoint contract
+and identity observers, removals, live USD edits, and authority changes wake
+reconciliation; stable updates read the latch without scanning endpoint
+entities for `Added<T>` matches.
+
 Domain source resolution has a separate invalidation path. Each discovered
 network root records its Modelica source assets; when a source class settles or
 changes, only roots indexed under that asset are queued for synthesis. New USD

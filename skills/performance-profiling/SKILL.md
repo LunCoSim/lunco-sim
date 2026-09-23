@@ -38,7 +38,8 @@ events: a no-match query can still inspect candidate entities, and separate
 `is_empty()` queries can repeat that work. Combine compatible invalidation
 sources into one `Or` query when they drive the same decision. If this remains a
 hot path, audit every writer before adding a source-owned event/revision/dirty
-set; do not create another per-frame full-population scan.
+set; once all writers are accounted for, prefer that signal over an
+always-evaluated `Added<T>` population query in a run condition.
 
 When gating a dependency's multi-system transform schedule, distinguish its
 per-update output flags from authoritative input changes. Preserve any required

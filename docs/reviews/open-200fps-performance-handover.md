@@ -537,6 +537,15 @@ in-flight synthesis remains live. A full discovery is kept for initial
 admission and a live USD wiring revision that may change composed network
 membership.
 
+The wiring run condition now reads the existing `UsdWiringDirty` latch instead
+of querying the full endpoint population for `Added<T>` matches each update.
+Endpoint contract and identity observers, relevant removals, composed-stage
+edits, and network-authority changes are the wake sources. This removes the
+steady-update candidate scan without changing the reconciliation transaction;
+a bounded Tracy comparison is still needed to quantify the frame-time effect.
+The focused cosim library and USD-wiring integration tests pass (29 unit tests
+and 4 integration tests); no FPS gain is claimed from that source-level result.
+
 #### Current generated-domain cache and measured baseline
 
 `rewire_usd_connections` caches immutable composed facts by stage asset,

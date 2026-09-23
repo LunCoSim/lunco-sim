@@ -167,12 +167,27 @@ pub(super) struct WiringQueries<'w, 's> {
 
 /// Run condition for the derived USD wiring cache.
 ///
-/// Keep the expensive composed-stage sweep out of stable frames. The system
-/// itself retains the same guard for direct minimal-app use and for tests; the
-/// production plugin uses this condition so Bevy does not enter that system at
-/// all until an endpoint, identity, authority, removal, or live edit arrives.
+/// Endpoint lifecycle observers, the live-stage consumer, and network-role
+/// changes publish the dirty latch. Reading it avoids scanning the endpoint
+/// population on every stable update just to rediscover that no `Added<T>`
+/// filter matches.
 pub(super) fn wiring_due(
-    arrivals: Query<
+    dirty: Res<UsdWiringDirty>,
+    role: Option<Res<lunco_core_session::NetworkRole>>,
+) -> bool {
+    dirty.0 || role.is_some_and(|role| role.is_changed())
+}
+
+pub(super) fn mark_wiring_dirty_on_remove<T: Component>(
+    _trigger: On<Remove, T>,
+    mut dirty: ResMut<UsdWiringDirty>,
+) {
+    dirty.0 = true;
+}
+
+fn mark_wiring_dirty_for_endpoint_add<T: Component>(
+    trigger: On<Add, T>,
+    endpoints: Query<
         (),
         (
             With<UsdPrimPath>,
@@ -182,28 +197,69 @@ pub(super) fn wiring_due(
                 With<lunco_port_core::OutputPorts>,
                 With<SimComponent>,
             )>,
+        ),
+    >,
+    mut dirty: ResMut<UsdWiringDirty>,
+) {
+    if endpoints.contains(trigger.entity) {
+        dirty.0 = true;
+    }
+}
+
+fn mark_wiring_dirty_for_usd_endpoint_remove<T: Component>(
+    trigger: On<Remove, T>,
+    endpoints: Query<
+        (),
+        (
+            With<UsdPrimPath>,
             Or<(
-                Added<UsdPrimPath>,
-                Added<lunco_core::GlobalEntityId>,
-                Added<UsdInstanceProjection>,
-                Added<SimComponent>,
-                Added<lunco_port_core::OutputPorts>,
-                Added<lunco_port_core::PortSurface>,
-                Added<lunco_port_core::PortSurfaceReady>,
+                With<lunco_port_core::PortSurfaceReady>,
+                With<lunco_port_core::PortSurface>,
+                With<lunco_port_core::OutputPorts>,
+                With<SimComponent>,
             )>,
         ),
     >,
-    dirty: Res<UsdWiringDirty>,
-    role: Option<Res<lunco_core_session::NetworkRole>>,
-) -> bool {
-    !arrivals.is_empty() || dirty.0 || role.is_some_and(|role| role.is_changed())
-}
-
-pub(super) fn mark_wiring_dirty_on_remove<T: Component>(
-    _trigger: On<Remove, T>,
     mut dirty: ResMut<UsdWiringDirty>,
 ) {
-    dirty.0 = true;
+    if endpoints.contains(trigger.entity) {
+        dirty.0 = true;
+    }
+}
+
+fn mark_wiring_dirty_for_path_remove(
+    trigger: On<Remove, UsdPrimPath>,
+    endpoints: Query<
+        (),
+        Or<(
+            With<lunco_port_core::PortSurfaceReady>,
+            With<lunco_port_core::PortSurface>,
+            With<lunco_port_core::OutputPorts>,
+            With<SimComponent>,
+        )>,
+    >,
+    mut dirty: ResMut<UsdWiringDirty>,
+) {
+    if endpoints.contains(trigger.entity) {
+        dirty.0 = true;
+    }
+}
+
+pub(super) fn install_wiring_invalidation_observers(app: &mut App) {
+    app.add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_port_core::PortSurfaceReady>)
+        .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_port_core::PortSurface>)
+        .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_port_core::OutputPorts>)
+        .add_observer(mark_wiring_dirty_for_endpoint_add::<SimComponent>)
+        .add_observer(mark_wiring_dirty_for_endpoint_add::<UsdPrimPath>)
+        .add_observer(mark_wiring_dirty_for_endpoint_add::<lunco_core::GlobalEntityId>)
+        .add_observer(mark_wiring_dirty_for_endpoint_add::<UsdInstanceProjection>)
+        .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurfaceReady>)
+        .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurface>)
+        .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::OutputPorts>)
+        .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
+        .add_observer(mark_wiring_dirty_for_path_remove)
+        .add_observer(mark_wiring_dirty_for_usd_endpoint_remove::<lunco_core::GlobalEntityId>)
+        .add_observer(mark_wiring_dirty_for_usd_endpoint_remove::<UsdInstanceProjection>);
 }
 
 /// Last published Modelica participant status. `SimComponent` also carries
@@ -390,7 +446,10 @@ pub(super) fn settle_binding_epoch(
 /// provide the wiring resources and want to exercise this owner without
 /// assembling the complete application plugin graph.
 pub fn install_wiring_system(app: &mut App) {
+    app.init_resource::<UsdWiringDirty>();
     app.init_resource::<WiringFactsCache>();
+    app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
+    install_wiring_invalidation_observers(app);
     app.add_systems(Update, rewire_usd_connections);
 }
 
@@ -400,36 +459,6 @@ pub(super) fn reset_wiring_facts_cache(mut cache: ResMut<WiringFactsCache>) {
 
 pub(super) fn rewire_usd_connections(
     mut commands: Commands,
-    // Any endpoint identity or contract arriving must re-derive the USD wire
-    // cache. Keeping the three arrival causes in one query avoids giving the
-    // composition system parallel change-detection paths.
-    wiring_arrivals: Query<
-        (),
-        (
-            With<UsdPrimPath>,
-            Or<(
-                With<lunco_port_core::PortSurfaceReady>,
-                With<lunco_port_core::PortSurface>,
-                With<lunco_port_core::OutputPorts>,
-                With<SimComponent>,
-            )>,
-            Or<(
-                // Identity can arrive after the endpoint contract during a
-                // runtime instance spawn, so it independently re-resolves the
-                // stage/path index without turning visual prim arrivals into
-                // whole-scene wiring work.
-                Added<UsdPrimPath>,
-                Added<lunco_core::GlobalEntityId>,
-                Added<UsdInstanceProjection>,
-                // Generated networks publish their public port surface after
-                // ModelicaModel; physical surfaces can also arrive later.
-                Added<SimComponent>,
-                Added<lunco_port_core::OutputPorts>,
-                Added<lunco_port_core::PortSurface>,
-                Added<lunco_port_core::PortSurfaceReady>,
-            )>,
-        ),
-    >,
     mut dirty: ResMut<UsdWiringDirty>,
     mut facts_cache: ResMut<WiringFactsCache>,
     // Wiring consumes a projected endpoint, not an initial path stub. The
@@ -462,12 +491,10 @@ pub(super) fn rewire_usd_connections(
     );
     let role_changed = role.as_ref().is_some_and(|role| role.is_changed());
 
-    let structural = !wiring_arrivals.is_empty()
-        // Changing authority changes whether a force edge is admissible. Rebuild
-        // immediately on a standalone/host ↔ client transition instead of
-        // leaving the previous role's wiring decision cached.
-        || role_changed;
-    if !structural && !dirty.0 {
+    // Changing authority changes whether a force edge is admissible. Rebuild
+    // immediately on a standalone/host ↔ client transition instead of leaving
+    // the previous role's wiring decision cached.
+    if !role_changed && !dirty.0 {
         return;
     }
     dirty.0 = false;

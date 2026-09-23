@@ -66,9 +66,10 @@ mod wiring;
 
 use wiring::{
     causal_participants_changed, derive_causal_barrier_participants, forget_binding_model_status,
-    mark_wiring_dirty_on_remove, request_binding_epoch, request_binding_epoch_on_model_change,
-    request_binding_epoch_on_remove, reset_wiring_facts_cache, rewire_usd_connections,
-    settle_binding_epoch, wiring_due, BindingModelStatuses, WiringFactsCache,
+    install_wiring_invalidation_observers, request_binding_epoch,
+    request_binding_epoch_on_model_change, request_binding_epoch_on_remove,
+    reset_wiring_facts_cache, rewire_usd_connections, settle_binding_epoch, wiring_due,
+    BindingModelStatuses, WiringFactsCache,
 };
 pub use wiring::{
     install_wiring_system, modelica_models_terminal, BindingEpochWait, UsdWiredConnection,
@@ -2092,6 +2093,7 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<WiringFactsCache>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>();
+        app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
         app.add_observer(request_binding_epoch::<UsdPrimPath>)
             .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
             .add_observer(lunco_usd_sim_domain::queue_added_domain_prim)
@@ -2109,10 +2111,6 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
             .add_observer(lunco_usd_sim_domain::on_remove_generated_source)
             .add_observer(request_binding_epoch::<SimComponent>)
-            .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
-            .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::OutputPorts>)
-            .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurface>)
-            .add_observer(mark_wiring_dirty_on_remove::<lunco_port_core::PortSurfaceReady>)
             .add_observer(forget_binding_model_status)
             .add_observer(request_binding_epoch::<lunco_usd_avian_contracts::PendingUsdJoint>)
             .add_observer(
@@ -2122,6 +2120,7 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(request_binding_epoch_on_remove::<PendingDifferential>)
             .add_observer(request_binding_epoch::<SimConnection>)
             .add_observer(request_binding_epoch_on_remove::<SimConnection>);
+        install_wiring_invalidation_observers(app);
         // USD source-load and contract failures use the same core notice stream as
         // the Modelica compiler, so the workbench console has one observable error
         // surface. `add_message` is idempotent when the Modelica plugin registered
@@ -2373,38 +2372,70 @@ mod tests {
     #[derive(Resource, Default)]
     struct WiringRuns(usize);
 
-    fn count_wiring_runs(mut runs: ResMut<WiringRuns>) {
+    fn count_wiring_runs(mut runs: ResMut<WiringRuns>, mut dirty: ResMut<UsdWiringDirty>) {
         runs.0 += 1;
+        dirty.0 = false;
     }
 
     #[test]
     fn wiring_gate_is_dormant_until_a_real_trigger() {
         let mut app = App::new();
         app.init_resource::<UsdWiringDirty>()
-            .init_resource::<WiringRuns>()
-            .add_systems(Update, count_wiring_runs.run_if(wiring_due));
+            .init_resource::<WiringRuns>();
+        install_wiring_invalidation_observers(&mut app);
+        app.add_systems(Update, count_wiring_runs.run_if(wiring_due));
 
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 0);
 
-        app.world_mut().spawn(UsdPrimPath::default());
+        let visual_only = app.world_mut().spawn(UsdPrimPath::default()).id();
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 0);
 
-        app.world_mut().spawn(SimComponent::default());
+        app.world_mut()
+            .entity_mut(visual_only)
+            .insert(lunco_port_core::PortSurfaceReady);
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 1);
 
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 1);
+
+        app.world_mut()
+            .entity_mut(visual_only)
+            .insert(lunco_core::GlobalEntityId::from_raw(12));
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 2);
+
+        app.world_mut()
+            .entity_mut(visual_only)
+            .remove::<lunco_core::GlobalEntityId>();
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 3);
+
+        app.world_mut()
+            .entity_mut(visual_only)
+            .remove::<lunco_port_core::PortSurfaceReady>();
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 4);
 
         app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
         app.update();
-        assert_eq!(app.world().resource::<WiringRuns>().0, 2);
+        assert_eq!(app.world().resource::<WiringRuns>().0, 5);
 
-        app.world_mut().resource_mut::<UsdWiringDirty>().0 = false;
+        let endpoint = app
+            .world_mut()
+            .spawn((UsdPrimPath::default(), lunco_port_core::PortSurfaceReady))
+            .id();
         app.update();
-        assert_eq!(app.world().resource::<WiringRuns>().0, 2);
+        assert_eq!(app.world().resource::<WiringRuns>().0, 6);
+
+        app.world_mut().entity_mut(endpoint).remove::<UsdPrimPath>();
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 7);
+
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 7);
     }
 
     #[derive(Resource, Default)]
