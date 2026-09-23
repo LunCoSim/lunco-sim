@@ -252,14 +252,22 @@ impl DomainSynthesizer for HookSynthesizer {
         // The READER is not the policy's business — a rhai body that had to
         // re-walk USD would be a second, divergent definition of what a network
         // is, which is the exact failure the one-reader rule exists to prevent.
-        let Some(network) = read_network(view, root, ctx.classes)? else {
+        let network_result = {
+            let _span = bevy::log::info_span!("domain_network_read").entered();
+            read_network(view, root, ctx.classes)
+        };
+        let Some(network) = network_result? else {
             return Ok(SynthOutcome::NotMine);
         };
         if network.pending_sources {
             return Ok(SynthOutcome::Pending);
         }
         let network_root = network.root.clone();
-        let facts = network_facts(&network, model_name, Some(ctx.classes)).map_err(|message| {
+        let facts_result = {
+            let _span = bevy::log::info_span!("domain_policy_facts").entered();
+            network_facts(&network, model_name, Some(ctx.classes))
+        };
+        let facts = facts_result.map_err(|message| {
             vec![DomainProjectionError {
                 path: network_root.clone(),
                 message: format!(
@@ -268,7 +276,11 @@ impl DomainSynthesizer for HookSynthesizer {
                 ),
             }]
         })?;
-        let result = lunco_hooks::invoke(&self.hook_id, &[facts]).ok_or_else(|| {
+        let result = {
+            let _span = bevy::log::info_span!("domain_rhai_synthesis").entered();
+            lunco_hooks::invoke(&self.hook_id, &[facts])
+        }
+        .ok_or_else(|| {
             vec![DomainProjectionError {
                 path: network_root.clone(),
                 message: format!(
@@ -292,6 +304,7 @@ impl DomainSynthesizer for HookSynthesizer {
                 ),
             }]);
         };
+        let _span = bevy::log::info_span!("domain_synthesis_decode_validate").entered();
         let Some(source) = map
             .iter()
             .find_map(|(key, value)| (key == "source").then(|| value.as_str()))

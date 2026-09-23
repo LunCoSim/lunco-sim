@@ -127,6 +127,57 @@ pub struct DomainProjectionState {
     fingerprint: u64,
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum AuthoredTelemetryScope {
+    Canonical {
+        asset: AssetId<UsdStageAsset>,
+        generation: u64,
+    },
+    PreparedPlan(usize),
+}
+
+/// Output ownership facts authored through `LunCoTelemetryAPI`, indexed once
+/// per composed read surface and projection batch.
+#[derive(Default)]
+struct AuthoredTelemetryIndex {
+    outputs_by_owner: HashMap<String, HashSet<String>>,
+}
+
+impl AuthoredTelemetryIndex {
+    fn from_view(view: &dyn ComposedReader) -> Self {
+        let _span = bevy::log::info_span!("domain_telemetry_index").entered();
+        let mut index = Self::default();
+        for declaration in view.prim_paths() {
+            if view.boolean(&declaration, "lunco:telemetry") != Some(true) {
+                continue;
+            }
+            let Some(output) = view.text(&declaration, "lunco:telemetry:port") else {
+                continue;
+            };
+            let declaration_path = declaration.to_string();
+            index
+                .outputs_by_owner
+                .entry(declaration_path)
+                .or_default()
+                .insert(output.clone());
+            if let Some(target) = view.rel_target(&declaration, "lunco:telemetry:target") {
+                index
+                    .outputs_by_owner
+                    .entry(target)
+                    .or_default()
+                    .insert(output);
+            }
+        }
+        index
+    }
+
+    fn contains(&self, member: &str, output: &str) -> bool {
+        self.outputs_by_owner
+            .get(member)
+            .is_some_and(|outputs| outputs.contains(output))
+    }
+}
+
 /// Inspectable runtime artifact for diagnostics and API/UI projection —
 /// readable through the `GeneratedModelicaSource` query in
 /// `lunco-usd-sim-domain-api`.
@@ -554,6 +605,8 @@ fn commit_domain_projection(
     requested: &str,
     model_name: &str,
     synthesized: Result<SynthOutcome, Vec<DomainProjectionError>>,
+    telemetry_indexes: &mut HashMap<AuthoredTelemetryScope, AuthoredTelemetryIndex>,
+    telemetry_scope: AuthoredTelemetryScope,
     notices: &mut MessageWriter<ModelicaNotice>,
 ) -> bool {
     let synthesized = match synthesized {
@@ -667,6 +720,9 @@ fn commit_domain_projection(
         .filter(|(_, _, alias)| interface.outputs.contains(alias))
         .cloned()
         .collect::<Vec<_>>();
+    let telemetry = telemetry_indexes
+        .entry(telemetry_scope)
+        .or_insert_with(|| AuthoredTelemetryIndex::from_view(view));
     let signal_layout = match generated_signal_layout(
         view,
         root_path,
@@ -675,6 +731,7 @@ fn commit_domain_projection(
         &synthesized.members,
         &member_output_aliases,
         &synthesized.units,
+        telemetry,
         classes,
     ) {
         Ok(layout) => layout,
@@ -798,6 +855,7 @@ pub fn project_domain_islands(
     let mut candidate_entities: Vec<_> = candidates.projection.drain().collect();
     candidate_entities.sort_unstable();
     let candidate_set: HashSet<_> = candidate_entities.iter().copied().collect();
+    let mut telemetry_indexes = HashMap::new();
     // Invalidate only in-flight synthesis for roots whose source view changed.
     // Unrelated network tasks remain valid and continue without restarting.
     pending
@@ -909,27 +967,39 @@ pub fn project_domain_islands(
             continue;
         };
         let model_name = network_model_name(&prim.path, instance_id);
-        let synthesized = synthesizer.synthesize(
-            &reader,
-            &root_path,
-            &model_name,
-            &SynthContext { classes: &classes },
-        );
-        if commit_domain_projection(
-            &mut commands,
-            entity,
-            prim,
-            previous,
-            installed_model,
-            &root_path,
-            &reader,
-            &classes,
-            &channels,
-            &requested,
-            &model_name,
-            synthesized,
-            &mut notices,
-        ) {
+        let synthesized = {
+            let _span = bevy::log::info_span!("domain_synthesizer_live").entered();
+            synthesizer.synthesize(
+                &reader,
+                &root_path,
+                &model_name,
+                &SynthContext { classes: &classes },
+            )
+        };
+        let committed = {
+            let _span = bevy::log::info_span!("domain_projection_commit").entered();
+            commit_domain_projection(
+                &mut commands,
+                entity,
+                prim,
+                previous,
+                installed_model,
+                &root_path,
+                &reader,
+                &classes,
+                &channels,
+                &requested,
+                &model_name,
+                synthesized,
+                &mut telemetry_indexes,
+                AuthoredTelemetryScope::Canonical {
+                    asset: id,
+                    generation: stage_generation,
+                },
+                &mut notices,
+            )
+        };
+        if committed {
             projected += 1;
         }
         continue;
@@ -964,6 +1034,7 @@ pub fn poll_domain_projection_tasks(
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
     let Some(channels) = channels else { return };
+    let mut telemetry_indexes = HashMap::new();
     let mut index = 0;
     while index < pending.tasks.len() {
         // A task may finish after its entity enters a presentation-only lease.
@@ -1019,6 +1090,15 @@ pub fn poll_domain_projection_tasks(
             &task.requested,
             &task.model_name,
             synthesized,
+            &mut telemetry_indexes,
+            if task.instance_plan {
+                AuthoredTelemetryScope::PreparedPlan(Arc::as_ptr(&task.plan) as usize)
+            } else {
+                AuthoredTelemetryScope::Canonical {
+                    asset: task.stage_id,
+                    generation: task.stage_generation,
+                }
+            },
             &mut notices,
         );
     }
@@ -1264,41 +1344,6 @@ fn instance_identifier(root: &str, path: &str) -> Result<String, String> {
     ))
 }
 
-/// Whether a generated member output already has an authored operator-facing
-/// telemetry declaration.  Such a declaration owns the public channel name;
-/// the generated wrapper alias remains available as implementation state but
-/// must not be classified as a second public channel for the same value.
-fn has_authored_telemetry_for_output(
-    view: &dyn ComposedReader,
-    member: &str,
-    output: &str,
-) -> bool {
-    let Ok(path) = SdfPath::new(member) else {
-        return false;
-    };
-    if view.boolean(&path, "lunco:telemetry") == Some(true)
-        && view
-            .text(&path, "lunco:telemetry:port")
-            .is_some_and(|port| port == output)
-    {
-        return true;
-    }
-
-    // One prim can carry one LunCoTelemetryAPI declaration. Additional
-    // operator channels are authored as declaration prims that target the
-    // measured member through the same API's relationship, so they still
-    // suppress a duplicate generated public alias.
-    view.prim_paths().into_iter().any(|candidate| {
-        view.boolean(&candidate, "lunco:telemetry") == Some(true)
-            && view
-                .text(&candidate, "lunco:telemetry:port")
-                .is_some_and(|port| port == output)
-            && view
-                .rel_target(&candidate, "lunco:telemetry:target")
-                .is_some_and(|target| target == member)
-    })
-}
-
 /// Build the runtime address map that reconnects one generated solver to the
 /// composed USD ownership tree.
 ///
@@ -1318,8 +1363,10 @@ fn generated_signal_layout(
     members: &[(String, String, String)],
     member_output_aliases: &[(String, String, String)],
     units: &[SynthesisUnit],
+    telemetry: &AuthoredTelemetryIndex,
     classes: &MemberClasses,
 ) -> Result<ModelicaSignalLayout, String> {
+    let _span = bevy::log::info_span!("domain_signal_layout").entered();
     let mut layout = ModelicaSignalLayout {
         root_path: root.to_string(),
         ..default()
@@ -1348,7 +1395,7 @@ fn generated_signal_layout(
         // only its generated implementation address.  Keep it retained, but
         // classify it internal so the same physical value is not presented
         // twice in the canonical catalog.
-        if !has_authored_telemetry_for_output(view, target_prim, target_output) {
+        if !telemetry.contains(target_prim, target_output) {
             layout.public_exact_paths.insert(output.clone());
         }
         if let Some((_, asset, class)) = members.iter().find(|(path, _, _)| path == target_prim) {
@@ -1416,7 +1463,7 @@ fn generated_signal_layout(
         // and therefore applies equally to motors, batteries, panels, and
         // future Modelica facets without a component-name classifier.
         if !public_member_outputs.contains_key(&format!("{member}.outputs:{output}"))
-            && !has_authored_telemetry_for_output(view, member, output)
+            && !telemetry.contains(member, output)
         {
             layout.public_exact_paths.insert(alias.clone());
         }
@@ -1426,54 +1473,69 @@ fn generated_signal_layout(
     // instance. A longest-prefix lookup assigns all public and internal
     // variables of that member—including variables introduced by a later
     // Modelica revision—to the authored member without an output annotation.
-    for unit in units {
-        let unit_prefix = unit.instance.clone();
-        for (output, owner) in layout.exact_paths.clone() {
-            let qualified = format!("{unit_prefix}.{output}");
-            layout.exact_paths.insert(qualified.clone(), owner);
-            // The unit instance is a generated implementation boundary, not a
-            // new physical value. Preserve the public classification of the
-            // authored boundary/member alias when copying it into the unit;
-            // otherwise the runtime retains the value but the operator tree
-            // hides the only representation of an unpromoted member output.
-            if layout.public_exact_paths.contains(&output) {
-                layout.public_exact_paths.insert(qualified);
-            }
-        }
-        for (variable, identity) in layout.exact_provenance.clone() {
-            layout
-                .exact_provenance
-                .insert(format!("{unit_prefix}.{variable}"), identity);
-        }
-        for (member, _, alias) in member_output_aliases
-            .iter()
-            .filter(|(member, _, _)| unit.component_paths.iter().any(|path| path == member))
-        {
-            layout
-                .exact_paths
-                .insert(format!("{unit_prefix}.{alias}"), member.clone());
-        }
-        for member in &unit.component_paths {
-            let member_prefix = instance_identifier(root, member)?;
-            let prefix = format!("{unit_prefix}.{member_prefix}.");
-            layout.prefixes.push((prefix.clone(), member.clone()));
-            if let Some((_, asset, class)) = members.iter().find(|(path, _, _)| path == member) {
-                if let Some(metadata) = classes.variable_metadata(asset) {
-                    for (variable, metadata) in metadata {
-                        layout
-                            .metadata
-                            .entry(format!("{prefix}{variable}"))
-                            .or_insert_with(|| metadata.clone());
-                    }
+    let source_exact_paths: Vec<_> = layout
+        .exact_paths
+        .iter()
+        .map(|(output, owner)| (output.clone(), owner.clone()))
+        .collect();
+    let source_exact_provenance: Vec<_> = layout
+        .exact_provenance
+        .iter()
+        .map(|(variable, identity)| (variable.clone(), identity.clone()))
+        .collect();
+    let source_public_exact_paths = layout.public_exact_paths.clone();
+    {
+        let _span = bevy::log::info_span!("domain_signal_unit_expansion").entered();
+        for unit in units {
+            let unit_prefix = &unit.instance;
+            for (output, owner) in &source_exact_paths {
+                let qualified = format!("{unit_prefix}.{output}");
+                layout.exact_paths.insert(qualified.clone(), owner.clone());
+                // The unit instance is a generated implementation boundary, not a
+                // new physical value. Preserve the public classification of the
+                // authored boundary/member alias when copying it into the unit;
+                // otherwise the runtime retains the value but the operator tree
+                // hides the only representation of an unpromoted member output.
+                if source_public_exact_paths.contains(output) {
+                    layout.public_exact_paths.insert(qualified);
                 }
-                layout.provenance_prefixes.push((
-                    prefix,
-                    ModelicaSignalProvenance {
-                        source_asset: Some(asset.clone()),
-                        model_class: Some(class.clone()),
-                        ..default()
-                    },
-                ));
+            }
+            for (variable, identity) in &source_exact_provenance {
+                layout
+                    .exact_provenance
+                    .insert(format!("{unit_prefix}.{variable}"), identity.clone());
+            }
+            for (member, _, alias) in member_output_aliases
+                .iter()
+                .filter(|(member, _, _)| unit.component_paths.iter().any(|path| path == member))
+            {
+                layout
+                    .exact_paths
+                    .insert(format!("{unit_prefix}.{alias}"), member.clone());
+            }
+            for member in &unit.component_paths {
+                let member_prefix = instance_identifier(root, member)?;
+                let prefix = format!("{unit_prefix}.{member_prefix}.");
+                layout.prefixes.push((prefix.clone(), member.clone()));
+                if let Some((_, asset, class)) = members.iter().find(|(path, _, _)| path == member)
+                {
+                    if let Some(metadata) = classes.variable_metadata(asset) {
+                        for (variable, metadata) in metadata {
+                            layout
+                                .metadata
+                                .entry(format!("{prefix}{variable}"))
+                                .or_insert_with(|| metadata.clone());
+                        }
+                    }
+                    layout.provenance_prefixes.push((
+                        prefix,
+                        ModelicaSignalProvenance {
+                            source_asset: Some(asset.clone()),
+                            model_class: Some(class.clone()),
+                            ..default()
+                        },
+                    ));
+                }
             }
         }
     }
@@ -2256,6 +2318,7 @@ mod tests {
             panic!("fixture must be a ready acausal network");
         };
         let aliases = plan.member_output_aliases.clone();
+        let telemetry = AuthoredTelemetryIndex::from_view(&view);
         let layout = generated_signal_layout(
             &view,
             &root_path,
@@ -2264,6 +2327,7 @@ mod tests {
             &plan.members,
             &aliases,
             &plan.units,
+            &telemetry,
             &classes,
         )
         .expect("validated generated member paths");
@@ -2338,6 +2402,121 @@ mod tests {
     }
 
     #[test]
+    fn generated_signal_layout_indexes_telemetry_and_expands_source_once_per_unit() {
+        let stage =
+            CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
+                "signal-layout-units.usda",
+                r#"#usda 1.0
+def Xform "Rig"
+{
+    float outputs:soc.connect = </Rig/Battery.outputs:soc_out>
+
+    def Xform "Battery"
+    {
+        bool lunco:telemetry = true
+        token lunco:telemetry:port = "soc_out"
+        token outputs:soc_out
+    }
+
+    def Xform "Motor"
+    {
+        token outputs:power_out
+    }
+
+    def Scope "MotorPowerChannel"
+    {
+        bool lunco:telemetry = true
+        token lunco:telemetry:port = "power_out"
+        rel lunco:telemetry:target = </Rig/Motor>
+    }
+}
+"#,
+            ))
+            .expect("signal layout stage");
+        let view = stage.view();
+        let root = SdfPath::new("/Rig").unwrap();
+        let members = vec![
+            (
+                "/Rig/Battery".to_string(),
+                "battery.mo".to_string(),
+                "Battery".to_string(),
+            ),
+            (
+                "/Rig/Motor".to_string(),
+                "motor.mo".to_string(),
+                "Motor".to_string(),
+            ),
+        ];
+        let aliases = vec![
+            (
+                "/Rig/Battery".to_string(),
+                "soc_out".to_string(),
+                "battery_soc".to_string(),
+            ),
+            (
+                "/Rig/Motor".to_string(),
+                "power_out".to_string(),
+                "motor_power".to_string(),
+            ),
+        ];
+        let units = vec![
+            SynthesisUnit {
+                name: "BatteryUnit".into(),
+                instance: "battery_unit".into(),
+                component_paths: vec!["/Rig/Battery".into()],
+                ..default()
+            },
+            SynthesisUnit {
+                name: "MotorUnit".into(),
+                instance: "motor_unit".into(),
+                component_paths: vec!["/Rig/Motor".into()],
+                ..default()
+            },
+        ];
+        let telemetry = AuthoredTelemetryIndex::from_view(&view);
+        assert!(telemetry.contains("/Rig/Battery", "soc_out"));
+        assert!(telemetry.contains("/Rig/Motor", "power_out"));
+
+        let layout = generated_signal_layout(
+            &view,
+            &root,
+            "/Rig",
+            &BTreeSet::from(["soc".to_string()]),
+            &members,
+            &aliases,
+            &units,
+            &telemetry,
+            &MemberClasses::default(),
+        )
+        .expect("generated signal layout");
+        assert_eq!(
+            layout.exposure("battery_soc"),
+            lunco_signal::SignalExposure::Internal
+        );
+        assert_eq!(
+            layout.exposure("motor_power"),
+            lunco_signal::SignalExposure::Internal
+        );
+        assert_eq!(
+            layout
+                .exact_paths
+                .get("battery_unit.soc")
+                .map(String::as_str),
+            Some("/Rig/Battery")
+        );
+        assert_eq!(
+            layout.exact_paths.get("motor_unit.soc").map(String::as_str),
+            Some("/Rig/Battery")
+        );
+        assert!(
+            !layout
+                .exact_paths
+                .contains_key("motor_unit.battery_unit.soc"),
+            "unit paths do not recursively include earlier unit identities"
+        );
+    }
+
+    #[test]
     fn authored_member_telemetry_owns_the_public_output_identity() {
         let stage =
             CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
@@ -2350,22 +2529,24 @@ def Scope "Rig"
         bool lunco:telemetry = true
         token lunco:telemetry:port = "soc_out"
         token outputs:soc_out
+        token outputs:terminal_voltage_v
+    }
+
+    def Scope "VoltageChannel"
+    {
+        bool lunco:telemetry = true
+        token lunco:telemetry:port = "terminal_voltage_v"
+        rel lunco:telemetry:target = </Rig/Battery>
     }
 }
 "#,
             ))
             .expect("telemetry owner stage");
         let view = stage.view();
-        assert!(has_authored_telemetry_for_output(
-            &view,
-            "/Rig/Battery",
-            "soc_out"
-        ));
-        assert!(!has_authored_telemetry_for_output(
-            &view,
-            "/Rig/Battery",
-            "terminal_voltage_v"
-        ));
+        let telemetry = AuthoredTelemetryIndex::from_view(&view);
+        assert!(telemetry.contains("/Rig/Battery", "soc_out"));
+        assert!(telemetry.contains("/Rig/Battery", "terminal_voltage_v"));
+        assert!(!telemetry.contains("/Rig/Battery", "unowned_output"));
     }
 
     #[test]
