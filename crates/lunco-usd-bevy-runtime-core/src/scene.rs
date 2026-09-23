@@ -28,6 +28,8 @@ use lunco_usd_bevy_stage::{
 /// have all drained.
 #[derive(Resource)]
 pub struct SceneLoadInFlight {
+    /// Identity of the lifecycle transaction that owns this asynchronous load.
+    pub transition_id: lunco_core::SceneTransitionId,
     /// Asset-relative path of the in-flight scene.
     pub path: String,
     /// Stage asset id of the in-flight load. Only the matching explicit asset
@@ -39,9 +41,11 @@ pub struct SceneLoadInFlight {
 #[derive(Message, Debug, Clone)]
 pub enum SceneStageAssetOutcome {
     Loaded {
+        transition_id: lunco_core::SceneTransitionId,
         stage_id: bevy::asset::AssetId<UsdStageAsset>,
     },
     Failed {
+        transition_id: lunco_core::SceneTransitionId,
         stage_id: bevy::asset::AssetId<UsdStageAsset>,
         error: String,
     },
@@ -49,30 +53,49 @@ pub enum SceneStageAssetOutcome {
 
 #[derive(Resource, Default)]
 struct PendingSceneStageOutcome {
+    transition_id: Option<lunco_core::SceneTransitionId>,
     stage_id: Option<bevy::asset::AssetId<UsdStageAsset>>,
     outcome: Option<SceneStageAssetOutcome>,
 }
 
 fn publish_loaded_scene_stage_outcomes(
     mut events: MessageReader<AssetEvent<UsdStageAsset>>,
+    in_flight: Option<Res<SceneLoadInFlight>>,
     mut outcomes: MessageWriter<SceneStageAssetOutcome>,
 ) {
+    let Some(in_flight) = in_flight else {
+        events.read().for_each(drop);
+        return;
+    };
     for event in events.read() {
-        if let AssetEvent::LoadedWithDependencies { id } = event {
-            outcomes.write(SceneStageAssetOutcome::Loaded { stage_id: *id });
+        if let AssetEvent::LoadedWithDependencies { id } = event
+            && *id == in_flight.stage_id
+        {
+            outcomes.write(SceneStageAssetOutcome::Loaded {
+                transition_id: in_flight.transition_id,
+                stage_id: *id,
+            });
         }
     }
 }
 
 fn publish_failed_scene_stage_outcomes(
     mut events: MessageReader<AssetLoadFailedEvent<UsdStageAsset>>,
+    in_flight: Option<Res<SceneLoadInFlight>>,
     mut outcomes: MessageWriter<SceneStageAssetOutcome>,
 ) {
+    let Some(in_flight) = in_flight else {
+        events.read().for_each(drop);
+        return;
+    };
     for event in events.read() {
-        outcomes.write(SceneStageAssetOutcome::Failed {
-            stage_id: event.id,
-            error: event.error.to_string(),
-        });
+        if event.id == in_flight.stage_id {
+            outcomes.write(SceneStageAssetOutcome::Failed {
+                transition_id: in_flight.transition_id,
+                stage_id: event.id,
+                error: event.error.to_string(),
+            });
+        }
     }
 }
 
@@ -90,23 +113,33 @@ fn record_scene_load_terminal_outcome(
 ) {
     let Some(g) = in_flight else {
         outcomes.read().for_each(drop);
+        pending.transition_id = None;
         pending.stage_id = None;
         pending.outcome = None;
         return;
     };
-    if pending.stage_id != Some(g.stage_id) {
+    if pending.transition_id != Some(g.transition_id) || pending.stage_id != Some(g.stage_id) {
+        pending.transition_id = None;
         pending.stage_id = None;
         pending.outcome = None;
     }
     if let Some(matching) = outcomes
         .read()
         .filter(|outcome| match outcome {
-            SceneStageAssetOutcome::Loaded { stage_id }
-            | SceneStageAssetOutcome::Failed { stage_id, .. } => *stage_id == g.stage_id,
+            SceneStageAssetOutcome::Loaded {
+                transition_id,
+                stage_id,
+            }
+            | SceneStageAssetOutcome::Failed {
+                transition_id,
+                stage_id,
+                ..
+            } => *transition_id == g.transition_id && *stage_id == g.stage_id,
         })
         .last()
         .cloned()
     {
+        pending.transition_id = Some(g.transition_id);
         pending.stage_id = Some(g.stage_id);
         pending.outcome = Some(matching);
     }
@@ -115,11 +148,15 @@ fn record_scene_load_terminal_outcome(
     };
     let Some(transition) = coordinator.active().cloned() else {
         warn!("[scene] ignoring stage outcome without an active scene transaction");
-        commands.remove_resource::<SceneLoadInFlight>();
-        pending.stage_id = None;
-        pending.outcome = None;
         return;
     };
+    if coordinator.active_id() != Some(g.transition_id) {
+        warn!(
+            "[scene] ignoring stale stage outcome for transaction {}",
+            g.transition_id.get()
+        );
+        return;
+    }
     if !matches!(
         &transition,
         SceneTransition::Load { .. } | SceneTransition::Restart { .. }
@@ -128,7 +165,11 @@ fn record_scene_load_terminal_outcome(
         warn!("[scene] {error}");
         pending.outcome = None;
         commands.remove_resource::<SceneLoadInFlight>();
-        commands.trigger(SceneTransitionFailed { transition, error });
+        commands.trigger(SceneTransitionFailed {
+            id: g.transition_id,
+            transition,
+            error,
+        });
         return;
     }
 
@@ -136,7 +177,11 @@ fn record_scene_load_terminal_outcome(
         pending.outcome = None;
         commands.remove_resource::<SceneLoadInFlight>();
         commands.remove_resource::<FailedSceneLoad>();
-        commands.trigger(SceneTransitionFailed { transition, error });
+        commands.trigger(SceneTransitionFailed {
+            id: g.transition_id,
+            transition,
+            error,
+        });
         return;
     }
 
@@ -163,7 +208,10 @@ fn record_scene_load_terminal_outcome(
     pending.outcome = None;
     commands.remove_resource::<SceneLoadInFlight>();
     commands.remove_resource::<FailedSceneLoad>();
-    commands.trigger(SceneTransitionCompleted { transition });
+    commands.trigger(SceneTransitionCompleted {
+        id: g.transition_id,
+        transition,
+    });
 }
 
 /// Install the generic stage-outcome and transition-dispatch machinery.
@@ -333,12 +381,16 @@ pub(crate) fn execute_admitted_restart_scene(
         root_prim: String::new(),
         reset_document: *reset_document,
     };
-    coordinator.start(transition.clone());
+    let transition_id = coordinator.start(transition.clone());
     commands.insert_resource(SceneLoadInFlight {
+        transition_id,
         path: label.clone(),
         stage_id: handle.id(),
     });
-    commands.trigger(lunco_core::SceneTransitionStarted { transition });
+    commands.trigger(lunco_core::SceneTransitionStarted {
+        id: transition_id,
+        transition,
+    });
     let stage_id = handle.id();
 
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).
@@ -359,7 +411,10 @@ pub(crate) fn execute_admitted_restart_scene(
         }
         spawn_scene_root_with_stage(world, &label, "", handle);
         if !reload_expected {
-            world.write_message(SceneStageAssetOutcome::Loaded { stage_id });
+            world.write_message(SceneStageAssetOutcome::Loaded {
+                transition_id,
+                stage_id,
+            });
         }
     });
 }
@@ -404,12 +459,14 @@ pub(crate) fn execute_admitted_clear_scene(
     }
 
     info!("[clear-scene] clearing viewport");
-    coordinator.start(SceneTransition::Clear);
+    let transition = SceneTransition::Clear;
+    let transition_id = coordinator.start(transition.clone());
     if let Some(state) = mount_state.as_deref_mut() {
         state.begin_replacement();
     }
     commands.trigger(lunco_core::SceneTransitionStarted {
-        transition: SceneTransition::Clear,
+        id: transition_id,
+        transition: transition.clone(),
     });
     // A clear invalidates a stage load that may still be waiting on an asset.
     // Without removing this identity, a late outcome from the outgoing stage
@@ -417,9 +474,10 @@ pub(crate) fn execute_admitted_clear_scene(
     commands.remove_resource::<SceneLoadInFlight>();
     commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
     clear_scene_entities(&mut commands, &scene);
-    commands.queue(|world: &mut World| {
+    commands.queue(move |world: &mut World| {
         world.trigger(SceneTransitionCompleted {
-            transition: SceneTransition::Clear,
+            id: transition_id,
+            transition,
         });
     });
 }
@@ -465,14 +523,24 @@ pub(crate) fn on_scene_transition_completed(
     trigger: On<SceneTransitionCompleted>,
     mut coordinator: ResMut<SceneTransitionCoordinator>,
 ) {
-    coordinator.finish(&trigger.event().transition);
+    if !coordinator.finish(trigger.event().id) {
+        warn!(
+            "[scene] ignoring stale completed transition {}",
+            trigger.event().id.get()
+        );
+    }
 }
 
 pub(crate) fn on_scene_transition_failed(
     trigger: On<SceneTransitionFailed>,
     mut coordinator: ResMut<SceneTransitionCoordinator>,
 ) {
-    coordinator.finish(&trigger.event().transition);
+    if !coordinator.finish(trigger.event().id) {
+        warn!(
+            "[scene] ignoring stale failed transition {}",
+            trigger.event().id.get()
+        );
+    }
 }
 
 /// Despawn the current scene's USD entities, synthesized physics entities, and
@@ -922,7 +990,7 @@ mod tests {
                 },
             );
 
-        {
+        let transition_id = {
             let mut coordinator = app.world_mut().resource_mut::<SceneTransitionCoordinator>();
             assert_eq!(
                 coordinator.admit(SceneTransitionRequest::load("scene.usda", "/World")),
@@ -932,14 +1000,18 @@ mod tests {
                 coordinator.take_admitted(),
                 Some(SceneTransitionRequest::load("scene.usda", "/World"))
             );
-            coordinator.start(transition.clone());
-        }
+            coordinator.start(transition.clone())
+        };
         app.insert_resource(SceneLoadInFlight {
+            transition_id,
             path: "scene.usda".to_owned(),
             stage_id,
         });
         app.world_mut()
-            .write_message(SceneStageAssetOutcome::Loaded { stage_id });
+            .write_message(SceneStageAssetOutcome::Loaded {
+                transition_id,
+                stage_id,
+            });
 
         app.update();
         assert!(!app.world().contains_resource::<SceneLoadInFlight>());
@@ -971,7 +1043,7 @@ mod tests {
                 },
             );
 
-        {
+        let transition_id = {
             let mut coordinator = app.world_mut().resource_mut::<SceneTransitionCoordinator>();
             assert_eq!(
                 coordinator.admit(SceneTransitionRequest::load("scene.usda", "/World")),
@@ -980,8 +1052,18 @@ mod tests {
             coordinator
                 .take_admitted()
                 .expect("the first scene request is admitted");
-            coordinator.start(transition.clone());
-        }
+            coordinator.start(transition.clone())
+        };
+        app.insert_resource(SceneLoadInFlight {
+            transition_id,
+            path: "scene.usda".to_owned(),
+            stage_id,
+        });
+        app.world_mut()
+            .write_message(SceneStageAssetOutcome::Loaded {
+                transition_id,
+                stage_id,
+            });
         let awaiting = app
             .world_mut()
             .spawn((
@@ -1003,13 +1085,6 @@ mod tests {
                 UsdSceneGeometryPending,
             ))
             .id();
-        app.insert_resource(SceneLoadInFlight {
-            path: "scene.usda".to_owned(),
-            stage_id,
-        });
-        app.world_mut()
-            .write_message(SceneStageAssetOutcome::Loaded { stage_id });
-
         app.update();
         assert!(app.world().contains_resource::<SceneLoadInFlight>());
         assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
@@ -1052,6 +1127,7 @@ mod tests {
     fn queued_transition_starts_after_the_projection_frame_flushes() {
         let first = SceneTransition::load("first.usda", "/World");
         let first_for_completion = first.clone();
+        let first_id = SceneTransitionCoordinator::default().start(first.clone());
         let second = SceneTransitionRequest::load("second.usda", "/World");
         let mut app = App::new();
         app.init_resource::<SceneTransitionCoordinator>();
@@ -1080,6 +1156,7 @@ mod tests {
                     if !queued.0 {
                         queued.0 = true;
                         commands.trigger(SceneTransitionCompleted {
+                            id: first_id,
                             transition: first_for_completion.clone(),
                         });
                     }
@@ -1096,7 +1173,8 @@ mod tests {
                 coordinator.take_admitted(),
                 Some(SceneTransitionRequest::load("first.usda", "/World"))
             );
-            coordinator.start(first);
+            let id = coordinator.start(first);
+            assert_eq!(id, first_id);
             assert_eq!(
                 coordinator.admit(second.clone()),
                 SceneTransitionAdmission::Queued

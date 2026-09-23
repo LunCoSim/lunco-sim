@@ -762,6 +762,8 @@ fn on_set_time_transport(
     mut fixed_time: Option<ResMut<Time<Fixed>>>,
     mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
     coordinator: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
+    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
 ) {
     let before = *transport;
     let command = trigger.event();
@@ -779,6 +781,8 @@ fn on_set_time_transport(
                 &transport,
                 &mut virtual_time,
                 fixed_time.as_deref_mut(),
+                progress.is_some_and(|state| state.is_held())
+                    || coupling.is_some_and(|state| state.held),
             );
         }
     }
@@ -1036,11 +1040,13 @@ fn on_reset_time(
     tick: Option<ResMut<lunco_core_runtime::SimTick>>,
     mut transport: ResMut<crate::TimeTransport>,
     virtual_time: Option<ResMut<Time<Virtual>>>,
-    fixed_time: Option<ResMut<Time<Fixed>>>,
+    mut fixed_time: Option<ResMut<Time<Fixed>>>,
     mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
     mut resolved: ResMut<ResolvedDomains>,
     mut last: ResMut<LastClockT>,
     celestial_time: Option<ResMut<CelestialTime>>,
+    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
+    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
     mut commands: Commands,
 ) {
     if let Some(clocks) = clocks {
@@ -1086,7 +1092,13 @@ fn on_reset_time(
         pending_scene_pause.0 = false;
     }
     if let Some(mut virtual_time) = virtual_time {
-        crate::project_transport_state(&transport, &mut virtual_time, None);
+        crate::project_transport_state(
+            &transport,
+            &mut virtual_time,
+            fixed_time.as_deref_mut(),
+            progress.is_some_and(|state| state.is_held())
+                || coupling.is_some_and(|state| state.held),
+        );
     }
     if let Some(mut fixed_time) = fixed_time {
         let timestep = fixed_time.timestep();

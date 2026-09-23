@@ -7,35 +7,34 @@
 
 use bevy::prelude::*;
 use lunco_physics::PhysicsTime;
-use lunco_scripting_bridge_core::{ValueBuilder, with_world};
+use lunco_scripting_bridge_core::{ValueBuilder, execution_context, with_world};
 use lunco_time::{Clocks, MissionClock, ResolvedDomains, TimeTransport, WorldTime};
 
-/// `sim_tick()` — current admitted FixedUpdate tick. A missing core tick is a
-/// terminal clock-contract fault; `-1` is returned only as an explicit invalid
-/// sentinel so the scripting callback cannot invent a valid tick.
-pub fn sim_tick() -> i64 {
+/// `sim_tick()` — current admitted FixedUpdate tick. The caller must be inside
+/// the simulation cycle; an out-of-cycle call fails only its current Rhai
+/// invocation. A missing core tick remains a terminal clock-contract fault.
+pub fn sim_tick() -> Result<i64, String> {
+    require_simulation_context("sim_tick()")?;
     with_world(|world| {
         world
             .get_resource::<lunco_core_runtime::SimTick>()
-            .map(|tick| tick.0 as i64)
+            .map(|tick| Ok(tick.0 as i64))
             .unwrap_or_else(|| {
                 report_clock_contract_fault(world, "sim-tick-missing", "SimTick is absent");
-                -1
+                Err("deterministic simulation clock is missing SimTick".to_owned())
             })
     })
-    .unwrap_or_else(|| {
-        error!("[scripting] deterministic clock contract violated: sim_tick() called outside a WorldScope");
-        -1
-    })
+    .ok_or_else(|| "sim_tick() requires an active script WorldScope".to_owned())?
 }
 
 /// `dt()` — fixed-step integration delta in seconds. The production clock
 /// spine is mandatory; absence is a terminal contract fault, never a default.
-pub fn dt() -> f64 {
+pub fn dt() -> Result<f64, String> {
+    require_simulation_context("dt()")?;
     with_world(|world| {
         let Some(time) = world.get_resource::<Time<bevy::time::Fixed>>() else {
             report_clock_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
-            return f64::NAN;
+            return Err("deterministic simulation clock is missing Time<Fixed>".to_owned());
         };
         let delta = time.delta_secs_f64();
         if !delta.is_finite() || delta <= 0.0 {
@@ -44,31 +43,32 @@ pub fn dt() -> f64 {
                 "fixed-clock-invalid",
                 format!("Time<Fixed>.delta must be finite and positive, got {delta:?}"),
             );
-            return f64::NAN;
+            return Err(format!(
+                "deterministic simulation clock has invalid fixed delta {delta:?}"
+            ));
         }
-        delta
+        Ok(delta)
     })
-    .unwrap_or_else(|| {
-        error!(
-            "[scripting] deterministic clock contract violated: dt() called outside a WorldScope"
-        );
-        f64::NAN
-    })
+    .ok_or_else(|| "dt() requires an active script WorldScope".to_owned())?
 }
 
 /// `elapsed_seconds()` — deterministic simulation seconds derived from the
 /// integer [`lunco_core_runtime::SimTick`], not Bevy's accumulated fixed-clock
 /// bookkeeping. The core tick and fixed clock are mandatory; absence is a
 /// terminal contract fault.
-pub fn elapsed_seconds() -> f64 {
+pub fn elapsed_seconds() -> Result<f64, String> {
+    require_simulation_context("elapsed_seconds()")?;
     with_world(|world| {
-        let Some(tick) = world.get_resource::<lunco_core_runtime::SimTick>().map(|tick| tick.0) else {
+        let Some(tick) = world
+            .get_resource::<lunco_core_runtime::SimTick>()
+            .map(|tick| tick.0)
+        else {
             report_clock_contract_fault(world, "sim-tick-missing", "SimTick is absent");
-            return f64::NAN;
+            return Err("deterministic simulation clock is missing SimTick".to_owned());
         };
         let Some(time) = world.get_resource::<Time<bevy::time::Fixed>>() else {
             report_clock_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
-            return f64::NAN;
+            return Err("deterministic simulation clock is missing Time<Fixed>".to_owned());
         };
         let dt = time.timestep().as_secs_f64();
         if !dt.is_finite() || dt <= 0.0 {
@@ -77,16 +77,123 @@ pub fn elapsed_seconds() -> f64 {
                 "fixed-clock-invalid",
                 format!("Time<Fixed>.timestep must be finite and positive, got {dt:?}"),
             );
-            return f64::NAN;
+            return Err(format!(
+                "deterministic simulation clock has invalid fixed timestep {dt:?}"
+            ));
         }
-        tick as f64 * dt
+        Ok(tick as f64 * dt)
     })
-    .unwrap_or_else(|| {
-        error!(
-            "[scripting] deterministic clock contract violated: elapsed_seconds() called outside a WorldScope"
-        );
-        f64::NAN
-    })
+    .ok_or_else(|| "elapsed_seconds() requires an active script WorldScope".to_owned())?
+}
+
+fn require_simulation_context(function: &str) -> Result<(), String> {
+    let context = execution_context();
+    if context
+        .route
+        .is_some_and(|route| route.cycle == lunco_core::RuntimeCycle::Simulation)
+        && context.clock == lunco_core::RuntimeClock::Simulation
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "{function} is available only in the simulation cycle (current route: {:?}, phase: {:?})",
+        context.route, context.phase
+    ))
+}
+
+/// Read the event's producer sequence when a producer stamp is attached;
+/// otherwise use the current cycle's sequence. Discrete invocations have none.
+pub fn logical_sequence() -> Option<u64> {
+    let context = execution_context();
+    context
+        .producer
+        .map(|producer| producer.sequence)
+        .or(context.sequence)
+}
+
+/// Project the active typed execution context into a backend-native map.
+pub fn execution_context_value<B: ValueBuilder>(b: &B) -> B::Value {
+    let context = execution_context();
+    let route = context.route;
+    let entries = vec![
+        (
+            "scope".to_owned(),
+            route.map_or_else(
+                || b.unit(),
+                |route| b.string(&format!("{:?}", route.scope).to_ascii_lowercase()),
+            ),
+        ),
+        (
+            "cycle".to_owned(),
+            route.map_or_else(
+                || b.unit(),
+                |route| b.string(&format!("{:?}", route.cycle).to_ascii_lowercase()),
+            ),
+        ),
+        (
+            "phase".to_owned(),
+            b.string(&format!("{:?}", context.phase).to_ascii_lowercase()),
+        ),
+        (
+            "generation".to_owned(),
+            optional_sequence(b, route.map(|route| route.generation)),
+        ),
+        (
+            "clock".to_owned(),
+            b.string(&format!("{:?}", context.clock).to_ascii_lowercase()),
+        ),
+        (
+            "sequence".to_owned(),
+            optional_sequence(b, context.sequence),
+        ),
+        (
+            "producer".to_owned(),
+            context.producer.map_or_else(
+                || b.unit(),
+                |producer| {
+                    b.map(vec![
+                        (
+                            "scope".to_owned(),
+                            b.string(&format!("{:?}", producer.route.scope).to_ascii_lowercase()),
+                        ),
+                        (
+                            "cycle".to_owned(),
+                            b.string(&format!("{:?}", producer.route.cycle).to_ascii_lowercase()),
+                        ),
+                        (
+                            "generation".to_owned(),
+                            b.string(&producer.route.generation.to_string()),
+                        ),
+                        (
+                            "sequence".to_owned(),
+                            b.string(&producer.sequence.to_string()),
+                        ),
+                    ])
+                },
+            ),
+        ),
+        (
+            "time_seconds".to_owned(),
+            optional_float(b, context.time_seconds),
+        ),
+        (
+            "delta_seconds".to_owned(),
+            optional_float(b, context.delta_seconds),
+        ),
+    ];
+    b.map(entries)
+}
+
+fn optional_sequence<B: ValueBuilder>(b: &B, value: Option<u64>) -> B::Value {
+    value
+        .map(|value| b.string(&value.to_string()))
+        .unwrap_or_else(|| b.unit())
+}
+
+fn optional_float<B: ValueBuilder>(b: &B, value: Option<f64>) -> B::Value {
+    value
+        .map(|value| b.float(value))
+        .unwrap_or_else(|| b.unit())
 }
 
 /// Surface a missing/invalid mandatory clock as a terminal simulation fault.
@@ -331,4 +438,90 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
         b.map(entries)
     })
     .unwrap_or_else(|| b.map(Vec::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_core::{
+        RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeProducerStamp,
+        RuntimeRoute, RuntimeScope,
+    };
+    use lunco_scripting_bridge_core::WorldScope;
+
+    #[test]
+    fn fixed_clock_helpers_reject_application_context_without_faulting_simulation() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.insert_resource(lunco_core_runtime::SimTick(12));
+        let context = RuntimeExecutionContext {
+            route: Some(RuntimeRoute {
+                scope: RuntimeScope::Application,
+                cycle: RuntimeCycle::Repl,
+                generation: 0,
+            }),
+            phase: RuntimePhase::Evaluation,
+            clock: RuntimeClock::Application,
+            time_seconds: Some(2.0),
+            delta_seconds: Some(0.1),
+            sequence: Some(4),
+            producer: None,
+        };
+        let _scope = WorldScope::enter(&mut world, context);
+
+        assert!(
+            sim_tick()
+                .unwrap_err()
+                .contains("only in the simulation cycle")
+        );
+        assert!(dt().unwrap_err().contains("only in the simulation cycle"));
+        assert!(
+            elapsed_seconds()
+                .unwrap_err()
+                .contains("only in the simulation cycle")
+        );
+        assert!(!world.resource::<lunco_core::RuntimeFaults>().active());
+    }
+
+    #[test]
+    fn fixed_clock_helpers_read_simulation_context() {
+        let mut world = World::new();
+        world.insert_resource(lunco_core_runtime::SimTick(12));
+        let mut fixed = Time::<bevy::time::Fixed>::default();
+        fixed.set_timestep_seconds(0.25);
+        fixed.advance_by(std::time::Duration::from_millis(250));
+        world.insert_resource(fixed);
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        let context = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::twin(RuntimeCycle::Simulation, 3)),
+            phase: RuntimePhase::Behavior,
+            clock: RuntimeClock::Simulation,
+            time_seconds: Some(3.0),
+            delta_seconds: Some(0.25),
+            sequence: Some(12),
+            producer: None,
+        };
+        let _scope = WorldScope::enter(&mut world, context);
+
+        assert_eq!(sim_tick().unwrap(), 12);
+        assert!((dt().unwrap() - 0.25).abs() < f64::EPSILON);
+        assert!((elapsed_seconds().unwrap() - 3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn event_producer_sequence_takes_precedence_over_consumer_sequence() {
+        let mut world = World::new();
+        let context = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::application(RuntimeCycle::Repl)),
+            phase: RuntimePhase::Event,
+            clock: RuntimeClock::Application,
+            time_seconds: Some(9.0),
+            delta_seconds: Some(0.1),
+            sequence: Some(90),
+            producer: Some(RuntimeProducerStamp::simulation(3, 89)),
+        };
+        let _scope = WorldScope::enter(&mut world, context);
+
+        assert_eq!(logical_sequence(), Some(89));
+    }
 }

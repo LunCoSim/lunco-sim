@@ -35,6 +35,16 @@ inside their deterministic schedule. Do not claim whole-simulation replay
 determinism while dynamic script reads bypass the causal graph or production
 physics uses an unpinned parallel profile.
 
+Lifecycle work that changes authoritative scene state participates in
+`lunco-core-runtime::SimulationProgress`. Acquire with a typed owner/operation
+key, carry that identity through async preparation, and release it only after
+the owning terminal result has been committed. Scene load/restart/clear use
+`SceneTransitionId`; same-path transitions still have distinct identities.
+Keep participant readiness and `PhysicsHolds` in their owners: they control
+local/world physics admission, while `SimulationProgress` controls whether the
+shared causal tick may advance. Surface the active wait reason through the
+existing status bus.
+
 For engineering requirements, keep the same split at the numerical boundary:
 SysML owns typed intent, units, normative tolerances, and requirement/
 verification identity; USD owns realized geometry and standard scene facts;
@@ -141,6 +151,48 @@ ownership; `Lifecycle`, `Simulation`, `Interaction`, `Command`, `Repl`, `Ui`, `P
 `Visualization` describe cadence. These are schedule labels and typed route
 metadata, not a new global event bus. Twin-owned resources and completions must
 carry their mount generation and be retired at Twin teardown.
+
+Cycle labels do not create independent clocks, CPU isolation, or execution
+cadence. Rust plugin composition decides which capabilities a host installs;
+Bevy's owning schedules provide the actual execution boundary. A typed
+`RuntimeExecutionContext` carries the current owner route, cycle, phase, clock
+sample, logical sequence, and optional event producer stamp into synchronous
+Rhai calls. Scenario hooks and one-shot REPL/tool calls use their owning
+contexts; `execution_context()` exposes a read-only Rhai map. `sim_tick()`,
+`dt()`, and `elapsed_seconds()` reject calls outside the simulation cycle as
+invocation errors, while missing mandatory simulation clock resources remain
+runtime faults. An unclassified invocation has no route; Rhai exposes its
+scope, cycle, and generation as unit instead of inventing an owner. Add a
+separate schedule driver only when a cycle needs independent cadence or
+overload semantics, and keep expensive calculations off
+the UI/physics-critical thread.
+The GUI installs `TerrainSurfaceVisualizationPlugin`; server and scene-test
+compositions keep terrain physics/query support but omit camera-driven LOD,
+visual-map baking, and overlays entirely. A system hidden behind a server-mode
+`run_if` still exists in that schedule and is not equivalent to omitting it.
+Application builders install the selected capabilities automatically; authors
+should not assemble Bevy schedules by hand. Rhai currently declares peer
+selection through `@scope host|client|both`; an unknown value disables that
+scenario and publishes one document error for its source generation instead of
+defaulting to host. Cycle and clock selection come from the Rust owner, not a
+script directive. A callback error remains visible and local to its owner;
+required authoritative hooks hold/fault their owner. Never panic or silently
+report success for a failed hook.
+
+Every cycle boundary should expose low-cost aggregate duration, work and queue
+counts, and missed-budget/overload counts through the existing diagnostics
+owner. Use these to target a Tracy capture, then measure frame responsiveness in
+a separate unprofiled run. Do not feed a per-frame diagnostics firehose through
+the simulation telemetry sampler.
+
+Keep telemetry's two lanes distinct: authoritative events used by Rhai retain
+their producer tick and deterministic delivery order; continuous samples are
+bounded observations of committed state. The fixed sample boundary captures
+only due channels and a small typed record. Logging, subscriber fan-out,
+formatting, serialization, persistence, and UI plot decimation run afterward.
+The current sampler still walks a cached list for due checks and triggers
+observers inline; treat reducing that work and measuring its effect on physics
+throughput as an open owner-level change, not a completed guarantee.
 
 Commands and one-shot Rhai/REPL evaluations have independent application
 clocks. Record command cadence from the shared `CommandOccurred` publication

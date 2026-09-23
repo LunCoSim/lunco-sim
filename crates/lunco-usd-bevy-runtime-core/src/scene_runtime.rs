@@ -236,7 +236,7 @@ pub(crate) fn execute_admitted_load_scene(
     let root_prim = root_prim.clone();
 
     let transition = lunco_core::SceneTransition::load(path.clone(), root_prim.clone());
-    coordinator.start(transition.clone());
+    let transition_id = coordinator.start(transition.clone());
     // Admission is the commit point. Only now does this request own scene state;
     // a request queued behind another transaction must not mutate the active
     // transaction's diagnostics or viewport reason.
@@ -281,7 +281,10 @@ pub(crate) fn execute_admitted_load_scene(
             "[load-scene] `{}` @ `{}` already loaded — no-op",
             path, root_prim
         );
-        commands.trigger(lunco_core::SceneTransitionCompleted { transition });
+        commands.trigger(lunco_core::SceneTransitionCompleted {
+            id: transition_id,
+            transition,
+        });
         return;
     }
 
@@ -296,10 +299,14 @@ pub(crate) fn execute_admitted_load_scene(
     }
 
     commands.insert_resource(SceneLoadInFlight {
+        transition_id,
         path: path.clone(),
         stage_id: new_id,
     });
-    commands.trigger(lunco_core::SceneTransitionStarted { transition });
+    commands.trigger(lunco_core::SceneTransitionStarted {
+        id: transition_id,
+        transition,
+    });
 
     // Despawn the old scene + free worker-side state (shared with `ClearScene`).
     clear_scene_entities(&mut commands, &scene);
@@ -311,7 +318,10 @@ pub(crate) fn execute_admitted_load_scene(
             .resource_mut::<lunco_usd_bevy_twin::TwinProjectionWake>()
             .wake();
         if stage_already_loaded {
-            world.write_message(SceneStageAssetOutcome::Loaded { stage_id: new_id });
+            world.write_message(SceneStageAssetOutcome::Loaded {
+                transition_id,
+                stage_id: new_id,
+            });
         }
     });
 }

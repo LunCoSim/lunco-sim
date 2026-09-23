@@ -35,8 +35,9 @@
 //!   `HeightGrid` (the bridge from a too-dense DEM to a drawable/collidable tile).
 //! - [`terrain`] — M3 spawn: build a static terrain entity (mesh + avian
 //!   `Collider::heightfield`) from a DEM asset via the `SpawnDemTerrain` command.
-//! - [`plugin`] — the Bevy [`TerrainSurfacePlugin`]. Wires the M3 spawn path;
-//!   tile streaming + LOD + the dynamic-physics collider ring land in M7.
+//! - [`plugin`] — `TerrainSurfacePlugin` owns DEM/query/physics composition;
+//!   `TerrainSurfaceVisualizationPlugin` separately owns camera-driven LOD and
+//!   derived visual products for hosts that present frames.
 
 pub mod band;
 pub mod collider_ring;
@@ -80,7 +81,7 @@ pub use lunco_terrain_core::{
 pub use oracle::{
     raycast_surface, DemHeightField, HeightContribution, SurfaceOracle, TerrainBodyCurvature,
 };
-pub use plugin::{TerrainSurfacePlugin, TerrainSurfaceSet};
+pub use plugin::{TerrainSurfacePlugin, TerrainSurfaceSet, TerrainSurfaceVisualizationPlugin};
 pub use query::{register_terrain_queries, TerrainHeightProvider};
 pub use stream_viz::{
     LodFrozen, LodTileOf, LodTiles, SetTerrainRenderingQuality, TerrainLodViz, TerrainNodeErrors,

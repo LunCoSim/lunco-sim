@@ -424,24 +424,35 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "()",
         "OPTIONAL, call in on_start. Deliver every event whose name starts with `prefix` (e.g. \"enter:\" for all zone-enters). Combines with subscribe().",
     ),
-    ("sim_tick", "sim_tick()", "i64", "Current FixedUpdate tick."),
+    (
+        "sim_tick",
+        "sim_tick()",
+        "i64",
+        "Current admitted simulation tick; calling outside the simulation cycle raises a Rhai invocation error.",
+    ),
     (
         "dt",
         "dt()",
         "f64",
-        "Fixed-step integration delta in seconds — multiply rates by this.",
+        "Fixed-step integration delta in seconds — multiply rates by this. Calling outside the simulation cycle raises a Rhai invocation error.",
     ),
     (
         "elapsed_seconds",
         "elapsed_seconds()",
         "f64",
-        "Admitted simulation seconds derived from SimTick; excludes scheduler overstep while a causal barrier is held.",
+        "Admitted simulation seconds derived from SimTick; excludes scheduler overstep while a causal barrier is held. Calling outside the simulation cycle raises a Rhai invocation error.",
     ),
     (
         "clock_snapshot",
         "clock_snapshot()",
         "map",
         "READ. Snapshot of fixed, virtual, physics, mission, wall, clock-tree, transport, and co-simulation clocks. `sim_tick` is the deterministic master; wall time is diagnostic-only.",
+    ),
+    (
+        "execution_context",
+        "execution_context()",
+        "map",
+        "READ. The cycle owner's scope, cycle, phase, clock sample, logical sequence, and optional event producer sequence. Nested Rhai calls inherit this context.",
     ),
     (
         "param",

@@ -167,6 +167,20 @@ persistent task state as the driver-bound `this`. The native task driver owns
 task progress, dwell timing, and event waits. You sense with queries/`get` and
 act with `cmd`/`set`.
 
+### Scenario scope and timing
+
+The runtime assigns persistent scenario hooks to the cycles owned by the
+selected application plugins. Use `// @scope host|client|both` to choose the
+network peer. Continuous behavior may declare `// @timing simulation`; this
+records its fixed-step requirement and does not install a schedule from Rhai.
+`on_start` and `on_event` inherit the lifecycle or simulation context of the
+pass that invokes them, which is available through `execution_context()`.
+
+An unsupported scope or timing value disables only that scenario and publishes
+a document diagnostic for that source revision. Editing the source reparses
+its directives before the new program runs. Runtime errors stay visible through
+the script diagnostics and do not become successful no-ops.
+
 ## 2. Your first script
 
 Create `assets/scenarios/my_rover_mission.rhai`:
@@ -411,8 +425,9 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `despawn(id)` | bool | **structural** — despawn an entity (+children); replicates on a host. *Spawn:* use `cmd("SpawnEntity", #{entry_id, position})` (no generic spawn — clients reconstruct from the catalog) |
 | `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` on the next scenario pass) |
 | `intent_edge(target, intent, edge)` / `intent_pulse(target, intent)` | command result | emit one target-scoped semantic edge; the runtime publishes it as `intent.edge` with a correlation id usable by `CausalTrace` |
-| `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | the fixed simulation clock |
-| `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded per hook from `(entity, tick, hook)`, identical on every peer and replay |
+| `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | fixed simulation clock; Rhai error outside the simulation cycle |
+| `execution_context()` | map | read-only owner scope, cycle, phase, selected clock sample, sequence, and event producer stamp; scope, cycle, and generation are unit when no owner route exists |
+| `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded by entity, event producer or cycle sequence, and hook; discrete lifecycle hooks use a stable sequence-free seed |
 | `param(id, key, default)` | any | read a `lunco:param:<key>` attribute from a prim (`custom float lunco:param:wmax = 1.05`); returns `default` if it is absent |
 | `detach_joint(id)` | bool | detach an entity through the generic `DetachJoint` command; ordinary entities use normal removal, while joint entities release their rigid link through the solver lifecycle |
 | `notify(msg)` / `notify_kind(msg, kind)` | () | send a HUD notification; `kind` is `"info"` / `"warn"` / `"error"` |
@@ -1371,9 +1386,11 @@ Scenarios are **host-authoritative**: they run on the `Host` and in single-playe
 behaviour via replication of the resulting entity state — it does not re-run the
 script (which would double-fire `cmd()`/`emit()` and diverge the per-entity
 `this`). For deterministic behaviour scripts read the fixed clock (`dt`,
-`sim_tick`, `elapsed_seconds`); `rand()` is available but uses **deterministic
-per-hook seeding** (`(entity, tick, hook)` triple) so a re-run at the same tick
-produces the same sequence — no explicit seeding needed.
+`sim_tick`, `elapsed_seconds`); `rand()` uses **deterministic per-hook
+seeding** from the event's producer sequence or the active cycle sequence, so
+a re-run with the same inputs produces the same sequence — no explicit seeding
+needed. A discrete lifecycle hook with no sequence receives a stable seed
+scoped to that hook.
 
 ## M. Running a scenario
 

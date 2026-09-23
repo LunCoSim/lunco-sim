@@ -170,6 +170,21 @@ reads. Causal simulation runs on the fixed schedule. Embodiment, camera, and UI
 presentation use `InteractionSchedule` and `InteractionEased`, so their stable
 presentation cadence does not become a second simulation clock.
 
+`RuntimeCycleSet` supplies ordering vocabulary, not an active clock sample or
+an independent cadence driver. Every system and callback must use the clock
+owned by its cycle. Nested functions and hooks inherit that execution context;
+events preserve their producer clock stamp and are consumed at the subscriber's
+declared cycle boundary. See
+[`62-deterministic-runtime-and-async-boundaries.md`](62-deterministic-runtime-and-async-boundaries.md)
+for the cross-domain invocation and async-commit contract.
+
+Rhai scenario preparation and hooks receive the scenario owner's typed cycle,
+phase, clock sample, sequence, and event producer stamp. Paused lifecycle/event
+callbacks receive no elapsed-time clock. One-shot REPL and tool calls use the
+application cadence. `sim_tick()`, `dt()`, and `elapsed_seconds()` reject calls
+outside the simulation cycle as a Rhai invocation error; missing mandatory
+simulation clock resources remain a runtime fault.
+
 ## 6. Networking and determinism
 
 Only deterministic simulation state and its authoritative transport decisions are

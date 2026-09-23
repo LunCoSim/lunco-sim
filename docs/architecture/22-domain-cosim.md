@@ -141,6 +141,18 @@ Update:
 The master loop reads outputs, propagates through connections, writes inputs,
 then steps all engines — this is the FMI master algorithm.
 
+The composed dependency graph is also the safe parallelization boundary.
+Participants in one dependency layer may calculate concurrently from the same
+immutable communication-point snapshot. The master waits for that layer,
+validates the session/source/step identities, and publishes outputs in stable
+participant order before admitting the next dependent layer. Independent
+participants that cannot affect an authoritative sink do not hold the physics
+clock. Worker completion order never chooses which participant value a tick
+observes. Current Modelica dispatch remains serialized; layered execution is a
+future optimization after every live Rhai port read/write is represented in
+this graph. See
+[`62-deterministic-runtime-and-async-boundaries.md`](62-deterministic-runtime-and-async-boundaries.md).
+
 ## The macro-step contract (what step 6 actually promises)
 
 The ordering above is *within* a tick. The other half of an FMI-CS master is the

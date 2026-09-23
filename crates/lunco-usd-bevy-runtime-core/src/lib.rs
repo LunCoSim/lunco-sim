@@ -96,6 +96,7 @@ impl Plugin for UsdSceneRuntimePlugin {
                 live_consume::project_stage_changes,
             )
                 .chain()
+                .in_set(lunco_core::RuntimeCycleSet::Lifecycle)
                 .run_if(
                     bevy::ecs::schedule::common_conditions::resource_exists::<
                         bevy::asset::AssetServer,

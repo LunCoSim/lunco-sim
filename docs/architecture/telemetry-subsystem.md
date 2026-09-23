@@ -100,9 +100,13 @@ catalog's labels still use `display_channel_label`.
 | Retention | `lunco_signal::SignalRegistry` scalar histories, with per-channel retention and deadband |
 | Unsubscribe | `UnsubscribeTelemetry` owns subscription lifecycle explicitly |
 
-`LunCoTelemetryPlugin` is registered in `lunco-luncosim`. Sampling is
-`run_if`-gated on a `Parameter` existing and runs on the fixed clock, so it
-costs nothing until a channel is authored.
+`LunCoTelemetryPlugin` is registered in the shared simulation composition.
+Sampling is `run_if`-gated on a `Parameter` existing and runs on the fixed
+clock. When channels exist, the current exclusive sampler walks its cached
+channel plan on each fixed tick to check due times; that work and its synchronous
+observers are a known performance gap tracked by the deterministic runtime
+contract. Preserve authored rate/clock semantics while moving to a due-driven
+plan and separating observation consumers from the physics step.
 
 `lunco-telemetry-core` owns the transport-neutral telemetry contracts
 (`TelemetryEvent`, `SampledParameter`, `Parameter`, `ChannelSource`, and their
@@ -121,6 +125,21 @@ observer, but telemetry never derives time from render cadence or a wall-clock
 accumulator. Parameter collection runs after the runtime's tick-advance set;
 physics collection runs after the physics step, and Modelica collection uses the
 solver's landed simulation time.
+
+### Physics and UI cost contract
+
+`TelemetryEvent` callbacks used by Rhai keep the deterministic producer stamp and
+are delivered in the declared simulation event phase. Log formatting, API
+subscription fan-out, serialization, and persistence consume an observation copy
+outside the fixed physics transaction. Continuous samples capture only channels
+due at that channel's resolved clock time; a fixed tick must not scan all
+declarations just to discard not-due channels. The capture boundary records the
+small typed value and source/tick identity. Retention, API delivery, logs, and
+recording use bounded owner queues or in-memory rings and report overload
+explicitly; physics never waits on telemetry I/O. UI plots derive decimated
+summaries from `SignalRegistry` history revisions instead of rebuilding them on
+every repaint. These are the target rules; the current sampler/observer path
+above has not yet completed this separation.
 
 ---
 

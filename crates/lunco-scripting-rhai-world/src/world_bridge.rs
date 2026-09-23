@@ -59,7 +59,7 @@ fn first_set_failure(id: u64, path: &str) -> bool {
         .insert((id, path.to_string()))
 }
 
-use rhai::{AST, Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext};
+use rhai::{AST, Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map, NativeCallContext};
 
 use lunco_doc::Diagnostic;
 use lunco_hooks::HookValue;
@@ -2260,20 +2260,26 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
         });
     });
 
-    // sim_tick() -> i64 — current FixedUpdate tick.
-    engine.register_fn("sim_tick", || -> i64 { time_bridge::sim_tick() });
+    // Simulation clocks are exposed only in a simulation-cycle invocation.
+    // Returning a Rhai error aborts this callback and publishes its ordinary
+    // document diagnostic without faulting unrelated runtime cycles.
+    engine.register_fn("sim_tick", || -> Result<i64, Box<EvalAltResult>> {
+        time_bridge::sim_tick().map_err(value_boundary_error)
+    });
 
     // dt() -> f64 — the fixed-step integration delta in seconds (1/FIXED_HZ).
     // The per-tick `dt` an on_tick hook should multiply rates by for
     // frame-rate-independent integration. The fixed clock is mandatory in a
     // running simulation; a missing or invalid clock raises RuntimeFaults.
-    engine.register_fn("dt", || -> f64 { time_bridge::dt() });
+    engine.register_fn("dt", || -> Result<f64, Box<EvalAltResult>> {
+        time_bridge::dt().map_err(value_boundary_error)
+    });
     // elapsed_seconds() -> f64 — admitted simulation seconds derived from the
     // deterministic SimTick, for second-based timeouts / rate limits
     // (`this.t0`-relative dwell, etc.). Scheduler overstep accumulated while a
     // causal barrier is held is excluded.
-    engine.register_fn("elapsed_seconds", || -> f64 {
-        time_bridge::elapsed_seconds()
+    engine.register_fn("elapsed_seconds", || -> Result<f64, Box<EvalAltResult>> {
+        time_bridge::elapsed_seconds().map_err(value_boundary_error)
     });
     // clock_snapshot() -> #{...} — read every installed clock domain and the
     // synchronization barrier.  `sim_tick`/`world_sim_s` are deterministic;
@@ -2281,6 +2287,12 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     // `wall_time_deterministic: false` in the returned map.
     engine.register_fn("clock_snapshot", || -> Dynamic {
         time_bridge::clock_snapshot(&RhaiBuilder)
+    });
+    // execution_context() -> #{scope, cycle, phase, clock, time_seconds,
+    // delta_seconds, sequence, producer}. This is the read-only
+    // owner context for the current callback and every nested Rhai function.
+    engine.register_fn("execution_context", || -> Dynamic {
+        time_bridge::execution_context_value(&RhaiBuilder)
     });
 
     // twin_root() -> String — absolute path of the ACTIVE twin's folder, i.e. the
@@ -3162,8 +3174,9 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         if matches!(hook, ScenarioHook::Start) {
             SUBS_ACCUM.with(|s| *s.borrow_mut() = Some(SubsAccum::default()));
         }
-        // Seed the deterministic RNG for this hook: (entity, tick, hook).
-        bridge_core::rng_begin(self_gid as u64, time_bridge::sim_tick() as u64, salt);
+        // Seed from the owner-supplied sequence. Startup and event hooks may
+        // run at a discrete boundary, so they must not read a fixed clock.
+        bridge_core::rng_begin(self_gid as u64, time_bridge::logical_sequence(), salt);
         // Only enter the VM if the program defines this lifecycle hook (cached
         // mask bit — no AST scan). The built-in drivers below run regardless.
         let (hook_ast, eval_ast) = st.program.hook_target();
@@ -3263,7 +3276,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // in the same tick draw distinct streams.
         bridge_core::rng_begin(
             self_gid as u64,
-            time_bridge::sim_tick() as u64,
+            time_bridge::logical_sequence(),
             bridge_core::hash_str(&event.name),
         );
         let st = self.states.get_mut(&entity)?;
@@ -3692,6 +3705,10 @@ fn tick_native_task(
     if ct.done {
         return None;
     }
+    let now = match time_bridge::elapsed_seconds() {
+        Ok(now) => now,
+        Err(error) => return Some((error, rhai::Position::NONE)),
+    };
     let scope = std::mem::take(&mut st.scope);
     let this = std::mem::take(&mut st.this);
     let mut ctx = RhaiTaskCtx {
@@ -3700,7 +3717,7 @@ fn tick_native_task(
         scope,
         this,
         me: self_gid,
-        now: time_bridge::elapsed_seconds(),
+        now,
         events: events.to_vec(),
         error: None,
     };
@@ -3892,7 +3909,12 @@ pub fn eval_with_world_as(
         }
     });
 
-    let _scope = bridge_core::WorldScope::enter(world);
+    let context = application_execution_context(
+        world,
+        lunco_core::RuntimeCycle::Repl,
+        lunco_core::RuntimePhase::Evaluation,
+    );
+    let _scope = bridge_core::WorldScope::enter(world, context);
     // `enter` reset the authority to None; bind the submitter for this eval.
     bridge_core::set_script_authority(authority);
     let result = engine.eval::<Dynamic>(code).map_err(|e| e.to_string())?;
@@ -3951,7 +3973,12 @@ pub fn eval_tool_with_world_as(
         }
     });
 
-    let _scope = bridge_core::WorldScope::enter(world);
+    let context = application_execution_context(
+        world,
+        lunco_core::RuntimeCycle::Repl,
+        lunco_core::RuntimePhase::Evaluation,
+    );
+    let _scope = bridge_core::WorldScope::enter(world, context);
     bridge_core::set_script_authority(authority);
     let mut scope = rhai::Scope::new();
     scope.push_dynamic(
@@ -3973,6 +4000,28 @@ pub fn eval_tool_with_world_as(
     Ok(captured)
 }
 
+fn application_execution_context(
+    world: &World,
+    cycle: lunco_core::RuntimeCycle,
+    phase: lunco_core::RuntimePhase,
+) -> lunco_core::RuntimeExecutionContext {
+    let clock = world
+        .get_resource::<lunco_core_runtime::ApplicationCadence>()
+        .map(|cadence| match cycle {
+            lunco_core::RuntimeCycle::Command => cadence.command,
+            _ => cadence.repl,
+        });
+    lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::application(cycle)),
+        phase,
+        clock: lunco_core::RuntimeClock::Application,
+        time_seconds: clock.map(|value| value.elapsed_secs),
+        delta_seconds: clock.and_then(|value| value.interval_secs),
+        sequence: clock.map(|value| value.sequence),
+        producer: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Test the generic Rhai bridge and compiler mechanics. Authored scripts are
@@ -3980,7 +4029,45 @@ mod tests {
     //! or editing a `.rhai` file does not require rebuilding this crate.
 
     use bevy::math::DVec3;
+    use lunco_core::{
+        RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeRoute,
+    };
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
+
+    #[test]
+    fn rhai_clock_api_rejects_repl_calls_and_exposes_owner_context() {
+        let engine = super::build_world_engine_base(Default::default());
+        let mut world = bevy::prelude::World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        let context = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::application(RuntimeCycle::Repl)),
+            phase: RuntimePhase::Evaluation,
+            clock: RuntimeClock::Application,
+            time_seconds: Some(8.0),
+            delta_seconds: Some(0.2),
+            sequence: Some(5),
+            producer: None,
+        };
+        let _scope = lunco_scripting_bridge_core::WorldScope::enter(&mut world, context);
+
+        let error = engine
+            .eval::<i64>("sim_tick()")
+            .expect_err("one-shot Rhai evaluation cannot read the simulation tick")
+            .to_string();
+        assert!(error.contains("only in the simulation cycle"));
+        assert!(!world.resource::<lunco_core::RuntimeFaults>().active());
+
+        let exposed: Map = engine
+            .eval("execution_context()")
+            .expect("Rhai receives the owner-supplied execution context");
+        assert_eq!(exposed["cycle"].clone().into_string().unwrap(), "repl");
+        assert_eq!(
+            exposed["phase"].clone().into_string().unwrap(),
+            "evaluation"
+        );
+        assert_eq!(exposed["sequence"].clone().into_string().unwrap(), "5");
+        assert_eq!(exposed["time_seconds"].as_float().unwrap(), 8.0);
+    }
 
     #[test]
     fn source_scoped_event_filter_accepts_only_the_declared_emitter() {

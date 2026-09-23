@@ -303,12 +303,25 @@ mod schedule_tests {
         let mut app = App::new();
         app.init_resource::<lunco_core_runtime::SimTick>()
             .init_resource::<ObservedTick>();
+        app.configure_sets(
+            FixedUpdate,
+            (
+                lunco_core_runtime::SimTickSet,
+                lunco_core::RuntimeCycleSet::Simulation,
+            )
+                .chain(),
+        );
         configure_scripting_schedule(&mut app);
         app.add_systems(
             FixedUpdate,
             advance_tick.in_set(lunco_core_runtime::SimTickSet),
         )
-        .add_systems(FixedUpdate, observe_tick.in_set(ScriptingSet));
+        .add_systems(
+            FixedUpdate,
+            observe_tick
+                .in_set(ScriptingSet)
+                .in_set(lunco_core::RuntimeCycleSet::Simulation),
+        );
 
         app.world_mut().run_schedule(FixedUpdate);
 

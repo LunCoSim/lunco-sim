@@ -158,6 +158,10 @@ mod readiness_gate_tests {
     use lunco_core::{SceneTransition, SceneTransitionCompleted, SceneTransitionStarted};
     use lunco_readiness::ReadinessState;
 
+    fn transition_id(transition: SceneTransition) -> lunco_core::SceneTransitionId {
+        lunco_core::SceneTransitionCoordinator::default().start(transition)
+    }
+
     #[test]
     fn each_scene_transition_opens_once_after_readiness_clears() {
         let mut app = App::new();
@@ -169,14 +173,18 @@ mod readiness_gate_tests {
             .add_observer(arm_scenarios_after_scene_composition)
             .add_systems(Update, open_scenarios_when_scene_ready);
 
+        let clear = SceneTransition::clear();
+        let clear_id = transition_id(clear.clone());
         app.world_mut().trigger(SceneTransitionStarted {
-            transition: SceneTransition::clear(),
+            id: clear_id,
+            transition: clear.clone(),
         });
         assert!(!app.world().resource::<ScenarioExecutionGate>().enabled);
         assert!(!app.world().resource::<ScenarioReadinessArm>().0);
 
         app.world_mut().trigger(SceneTransitionCompleted {
-            transition: SceneTransition::clear(),
+            id: clear_id,
+            transition: clear,
         });
         app.world_mut().resource_mut::<ReadinessState>().world_hold = true;
         app.update();
@@ -206,8 +214,10 @@ mod readiness_gate_tests {
         assert!(app.world().resource::<ScenarioExecutionGate>().enabled);
 
         // The next authoritative transition closes it again.
+        let next = SceneTransition::load("next.usda", "");
         app.world_mut().trigger(SceneTransitionStarted {
-            transition: SceneTransition::load("next.usda", ""),
+            id: transition_id(next.clone()),
+            transition: next,
         });
         assert!(!app.world().resource::<ScenarioExecutionGate>().enabled);
     }
@@ -296,46 +306,109 @@ pub fn resolve_scenario_audience(
 /// - `Both` — every peer (each peer still filtered by the same client-local rule
 ///   when it is the client).
 ///
-/// Authored via a `// @scope client` (or `both`) directive on one of the first
+/// Authored via a `// @scope host|client|both` directive on one of the first
 /// lines of the script source, so it rides the same channel for API-attached
 /// (`RunScenario`) and USD-embedded scenarios with no wire or schema change.
-#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScriptScope {
     #[default]
     Host,
     Client,
     Both,
+    /// A declared peer scope was not recognized; the scenario is disabled.
+    Unsupported,
 }
 
 impl ScriptScope {
-    /// Parse a `// @scope <host|client|both>` directive from the script source
-    /// (scanned in the first lines). Absent / unrecognized ⇒ [`Host`](Self::Host).
-    pub fn from_source(src: &str) -> Self {
-        for line in src.lines().take(24) {
-            let t = line.trim_start();
-            let Some(rest) = t.strip_prefix("//") else {
-                continue;
-            };
-            let rest = rest.trim_start().trim_start_matches('!').trim_start();
-            let Some(val) = rest.strip_prefix("@scope") else {
-                continue;
-            };
-            return match val.trim().to_ascii_lowercase().as_str() {
-                "client" => ScriptScope::Client,
-                "both" => ScriptScope::Both,
-                _ => ScriptScope::Host,
-            };
-        }
-        ScriptScope::Host
-    }
-
     /// Whether a scenario with this scope should tick on the current peer.
     pub fn runs_on(self, is_client: bool) -> bool {
         match self {
             ScriptScope::Host => !is_client,
             ScriptScope::Client => is_client,
             ScriptScope::Both => true,
+            ScriptScope::Unsupported => false,
         }
+    }
+
+    fn is_unsupported(self) -> bool {
+        matches!(self, Self::Unsupported)
+    }
+}
+
+/// Clock cycle requested by a persistent scenario.
+///
+/// The scenario host currently admits stateful hooks only to deterministic
+/// simulation. This declaration makes that contract explicit without allowing
+/// authored text to install or move systems between Rust schedules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScriptTiming {
+    /// The fixed simulation cycle owned by the scenario runtime.
+    #[default]
+    Simulation,
+    /// A timing value the scenario runtime does not support.
+    Unsupported,
+}
+
+/// Parsed, source-revision-owned scheduling metadata for one scenario.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScenarioDirectives {
+    /// Network peer on which this scenario may execute.
+    pub scope: ScriptScope,
+    /// Runtime cycle requested by this scenario.
+    pub timing: ScriptTiming,
+}
+
+impl ScenarioDirectives {
+    /// Parse known directives from the source preamble.
+    ///
+    /// Unknown scope and timing values are retained as unsupported metadata so
+    /// the owner can skip this scenario and publish a document diagnostic.
+    pub fn from_source(src: &str) -> Self {
+        let mut directives = Self::default();
+        for line in src.lines().take(24) {
+            let t = line.trim_start();
+            let Some(rest) = t.strip_prefix("//") else {
+                continue;
+            };
+            let rest = rest.trim_start().trim_start_matches('!').trim_start();
+            if let Some(value) = rest.strip_prefix("@scope") {
+                directives.scope = match value.trim().to_ascii_lowercase().as_str() {
+                    "host" => ScriptScope::Host,
+                    "client" => ScriptScope::Client,
+                    "both" => ScriptScope::Both,
+                    _ => ScriptScope::Unsupported,
+                };
+            } else if let Some(value) = rest.strip_prefix("@timing") {
+                directives.timing = match value.trim().to_ascii_lowercase().as_str() {
+                    "simulation" => ScriptTiming::Simulation,
+                    _ => ScriptTiming::Unsupported,
+                };
+            }
+        }
+        directives
+    }
+
+    fn is_supported(self) -> bool {
+        !self.scope.is_unsupported() && self.timing != ScriptTiming::Unsupported
+    }
+
+    fn diagnostics(self) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.scope.is_unsupported() {
+            diagnostics.push(Diagnostic::error(
+                "unknown scenario @scope directive; expected host, client, or both",
+                None,
+                None,
+            ));
+        }
+        if self.timing == ScriptTiming::Unsupported {
+            diagnostics.push(Diagnostic::error(
+                "unsupported scenario @timing directive; expected simulation",
+                None,
+                None,
+            ));
+        }
+        diagnostics
     }
 }
 
@@ -497,6 +570,8 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
 struct Fsm {
     /// `ScriptDocument.generation` the current program was compiled from.
     generation: u64,
+    /// Document that owns the program and its lifecycle diagnostics.
+    document_id: Option<u64>,
     /// Source revision most recently sent to the compiler, including a failed
     /// compile. A broken revision is terminal until the document changes; retrying
     /// it every fixed tick only floods the log and repeats work that cannot succeed.
@@ -516,6 +591,93 @@ struct Fsm {
     gid: i64,
     /// Scene generation at which this scenario last entered `on_start`.
     scene_generation: u64,
+    /// Source revision whose scheduling metadata is cached below.
+    directives_generation: Option<u64>,
+    /// Parsed peer scope and execution timing for that source revision.
+    directives: ScenarioDirectives,
+    /// Source generation whose unsupported directives were diagnosed.
+    directives_diagnostic_generation: Option<u64>,
+}
+
+fn publish_scenario_stop_error(
+    world: &mut World,
+    document_id: Option<u64>,
+    diagnostic: Diagnostic,
+) {
+    let Some(raw) = document_id else {
+        bevy::log::error!(
+            "[scenario] on_stop failed without an owning script document: {}",
+            diagnostic.message
+        );
+        return;
+    };
+    if let Some(mut diagnostics) = world.get_resource_mut::<DocumentDiagnostics>() {
+        let document = DocumentId::new(raw);
+        let mut current = diagnostics.diagnostics(document).to_vec();
+        current.push(diagnostic);
+        diagnostics.set_error(document, current);
+    } else {
+        bevy::log::error!(
+            "[scenario] on_stop failed for script document {raw}, but document diagnostics are unavailable"
+        );
+    }
+}
+
+fn scenario_execution_context(
+    world: &World,
+    simulation_cycle: bool,
+    scene_generation: Option<u64>,
+) -> lunco_core::RuntimeExecutionContext {
+    let (sequence, fixed_sample) = if simulation_cycle {
+        (
+            world
+                .get_resource::<lunco_core_runtime::SimTick>()
+                .map(|tick| tick.0),
+            world
+                .get_resource::<Time<Fixed>>()
+                .map(|time| (time.timestep().as_secs_f64(), time.delta_secs_f64())),
+        )
+    } else {
+        (None, None)
+    };
+    let cycle = if simulation_cycle {
+        lunco_core::RuntimeCycle::Simulation
+    } else {
+        lunco_core::RuntimeCycle::Lifecycle
+    };
+    let (clock, time_seconds, delta_seconds) = if simulation_cycle {
+        let timestep = fixed_sample.map(|(timestep, _)| timestep);
+        let delta = fixed_sample.map(|(_, delta)| delta);
+        (
+            lunco_core::RuntimeClock::Simulation,
+            sequence.zip(timestep).map(|(tick, dt)| tick as f64 * dt),
+            delta,
+        )
+    } else {
+        (lunco_core::RuntimeClock::None, None, None)
+    };
+    lunco_core::RuntimeExecutionContext {
+        route: scene_generation.map(|generation| lunco_core::RuntimeRoute::twin(cycle, generation)),
+        phase: lunco_core::RuntimePhase::Unclassified,
+        clock,
+        time_seconds,
+        delta_seconds,
+        sequence,
+        producer: None,
+    }
+}
+
+fn report_missing_scenario_generation(world: &mut World) {
+    const DETAIL: &str = "scenario execution requires the active Twin scene generation";
+    bevy::log::error!(target: "scripting", "{DETAIL}");
+    if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
+        faults.raise(
+            "scenario-generation-missing",
+            None,
+            "Rhai scenario driver",
+            DETAIL,
+        );
+    }
 }
 
 /// Generic scenario runtime resource: a language backend `R` + the neutral FSM.
@@ -563,23 +725,35 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             return;
         }
 
+        let mut stop_error = None;
+        let mut document_id = None;
         world.resource_scope(|world, mut driver: Mut<ScenarioDriver<R>>| {
             let Some(state) = driver.fsm.remove(&entity) else {
                 return;
             };
-            let _scope = bridge_core::WorldScope::enter(world);
+            document_id = state.document_id;
+            let generation = world
+                .get_resource::<ScenarioSceneGeneration>()
+                .map(|generation| generation.0);
+            let context = scenario_execution_context(world, false, generation)
+                .with_phase(lunco_core::RuntimePhase::Stop);
+            let _scope = bridge_core::WorldScope::enter(world, context);
             // The entity is still present, but the scene/tutor owns the
             // transition. Its final cleanup is host-authoritative, matching
             // the normal despawn teardown path below.
             bridge_core::set_script_authority(None);
             bridge_core::set_script_client_local(false);
             if state.started && state.compiled {
-                let _ = driver
+                let _phase = bridge_core::ExecutionContextScope::enter(context);
+                stop_error = driver
                     .runtime
                     .call_hook(entity, ScenarioHook::Stop, state.gid);
             }
             driver.runtime.forget(entity);
         });
+        if let Some(diagnostic) = stop_error {
+            publish_scenario_stop_error(world, document_id, diagnostic);
+        }
     }
 
     /// Exclusive-system body: drive every non-paused `ScriptedModel { language }`
@@ -599,6 +773,14 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     }
 
     fn run_with_tick(world: &mut World, language: ScriptLanguage, run_tick: bool) {
+        let Some(scene_generation) = world
+            .get_resource::<ScenarioSceneGeneration>()
+            .map(|generation| generation.0)
+        else {
+            report_missing_scenario_generation(world);
+            return;
+        };
+        let pass_context = scenario_execution_context(world, run_tick, Some(scene_generation));
         // 1. Snapshot (entity, doc_id, gid, source revision, parameter revision),
         //    releasing every
         //    World borrow before we execute scripts. `live` = all THIS-LANGUAGE
@@ -608,6 +790,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // when a (re)compile is due (see below) — not every tick — since they're
         // consumed solely by `runtime.compile`.
         type CompileInput = (String, ScenarioParameters, Option<String>);
+        let mut diag_updates: Vec<(u64, Option<Vec<Diagnostic>>)> = Vec::new();
         let mut work: Vec<(
             Entity,
             u64,
@@ -618,6 +801,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             Option<SessionId>,
             crate::doc::ScenarioReloadPolicy,
             u64,
+            ScenarioDirectives,
         )> = Vec::new();
         // A predicting client only ticks scenarios scoped to run there
         // (`Client`/`Both`); the host ticks `Host`/`Both`. Read once — constant
@@ -626,11 +810,6 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             world.get_resource::<lunco_core_session::NetworkRole>(),
             Some(lunco_core_session::NetworkRole::Client)
         );
-        let scene_generation = world
-            .get_resource::<ScenarioSceneGeneration>()
-            .copied()
-            .unwrap_or_default()
-            .0;
         let current_sim_tick = world
             .get_resource::<lunco_core_runtime::SimTick>()
             .map(|tick| tick.0);
@@ -640,31 +819,24 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             .unwrap_or_default();
         let live: HashSet<Entity>;
         {
-            let mut q = world.query::<(
-                Entity,
-                &ScriptedModel,
-                Option<&ScriptAuthority>,
-                Option<&ScriptScope>,
-            )>();
+            let mut q = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
             let models: Vec<(
                 Entity,
                 bool,
                 Option<ScriptLanguage>,
                 Option<u64>,
                 Option<SessionId>,
-                ScriptScope,
                 crate::doc::ScenarioReloadPolicy,
                 u64,
             )> = q
                 .iter(world)
-                .map(|(e, m, auth, scope)| {
+                .map(|(e, m, auth)| {
                     (
                         e,
                         m.paused,
                         m.language,
                         m.document_id,
                         auth.and_then(|a| a.0),
-                        scope.copied().unwrap_or_default(),
                         m.reload_policy,
                         m.parameters_revision,
                     )
@@ -672,38 +844,18 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 .collect();
             live = models
                 .iter()
-                .filter(|(_, _, l, _, _, _, _, _)| *l == Some(language))
+                .filter(|(_, _, l, _, _, _, _)| *l == Some(language))
                 .map(|(e, ..)| *e)
                 .collect();
 
-            for (
-                entity,
-                paused,
-                lang,
-                doc_id,
-                authority,
-                scope,
-                reload_policy,
-                parameters_revision,
-            ) in models
+            for (entity, paused, lang, doc_id, authority, reload_policy, parameters_revision) in
+                models
             {
-                if paused || lang != Some(language) {
-                    continue;
-                }
-                // Scope gate: skip (don't execute) a scenario not meant for this
-                // peer. It stays in `live` above, so it is NOT torn down — just
-                // idle here (it ticks on the peer it belongs to).
-                if !scope.runs_on(is_client) {
-                    continue;
-                }
-                // Readiness freezes a physical subtree. Scripts owned anywhere
-                // inside that subtree wait with it, while unrelated scenarios
-                // keep participating in the fixed step.
-                if scenario_owner_is_held(world, entity, &held_roots) {
+                if lang != Some(language) {
                     continue;
                 }
                 let Some(raw) = doc_id else { continue };
-                let (generation, maybe_src) = {
+                let (generation, maybe_src, directives, directives_changed, prior_diag) = {
                     let registry = world.resource::<ScriptRegistry>();
                     let Some(host) = registry.documents.get(&DocumentId::new(raw)) else {
                         continue;
@@ -713,21 +865,33 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         continue;
                     }
                     let generation = doc.generation;
+                    let state = world
+                        .get_resource::<ScenarioDriver<R>>()
+                        .and_then(|driver| driver.fsm.get(&entity));
+                    let directives_changed =
+                        state.is_none_or(|state| state.directives_generation != Some(generation));
+                    let directives = match state {
+                        Some(state) if !directives_changed => state.directives,
+                        _ => ScenarioDirectives::from_source(&doc.source),
+                    };
+                    let prior_diag = state.and_then(|state| state.directives_diagnostic_generation);
                     // Only (re)compilation reads source/params, so clone them ONLY when a
                     // recompile is actually due (first sight or generation bump) — otherwise
                     // the multi-KB source was cloned and dropped unused every tick. This
                     // A failed compile is also an attempted revision. Do not compile it
                     // again until the author changes the document: the diagnostic is
                     // already published and the same text cannot become valid by ticking.
-                    let needs_recompile = world
-                        .get_resource::<ScenarioDriver<R>>()
-                        .and_then(|d| d.fsm.get(&entity))
-                        .is_none_or(|st| {
-                            st.attempted_generation != Some(generation)
-                                || st.parameters_revision != parameters_revision
+                    let can_compile = directives.is_supported()
+                        && !paused
+                        && directives.scope.runs_on(is_client)
+                        && !scenario_owner_is_held(world, entity, &held_roots);
+                    let needs_recompile = can_compile
+                        && state.is_none_or(|state| {
+                            state.attempted_generation != Some(generation)
+                                || state.parameters_revision != parameters_revision
                                 || (reload_policy == crate::doc::ScenarioReloadPolicy::Restart
-                                    && st.started
-                                    && st.scene_generation != scene_generation)
+                                    && state.started
+                                    && state.scene_generation != scene_generation)
                         });
                     let maybe_src = needs_recompile.then(|| {
                         let parameters = world
@@ -736,8 +900,73 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             .unwrap_or_default();
                         (doc.source.clone(), parameters, doc.asset_id.clone())
                     });
-                    (generation, maybe_src)
+                    (
+                        generation,
+                        maybe_src,
+                        directives,
+                        directives_changed,
+                        prior_diag,
+                    )
                 };
+
+                if directives_changed {
+                    if let Some(mut driver) = world.get_resource_mut::<ScenarioDriver<R>>() {
+                        let state = driver.fsm.entry(entity).or_default();
+                        state.directives_generation = Some(generation);
+                        state.directives = directives;
+                    }
+                }
+
+                if directives_changed && directives.is_supported() && prior_diag.is_some() {
+                    if let Some(mut driver) = world.get_resource_mut::<ScenarioDriver<R>>() {
+                        driver
+                            .fsm
+                            .entry(entity)
+                            .or_default()
+                            .directives_diagnostic_generation = None;
+                    }
+                    diag_updates.push((raw, None));
+                }
+                if !directives.is_supported() {
+                    // Invalid authored routing/timing is local to this scenario.
+                    // It bypasses peer, pause, and readiness gates so a changed
+                    // invalid revision can stop an already-running program and
+                    // publish its document error immediately.
+                    let settled = world
+                        .get_resource::<ScenarioDriver<R>>()
+                        .and_then(|driver| driver.fsm.get(&entity))
+                        .is_some_and(|state| {
+                            state.directives_diagnostic_generation == Some(generation)
+                                && !state.started
+                                && !state.compiled
+                        });
+                    if settled {
+                        continue;
+                    }
+                } else {
+                    if paused {
+                        continue;
+                    }
+                    if !directives.scope.runs_on(is_client) {
+                        let active = world
+                            .get_resource::<ScenarioDriver<R>>()
+                            .and_then(|driver| driver.fsm.get(&entity))
+                            .is_some_and(|state| state.started || state.compiled);
+                        if !active {
+                            continue;
+                        }
+                    }
+                    // Readiness freezes a physical subtree. Scripts owned
+                    // anywhere inside that subtree wait with it, while unrelated
+                    // scenarios keep participating in the fixed step. A peer
+                    // change still reaches the owner above to stop old state.
+                    if directives.scope.runs_on(is_client)
+                        && scenario_owner_is_held(world, entity, &held_roots)
+                    {
+                        continue;
+                    }
+                }
+
                 let gid = world
                     .resource::<ApiEntityRegistry>()
                     .api_id_for(entity)
@@ -753,6 +982,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     authority,
                     reload_policy,
                     scene_generation,
+                    directives,
                 ));
             }
         }
@@ -815,7 +1045,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         let needs_teardown = world
             .get_resource::<ScenarioDriver<R>>()
             .is_some_and(|d| d.fsm.keys().any(|e| !live.contains(e)));
-        if work.is_empty() && !needs_teardown {
+        if work.is_empty() && !needs_teardown && diag_updates.is_empty() {
             // No scenario can consume this batch. Preserve the allocation for
             // the next pass, but intentionally discard the events themselves.
             events.clear();
@@ -825,19 +1055,17 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             return;
         }
 
-        // Per-document diagnostics to publish AFTER the scope: None = OK,
-        // Some(diags) = errored. Only (re)compiles + runtime errors record.
-        let mut diag_updates: Vec<(u64, Option<Vec<Diagnostic>>)> = Vec::new();
-
         world.resource_scope(|world, mut driver: Mut<ScenarioDriver<R>>| {
-            let _scope = bridge_core::WorldScope::enter(world);
+            let _scope = bridge_core::WorldScope::enter(world, pass_context);
+            let _phase = bridge_core::ExecutionContextScope::enter(
+                pass_context.with_phase(lunco_core::RuntimePhase::Preparation),
+            );
             driver.runtime.maintain();
             let ScenarioDriver { runtime, fsm } = &mut *driver;
 
-            // Everything that reaches `work` on a client passed the scope gate, so
-            // it is a client-scoped scenario: restrict its `cmd()`s to the
-            // client-local surface (see `bridge_core::cmd_value`). Host/standalone
-            // leaves the filter off.
+            // Live client hooks are restricted to the client-local command
+            // surface. Invalid or newly rerouted scenarios may also reach this
+            // pass solely to stop old state and publish their document diagnostic.
             bridge_core::set_script_client_local(is_client);
 
             for (
@@ -850,6 +1078,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 authority,
                 reload_policy,
                 scene_generation,
+                directives,
                 ) in work
             {
                 // Gate this entity's hook `cmd()`s against the launching session
@@ -857,6 +1086,52 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 // hot-reload `on_stop` below too (still inside this iteration).
                 bridge_core::set_script_authority(authority);
                 let st = fsm.entry(entity).or_default();
+                st.document_id = Some(raw);
+                st.directives_generation = Some(generation);
+                st.directives = directives;
+                let directive_invalid = !directives.is_supported();
+                let runs_on_peer = directives.scope.runs_on(is_client);
+                if directive_invalid || !runs_on_peer {
+                    let scene_restart = reload_policy
+                        == crate::doc::ScenarioReloadPolicy::Restart
+                        && st.started
+                        && st.scene_generation != scene_generation;
+                    let stop_error = if st.started && st.compiled && !scene_restart {
+                        let _phase = bridge_core::ExecutionContextScope::enter(
+                            pass_context.with_phase(lunco_core::RuntimePhase::Stop),
+                        );
+                        runtime.call_hook(entity, ScenarioHook::Stop, gid)
+                    } else {
+                        None
+                    };
+                    runtime.forget(entity);
+                    st.gid = gid;
+                    st.started = false;
+                    st.compiled = false;
+                    st.generation = generation;
+                    if directive_invalid {
+                        st.attempted_generation = Some(generation);
+                    }
+                    st.parameters_revision = parameters_revision;
+                    st.scene_generation = scene_generation;
+                    if directive_invalid {
+                        if st.directives_diagnostic_generation != Some(generation)
+                            || stop_error.is_some()
+                        {
+                            let mut diagnostics = directives.diagnostics();
+                            diagnostics.extend(stop_error);
+                            diag_updates.push((raw, Some(diagnostics)));
+                            st.directives_diagnostic_generation = Some(generation);
+                        }
+                    } else if let Some(diagnostic) = stop_error {
+                        diag_updates.push((raw, Some(vec![diagnostic])));
+                        st.directives_diagnostic_generation = None;
+                    } else if st.directives_diagnostic_generation.take().is_some() {
+                        diag_updates.push((raw, None));
+                    }
+                    continue;
+                }
+                st.directives_diagnostic_generation = None;
                 // Events accumulated before this program's first `on_start`
                 // belong to the prior lifecycle state. Startup reads current
                 // owner state directly; it must not replay a stale event batch.
@@ -864,6 +1139,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 st.gid = gid;
                 let mut recompiled = false;
                 let mut compile_diag: Option<Diagnostic> = None;
+                let mut transition_error: Option<Diagnostic> = None;
                 let scene_restart = reload_policy
                     == crate::doc::ScenarioReloadPolicy::Restart
                     && st.started
@@ -884,10 +1160,16 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         runtime.forget(entity);
                         st.compiled = false;
                     } else if st.started && st.compiled {
-                        let _ = runtime.call_hook(entity, ScenarioHook::Stop, gid);
+                        let _phase = bridge_core::ExecutionContextScope::enter(
+                            pass_context.with_phase(lunco_core::RuntimePhase::Stop),
+                        );
+                        transition_error = runtime.call_hook(entity, ScenarioHook::Stop, gid);
                     }
                     st.started = false;
                     st.scene_generation = scene_generation;
+                    let _phase = bridge_core::ExecutionContextScope::enter(
+                        pass_context.with_phase(lunco_core::RuntimePhase::Preparation),
+                    );
                     match runtime.compile(entity, source, params, asset_id.as_deref()) {
                         CompileOutcome::Failed(diag) => {
                             let program = world
@@ -901,7 +1183,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 diag.message,
                             );
                             st.compiled = false;
-                            diag_updates.push((raw, Some(vec![diag])));
+                            let mut diagnostics = Vec::new();
+                            diagnostics.extend(transition_error.take());
+                            diagnostics.push(diag);
+                            diag_updates.push((raw, Some(diagnostics)));
                             continue;
                         }
                         CompileOutcome::Ready { top_level } => {
@@ -919,24 +1204,39 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     continue;
                 }
 
-                // First runtime error from any hook this pass.
-                let mut runtime_err: Option<Diagnostic> = None;
+                // Preserve each runtime failure from teardown and this pass.
+                let mut runtime_errors = Vec::new();
+                runtime_errors.extend(transition_error.take());
                 if !st.started {
                     st.started = true;
+                    let _phase = bridge_core::ExecutionContextScope::enter(
+                        pass_context.with_phase(lunco_core::RuntimePhase::Start),
+                    );
                     if let Some(d) = runtime.call_hook(entity, ScenarioHook::Start, gid) {
-                        runtime_err.get_or_insert(d);
+                        runtime_errors.push(d);
                     }
                 }
                 if receive_events {
                     for ev in &events {
+                        let _phase = bridge_core::ExecutionContextScope::enter(
+                            pass_context
+                                .with_phase(lunco_core::RuntimePhase::Event)
+                                .with_producer(lunco_core::RuntimeProducerStamp::simulation(
+                                    scene_generation,
+                                    ev.sim_tick,
+                                )),
+                        );
                         if let Some(d) = runtime.deliver_event(entity, gid, ev) {
-                            runtime_err.get_or_insert(d);
+                            runtime_errors.push(d);
                         }
                     }
                 }
                 if run_tick {
+                    let _phase = bridge_core::ExecutionContextScope::enter(
+                        pass_context.with_phase(lunco_core::RuntimePhase::Behavior),
+                    );
                     if let Some(d) = runtime.call_hook(entity, ScenarioHook::Tick, gid) {
-                        runtime_err.get_or_insert(d);
+                        runtime_errors.push(d);
                     }
                 }
 
@@ -952,7 +1252,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 // set stays Ready. Cleared to OK only when a (re)compile ran clean.
                 let mut diags = Vec::new();
                 diags.extend(compile_diag);
-                diags.extend(runtime_err);
+                diags.extend(runtime_errors);
                 if !dropped.is_empty() {
                     diags.push(Diagnostic::warning(
                         format!(
@@ -988,7 +1288,16 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             for entity in dead {
                 if let Some(st) = fsm.remove(&entity) {
                     if st.started && st.compiled {
-                        let _ = runtime.call_hook(entity, ScenarioHook::Stop, st.gid);
+                        let _phase = bridge_core::ExecutionContextScope::enter(
+                            pass_context.with_phase(lunco_core::RuntimePhase::Stop),
+                        );
+                        if let Some(diagnostic) = runtime.call_hook(entity, ScenarioHook::Stop, st.gid) {
+                            if let Some(raw) = st.document_id {
+                                diag_updates.push((raw, Some(vec![diagnostic])));
+                            } else {
+                                bevy::log::error!("[scenario] on_stop failed without an owning script document: {}", diagnostic.message);
+                            }
+                        }
                     }
                     runtime.forget(entity);
                 }
@@ -1318,16 +1627,149 @@ mod lifecycle_readiness_tests {
     use crate::doc::ScriptDocument;
     use std::sync::{Arc, Mutex};
 
+    #[test]
+    fn scenario_directives_bind_only_to_supported_peer_and_timing_values() {
+        assert_eq!(
+            ScenarioDirectives::from_source("fn on_start(me, ctx) {}"),
+            ScenarioDirectives::default()
+        );
+        assert_eq!(
+            ScenarioDirectives::from_source("// @scope host\n// @timing simulation\n"),
+            ScenarioDirectives::default()
+        );
+        assert_eq!(
+            ScenarioDirectives::from_source("// @scope client\n").scope,
+            ScriptScope::Client
+        );
+        assert_eq!(
+            ScenarioDirectives::from_source("// @scope both\n").scope,
+            ScriptScope::Both
+        );
+
+        let unknown_scope = ScenarioDirectives::from_source("// @scope clinet\n");
+        assert_eq!(unknown_scope.scope, ScriptScope::Unsupported);
+        assert_eq!(unknown_scope.timing, ScriptTiming::Simulation);
+        assert_eq!(unknown_scope.diagnostics().len(), 1);
+
+        let unknown_timing = ScenarioDirectives::from_source("// @timing presentation\n");
+        assert_eq!(unknown_timing.scope, ScriptScope::Host);
+        assert_eq!(unknown_timing.timing, ScriptTiming::Unsupported);
+        assert_eq!(unknown_timing.diagnostics().len(), 1);
+
+        let invalid =
+            ScenarioDirectives::from_source("// @scope clinet\n// @timing presentation\n");
+        assert_eq!(invalid.diagnostics().len(), 2);
+    }
+
+    #[test]
+    fn missing_scene_generation_faults_and_skips_scenario_execution() {
+        let mut world = World::new();
+        world.init_resource::<lunco_core::RuntimeFaults>();
+
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+
+        let fault = world
+            .resource::<lunco_core::RuntimeFaults>()
+            .first
+            .as_ref()
+            .expect("missing owner generation is visible as a runtime fault");
+        assert_eq!(fault.kind, "scenario-generation-missing");
+    }
+
+    #[test]
+    fn unknown_scenario_directives_skip_runtime_and_publish_document_errors_once() {
+        let mut world = World::new();
+        let owner = world.spawn_empty().id();
+        world.spawn((
+            ChildOf(owner),
+            ScriptedModel {
+                document_id: Some(72),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            },
+        ));
+        world.spawn((
+            ChildOf(owner),
+            ScriptedModel {
+                document_id: Some(74),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            },
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        world.insert_resource(ScenarioDriver {
+            runtime: RecordingRuntime(calls.clone(), contexts, Arc::new(Mutex::new(false))),
+            fsm: HashMap::new(),
+        });
+        world.insert_resource(ScriptRegistry::default());
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(72),
+            ScriptDocument::new(
+                72,
+                ScriptLanguage::Rhai,
+                "// @scope clinet\n// @timing presentation\n",
+            ),
+        );
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(74),
+            ScriptDocument::new(
+                74,
+                ScriptLanguage::Rhai,
+                "// @scope host\n// @timing simulation\n",
+            ),
+        );
+        world.insert_resource(ApiEntityRegistry::default());
+        world.insert_resource(DocumentDiagnostics::default());
+        world.insert_resource(ScriptEventInbox::default());
+        world.insert_resource(ScenarioSceneGeneration::default());
+        world.insert_resource(lunco_core_runtime::SimTick(4));
+
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                RecordedCall::Compile,
+                RecordedCall::Start,
+                RecordedCall::Tick
+            ]
+        );
+        let status = world
+            .resource::<DocumentDiagnostics>()
+            .get(DocumentId::new(72))
+            .expect("invalid scope is visible to the document owner");
+        assert_eq!(status.diagnostics.len(), 2);
+        assert!(status.diagnostics[0]
+            .message
+            .contains("unknown scenario @scope"));
+        assert!(status.diagnostics[1]
+            .message
+            .contains("unsupported scenario @timing"));
+
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(calls.lock().unwrap().len(), 4);
+        let status = world
+            .resource::<DocumentDiagnostics>()
+            .get(DocumentId::new(72))
+            .unwrap();
+        assert_eq!(status.diagnostics.len(), 2);
+    }
+
     #[derive(Debug, PartialEq, Eq)]
     enum RecordedCall {
         Compile,
         Start,
         Tick,
+        Stop,
         Event(String),
     }
 
     #[derive(Clone, Default)]
-    struct RecordingRuntime(Arc<Mutex<Vec<RecordedCall>>>);
+    struct RecordingRuntime(
+        Arc<Mutex<Vec<RecordedCall>>>,
+        Arc<Mutex<Vec<lunco_core::RuntimeExecutionContext>>>,
+        Arc<Mutex<bool>>,
+    );
 
     impl ScenarioRuntime for RecordingRuntime {
         fn compile(
@@ -1338,6 +1780,10 @@ mod lifecycle_readiness_tests {
             _asset_id: Option<&str>,
         ) -> CompileOutcome {
             self.0.lock().unwrap().push(RecordedCall::Compile);
+            self.1
+                .lock()
+                .unwrap()
+                .push(bridge_core::execution_context());
             CompileOutcome::Ready { top_level: None }
         }
 
@@ -1347,13 +1793,21 @@ mod lifecycle_readiness_tests {
             hook: ScenarioHook,
             _self_gid: i64,
         ) -> Option<Diagnostic> {
+            self.1
+                .lock()
+                .unwrap()
+                .push(bridge_core::execution_context());
             let call = match hook {
                 ScenarioHook::Start => RecordedCall::Start,
                 ScenarioHook::Tick => RecordedCall::Tick,
-                ScenarioHook::Stop => return None,
+                ScenarioHook::Stop => RecordedCall::Stop,
             };
             self.0.lock().unwrap().push(call);
-            None
+            if matches!(hook, ScenarioHook::Stop) && *self.2.lock().unwrap() {
+                Some(Diagnostic::error("on_stop failed", None, None))
+            } else {
+                None
+            }
         }
 
         fn deliver_event(
@@ -1362,6 +1816,10 @@ mod lifecycle_readiness_tests {
             _self_gid: i64,
             event: &TelemetryEvent,
         ) -> Option<Diagnostic> {
+            self.1
+                .lock()
+                .unwrap()
+                .push(bridge_core::execution_context());
             self.0
                 .lock()
                 .unwrap()
@@ -1370,6 +1828,91 @@ mod lifecycle_readiness_tests {
         }
 
         fn forget(&mut self, _entity: Entity) {}
+    }
+
+    #[test]
+    fn edited_directives_stop_the_old_program_and_skip_the_new_revision() {
+        let mut world = World::new();
+        let owner = world.spawn_empty().id();
+        world.spawn((
+            ChildOf(owner),
+            ScriptedModel {
+                document_id: Some(73),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            },
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        world.insert_resource(ScenarioDriver {
+            runtime: RecordingRuntime(
+                calls.clone(),
+                Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(true)),
+            ),
+            fsm: HashMap::new(),
+        });
+        world.insert_resource(ScriptRegistry::default());
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(73),
+            ScriptDocument::new(
+                73,
+                ScriptLanguage::Rhai,
+                "// @scope host\n// @timing simulation\n",
+            ),
+        );
+        world.insert_resource(ApiEntityRegistry::default());
+        world.insert_resource(DocumentDiagnostics::default());
+        world.insert_resource(ScriptEventInbox::default());
+        world.insert_resource(ScenarioSceneGeneration::default());
+        world.insert_resource(lunco_core_runtime::SimTick(1));
+
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                RecordedCall::Compile,
+                RecordedCall::Start,
+                RecordedCall::Tick
+            ]
+        );
+
+        assert!(world
+            .resource_mut::<ScriptRegistry>()
+            .reload_external_source(
+                DocumentId::new(73),
+                "// @scope clinet\n// @timing presentation\n",
+            ));
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                RecordedCall::Compile,
+                RecordedCall::Start,
+                RecordedCall::Tick,
+                RecordedCall::Stop,
+            ]
+        );
+        let diagnostics = world
+            .resource::<DocumentDiagnostics>()
+            .get(DocumentId::new(73))
+            .expect("the edited source revision publishes its own diagnostics");
+        assert_eq!(diagnostics.diagnostics.len(), 3);
+        assert!(diagnostics.diagnostics[2]
+            .message
+            .contains("on_stop failed"));
+
+        ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(calls.lock().unwrap().len(), 4);
+        assert_eq!(
+            world
+                .resource::<DocumentDiagnostics>()
+                .get(DocumentId::new(73))
+                .unwrap()
+                .diagnostics
+                .len(),
+            3
+        );
     }
 
     fn event(name: &str, sim_tick: u64) -> TelemetryEvent {
@@ -1397,8 +1940,9 @@ mod lifecycle_readiness_tests {
             },
         ));
         let calls = Arc::new(Mutex::new(Vec::new()));
+        let contexts = Arc::new(Mutex::new(Vec::new()));
         world.insert_resource(ScenarioDriver {
-            runtime: RecordingRuntime(calls.clone()),
+            runtime: RecordingRuntime(calls.clone(), contexts.clone(), Arc::new(Mutex::new(false))),
             fsm: HashMap::new(),
         });
         world.insert_resource(ScriptRegistry::default());
@@ -1409,6 +1953,7 @@ mod lifecycle_readiness_tests {
         world.insert_resource(ApiEntityRegistry::default());
         world.insert_resource(DocumentDiagnostics::default());
         world.insert_resource(ScriptEventInbox::default());
+        world.insert_resource(ScenarioSceneGeneration::default());
         world.insert_resource(lunco_core_runtime::SimTick(5));
         world.insert_resource(lunco_readiness::ReadinessState {
             world_hold: false,
@@ -1463,5 +2008,31 @@ mod lifecycle_readiness_tests {
             .lock()
             .unwrap()
             .contains(&RecordedCall::Event("paused_update".into())));
+
+        let contexts = contexts.lock().unwrap();
+        assert!(contexts.iter().any(|context| {
+            context
+                .route
+                .is_some_and(|route| route.cycle == lunco_core::RuntimeCycle::Simulation)
+                && context.phase == lunco_core::RuntimePhase::Behavior
+                && context.clock == lunco_core::RuntimeClock::Simulation
+                && context.sequence == Some(6)
+        }));
+        assert!(contexts.iter().any(|context| {
+            context
+                .route
+                .is_some_and(|route| route.cycle == lunco_core::RuntimeCycle::Simulation)
+                && context.phase == lunco_core::RuntimePhase::Event
+                && context.producer == Some(lunco_core::RuntimeProducerStamp::simulation(0, 5))
+        }));
+        assert!(contexts.iter().any(|context| {
+            context
+                .route
+                .is_some_and(|route| route.cycle == lunco_core::RuntimeCycle::Lifecycle)
+                && context.phase == lunco_core::RuntimePhase::Event
+                && context.clock == lunco_core::RuntimeClock::None
+                && context.sequence.is_none()
+                && context.producer == Some(lunco_core::RuntimeProducerStamp::simulation(0, 6))
+        }));
     }
 }

@@ -520,7 +520,7 @@ fn parse_script_workbench_menus(
             return Err(format!(
                 "`menus` must be an array, got {}",
                 other.type_name()
-            ))
+            ));
         }
         None => return Err("result has no `menus` array".into()),
     };
@@ -597,7 +597,7 @@ fn parse_script_workbench_item(
             return Err(format!(
                 "{path}.tooltip must be a string, got {}",
                 other.type_name()
-            ))
+            ));
         }
     };
     let enabled = match hook_field(fields, "enabled") {
@@ -607,7 +607,7 @@ fn parse_script_workbench_item(
             return Err(format!(
                 "{path}.enabled must be boolean, got {}",
                 other.type_name()
-            ))
+            ));
         }
     };
     let children = match hook_field(fields, "children") {
@@ -654,7 +654,7 @@ fn parse_script_workbench_item(
                     return Err(format!(
                         "{path}.args must be a map, got {}",
                         other.type_name()
-                    ))
+                    ));
                 }
             };
             Some(ScriptWorkbenchMenuAction {
@@ -868,7 +868,24 @@ pub fn apply_twin_policy_commands(world: &mut World) {
         if !current {
             continue;
         }
-        let _scope = lunco_scripting_bridge_core::WorldScope::enter(world);
+        let context = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::application(
+                lunco_core::RuntimeCycle::Command,
+            )),
+            phase: lunco_core::RuntimePhase::Command,
+            clock: lunco_core::RuntimeClock::Application,
+            time_seconds: world
+                .get_resource::<lunco_core_runtime::ApplicationCadence>()
+                .map(|cadence| cadence.command.elapsed_secs),
+            delta_seconds: world
+                .get_resource::<lunco_core_runtime::ApplicationCadence>()
+                .and_then(|cadence| cadence.command.interval_secs),
+            sequence: world
+                .get_resource::<lunco_core_runtime::ApplicationCadence>()
+                .map(|cadence| cadence.command.sequence),
+            producer: None,
+        };
+        let _scope = lunco_scripting_bridge_core::WorldScope::enter(world, context);
         let result = lunco_scripting_bridge_core::cmd_value(&action.command, action.params);
         match result.get("ok").and_then(HookValue::as_bool) {
             Some(true) => {}
