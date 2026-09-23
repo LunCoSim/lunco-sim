@@ -2,11 +2,23 @@
 //!
 //! Domain crates own their tree data, filtering, selection, and actions. This
 //! module owns only the common egui branch lifecycle: the disclosure control,
-//! full-width header allocation, persistent expansion state, and indented
-//! body. Keeping that contract here prevents each panel from growing a
-//! slightly different tree renderer.
+//! full-width header allocation, shared row alignment and height, persistent
+//! expansion state, and indented body. Keeping that contract here prevents
+//! each panel from growing a slightly different tree renderer.
 
 use egui;
+
+/// Number of hierarchy levels that depth-based trees reveal by default.
+pub const DEFAULT_OPEN_LEVELS: usize = 2;
+
+/// Whether a branch at `depth` belongs to the initially visible hierarchy.
+pub fn default_open_at_depth(depth: usize) -> bool {
+    depth < DEFAULT_OPEN_LEVELS
+}
+
+fn row_size(ui: &egui::Ui, width: f32) -> [f32; 2] {
+    [width.max(0.0), ui.spacing().interact_size.y]
+}
 
 /// Render one standard workbench tree branch and return whether it is open.
 ///
@@ -77,4 +89,39 @@ pub fn leaf<R>(
         ui.set_min_width(available_width);
         add_row(ui)
     })
+}
+
+/// Render one truncated, left-aligned text row at the shared tree-row height.
+pub fn label(
+    ui: &mut egui::Ui,
+    text: impl Into<egui::WidgetText>,
+    width: f32,
+    sense: egui::Sense,
+) -> egui::Response {
+    ui.add_sized(
+        row_size(ui, width),
+        egui::Label::new(text)
+            .halign(egui::Align::Min)
+            .truncate()
+            .sense(sense),
+    )
+}
+
+/// Render a full-height selectable tree label with text aligned after the
+/// disclosure control, matching ordinary left-aligned tree labels.
+///
+/// `width` lets rows reserve space for trailing controls while keeping the
+/// selectable label's typography, alignment, and height shared across trees.
+pub fn selectable_label(
+    ui: &mut egui::Ui,
+    selected: bool,
+    text: impl Into<egui::WidgetText>,
+    width: f32,
+) -> egui::Response {
+    ui.add_sized(
+        row_size(ui, width),
+        egui::Button::selectable(selected, text)
+            .right_text(egui::Atom::grow())
+            .truncate(),
+    )
 }

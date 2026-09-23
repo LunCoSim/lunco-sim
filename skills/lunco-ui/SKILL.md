@@ -133,14 +133,16 @@ human-readable names/paths, retain matching ancestors, and emit the existing
 typed navigation actions. Do not add a per-domain search resource or make the
 browser search generated ids.
 
-For hierarchy rows, use `lunco_workbench_widgets::tree::{branch, leaf}`. The shared
-renderer owns the disclosure control, full-width row geometry, persistent
-expansion identity, and indentation. Domain panels own only their view-model
-filtering, stable `egui::Id`, selection/loading state, and typed actions. Do
-not create a second `CollapsingHeader`/`CollapsingState` path for a tree, and do
-not move domain selection or loading policy into the shared renderer. Search
-may force matching branches open for the current frame; ordinary expansion
-remains persistent UI state.
+For hierarchy rows, use `lunco_workbench_widgets::tree::{branch, leaf}` and
+`tree::{label, selectable_label}` for row text. The shared renderer owns the
+disclosure control, full-width row geometry, left-aligned label presentation,
+persistent expansion identity, indentation, and the default depth-based
+expansion policy. Domain panels own only their view-model filtering, stable
+`egui::Id`, selection/loading state, and typed actions. Do not create a second
+`CollapsingHeader`/`CollapsingState` path for a tree, or duplicate selectable-row
+sizing and alignment at call sites. Do not move domain selection or loading
+policy into the shared renderer. Search may force matching branches open for
+the current frame; ordinary expansion remains persistent UI state.
 
 Project-owned settings are not user-global settings: read the active Twin's
 manifest through the workspace resource and emit a typed event for changes.
@@ -189,12 +191,14 @@ hierarchy remain visible together. The prim tree consumes the full width of its
 pane and uses immediate structural collapse rendering; do not add a nested
 auto-shrinking scroll region or animated body that can paint stale outlines
 over neighbouring rows.
-All hierarchy rows use `lunco_workbench_widgets::tree::{branch, leaf}`;
-the Ports entity browser follows the same contract as the Twin, Entity, USD,
-Modelica, library, and telemetry trees. Raw `CollapsingHeader` is for non-tree
-sections, not a second tree implementation. The Prims rows reuse the Entities
-selectable-row presentation and expose preview-scoped Visible, Invisible, and
-Contour controls at the trailing edge. Those controls dispatch
+All hierarchy rows use `lunco_workbench_widgets::tree::{branch, leaf}` and
+`tree::{label, selectable_label}`; depth-based initial expansion uses
+`tree::default_open_at_depth`. The Ports entity browser follows the same
+contract as the Twin, Entity, USD, Modelica, library, and telemetry trees. Raw
+`CollapsingHeader` is for non-tree sections, not a second tree implementation.
+The Prims rows reuse the Entities selectable-row presentation
+and expose preview-scoped Visible, Invisible, and Contour controls at the
+trailing edge. Those controls dispatch
 `SetUsdPrimDisplayMode`; the viewport projects the typed intent and the render
 binder owns wireframe rendering.
 The viewport panel paints the session selected by the focused `UsdPreviewViewId`. Views share that

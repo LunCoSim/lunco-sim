@@ -29,7 +29,7 @@ use lunco_camera_core::camera_display_labels;
 use lunco_render::SceneCamera;
 use lunco_scene_selection::{SelectEntityTarget, SelectionIntent};
 use lunco_usd_bevy_scene::{is_preview_entity, UsdPrimDisplayMode, UsdPrimPath};
-use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_viewport_core::{
     SetUsdPrimDisplayMode, UsdPreviewId, UsdPrimDisplayModes, UsdViewportState,
 };
@@ -443,7 +443,7 @@ fn render_prim_node(
     }
     // Top two levels open by default so the scene structure is visible without
     // drilling; deeper subtrees (a rover's per-wheel joints) start collapsed.
-    let default_open = depth < 2;
+    let default_open = lunco_workbench_widgets::tree::default_open_at_depth(depth);
     // The document path is stable and already scoped by this panel's active
     // document, so it is sufficient for collapse-state identity.
     let id = ui.make_persistent_id(("usd_prim_tree", key));
@@ -533,12 +533,13 @@ fn prim_select_label(
                     .as_deref()
                     .map(|identity| format!("{identity}  ·  {hint}"))
                     .unwrap_or(hint);
-                let resp = ui
-                    .add_sized(
-                        [label_width, ui.spacing().interact_size.y],
-                        egui::Button::selectable(selected.entities.contains(&entity), label),
-                    )
-                    .on_hover_text(hint);
+                let resp = lunco_workbench_widgets::tree::selectable_label(
+                    ui,
+                    selected.entities.contains(&entity),
+                    label,
+                    label_width,
+                )
+                .on_hover_text(hint);
                 if selection_changed && primary == Some(entity) {
                     resp.scroll_to_me(Some(egui::Align::Center));
                 }
@@ -548,9 +549,11 @@ fn prim_select_label(
                 }
             }
             None => {
-                ui.add_sized(
-                    [label_width, ui.spacing().interact_size.y],
-                    egui::Label::new(egui::RichText::new(label).weak()),
+                lunco_workbench_widgets::tree::label(
+                    ui,
+                    egui::RichText::new(label).weak(),
+                    label_width,
+                    egui::Sense::hover(),
                 );
             }
         }
