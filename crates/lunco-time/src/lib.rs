@@ -127,8 +127,9 @@ pub fn project_transport_state(
     transport: &TimeTransport,
     virtual_time: &mut Time<Virtual>,
     fixed_time: Option<&mut Time<Fixed>>,
+    causal_hold: bool,
 ) {
-    let frozen = !transport.is_running();
+    let frozen = !transport.is_running() || causal_hold;
     let configured = if frozen { 1.0 } else { transport.rate };
 
     if virtual_time.relative_speed_f64() != configured {
@@ -408,6 +409,8 @@ pub fn advance_world_clock(
     mut world: ResMut<WorldTime>,
     mut virtual_time: ResMut<Time<Virtual>>,
     coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
+    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
+    mut fixed_time: Option<ResMut<Time<Fixed>>>,
 ) {
     // A Modelica result that feeds an Avian force/torque port is a barrier for
     // the whole deterministic simulation, not just for Avian. If only the
@@ -417,7 +420,8 @@ pub fn advance_world_clock(
     // shares one coherent boundary. The resource is optional so the time spine
     // remains usable in small/headless apps that do not install co-simulation.
     let coupling_held = coupling.is_some_and(|state| state.held);
-    let paused = matches!(transport.mode, TransportMode::Paused) || coupling_held;
+    let admission_held = progress.is_some_and(|state| state.is_held());
+    let paused = matches!(transport.mode, TransportMode::Paused) || coupling_held || admission_held;
     let relative_speed = advance_clock(transport.rate, paused);
 
     world.epoch_jd = clock.epoch_jd(tick.0);
@@ -447,6 +451,11 @@ pub fn advance_world_clock(
             virtual_time.pause();
         } else {
             virtual_time.unpause();
+        }
+    }
+    if admission_held {
+        if let Some(fixed_time) = fixed_time.as_deref_mut() {
+            discard_fixed_overstep(fixed_time);
         }
     }
 }
@@ -486,6 +495,10 @@ pub struct TimePlugin;
 
 impl Plugin for TimePlugin {
     fn build(&self, app: &mut App) {
+        app.configure_sets(
+            PreUpdate,
+            TimeSpineSet.after(lunco_core::RuntimeCycleSet::Lifecycle),
+        );
         // `SimTick` lives in `lunco-core`; `init_resource` is idempotent, so this
         // is harmless where another plugin also inserts it and makes the spine
         // self-sufficient where it doesn't.
@@ -778,5 +791,54 @@ mod tests {
         let vt = world.resource::<Time<Virtual>>();
         assert!(vt.is_paused());
         assert_eq!(vt.relative_speed_f64(), 1.0);
+    }
+
+    #[test]
+    fn active_scene_transition_holds_and_then_restores_the_causal_clock() {
+        use bevy::ecs::system::RunSystemOnce;
+        use lunco_core::{SceneTransition, SceneTransitionCoordinator, SceneTransitionRequest};
+        use lunco_core_runtime::{SimulationProgress, SimulationProgressKey};
+
+        let mut world = bevy::prelude::World::new();
+        world.insert_resource(lunco_core_runtime::SimTick(0));
+        world.insert_resource(TimeTransport {
+            mode: TransportMode::Playing,
+            rate: 4.0,
+        });
+        world.insert_resource(MissionClock::default());
+        world.insert_resource(WorldTime::default());
+        world.insert_resource(Time::<Virtual>::default());
+
+        let mut coordinator = SceneTransitionCoordinator::default();
+        assert_eq!(
+            coordinator.admit(SceneTransitionRequest::load("scene.usda", "/World")),
+            lunco_core::SceneTransitionAdmission::Admitted
+        );
+        coordinator
+            .take_admitted()
+            .expect("admitted scene transition");
+        let transition = SceneTransition::load("scene.usda", "/World");
+        let transition_id = coordinator.start(transition.clone());
+        world.insert_resource(coordinator);
+        let mut progress = SimulationProgress::default();
+        let key = SimulationProgressKey::scene_transition(transition_id);
+        assert!(progress.acquire(key, "Loading scene: scene.usda"));
+        world.insert_resource(progress);
+
+        world.run_system_once(advance_world_clock).unwrap();
+        assert!(
+            world.resource::<Time<Virtual>>().is_paused(),
+            "scene preparation must not consume causal simulation time"
+        );
+
+        world
+            .resource_mut::<SceneTransitionCoordinator>()
+            .finish(transition_id);
+        assert!(world.resource_mut::<SimulationProgress>().release(key));
+        world.run_system_once(advance_world_clock).unwrap();
+
+        let virtual_time = world.resource::<Time<Virtual>>();
+        assert!(!virtual_time.is_paused());
+        assert_eq!(virtual_time.relative_speed_f64(), 4.0);
     }
 }

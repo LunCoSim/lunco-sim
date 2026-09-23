@@ -1,9 +1,16 @@
 // Production scene-test coverage for the authored Rhai task and mission
 // contract. The test observes the same public event/task surface used by
 // authored programs; it does not recreate the task cursor in Rust.
+// @timing simulation
 
 fn on_start(me, ctx) {
     this.start_ctx_is_empty = ctx.len() == 0;
+    let execution = execution_context();
+    this.start_cycle = execution.cycle;
+    this.start_phase = execution.phase;
+    this.start_clock = execution.clock;
+    this.start_tick = sim_tick();
+    this.start_dt = dt();
     this.task_ctx_is_empty = false;
     this.mission_ctx_is_empty = false;
     this.elapsed = 0.0;
@@ -78,6 +85,11 @@ fn mission(me, ctx) {
 
 fn on_event(me, evt, ctx) {
     this.event_ctx_is_empty = ctx.len() == 0;
+    let execution = execution_context();
+    this.event_cycle = execution.cycle;
+    this.event_phase = execution.phase;
+    this.event_producer_cycle = execution.producer.cycle;
+    this.event_producer_sequence = execution.producer.sequence;
     if evt.name == "TASK_CTX_EMPTY" { this.task_ctx_is_empty = evt.value == true; }
     if evt.name == "MISSION_CTX_EMPTY" { this.mission_ctx_is_empty = evt.value == true; }
     if evt.name == "TASK_SEQ_A" { this.seq_a += 1; }
@@ -94,6 +106,10 @@ fn on_event(me, evt, ctx) {
 
 fn on_tick(me, ctx) {
     this.tick_ctx_is_empty = ctx.len() == 0;
+    let execution = execution_context();
+    this.tick_cycle = execution.cycle;
+    this.tick_phase = execution.phase;
+    this.tick_clock = execution.clock;
     if this.done { return; }
     this.elapsed += dt();
 
@@ -110,10 +126,15 @@ fn on_tick(me, ctx) {
         this.done = true;
         report_verdict([
             t_true(this.start_ctx_is_empty, "on_start receives the empty default context"),
+            t_true(this.start_cycle == "simulation" && this.start_phase == "start", "on_start inherits its simulation cycle and start phase"),
+            t_true(this.start_clock == "simulation" && this.start_dt > 0.0 && this.start_tick >= 0, "simulation clock APIs work in on_start"),
             t_true(this.task_ctx_is_empty, "task receives the empty default context"),
             t_true(this.mission_ctx_is_empty, "mission receives the empty default context"),
             t_true(this.event_ctx_is_empty, "on_event receives the empty default context"),
+            t_true(this.event_cycle == "simulation" && this.event_phase == "event", "on_event inherits its consuming cycle and phase"),
+            t_true(this.event_producer_cycle == "simulation" && this.event_producer_sequence != "", "on_event retains its producer stamp"),
             t_true(this.tick_ctx_is_empty, "on_tick receives the empty default context"),
+            t_true(this.tick_cycle == "simulation" && this.tick_phase == "behavior" && this.tick_clock == "simulation", "on_tick inherits its deterministic cycle context"),
             t_true(this.seq_a == 1, "sequence action ran once"),
             t_true(this.seq_b == 1, "sequence advanced after wait_for"),
             t_true(this.branch_a == 1, "par_all first branch ran once"),

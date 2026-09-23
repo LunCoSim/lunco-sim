@@ -884,7 +884,7 @@ fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32), anisotropy_clamp
 }
 
 /// Register the derived-layer bake/bind systems. Called from
-/// [`crate::plugin::TerrainSurfacePlugin`].
+/// [`crate::plugin::TerrainSurfaceVisualizationPlugin`].
 pub(crate) fn register(app: &mut App) {
     app.init_resource::<DerivedQualitySignature>()
         .init_resource::<TerrainDerivedStatus>()

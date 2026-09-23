@@ -13,7 +13,7 @@ contract remains open.
 
 | ID | Severity | Finding and evidence | Status |
 |---|---|---|---|
-| D1 | P1 | Initial scene readiness holds physics/scenario execution but does not hold the authoritative tick: [`advance_sim_tick`](../../crates/lunco-core-runtime/src/lib.rs#L177) advances whenever `Time<Virtual>` runs; [`apply_physics_holds`](../../crates/lunco-physics/src/lib.rs#L853) pauses only `Time<Physics>`. Async load duration can therefore change the scene's first live `SimTick` and clock state. | Open |
+| D1 | P1 | Initial scene readiness holds physics/scenario execution but does not hold the authoritative tick: [`advance_sim_tick`](../../crates/lunco-core-runtime/src/lib.rs#L177) advances whenever `Time<Virtual>` runs; [`apply_physics_holds`](../../crates/lunco-physics/src/lib.rs#L853) pauses only `Time<Physics>`. Scene lifecycle now gates `Time<Virtual>` through the matching asset/visual-projection terminal edge, but Modelica preparation, physics admission, reference closure, and the first shared communication point are still outside the same scene-start transaction. | Open; lifecycle admission is partial |
 | D2 | P1 | Referenced assets become live when asynchronous loads complete: [`drain_ref_spawns`](../../crates/lunco-usd-bevy-runtime-core/src/twin_projection.rs#L2057) authors and projects ready references, while the readiness owner does not include the full pending-reference closure. Runtime topology can be admitted at a completion-time-dependent tick. | Open |
 | D3 | P1 | Rhai `get`/`port` and `set`/`port_set` access the live port registry directly ([`world_bridge.rs`](../../crates/lunco-scripting-rhai-world/src/world_bridge.rs#L1507)); [`derive_causal_barrier_participants`](../../crates/lunco-usd-sim-cosim/src/wiring.rs#L891) traces only declared `SimConnection`s. A script may consume a Modelica output without that dependency holding the shared clock. | Open |
 | D4 | P1 | Production GUI physics is not admitted as deterministic: the composition root records [`PhysicsDeterminism::from_compute_threads(None)`](../../crates/lunco-luncosim-simulation/src/lib.rs#L392), and Avian's parallel implementation uses the shared compute pool. Fixed `dt` alone does not establish repeatable contact/constraint results. | Open; choose and measure a production profile |
@@ -25,35 +25,19 @@ contract remains open.
 | D10 | Fixed | Scenario hooks and teardown previously followed ECS/hash iteration order even though synchronous `cmd()` can affect a later hook in the same pass. The driver now orders actors by `GlobalEntityId`, with a world-local entity tie-breaker. | Landed in current branch |
 | D11 | Fixed | Telemetry events previously preserved observer arrival order and could hide an older event behind a newer tick in the FIFO queue. Eligible batches now use a stable typed total order before delivery. | Landed in current branch |
 | D12 | Fixed | Connected USD events and serialized Modelica step requests previously followed ECS query order. Both dispatch paths now sort by scene identity before publication/submission. | Landed in current branch |
+| D13 | Fixed | Scene terminal events identified transactions by path and transition equality, so a late completion could collide with a later load of the same scene. A monotonic `SceneTransitionId` now travels through lifecycle events and async stage outcomes; coordinator completion and progress release require that exact id. | Landed in current branch |
+| D14 | P1 | `RuntimeCycleSet` remains ordering metadata rather than an independent cadence driver ([`cycles.rs`](../../crates/lunco-core/src/cycles.rs)). Typed context now reaches scenario preparation/start/event/behavior/stop and one-shot REPL/tool evaluation, and Rhai exposes it through `execution_context()`. Other callback owners still need adoption, and GUI UI/LOD still lack independent cadence. | Partial; first Rhai owners implemented and tested |
+| D15 | Fixed | The shared simulation composition previously installed camera-driven terrain LOD with physics terrain. `TerrainSurfaceVisualizationPlugin` now owns LOD, derived visual maps, overlays, and render-shadow binding; only the GUI presentation composition installs it. Headless server and scene-test hosts retain terrain queries/colliders without scheduling those systems. | Landed; package check and opt-in composition test passed |
+| D16 | P2 | GUI LOD and UI still share Bevy's `Update` frame even though they carry different `RuntimeCycleSet` labels. LOD selection/bake admission can therefore consume UI frame capacity. A true cadence/skip boundary plus bounded asynchronous preparation and small result commits is still needed for visual hosts. | Open |
+| D17 | P1 | Telemetry sampling still reads the cached channel list in an exclusive `FixedUpdate` pass ([`telemetry/src/lib.rs`](../../crates/lunco-telemetry/src/lib.rs)). Sample callbacks now use a bounded, budgeted `Telemetry` delivery cycle after simulation; overload drops old samples with a queryable count, and scene transitions discard outgoing-Twin backlog. Off-thread immutable preparation and measured tick-throughput acceptance remain open. | Partial; bounded fan-out moved out of the fixed simulation pass |
+| D18 | P2 | There is no shared low-cost per-cycle duration/queue/overload view to target optimization; cycle labels alone do not provide measurements. Expose aggregate owner metrics through diagnostics and use the repository Tracy workflow for focused profiling, with a separate unprofiled responsiveness run. | Open |
 
 ## Migration order
 
-1. **Stable boundary order (landed).** Canonicalize Rhai actors, teardown,
-   same-tick event batches, connected-event emission, and Modelica command
-   submission. Production Rhai event-delivery coverage asserts that reverse
-   enqueue order is delivered by the canonical event key.
-2. **Async immutable preparation.** Move Rhai parse/import preparation, SysML
-   source analysis, initial USD document parsing/overlay serialization, and
-   Modelica interface extraction to revision-stamped workers. Keep Rhai top-level
-   world initialization and live stage mutations on their owner schedules.
-3. **One simulation-progress admission owner.** Add reason-keyed progress holds
-   for initial readiness, runtime references, required Modelica results, and
-   revision commits. Do not let load/compile time consume authoritative ticks;
-   admit referenced topology only at a declared boundary.
-4. **Close the dependency graph.** Make dynamic Rhai port access either a
-   declared dependency in the causal graph or a typed read-snapshot/action-plan
-   contract. Every authoritative read/write must have a producer, tick, and
-   stable identity.
-5. **Pin and validate physics execution.** Choose serial Avian execution or
-   deterministic parallel operations after a measured production baseline.
-   `PhysicsDeterminism` must reflect the actual pool/solver selection.
-6. **Record/replay acceptance.** Add a typed authoritative input log and compare
-   composed USD, Modelica, Rhai, SysML verification inputs, and Avian state at
-   fixed tick boundaries. Record solver/build/platform scope in each verdict.
-7. **Measure throughput.** After the ordering and admission contract is stable,
-   use a settled production scene and a separate Tracy capture to verify that
-   async preparation removes UI/fixed-schedule stalls without hiding solver cost.
-
-Phases 2–6 remain necessary before claiming whole-simulation determinism. The
-current ordering fixes do not close async activation, dynamic dependency, physics
-numeric, or replay gaps.
+Use the canonical staged plan in
+[`62-deterministic-runtime-and-async-boundaries.md`](../architecture/62-deterministic-runtime-and-async-boundaries.md#10-migration-order).
+The terrain visualization capability split (D15) and first Rhai execution
+context boundaries (D14) are implemented in this branch. D1–D9, remaining D14
+owners, and D16–D18 remain open. Whole-simulation determinism,
+physics throughput, and UI responsiveness must be verified independently before
+claiming the complete contract.

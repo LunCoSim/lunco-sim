@@ -98,7 +98,8 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             )
             .add_systems(
                 Update,
-                lunco_scripting_rhai_world::policy::apply_twin_policy_commands,
+                lunco_scripting_rhai_world::policy::apply_twin_policy_commands
+                    .in_set(lunco_core::RuntimeCycleSet::Command),
             )
             .add_systems(
                 PreUpdate,
@@ -112,6 +113,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             .add_systems(
                 FixedUpdate,
                 lunco_scripting_rhai_world::world_bridge::tick_rhai_scenarios
+                    .in_set(lunco_core::RuntimeCycleSet::Simulation)
                     .in_set(lunco_scripting::ScriptingSet)
                     .run_if(lunco_scripting::scenario::scenario_execution_enabled)
                     .run_if(lunco_scripting_rhai_world::world_bridge::rhai_runtime_ready)
@@ -120,6 +122,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             .add_systems(
                 Update,
                 lunco_scripting_rhai_world::world_bridge::tick_rhai_scenarios_while_paused
+                    .in_set(lunco_core::RuntimeCycleSet::Lifecycle)
                     .run_if(lunco_scripting::scenario::scenario_execution_enabled)
                     .run_if(lunco_scripting_rhai_world::world_bridge::rhai_runtime_ready)
                     .run_if(lunco_scripting::scenario::simulation_is_paused),

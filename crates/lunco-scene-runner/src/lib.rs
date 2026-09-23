@@ -1084,8 +1084,16 @@ fn discard_fixed_overstep_while_barrier_held(app: &mut App) {
 /// while a playing transport is admitted without consuming a fixed overstep.
 fn reproject_test_transport(app: &mut App) {
     let transport = *app.world().resource::<lunco_time::TimeTransport>();
+    let causal_hold = app
+        .world()
+        .get_resource::<lunco_core_runtime::SimulationProgress>()
+        .is_some_and(|progress| progress.is_held())
+        || app
+            .world()
+            .get_resource::<lunco_core_runtime::SimulationBarrier>()
+            .is_some_and(|barrier| barrier.held);
     if let Some(mut virtual_time) = app.world_mut().get_resource_mut::<Time<Virtual>>() {
-        lunco_time::project_transport_state(&transport, &mut virtual_time, None);
+        lunco_time::project_transport_state(&transport, &mut virtual_time, None, causal_hold);
     }
 }
 

@@ -337,6 +337,18 @@ the same engine and bridge for one-shot evaluation without attaching a
 persistent `ScriptedModel`; it is a separate execution mode, not a second
 lifecycle or compatibility implementation.
 
+The owning system supplies a typed `RuntimeExecutionContext` for each scenario
+phase and one-shot REPL/tool evaluation. Rhai reads it with
+`execution_context()`; nested functions inherit their caller's phase and clock.
+`sim_tick()`, `dt()`, and `elapsed_seconds()` reject calls outside the simulation
+cycle as a Rhai invocation error. A wrong-cycle call does not fault the
+simulation or another runtime cycle. Persistent scenarios may declare
+`// @scope host|client|both` and `// @timing simulation`; these validate the
+scenario's peer and fixed-step requirements while Rust retains schedule
+ownership. Unsupported metadata stops only that scenario and becomes a
+source-revision diagnostic. The driver reparses metadata when the document
+generation changes, so edits cannot leave stale routing attached to a program.
+
 ### 3.2 Exposed verbs (the generic runtime surface)
 ```rust
 cmd(name: &str, params: Map) -> Dynamic       // any registered #[Command]
@@ -346,6 +358,7 @@ get_setting(path) / set_setting(path, value)  // reflected resource fields
 find(name) / name(id) / parent(id) / children(id)
 list_entities() / world_pos(id) / world_forward(id) / world_rotation(id)
 sim_tick() / dt() / elapsed_seconds()
+execution_context()
 emit(name, value?) / subscribe(name) / subscribe_prefix(prefix)
 ```
 These are the generic Rust-side operations. `cmd()` reaches every registered

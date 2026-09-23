@@ -22,7 +22,7 @@ to `lunco-terrain-globe` (orbit scale).
 | `georef` | `TerrainGeoref` parsed from `lunco:anchor:*` plus `FlatSiteSurface` derived from an explicitly designated standard USD site plane |
 | `terrain` | the DEM terrain surface + spawn requests (`DemTerrainSurface`, `DemTerrainRequest`, `SpawnDemTerrain`) |
 | `query` | terrain-height queries (`TerrainHeightProvider`, `register_terrain_queries`) |
-| `plugin` | `TerrainSurfacePlugin` (wires the full DEM → streaming → collider pipeline) |
+| `plugin` | `TerrainSurfacePlugin` (authoritative DEM, query, and collider pipeline); `TerrainSurfaceVisualizationPlugin` (camera-driven visual products) |
 
 ## Usage
 
@@ -30,11 +30,17 @@ to `lunco-terrain-globe` (orbit scale).
 app.add_plugins(lunco_terrain_surface::TerrainSurfacePlugin);
 ```
 
+GUI compositions also install `TerrainSurfaceVisualizationPlugin` through
+`lunco-luncosim-presentation`. Headless servers and scene-test hosts omit it,
+so they do not schedule camera-driven LOD, visual-map baking, or terrain
+overlays. Terrain height queries and authored collider rings remain available.
+
 ## Status
 
 Inert until a DEM terrain is spawned (via `SpawnDemTerrain` or a USD
-`lunco:assetMode="layered"` terrain prim). Streaming visuals, the collider ring,
-and the composable layer stack are all wired. The design narrative — the
+`lunco:assetMode="layered"` terrain prim). The authoritative plugin wires the
+collider ring and composable layer stack. Visual streaming is wired only by the
+presentation plugin. The design narrative — the
 height-oracle model, the three-channel layer taxonomy (height / carve / geometry),
 independent visual/physics sampling, authored collider parameters, error-driven
 visual detail, and orbit→surface scaling — is in

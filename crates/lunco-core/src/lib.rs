@@ -49,7 +49,10 @@ pub use commands::{
     ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOutcome, CommandResults,
     EditIntent, MarkClientLocalExt, SpawnEntity,
 };
-pub use cycles::{RuntimeCycle, RuntimeCycleSet, RuntimeRoute, RuntimeScope};
+pub use cycles::{
+    RuntimeClock, RuntimeCycle, RuntimeCycleSet, RuntimeExecutionContext, RuntimePhase,
+    RuntimeProducerStamp, RuntimeRoute, RuntimeScope,
+};
 pub use derived::RebuildOnChange;
 pub use events::{trigger_runtime_error, CommandOccurred, RuntimeError, SubsystemStateChanged};
 pub use faults::{
@@ -70,7 +73,7 @@ pub use model_state::ModelStateRevision;
 pub use physics_state::*;
 pub use scene::{
     SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted, SceneTransitionCompleted,
-    SceneTransitionCoordinator, SceneTransitionFailed, SceneTransitionIntent,
+    SceneTransitionCoordinator, SceneTransitionFailed, SceneTransitionId, SceneTransitionIntent,
     SceneTransitionRequest, SceneTransitionStarted,
 };
 pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};

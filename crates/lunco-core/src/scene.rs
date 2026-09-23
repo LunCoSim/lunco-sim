@@ -7,6 +7,22 @@
 
 use bevy::prelude::*;
 
+/// Monotonic identity for one admitted scene lifecycle transaction.
+///
+/// Scene paths are descriptive input, not transaction identities: the same
+/// scene may be loaded more than once while stale async results are still in
+/// flight. Every lifecycle edge carries this id so a late terminal event
+/// cannot close a newer transaction with the same path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SceneTransitionId(u64);
+
+impl SceneTransitionId {
+    /// Stable process-local transaction sequence number.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// The complete identity of a scene transition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SceneTransition {
@@ -95,15 +111,16 @@ pub enum SceneTransitionAdmission {
 /// transaction's completed/failed edge. There is no frame polling or retry path.
 #[derive(Resource, Debug, Default)]
 pub struct SceneTransitionCoordinator {
-    active: Option<SceneTransition>,
+    active: Option<(SceneTransitionId, SceneTransition)>,
     admitted: Option<SceneTransitionRequest>,
     pending: Option<SceneTransitionRequest>,
+    next_id: u64,
 }
 
 impl SceneTransitionCoordinator {
     pub fn admit(&mut self, request: SceneTransitionRequest) -> SceneTransitionAdmission {
         if let Some(active) = self.active.as_ref() {
-            if request.matches(active) {
+            if request.matches(&active.1) {
                 self.pending = None;
                 return SceneTransitionAdmission::AlreadyActive;
             }
@@ -131,31 +148,36 @@ impl SceneTransitionCoordinator {
     }
 
     /// Publish the concrete identity resolved by the admitted request.
-    pub fn start(&mut self, transition: SceneTransition) {
+    pub fn start(&mut self, transition: SceneTransition) -> SceneTransitionId {
         assert!(
             self.admitted.is_none(),
             "scene transition started before its admitted request was dispatched"
         );
         assert!(
-            self.active.replace(transition).is_none(),
+            self.active.is_none(),
             "scene transition started while another transaction is active"
         );
+        let id = SceneTransitionId(self.next_id.max(1));
+        self.next_id =
+            id.0.checked_add(1)
+                .expect("scene transition identity sequence exhausted");
+        self.active = Some((id, transition));
+        id
     }
 
     /// Close the active transaction and admit the pending request for the next
     /// lifecycle phase.
-    pub fn finish(&mut self, transition: &SceneTransition) {
-        assert_eq!(
-            self.active.as_ref(),
-            Some(transition),
-            "scene terminal edge does not match the active transaction"
-        );
+    pub fn finish(&mut self, id: SceneTransitionId) -> bool {
+        if self.active.as_ref().map(|(active_id, _)| *active_id) != Some(id) {
+            return false;
+        }
         assert!(
             self.admitted.is_none(),
             "scene transaction reached a terminal edge while another request was already admitted"
         );
         self.active = None;
         self.admitted = self.pending.take();
+        true
     }
 
     /// Advance after an admitted request resolves to a semantic no-op before a
@@ -173,7 +195,12 @@ impl SceneTransitionCoordinator {
     }
 
     pub fn active(&self) -> Option<&SceneTransition> {
-        self.active.as_ref()
+        self.active.as_ref().map(|(_, transition)| transition)
+    }
+
+    /// Identity of the active scene transaction, if one has started.
+    pub fn active_id(&self) -> Option<SceneTransitionId> {
+        self.active.as_ref().map(|(id, _)| *id)
     }
 
     pub fn has_admitted(&self) -> bool {
@@ -242,18 +269,21 @@ impl SceneTransitionIntent {
 /// outgoing scene. All consumers use this edge to wind down their own state.
 #[derive(Event, Debug, Clone, PartialEq, Eq)]
 pub struct SceneTransitionStarted {
+    pub id: SceneTransitionId,
     pub transition: SceneTransition,
 }
 
 /// Published after a transition has reached its authoritative completion edge.
 #[derive(Event, Debug, Clone, PartialEq, Eq)]
 pub struct SceneTransitionCompleted {
+    pub id: SceneTransitionId,
     pub transition: SceneTransition,
 }
 
 /// Published when a requested stage cannot reach its completion edge.
 #[derive(Event, Debug, Clone, PartialEq, Eq)]
 pub struct SceneTransitionFailed {
+    pub id: SceneTransitionId,
     pub transition: SceneTransition,
     pub error: String,
 }
@@ -275,13 +305,15 @@ mod tests {
             coordinator.take_admitted(),
             Some(SceneTransitionRequest::load("first.usda", "/World"))
         );
-        coordinator.start(first.clone());
+        let first_id = coordinator.start(first.clone());
         assert_eq!(
             coordinator.admit(SceneTransitionRequest::load("second.usda", "/World")),
             SceneTransitionAdmission::Queued
         );
 
-        coordinator.finish(&first);
+        assert!(!coordinator.finish(SceneTransitionId(first_id.get() + 1)));
+        assert_eq!(coordinator.active_id(), Some(first_id));
+        assert!(coordinator.finish(first_id));
         assert!(coordinator.active().is_none());
         assert!(coordinator.has_admitted());
     }

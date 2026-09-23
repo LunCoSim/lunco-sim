@@ -375,6 +375,12 @@ thread_local! {
     /// [`WorldScope`] guard is alive.
     static WORLD_PTR: Cell<*mut World> = const { Cell::new(std::ptr::null_mut()) };
 
+    /// Typed owner context for synchronous script calls. The context is copied
+    /// into each nested call and is never inferred from whichever clock happens
+    /// to be installed in the World.
+    static EXECUTION_CONTEXT: Cell<lunco_core::RuntimeExecutionContext> =
+        const { Cell::new(lunco_core::RuntimeExecutionContext::unclassified()) };
+
     /// The session a running script acts on behalf of — the authority its
     /// [`cmd`] calls are gated against (design §3.4). `Some` only for a script
     /// launched by a *remote* networked session (captured at launch from the
@@ -405,9 +411,10 @@ thread_local! {
 pub struct WorldScope;
 
 impl WorldScope {
-    /// Publish `world` to the scoped thread-local for the guard's lifetime.
-    pub fn enter(world: &mut World) -> Self {
+    /// Publish `world` and its owning cycle context for the guard's lifetime.
+    pub fn enter(world: &mut World, context: lunco_core::RuntimeExecutionContext) -> Self {
         WORLD_PTR.with(|p| p.set(world as *mut World));
+        EXECUTION_CONTEXT.with(|current| current.set(context));
         SCRIPT_AUTHORITY.with(|a| a.set(None));
         SCRIPT_CLIENT_LOCAL.with(|c| c.set(false));
         SCRIPT_REJECTS.with(|r| r.borrow_mut().clear());
@@ -419,11 +426,42 @@ impl WorldScope {
 impl Drop for WorldScope {
     fn drop(&mut self) {
         WORLD_PTR.with(|p| p.set(std::ptr::null_mut()));
+        EXECUTION_CONTEXT
+            .with(|current| current.set(lunco_core::RuntimeExecutionContext::unclassified()));
         SCRIPT_AUTHORITY.with(|a| a.set(None));
         SCRIPT_CLIENT_LOCAL.with(|c| c.set(false));
         SCRIPT_REJECTS.with(|r| r.borrow_mut().clear());
         CURRENT_SELF.with(|c| c.set(0));
     }
+}
+
+/// Temporarily set the phase or event origin for one synchronous script call.
+/// Dropping the guard restores its caller's context, including on an error.
+pub struct ExecutionContextScope {
+    previous: lunco_core::RuntimeExecutionContext,
+}
+
+impl ExecutionContextScope {
+    /// Set a more specific context for a nested call in the current cycle.
+    pub fn enter(context: lunco_core::RuntimeExecutionContext) -> Self {
+        let previous = EXECUTION_CONTEXT.with(|current| {
+            let previous = current.get();
+            current.set(context);
+            previous
+        });
+        Self { previous }
+    }
+}
+
+impl Drop for ExecutionContextScope {
+    fn drop(&mut self) {
+        EXECUTION_CONTEXT.with(|current| current.set(self.previous));
+    }
+}
+
+/// Read the immutable context supplied by the active invocation owner.
+pub fn execution_context() -> lunco_core::RuntimeExecutionContext {
+    EXECUTION_CONTEXT.with(Cell::get)
 }
 
 /// Set the session the current script acts on behalf of, for [`cmd`]
@@ -1361,9 +1399,10 @@ pub fn is_unattended() -> bool {
 // Scripts WILL want randomness (scatter, jitter, exploration, retry backoff). A
 // wall-clock / OS source would diverge across host and clients and break replay,
 // so the bridge gives them a stream that is a pure function of stable inputs:
-// the entity's networked `GlobalEntityId`, the sim tick, and the call order
-// within the hook. Same entity + same tick + same call index → same number on
-// every peer and every re-run. The runtime calls `rng_begin` before each hook;
+// the entity's networked `GlobalEntityId`, the producer/owner sequence (or a
+// discrete lifecycle seed), and the call order within the hook. Same inputs
+// produce the same number on every peer and every re-run. The runtime calls
+// `rng_begin` before each hook;
 // each `rng_next_*` advances the per-thread stream. Execution is single-threaded
 // (FixedUpdate / wasm), so the thread-local is sound and order is deterministic.
 
@@ -1390,13 +1429,16 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Seed the per-hook RNG stream from `(gid, tick, salt)`. `salt` decorrelates
-/// distinct hooks/events firing in the same tick on the same entity (so on_tick
-/// and on_event don't draw the identical sequence). Called by the scenario
-/// runtime before each hook invocation.
-pub fn rng_begin(gid: u64, tick: u64, salt: u64) {
+/// Seed the per-hook RNG stream from `(gid, optional sequence, salt)`. Event
+/// hooks use their producer sequence; discrete lifecycle hooks have no sequence
+/// and receive a separately tagged deterministic stream. `salt` decorrelates
+/// distinct hooks/events on the same entity.
+pub fn rng_begin(gid: u64, sequence: Option<u64>, salt: u64) {
+    let sequence_seed = sequence
+        .map(|sequence| sequence.wrapping_mul(0xD1B5_4A32_D192_ED03) ^ 1)
+        .unwrap_or(0xE703_7ED1_A0B4_28DB);
     let seed = gid.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ tick.wrapping_mul(0xD1B5_4A32_D192_ED03)
+        ^ sequence_seed
         ^ salt.wrapping_mul(0xA076_1D64_78BD_642F);
     RNG_STATE.with(|c| c.set(seed));
     CURRENT_SELF.with(|c| c.set(gid));
@@ -1568,7 +1610,10 @@ mod tests {
             },
         );
 
-        let _scope = WorldScope::enter(&mut world);
+        let _scope = WorldScope::enter(
+            &mut world,
+            lunco_core::RuntimeExecutionContext::unclassified(),
+        );
 
         // (1) Local/host launch → ungated. No observer is registered for the
         // valid command, so it dispatches as a fire-and-forget no-op and reports
@@ -1624,7 +1669,10 @@ mod tests {
         world.init_resource::<CommandResults>();
         world.resource_mut::<ApiVisibility>().hide("HiddenCommand");
 
-        let _scope = WorldScope::enter(&mut world);
+        let _scope = WorldScope::enter(
+            &mut world,
+            lunco_core::RuntimeExecutionContext::unclassified(),
+        );
         set_script_authority(None);
 
         for name in ["MissingCommand", "InternalEvent", "HiddenCommand"] {
@@ -1669,7 +1717,10 @@ mod tests {
             .resource_mut::<SessionRegistry>()
             .claim(SessionId(7), 1);
 
-        let _scope = WorldScope::enter(&mut world);
+        let _scope = WorldScope::enter(
+            &mut world,
+            lunco_core::RuntimeExecutionContext::unclassified(),
+        );
 
         // Local launch → ungated for any target.
         set_script_authority(None);
@@ -1685,7 +1736,10 @@ mod tests {
     #[test]
     fn client_scoped_scripts_cannot_use_direct_mutation_paths() {
         let mut world = World::new();
-        let _scope = WorldScope::enter(&mut world);
+        let _scope = WorldScope::enter(
+            &mut world,
+            lunco_core::RuntimeExecutionContext::unclassified(),
+        );
         set_script_client_local(true);
 
         for capability in [
@@ -1700,5 +1754,48 @@ mod tests {
         }
 
         assert!(script_is_client_local());
+    }
+
+    #[test]
+    fn discrete_rng_seed_is_repeatable_and_distinct_from_sequence_zero() {
+        rng_begin(42, None, 1);
+        let first = rng_next_f64();
+        rng_begin(42, None, 1);
+        assert_eq!(rng_next_f64(), first);
+
+        rng_begin(42, Some(0), 1);
+        assert_ne!(rng_next_f64(), first);
+    }
+
+    #[test]
+    fn nested_script_phase_restores_its_callers_context() {
+        let simulation = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin(
+                lunco_core::RuntimeCycle::Simulation,
+                7,
+            )),
+            phase: lunco_core::RuntimePhase::Behavior,
+            clock: lunco_core::RuntimeClock::Simulation,
+            time_seconds: Some(1.5),
+            delta_seconds: Some(1.0 / 60.0),
+            sequence: Some(90),
+            producer: None,
+        };
+        let event = simulation
+            .with_phase(lunco_core::RuntimePhase::Event)
+            .with_producer(lunco_core::RuntimeProducerStamp::simulation(7, 89));
+        {
+            let _scope = ExecutionContextScope::enter(simulation);
+            assert_eq!(execution_context(), simulation);
+            {
+                let _nested = ExecutionContextScope::enter(event);
+                assert_eq!(execution_context(), event);
+            }
+            assert_eq!(execution_context(), simulation);
+        }
+        assert_eq!(
+            execution_context(),
+            lunco_core::RuntimeExecutionContext::unclassified()
+        );
     }
 }

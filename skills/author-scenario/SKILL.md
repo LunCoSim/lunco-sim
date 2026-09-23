@@ -14,7 +14,12 @@ A **scenario** is a rhai program attached to an entity. Production scenarios
 are task/event-driven policy. They must not define `on_tick`; that hook is
 reserved for authored tests under `assets/scenarios/tests/` to sample live
 telemetry and publish a bounded verdict. Continuous rover dynamics remain in
-fixed-step physics/Modelica.
+fixed-step physics/Modelica. Runtime plugins install their own cycles from
+the selected application composition. A scenario may declare `// @scope
+host|client|both` and `// @timing simulation`; Rust retains schedule ownership.
+Unsupported metadata disables only that program and publishes a document
+diagnostic for its source revision. Keep runtime errors visible; do not catch
+and erase them as successful no-ops.
 
 For mission operations, read the generic
 [mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
@@ -189,8 +194,9 @@ fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / 
 | `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, `usd_path` is canonical USD topology |
 | `owner_of(id)` / `controller(id)` / `is_controlled(id)` | who's driving (human vs AI vs unowned) |
 | `emit(name, value?)` | fire a `TelemetryEvent` stamped with the simulator `sim_secs` and `sim_tick` (fixed-step delivery waits for a later `SimTick`; a paused simulation uses the next `Update` pass); scalar, array, and map payloads keep their typed structure. During a world-level readiness hold, the shared scenario gate is closed and events are not queued. |
-| `sim_tick()` / `dt()` / `elapsed_seconds()` | the fixed clock |
-| `rand()` / `rand_range(lo,hi)` | **deterministic** RNG (seeded per `(entity,tick,hook)`) |
+| `sim_tick()` / `dt()` / `elapsed_seconds()` | available only in simulation-cycle calls; each returns a Rhai error in paused lifecycle and one-shot REPL/tool calls |
+| `execution_context()` | read-only owner scope, cycle, phase, clock sample, logical sequence, and event producer stamp |
+| `rand()` / `rand_range(lo,hi)` | **deterministic** RNG (seeded by entity, event producer or cycle sequence, and hook; discrete lifecycle hooks use a sequence-free seed) |
 | `despawn(id)` / `add`/`remove`(id,"Comp",…) | structural. **Spawn:** `cmd("SpawnEntity", #{entry_id, position})` — no generic spawn |
 | `notify(msg)` / `notify_kind(msg,kind)` | HUD notification |
 

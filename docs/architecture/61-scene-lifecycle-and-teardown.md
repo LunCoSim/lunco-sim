@@ -42,9 +42,19 @@ JSON payload to another subsystem.
 
 The owner publishes `SceneTransitionStarted` before teardown and publishes
 `SceneTransitionCompleted` or `SceneTransitionFailed` from the authoritative
-transaction. All three scene commands—`LoadScene`, `ClearScene`, and
+transaction. Each edge carries the coordinator's monotonic
+`SceneTransitionId`; the asset outcome, coordinator close, and simulation
+progress hold all use that same id. A repeated path is a new transaction, and
+a late terminal edge cannot finish or unpause its successor. All three scene commands—`LoadScene`, `ClearScene`, and
 `RestartScene`—use this boundary, so tutorial/runtime owners cannot miss a
 transition merely because it entered through a different command.
+
+`lunco-core-runtime::SimulationProgress` holds the causal clock from the start
+edge through the asset and visual-projection terminal edge. The presentation
+status bus shows the active wait reason. `TimeTransport` keeps the user's play
+and rate intent while the gate pauses `Time<Virtual>`. Physics readiness stays
+in its existing owner and continues to control physics admission; the scene
+progress gate covers lifecycle work that must not consume simulation ticks.
 
 Consumers that own transient execution must wind down at `Started` and attach
 again only from `Completed`. The tutorial launcher preserves the active

@@ -52,6 +52,8 @@ app.add_plugins(LunCoTelemetryPlugin);
 
 // LunCoTelemetryPlugin installs the unified mission-time spine and telemetry
 // settings required by its fixed-clock sampler.
+// SampledParameter observers run in its bounded post-simulation delivery cycle;
+// each sample retains the fixed tick and domain timestamp captured by the sampler.
 
 // Subscribe to telemetry events
 app.add_observer(|trigger: On<SampledParameter>| {

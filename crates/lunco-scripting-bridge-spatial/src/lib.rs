@@ -242,7 +242,10 @@ mod tests {
             .resource_mut::<ApiEntityRegistry>()
             .assign(entity, GlobalEntityId::from_raw(42));
 
-        let _scope = lunco_scripting_bridge_core::WorldScope::enter(&mut world);
+        let _scope = lunco_scripting_bridge_core::WorldScope::enter(
+            &mut world,
+            lunco_core::RuntimeExecutionContext::unclassified(),
+        );
         assert_eq!(world_pos(42), None);
         assert_eq!(world_forward(42), None);
         assert_eq!(world_rotation(42), None);
@@ -285,7 +288,10 @@ mod tests {
             .resource_mut::<ApiEntityRegistry>()
             .assign(entity, GlobalEntityId::from_raw(42));
 
-        let _scope = lunco_scripting_bridge_core::WorldScope::enter(&mut world);
+        let _scope = lunco_scripting_bridge_core::WorldScope::enter(
+            &mut world,
+            lunco_core::RuntimeExecutionContext::unclassified(),
+        );
         let position = world_pos(42).expect("position");
         let forward = world_forward(42).expect("forward");
         let rotation = world_rotation(42).expect("rotation");

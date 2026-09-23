@@ -18,6 +18,7 @@ pub use cadence::{ApplicationCadence, CadenceClock};
 pub use health::{ENGINE_HEALTH_HISTORY_LEN, EngineHealthSnapshot, PhysicsHealthSnapshot};
 pub use pacing::{
     FramePacingDemand, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
+    SimulationProgress, SimulationProgressBlocker, SimulationProgressKey, SimulationProgressOwner,
 };
 pub use sync::LockExt;
 
@@ -103,6 +104,9 @@ impl Plugin for LunCoCoreRuntimePlugin {
 
         register_core_resources(app);
         app.add_observer(record_command_cadence);
+        app.add_observer(acquire_scene_progress_hold)
+            .add_observer(release_completed_scene_progress_hold)
+            .add_observer(release_failed_scene_progress_hold);
         app.add_systems(
             PostUpdate,
             health::publish_engine_health.in_set(lunco_core::RuntimeCycleSet::Presentation),
@@ -121,12 +125,13 @@ impl Plugin for LunCoCoreRuntimePlugin {
         subsystems::build_subsystems(app);
         app.configure_sets(
             FixedUpdate,
-            (lunco_core::RuntimeCycleSet::Simulation, SimTickSet).chain(),
+            (SimTickSet, lunco_core::RuntimeCycleSet::Simulation).chain(),
         )
         .add_systems(FixedUpdate, advance_sim_tick.in_set(SimTickSet));
         app.configure_sets(
             Update,
             (
+                lunco_core::RuntimeCycleSet::Lifecycle,
                 lunco_core::RuntimeCycleSet::Command,
                 lunco_core::RuntimeCycleSet::Repl,
                 lunco_core::RuntimeCycleSet::Ui,
@@ -138,6 +143,7 @@ impl Plugin for LunCoCoreRuntimePlugin {
             (
                 lunco_core::RuntimeCycleSet::Presentation,
                 lunco_core::RuntimeCycleSet::Ui,
+                lunco_core::RuntimeCycleSet::Telemetry,
             )
                 .chain(),
         );
@@ -154,6 +160,7 @@ fn register_core_resources(app: &mut App) {
         .init_resource::<lunco_core::RuntimeDiagnostics>()
         .init_resource::<SimulationBarrier>()
         .init_resource::<SimulationBarrierParticipants>()
+        .init_resource::<SimulationProgress>()
         .init_resource::<health::EngineHealthSnapshot>()
         .init_resource::<health::PhysicsHealthSnapshot>()
         .init_resource::<ApplicationCadence>();
@@ -168,6 +175,53 @@ fn record_command_cadence(
         return;
     };
     cadence.observe_command(&time);
+}
+
+fn acquire_scene_progress_hold(
+    trigger: On<lunco_core::SceneTransitionStarted>,
+    mut progress: ResMut<SimulationProgress>,
+) {
+    let event = trigger.event();
+    let reason = match &event.transition {
+        lunco_core::SceneTransition::Load { path, .. } => format!("Loading scene: {path}"),
+        lunco_core::SceneTransition::Clear => "Clearing scene".to_owned(),
+        lunco_core::SceneTransition::Restart { path, .. } => {
+            format!("Restarting scene: {path}")
+        }
+    };
+    let key = SimulationProgressKey::scene_transition(event.id);
+    if !progress.acquire(key, reason) {
+        bevy::log::warn!(
+            "[simulation-progress] duplicate scene hold for transaction {}",
+            event.id.get()
+        );
+    }
+}
+
+fn release_completed_scene_progress_hold(
+    trigger: On<lunco_core::SceneTransitionCompleted>,
+    mut progress: ResMut<SimulationProgress>,
+) {
+    release_scene_progress_hold(trigger.event().id, &mut progress);
+}
+
+fn release_failed_scene_progress_hold(
+    trigger: On<lunco_core::SceneTransitionFailed>,
+    mut progress: ResMut<SimulationProgress>,
+) {
+    release_scene_progress_hold(trigger.event().id, &mut progress);
+}
+
+fn release_scene_progress_hold(
+    id: lunco_core::SceneTransitionId,
+    progress: &mut SimulationProgress,
+) {
+    if !progress.release(SimulationProgressKey::scene_transition(id)) {
+        bevy::log::warn!(
+            "[simulation-progress] terminal edge has no matching scene hold for transaction {}",
+            id.get()
+        );
+    }
 }
 
 fn reset_core_scene_state(mut rollback: ResMut<RollbackInProgress>) {
@@ -197,6 +251,60 @@ mod tests {
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 1);
+    }
+
+    #[test]
+    fn scene_progress_is_released_only_by_its_matching_transaction_edge() {
+        use lunco_core::{
+            SceneTransition, SceneTransitionCompleted, SceneTransitionCoordinator,
+            SceneTransitionFailed, SceneTransitionStarted,
+        };
+
+        let mut app = App::new();
+        app.add_plugins(LunCoCoreRuntimePlugin)
+            .init_resource::<SceneTransitionCoordinator>();
+
+        let mut coordinator = SceneTransitionCoordinator::default();
+        let first = SceneTransition::load("same.usda", "/World");
+        let first_id = coordinator.start(first.clone());
+        app.world_mut().trigger(SceneTransitionStarted {
+            id: first_id,
+            transition: first.clone(),
+        });
+        assert_eq!(
+            app.world()
+                .resource::<SimulationProgress>()
+                .blockers()
+                .count(),
+            1
+        );
+
+        assert!(coordinator.finish(first_id));
+        let second = SceneTransition::load("same.usda", "/World");
+        let second_id = coordinator.start(second.clone());
+        app.world_mut().trigger(SceneTransitionStarted {
+            id: second_id,
+            transition: second,
+        });
+
+        app.world_mut().trigger(SceneTransitionCompleted {
+            id: first_id,
+            transition: first,
+        });
+        let progress = app.world().resource::<SimulationProgress>();
+        assert!(progress.is_held());
+        assert_eq!(progress.blockers().count(), 1);
+        assert_eq!(
+            progress.blockers().next().unwrap().key,
+            SimulationProgressKey::scene_transition(second_id)
+        );
+
+        app.world_mut().trigger(SceneTransitionFailed {
+            id: second_id,
+            transition: SceneTransition::load("same.usda", "/World"),
+            error: "asset failed".to_owned(),
+        });
+        assert!(!app.world().resource::<SimulationProgress>().is_held());
     }
 
     #[test]

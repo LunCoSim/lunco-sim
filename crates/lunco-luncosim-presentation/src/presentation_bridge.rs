@@ -683,6 +683,7 @@ fn report_terrain_generation_status(
 /// `lunco-workbench`.
 fn report_scene_spawn_status(
     in_flight: Option<Res<lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight>>,
+    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
     awaiting: Query<(), With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
     projecting: Query<(), With<lunco_usd_bevy_scene::UsdSceneProjectionQueued>>,
     pending_meshes: Query<(), With<lunco_usd_bevy_scene::UsdSceneGeometryPending>>,
@@ -732,7 +733,21 @@ fn report_scene_spawn_status(
             0,
         );
     } else {
-        bus.remove_progress(SOURCE);
+        let Some(progress) = progress.as_deref() else {
+            bus.remove_progress(SOURCE);
+            return;
+        };
+        let Some(first) = progress.blockers().next() else {
+            bus.remove_progress(SOURCE);
+            return;
+        };
+        let count = progress.blockers().count();
+        let message = if count == 1 {
+            first.reason.clone()
+        } else {
+            format!("{} ({count} operations pending)", first.reason)
+        };
+        bus.set_progress(SOURCE, message, 0, 0);
     }
 }
 

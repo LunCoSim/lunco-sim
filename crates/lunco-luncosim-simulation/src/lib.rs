@@ -518,9 +518,9 @@ impl Plugin for LunCoSimSimulationPlugin {
             // is the USD DEM terrain, which observes that command and stamps
             // craters / scatters rocks into its own grid.
             .add_plugins(ObstacleFieldPlugin)
-            // Streamed, dynamically-LOD'd terrain (DEM tiles + heightfield
-            // colliders). Inert at M0 (config only); see lunco-terrain-surface
-            // and docs/architecture/terrain-substrate.md.
+            // Authoritative DEM terrain, analytic queries, and heightfield
+            // colliders. Camera-driven visual LOD is installed by the GUI
+            // presentation composition, not by server or scene-test hosts.
             .add_plugins(TerrainSurfacePlugin)
             // Celestial stack (doc 43): dormant unless the SCENE asks for it. Bodies
             // are authored in USD (`LunCoCelestialBodyAPI` — reference

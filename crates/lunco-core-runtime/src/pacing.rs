@@ -15,6 +15,7 @@
 
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
+use std::collections::BTreeMap;
 
 /// How the host drives the simulation application.
 ///
@@ -158,6 +159,96 @@ pub struct SimulationBarrier {
 pub struct SimulationBarrierParticipants {
     pub topology_ready: bool,
     pub entities: EntityHashSet,
+}
+
+/// Owner namespace for an operation that must finish before authoritative
+/// simulation time advances. Operation ids are allocated by their owner and
+/// remain attached to prepared work through its terminal result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SimulationProgressOwner {
+    /// Scene load, restart, or clear lifecycle transaction.
+    SceneLifecycle,
+    /// Runtime USD reference topology admission.
+    SceneReferences,
+    /// USD document source preparation and revision admission.
+    DocumentPreparation,
+    /// Modelica source/interface preparation.
+    ModelicaPreparation,
+    /// Rhai parse/import preparation.
+    ScriptPreparation,
+    /// SysML source-set analysis and revision admission.
+    SysmlAnalysis,
+}
+
+/// Stable owner and operation identity for one simulation-progress hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SimulationProgressKey {
+    pub owner: SimulationProgressOwner,
+    pub operation_id: u64,
+}
+
+impl SimulationProgressKey {
+    /// Key the hold to the scene lifecycle transaction that owns preparation.
+    pub const fn scene_transition(id: lunco_core::SceneTransitionId) -> Self {
+        Self {
+            owner: SimulationProgressOwner::SceneLifecycle,
+            operation_id: id.get(),
+        }
+    }
+}
+
+/// User-visible reason why the causal simulation is waiting for preparation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimulationProgressBlocker {
+    pub key: SimulationProgressKey,
+    pub reason: String,
+}
+
+/// Reason-keyed admission gate for asynchronous work that changes which state
+/// exists at a simulation boundary.
+///
+/// The gate is event driven: each owner acquires one key when its operation is
+/// admitted and releases that exact key after a committed or failed terminal
+/// result. Duplicate acquisition is idempotent; a stale completion cannot
+/// release another operation's hold. Per-step Modelica causality remains in
+/// [`SimulationBarrier`], whose worker handshake is a separate fixed-step
+/// synchronization contract.
+#[derive(Resource, Debug, Default)]
+pub struct SimulationProgress {
+    blockers: BTreeMap<SimulationProgressKey, SimulationProgressBlocker>,
+}
+
+impl SimulationProgress {
+    /// Acquire an operation's admission hold. Returns `true` only when the key
+    /// is newly admitted, keeping duplicate lifecycle notifications idempotent.
+    pub fn acquire(&mut self, key: SimulationProgressKey, reason: impl Into<String>) -> bool {
+        if self.blockers.contains_key(&key) {
+            return false;
+        }
+        self.blockers.insert(
+            key,
+            SimulationProgressBlocker {
+                key,
+                reason: reason.into(),
+            },
+        );
+        true
+    }
+
+    /// Release only the exact operation that reached its terminal result.
+    pub fn release(&mut self, key: SimulationProgressKey) -> bool {
+        self.blockers.remove(&key).is_some()
+    }
+
+    /// Whether an admitted operation currently prevents authoritative ticks.
+    pub fn is_held(&self) -> bool {
+        !self.blockers.is_empty()
+    }
+
+    /// Ordered explanations for UI, status, and diagnostics.
+    pub fn blockers(&self) -> impl Iterator<Item = &SimulationProgressBlocker> {
+        self.blockers.values()
+    }
 }
 
 impl SimulationBarrierParticipants {

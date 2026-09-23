@@ -99,6 +99,23 @@ REPL clock advances once per script actually evaluated. Do not use
 request as completed evaluation. The resulting `application-cadence`
 exposure is the common reader for UI, telemetry, API, and recording consumers.
 
+Cycle labels do not separate frame budgets by themselves. Visual LOD must be
+installed only by a presentation-capable host. The GUI adds
+`TerrainSurfaceVisualizationPlugin`; headless servers keep the terrain query
+and collider owners but do not install camera-driven LOD, derived visual maps,
+or overlays. If a future host renders or records offscreen frames, it opts into
+that visual plugin explicitly. Expensive selection/baking also needs its own
+bounded visualization cadence so UI input and painting retain frame capacity.
+See [the deterministic runtime contract](62-deterministic-runtime-and-async-boundaries.md)
+for the cross-cycle admission and result-commit rules.
+
+The separation is Rust-owned and measurable: plugins install only the cycles a
+host uses, native Bevy schedules define their execution boundaries, and a
+dedicated cycle driver is added only for an independent cadence. Set labels
+alone do not isolate CPU time. Keep each boundary's aggregate duration, queue
+depth, and missed-budget counts available to diagnostics; use those counters to
+select Tracy capture regions, then verify responsiveness in an unprofiled run.
+
 The render camera binder applies the same rule to Bevy's clustered-light
 infrastructure. `Camera3d` requires a `Clusters` component, but directional
 lights do not use it and Bevy's default allocates a 4,096-cell grid even when

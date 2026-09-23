@@ -1,13 +1,8 @@
 //! Bevy plugin for streamed terrain.
 //!
-//! Wires the full DEM → oracle → streaming pipeline: the terrain build/edit
-//! systems ([`crate::terrain`]), the `TerrainHeight` scripting query
-//! ([`crate::query`]), off-thread derived surface/normal maps
-//! ([`crate::derived_layers`]), camera-driven CDLOD visual tile streaming
-//! ([`crate::stream_viz`]), the composable USD terrain-layer stack
-//! ([`crate::terrain_layers`]), and the per-body heightfield collider ring +
-//! physics-hold / tunnel / overturn rescues ([`crate::collider_ring`]). The
-//! visual quality knobs live in [`lunco_render::RenderingQualitySettings`].
+//! Wires the authoritative DEM → oracle → physics pipeline. Camera-driven LOD,
+//! derived visual maps, and terrain overlays are installed separately by
+//! [`TerrainSurfaceVisualizationPlugin`], so a server does not schedule them.
 
 use bevy::prelude::*;
 
@@ -29,8 +24,8 @@ pub enum TerrainSurfaceSet {
     RenderShadowBinding,
 }
 
-/// Streamed-terrain plugin — registers the DEM build, streaming, layer, and
-/// collider-ring systems (see the module docs for the pipeline).
+/// Authoritative terrain plugin — registers DEM construction, queries, layers,
+/// and collider-ring systems. It is suitable for GUI, headless, and server apps.
 pub struct TerrainSurfacePlugin;
 
 impl Plugin for TerrainSurfacePlugin {
@@ -44,33 +39,10 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_settings_section::<lunco_settings::TerrainSettings>();
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::georef::FlatSiteSurface>();
-        app.register_type::<crate::stream_viz::TerrainVisualFocus>();
-        // The streamed mesh cache and LOD controls are rendering-quality resources even when
-        // this plugin runs headless: the CPU-side cache still needs the same
-        // authoritative limit as the graphical client. The workbench's
-        // settings registration may replace this default with persisted user
-        // values later in plugin construction.
+        // Terrain layer realization uses this shared quality setting in GUI
+        // and headless compositions. Visual LOD resources are installed by
+        // `TerrainSurfaceVisualizationPlugin` only.
         app.init_resource::<lunco_render::RenderingQualitySettings>();
-        // `SetTerrainRenderingQuality` — the same knobs, addressable from the API/scripts.
-        crate::stream_viz::register_all_commands(app);
-        // Render-resource invalidation is an event, not a reason to rescan every
-        // resident tile on stable frames. The stream owns visibility; the render
-        // binder owns the ShaderLookReady marker.
-        app.add_observer(crate::stream_viz::invalidate_removed_shader_look_ready);
-        app.init_resource::<crate::stream_viz::LodMeshCache>();
-        app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
-        app.init_resource::<crate::stream_viz::TerrainDetailDemands>();
-        // Terrain visual demand follows the same presentation binding as the
-        // renderer. The streamer must not infer an authority from raw
-        // Camera::is_active flags, because a stale/offscreen camera can carry
-        // a valid render component while not being the camera shown in the
-        // viewport.
-        app.init_resource::<lunco_viewport_core::SceneViewport>();
-        // Off by default: interactive play wants real-time-paced streaming. Set by
-        // `lunco-luncosim` for the duration of an offline recording so the captured
-        // tile set is a function of the frame index rather than of thread
-        // scheduling. See `stream_viz::TerrainStreamLockstep`.
-        app.init_resource::<crate::stream_viz::TerrainStreamLockstep>();
         // M3: spawn a static DEM terrain (mesh + heightfield collider) on the
         // `SpawnDemTerrain` command. See `crate::terrain`.
         crate::terrain::register(app);
@@ -84,25 +56,6 @@ impl Plugin for TerrainSurfacePlugin {
             PreUpdate,
             crate::surface_query::update_terrain_physics_frame_poses,
         );
-        // Analysis diagnostic VIEW: the `TerrainOverlayParams` resource +
-        // `SetTerrainOverlay` command + live-sync system that replaces resident
-        // production tile materials with the separate diagnostic material. See
-        // `crate::overlay`.
-        crate::overlay::register(app);
-        // P3b: bake DEM-derived surface (rough/AO/hazard) + normal layers off the
-        // main thread and publish them as `TerrainDerivedMaps`. Inert headless
-        // (gated on render assets existing). See `crate::derived_layers`.
-        crate::derived_layers::register(app);
-        // S3 (visual-only): opt-in camera-driven CDLOD tile streaming for SEEING
-        // LODs. Inert unless a DEM is built with `lod_viz`. Physics uses the
-        // separately authored collider-ring contract when `collider_ring` is
-        // enabled. See `crate::stream_viz`.
-        //
-        // NO material store is initialised here any more. A tile states its
-        // appearance as a `ShaderLook` and this crate never touches
-        // `Assets<ShaderMaterial>` — so the headless server needs no render assets
-        // and no `#[cfg]`; it simply never adds `LuncoRenderPlugin`, and the looks
-        // sit in the world as inspectable data. See docs/architecture/render-decoupling.md.
         // The active physics support contract is inspectable at RUNTIME: the ring
         // component is reflected and registered, so the Inspector and reflection
         // API can inspect or retune the authored physics lattice live.
@@ -110,11 +63,6 @@ impl Plugin for TerrainSurfacePlugin {
         app.register_type::<avian3d::prelude::NarrowPhaseConfig>();
         app.init_resource::<crate::collider_ring::PhysicsSupportCache>();
         app.configure_sets(Update, TerrainSurfaceSet::PhysicsSupportCache);
-        app.configure_sets(
-            PostUpdate,
-            TerrainSurfaceSet::RenderShadowBinding
-                .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision),
-        );
         // Physics owns the support contract; this cache turns Avian's change
         // events into a stable assembly projection. Ring selection and the
         // readiness hold both consume that projection instead of rebuilding the
@@ -124,37 +72,6 @@ impl Plugin for TerrainSurfacePlugin {
             crate::collider_ring::update_physics_support_cache
                 .in_set(TerrainSurfaceSet::PhysicsSupportCache)
                 .in_set(lunco_physics::PhysicsSupportSet::Consume),
-        );
-        app.add_systems(
-            Update,
-            (
-                (
-                    crate::stream_viz::mark_terrain_visual_foci,
-                    crate::stream_viz::collect_terrain_detail_demands,
-                    crate::stream_viz::update_lod_tiles,
-                    crate::stream_viz::retire_terrain_tiles,
-                )
-                    .chain(),
-                // Reconcile one complete terrain material source selection when
-                // USD-authored or engine-derived maps publish. This keeps the
-                // two source owners from racing through separate late binders.
-                crate::stream_viz::bind_terrain_maps_to_materials,
-                crate::stream_viz::sync_removed_terrain_maps_to_materials,
-                // Change-driven: early-outs unless a `TerrainLodViz` removal
-                // event fired this frame (stays in `Update` so its
-                // `RemovedComponents` reader drains every frame).
-                crate::stream_viz::despawn_orphaned_lod_tiles,
-            )
-                .in_set(lunco_core::RuntimeCycleSet::Visualization),
-        );
-        // Tile shadow intent is a render-frame consumer. It must see the final
-        // floating-origin transforms, and is kept in a public phase so the
-        // streamed-terrain cache producer can publish immediately before it.
-        app.add_systems(
-            PostUpdate,
-            crate::stream_viz::bind_shadow_cache_to_tiles
-                .in_set(TerrainSurfaceSet::RenderShadowBinding)
-                .in_set(lunco_core::RuntimeCycleSet::Visualization),
         );
         // Composable TERRAIN LAYER stack (authored as USD child layer prims; craters
         // stamp into the grid, rocks scatter on the surface). The parser registry maps
@@ -244,5 +161,76 @@ impl Plugin for TerrainSurfacePlugin {
         // rhai, both landing on the `RecoverVessel` command in `collider_ring`.
         // The old `FixedUpdate` auto-righting hid the terrain/suspension problem
         // that put the rover there in the first place.
+    }
+}
+
+/// Camera-driven terrain products for applications with a visual surface.
+///
+/// Keep this plugin out of headless/server compositions. Physics terrain and
+/// height queries remain available through [`TerrainSurfacePlugin`].
+pub struct TerrainSurfaceVisualizationPlugin;
+
+impl Plugin for TerrainSurfaceVisualizationPlugin {
+    fn build(&self, app: &mut App) {
+        app.register_type::<crate::stream_viz::TerrainVisualFocus>();
+        app.init_resource::<lunco_render::RenderingQualitySettings>();
+        crate::stream_viz::register_all_commands(app);
+        app.add_observer(crate::stream_viz::invalidate_removed_shader_look_ready);
+        app.init_resource::<crate::stream_viz::LodMeshCache>();
+        app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
+        app.init_resource::<crate::stream_viz::TerrainDetailDemands>();
+        app.init_resource::<lunco_viewport_core::SceneViewport>();
+        app.init_resource::<crate::stream_viz::TerrainStreamLockstep>();
+        crate::overlay::register(app);
+        crate::derived_layers::register(app);
+
+        app.configure_sets(
+            PostUpdate,
+            TerrainSurfaceSet::RenderShadowBinding
+                .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision),
+        );
+        app.add_systems(
+            Update,
+            (
+                (
+                    crate::stream_viz::mark_terrain_visual_foci,
+                    crate::stream_viz::collect_terrain_detail_demands,
+                    crate::stream_viz::update_lod_tiles,
+                    crate::stream_viz::retire_terrain_tiles,
+                )
+                    .chain(),
+                crate::stream_viz::bind_terrain_maps_to_materials,
+                crate::stream_viz::sync_removed_terrain_maps_to_materials,
+                crate::stream_viz::despawn_orphaned_lod_tiles,
+            )
+                .in_set(lunco_core::RuntimeCycleSet::Visualization),
+        );
+        app.add_systems(
+            PostUpdate,
+            crate::stream_viz::bind_shadow_cache_to_tiles
+                .in_set(TerrainSurfaceSet::RenderShadowBinding)
+                .in_set(lunco_core::RuntimeCycleSet::Visualization),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visual_terrain_work_is_opt_in_at_composition() {
+        let mut app = App::new();
+        app.add_plugins(TerrainSurfacePlugin);
+        assert!(app
+            .world()
+            .get_resource::<crate::stream_viz::TerrainDetailDemands>()
+            .is_none());
+
+        app.add_plugins(TerrainSurfaceVisualizationPlugin);
+        assert!(app
+            .world()
+            .get_resource::<crate::stream_viz::TerrainDetailDemands>()
+            .is_some());
     }
 }
