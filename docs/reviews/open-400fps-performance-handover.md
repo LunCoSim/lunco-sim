@@ -72,9 +72,35 @@ no longer triggers a whole wiring pass. These are source-level work reductions
 only. Program binding extracts its declared input/output maps once and reuses
 them for the admission verdict and published interface; the communication
 period is read through a direct authored-property query. Orphan acausal
-admission also derives declaration and connection presence in one attribute pass.
-Their CPU benefit is not yet measured, and the next clean settled Apollo run
-remains necessary before claiming an FPS improvement.
+admission uses a non-allocating prefix probe to skip connectorless programs,
+then derives declaration and connection presence from one attribute-name pass
+when connectors exist. A change-driven authoring-review view-model update is
+under evaluation. Its gate reacts to selection/control/camera/mount and
+identity-lifecycle changes, compares diagnostic/fault contents to ignore
+no-op mutable publishes, and passes its focused scheduling test. The preceding
+Tracy table attributed 0.993 ms per call (571 calls), but the current reduction
+remains source-level and unmeasured. A clean settled Apollo run remains
+necessary before claiming an FPS improvement.
+
+## CPU investigation lead
+
+Source inspection found a potentially expensive main-thread boundary in
+`project_domain_islands`: for a canonical stage generation greater than zero,
+the `Update` system calls `synthesizer.synthesize(...)` inline. Only the
+generation-zero prepared-plan path queues synthesis on
+`AsyncComputeTaskPool`. The older mixed Apollo Tracy capture recorded one
+`project_domain_islands` invocation at about 6.4 seconds, but it predates the
+current candidate filtering and is diagnostic, not proof that this inline path
+caused that sample or current low FPS.
+
+The live canonical USD `Stage` is `!Send` and exposed through a `StageView`, so
+moving that handle to a worker is not valid. A viable direction to investigate
+is an owned, send-safe snapshot of the domain facts for one root and stage
+generation: read the canonical stage once at its owner, run Rhai synthesis and
+source validation off the UI schedule, then publish only if the root and stage
+generation still match. Before changing this boundary, add bounded Tracy zones
+that separate `read_network`, hook execution/validation, and projection commit;
+compare one settled live capture to identify which work dominates.
 
 ## Verification
 
@@ -106,6 +132,9 @@ remains necessary before claiming an FPS improvement.
 - Settled diagnostics reported 4100 entities and approximately 33–79 FPS with
   approximately 12.6–30.3 ms samples in the captured window. The API `Exit`
   command was accepted and port 4366 was verified closed.
+- `nice -n 19 cargo test -j 4 -p lunco-luncosim-edit-ui --lib
+  authoring_review_view_gate_sleeps_until_an_owner_or_identity_changes` passed
+  (1 test). This verifies the scheduling gate, not an FPS gain.
 
 ## Remaining blocker
 

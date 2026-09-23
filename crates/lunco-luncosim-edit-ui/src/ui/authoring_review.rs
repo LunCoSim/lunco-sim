@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_camera_core::{OrbitCamera, SpringArmCamera};
 use lunco_control_core::ControlLink;
-use lunco_core::{entity_display_name, CatalogEntryId, GlobalEntityId};
+use lunco_core::{entity_display_name, CatalogEntryId, GlobalEntityId, RuntimeDiagnostic};
 use lunco_core::{RuntimeDiagnostics, RuntimeFaults, SceneMountState};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_render::SceneCamera;
@@ -73,18 +73,181 @@ impl Default for AuthoringReviewTargetIndexDirty {
     }
 }
 
-pub(crate) fn mark_target_index_dirty_on_add<T: Component>(
-    _trigger: On<Add, T>,
+/// Coalesces changes to the evidence consumed by the authoring-review panel.
+#[derive(Resource)]
+pub(crate) struct AuthoringReviewViewDirty(pub bool);
+
+impl Default for AuthoringReviewViewDirty {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct AuthoringReviewResourceSnapshot {
+    diagnostics: Option<Vec<RuntimeDiagnostic>>,
+    fault: Option<Option<(&'static str, String, String)>>,
+}
+
+pub(crate) fn mark_target_index_dirty_on_insert<T: Component>(
+    _trigger: On<Insert, T>,
     mut dirty: ResMut<AuthoringReviewTargetIndexDirty>,
+    mut view_dirty: ResMut<AuthoringReviewViewDirty>,
 ) {
     dirty.0 = true;
+    view_dirty.0 = true;
 }
 
 pub(crate) fn mark_target_index_dirty_on_remove<T: Component>(
     _trigger: On<Remove, T>,
     mut dirty: ResMut<AuthoringReviewTargetIndexDirty>,
+    mut view_dirty: ResMut<AuthoringReviewViewDirty>,
 ) {
     dirty.0 = true;
+    view_dirty.0 = true;
+}
+
+#[derive(SystemParam)]
+struct ReviewTargetQueries<'w, 's> {
+    links: Query<'w, 's, &'static ControlLink>,
+    spring: Query<'w, 's, &'static SpringArmCamera>,
+    orbit: Query<'w, 's, &'static OrbitCamera>,
+}
+
+fn is_review_target(
+    entity: Entity,
+    selected: &SelectedEntities,
+    local_avatar: &TheLocalEmbodiment,
+    viewport: Option<&SceneViewport>,
+    q: &ReviewTargetQueries,
+) -> bool {
+    if selected.primary() == Some(entity) || local_avatar.0 == Some(entity) {
+        return true;
+    }
+    let controlled = local_avatar
+        .0
+        .and_then(|avatar| q.links.get(avatar).ok())
+        .map(|link| link.target);
+    if controlled == Some(entity) {
+        return true;
+    }
+    let Some(camera) = viewport.and_then(|viewport| viewport.active_camera) else {
+        return false;
+    };
+    if camera == entity {
+        return true;
+    }
+    q.spring.get(camera).is_ok_and(|arm| arm.target == entity)
+        || q.orbit
+            .get(camera)
+            .is_ok_and(|orbit| orbit.target == entity)
+}
+
+fn mark_authoring_review_view_dirty_on_insert<T: Component>(
+    trigger: On<Insert, T>,
+    selected: Res<SelectedEntities>,
+    local_avatar: Res<TheLocalEmbodiment>,
+    viewport: Option<Res<SceneViewport>>,
+    targets: ReviewTargetQueries,
+    mut dirty: ResMut<AuthoringReviewViewDirty>,
+) {
+    if is_review_target(
+        trigger.entity,
+        &selected,
+        &local_avatar,
+        viewport.as_deref(),
+        &targets,
+    ) {
+        dirty.0 = true;
+    }
+}
+
+fn mark_authoring_review_view_dirty_on_remove<T: Component>(
+    trigger: On<Remove, T>,
+    selected: Res<SelectedEntities>,
+    local_avatar: Res<TheLocalEmbodiment>,
+    viewport: Option<Res<SceneViewport>>,
+    targets: ReviewTargetQueries,
+    mut dirty: ResMut<AuthoringReviewViewDirty>,
+) {
+    if is_review_target(
+        trigger.entity,
+        &selected,
+        &local_avatar,
+        viewport.as_deref(),
+        &targets,
+    ) {
+        dirty.0 = true;
+    }
+}
+
+pub(crate) fn authoring_review_view_due(
+    dirty: Res<AuthoringReviewViewDirty>,
+    target_index_dirty: Res<AuthoringReviewTargetIndexDirty>,
+    selected: Res<SelectedEntities>,
+    local_avatar: Res<TheLocalEmbodiment>,
+    viewport: Option<Res<SceneViewport>>,
+    diagnostics: Res<RuntimeDiagnostics>,
+    faults: Res<RuntimeFaults>,
+    mount: Option<Res<SceneMountState>>,
+    mut observed: Local<AuthoringReviewResourceSnapshot>,
+) -> bool {
+    // Several diagnostic producers hold `ResMut` and may republish identical
+    // facts on a cadence. Compare semantic content so those no-op writes do not
+    // keep this presentation view awake.
+    let diagnostics_changed =
+        observed.diagnostics.as_deref() != Some(diagnostics.findings.as_slice());
+    if diagnostics_changed {
+        observed.diagnostics = Some(diagnostics.findings.clone());
+    }
+    let fault_changed = match (observed.fault.as_ref(), faults.first.as_ref()) {
+        (None, _) => true,
+        (Some(None), None) => false,
+        (Some(Some((kind, subject, detail))), Some(fault)) => {
+            *kind != fault.kind || subject != &fault.subject || detail != &fault.detail
+        }
+        (Some(Some(_)), None) | (Some(None), Some(_)) => true,
+    };
+    if fault_changed {
+        observed.fault = Some(
+            faults
+                .first
+                .as_ref()
+                .map(|fault| (fault.kind, fault.subject.clone(), fault.detail.clone())),
+        );
+    }
+
+    dirty.0
+        || target_index_dirty.0
+        || selected.is_changed()
+        || local_avatar.is_changed()
+        || viewport.is_some_and(|viewport| viewport.is_changed())
+        || diagnostics_changed
+        || fault_changed
+        || mount.is_some_and(|mount| mount.is_changed())
+}
+
+pub(crate) fn install_view_model_tracking(app: &mut App) {
+    app.init_resource::<AuthoringReviewTargetIndexDirty>()
+        .init_resource::<AuthoringReviewViewDirty>()
+        .add_observer(mark_target_index_dirty_on_insert::<UsdPrimPath>)
+        .add_observer(mark_target_index_dirty_on_remove::<UsdPrimPath>)
+        .add_observer(mark_target_index_dirty_on_insert::<GlobalEntityId>)
+        .add_observer(mark_target_index_dirty_on_remove::<GlobalEntityId>)
+        .add_observer(mark_authoring_review_view_dirty_on_insert::<Name>)
+        .add_observer(mark_authoring_review_view_dirty_on_remove::<Name>)
+        .add_observer(mark_authoring_review_view_dirty_on_insert::<lunco_core::markers::Callsign>)
+        .add_observer(mark_authoring_review_view_dirty_on_remove::<lunco_core::markers::Callsign>)
+        .add_observer(mark_authoring_review_view_dirty_on_insert::<CatalogEntryId>)
+        .add_observer(mark_authoring_review_view_dirty_on_remove::<CatalogEntryId>)
+        .add_observer(mark_authoring_review_view_dirty_on_insert::<ControlLink>)
+        .add_observer(mark_authoring_review_view_dirty_on_remove::<ControlLink>)
+        .add_observer(mark_authoring_review_view_dirty_on_insert::<SpringArmCamera>)
+        .add_observer(mark_authoring_review_view_dirty_on_remove::<SpringArmCamera>)
+        .add_observer(mark_authoring_review_view_dirty_on_insert::<OrbitCamera>)
+        .add_observer(mark_authoring_review_view_dirty_on_remove::<OrbitCamera>)
+        .add_observer(mark_authoring_review_view_dirty_on_insert::<SceneCamera>)
+        .add_observer(mark_authoring_review_view_dirty_on_remove::<SceneCamera>);
 }
 
 fn index_target_ids_by_path<'a>(
@@ -175,8 +338,10 @@ pub(crate) fn populate_authoring_review_view(
     faults: Res<RuntimeFaults>,
     mount: Option<Res<SceneMountState>>,
     mut target_index_dirty: ResMut<AuthoringReviewTargetIndexDirty>,
+    mut view_dirty: ResMut<AuthoringReviewViewDirty>,
     q: AuthoringReviewQueries,
 ) {
+    view_dirty.0 = false;
     let selected_entity = selected.primary();
     view.selected = selected_entity;
     view.selected_label = selected_entity
@@ -253,7 +418,91 @@ pub(crate) fn populate_authoring_review_view(
 
 #[cfg(test)]
 mod tests {
-    use super::index_target_ids_by_path;
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct ViewModelRuns(u32);
+
+    fn republish_empty_diagnostics(mut diagnostics: ResMut<RuntimeDiagnostics>) {
+        diagnostics.replace_producer("stable", std::iter::empty());
+    }
+
+    fn record_view_model_run(
+        mut runs: ResMut<ViewModelRuns>,
+        mut dirty: ResMut<AuthoringReviewViewDirty>,
+        mut target_index_dirty: ResMut<AuthoringReviewTargetIndexDirty>,
+    ) {
+        runs.0 += 1;
+        dirty.0 = false;
+        target_index_dirty.0 = false;
+    }
+
+    #[test]
+    fn authoring_review_view_gate_sleeps_until_an_owner_or_identity_changes() {
+        let mut app = App::new();
+        app.init_resource::<SelectedEntities>()
+            .init_resource::<TheLocalEmbodiment>()
+            .init_resource::<SceneViewport>()
+            .init_resource::<RuntimeDiagnostics>()
+            .init_resource::<RuntimeFaults>()
+            .init_resource::<ViewModelRuns>();
+        install_view_model_tracking(&mut app);
+        app.add_systems(Update, republish_empty_diagnostics);
+        app.add_systems(
+            Update,
+            record_view_model_run.run_if(authoring_review_view_due),
+        );
+
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 1);
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 1);
+
+        let selected = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<SelectedEntities>()
+            .entities
+            .push(selected);
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 2);
+
+        app.world_mut()
+            .entity_mut(selected)
+            .insert(Name::new("renamed target"));
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 3);
+
+        app.world_mut()
+            .spawn(Name::new("unrelated streamed entity"));
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 3);
+
+        app.world_mut()
+            .resource_mut::<RuntimeDiagnostics>()
+            .replace_producer(
+                "test",
+                [RuntimeDiagnostic {
+                    code: "test-finding".into(),
+                    severity: lunco_core::DiagnosticSeverity::Warning,
+                    producer: "test".into(),
+                    subject: "/Target".into(),
+                    message: "changed".into(),
+                }],
+            );
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 4);
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 4);
+
+        app.world_mut().resource_mut::<RuntimeFaults>().raise(
+            "test-fault",
+            Some(selected),
+            "/Target",
+            "changed",
+        );
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 5);
+    }
 
     #[test]
     fn diagnostic_targets_use_one_path_index_and_leave_duplicate_instances_ambiguous() {
