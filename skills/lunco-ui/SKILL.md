@@ -148,6 +148,12 @@ Workbench hot-exit documents, tabs, and dock windows are scoped to the active
 Twin. With no active Twin, use the host's startup layout and skip workspace
 state load/save; do not restore loose Editor or Modelica tabs from an
 app-global no-folder session.
+Workspace snapshots load, prepare file-backed documents, serialize, and save on
+Bevy's task pool through `lunco-storage`. Domain codecs restore documents
+through their existing registries and lifecycle events. Document-backed view
+tabs can remap many saved views onto one canonical document; the codec chooses
+whether unmatched tabs are retained or dropped, while stable singleton-instance
+panels keep their own IDs.
 For the missing-asset consent flow, the popup's unchecked negative checkbox
 means "show next time" and persists through `twin.toml [downloads]`; do not
 add a second global settings key for it.

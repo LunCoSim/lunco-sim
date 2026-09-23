@@ -92,6 +92,13 @@ focused-session projection restored from editor-owned session selection, not a
 document identity. Panel writes use the session's explicit `DocumentId`,
 `LayerId`, and projection generation.
 
+The active Twin's asynchronous workspace restore recreates saved view tabs over
+the same document-scoped preview session and restores each view's camera and
+presentation settings. Reopening the same file reuses the registered document;
+use the explicit **Open view** action to add another perspective. A view tab
+without a restored session is dropped from the saved dock layout rather than
+shown empty.
+
 Preview projection is a presentation scope over the same composed stage. It
 owns one session-local light and excludes authored scene-wide
 `DistantLight`/`DomeLight` prims from that render layer; authored local

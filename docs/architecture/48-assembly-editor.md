@@ -98,6 +98,16 @@ name convention, or ECS-only grouping state is introduced.
   presentation state over that shared session.
   `OpenUsdPreviewView` therefore provides
   split or tabbed 3D inspection without duplicate USD projection work.
+  Workspace restore follows the same identity boundary: one snapshot per
+  `UsdDocument`/file origin, with each saved view restored as another tab over
+  the same preview session. Opening the same file reuses the registered
+  document; an additional perspective is created explicitly through **Open
+  view**, and all perspectives observe the same live edits. Camera and
+  presentation settings are user workspace state, not journaled USD edits.
+  Clean file-backed buffers refresh asynchronously from the file; dirty
+  buffers restore from their saved source snapshot. A stale view tab whose
+  document or view cannot be reopened is dropped when the dock tree is
+  reconciled.
   Hidden view tabs have inactive cameras; visible tabs publish their own dock
   geometry and are resized independently. `UsdPreviewRenderBudget` bounds each
   target to 2048 px per axis and 4,194,304 pixels, with an 8,388,608-pixel

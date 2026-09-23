@@ -5,7 +5,7 @@
 //! persisted presentation settings. The render package owns images, egui
 //! texture registration, cameras' render components, and panels.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::prelude::{
@@ -63,6 +63,9 @@ pub struct UsdPreviewViewId(pub u64);
 
 /// The default preview identity used by the desktop Assembly editor.
 pub const EDITOR_PREVIEW_ID: UsdPreviewId = UsdPreviewId(1);
+
+/// Stable workbench panel kind for one USD preview presentation view.
+pub const USD_PREVIEW_VIEW_PANEL_KIND: &str = "usd::preview_view";
 
 /// Presentation projection of one USD preview view.
 #[derive(
@@ -605,6 +608,93 @@ impl UsdPreviewView {
     }
 }
 
+/// Persistable presentation state for one view over a USD preview session.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsdPreviewViewSettings {
+    /// Camera yaw in radians.
+    pub yaw: f32,
+    /// Camera pitch in radians.
+    pub pitch: f32,
+    /// Perspective camera distance.
+    pub distance: f32,
+    /// Camera target in stage coordinates.
+    pub target: [f32; 3],
+    /// Camera projection.
+    pub projection: UsdPreviewProjection,
+    /// Orthographic scale.
+    pub orthographic_scale: f32,
+    /// Whether the camera frames the stage when projection becomes ready.
+    pub auto_frame: bool,
+    /// Visual or text presentation mode.
+    pub mode: UsdPreviewViewMode,
+    /// Authored or composed text layer.
+    pub text_layer: UsdPreviewTextLayer,
+}
+
+impl UsdPreviewViewSettings {
+    /// Capture the user-visible camera and presentation settings for a view.
+    pub fn capture(view: &UsdPreviewView) -> Self {
+        Self {
+            yaw: view.orbit.yaw,
+            pitch: view.orbit.pitch,
+            distance: view.orbit.distance,
+            target: view.orbit.target.to_array(),
+            projection: view.projection,
+            orthographic_scale: view.orthographic_scale,
+            auto_frame: view.auto_frame,
+            mode: view.mode,
+            text_layer: view.text_layer,
+        }
+    }
+
+    /// Apply validated persisted values to a newly allocated view.
+    pub fn apply(&self, view: &mut UsdPreviewView) -> Result<(), String> {
+        if !self.yaw.is_finite()
+            || !self.pitch.is_finite()
+            || !self.distance.is_finite()
+            || !self.orthographic_scale.is_finite()
+            || !self.target.iter().all(|value| value.is_finite())
+        {
+            return Err("USD preview view settings contain a non-finite number".into());
+        }
+        view.orbit.yaw = self.yaw;
+        view.orbit.pitch = self
+            .pitch
+            .clamp(-view.orbit.pitch_clamp, view.orbit.pitch_clamp);
+        view.orbit.distance = self
+            .distance
+            .clamp(view.orbit.min_distance, view.orbit.max_distance);
+        view.orbit.target = Vec3::from_array(self.target);
+        view.projection = self.projection;
+        view.orthographic_scale = self.orthographic_scale.clamp(
+            view.orbit.min_orthographic_scale,
+            view.orbit.max_orthographic_scale,
+        );
+        view.auto_frame = self.auto_frame;
+        view.mode = self.mode;
+        view.text_layer = self.text_layer;
+        Ok(())
+    }
+}
+
+impl Default for UsdPreviewViewSettings {
+    fn default() -> Self {
+        let orbit = OrbitCamera::default();
+        Self {
+            yaw: orbit.yaw,
+            pitch: orbit.pitch,
+            distance: orbit.distance,
+            target: orbit.target.to_array(),
+            projection: UsdPreviewProjection::default(),
+            orthographic_scale: 1.0,
+            auto_frame: true,
+            mode: UsdPreviewViewMode::default(),
+            text_layer: UsdPreviewTextLayer::default(),
+        }
+    }
+}
+
 /// Session and view registry shared by USD editor surfaces.
 #[derive(Resource, Default)]
 pub struct UsdViewportState {
@@ -613,6 +703,10 @@ pub struct UsdViewportState {
     focused: Option<UsdPreviewId>,
     focused_view: Option<UsdPreviewViewId>,
     next_view_id: u64,
+    restore_settings: HashMap<UsdPreviewViewId, UsdPreviewViewSettings>,
+    restore_primary_views: HashMap<UsdPreviewId, UsdPreviewViewId>,
+    suppressed_auto_preview_docs: HashSet<DocumentId>,
+    explicitly_closed_preview_docs: HashSet<DocumentId>,
 }
 
 /// Transient display overrides keyed by preview session and absolute prim path.
@@ -742,6 +836,81 @@ pub fn preview_drag_channels(
 }
 
 impl UsdViewportState {
+    /// Attach saved view settings to a reserved identity before its render
+    /// adapter creates the camera and presentation state.
+    pub fn queue_restore_settings(
+        &mut self,
+        view: UsdPreviewViewId,
+        settings: UsdPreviewViewSettings,
+    ) {
+        self.restore_settings.insert(view, settings);
+    }
+
+    /// Consume settings queued for a view being created.
+    pub fn take_restore_settings(
+        &mut self,
+        view: UsdPreviewViewId,
+    ) -> Option<UsdPreviewViewSettings> {
+        self.restore_settings.remove(&view)
+    }
+
+    /// Identities with settings waiting for their runtime view adapter.
+    pub fn pending_restore_views(&self) -> Vec<UsdPreviewViewId> {
+        self.restore_settings.keys().copied().collect()
+    }
+
+    /// Drop queued settings during Twin teardown.
+    pub fn clear_restore_settings(&mut self) {
+        self.restore_settings.clear();
+    }
+
+    /// Select the primary view identity for a preview being restored.
+    pub fn queue_restore_primary_view(&mut self, preview: UsdPreviewId, view: UsdPreviewViewId) {
+        self.restore_primary_views.insert(preview, view);
+    }
+
+    /// Consume the primary view identity queued for a preview restore.
+    pub fn take_restore_primary_view(&mut self, preview: UsdPreviewId) -> Option<UsdPreviewViewId> {
+        self.restore_primary_views.remove(&preview)
+    }
+
+    /// Clear queued primary identities when the Twin is torn down.
+    pub fn clear_restore_primary_views(&mut self) {
+        self.restore_primary_views.clear();
+    }
+
+    /// Keep document readiness from recreating a preview that the restored
+    /// workspace explicitly left closed.
+    pub fn suppress_auto_preview_for(&mut self, doc: DocumentId) {
+        self.suppressed_auto_preview_docs.insert(doc);
+    }
+
+    /// Mark a document whose preview the user explicitly closed.
+    pub fn mark_preview_closed(&mut self, doc: DocumentId) {
+        self.explicitly_closed_preview_docs.insert(doc);
+    }
+
+    /// Whether the document's last preview was explicitly closed.
+    pub fn preview_was_explicitly_closed(&self, doc: DocumentId) -> bool {
+        self.explicitly_closed_preview_docs.contains(&doc)
+    }
+
+    /// Clear the explicit close marker after a preview has reopened.
+    pub fn clear_preview_closed(&mut self, doc: DocumentId) {
+        self.explicitly_closed_preview_docs.remove(&doc);
+    }
+
+    /// Consume a restored closed-preview marker when document readiness runs.
+    pub fn take_auto_preview_suppression(&mut self, doc: DocumentId) -> bool {
+        self.suppressed_auto_preview_docs.remove(&doc)
+    }
+
+    /// Clear transient close intent with the rest of a Twin-scoped viewport.
+    pub fn clear_auto_preview_suppressions(&mut self) {
+        self.suppressed_auto_preview_docs.clear();
+        self.explicitly_closed_preview_docs.clear();
+    }
+
     /// The focused preview identity.
     pub fn focused_preview_id(&self) -> Option<UsdPreviewId> {
         self.focused
