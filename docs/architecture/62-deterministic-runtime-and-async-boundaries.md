@@ -380,8 +380,13 @@ The whole-simulation guarantee remains open because:
    readiness.
 3. Dynamic Rhai port access is not represented in the Modelica causal graph.
 4. Some heavy preparation remains synchronous: Rhai cache-miss compilation and
-   module evaluation, SysML analysis/source-set discovery, initial USD document
-   parse/overlay serialization, and USD Modelica interface extraction.
+   module evaluation, SysML analysis/source-set discovery, and initial USD
+   document parse/overlay serialization. Native Modelica source interfaces are
+   extracted once on Bevy's async-compute pool while the source asset loads;
+   co-simulation, member discovery, and the web workbench reuse that
+   revision-matched interface. Bevy's wasm task pool runs on the browser main
+   thread, so the web loader still needs a Modelica Web Worker handoff for a
+   fully non-blocking parse.
 5. The production GUI does not pin Avian's compute pool; `PhysicsDeterminism`
    correctly reports that configuration as nondeterministic.
 6. The command journal does not yet provide a whole-simulation authoritative
@@ -398,11 +403,10 @@ The whole-simulation guarantee remains open because:
 9. Rhai hooks and co-simulation still have live-world access paths that prevent
    safe parallel evaluation even where the dependency graph contains
    independent actors.
-10. Telemetry samples run in an exclusive fixed-step system and synchronously
-    trigger retention, subscription, and logging observers. The sampler walks
-    its cached channel list for due checks each fixed tick; capture and observer
-    costs have not been separated into a bounded observation phase or measured
-    against physics throughput.
+10. Telemetry sampling still walks its cached channel list for due checks in
+    the fixed simulation cycle. Subscriber callbacks now run in a bounded
+    post-simulation telemetry cycle, but capture cost and end-to-end observer
+    throughput have not been measured against physics.
 11. Cycle duration, queue pressure, and overload counters are not yet exposed
     together at the diagnostics boundary, so optimization cannot target an
     owner using comparable cycle evidence.

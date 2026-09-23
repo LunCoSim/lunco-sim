@@ -391,7 +391,7 @@ fn request_web_workbench(
                     .and_then(|params| params.get("example"))
             });
     }
-    let Some(requested_name) = request.requested_name.as_deref() else {
+    let Some(requested_name) = request.requested_name.clone() else {
         return;
     };
     if !manifest.ready() {
@@ -451,7 +451,7 @@ fn setup_web_workbench(
     mut doc_registry: ResMut<
         lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
     >,
-    mut compile_states: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
+    compile_states: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
     mut model_tabs: ResMut<lunco_modelica_ui::model_tabs::ModelTabs>,
     model_info: Option<Res<BundledModelInfo>>,
     sources: Res<Assets<ModelicaSource>>,
@@ -477,10 +477,13 @@ fn setup_web_workbench(
     commands.insert_resource(WebWorkbenchStarted);
     let model_path = PathBuf::from(&model_info.asset_path);
     let source = asset.text.clone();
-    let model_name = lunco_modelica_ast::ast_extract::extract_model_name(&source)
+    let model_name = asset
+        .interface
+        .model_name
+        .clone()
         .unwrap_or_else(|| "Model".to_string());
-    let initial_params = lunco_modelica_ast::ast_extract::extract_parameters(&source);
-    let initial_inputs = lunco_modelica_ast::ast_extract::extract_inputs_with_defaults(&source);
+    let initial_params = asset.interface.parameters.clone();
+    let initial_inputs = asset.interface.input_defaults.clone();
 
     workbench_state.editor_buffer = source.clone();
 
@@ -522,7 +525,7 @@ fn setup_web_workbench(
 
     // No automatic compile on boot: the user clicks Compile when ready.
     // Avoids racing the source library fetch (lands seconds later on web).
-    let _ = (entity, model_name, source, channels);
+    let _ = (entity, model_name, channels);
 }
 
 /// Auto-opens the most recently opened Twin on native GUI startup.

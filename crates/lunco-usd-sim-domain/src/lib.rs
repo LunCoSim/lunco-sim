@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_modelica_ast::ast_extract::{
-    parse_model_interface, parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
+    parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
 };
 use lunco_modelica_ast::{Causality, StoredDefinition};
 use lunco_modelica_runtime::{resolve_communication_period_secs, ModelicaSource};
@@ -1524,20 +1524,24 @@ pub fn resolve_member_classes(
                 return None;
             }
             if let Some(source) = sources.get(handle) {
-                let interface = parse_model_interface(&source.text, "member-class.mo");
-                let Some(declared) = interface.model_name else {
+                let interface = &source.interface;
+                let Some(declared) = interface.model_name.as_ref().cloned() else {
                     return Some((
                         asset.clone(),
                         Err("the Modelica source did not expose a declared class".into()),
                     ));
                 };
-                let class = match interface.within {
+                let class = match interface.within.as_deref() {
                     Some(within) => format!("{within}.{declared}"),
                     None => declared,
                 };
                 return Some((
                     asset.clone(),
-                    Ok((class, interface.outputs, interface.variable_metadata)),
+                    Ok((
+                        class,
+                        interface.outputs.clone(),
+                        interface.variable_metadata.clone(),
+                    )),
                 ));
             }
             failed.get(&id).map(|error| {

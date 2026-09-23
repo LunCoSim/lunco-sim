@@ -227,7 +227,7 @@ async fn fetch_bytes_web(
     url: &str,
     settings: &lunco_settings::DownloadSettings,
 ) -> Result<Vec<u8>, String> {
-    lunco_assets_runtime::web_fetch::fetch_bytes_cached("lunco-scenario-assets-v1", url, settings)
+    lunco_assets_core::web_fetch::fetch_bytes_cached("lunco-scenario-assets-v1", url, settings)
         .await
 }
 

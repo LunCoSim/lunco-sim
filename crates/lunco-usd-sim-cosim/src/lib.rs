@@ -30,7 +30,6 @@ use lunco_cosim_core::{
 };
 #[cfg(feature = "python")]
 use lunco_doc::{DocumentId, DocumentOrigin};
-use lunco_modelica_ast::ast_extract::parse_model_interface;
 use lunco_modelica_runtime::source_asset::ModelicaSource;
 use lunco_modelica_runtime::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaSignalLayout,
@@ -1521,15 +1520,18 @@ pub(crate) fn dispatch_loaded_modelica_sources(
             continue;
         };
 
-        // ONE parse-and-extract, shared with the network projector
-        // (`lunco_modelica_core::parse_model_interface`): `ModelicaModel::inputs` is a
-        // write buffer seeded from the authored interface, which
+        // The source asset loader prepares this interface on Bevy's async
+        // compute pool. `ModelicaModel::inputs` is a write buffer seeded from
+        // the authored interface, which
         // `wrap_modelica_into_simcomponent` copies into `SimComponent::inputs` —
         // the port surface a wire writes to.
-        let interface = parse_model_interface(&src.text, "cosim-dispatch.mo");
-        let model_name = interface.model_name.unwrap_or_else(|| "Model".into());
-        let mut parameters = interface.parameters;
-        let mut inputs = interface.inputs;
+        let model_name = src
+            .interface
+            .model_name
+            .clone()
+            .unwrap_or_else(|| "Model".into());
+        let mut parameters = src.interface.parameters.clone();
+        let mut inputs = src.interface.inputs.clone();
         // USD is the instance-authoring boundary. Apply its unconnected
         // scalar values to the correct Modelica variability class before the
         // first compile: parameters stay compile-time parameters, while

@@ -77,6 +77,10 @@ pub struct ModelInterface {
     /// subset that authored a numeric binding — seeding from defaults alone
     /// gives an unbound `input Real drive_left` no port at all.
     pub inputs: HashMap<String, f64>,
+    /// Authored numeric bindings for input variables. Unlike [`Self::inputs`],
+    /// this omits unbound inputs and preserves their distinction from the
+    /// documented zero seed used by the runtime port surface.
+    pub input_defaults: HashMap<String, f64>,
     /// Every causal output declared by the model, including output connector
     /// types whose causality is carried by the connector class.
     pub outputs: std::collections::BTreeSet<String>,
@@ -174,6 +178,7 @@ pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface 
                 (name, seed)
             })
             .collect(),
+        input_defaults: defaults,
         outputs: extract_output_names_from_ast(ast),
         variable_metadata: variable_metadata_from_ast(ast),
     }

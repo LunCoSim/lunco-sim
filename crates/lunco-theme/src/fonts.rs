@@ -119,7 +119,7 @@ pub fn spawn_wasm_font_fetch(
     settings: lunco_settings::DownloadSettings,
 ) {
     wasm_bindgen_futures::spawn_local(async move {
-        match lunco_assets_runtime::web_fetch::network_fetch_uncached(&url, &settings).await {
+        match lunco_assets_core::web_fetch::network_fetch_uncached(&url, &settings).await {
             Ok(bytes) => {
                 bevy::log::info!(
                     "[lunco-theme] font fetched {url}: {} bytes — installing",

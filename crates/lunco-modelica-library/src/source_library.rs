@@ -238,7 +238,7 @@ pub fn deserialize_parsed_bundle(
 pub fn load_library_index_from_source_bundle(
     compressed: &[u8],
 ) -> Result<lunco_modelica_index::visual_diagram::LibraryIndex, String> {
-    let files = lunco_assets_runtime::web_fetch::unpack_tar_zst(compressed, 1)?;
+    let files = lunco_assets_core::web_fetch::unpack_tar_zst(compressed, 1)?;
     let bytes = files
         .get(std::path::Path::new(
             lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME,
@@ -443,7 +443,7 @@ pub fn ensure_library_source_unpacked() {
     let Some((bytes, meta)) = LIBRARY_SOURCE_COMPRESSED.get() else {
         return;
     };
-    match lunco_assets_runtime::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
+    match lunco_assets_core::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
         Ok(files) => {
             let n = files.len();
             lunco_assets_runtime::library::install_global_library_sources(vec![
