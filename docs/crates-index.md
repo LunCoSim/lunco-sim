@@ -134,7 +134,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It registers the vehicle wheel owner with `lunco-usd-bevy-core` for in-place live edits. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
 | **`lunco-usd-sim-authoring`** | Render-free composed readers for PhysX vehicle wheel-attachment and gear-drive authoring, shared by vehicle projection and scene validation; it also publishes the corresponding typed USD lint facts. Runtime ECS resynchronization remains in `lunco-usd-sim`, registered through the generic live-edit owner in `lunco-usd-bevy-core`. |
-| **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, pending differential contract, physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, and scene-runner packages. It contains no projection systems. |
+| **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, coalesced `PendingEntityWork`, pending differential contract, physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, and scene-runner packages. It contains no projection systems. |
 | **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`; generic scene admission and mounting belong to `lunco-usd-bevy-runtime-core`. |
 | **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
 | **`lunco-usd-sim-domain`** | Render-free USD domain projection: its public `network` module reads and validates component-network facts, `synthesis` owns Rhai-backed policies and generated-plan contracts, and the parent module owns Modelica member-class lifecycle plus ECS projection. Generic USD actuator lowering lives in `lunco-usd-actuation`; its optional API query providers live in `lunco-usd-sim-domain-api`. |
@@ -912,10 +912,11 @@ registered through the generic live-edit owner in `lunco-usd-bevy-core`.
 **`lunco-usd-sim-core`**
 Small production contract package shared by the vehicle and USD cosim
 projectors and scene readiness. It owns `UsdSimSet` (including the shader
-projection-preparation boundary), `UsdSimProcessed`,
-`PendingDifferential`, and `GroundColliderPending`, keeping shared contracts
-out of either large implementation crate and allowing scene runners to avoid
-the full vehicle projector.
+projection-preparation boundary), `UsdSimProcessed`, the coalesced
+`PendingEntityWork` lifecycle queue, `PendingDifferential`, and
+`GroundColliderPending`, keeping shared contracts out of either large
+implementation crate and allowing scene runners to avoid the full vehicle
+projector.
 
 **`lunco-usd-sim-cosim`**
 USD-to-cosim translator. `UsdSimCosimPlugin` installs source discovery,

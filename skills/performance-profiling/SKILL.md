@@ -41,6 +41,13 @@ hot path, audit every writer before adding a source-owned event/revision/dirty
 set; once all writers are accounted for, prefer that signal over an
 always-evaluated `Added<T>` population query in a run condition.
 
+For deferred USD projectors, keep one entity-work set per owner and feed it
+from the complete lifecycle boundary: identity arrival, projection readiness,
+invalidation, removal, and scene teardown. Keep a single bootstrap discovery for
+entities predating plugin installation, and retry only work whose authoritative
+stage/readiness input is still pending. The idle run condition should inspect
+the owner set, not scan the projected population.
+
 When gating a dependency's multi-system transform schedule, distinguish its
 per-update output flags from authoritative input changes. Preserve any required
 settle pass after a floating-origin change, and test the change → settle → idle

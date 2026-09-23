@@ -445,6 +445,15 @@ section.
 5. **UsdShaderPlugin** — Projects authored `UsdShade` WGSL intent and registers the shader-parameter port backend in the shared preparation phase.
 6. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored vehicle topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `lunco_port_core::OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, and sensors. **UsdSimCosimPlugin** separately discovers programs, publishes model surfaces, and derives co-simulation wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
+Vehicle simulation prim discovery uses a separate `PendingEntityWork` instance
+from the shared `lunco-usd-sim-core` contract. Path, visual-projection, and
+processed-marker lifecycle observers queue only affected entities; one initial
+discovery covers prims present before plugin installation. The update gate reads
+that set instead of querying all projected prims on idle frames, and stage
+topology is refreshed only for stages represented in the current batch. Live
+USD invalidation requeues the affected prim, while `SceneTeardown` retires the
+scene-owned queue.
+
 Authored controls and generic executable programs are resolved by the separate
 `UsdAuthoredRuntimePlugin` after visual projection. It observes
 `UsdSceneProjected` additions, queues non-preview owners, and runs its exclusive
