@@ -19,6 +19,7 @@ use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_viewport_core::SceneViewport;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
+use std::collections::HashMap;
 
 use crate::diagnostic_visuals::{DiagnosticVisualKind, DiagnosticVisualStore};
 use crate::selection::SelectEntity;
@@ -60,6 +61,43 @@ pub struct AuthoringReviewView {
     pub findings: Vec<AuthoringReviewFinding>,
     /// First terminal runtime fault, if the scene is faulted.
     pub fault: Option<(String, String, String)>,
+}
+
+/// Coalesces USD identity lifecycle events for the diagnostic target lookup.
+#[derive(Resource)]
+pub(crate) struct AuthoringReviewTargetIndexDirty(pub bool);
+
+impl Default for AuthoringReviewTargetIndexDirty {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+pub(crate) fn mark_target_index_dirty_on_add<T: Component>(
+    _trigger: On<Add, T>,
+    mut dirty: ResMut<AuthoringReviewTargetIndexDirty>,
+) {
+    dirty.0 = true;
+}
+
+pub(crate) fn mark_target_index_dirty_on_remove<T: Component>(
+    _trigger: On<Remove, T>,
+    mut dirty: ResMut<AuthoringReviewTargetIndexDirty>,
+) {
+    dirty.0 = true;
+}
+
+fn index_target_ids_by_path<'a>(
+    entities: impl IntoIterator<Item = (&'a str, Option<u64>)>,
+) -> HashMap<&'a str, Option<u64>> {
+    let mut index: HashMap<&'a str, Option<u64>> = HashMap::new();
+    for (path, target_id) in entities {
+        index
+            .entry(path)
+            .and_modify(|existing| *existing = None)
+            .or_insert(target_id);
+    }
+    index
 }
 
 fn label(
@@ -136,6 +174,7 @@ pub(crate) fn populate_authoring_review_view(
     diagnostics: Res<RuntimeDiagnostics>,
     faults: Res<RuntimeFaults>,
     mount: Option<Res<SceneMountState>>,
+    mut target_index_dirty: ResMut<AuthoringReviewTargetIndexDirty>,
     q: AuthoringReviewQueries,
 ) {
     let selected_entity = selected.primary();
@@ -171,21 +210,21 @@ pub(crate) fn populate_authoring_review_view(
         view.camera_target_path = None;
     }
 
-    if diagnostics.is_changed()
-        || view
-            .findings
-            .iter()
-            .any(|finding| finding.target_id.is_none())
-    {
+    if diagnostics.is_changed() || target_index_dirty.0 {
+        target_index_dirty.0 = false;
+        let target_ids_by_path = index_target_ids_by_path(
+            q.entities
+                .iter()
+                .map(|(_, path, id)| (path.path.as_str(), id.map(GlobalEntityId::get))),
+        );
         view.findings = diagnostics
             .findings
             .iter()
             .map(|finding| {
-                let target_id = q
-                    .entities
-                    .iter()
-                    .find(|(_, path, _)| path.path == finding.subject)
-                    .and_then(|(_, _, id)| id.map(GlobalEntityId::get));
+                let target_id = target_ids_by_path
+                    .get(finding.subject.as_str())
+                    .copied()
+                    .flatten();
                 AuthoringReviewFinding {
                     code: finding.code.clone(),
                     severity: finding.severity.as_str().into(),
@@ -210,6 +249,26 @@ pub(crate) fn populate_authoring_review_view(
     // explicitly scoped to the active Twin mount. It also makes the no-scene
     // state visible to future consumers without inventing a global target.
     let _ = mount;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::index_target_ids_by_path;
+
+    #[test]
+    fn diagnostic_targets_use_one_path_index_and_leave_duplicate_instances_ambiguous() {
+        let index = index_target_ids_by_path([
+            ("/Scene/Unique", Some(12)),
+            ("/Scene/Pending", None),
+            ("/Scene/Repeated", Some(34)),
+            ("/Scene/Repeated", Some(56)),
+        ]);
+
+        assert_eq!(index.get("/Scene/Unique"), Some(&Some(12)));
+        assert_eq!(index.get("/Scene/Pending"), Some(&None));
+        assert_eq!(index.get("/Scene/Repeated"), Some(&None));
+        assert_eq!(index.get("/Scene/Missing"), None);
+    }
 }
 
 fn entity_row(ui: &mut egui::Ui, name: &str, label: &str, path: &Option<String>) {

@@ -2086,10 +2086,13 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_usd_sim_domain::MemberClasses>()
             .init_resource::<lunco_usd_sim_domain::ProjectionDirty>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
+            .init_resource::<lunco_usd_sim_domain::PendingDomainProjectionCandidates>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>();
         app.add_observer(request_binding_epoch::<UsdPrimPath>)
             .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
+            .add_observer(lunco_usd_sim_domain::queue_added_domain_prim)
+            .add_observer(lunco_usd_sim_domain::queue_added_domain_identity)
             // Link port names are derived from the classes of the other authored
             // LinkNodes. A node arriving after its wire must therefore reopen the
             // same binding transaction as any other projected endpoint.
