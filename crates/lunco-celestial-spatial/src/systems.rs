@@ -636,23 +636,11 @@ pub fn celestial_visuals_system(
     mut last_per_body: Local<std::collections::HashMap<Entity, f32>>,
     mut force_frames: Local<u8>,
 ) {
-    let Some((cam_ent, cam_cell, cam_tf)) = q_camera.single().ok() else {
-        return;
-    };
-    let Ok(cam_abs) = world_position_seeded(
-        cam_ent,
-        Some(cam_cell),
-        cam_tf,
-        &q_parents,
-        &q_grids,
-        &q_spatial,
-    ) else {
-        return;
-    };
-
     // The blueprint grid is an EDITOR affordance, and a scene with a site anchor is
     // not being edited from orbit — it is being stood on. Suppress the ramp there and
-    // leave every body fully textured.
+    // leave every body fully textured. Apply this before looking for a local avatar:
+    // editor and preview cameras do not carry `LocalEmbodiment`, but they still render
+    // the same site scene and must not inherit the material's blueprint default.
     //
     // Why this is the root fix and not a special case: the ramp exists so that a
     // camera diving at a body in the inspector sees STRUCTURE (a lat/long graticule,
@@ -668,6 +656,24 @@ pub fn celestial_visuals_system(
     // and, because the globe sphere is coincident with the site's own ground slab at
     // the datum, the two z-fought into concentric moiré rings across the whole frame.
     let site_anchored = !q_site.is_empty();
+    let camera_abs = if site_anchored {
+        None
+    } else {
+        let Some((cam_ent, cam_cell, cam_tf)) = q_camera.single().ok() else {
+            return;
+        };
+        let Ok(cam_abs) = world_position_seeded(
+            cam_ent,
+            Some(cam_cell),
+            cam_tf,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            return;
+        };
+        Some(cam_abs)
+    };
 
     // Per-body camera altitude → per-body texture↔blueprint transition.
     // Body-local coords (camera relative to body center) prevent thrashing
@@ -686,22 +692,22 @@ pub fn celestial_visuals_system(
     let end_transition_alt = 10_000.0;
     let mut per_body: std::collections::HashMap<Entity, f32> = std::collections::HashMap::new();
     for (body_ent, body_cell, body_tf, body) in q_bodies.iter() {
-        let Ok(body_abs) = world_position_seeded(
-            body_ent,
-            Some(body_cell),
-            body_tf,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            continue;
-        };
-        let altitude = ((cam_abs - body_abs).length() - body.radius_m).max(0.0);
-        let transition = if site_anchored {
-            0.0
-        } else {
+        let transition = if let Some(cam_abs) = camera_abs {
+            let Ok(body_abs) = world_position_seeded(
+                body_ent,
+                Some(body_cell),
+                body_tf,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) else {
+                continue;
+            };
+            let altitude = ((cam_abs - body_abs).length() - body.radius_m).max(0.0);
             ((start_transition_alt - altitude) / (start_transition_alt - end_transition_alt))
                 .clamp(0.0, 1.0) as f32
+        } else {
+            0.0
         };
         per_body.insert(body_ent, transition);
     }
