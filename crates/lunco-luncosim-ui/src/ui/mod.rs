@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use lunco_workbench_runtime_ui as runtime_ui;
 
 use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
@@ -570,6 +570,9 @@ fn runtime_ui_action_value_to_telemetry(
     Ok(match value {
         HookValue::Unit => return Err(format!("{path} cannot contain unit values")),
         HookValue::Int(value) => TelemetryValue::I64(*value),
+        HookValue::UInt(value) => i64::try_from(*value)
+            .map(TelemetryValue::I64)
+            .map_err(|_| format!("{path} exceeds the telemetry integer range"))?,
         HookValue::Float(value) => TelemetryValue::F64(*value),
         HookValue::Bool(value) => TelemetryValue::Bool(*value),
         HookValue::Str(value) => TelemetryValue::String(value.clone()),
@@ -1706,8 +1709,8 @@ fn clean_scene_name(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        runtime_ui_dimension, scenario_registry_diagnostic, scenario_registry_status_message,
-        RuntimeUiDropdownState,
+        RuntimeUiDropdownState, runtime_ui_dimension, scenario_registry_diagnostic,
+        scenario_registry_status_message,
     };
     use lunco_exposure_core::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;

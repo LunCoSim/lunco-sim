@@ -9,7 +9,8 @@ use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResul
 use lunco_api_core::ApiErrorCode;
 use lunco_hooks::HookValue;
 use lunco_sysml_ast::lint_facts::{SysmlFactPage, SysmlFactSelection, SysmlFactTable};
-use std::collections::BTreeSet;
+use lunco_sysml_ast::{SysmlElementHandle, SysmlFeatureHandle};
+use std::collections::{BTreeSet, HashSet};
 
 use crate::validate::validate_sysml_reference;
 
@@ -44,10 +45,20 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
             tables: parse_tables(params)?,
             page: parse_page(params)?,
             attribute_names: parse_attribute_names(params)?,
+            attribute_handles: parse_feature_handle_selection(params, "attribute_handles")?,
             attribute_owners: parse_name_selection(params, "attribute_owners")?,
+            attribute_owner_handles: parse_handle_selection(params, "attribute_owner_handles")?,
             attribute_string_values: parse_name_selection(params, "attribute_string_values")?,
             requirement_names: parse_name_selection(params, "requirement_names")?,
             verification_names: parse_name_selection(params, "verification_names")?,
+            reference_target_names: parse_name_selection(params, "reference_target_names")?,
+            reference_target_handles: parse_handle_selection(params, "reference_target_handles")?,
+            reference_from_owners: parse_name_selection(params, "reference_from_owners")?,
+            reference_from_owner_handles: parse_handle_selection(
+                params,
+                "reference_from_owner_handles",
+            )?,
+            reference_from_features: parse_name_selection(params, "reference_from_features")?,
         };
         let facts = report.sysml_analysis.as_deref().map_or_else(
             || HookValue::Unit,
@@ -176,4 +187,77 @@ fn parse_name_selection(
         names.insert(name.clone());
     }
     Ok(Some(names))
+}
+
+fn parse_handle_selection(
+    params: &HookValue,
+    key: &'static str,
+) -> Result<Option<HashSet<SysmlElementHandle>>, ApiQueryError> {
+    let Some(value) = params.get(key) else {
+        return Ok(None);
+    };
+    let HookValue::Array(values) = value else {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            format!("AnalyzeSysml: `{key}` must be an array of SysML element handles"),
+        ));
+    };
+    let mut handles = HashSet::with_capacity(values.len());
+    for value in values {
+        let handle = parse_element_handle(value).ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("AnalyzeSysml: `{key}` contains an invalid SysML element handle"),
+            )
+        })?;
+        handles.insert(handle);
+    }
+    Ok(Some(handles))
+}
+
+fn parse_feature_handle_selection(
+    params: &HookValue,
+    key: &'static str,
+) -> Result<Option<HashSet<SysmlFeatureHandle>>, ApiQueryError> {
+    let Some(value) = params.get(key) else {
+        return Ok(None);
+    };
+    let HookValue::Array(values) = value else {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            format!("AnalyzeSysml: `{key}` must be an array of SysML feature handles"),
+        ));
+    };
+    let mut handles = HashSet::with_capacity(values.len());
+    for value in values {
+        let element = value
+            .get("element")
+            .and_then(parse_element_handle)
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("AnalyzeSysml: `{key}` contains an invalid SysML feature handle"),
+                )
+            })?;
+        handles.insert(SysmlFeatureHandle { element });
+    }
+    Ok(Some(handles))
+}
+
+fn parse_element_handle(value: &HookValue) -> Option<SysmlElementHandle> {
+    let source_revision = parse_unsigned(value.get("source_revision")?)?;
+    let source_fingerprint = parse_unsigned(value.get("source_fingerprint")?)?;
+    let element_id = u32::try_from(value.get("element_id")?.as_u64()?).ok()?;
+    Some(SysmlElementHandle {
+        source_revision,
+        source_fingerprint,
+        element_id,
+    })
+}
+
+fn parse_unsigned(value: &HookValue) -> Option<u64> {
+    match value {
+        HookValue::UInt(value) => Some(*value),
+        _ => None,
+    }
 }

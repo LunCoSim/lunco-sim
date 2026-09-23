@@ -63,6 +63,7 @@ pub enum IrValueType {
     String,
     Quantity { quantity_kind: Option<String> },
     Enumeration { type_name: Option<String> },
+    Reference { type_name: Option<String> },
     Structured { type_name: Option<String> },
     Unknown,
 }
@@ -111,6 +112,9 @@ impl IrValueType {
                     quantity_kind: right,
                 },
             ) => left == right || left.is_none() || right.is_none(),
+            (Self::Reference { type_name: left }, Self::Reference { type_name: right }) => {
+                left == right || left.is_none() || right.is_none()
+            }
             (left, right) => {
                 left == right || matches!(left, Self::Unknown) || matches!(right, Self::Unknown)
             }
@@ -778,11 +782,16 @@ fn ir_type_from_sysml(value: &SysmlType) -> IrType {
                 .as_ref()
                 .map(|value| value.qualified_name.clone()),
         },
+        SysmlTypeCategory::Reference => IrValueType::Reference {
+            type_name: value
+                .resolved_type
+                .as_ref()
+                .map(|value| value.qualified_name.clone()),
+        },
         SysmlTypeCategory::Structured
         | SysmlTypeCategory::Part
         | SysmlTypeCategory::Item
-        | SysmlTypeCategory::Port
-        | SysmlTypeCategory::Reference => IrValueType::Structured {
+        | SysmlTypeCategory::Port => IrValueType::Structured {
             type_name: value
                 .resolved_type
                 .as_ref()
@@ -813,11 +822,16 @@ fn ir_type_from_sysml(value: &SysmlType) -> IrType {
                     .as_ref()
                     .map(|value| value.qualified_name.clone()),
             },
+            SysmlTypeCategory::Reference => IrValueType::Reference {
+                type_name: value
+                    .resolved_type
+                    .as_ref()
+                    .map(|value| value.qualified_name.clone()),
+            },
             SysmlTypeCategory::Structured
             | SysmlTypeCategory::Part
             | SysmlTypeCategory::Item
-            | SysmlTypeCategory::Port
-            | SysmlTypeCategory::Reference => IrValueType::Structured {
+            | SysmlTypeCategory::Port => IrValueType::Structured {
                 type_name: value
                     .resolved_type
                     .as_ref()
@@ -1079,7 +1093,16 @@ pub enum IrValue {
     Real(f64),
     Boolean(bool),
     String(String),
-    Quantity { value: f64, unit: String },
+    Enumeration {
+        type_name: Option<String>,
+        literal: String,
+    },
+    /// Snapshot-scoped semantic identity resolved by the SysML model.
+    Reference(SysmlElementHandle),
+    Quantity {
+        value: f64,
+        unit: String,
+    },
     Collection(Vec<IrValue>),
     Null,
 }
@@ -1108,6 +1131,8 @@ pub struct BindingContract {
     pub unit: Option<String>,
     pub frame: Option<String>,
     pub time_basis: Option<String>,
+    #[serde(default)]
+    pub source_revision: Option<u64>,
 }
 
 /// Explicit provider state. Missing data is not a false engineering result.
@@ -1128,6 +1153,16 @@ pub struct FeatureObservation {
     pub state: ObservationState,
     pub value: Option<IrValue>,
     pub detail: Option<String>,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub frame: Option<String>,
+    #[serde(default)]
+    pub time_basis: Option<String>,
+    #[serde(default)]
+    pub source_revision: Option<u64>,
+    #[serde(default)]
+    pub contract: Option<BindingContract>,
 }
 
 /// Read-only evaluation input. Providers outside this crate map USD,
@@ -1187,6 +1222,22 @@ pub fn evaluate_constraint(
     context: &EvaluationContext,
     options: EvaluationOptions,
 ) -> EvaluationReport {
+    if !options.absolute_tolerance.is_finite()
+        || options.absolute_tolerance < 0.0
+        || !options.relative_tolerance.is_finite()
+        || options.relative_tolerance < 0.0
+    {
+        return EvaluationReport {
+            verdict: VerificationVerdict::Error,
+            expression_results: Vec::new(),
+            diagnostics: vec![IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: "SYSML-IR-028".to_owned(),
+                source: None,
+                message: "comparison tolerances must be finite and non-negative".to_owned(),
+            }],
+        };
+    }
     let Some(constraint) = &compiled.constraint else {
         return EvaluationReport {
             verdict: VerificationVerdict::Error,
@@ -1275,7 +1326,15 @@ enum EvaluationValue {
     Real(f64),
     Boolean(bool),
     String(String),
-    Quantity { value: f64, unit: String },
+    Enumeration {
+        type_name: Option<String>,
+        literal: String,
+    },
+    Reference(SysmlElementHandle),
+    Quantity {
+        value: f64,
+        unit: String,
+    },
     Collection(Vec<EvaluationValue>),
     Null,
 }
@@ -1298,6 +1357,7 @@ fn evaluate_expression(
                     "no provider observation exists for a referenced feature".to_owned(),
                 ));
             };
+            validate_observation_contract(observation, *feature)?;
             match observation.state {
                 ObservationState::Value => observation
                     .value
@@ -1307,6 +1367,22 @@ fn evaluate_expression(
                         EvaluationFailure::Error(
                             "provider marked observation as Value without a value".to_owned(),
                         )
+                    })
+                .and_then(|value| {
+                    if runtime_value_matches_type(&value, &expression.result_type) {
+                            if runtime_references_match_snapshot(&value, *feature) {
+                                Ok(value)
+                            } else {
+                                Err(EvaluationFailure::Error(
+                                    "reference observation belongs to a different SysML source snapshot".to_owned(),
+                                ))
+                            }
+                        } else {
+                            Err(EvaluationFailure::Error(format!(
+                                "provider value does not match referenced SysML type {:?}",
+                                expression.result_type.value
+                            )))
+                        }
                     }),
                 ObservationState::Unavailable | ObservationState::Stale => {
                     Err(EvaluationFailure::Inconclusive(
@@ -1361,12 +1437,84 @@ fn evaluate_expression(
     }
 }
 
+fn validate_observation_contract(
+    observation: &FeatureObservation,
+    feature: SysmlFeatureHandle,
+) -> Result<(), EvaluationFailure> {
+    let Some(contract) = &observation.contract else {
+        return Ok(());
+    };
+    if contract.feature != feature {
+        return Err(EvaluationFailure::Error(
+            "binding contract refers to a different SysML feature".to_owned(),
+        ));
+    }
+    if contract.provider != observation.provider {
+        return Err(EvaluationFailure::Error(format!(
+            "binding provider {:?} does not satisfy contract provider {:?}",
+            observation.provider, contract.provider
+        )));
+    }
+    for (label, expected, actual) in [
+        ("unit", contract.unit.as_ref(), observation.unit.as_ref()),
+        ("frame", contract.frame.as_ref(), observation.frame.as_ref()),
+        (
+            "time basis",
+            contract.time_basis.as_ref(),
+            observation.time_basis.as_ref(),
+        ),
+    ] {
+        if let Some(expected) = expected {
+            if actual != Some(expected) {
+                return Err(EvaluationFailure::Error(format!(
+                    "observation {label} {:?} does not satisfy binding contract {:?}",
+                    actual, expected
+                )));
+            }
+        }
+    }
+    if let Some(expected) = contract.source_revision {
+        match observation.source_revision {
+            Some(actual) if actual == expected => {}
+            Some(actual) => {
+                return Err(EvaluationFailure::Inconclusive(format!(
+                    "provider revision {actual} is stale; contract requires {expected}"
+                )));
+            }
+            None => {
+                return Err(EvaluationFailure::Inconclusive(
+                    "provider omitted the source revision required by its binding contract"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+    if let Some(IrValue::Quantity { unit, .. }) = observation.value.as_ref() {
+        if observation
+            .unit
+            .as_ref()
+            .is_some_and(|reported| reported != unit)
+        {
+            return Err(EvaluationFailure::Error(format!(
+                "observation metadata unit {:?} disagrees with quantity value unit `{unit}`",
+                observation.unit
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn runtime_value(value: &IrValue) -> EvaluationValue {
     match value {
         IrValue::Integer(value) => EvaluationValue::Integer(*value),
         IrValue::Real(value) => EvaluationValue::Real(*value),
         IrValue::Boolean(value) => EvaluationValue::Boolean(*value),
         IrValue::String(value) => EvaluationValue::String(value.clone()),
+        IrValue::Enumeration { type_name, literal } => EvaluationValue::Enumeration {
+            type_name: type_name.clone(),
+            literal: literal.clone(),
+        },
+        IrValue::Reference(target) => EvaluationValue::Reference(*target),
         IrValue::Quantity { value, unit } => EvaluationValue::Quantity {
             value: *value,
             unit: unit.clone(),
@@ -1375,6 +1523,67 @@ fn runtime_value(value: &IrValue) -> EvaluationValue {
             EvaluationValue::Collection(values.iter().map(runtime_value).collect())
         }
         IrValue::Null => EvaluationValue::Null,
+    }
+}
+
+fn runtime_value_matches_type(value: &EvaluationValue, ty: &IrType) -> bool {
+    if let EvaluationValue::Collection(values) = value {
+        if !ty.multiplicity.is_collection()
+            || values.len() < ty.multiplicity.lower
+            || ty
+                .multiplicity
+                .upper
+                .is_some_and(|upper| values.len() > upper)
+        {
+            return false;
+        }
+        return values
+            .iter()
+            .all(|value| runtime_value_matches_scalar_type(value, &ty.value, ty.unit.as_deref()));
+    }
+    !ty.multiplicity.is_collection()
+        && runtime_value_matches_scalar_type(value, &ty.value, ty.unit.as_deref())
+}
+
+fn runtime_value_matches_scalar_type(
+    value: &EvaluationValue,
+    ty: &IrValueType,
+    unit: Option<&str>,
+) -> bool {
+    match (ty, value) {
+        (IrValueType::Unknown, _) => true,
+        (IrValueType::Boolean, EvaluationValue::Boolean(_)) => true,
+        (IrValueType::Integer, EvaluationValue::Integer(_)) => true,
+        (IrValueType::Real, EvaluationValue::Integer(_) | EvaluationValue::Real(_)) => true,
+        (IrValueType::String, EvaluationValue::String(_)) => true,
+        (IrValueType::Quantity { .. }, EvaluationValue::Quantity { unit: actual, .. }) => {
+            unit.is_none_or(|expected| expected == actual)
+        }
+        (
+            IrValueType::Enumeration {
+                type_name: expected,
+            },
+            EvaluationValue::Enumeration {
+                type_name: actual, ..
+            },
+        ) => expected
+            .as_ref()
+            .is_none_or(|expected| actual.as_ref() == Some(expected)),
+        (IrValueType::Reference { .. }, EvaluationValue::Reference(_)) => true,
+        _ => false,
+    }
+}
+
+fn runtime_references_match_snapshot(value: &EvaluationValue, feature: SysmlFeatureHandle) -> bool {
+    match value {
+        EvaluationValue::Reference(target) => {
+            target.source_revision == feature.element.source_revision
+                && target.source_fingerprint == feature.element.source_fingerprint
+        }
+        EvaluationValue::Collection(values) => values
+            .iter()
+            .all(|value| runtime_references_match_snapshot(value, feature)),
+        _ => true,
     }
 }
 
@@ -1403,22 +1612,22 @@ fn evaluate_binary(
         IrOperator::Or => bool_binary(left, right, |left, right| left || right),
         IrOperator::Implies => bool_binary(left, right, |left, right| !left || right),
         IrOperator::Equivalent => bool_binary(left, right, |left, right| left == right),
-        IrOperator::Equal => compare_binary(left, right, options, |ordering| {
+        IrOperator::Equal => compare_binary(operator, left, right, options, |ordering| {
             ordering == std::cmp::Ordering::Equal
         }),
-        IrOperator::NotEqual => compare_binary(left, right, options, |ordering| {
+        IrOperator::NotEqual => compare_binary(operator, left, right, options, |ordering| {
             ordering != std::cmp::Ordering::Equal
         }),
-        IrOperator::Less => compare_binary(left, right, options, |ordering| {
+        IrOperator::Less => compare_binary(operator, left, right, options, |ordering| {
             ordering == std::cmp::Ordering::Less
         }),
-        IrOperator::LessEqual => compare_binary(left, right, options, |ordering| {
+        IrOperator::LessEqual => compare_binary(operator, left, right, options, |ordering| {
             ordering != std::cmp::Ordering::Greater
         }),
-        IrOperator::Greater => compare_binary(left, right, options, |ordering| {
+        IrOperator::Greater => compare_binary(operator, left, right, options, |ordering| {
             ordering == std::cmp::Ordering::Greater
         }),
-        IrOperator::GreaterEqual => compare_binary(left, right, options, |ordering| {
+        IrOperator::GreaterEqual => compare_binary(operator, left, right, options, |ordering| {
             ordering != std::cmp::Ordering::Less
         }),
         IrOperator::Add => numeric_binary(left, right, |left, right| left + right),
@@ -1531,6 +1740,7 @@ fn numeric_value(value: EvaluationValue) -> Result<(f64, Option<String>), Evalua
 }
 
 fn compare_binary(
+    operator: IrOperator,
     left: EvaluationValue,
     right: EvaluationValue,
     options: EvaluationOptions,
@@ -1545,28 +1755,60 @@ fn compare_binary(
             }
             let mut result = true;
             for (left, right) in left.into_iter().zip(right) {
-                let value = compare_binary(left, right, options, operation)?;
+                let value = compare_binary(operator, left, right, options, operation)?;
                 result &= matches!(value, EvaluationValue::Boolean(true));
             }
             Ok(EvaluationValue::Boolean(result))
         }
         (left, right) => {
-            let (left_number, left_unit) = numeric_value(left)?;
-            let (right_number, right_unit) = numeric_value(right)?;
-            if left_unit != right_unit {
-                return Err(EvaluationFailure::Error(
-                    "quantity comparison requires canonical matching units".to_owned(),
-                ));
-            }
-            let scale = left_number.abs().max(right_number.abs()).max(1.0);
-            let equal = (left_number - right_number).abs()
-                <= options.absolute_tolerance + options.relative_tolerance * scale;
-            let ordering = if equal {
-                std::cmp::Ordering::Equal
-            } else if left_number < right_number {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
+            let ordering = match (left, right) {
+                (EvaluationValue::String(left), EvaluationValue::String(right)) => left.cmp(&right),
+                (EvaluationValue::Boolean(left), EvaluationValue::Boolean(right)) => {
+                    left.cmp(&right)
+                }
+                (
+                    EvaluationValue::Enumeration {
+                        type_name: left_type,
+                        literal: left,
+                    },
+                    EvaluationValue::Enumeration {
+                        type_name: right_type,
+                        literal: right,
+                    },
+                ) if left_type == right_type
+                    && matches!(operator, IrOperator::Equal | IrOperator::NotEqual) =>
+                {
+                    left.cmp(&right)
+                }
+                (EvaluationValue::Reference(left), EvaluationValue::Reference(right))
+                    if matches!(operator, IrOperator::Equal | IrOperator::NotEqual) =>
+                {
+                    if left == right {
+                        std::cmp::Ordering::Equal
+                    } else {
+                        std::cmp::Ordering::Greater
+                    }
+                }
+                (EvaluationValue::Null, EvaluationValue::Null) => std::cmp::Ordering::Equal,
+                (left, right) => {
+                    let (left_number, left_unit) = numeric_value(left)?;
+                    let (right_number, right_unit) = numeric_value(right)?;
+                    if left_unit != right_unit {
+                        return Err(EvaluationFailure::Error(
+                            "quantity comparison requires canonical matching units".to_owned(),
+                        ));
+                    }
+                    let scale = left_number.abs().max(right_number.abs()).max(1.0);
+                    let equal = (left_number - right_number).abs()
+                        <= options.absolute_tolerance + options.relative_tolerance * scale;
+                    if equal {
+                        std::cmp::Ordering::Equal
+                    } else if left_number < right_number {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    }
+                }
             };
             Ok(EvaluationValue::Boolean(operation(ordering)))
         }

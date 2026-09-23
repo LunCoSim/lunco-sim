@@ -39,11 +39,11 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::{api_param_str, ApiQueryError, ApiQueryResult};
+use lunco_api::{ApiQueryError, ApiQueryResult, api_param_str};
 use lunco_api_core::ApiErrorCode;
-use lunco_api_core::{api_value, ApiValue};
+use lunco_api_core::{ApiValue, api_value};
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy_stage::{canonical::CanonicalStage, UsdRead};
+use lunco_usd_bevy_stage::{UsdRead, canonical::CanonicalStage};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -658,11 +658,7 @@ pub fn run_cli(paths: &[String]) -> i32 {
         }
         failed |= !report.ok;
     }
-    if failed {
-        1
-    } else {
-        0
-    }
+    if failed { 1 } else { 0 }
 }
 
 // ─── API registration ───────────────────────────────────────────────────────
@@ -711,8 +707,8 @@ impl ApiQueryProvider for ValidateSysmlProvider {
             .flat_map(|analysis| analysis.files())
             .map(|file| ApiValue::str(file.name.clone()))
             .collect();
-        let source_revision_hex = analysis
-            .map(|analysis| ApiValue::str(format!("0x{:016x}", analysis.source_revision())))
+        let source_revision = analysis
+            .map(|analysis| ApiValue::UInt(analysis.source_revision()))
             .unwrap_or(ApiValue::Unit);
         Ok(Some(api_value!({
             "path": report.path,
@@ -721,7 +717,7 @@ impl ApiQueryProvider for ValidateSysmlProvider {
             "errors": report.errors,
             "warnings": report.warnings,
             "source_files": ApiValue::Array(source_files),
-            "source_revision_hex": source_revision_hex,
+            "source_revision": source_revision,
         })))
     }
 }

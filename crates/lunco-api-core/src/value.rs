@@ -317,6 +317,9 @@ macro_rules! api_value_deserialize_signed {
                 ApiValue::Int(value) => <$ty>::try_from(value)
                     .map_err(serde::de::Error::custom)
                     .and_then(|value| visitor.$visit(value)),
+                ApiValue::UInt(value) => <$ty>::try_from(value)
+                    .map_err(serde::de::Error::custom)
+                    .and_then(|value| visitor.$visit(value)),
                 value => Err(expected_api_value(&value, "an integer")),
             }
         }
@@ -331,6 +334,9 @@ macro_rules! api_value_deserialize_unsigned {
         {
             match self.0 {
                 ApiValue::Int(value) => <$ty>::try_from(value)
+                    .map_err(serde::de::Error::custom)
+                    .and_then(|value| visitor.$visit(value)),
+                ApiValue::UInt(value) => <$ty>::try_from(value)
                     .map_err(serde::de::Error::custom)
                     .and_then(|value| visitor.$visit(value)),
                 value => Err(expected_api_value(&value, "an unsigned integer")),
@@ -349,6 +355,7 @@ impl<'de> serde::de::Deserializer<'de> for ApiValueDeserializer {
         match self.0 {
             ApiValue::Unit => visitor.visit_unit(),
             ApiValue::Int(value) => visitor.visit_i64(value),
+            ApiValue::UInt(value) => visitor.visit_u64(value),
             ApiValue::Float(value) => visitor.visit_f64(value),
             ApiValue::Bool(value) => visitor.visit_bool(value),
             ApiValue::Str(value) => visitor.visit_string(value),
@@ -381,6 +388,9 @@ impl<'de> serde::de::Deserializer<'de> for ApiValueDeserializer {
     {
         match self.0 {
             ApiValue::Int(value) => visitor.visit_i64(value),
+            ApiValue::UInt(value) => i64::try_from(value)
+                .map_err(serde::de::Error::custom)
+                .and_then(|value| visitor.visit_i64(value)),
             value => Err(expected_api_value(&value, "an integer")),
         }
     }
@@ -397,10 +407,7 @@ impl<'de> serde::de::Deserializer<'de> for ApiValueDeserializer {
             ApiValue::Int(value) => u64::try_from(value)
                 .map_err(serde::de::Error::custom)
                 .and_then(|value| visitor.visit_u64(value)),
-            ApiValue::Str(value) => value
-                .parse::<u64>()
-                .map_err(serde::de::Error::custom)
-                .and_then(|value| visitor.visit_u64(value)),
+            ApiValue::UInt(value) => visitor.visit_u64(value),
             value => Err(expected_api_value(&value, "an unsigned integer")),
         }
     }
@@ -411,6 +418,7 @@ impl<'de> serde::de::Deserializer<'de> for ApiValueDeserializer {
     {
         match self.0 {
             ApiValue::Int(value) => visitor.visit_f32(value as f32),
+            ApiValue::UInt(value) => visitor.visit_f32(value as f32),
             ApiValue::Float(value) => visitor.visit_f32(value as f32),
             value => Err(expected_api_value(&value, "a number")),
         }
@@ -422,6 +430,7 @@ impl<'de> serde::de::Deserializer<'de> for ApiValueDeserializer {
     {
         match self.0 {
             ApiValue::Int(value) => visitor.visit_f64(value as f64),
+            ApiValue::UInt(value) => visitor.visit_f64(value as f64),
             ApiValue::Float(value) => visitor.visit_f64(value),
             value => Err(expected_api_value(&value, "a number")),
         }
@@ -785,21 +794,21 @@ impl serde::Serializer for ApiValueSerializer {
     }
 
     fn serialize_i128(self, value: i128) -> Result<Self::Ok, Self::Error> {
-        Ok(i64::try_from(value)
+        i64::try_from(value)
             .map(ApiValue::Int)
-            .unwrap_or_else(|_| ApiValue::Str(value.to_string())))
+            .map_err(|_| ApiValueError("i128 value is outside the API integer range".into()))
     }
 
     fn serialize_u8(self, value: u8) -> Result<Self::Ok, Self::Error> {
-        self.serialize_i64(i64::from(value))
+        Ok(ApiValue::UInt(u64::from(value)))
     }
 
     fn serialize_u16(self, value: u16) -> Result<Self::Ok, Self::Error> {
-        self.serialize_i64(i64::from(value))
+        Ok(ApiValue::UInt(u64::from(value)))
     }
 
     fn serialize_u32(self, value: u32) -> Result<Self::Ok, Self::Error> {
-        self.serialize_i64(i64::from(value))
+        Ok(ApiValue::UInt(u64::from(value)))
     }
 
     fn serialize_u64(self, value: u64) -> Result<Self::Ok, Self::Error> {
@@ -807,9 +816,9 @@ impl serde::Serializer for ApiValueSerializer {
     }
 
     fn serialize_u128(self, value: u128) -> Result<Self::Ok, Self::Error> {
-        Ok(i64::try_from(value)
-            .map(ApiValue::Int)
-            .unwrap_or_else(|_| ApiValue::Str(value.to_string())))
+        u64::try_from(value)
+            .map(api_value_from_u64)
+            .map_err(|_| ApiValueError("u128 value is outside the API integer range".into()))
     }
 
     fn serialize_f32(self, value: f32) -> Result<Self::Ok, Self::Error> {
@@ -1114,12 +1123,9 @@ impl SerializeStructVariant for StructVariantSerializer {
 }
 
 /// Represent an unsigned value without narrowing it through the signed
-/// in-process integer ABI. Values outside `i64` use decimal text, which the
-/// typed deserializer parses back to `u64`.
+/// in-process integer ABI.
 pub fn api_value_from_u64(value: u64) -> ApiValue {
-    i64::try_from(value)
-        .map(ApiValue::Int)
-        .unwrap_or_else(|_| ApiValue::Str(value.to_string()))
+    ApiValue::UInt(value)
 }
 
 #[cfg(test)]
@@ -1151,11 +1157,32 @@ mod tests {
     fn unsigned_values_round_trip_without_precision_loss() {
         use serde::Deserialize;
 
+        let small_value = api_value_from_serializable(&23_u32).expect("serialize u32");
+        assert_eq!(small_value, ApiValue::UInt(23));
+        assert_eq!(
+            u32::deserialize(ApiValueDeserializer::new(small_value)).expect("deserialize u32"),
+            23
+        );
+
         let value = api_value_from_serializable(&u64::MAX).expect("serialize unsigned value");
-        assert_eq!(value, ApiValue::Str(u64::MAX.to_string()));
+        assert_eq!(value, ApiValue::UInt(u64::MAX));
         assert_eq!(
             u64::deserialize(ApiValueDeserializer::new(value)).expect("deserialize unsigned value"),
             u64::MAX
+        );
+    }
+
+    #[test]
+    fn wide_fixed_width_integers_fail_instead_of_becoming_text() {
+        let signed = api_value_from_serializable(&i128::MAX)
+            .expect_err("i128 values outside the API range are unsupported");
+        assert!(signed.to_string().contains("outside the API integer range"));
+        let unsigned = api_value_from_serializable(&u128::MAX)
+            .expect_err("u128 values outside the API range are unsupported");
+        assert!(
+            unsigned
+                .to_string()
+                .contains("outside the API integer range")
         );
     }
 }

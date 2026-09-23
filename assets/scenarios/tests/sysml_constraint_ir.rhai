@@ -39,7 +39,7 @@ fn on_tick(me, ctx) {
     let valid = model.constraint_ir(
         "ConstraintProjection::CoincidentPointTranslation");
     checks.push(t_true(model.path == VALID_PATH
-        && model.source_revision_hex.starts_with("0x")
+        && model.source_revision != ()
         && valid.valid == true && valid.status == "valid"
         && valid.constraint.parameters.len() == 3
         && valid.constraint.expressions.len() == 1

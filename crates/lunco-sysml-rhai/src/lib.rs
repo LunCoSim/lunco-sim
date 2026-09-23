@@ -14,14 +14,15 @@ use lunco_sysml_ast::{
     SysmlTypeCategory, SysmlTypeRef, SysmlUnsupportedExpression,
 };
 use lunco_sysml_ir::{
-    compile_constraint_by_name, evaluate_constraint, BindingProvider, CompiledConstraint,
+    BindingContract, BindingProvider, CompiledConstraint,
     CompiledConstraint as IrCompiledConstraint, ConstraintIr, DiagnosticSeverity,
     EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
     IrExpression, IrExpressionKind, IrFeatureDirection, IrParameter, IrType, IrValue, IrValueType,
-    ObservationState, VerificationVerdict,
+    ObservationState, VerificationVerdict, compile_constraint_by_name, evaluate_constraint,
 };
 use lunco_sysml_modelica::lower_constraint;
 use rhai::{Dynamic, Engine, Map};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A source-backed SysML record exposed as a native Rhai object.
@@ -244,12 +245,75 @@ pub fn evaluate_constraint_value(
         let detail = record
             .get("detail")
             .and_then(|value| value.clone().into_string().ok());
+        let unit = record
+            .get("unit")
+            .and_then(|value| value.clone().into_string().ok());
+        let frame = record
+            .get("frame")
+            .and_then(|value| value.clone().into_string().ok());
+        let time_basis = record
+            .get("time_basis")
+            .and_then(|value| value.clone().into_string().ok());
+        let source_revision = record.get("source_revision").and_then(dynamic_u64);
+        let contract = if let Some(dynamic_contract) = record.get("contract") {
+            let Some(contract_record) = dynamic_contract.clone().try_cast::<Map>() else {
+                input_diagnostics.push(IrDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: "SYSML-IR-029".to_owned(),
+                    source: None,
+                    message: format!("binding contract for `{qualified_name}` must be a Rhai map"),
+                });
+                continue;
+            };
+            let contract_provider = contract_record
+                .get("provider")
+                .and_then(|value| value.clone().into_string().ok())
+                .and_then(|value| parse_binding_provider(&value));
+            let Some(contract_provider) = contract_provider else {
+                input_diagnostics.push(IrDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: "SYSML-IR-029".to_owned(),
+                    source: None,
+                    message: format!(
+                        "binding contract for `{qualified_name}` needs a recognized provider"
+                    ),
+                });
+                continue;
+            };
+            let required = contract_record
+                .get("required")
+                .and_then(|value| value.as_bool().ok())
+                .unwrap_or(true);
+            Some(BindingContract {
+                feature,
+                qualified_name: qualified_name.clone(),
+                provider: contract_provider,
+                required,
+                unit: contract_record
+                    .get("unit")
+                    .and_then(|value| value.clone().into_string().ok()),
+                frame: contract_record
+                    .get("frame")
+                    .and_then(|value| value.clone().into_string().ok()),
+                time_basis: contract_record
+                    .get("time_basis")
+                    .and_then(|value| value.clone().into_string().ok()),
+                source_revision: contract_record.get("source_revision").and_then(dynamic_u64),
+            })
+        } else {
+            None
+        };
         context.observations.push(FeatureObservation {
             feature,
             provider,
             state,
             value,
             detail,
+            unit,
+            frame,
+            time_basis,
+            source_revision,
+            contract,
         });
     }
 
@@ -309,6 +373,15 @@ fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
     if value.is_string() {
         return value.clone().into_string().ok().map(IrValue::String);
     }
+    if let Some(target) = value.clone().try_cast::<SysmlElementHandle>() {
+        return Some(IrValue::Reference(target));
+    }
+    if let Some(value) = value.clone().try_cast::<SysmlEnumValue>() {
+        return Some(IrValue::Enumeration {
+            type_name: value.type_ref.map(|reference| reference.qualified_name),
+            literal: value.literal,
+        });
+    }
     if let Some(values) = value.clone().try_cast::<rhai::Array>() {
         return values
             .iter()
@@ -333,6 +406,15 @@ fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
         });
     }
     Some(nested)
+}
+
+fn dynamic_u64(value: &Dynamic) -> Option<u64> {
+    value.clone().try_cast::<u64>().or_else(|| {
+        value
+            .as_int()
+            .ok()
+            .and_then(|value| u64::try_from(value).ok())
+    })
 }
 
 fn parse_binding_provider(value: &str) -> Option<BindingProvider> {
@@ -417,18 +499,19 @@ fn requirement_has_attribute(requirement: &mut SysmlRequirementValue, name: &str
 /// content revision, not another copy of every file's bytes. Report shape and
 /// selection policy belong to authored Rhai tools.
 pub fn semantic_snapshot_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
+    let elements_by_handle = analysis
+        .elements()
+        .iter()
+        .map(|element| (element.handle, element))
+        .collect::<HashMap<_, _>>();
     let mut report = Map::new();
     report.insert(
-        "source_revision_hex".into(),
-        Dynamic::from(format!("0x{:016x}", analysis.source_revision())),
-    );
-    report.insert(
         "source_revision".into(),
-        Dynamic::from(analysis.source_revision().to_string()),
+        Dynamic::from(analysis.source_revision()),
     );
     report.insert(
         "source_fingerprint".into(),
-        Dynamic::from(format!("0x{:016x}", analysis.source_fingerprint())),
+        Dynamic::from(analysis.source_fingerprint()),
     );
     report.insert(
         "stdlib".into(),
@@ -458,7 +541,7 @@ pub fn semantic_snapshot_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
             analysis
                 .references()
                 .iter()
-                .map(reference_dynamic)
+                .map(|reference| reference_dynamic(reference, &elements_by_handle))
                 .collect(),
         ),
     );
@@ -558,13 +641,13 @@ pub fn register_sysml_types(engine: &mut Engine) {
         })
         .register_type_with_name::<SysmlElementHandle>("SysmlElementHandle")
         .register_get("element_id", |handle: &mut SysmlElementHandle| {
-            handle.element_id as i64
+            u64::from(handle.element_id)
         })
         .register_get("source_revision", |handle: &mut SysmlElementHandle| {
-            i64::try_from(handle.source_revision).unwrap_or(-1)
+            handle.source_revision
         })
         .register_get("source_fingerprint", |handle: &mut SysmlElementHandle| {
-            format!("0x{:016x}", handle.source_fingerprint)
+            handle.source_fingerprint
         })
         .register_fn(
             "==",
@@ -783,9 +866,7 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_get("file", |value: &mut SysmlSourceRef| value.file.clone())
         .register_get("start", |value: &mut SysmlSourceRef| value.start as i64)
         .register_get("end", |value: &mut SysmlSourceRef| value.end as i64)
-        .register_get("revision", |value: &mut SysmlSourceRef| {
-            value.revision.to_string()
-        })
+        .register_get("revision", |value: &mut SysmlSourceRef| value.revision)
         .register_type_with_name::<SysmlRecordValue>("SysmlRecord")
         .register_get("type_name", |value: &mut SysmlRecordValue| {
             value.inner.type_name.clone()
@@ -808,13 +889,10 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_type_with_name::<SysmlModelValue>("SysmlModel")
         .register_get("path", |model: &mut SysmlModelValue| model.path.clone())
         .register_get("source_revision", |model: &mut SysmlModelValue| {
-            i64::try_from(model.analysis.source_revision()).unwrap_or(-1)
-        })
-        .register_get("source_revision_hex", |model: &mut SysmlModelValue| {
-            format!("0x{:016x}", model.analysis.source_revision())
+            model.analysis.source_revision()
         })
         .register_get("source_fingerprint", |model: &mut SysmlModelValue| {
-            format!("0x{:016x}", model.analysis.source_fingerprint())
+            model.analysis.source_fingerprint()
         })
         .register_fn("attribute", model_attribute)
         .register_fn("value", model_value)
@@ -1115,11 +1193,19 @@ fn element_dynamic(element: &SysmlElement) -> Dynamic {
             .map(Dynamic::from)
             .unwrap_or(Dynamic::UNIT),
     );
-    value.insert("id".into(), Dynamic::from_int(element.id as i64));
+    value.insert("id".into(), Dynamic::from(element.id));
     value.insert("file".into(), Dynamic::from(element.file.clone()));
     value.insert(
         "qualified_name".into(),
         Dynamic::from(element.qualified_name.clone()),
+    );
+    value.insert(
+        "short_name".into(),
+        element
+            .short_name
+            .clone()
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
     );
     value.insert("kind".into(), Dynamic::from(element.kind.clone()));
     value.insert("start".into(), Dynamic::from_int(element.start as i64));
@@ -1127,14 +1213,55 @@ fn element_dynamic(element: &SysmlElement) -> Dynamic {
     Dynamic::from_map(value)
 }
 
-fn reference_dynamic(reference: &lunco_sysml_ast::SysmlReference) -> Dynamic {
+fn reference_dynamic(
+    reference: &lunco_sysml_ast::SysmlReference,
+    elements: &HashMap<lunco_sysml_ast::SysmlElementHandle, &SysmlElement>,
+) -> Dynamic {
+    let from_feature = elements.get(&reference.from).copied();
+    let from_owner = reference
+        .from_owner
+        .and_then(|handle| elements.get(&handle).copied());
+    let target = elements.get(&reference.target).copied();
     let mut value = Map::new();
     value.insert("file".into(), Dynamic::from(reference.file.clone()));
     value.insert("start".into(), Dynamic::from_int(reference.start as i64));
     value.insert("end".into(), Dynamic::from_int(reference.end as i64));
     value.insert("name".into(), Dynamic::from(reference.name.clone()));
     value.insert("from".into(), Dynamic::from(reference.from));
+    value.insert(
+        "from_owner".into(),
+        reference
+            .from_owner
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "from_feature_name".into(),
+        from_feature
+            .and_then(|element| element.qualified_name.rsplit("::").next())
+            .map(|name| Dynamic::from(name.to_owned()))
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "from_owner_name".into(),
+        from_owner
+            .map(|element| Dynamic::from(element.qualified_name.clone()))
+            .unwrap_or(Dynamic::UNIT),
+    );
     value.insert("target".into(), Dynamic::from(reference.target));
+    value.insert(
+        "target_name".into(),
+        target
+            .map(|element| Dynamic::from(element.qualified_name.clone()))
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "target_short_name".into(),
+        target
+            .and_then(|element| element.short_name.clone())
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
     value.insert(
         "target_feature".into(),
         reference
@@ -1263,10 +1390,7 @@ fn constraint_ir_dynamic(constraint: &ConstraintIr) -> Dynamic {
                 .collect(),
         ),
     );
-    value.insert(
-        "fingerprint".into(),
-        Dynamic::from(format!("0x{:016x}", constraint.fingerprint)),
-    );
+    value.insert("fingerprint".into(), Dynamic::from(constraint.fingerprint));
     value.insert(
         "dependencies".into(),
         Dynamic::from_array(
@@ -1426,6 +1550,7 @@ fn ir_value_type_name(value: &IrValueType) -> &'static str {
         IrValueType::String => "String",
         IrValueType::Quantity { .. } => "Quantity",
         IrValueType::Enumeration { .. } => "Enumeration",
+        IrValueType::Reference { .. } => "Reference",
         IrValueType::Structured { .. } => "Structured",
         IrValueType::Unknown => "Unknown",
     }

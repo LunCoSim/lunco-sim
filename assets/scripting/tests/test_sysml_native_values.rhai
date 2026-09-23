@@ -12,7 +12,7 @@ checks.push(t_true(report.ok == true, "valid SysML fixture returns a source repo
 let contract_facts = query("AnalyzeSysml", #{path: path,
     tables: ["requirements", "verifications"]});
 checks.push(t_true(contract_facts.ok == true && contract_facts.analysis != ()
-    && contract_facts.analysis.source_revision_hex == report.analysis.source_revision_hex
+    && contract_facts.analysis.source_revision == report.analysis.source_revision
     && contract_facts.analysis.requirements.len() > 0
     && contract_facts.analysis.verifications.len() > 0,
     "Rhai-selected fact query returns requirement and verification records from the same source generation"));
@@ -30,8 +30,8 @@ checks.push(t_true(first_fact_page.ok == true && second_fact_page.ok == true
     && second_fact_page.analysis.page.offset == 1
     && second_fact_page.analysis.page.tables.requirements.returned == 1
     && second_fact_page.analysis.page.tables.requirements.has_more == false
-    && first_fact_page.analysis.source_revision_hex
-        == second_fact_page.analysis.source_revision_hex,
+    && first_fact_page.analysis.source_revision
+        == second_fact_page.analysis.source_revision,
     "the generic typed-facts query pages requirement records with stable source identity and totals"));
 checks.push(t_true(first_fact_page.analysis.page.tables.verifications.total == 1
     && first_fact_page.analysis.page.tables.verifications.returned == 1
@@ -52,7 +52,7 @@ checks.push(t_true(type_of(station_names) == "array" && station_names.len() == 2
 
 let native = sysml_analysis(path);
 checks.push(t_true(native.ok == true && native.analysis != ()
-    && native.analysis.source_revision_hex == report.analysis.source_revision_hex,
+    && native.analysis.source_revision == report.analysis.source_revision,
     "the native typed snapshot and policy-neutral query identify the same source generation"));
 let native_position = sysml_value_from_report(native, qualified_position_attribute);
 checks.push(t_true(native_position.ok == true && native_position.found == true

@@ -13,11 +13,11 @@ use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::{ApiQueryError, ApiQueryResult};
-use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_core::markers::Callsign;
-use lunco_core::{entity_display_name, CatalogEntryId};
+use lunco_core::{CatalogEntryId, entity_display_name};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState};
 use openusd::sdf::Path as SdfPath;
 
@@ -39,7 +39,7 @@ fn preview_id(params: &ApiValue) -> Result<Option<UsdPreviewId>, ApiQueryError> 
     };
     let id = match value {
         ApiValue::Int(value) => u64::try_from(*value).ok(),
-        ApiValue::Str(value) => value.parse().ok(),
+        ApiValue::UInt(value) => Some(*value),
         _ => None,
     }
     .ok_or_else(|| {

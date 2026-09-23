@@ -361,7 +361,7 @@ fn assemble_segment(report, usage_name) {
         + "  axis = segment.axis;\n"
         + "end SysmlSegmentConstraintSolve;\n";
     #{ok: true, class: "SysmlSegmentConstraintSolve", source: source,
-      source_revision_hex: report.analysis.source_revision_hex,
+      source_revision: report.analysis.source_revision,
       constraint: definition.element.qualified_name,
       usage: usage_name, modelica_class: "LunCo.Geometry.Segment3D",
       start_feature: start.feature, end_feature: finish.feature,
@@ -649,7 +649,7 @@ fn assemble_coincident_translation_set(report, usage_selectors) {
     let experiment_outputs = ["translation[1]", "translation[2]", "translation[3]"];
     experiment_outputs += relation_residual_outputs;
     #{ok: true, class: "SysmlCoincidentPointTranslationSetSolve", source: source,
-      source_revision_hex: report.analysis.source_revision_hex,
+      source_revision: report.analysis.source_revision,
       source_fingerprint: report.analysis.source_fingerprint,
       constraint: definition.element.qualified_name,
       usage: usages[0].element.qualified_name,
@@ -749,7 +749,7 @@ fn _coincident_translation_experiment_ticket(doc_id, parent_generation, generate
     }
     // `label` is for the Experiments UI only; execution identity comes from
     // the deferred RunExperiment acknowledgement, never from name matching.
-    let label = "SysML geometry solve: " + generated.source_revision_hex
+    let label = "SysML geometry solve: " + generated.source_revision.to_string()
         + " / " + generated.usage;
     let ticket = modelica_editor::experiment_ticket(
         doc_id, generated.class, after.generation, label,
@@ -861,7 +861,7 @@ fn coincident_translation_readback(generated, completed) {
        dof: dof,
        moving_point: generated.moving_point, fixed_point: generated.fixed_point,
        constraint: generated.constraint, usage: generated.usage, usages: generated.usages,
-       source_revision_hex: generated.source_revision_hex,
+       source_revision: generated.source_revision,
        modelica_doc_id: completed.ticket.doc_id,
        source_generation: completed.ticket.source_generation,
        modelica_class: generated.class, experiment_id: completed.ticket.experiment_id,
@@ -1025,7 +1025,7 @@ fn coincident_translation_placement_plan(doc_id, edit_target, path,
     #{ ok: true, kind: "coincident_translation_placement",
        doc_id: doc_id, edit_target: edit_target, path: path,
        parent_generation: parent_generation, scope: #{ Assembly: () },
-       source_revision_hex: solution.source_revision_hex,
+       source_revision: solution.source_revision,
        modelica_doc_id: solution.modelica_doc_id,
        source_generation: solution.source_generation,
        experiment_id: solution.experiment_id,

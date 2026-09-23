@@ -7,7 +7,7 @@
 //! `lunco-modelica-ast::parse_to_ast` so Rumoca owns Modelica syntax and
 //! recovery/validation.
 
-use lunco_modelica_ast::{parse_to_ast, StoredDefinition};
+use lunco_modelica_ast::{StoredDefinition, parse_to_ast};
 use lunco_sysml_ir::{
     CompiledConstraint, ConstraintIr, IrExpression, IrExpressionKind, IrLiteral, IrOperator,
     IrType, IrValueType,
@@ -174,10 +174,13 @@ fn modelica_declaration(ty: &IrType, name: &str) -> Result<String, ModelicaLower
             ("Real".to_owned(), attributes)
         }
         IrValueType::String => ("String".to_owned(), Vec::new()),
-        IrValueType::Enumeration { .. } | IrValueType::Structured { .. } | IrValueType::Unknown => {
+        IrValueType::Enumeration { .. }
+        | IrValueType::Reference { .. }
+        | IrValueType::Structured { .. }
+        | IrValueType::Unknown => {
             return Err(ModelicaLoweringError::UnsupportedType(format!(
                 "feature `{name}` has no scalar Modelica representation"
-            )))
+            )));
         }
     };
     let dimensions = match ty.multiplicity.upper {
@@ -187,12 +190,12 @@ fn modelica_declaration(ty: &IrType, name: &str) -> Result<String, ModelicaLower
             return Err(ModelicaLoweringError::UnsupportedMultiplicity(format!(
                 "feature `{name}` has non-fixed multiplicity {}..{upper:?}",
                 ty.multiplicity.lower
-            )))
+            )));
         }
         None => {
             return Err(ModelicaLoweringError::UnsupportedMultiplicity(format!(
                 "feature `{name}` has unbounded multiplicity"
-            )))
+            )));
         }
     };
     let attributes = if attributes.is_empty() {
@@ -249,7 +252,7 @@ fn modelica_expression(
             IrLiteral::Null => {
                 return Err(ModelicaLoweringError::InvalidExpression(
                     "null cannot be lowered to a Modelica scalar expression".to_owned(),
-                ))
+                ));
             }
         }),
         IrExpressionKind::Unary { operator, operand } => {
@@ -261,7 +264,7 @@ fn modelica_expression(
                 _ => {
                     return Err(ModelicaLoweringError::InvalidExpression(
                         "invalid unary operator in Modelica lowering".to_owned(),
-                    ))
+                    ));
                 }
             };
             Ok(format!("({operator}{operand})"))
@@ -298,7 +301,7 @@ fn modelica_expression(
                 _ => {
                     return Err(ModelicaLoweringError::InvalidExpression(
                         "invalid binary operator in Modelica lowering".to_owned(),
-                    ))
+                    ));
                 }
             };
             Ok(format!("({left} {operator} {right})"))

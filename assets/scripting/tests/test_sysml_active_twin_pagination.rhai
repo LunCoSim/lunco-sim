@@ -11,7 +11,7 @@ checks.push(t_true(contract.open == true,
 if contract.open == true {
     let source = sysml_requirements::source();
     checks.push(t_true(source.ok == true
-        && source.source_revision_hex != ()
+        && source.source_revision != ()
         && source.source_page_count > 0
         && source.source_fact_totals != ()
         && source.source_fact_totals.requirements == source.requirement_records.len()

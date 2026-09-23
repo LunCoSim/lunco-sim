@@ -96,6 +96,9 @@ impl ValueBuilder for RhaiBuilder {
     fn int(&self, i: i64) -> Dynamic {
         Dynamic::from_int(i)
     }
+    fn uint(&self, value: u64) -> Dynamic {
+        Dynamic::from(value)
+    }
     fn bool(&self, b: bool) -> Dynamic {
         Dynamic::from_bool(b)
     }
@@ -556,7 +559,7 @@ fn sysml_attribute_value(path: &str, qualified_name: &str) -> Dynamic {
     result.insert("found".into(), Dynamic::from_bool(true));
     result.insert(
         "source_revision".into(),
-        Dynamic::from(analysis.source_revision().to_string()),
+        Dynamic::from(analysis.source_revision()),
     );
     result.insert("attribute".into(), Dynamic::from(attribute.clone()));
     Dynamic::from_map(result)
@@ -2058,7 +2061,7 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     // the full InspectUsdDocument JSON snapshot on every fixed tick.
     engine.register_fn("usd_document_generation", |doc_id: i64| -> Dynamic {
         usd_bridge::usd_document_generation(doc_id as u64)
-            .map(|generation| Dynamic::from_int(generation as i64))
+            .map(Dynamic::from)
             .unwrap_or(Dynamic::UNIT)
     });
 
@@ -4074,7 +4077,7 @@ mod tests {
             exposed["phase"].clone().into_string().unwrap(),
             "evaluation"
         );
-        assert_eq!(exposed["sequence"].clone().into_string().unwrap(), "5");
+        assert_eq!(exposed["sequence"].clone().cast::<u64>(), 5);
         assert_eq!(exposed["time_seconds"].as_float().unwrap(), 8.0);
     }
 
@@ -4304,7 +4307,7 @@ mod tests {
         params.insert("bad".into(), Dynamic::from(NotAWireType));
         let error = super::dynamic_to_hook_value(&Dynamic::from_map(params))
             .expect_err("custom values must not become an implicit unit value");
-        assert!(error.contains("unsupported Rhai value type"));
+        assert!(error.contains("unsupported Rhai hook return type"));
     }
 
     #[test]
@@ -4685,16 +4688,14 @@ mod tests {
     }
 
     #[test]
-    fn rhai_unsigned_values_use_native_int_or_lossless_text() {
+    fn rhai_unsigned_values_preserve_their_numeric_type() {
         let small = lunco_scripting_bridge_core::build_from_reflect(&super::RhaiBuilder, &42_u64)
             .expect("small unsigned value");
-        assert_eq!(small.as_int().expect("small value stays native"), 42);
+        assert_eq!(small.type_name(), "u64");
+        assert_eq!(small.clone().try_cast::<u64>(), Some(42));
 
         let wide = lunco_scripting_bridge_core::build_from_reflect(&super::RhaiBuilder, &u64::MAX)
             .expect("wide unsigned value");
-        assert_eq!(
-            wide.into_string().expect("wide value uses explicit text"),
-            u64::MAX.to_string()
-        );
+        assert_eq!(wide.clone().try_cast::<u64>(), Some(u64::MAX));
     }
 }

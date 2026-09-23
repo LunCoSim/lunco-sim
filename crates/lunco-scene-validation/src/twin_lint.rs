@@ -136,11 +136,15 @@ pub fn inspect_twin(twin: &lunco_workspace::Twin) -> TwinNamespaceSnapshot {
     }
 
     // The source files are the durable Twin owner. The live registry is the
-    // authoritative view of application tools, so a Twin tool that shadows an
-    // engine module is reported even though the process registry retains one
-    // winner.
+    // authoritative view of engine tools. Its active Twin overlay is already
+    // represented by the indexed Twin source files above, so counting those
+    // registrations here would report every Twin tool as colliding with
+    // itself.
     let mut known_tools = HashSet::new();
     for tool in lunco_tools::index() {
+        if tool.scope.starts_with("twin:") {
+            continue;
+        }
         known_tools.insert(tool.name.clone());
         entries.push(tool_entry(
             tool.name.clone(),
@@ -505,13 +509,17 @@ mod tests {
         assert_eq!(collisions.len(), 1);
         assert_eq!(collisions[0].entries.len(), 2);
         assert_eq!(collisions[0].scope, "modelica source root ``");
-        assert!(collisions[0]
-            .entries
-            .iter()
-            .all(|entry| entry.source == "a.mo" || entry.source == "b.mo"));
-        assert!(snapshot
-            .entries
-            .iter()
-            .any(|entry| { entry.namespace == ASSET_NAMESPACE && entry.source == "a.mo" }));
+        assert!(
+            collisions[0]
+                .entries
+                .iter()
+                .all(|entry| entry.source == "a.mo" || entry.source == "b.mo")
+        );
+        assert!(
+            snapshot
+                .entries
+                .iter()
+                .any(|entry| { entry.namespace == ASSET_NAMESPACE && entry.source == "a.mo" })
+        );
     }
 }

@@ -12,7 +12,7 @@ use crate::{
     SysmlSubject, SysmlType, SysmlTypeRef, SysmlUnsupportedExpression, SysmlVerificationRecord,
 };
 use lunco_hooks::HookValue as H;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// A source-neutral SysML fact table that can be requested by a policy.
 ///
@@ -85,14 +85,28 @@ pub struct SysmlFactSelection {
     pub page: Option<SysmlFactPage>,
     /// Attribute names: exact qualified identities or local names.
     pub attribute_names: Option<BTreeSet<String>>,
+    /// Snapshot-scoped attribute features selected by semantic feature handle.
+    pub attribute_handles: Option<HashSet<SysmlFeatureHandle>>,
     /// Exact qualified attribute owners.
     pub attribute_owners: Option<BTreeSet<String>>,
+    /// Snapshot-scoped attribute owners selected by semantic element handle.
+    pub attribute_owner_handles: Option<HashSet<SysmlElementHandle>>,
     /// Exact values of typed SysML string literals.
     pub attribute_string_values: Option<BTreeSet<String>>,
     /// Requirement identities: exact qualified identities or local names.
     pub requirement_names: Option<BTreeSet<String>>,
     /// Verification identities: exact qualified identities or local names.
     pub verification_names: Option<BTreeSet<String>>,
+    /// Names or standard short names of reference targets to include.
+    pub reference_target_names: Option<BTreeSet<String>>,
+    /// Snapshot-scoped reference targets selected by semantic element handle.
+    pub reference_target_handles: Option<HashSet<SysmlElementHandle>>,
+    /// Qualified or local names of the elements owning reference features.
+    pub reference_from_owners: Option<BTreeSet<String>>,
+    /// Snapshot-scoped reference owners selected by semantic element handle.
+    pub reference_from_owner_handles: Option<HashSet<SysmlElementHandle>>,
+    /// Local names of reference features to include.
+    pub reference_from_features: Option<BTreeSet<String>>,
 }
 
 fn selected_identity(names: &Option<BTreeSet<String>>, qualified_name: &str) -> bool {
@@ -102,14 +116,31 @@ fn selected_identity(names: &Option<BTreeSet<String>>, qualified_name: &str) -> 
     })
 }
 
+fn element_identity_matches(names: &BTreeSet<String>, element: &SysmlElement) -> bool {
+    let local_name = element
+        .qualified_name
+        .rsplit("::")
+        .next()
+        .unwrap_or(&element.qualified_name);
+    names.contains(&element.qualified_name)
+        || names.contains(local_name)
+        || element
+            .short_name
+            .as_ref()
+            .is_some_and(|short_name| names.contains(short_name))
+}
+
 /// Project only requested tables from one immutable analysis. Source identity
 /// metadata is always present so policy results can cite their inputs.
 pub fn selected_sysml_facts(analysis: &SysmlAnalysis, selection: &SysmlFactSelection) -> H {
+    let elements_by_handle = analysis
+        .elements()
+        .iter()
+        .map(|element| (element.handle, element))
+        .collect::<HashMap<_, _>>();
     let mut facts = vec![
-        (
-            "source_revision_hex",
-            H::str(format!("0x{:016x}", analysis.source_revision())),
-        ),
+        ("source_revision", H::UInt(analysis.source_revision())),
+        ("source_fingerprint", H::UInt(analysis.source_fingerprint())),
         ("stdlib", H::Bool(analysis.includes_stdlib())),
         (
             "source_files",
@@ -143,11 +174,63 @@ pub fn selected_sysml_facts(analysis: &SysmlAnalysis, selection: &SysmlFactSelec
         ));
     }
     if includes(SysmlFactTable::References) {
-        let (total, references) =
-            page_records(analysis.references().iter().collect(), selection.page);
+        let selected = analysis
+            .references()
+            .iter()
+            .filter(|reference| {
+                let target = elements_by_handle.get(&reference.target).copied();
+                let from_owner = reference
+                    .from_owner
+                    .and_then(|handle| elements_by_handle.get(&handle).copied());
+                let from_feature = elements_by_handle.get(&reference.from).map(|element| {
+                    element
+                        .qualified_name
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or_default()
+                });
+                selection
+                    .reference_target_names
+                    .as_ref()
+                    .map_or(true, |names| {
+                        target.is_some_and(|element| element_identity_matches(names, element))
+                    })
+                    && selection
+                        .reference_target_handles
+                        .as_ref()
+                        .map_or(true, |handles| handles.contains(&reference.target))
+                    && selection
+                        .reference_from_owners
+                        .as_ref()
+                        .map_or(true, |names| {
+                            from_owner
+                                .is_some_and(|element| element_identity_matches(names, element))
+                        })
+                    && selection
+                        .reference_from_owner_handles
+                        .as_ref()
+                        .map_or(true, |handles| {
+                            reference
+                                .from_owner
+                                .is_some_and(|owner| handles.contains(&owner))
+                        })
+                    && selection
+                        .reference_from_features
+                        .as_ref()
+                        .map_or(true, |names| {
+                            from_feature.is_some_and(|name| names.contains(name))
+                        })
+            })
+            .collect();
+        let (total, references) = page_records(selected, selection.page);
         facts.push((
             "references",
-            H::Array(references.iter().map(|record| reference(record)).collect()),
+            H::Array(
+                references
+                    .iter()
+                    .map(|record| reference(record, &elements_by_handle))
+                    .collect(),
+            ),
         ));
         page_tables.push((
             "references",
@@ -195,9 +278,21 @@ pub fn selected_sysml_facts(analysis: &SysmlAnalysis, selection: &SysmlFactSelec
             .filter(|record| {
                 selected_identity(&selection.attribute_names, &record.qualified_name)
                     && selection
+                        .attribute_handles
+                        .as_ref()
+                        .map_or(true, |handles| handles.contains(&record.handle))
+                    && selection
                         .attribute_owners
                         .as_ref()
                         .map_or(true, |owners| owners.contains(&record.owner))
+                    && selection
+                        .attribute_owner_handles
+                        .as_ref()
+                        .map_or(true, |handles| {
+                            record
+                                .owner_handle
+                                .is_some_and(|owner| handles.contains(&owner))
+                        })
                     && selection
                         .attribute_string_values
                         .as_ref()
@@ -335,11 +430,14 @@ fn table_page(total: usize, returned: usize, page: Option<SysmlFactPage>) -> H {
 /// verification cases, and parser diagnostics are all retained.  Rules should
 /// use the qualified names and source-backed spans rather than reparsing text.
 pub fn sysml_facts(analysis: &SysmlAnalysis) -> H {
+    let elements_by_handle = analysis
+        .elements()
+        .iter()
+        .map(|element| (element.handle, element))
+        .collect::<HashMap<_, _>>();
     H::map([
-        (
-            "source_revision_hex",
-            H::str(format!("0x{:016x}", analysis.source_revision())),
-        ),
+        ("source_revision", H::UInt(analysis.source_revision())),
+        ("source_fingerprint", H::UInt(analysis.source_fingerprint())),
         ("stdlib", H::Bool(analysis.includes_stdlib())),
         (
             "source_files",
@@ -357,7 +455,13 @@ pub fn sysml_facts(analysis: &SysmlAnalysis) -> H {
         ),
         (
             "references",
-            H::Array(analysis.references().iter().map(reference).collect()),
+            H::Array(
+                analysis
+                    .references()
+                    .iter()
+                    .map(|reference_value| reference(reference_value, &elements_by_handle))
+                    .collect(),
+            ),
         ),
         (
             "relationships",
@@ -400,20 +504,63 @@ fn element(value: &SysmlElement) -> H {
         ("id", H::Int(i64::from(value.id))),
         ("file", H::str(value.file.clone())),
         ("qualified_name", H::str(value.qualified_name.clone())),
+        (
+            "short_name",
+            value
+                .short_name
+                .as_ref()
+                .map(|name| H::str(name.clone()))
+                .unwrap_or(H::Unit),
+        ),
         ("kind", H::str(value.kind.clone())),
         ("start", H::Int(i64::from(value.start))),
         ("end", H::Int(i64::from(value.end))),
     ])
 }
 
-fn reference(value: &SysmlReference) -> H {
+fn reference(value: &SysmlReference, elements: &HashMap<SysmlElementHandle, &SysmlElement>) -> H {
+    let from_feature = elements.get(&value.from).copied();
+    let from_owner = value
+        .from_owner
+        .and_then(|handle| elements.get(&handle).copied());
+    let target = elements.get(&value.target).copied();
     H::map([
         ("file", H::str(value.file.clone())),
         ("start", H::Int(i64::from(value.start))),
         ("end", H::Int(i64::from(value.end))),
         ("name", H::str(value.name.clone())),
         ("from", element_handle(value.from)),
+        (
+            "from_owner",
+            value.from_owner.map(element_handle).unwrap_or(H::Unit),
+        ),
+        (
+            "from_feature_name",
+            from_feature
+                .and_then(|element| element.qualified_name.rsplit("::").next())
+                .map(|name| H::str(name.to_owned()))
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "from_owner_name",
+            from_owner
+                .map(|element| H::str(element.qualified_name.clone()))
+                .unwrap_or(H::Unit),
+        ),
         ("target", element_handle(value.target)),
+        (
+            "target_name",
+            target
+                .map(|element| H::str(element.qualified_name.clone()))
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "target_short_name",
+            target
+                .and_then(|element| element.short_name.as_ref())
+                .map(|name| H::str(name.clone()))
+                .unwrap_or(H::Unit),
+        ),
         (
             "target_feature",
             value.target_feature.map(feature_handle).unwrap_or(H::Unit),
@@ -475,15 +622,9 @@ fn constraint(value: &SysmlConstraint) -> H {
 
 fn element_handle(value: SysmlElementHandle) -> H {
     H::map([
-        (
-            "source_revision",
-            H::str(format!("0x{:016x}", value.source_revision)),
-        ),
-        (
-            "source_fingerprint",
-            H::str(format!("0x{:016x}", value.source_fingerprint)),
-        ),
-        ("element_id", H::Int(i64::from(value.element_id))),
+        ("source_revision", H::UInt(value.source_revision)),
+        ("source_fingerprint", H::UInt(value.source_fingerprint)),
+        ("element_id", H::UInt(u64::from(value.element_id))),
     ])
 }
 
@@ -499,10 +640,7 @@ fn expression(value: &SysmlExpression) -> H {
                 ("file", H::str(value.source.file.clone())),
                 ("start", H::Int(i64::from(value.source.start))),
                 ("end", H::Int(i64::from(value.source.end))),
-                (
-                    "revision",
-                    H::str(format!("0x{:016x}", value.source.revision)),
-                ),
+                ("revision", H::UInt(value.source.revision)),
             ]),
         ),
         ("kind_code", H::Int(expression_kind_code(value.kind))),

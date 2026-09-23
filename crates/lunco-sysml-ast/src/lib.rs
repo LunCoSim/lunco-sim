@@ -137,6 +137,9 @@ pub struct SysmlElement {
     pub file: String,
     /// Root-qualified name (`Package::Part`).
     pub qualified_name: String,
+    /// Declared SysML short name, when the element has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_name: Option<String>,
     /// Upstream metamodel kind (`PartDefinition`, `Requirement`, …).
     pub kind: String,
     /// Full declaration byte-range start.
@@ -158,6 +161,9 @@ pub struct SysmlReference {
     pub name: String,
     /// Snapshot-scoped element that owns the reference expression.
     pub from: SysmlElementHandle,
+    /// Immediate source element that owns the reference feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_owner: Option<SysmlElementHandle>,
     /// Resolved snapshot-scoped target.
     pub target: SysmlElementHandle,
     /// Typed target when the reference resolves to a SysML feature.
@@ -1103,6 +1109,7 @@ impl SysmlAnalysis {
                     id: id.index() as u32,
                     file: file_name.clone(),
                     qualified_name: workspace.qualified_name_of(id),
+                    short_name: workspace.model().declared_short_name(id).map(str::to_owned),
                     kind: workspace.model().kind(id).name().to_string(),
                     start: u32::from(range.start()),
                     end: u32::from(range.end()),
@@ -1136,6 +1143,13 @@ impl SysmlAnalysis {
                     source_fingerprint,
                     element_id: reference.from.index() as u32,
                 },
+                from_owner: workspace.model().owner(reference.from).map(|owner| {
+                    SysmlElementHandle {
+                        source_revision,
+                        source_fingerprint,
+                        element_id: owner.index() as u32,
+                    }
+                }),
                 target: SysmlElementHandle {
                     source_revision,
                     source_fingerprint,
@@ -1174,13 +1188,8 @@ impl SysmlAnalysis {
         );
         let attributes = project_attributes(&mut workspace, &files, &elements, &type_catalog);
         let records = project_records(&attributes, source_revision);
-        let requirements = project_requirements(
-            &workspace,
-            &project_indices,
-            &files,
-            &elements,
-            &attributes,
-        );
+        let requirements =
+            project_requirements(&workspace, &project_indices, &files, &elements, &attributes);
         let verifications = project_verifications(&files, &elements);
 
         Self {
@@ -2460,9 +2469,11 @@ fn project_requirement_constraints(
     let model = workspace.model();
     let mut owners = vec![requirement];
     if model.kind(requirement).is_a(ElementKind::RequirementUsage) {
-        owners.extend(model.types_of(requirement).filter(|&ty| {
-            model.kind(ty).is_a(ElementKind::RequirementDefinition)
-        }));
+        owners.extend(
+            model
+                .types_of(requirement)
+                .filter(|&ty| model.kind(ty).is_a(ElementKind::RequirementDefinition)),
+        );
     }
 
     let mut constraints = Vec::new();
@@ -2495,8 +2506,7 @@ fn project_requirement_constraints(
                         .find(|element| element.id == reference.target.index() as u32)
                 })
                 .find(|element| {
-                    element.kind == "ConstraintDefinition"
-                        || element.kind == "ConstraintUsage"
+                    element.kind == "ConstraintDefinition" || element.kind == "ConstraintUsage"
                 })
                 .cloned();
             let record = SysmlRequirementConstraint {
@@ -2638,10 +2648,12 @@ mod tests {
     fn malformed_source_is_reported_without_panicking() {
         let analysis = SysmlAnalysis::from_files_without_stdlib([("broken.sysml", "package {")]);
         assert!(analysis.has_errors());
-        assert!(analysis
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.kind == SysmlDiagnosticKind::Syntax));
+        assert!(
+            analysis
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.kind == SysmlDiagnosticKind::Syntax)
+        );
     }
 
     #[test]
@@ -2652,12 +2664,11 @@ mod tests {
 
     #[test]
     fn requirement_projection_preserves_required_constraint_and_objective_links() {
-        let source = include_str!("../../../assets/scripting/tests/fixtures/sysml_requirement_constraint.sysml");
-        let analysis = SysmlAnalysis::build(
-            [("sysml_requirement_constraint.sysml", source)],
-            true,
-            7,
+        let source = include_str!(
+            "../../../assets/scripting/tests/fixtures/sysml_requirement_constraint.sysml"
         );
+        let analysis =
+            SysmlAnalysis::build([("sysml_requirement_constraint.sysml", source)], true, 7);
         assert!(
             !analysis.has_errors(),
             "fixture diagnostics: {:?}",
@@ -2668,8 +2679,7 @@ mod tests {
             .requirements()
             .iter()
             .find(|record| {
-                record.element.qualified_name
-                    == "SysmlRequirementConstraint::payloadCapacity"
+                record.element.qualified_name == "SysmlRequirementConstraint::payloadCapacity"
             })
             .expect("requirement usage is projected");
         assert_eq!(requirement.constraints.len(), 1);
@@ -2686,11 +2696,90 @@ mod tests {
             .verifications()
             .iter()
             .find(|record| {
-                record.element.qualified_name
-                    == "SysmlRequirementConstraint::VerifyPayloadCapacity"
+                record.element.qualified_name == "SysmlRequirementConstraint::VerifyPayloadCapacity"
             })
             .expect("verification case is projected");
         assert_eq!(verification.verifies, ["payloadCapacity"]);
+    }
+
+    #[test]
+    fn typed_fact_selection_follows_requirement_and_source_handles() {
+        use crate::lint_facts::{SysmlFactSelection, SysmlFactTable, selected_sysml_facts};
+        use lunco_hooks::HookValue;
+
+        let source =
+            include_str!("../../../assets/scripting/tests/fixtures/sysml_provenance.sysml");
+        let analysis = SysmlAnalysis::build([("sysml_provenance.sysml", source)], true, 17);
+        assert!(
+            !analysis.has_errors(),
+            "fixture diagnostics: {:?}",
+            analysis.diagnostics()
+        );
+
+        let requirement = analysis
+            .requirements()
+            .iter()
+            .find(|record| record.element.short_name.as_deref() == Some("GR-001"))
+            .expect("standard short name identifies the requirement usage");
+        let target_link = analysis
+            .references()
+            .iter()
+            .find(|reference| reference.target == requirement.element.handle)
+            .expect("typed reference resolves to the requirement usage");
+        let evidence_owner = target_link
+            .from_owner
+            .expect("requirement target reference has an owning evidence part");
+        let source_link = analysis
+            .references()
+            .iter()
+            .find(|reference| {
+                reference.from_owner == Some(evidence_owner)
+                    && analysis
+                        .elements()
+                        .iter()
+                        .find(|element| element.handle == reference.from)
+                        .and_then(|element| element.qualified_name.rsplit("::").next())
+                        == Some("sources")
+            })
+            .expect("evidence source relationship resolves to a source element");
+        let source_owner = source_link.target;
+
+        let source_attributes = selected_sysml_facts(
+            &analysis,
+            &SysmlFactSelection {
+                tables: Some([SysmlFactTable::Attributes].into_iter().collect()),
+                attribute_owner_handles: Some([source_owner].into_iter().collect()),
+                ..SysmlFactSelection::default()
+            },
+        );
+        let attributes = match source_attributes.get("attributes") {
+            Some(HookValue::Array(records)) => records,
+            other => panic!("expected selected attribute table, got {other:?}"),
+        };
+        assert_eq!(
+            attributes.len(),
+            2,
+            "source role and locator belong to one typed source"
+        );
+
+        let source_references = selected_sysml_facts(
+            &analysis,
+            &SysmlFactSelection {
+                tables: Some([SysmlFactTable::References].into_iter().collect()),
+                reference_target_handles: Some([source_owner].into_iter().collect()),
+                reference_from_owner_handles: Some([evidence_owner].into_iter().collect()),
+                ..SysmlFactSelection::default()
+            },
+        );
+        let references = match source_references.get("references") {
+            Some(HookValue::Array(records)) => records,
+            other => panic!("expected selected reference table, got {other:?}"),
+        };
+        assert_eq!(
+            references.len(),
+            1,
+            "handle selectors retain only the authored source link"
+        );
     }
 
     #[test]
@@ -2707,9 +2796,11 @@ mod tests {
         let first = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
         let second = SysmlAnalysis::build_cached([("a.sysml", "part def B {}")], false, 0x1234);
         assert!(!Arc::ptr_eq(&first, &second));
-        assert!(second
-            .elements()
-            .iter()
-            .any(|element| element.qualified_name == "B"));
+        assert!(
+            second
+                .elements()
+                .iter()
+                .any(|element| element.qualified_name == "B")
+        );
     }
 }

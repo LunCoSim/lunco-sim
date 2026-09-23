@@ -166,7 +166,7 @@ fn report_structured_verdict(report, title, channel) {
     let failures = [];
     let raw_failures = [];
     let ok = report != () && report.ok == true;
-    let source_revision = "";
+    let source_revision = ();
     let result_count = 0;
     let check_count = 0;
     let results = [];
@@ -176,18 +176,12 @@ fn report_structured_verdict(report, title, channel) {
     let requirement_names = [];
     let requirement_summary = #{};
     let source_files = [];
-    let source_revision_hex = "";
     let metrics = #{};
     let evidence_result_events = ();
     let evidence_channels = ();
     let failure_count = 0;
     if report != () {
         if report.source_revision != () { source_revision = report.source_revision; }
-        if report.source_revision_hex != () {
-            source_revision_hex = report.source_revision_hex;
-        } else {
-            source_revision_hex = source_revision;
-        }
         if report.source_files != () { source_files = report.source_files; }
         if report.metrics != () { metrics = report.metrics; }
         if report.evidence_result_events != () {
@@ -261,7 +255,7 @@ fn report_structured_verdict(report, title, channel) {
         verification: verification, requirement_count: requirement_count,
         check_count: check_count, requirement_names: requirement_names,
         requirement_summary: requirement_summary,
-        source_revision: source_revision, source_revision_hex: source_revision_hex,
+        source_revision: source_revision,
         source_files: source_files, result_count: result_count,
         failure_count: failure_count, evidence_chunked: !inline_results,
         evidence_result_events: if evidence_result_events != () {
@@ -278,14 +272,13 @@ fn report_structured_verdict(report, title, channel) {
                 emit(channel + "_EVIDENCE_RESULT", #{schema_version: 1,
                     title: title, channel: channel, verification: verification,
                     source_revision: source_revision,
-                    source_revision_hex: source_revision_hex,
                     result_count: check_count, failure_count: failure_count,
                     result_index: result_index, result: result});
                 result_index += 1;
             }
         }
     }
-    print(channel + "_EVIDENCE source_revision=" + source_revision
+    print(channel + "_EVIDENCE source_revision=" + source_revision.to_string()
         + " requirements=" + requirement_count + " checks=" + check_count
         + " failures=" + failure_count);
     report_verdict(failures, title, channel)

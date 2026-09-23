@@ -8,7 +8,7 @@ use avian3d::schedule::PhysicsTime;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryError, ApiQueryResult};
-use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_cosim_core::{
     BindingEpochDirty, BoundConnection, ConnectionBinding, SimComponent, SimConnection, SimStatus,
     UsdSourcedCosim,
@@ -20,7 +20,7 @@ use lunco_usd_bevy_camera::camera_mount::MountedCamera;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
 use lunco_usd_bevy_stage::UsdInstanceRoot;
 use lunco_usd_sim_core::PendingDifferential;
-use lunco_usd_sim_cosim::{modelica_models_terminal, BindingEpochWait};
+use lunco_usd_sim_cosim::{BindingEpochWait, modelica_models_terminal};
 
 mod broken_connections;
 
@@ -35,6 +35,7 @@ fn api_error(code: ApiErrorCode, message: impl Into<String>) -> ApiQueryResult {
 fn api_u64(value: &ApiValue) -> Option<u64> {
     match value {
         ApiValue::Int(value) => u64::try_from(*value).ok(),
+        ApiValue::UInt(value) => Some(*value),
         _ => None,
     }
 }
@@ -110,6 +111,7 @@ fn resolve_param_entity(world: &World, params: &ApiValue) -> Result<Option<Entit
     let raw = match params.get("api_id").or_else(|| params.get("entity")) {
         None => return Ok(None),
         Some(ApiValue::Int(value)) => u64::try_from(*value).ok(),
+        Some(ApiValue::UInt(value)) => Some(*value),
         Some(_) => None,
     }
     .ok_or_else(|| {
