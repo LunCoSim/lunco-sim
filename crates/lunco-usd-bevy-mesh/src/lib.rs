@@ -54,31 +54,42 @@ pub fn build_primitive_mesh(
             quality.primitive_sphere_longitudes,
             quality.primitive_sphere_latitudes,
         )),
-        ShapeDims::Cylinder { radius, height } => Some(
+        ShapeDims::Cylinder { radius, height, .. } => Some(
             Cylinder::new(radius as f32, height as f32)
                 .mesh()
                 .resolution(quality.primitive_radial_segments)
                 .into(),
         ),
-        ShapeDims::Cone { radius, height } => Some(
+        ShapeDims::Cone { radius, height, .. } => Some(
             Cone::new(radius as f32, height as f32)
                 .mesh()
                 .resolution(quality.primitive_radial_segments)
                 .into(),
         ),
-        ShapeDims::Capsule { radius, height } => Some(
+        ShapeDims::Capsule { radius, height, .. } => Some(
             Capsule3d::new(radius as f32, (height / 2.0) as f32)
                 .mesh()
                 .latitudes(quality.primitive_capsule_latitudes)
                 .longitudes(quality.primitive_capsule_longitudes)
                 .into(),
         ),
-        ShapeDims::Plane { width, length } => Some(
-            Plane3d::default()
-                .mesh()
-                .size(width as f32, length as f32)
-                .into(),
-        ),
+        ShapeDims::Plane {
+            width,
+            length,
+            axis,
+        } => {
+            // The generated plane is local XZ with a +Y normal. UsdGeomPlane
+            // defines X-axis width along Z and length along Y, so account for
+            // that axis-specific dimension mapping before the shared transform
+            // rotates the normal onto the authored axis.
+            let (mesh_width, mesh_length) = axis.plane_local_dimensions(width, length);
+            Some(
+                Plane3d::default()
+                    .mesh()
+                    .size(mesh_width as f32, mesh_length as f32)
+                    .into(),
+            )
+        }
     }
 }
 

@@ -980,9 +980,14 @@ fn read_prim_from_view(
                     .iter()
                     .map(|point| api_value!([point[0], point[1], point[2]]))
                     .collect::<Vec<_>>();
+                let type_name = geometry.source.type_name();
+                let approximation = geometry.source.approximation().map_or(
+                    "primitive",
+                    openusd::schemas::physics::CollisionApprox::as_token,
+                );
                 Some(api_value!({
-                    "type_name": geometry.type_name,
-                    "approximation": geometry.approximation,
+                    "type_name": type_name,
+                    "approximation": approximation,
                     "vertices": ApiValue::Array(vertices),
                     "frame": "canonical_stage",
                 }))

@@ -2,18 +2,145 @@ use bevy::prelude::{error, Quat, Vec3};
 use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::stage_convention;
 use openusd::schemas::geom::tokens;
+use openusd::schemas::physics::{tokens as physics_tokens, CollisionApprox};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
+
+/// Invalid authored `physics:approximation` data on a mesh collision API.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MeshCollisionApproximationError {
+    pub prim: String,
+    pub value: String,
+}
+
+impl std::fmt::Display for MeshCollisionApproximationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} has invalid authored {} token `{}`",
+            self.prim,
+            physics_tokens::A_APPROXIMATION,
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for MeshCollisionApproximationError {}
+
+/// Resolve the standard mesh collision approximation, including its schema
+/// default. The value is interpreted only when `PhysicsMeshCollisionAPI` is
+/// applied; otherwise `UsdPhysicsCollisionAPI` uses the mesh directly.
+pub fn read_mesh_collision_approximation(
+    reader: &dyn UsdReadObject,
+    path: &SdfPath,
+) -> Result<CollisionApprox, MeshCollisionApproximationError> {
+    if !reader.has_api_schema(path, physics_tokens::API_MESH_COLLISION) {
+        return Ok(CollisionApprox::None);
+    }
+    match reader.text(path, physics_tokens::A_APPROXIMATION) {
+        Some(value) => CollisionApprox::from_token(value.clone()).ok_or_else(|| {
+            MeshCollisionApproximationError {
+                prim: path.as_str().to_owned(),
+                value,
+            }
+        }),
+        None if reader.has_authored_attribute(path, physics_tokens::A_APPROXIMATION)
+            || !reader
+                .connections(path, physics_tokens::A_APPROXIMATION)
+                .is_empty() =>
+        {
+            Err(MeshCollisionApproximationError {
+                prim: path.as_str().to_owned(),
+                value: "<non-token authored value>".to_owned(),
+            })
+        }
+        None => Ok(CollisionApprox::None),
+    }
+}
 
 /// Canonical dimensions of a USD primitive shape, in metres.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShapeDims {
-    Cube { size: f64 },
-    Sphere { radius: f64 },
-    Cylinder { radius: f64, height: f64 },
-    Cone { radius: f64, height: f64 },
-    Capsule { radius: f64, height: f64 },
-    Plane { width: f64, length: f64 },
+    Cube {
+        size: f64,
+    },
+    Sphere {
+        radius: f64,
+    },
+    Cylinder {
+        radius: f64,
+        height: f64,
+        axis: UsdGeomAxis,
+    },
+    Cone {
+        radius: f64,
+        height: f64,
+        axis: UsdGeomAxis,
+    },
+    Capsule {
+        radius: f64,
+        height: f64,
+        axis: UsdGeomAxis,
+    },
+    Plane {
+        width: f64,
+        length: f64,
+        axis: UsdGeomAxis,
+    },
+}
+
+/// A cardinal axis token from a `UsdGeom` primitive.
+///
+/// Keeping the schema token typed prevents geometry, transform, and collider
+/// projections from each interpreting a free-form string independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsdGeomAxis {
+    X,
+    Y,
+    Z,
+}
+
+impl UsdGeomAxis {
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::X => "X",
+            Self::Y => "Y",
+            Self::Z => "Z",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "X" => Some(Self::X),
+            "Y" => Some(Self::Y),
+            "Z" => Some(Self::Z),
+            _ => None,
+        }
+    }
+
+    /// Width and length as local X/Z dimensions of the canonical +Y-normal
+    /// plane mesh, before applying the axis rotation.
+    pub const fn plane_local_dimensions(self, width: f64, length: f64) -> (f64, f64) {
+        match self {
+            Self::X => (length, width),
+            Self::Y | Self::Z => (width, length),
+        }
+    }
+}
+
+/// The finite `UsdGeomPlane` surface in the canonical primitive's local frame.
+/// Its normal is +Y; callers apply `usd_axis_to_quat(axis)` through the same
+/// stage convention as the visual projection.
+pub fn usd_plane_surface_vertices(width: f64, length: f64, axis: UsdGeomAxis) -> [[f64; 3]; 4] {
+    let (local_width, local_length) = axis.plane_local_dimensions(width, length);
+    let half_width = local_width * 0.5;
+    let half_length = local_length * 0.5;
+    [
+        [-half_width, 0.0, -half_length],
+        [-half_width, 0.0, half_length],
+        [half_width, 0.0, half_length],
+        [half_width, 0.0, -half_length],
+    ]
 }
 
 /// Canonical topology of a native USD mesh.
@@ -29,13 +156,12 @@ pub struct UsdMeshTopology {
     pub face_vertex_indices: Vec<i32>,
 }
 
-/// Canonical `UsdGeom` axis token to quaternion for Y-axial Bevy primitives.
-/// Returns `None` for the already-aligned Y axis and unsupported tokens.
-pub fn usd_axis_to_quat(axis: &str) -> Option<Quat> {
+/// Canonical `UsdGeom` axis to quaternion for Y-axial Bevy primitives.
+pub fn usd_axis_to_quat(axis: UsdGeomAxis) -> Quat {
     match axis {
-        "X" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::X)),
-        "Z" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::Z)),
-        _ => None,
+        UsdGeomAxis::X => Quat::from_rotation_arc(Vec3::Y, Vec3::X),
+        UsdGeomAxis::Y => Quat::IDENTITY,
+        UsdGeomAxis::Z => Quat::from_rotation_arc(Vec3::Y, Vec3::Z),
     }
 }
 
@@ -44,20 +170,22 @@ pub fn read_primitive_axis(
     reader: &dyn UsdReadObject,
     path: &SdfPath,
     type_name: &str,
-) -> Option<String> {
+) -> Option<UsdGeomAxis> {
     if !matches!(type_name, "Cylinder" | "Cone" | "Capsule" | "Plane") {
-        return Some("Z".to_owned());
+        return Some(UsdGeomAxis::Z);
     }
     match reader.text(path, "axis") {
-        Some(axis) if matches!(axis.as_str(), "X" | "Y" | "Z") => Some(axis),
-        Some(axis) => {
-            error!(
-                "[usd-scene] {} has invalid {} axis token `{axis}`; expected X, Y, or Z",
-                path.as_str(),
-                type_name
-            );
-            None
-        }
+        Some(axis) => match UsdGeomAxis::parse(&axis) {
+            Some(axis) => Some(axis),
+            None => {
+                error!(
+                    "[usd-scene] {} has invalid {} axis token `{axis}`; expected X, Y, or Z",
+                    path.as_str(),
+                    type_name
+                );
+                None
+            }
+        },
         None if reader.has_authored_attribute(path, "axis")
             || !reader.connections(path, "axis").is_empty() =>
         {
@@ -68,7 +196,7 @@ pub fn read_primitive_axis(
             );
             None
         }
-        None => Some("Z".to_owned()),
+        None => Some(UsdGeomAxis::Z),
     }
 }
 
@@ -89,24 +217,41 @@ pub fn read_shape_dims(
         ShapeDims::Sphere { radius } => ShapeDims::Sphere {
             radius: length(radius),
         },
-        ShapeDims::Cylinder { radius, height } => ShapeDims::Cylinder {
+        ShapeDims::Cylinder {
+            radius,
+            height,
+            axis,
+        } => ShapeDims::Cylinder {
             radius: length(radius),
             height: length(height),
+            axis,
         },
-        ShapeDims::Cone { radius, height } => ShapeDims::Cone {
+        ShapeDims::Cone {
+            radius,
+            height,
+            axis,
+        } => ShapeDims::Cone {
             radius: length(radius),
             height: length(height),
+            axis,
         },
-        ShapeDims::Capsule { radius, height } => ShapeDims::Capsule {
+        ShapeDims::Capsule {
+            radius,
+            height,
+            axis,
+        } => ShapeDims::Capsule {
             radius: length(radius),
             height: length(height),
+            axis,
         },
         ShapeDims::Plane {
             width,
             length: depth,
+            axis,
         } => ShapeDims::Plane {
             width: length(width),
             length: length(depth),
+            axis,
         },
     })
 }
@@ -116,7 +261,7 @@ fn read_shape_dims_raw(
     path: &SdfPath,
     type_name: &str,
 ) -> Option<ShapeDims> {
-    read_primitive_axis(reader, path, type_name)?;
+    let axis = read_primitive_axis(reader, path, type_name)?;
     let dims = match type_name {
         "Cube" => ShapeDims::Cube {
             size: read_shape_dimension(reader, path, "size", 2.0)?,
@@ -127,18 +272,22 @@ fn read_shape_dims_raw(
         "Cylinder" => ShapeDims::Cylinder {
             radius: read_shape_dimension(reader, path, "radius", 1.0)?,
             height: read_shape_dimension(reader, path, "height", 2.0)?,
+            axis,
         },
         "Cone" => ShapeDims::Cone {
             radius: read_shape_dimension(reader, path, "radius", 1.0)?,
             height: read_shape_dimension(reader, path, "height", 2.0)?,
+            axis,
         },
         "Capsule" => ShapeDims::Capsule {
             radius: read_shape_dimension(reader, path, "radius", 0.5)?,
             height: read_shape_dimension(reader, path, "height", 1.0)?,
+            axis,
         },
         "Plane" => ShapeDims::Plane {
             width: read_shape_dimension(reader, path, "width", 2.0)?,
             length: read_shape_dimension(reader, path, "length", 2.0)?,
+            axis,
         },
         _ => return None,
     };
@@ -401,7 +550,7 @@ mod stage_metrics_import_tests {
     //! (`docs/architecture/41-axes-and-units.md`: "convert once, at the
     //! importer"). These tests pin the authored Z-up/centimetre input contract
     //! and its canonical SI Y-up output.
-    use super::{read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims};
+    use super::{read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, UsdGeomAxis};
     use bevy::prelude::{Quat, Vec3};
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_bevy_stage::{local_transform_at, stage_convention};
@@ -506,9 +655,14 @@ def Xform "World"
 
         // Dimensions convert to metres — the collider and the mesh both read this.
         match read_shape_dims(&reader, &tower, "Cylinder") {
-            Some(ShapeDims::Cylinder { radius, height }) => {
+            Some(ShapeDims::Cylinder {
+                radius,
+                height,
+                axis,
+            }) => {
                 assert!((radius - 0.5).abs() < 1e-9, "radius {radius} m");
                 assert!((height - 2.0).abs() < 1e-9, "height {height} m");
+                assert_eq!(axis, UsdGeomAxis::Z);
             }
             other => panic!("expected Cylinder dims, got {other:?}"),
         }
@@ -526,7 +680,7 @@ def Xform "World"
         // Z-up world, so after conversion it must stand up along canonical +Y —
         // i.e. the composed geometry rotation maps the primitive's own +Y to +Y.
         let conv = stage_convention(&reader).expect("valid stage convention");
-        let q = conv.orient(usd_axis_to_quat("Z").unwrap_or(Quat::IDENTITY));
+        let q = conv.orient(usd_axis_to_quat(UsdGeomAxis::Z));
         assert!(
             (q * Vec3::Y).abs_diff_eq(Vec3::Y, 1e-5),
             "a Z-axial cylinder on a Z-up stage must end up axial with canonical up, got {:?}",

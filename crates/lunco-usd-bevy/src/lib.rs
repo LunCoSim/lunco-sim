@@ -1117,9 +1117,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // identity rotation and authored scale. Apply the primitive axis exactly once
         // to that pose, not to the previous visual projection.
         let mut transform = usd_tf.unwrap_or_else(|| existing_tf.cloned().unwrap_or_default());
-        // UsdGeomCylinder.axis token (X|Y|Z, default Z). Compose the
-        // axis-induced rotation onto the entity Transform so a Y-axis
-        // Bevy `Cylinder` mesh appears along the authored axis without
+        // Axis tokens on UsdGeomCylinder/Cone/Capsule/Plane use the
+        // schema's Z default. Compose the axis-induced rotation onto the
+        // entity Transform so canonical Y-axial meshes and +Y-normal planes
+        // appear along their authored axis without
         // an explicit `xformOp:rotateXYZ` hack. Goes after rotateXYZ so
         // it applies on top of any user-authored rotation.
         if matches!(
@@ -1135,7 +1136,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 // pre-rotated by the stage convention (`Q·q_axis`). On a Z-up stage an
                 // `axis = "Z"` cylinder therefore stands up along canonical +Y, as it
                 // did along the stage's +Z. Identity on a Y-up stage.
-                let q_axis = convention.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
+                let q_axis = convention.orient(usd_axis_to_quat(axis));
                 if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
                     transform.rotation *= q_axis;
                 }
@@ -1143,7 +1144,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                     "[usd-bevy] {} {} axis={} rot={:?}",
                     sdf_path.as_str(),
                     prim_type.as_deref().unwrap_or(""),
-                    axis,
+                    axis.as_token(),
                     transform.rotation
                 );
             }
@@ -1349,8 +1350,7 @@ fn project_point_instancer<R: UsdRead>(
             "Cylinder" | "Cone" | "Capsule" | "Plane"
         ) {
             if let Some(axis) = read_primitive_axis(reader, &prototype_path, &prototype_type) {
-                transform.rotation *=
-                    convention.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
+                transform.rotation *= convention.orient(usd_axis_to_quat(axis));
             }
         }
         commands.spawn((

@@ -5,7 +5,7 @@ use lunco_usd_bevy_mesh::{
     build_primitive_mesh, build_usd_curve_mesh, build_usd_mesh, build_usd_nurbs_patch_mesh,
     read_nurbs_patch_surface,
 };
-use lunco_usd_bevy_scene::ShapeDims;
+use lunco_usd_bevy_scene::{ShapeDims, UsdGeomAxis};
 use lunco_usd_bevy_stage::canonical::CanonicalStage;
 use openusd::sdf::Path as SdfPath;
 
@@ -161,7 +161,8 @@ mod primitive_mesh_quality_tests {
         assert!(build_primitive_mesh(
             ShapeDims::Cylinder {
                 radius: 1.0,
-                height: 2.0
+                height: 2.0,
+                axis: UsdGeomAxis::Y,
             },
             quality
         )

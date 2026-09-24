@@ -13,7 +13,7 @@
 use lunco_hash::Fnv1a;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlElementHandle, SysmlExpression,
-    SysmlExpressionKind, SysmlExpressionOperator, SysmlFeature, SysmlFeatureHandle,
+    SysmlExpressionData, SysmlExpressionOperator, SysmlFeature, SysmlFeatureHandle,
     SysmlMultiplicity, SysmlPrimitiveType, SysmlSourceRef, SysmlType, SysmlTypeCategory,
     SysmlUnsupportedExpression,
 };
@@ -59,12 +59,26 @@ impl IrMultiplicity {
 pub enum IrValueType {
     Boolean,
     Integer,
+    /// Exact SysML `Rational`; execution is rejected until the value/evaluator
+    /// boundary supports exact rational arithmetic.
+    Rational,
     Real,
+    /// SysML `Complex`; execution is rejected until the value/evaluator
+    /// boundary supports complex arithmetic.
+    Complex,
     String,
-    Quantity { quantity_kind: Option<String> },
-    Enumeration { type_name: Option<String> },
-    Reference { type_name: Option<String> },
-    Structured { type_name: Option<String> },
+    Quantity {
+        quantity_kind: Option<String>,
+    },
+    Enumeration {
+        type_name: Option<String>,
+    },
+    Reference {
+        type_name: Option<String>,
+    },
+    Structured {
+        type_name: Option<String>,
+    },
     Unknown,
 }
 
@@ -487,27 +501,16 @@ fn compile_expression(
     }
 
     let source = expression.source.clone();
-    let kind = match expression.kind {
-        SysmlExpressionKind::FeatureReference => {
-            let feature = match expression.feature {
-                Some(feature) => feature,
-                None => {
-                    diagnostics.push(error(
-                        "SYSML-IR-004",
-                        &source,
-                        "feature reference has no resolved semantic feature",
-                    ));
-                    return None;
-                }
-            };
+    let kind = match &expression.data {
+        SysmlExpressionData::FeatureReference(feature) => {
             let feature_name = attributes
                 .iter()
-                .find(|attribute| attribute.handle == feature)
+                .find(|attribute| attribute.handle == *feature)
                 .map(|attribute| attribute.qualified_name.clone())
                 .or_else(|| {
                     parameters
                         .iter()
-                        .find(|parameter| parameter.handle == feature)
+                        .find(|parameter| parameter.handle == *feature)
                         .map(|parameter| parameter.qualified_name.clone())
                 });
             let feature_name = match feature_name {
@@ -521,145 +524,95 @@ fn compile_expression(
                     return None;
                 }
             };
-            dependencies.push(feature);
+            let declared_type = attributes
+                .iter()
+                .find(|attribute| attribute.handle == *feature)
+                .and_then(|attribute| attribute.declared_type.as_ref())
+                .or_else(|| {
+                    parameters
+                        .iter()
+                        .find(|parameter| parameter.handle == *feature)
+                        .and_then(|parameter| parameter.declared_type.as_ref())
+                })
+                .map(ir_type_from_sysml);
+            let unsupported_primitive = declared_type.as_ref().and_then(|ty| match &ty.value {
+                IrValueType::Rational => Some("Rational"),
+                IrValueType::Complex => Some("Complex"),
+                _ => None,
+            });
+            if let Some(primitive) = unsupported_primitive {
+                diagnostics.push(error(
+                    "SYSML-IR-038",
+                    &source,
+                    &format!(
+                        "SysML primitive `{primitive}` is preserved in the type graph but is not executable in the scalar evaluator"
+                    ),
+                ));
+                return None;
+            }
+            dependencies.push(*feature);
             IrExpressionKind::FeatureReference {
-                feature,
+                feature: *feature,
                 qualified_name: feature_name,
             }
         }
-        SysmlExpressionKind::StandardConstant => {
-            let Some(constant) = expression.standard_constant else {
-                diagnostics.push(error(
-                    "SYSML-IR-033",
-                    &source,
-                    "standard constant has no resolved constant identity",
-                ));
-                return None;
-            };
-            let Some(feature) = expression.feature else {
-                diagnostics.push(error(
-                    "SYSML-IR-033",
-                    &source,
-                    "standard constant has no resolved source feature",
-                ));
-                return None;
-            };
+        SysmlExpressionData::StandardConstant { feature, constant } => {
             IrExpressionKind::StandardConstant {
-                constant,
+                constant: *constant,
                 feature_element: feature.element,
             }
         }
-        SysmlExpressionKind::IntegerLiteral => {
-            IrExpressionKind::Literal(match expression.integer_value {
-                Some(value) => IrLiteral::Integer(value),
-                None => {
-                    diagnostics.push(error(
-                        "SYSML-IR-006",
-                        &source,
-                        "integer literal has no value",
-                    ));
-                    return None;
-                }
-            })
+        SysmlExpressionData::IntegerLiteral(value) => {
+            IrExpressionKind::Literal(IrLiteral::Integer(*value))
         }
-        SysmlExpressionKind::RealLiteral => {
-            IrExpressionKind::Literal(match expression.real_value {
-                Some(value) => IrLiteral::Real(value.as_f64()),
-                None => {
-                    diagnostics.push(error("SYSML-IR-007", &source, "real literal has no value"));
-                    return None;
-                }
-            })
+        SysmlExpressionData::RealLiteral(value) => {
+            IrExpressionKind::Literal(IrLiteral::Real(value.as_f64()))
         }
-        SysmlExpressionKind::BooleanLiteral => {
-            IrExpressionKind::Literal(match expression.boolean_value {
-                Some(value) => IrLiteral::Boolean(value),
-                None => {
-                    diagnostics.push(error(
-                        "SYSML-IR-008",
-                        &source,
-                        "boolean literal has no value",
-                    ));
-                    return None;
-                }
-            })
+        SysmlExpressionData::BooleanLiteral(value) => {
+            IrExpressionKind::Literal(IrLiteral::Boolean(*value))
         }
-        SysmlExpressionKind::StringLiteral => {
-            IrExpressionKind::Literal(match &expression.string_value {
-                Some(value) => IrLiteral::String(value.clone()),
-                None => {
-                    diagnostics.push(error(
-                        "SYSML-IR-009",
-                        &source,
-                        "string literal has no value",
-                    ));
-                    return None;
-                }
-            })
+        SysmlExpressionData::StringLiteral(value) => {
+            IrExpressionKind::Literal(IrLiteral::String(value.clone()))
         }
-        SysmlExpressionKind::NullLiteral => IrExpressionKind::Literal(IrLiteral::Null),
-        SysmlExpressionKind::Unary => {
-            let operator = match expression.operator {
-                Some(operator) => IrOperator::from(operator),
-                None => {
-                    diagnostics.push(error(
-                        "SYSML-IR-010",
-                        &source,
-                        "unary expression has no operator",
-                    ));
-                    return None;
-                }
-            };
-            let operand = match one_child(expression, diagnostics) {
-                Some(child) => compile_expression(
-                    child,
-                    attributes,
-                    parameters,
-                    diagnostics,
-                    dependencies,
-                    depth + 1,
-                )?,
-                None => return None,
-            };
+        SysmlExpressionData::NullLiteral => IrExpressionKind::Literal(IrLiteral::Null),
+        SysmlExpressionData::Unary { operator, operand } => {
+            let operator = IrOperator::from(*operator);
+            let operand = compile_expression(
+                operand,
+                attributes,
+                parameters,
+                diagnostics,
+                dependencies,
+                depth + 1,
+            )?;
             validate_unary(operator, &operand.result_type, &source, diagnostics);
             IrExpressionKind::Unary {
                 operator,
                 operand: Box::new(operand),
             }
         }
-        SysmlExpressionKind::Binary => {
-            let operator = match expression.operator {
-                Some(operator) => IrOperator::from(operator),
-                None => {
-                    diagnostics.push(error(
-                        "SYSML-IR-011",
-                        &source,
-                        "binary expression has no operator",
-                    ));
-                    return None;
-                }
-            };
-            let (left, right) = match two_children(expression, diagnostics) {
-                Some(children) => (
-                    compile_expression(
-                        children.0,
-                        attributes,
-                        parameters,
-                        diagnostics,
-                        dependencies,
-                        depth + 1,
-                    )?,
-                    compile_expression(
-                        children.1,
-                        attributes,
-                        parameters,
-                        diagnostics,
-                        dependencies,
-                        depth + 1,
-                    )?,
-                ),
-                None => return None,
-            };
+        SysmlExpressionData::Binary {
+            operator,
+            left,
+            right,
+        } => {
+            let operator = IrOperator::from(*operator);
+            let left = compile_expression(
+                left,
+                attributes,
+                parameters,
+                diagnostics,
+                dependencies,
+                depth + 1,
+            )?;
+            let right = compile_expression(
+                right,
+                attributes,
+                parameters,
+                diagnostics,
+                dependencies,
+                depth + 1,
+            )?;
             validate_binary(
                 operator,
                 &left.result_type,
@@ -673,36 +626,35 @@ fn compile_expression(
                 right: Box::new(right),
             }
         }
-        SysmlExpressionKind::Conditional => {
-            let (condition, when_true, when_false) = match three_children(expression, diagnostics) {
-                Some(children) => (
-                    compile_expression(
-                        children.0,
-                        attributes,
-                        parameters,
-                        diagnostics,
-                        dependencies,
-                        depth + 1,
-                    )?,
-                    compile_expression(
-                        children.1,
-                        attributes,
-                        parameters,
-                        diagnostics,
-                        dependencies,
-                        depth + 1,
-                    )?,
-                    compile_expression(
-                        children.2,
-                        attributes,
-                        parameters,
-                        diagnostics,
-                        dependencies,
-                        depth + 1,
-                    )?,
-                ),
-                None => return None,
-            };
+        SysmlExpressionData::Conditional {
+            condition,
+            when_true,
+            when_false,
+        } => {
+            let condition = compile_expression(
+                condition,
+                attributes,
+                parameters,
+                diagnostics,
+                dependencies,
+                depth + 1,
+            )?;
+            let when_true = compile_expression(
+                when_true,
+                attributes,
+                parameters,
+                diagnostics,
+                dependencies,
+                depth + 1,
+            )?;
+            let when_false = compile_expression(
+                when_false,
+                attributes,
+                parameters,
+                diagnostics,
+                dependencies,
+                depth + 1,
+            )?;
             if !condition.result_type.is_boolean_scalar() {
                 diagnostics.push(error(
                     "SYSML-IR-012",
@@ -723,15 +675,10 @@ fn compile_expression(
                 when_false: Box::new(when_false),
             }
         }
-        SysmlExpressionKind::Invocation => {
-            let Some(function_reference) = expression.function.as_ref() else {
-                diagnostics.push(error(
-                    "SYSML-IR-029",
-                    &source,
-                    "function invocation has no resolved semantic target",
-                ));
-                return None;
-            };
+        SysmlExpressionData::Invocation {
+            function: function_reference,
+            arguments: invocation_arguments,
+        } => {
             let Some(function) = function_reference.standard_function else {
                 diagnostics.push(error(
                     "SYSML-IR-029",
@@ -740,7 +687,7 @@ fn compile_expression(
                 ));
                 return None;
             };
-            if expression.children.len() != function.arity() {
+            if invocation_arguments.len() != function.arity() {
                 diagnostics.push(error(
                     "SYSML-IR-030",
                     &source,
@@ -748,13 +695,14 @@ fn compile_expression(
                         "standard function `{}` requires {} argument(s), found {}",
                         function.standard_name(),
                         function.arity(),
-                        expression.children.len()
+                        invocation_arguments.len()
                     ),
                 ));
                 return None;
             }
-            if expression.argument_parameters.len() != expression.children.len()
-                || expression.argument_parameters.iter().any(Option::is_none)
+            if invocation_arguments
+                .iter()
+                .any(|argument| argument.parameter.is_none())
             {
                 diagnostics.push(error(
                     "SYSML-IR-031",
@@ -763,11 +711,9 @@ fn compile_expression(
                 ));
                 return None;
             }
-            let mut bound_parameters = expression
-                .argument_parameters
+            let mut bound_parameters = invocation_arguments
                 .iter()
-                .flatten()
-                .copied()
+                .filter_map(|argument| argument.parameter)
                 .collect::<Vec<_>>();
             bound_parameters.sort_unstable_by_key(|parameter| parameter.element_id);
             if bound_parameters.windows(2).any(|pair| pair[0] == pair[1]) {
@@ -778,12 +724,11 @@ fn compile_expression(
                 ));
                 return None;
             }
-            let arguments = expression
-                .children
+            let arguments = invocation_arguments
                 .iter()
-                .map(|child| {
+                .map(|argument| {
                     compile_expression(
-                        child,
+                        &argument.value,
                         attributes,
                         parameters,
                         diagnostics,
@@ -796,19 +741,14 @@ fn compile_expression(
             IrExpressionKind::Invocation {
                 function,
                 function_element: function_reference.element,
-                argument_parameters: expression
-                    .argument_parameters
+                argument_parameters: invocation_arguments
                     .iter()
-                    .flatten()
-                    .copied()
+                    .filter_map(|argument| argument.parameter)
                     .collect(),
                 arguments,
             }
         }
-        SysmlExpressionKind::Index => {
-            let Some((collection, index)) = two_children(expression, diagnostics) else {
-                return None;
-            };
+        SysmlExpressionData::Index { collection, index } => {
             let collection = compile_expression(
                 collection,
                 attributes,
@@ -841,9 +781,8 @@ fn compile_expression(
                 index: Box::new(index),
             }
         }
-        SysmlExpressionKind::Collection => {
-            let values = expression
-                .children
+        SysmlExpressionData::Collection(expression_arguments) => {
+            let values = expression_arguments
                 .iter()
                 .map(|child| {
                     compile_expression(
@@ -866,25 +805,19 @@ fn compile_expression(
             }
             IrExpressionKind::Collection(values)
         }
-        SysmlExpressionKind::Group => {
-            let child = match one_child(expression, diagnostics) {
-                Some(child) => compile_expression(
-                    child,
-                    attributes,
-                    parameters,
-                    diagnostics,
-                    dependencies,
-                    depth + 1,
-                )?,
-                None => return None,
-            };
+        SysmlExpressionData::Group(child) => {
+            let child = compile_expression(
+                child,
+                attributes,
+                parameters,
+                diagnostics,
+                dependencies,
+                depth + 1,
+            )?;
             IrExpressionKind::Group(Box::new(child))
         }
-        SysmlExpressionKind::Unsupported => {
-            let reason = expression
-                .unsupported
-                .map(unsupported_name)
-                .unwrap_or("unsupported syntax");
+        SysmlExpressionData::Unsupported(reason) => {
+            let reason = unsupported_name(*reason);
             diagnostics.push(error(
                 "SYSML-IR-014",
                 &source,
@@ -1177,10 +1110,10 @@ fn ir_type_from_sysml(value: &SysmlType) -> IrType {
     let value_type = match value.value_category {
         SysmlTypeCategory::Primitive => match value.primitive {
             Some(SysmlPrimitiveType::Boolean) => IrValueType::Boolean,
-            Some(SysmlPrimitiveType::Integer | SysmlPrimitiveType::Rational) => {
-                IrValueType::Integer
-            }
-            Some(SysmlPrimitiveType::Real | SysmlPrimitiveType::Complex) => IrValueType::Real,
+            Some(SysmlPrimitiveType::Integer) => IrValueType::Integer,
+            Some(SysmlPrimitiveType::Rational) => IrValueType::Rational,
+            Some(SysmlPrimitiveType::Real) => IrValueType::Real,
+            Some(SysmlPrimitiveType::Complex) => IrValueType::Complex,
             Some(SysmlPrimitiveType::String) => IrValueType::String,
             None => IrValueType::Unknown,
         },
@@ -1211,49 +1144,9 @@ fn ir_type_from_sysml(value: &SysmlType) -> IrType {
                 .as_ref()
                 .map(|value| value.qualified_name.clone()),
         },
-        // `category` is Collection for `Real[3]`, `Length[3]`, and other
-        // multiplicity-bearing features. `value_category` retains the
-        // element type and is the only correct source for the IR value kind.
-        SysmlTypeCategory::Collection => match value.value_category {
-            SysmlTypeCategory::Primitive => match value.primitive {
-                Some(SysmlPrimitiveType::Boolean) => IrValueType::Boolean,
-                Some(SysmlPrimitiveType::Integer | SysmlPrimitiveType::Rational) => {
-                    IrValueType::Integer
-                }
-                Some(SysmlPrimitiveType::Real | SysmlPrimitiveType::Complex) => IrValueType::Real,
-                Some(SysmlPrimitiveType::String) => IrValueType::String,
-                None => IrValueType::Unknown,
-            },
-            SysmlTypeCategory::Quantity => IrValueType::Quantity {
-                quantity_kind: value
-                    .quantity_kind
-                    .as_ref()
-                    .map(|kind| kind.qualified_name.clone()),
-            },
-            SysmlTypeCategory::Enumeration => IrValueType::Enumeration {
-                type_name: value
-                    .resolved_type
-                    .as_ref()
-                    .map(|value| value.qualified_name.clone()),
-            },
-            SysmlTypeCategory::Reference => IrValueType::Reference {
-                type_name: value
-                    .resolved_type
-                    .as_ref()
-                    .map(|value| value.qualified_name.clone()),
-            },
-            SysmlTypeCategory::Structured
-            | SysmlTypeCategory::Part
-            | SysmlTypeCategory::Item
-            | SysmlTypeCategory::Port => IrValueType::Structured {
-                type_name: value
-                    .resolved_type
-                    .as_ref()
-                    .map(|value| value.qualified_name.clone()),
-            },
-            SysmlTypeCategory::Collection | SysmlTypeCategory::Unknown => IrValueType::Unknown,
-        },
-        SysmlTypeCategory::Unknown => IrValueType::Unknown,
+        // Collection multiplicity belongs to `IrType`; this case only means
+        // the resolved element type itself is not scalar/structured.
+        SysmlTypeCategory::Collection | SysmlTypeCategory::Unknown => IrValueType::Unknown,
     };
     IrType {
         value: value_type,
@@ -1339,59 +1232,6 @@ fn validate_binary(
             "operator is not defined for the operand types, units, or multiplicities",
         ));
     }
-}
-
-fn one_child<'a>(
-    expression: &'a SysmlExpression,
-    diagnostics: &mut Vec<IrDiagnostic>,
-) -> Option<&'a SysmlExpression> {
-    if expression.children.len() != 1 {
-        diagnostics.push(error(
-            "SYSML-IR-018",
-            &expression.source,
-            "unary/group expression must contain exactly one child",
-        ));
-        return None;
-    }
-    expression.children.first()
-}
-
-fn two_children<'a>(
-    expression: &'a SysmlExpression,
-    diagnostics: &mut Vec<IrDiagnostic>,
-) -> Option<(&'a SysmlExpression, &'a SysmlExpression)> {
-    if expression.children.len() != 2 {
-        diagnostics.push(error(
-            "SYSML-IR-019",
-            &expression.source,
-            "binary expression must contain exactly two children",
-        ));
-        return None;
-    }
-    Some((&expression.children[0], &expression.children[1]))
-}
-
-fn three_children<'a>(
-    expression: &'a SysmlExpression,
-    diagnostics: &mut Vec<IrDiagnostic>,
-) -> Option<(
-    &'a SysmlExpression,
-    &'a SysmlExpression,
-    &'a SysmlExpression,
-)> {
-    if expression.children.len() != 3 {
-        diagnostics.push(error(
-            "SYSML-IR-020",
-            &expression.source,
-            "conditional expression must contain guard and two branches",
-        ));
-        return None;
-    }
-    Some((
-        &expression.children[0],
-        &expression.children[1],
-        &expression.children[2],
-    ))
 }
 
 fn unsupported_name(value: SysmlUnsupportedExpression) -> &'static str {

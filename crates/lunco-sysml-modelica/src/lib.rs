@@ -255,6 +255,8 @@ fn modelica_declaration(ty: &IrType, name: &str) -> Result<String, ModelicaLower
         IrValueType::Enumeration { .. }
         | IrValueType::Reference { .. }
         | IrValueType::Structured { .. }
+        | IrValueType::Rational
+        | IrValueType::Complex
         | IrValueType::Unknown => {
             return Err(ModelicaLoweringError::UnsupportedType(format!(
                 "feature `{name}` has no scalar Modelica representation"
