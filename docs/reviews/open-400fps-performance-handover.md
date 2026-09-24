@@ -82,6 +82,11 @@ selection/control/camera/mount and identity-lifecycle changes, compares
 diagnostic/fault contents to ignore no-op mutable publishes, and passes its
 focused scheduling test. Its reduction remains source-level and unmeasured. A
 clean settled Apollo run remains necessary before claiming an FPS improvement.
+The shader-look binder also reuses loaded WGSL stage verdicts by asset ID and
+stage, invalidating them on shader asset events so shared terrain looks do not
+revalidate identical source; see the dated note in the [200 FPS
+handover](open-200fps-performance-handover.md). No measured FPS delta is
+claimed.
 
 ## CPU investigation lead
 

@@ -31,8 +31,8 @@
 //! by name, and is repacked the moment the schema lands. That machinery is
 //! untouched.
 
-use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
-use crate::shader_material::{ShaderMaterial, build_shader_material, wgsl_source};
+use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
+use crate::shader_material::{build_shader_material, wgsl_source, ShaderMaterial};
 use bevy::asset::AssetId;
 use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
@@ -41,10 +41,10 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureDimension, TextureFormat};
 use bevy::shader::Shader;
-use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
+use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_materials::{
-    ParamSchema, Rgba8MipMode, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady,
-    ShaderStage, TextureLayer, rgba8_mip_chain, validate_shader_stage,
+    rgba8_mip_chain, validate_shader_stage, ParamSchema, Rgba8MipMode, ShaderLook, ShaderLookBound,
+    ShaderLookKey, ShaderLookReady, ShaderStage, TextureLayer,
 };
 use lunco_render::{ProceduralSkybox, SurfaceAlpha};
 use std::sync::Arc;
@@ -145,17 +145,61 @@ fn loaded_shader_stage_failure(
         })
 }
 
-fn shader_id_for(
-    path: &str,
-    ids: &mut HashMap<String, AssetId<Shader>>,
-    asset_server: &AssetServer,
-) -> AssetId<Shader> {
-    if let Some(id) = ids.get(path) {
-        return *id;
+#[derive(Default)]
+struct ShaderLookShaderCache {
+    ids_by_path: HashMap<String, AssetId<Shader>>,
+    stage_failures: HashMap<(AssetId<Shader>, ShaderStage), Option<String>>,
+}
+
+impl ShaderLookShaderCache {
+    fn shader_id(&mut self, path: &str, asset_server: &AssetServer) -> AssetId<Shader> {
+        *self
+            .ids_by_path
+            .entry(path.to_owned())
+            .or_insert_with(|| asset_server.load::<Shader>(path.to_owned()).id())
     }
-    let id = asset_server.load::<Shader>(path.to_owned()).id();
-    ids.insert(path.to_owned(), id);
-    id
+
+    fn failure(&mut self, id: AssetId<Shader>, stage: ShaderStage, source: &str) -> Option<String> {
+        self.stage_failures
+            .entry((id, stage))
+            .or_insert_with(|| {
+                validate_shader_stage(source, stage)
+                    .err()
+                    .map(|error| error.to_string())
+            })
+            .clone()
+    }
+
+    fn invalidate(&mut self, id: AssetId<Shader>) {
+        self.ids_by_path.retain(|_, cached| *cached != id);
+        self.stage_failures.retain(|(cached, _), _| *cached != id);
+    }
+}
+
+fn changed_shader_stage_failure(
+    look: &ShaderLook,
+    shaders: Option<&Assets<Shader>>,
+    asset_server: &AssetServer,
+    cache: &mut ShaderLookShaderCache,
+) -> Option<(ShaderStage, String)> {
+    let shaders = shaders?;
+    let fragment_id = cache.shader_id(&look.shader, asset_server);
+    if let Some(source) = shaders.get(fragment_id).and_then(wgsl_source) {
+        if let Some(detail) = cache.failure(fragment_id, ShaderStage::Fragment, source) {
+            return Some((ShaderStage::Fragment, detail));
+        }
+    }
+
+    let vertex_path = look.vertex_shader.as_deref()?;
+    let vertex_id = cache.shader_id(vertex_path, asset_server);
+    shaders
+        .get(vertex_id)
+        .and_then(wgsl_source)
+        .and_then(|source| {
+            cache
+                .failure(vertex_id, ShaderStage::Vertex, source)
+                .map(|detail| (ShaderStage::Vertex, detail))
+        })
 }
 
 fn clear_shader_render_components(commands: &mut Commands, entity: Entity) {
@@ -364,13 +408,22 @@ fn rebind_changed_shader_look(
     schemas: Option<Res<crate::ShaderSchemas>>,
     mut commands: Commands,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
-    // Shader path → resolved `AssetId`, so the driven hot path can compare shader
-    // identity WITHOUT `asset_server.load::<Shader>()` per prim per tick. A path's
-    // id is minted once and the bound material's own `Handle<Shader>` keeps the
-    // asset alive, so a cached id stays valid while any look uses it; the
-    // structural branch refreshes the entry from the freshly built material.
-    mut shader_ids: Local<HashMap<String, AssetId<Shader>>>,
+    // Owns resolved IDs and validation results for changed looks. Asset events
+    // retire both entries, while a shader shared by many changed tiles is
+    // loaded and validated only once until that event.
+    mut shader_events: MessageReader<AssetEvent<Shader>>,
+    mut shader_cache: Local<ShaderLookShaderCache>,
 ) {
+    for event in shader_events.read() {
+        let id = match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::Removed { id }
+            | AssetEvent::Unused { id }
+            | AssetEvent::LoadedWithDependencies { id } => *id,
+        };
+        shader_cache.invalidate(id);
+    }
     // Shared materials already written this run. Every terrain tile carries the same
     // global overlay values, so without this the one material they share would be
     // re-packed once per tile per change — hundreds of redundant writes per frame.
@@ -378,7 +431,7 @@ fn rebind_changed_shader_look(
 
     for (e, look, current, was_ready, skybox) in &changed {
         if let Some((stage, detail)) =
-            loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server)
+            changed_shader_stage_failure(look, shaders.as_deref(), &asset_server, &mut shader_cache)
         {
             clear_shader_render_components(&mut commands, e);
             if let Some(diagnostics) = diagnostics.as_deref_mut() {
@@ -413,16 +466,14 @@ fn rebind_changed_shader_look(
                 // reflected schema across when we do. Otherwise write the values in
                 // place, which is what `set_many` exists for: one repack for N
                 // fields, against the live schema. Shader identity comes from the
-                // `shader_ids` cache — `asset_server.load` mints a strong handle
-                // and touches the asset infrastructure, far too heavy for a
-                // per-tick id compare. Textures compare slot-by-slot
+                // asset-ID cache, avoiding repeated path resolution. Textures compare slot-by-slot
                 // (`textures_match`): a TEXTURED look whose texture SET is
                 // unchanged takes the cheap param path like everything else.
-                let want_shader_id = shader_id_for(&look.shader, &mut shader_ids, &asset_server);
+                let want_shader_id = shader_cache.shader_id(&look.shader, &asset_server);
                 let want_vertex_shader_id = look
                     .vertex_shader
                     .as_deref()
-                    .map(|path| shader_id_for(path, &mut shader_ids, &asset_server));
+                    .map(|path| shader_cache.shader_id(path, &asset_server));
                 let structural = existing.shader.id() != want_shader_id
                     || existing.vertex_shader.as_ref().map(Handle::id) != want_vertex_shader_id
                     || !textures_match(&existing, look);
@@ -432,12 +483,14 @@ fn rebind_changed_shader_look(
                     existing.set_schema(schema);
                     // The rebuild loaded the shader afresh; make the id cache agree
                     // with the material so the compare above stays quiet next tick.
-                    shader_ids.insert(look.shader.clone(), existing.shader.id());
+                    shader_cache
+                        .ids_by_path
+                        .insert(look.shader.clone(), existing.shader.id());
                     if let (Some(path), Some(id)) = (
                         look.vertex_shader.as_deref(),
                         existing.vertex_shader.as_ref().map(Handle::id),
                     ) {
-                        shader_ids.insert(path.to_owned(), id);
+                        shader_cache.ids_by_path.insert(path.to_owned(), id);
                     }
                 } else {
                     existing.set_many(
@@ -1205,6 +1258,33 @@ mod tests {
             image_dependency_removed(&AssetEvent::Unused { id }),
             Some(id)
         );
+    }
+
+    #[test]
+    fn shader_stage_validation_is_cached_until_asset_invalidation() {
+        let id = Handle::<Shader>::default().id();
+        let valid_fragment =
+            "@fragment fn fragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }";
+        let mut cache = ShaderLookShaderCache::default();
+
+        assert_eq!(
+            cache.failure(id, ShaderStage::Fragment, valid_fragment),
+            None
+        );
+        assert_eq!(cache.stage_failures.len(), 1);
+        assert_eq!(
+            cache.failure(id, ShaderStage::Fragment, "not a fragment shader"),
+            None,
+            "a shared asset is validated once while its source revision is unchanged"
+        );
+
+        cache.ids_by_path.insert("test.wgsl".to_string(), id);
+        cache.invalidate(id);
+        assert!(cache.stage_failures.is_empty());
+        assert!(cache.ids_by_path.is_empty());
+        assert!(cache
+            .failure(id, ShaderStage::Fragment, "not a fragment shader")
+            .is_some());
     }
 
     fn material_of(app: &App, e: Entity) -> Handle<ShaderMaterial> {

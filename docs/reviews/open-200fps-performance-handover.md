@@ -1095,7 +1095,7 @@ bounded inspection window, so no post-change CPU delta is claimed. The app's
 transient logged FPS is likewise not acceptance evidence. Its own API Exit was
 accepted and ports 4193/8087 were verified closed.
 
-### 2026-09-24 — avoid redundant shader readiness validation
+### 2026-09-24 — avoid repeated shader validation and readiness checks
 
 The earlier Tracy inspection put
 `lunco_render_bevy::shader_look::rebind_changed_shader_look` at about 0.60 ms
@@ -1113,6 +1113,13 @@ checks that a live update keeps its existing material and readiness marker.
 This is a source-backed reduction, not yet a measured FPS/CPU delta; the
 existing concurrent, readiness-held Tracy capture is not suitable for a
 post-change comparison. A clean settled window remains required.
+
+The same measured leaf also validated identical loaded WGSL once per changed
+entity. Its shader-path/asset-ID lookup and fragment/vertex stage verdicts are
+now shared by asset identity and stage, then invalidated by shader asset events.
+This preserves validation for in-place shader changes while preventing repeated
+validation when many streamed tiles share one shader. A focused cache regression
+covers reuse and event invalidation; this remains source-level evidence only.
 
 ## Acceptance criteria
 
