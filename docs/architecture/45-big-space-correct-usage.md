@@ -294,24 +294,25 @@ The body hierarchy has two intentionally separate surface-grid identities:
   selector, streamed tile parents, and presentation-time camera projection use
   it for derived planetary imagery.
 
-The presentation grid samples physical time between completed ticks. It must
-never be used as the physical site parent, and physical content must never be
-reparented into it as a way to make a view look aligned. Keeping the ownership
-split in the component contract makes an invalid wiring a compile-time field
-initialization error rather than a runtime timing symptom.
+The presentation grid samples `CelestialTime`, which normally tracks the
+physical mission timeline and can be detached for accelerated celestial
+motion. It must never be used as the physical site parent, and physical content
+must never be reparented into it as a way to make a view look aligned. Keeping
+the ownership split in the component contract makes invalid wiring a
+compile-time field initialization error rather than a runtime timing symptom.
 
-The render presentation sample also drives the rendered solar direction and
-globe pose. A
-surface station remains a causal entity on the physical body-fixed grid; its
-screen marker is mirrored as render-only geometry under the matching
-presentation grid, so the marker follows the fast globe without changing
-station, terrain, physics, or link coordinates. The physical marker is shown
-from its own body's surface view; orbit and other-body views use the moving
-copy, avoiding a stationary duplicate. Celestial body shader looks retain
-installed dataset albedo unless USD authors an explicit albedo map. The solar
-presentation hierarchy is rigidly aligned at the active body-fixed camera
-pose; this preserves the interpolated Earth/Moon/Sun directions in the local
-sky without reposing the causal body or site.
+The render presentation sample drives globe pose. A surface station remains a
+causal entity on the physical body-fixed grid; its screen marker is mirrored as
+render-only geometry under the matching presentation grid, so the marker
+follows the fast globe without changing station, terrain, physics, or link
+coordinates. The physical marker is shown from its own body's surface view;
+orbit and other-body views use the moving copy, avoiding a stationary
+duplicate. Celestial body shader looks retain installed dataset albedo unless
+USD authors an explicit albedo map. The solar presentation hierarchy is
+rigidly aligned at the active body-fixed camera pose. When `CelestialTime` is
+detached at a surface observer, its Sun direction also selects the render
+light; Bevy's shadow map, terrain shadows, and horizon cache then consume the
+same finalized light direction without reposing the causal body or site.
 
 The procedural Sun disc uniform uses the active camera's view coordinates,
 matching the shader's view-space rays. The celestial projection composes the

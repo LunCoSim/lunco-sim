@@ -38,7 +38,7 @@ pub(crate) struct OverlaySettings {
     #[serde(default = "overlay_settings_schema_version")]
     schema_version: u8,
     #[serde(default)]
-    /// The sky-time pill (top-left): the interpolated physical-time epoch.
+    /// The sky-time pill (top-left): the `CelestialTime` presentation epoch.
     pub sky_clock: bool,
     #[serde(default)]
     /// The view-mode switcher pill (top-centre): Surface / Moon / Earth, which

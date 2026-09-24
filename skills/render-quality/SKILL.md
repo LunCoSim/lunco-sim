@@ -63,13 +63,16 @@ LOD approaches, consult the source-linked
 For celestial globes, verify the installed Earth/Moon imagery dataset and the
 composed USD body look. A body shader look may add shader parameters, but it
 must retain the installed dataset albedo unless USD supplies an explicit
-albedo layer or `AuthoredBodyAlbedo`. Globe and sky presentation use the
-interpolated physical-time sample; physical station, terrain, and link state
-use causal `WorldTime` at completed ticks. In surface view, align the
-render-only presentation hierarchy at the physical camera pose. A visible
-surface marker may be copied under the matching presentation body-fixed grid,
-but that copy is render-only. Show the causal marker on its own body's surface
-and the copy in orbit or other-body views.
+albedo layer or `AuthoredBodyAlbedo`. Globe and sky presentation use
+`CelestialTime`, which normally tracks the physical timeline and can be
+detached by the sky-clock controls; physical station, terrain, and link state
+use causal `WorldTime` at completed ticks. At a surface observer, a detached
+celestial Sun direction drives the scene light and shadows in the same render
+frame without changing `SunState` or co-simulation inputs. In surface view,
+align the render-only presentation hierarchy at the physical camera pose. A
+visible surface marker may be copied under the matching presentation
+body-fixed grid, but that copy is render-only. Show the causal marker on its own
+body's surface and the copy in orbit or other-body views.
 Procedural sky materials opt into the live Sun disc by declaring both
 `sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
 the behavior. The direction is in the active camera's view coordinates, the

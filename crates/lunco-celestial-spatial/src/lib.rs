@@ -455,6 +455,7 @@ impl Plugin for CelestialPlugin {
                 .run_if(lunco_time::scene_time_ready)
                 .after(lunco_time::CelestialTimeSet)
                 .after(lunco_time::InteractionRenderSet)
+                .before(lunco_environment::SunRenderProjectionSet)
                 .before(TransformSystems::Propagate),
         );
 
@@ -517,12 +518,12 @@ impl Plugin for CelestialPlugin {
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate
 
-        // Ephemeris-driven physical-surface sun direction (doc 19 — T2). The
-        // system returns early when no ephemeris provider or site frame is
-        // available, so manual `SetEnvironmentLight` (yaw/pitch) remains an
-        // explicit operator command in non-orbital contexts. It tracks the
-        // causal world clock, while the render-only globe branch samples the
-        // same physical timeline with fixed-step interpolation:
+        // Ephemeris-driven physical-surface SunState (doc 19 — T2). The system
+        // returns early when no ephemeris provider or site frame is available,
+        // so manual `SetEnvironmentLight` (yaw/pitch) remains an explicit
+        // operator command in non-orbital contexts. SunState tracks WorldTime;
+        // render-only celestial frames and the detached surface light follow
+        // CelestialTime:
         // required since the celestial sun light is a TOP-LEVEL entity (it
         // must not ride the Solar Grid — heliocentric-magnitude translations
         // corrupt the f32 cascade-shadow matrices) and therefore inherits no
@@ -531,8 +532,7 @@ impl Plugin for CelestialPlugin {
             Update,
             update_sun_light_system
                 .run_if(cadence::tracked_needs_solve())
-                .run_if(lunco_time::scene_time_ready)
-                .before(lunco_environment::project_sun_state_to_light),
+                .run_if(lunco_time::scene_time_ready),
         );
     }
 }

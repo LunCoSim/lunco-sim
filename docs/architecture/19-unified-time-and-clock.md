@@ -91,16 +91,19 @@ this physical presentation sample. Causal physics and body state read
 `WorldTime` at integer ticks; ordinary render-only consumers may interpolate
 between those completed states, but they do not advance on wall time.
 
-Celestial frames and the rendered solar direction use `CelestialTime`. Its
-default source is mission elapsed time from the same deterministic tick. The
-`SetClock` command can re-parent that presentation clock to wall time and select
-a rate up to 100,000×. This changes only celestial rendering; `WorldTime`,
-physics, co-simulation, and ordinary USD animation stay on the causal timeline.
-The celestial solve gate applies its certified angular error budget to this
-clock, and visible motion requests the shared bounded realtime frame cadence.
-The Time menu and optional sky-clock HUD expose the same controls. The HUD can
-seek UTC dates and select rates through 100k×; `SetTimeTransport` remains the
-separate 0.1×–64× causal control.
+Celestial frames, the sky Sun disc, and the surface render-light direction use
+`CelestialTime`. Its default source is mission elapsed time from the same
+deterministic tick. The `SetClock` command can re-parent that presentation clock
+to wall time and select a rate up to 100,000×. At a surface observer, the
+selected celestial direction drives the scene `DistantLight` before transform
+propagation, so Bevy's shadow map, terrain shadows, and the horizon cache use
+the same finalized direction. `SunState`, `WorldTime`, physics, co-simulation,
+and ordinary USD animation stay on the causal timeline. The celestial solve
+gate applies its certified angular error budget to this clock, and visible
+motion requests the shared bounded realtime frame cadence. The Time menu and
+optional sky-clock HUD expose the same controls. The HUD can seek UTC dates and
+select rates through 100k×; `SetTimeTransport` remains the separate 0.1×–64×
+causal control.
 
 ## 3. Clock tree
 
