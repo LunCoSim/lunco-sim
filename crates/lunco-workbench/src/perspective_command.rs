@@ -37,7 +37,9 @@ fn on_activate_perspective(
     };
     if layout.activate_perspective_by_str(&id) {
         if let Some(snapshot) = snapshot.as_deref_mut() {
-            crate::publish_workbench_snapshot(&layout, snapshot);
+            if let Some(next) = crate::snapshot_for_layout_if_changed(&layout, snapshot) {
+                *snapshot = next;
+            }
         }
         info!("[ActivatePerspective] activated `{id}`");
     } else {
@@ -75,7 +77,9 @@ fn on_reset_workspace_layout(
     };
     layout.reset_to_default_layout();
     if let Some(snapshot) = snapshot.as_deref_mut() {
-        crate::publish_workbench_snapshot(&layout, snapshot);
+        if let Some(next) = crate::snapshot_for_layout_if_changed(&layout, snapshot) {
+            *snapshot = next;
+        }
     }
     info!("[ResetWorkspaceLayout] dock reset to active perspective preset");
 }
@@ -102,7 +106,9 @@ fn on_reset_to_default_perspective(
     };
     layout.reset_to_default_perspective();
     if let Some(snapshot) = snapshot.as_deref_mut() {
-        crate::publish_workbench_snapshot(&layout, snapshot);
+        if let Some(next) = crate::snapshot_for_layout_if_changed(&layout, snapshot) {
+            *snapshot = next;
+        }
     }
 }
 

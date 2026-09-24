@@ -125,6 +125,14 @@ producer must not rebuild a projection in the background.
 `WorkbenchSnapshot::is_panel_visible` is the shared visibility boundary for
 that decision; selecting the panel makes its normal producer cadence eligible
 again. `is_panel_docked` remains the layout-presence query for shell operations.
+The snapshot also publishes exact visible `TabId`s for instance panels, and
+`WorkbenchSnapshotPublishSet` orders consumers after that publication. USD
+preview cameras remain active only while their Visual singleton/instance tab is
+visible and within the existing render-pixel budget. Visibility is
+transition-driven: stable visible previews are not disabled/re-enabled each
+frame. Their measured rect updates `UsdViewportState` only when it actually
+changes, so camera presentation does not reopen preview subtree walks on idle
+frames.
 
 Physics has the same frame-budget boundary even though its consumer is not UI.
 Avian's collider-tree optimizer may use a worker task, but Avian joins that task
