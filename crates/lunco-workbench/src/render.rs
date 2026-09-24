@@ -32,17 +32,22 @@ impl Default for WorkbenchVisualsCache {
 
 pub(crate) fn render_workbench(
     world: &mut World,
-    state: &mut bevy::ecs::system::SystemState<EguiContexts>,
+    state: &mut bevy::ecs::system::SystemState<(EguiContexts, Res<WorkbenchMenuRegistry>)>,
+    mut menu_snapshot: Local<Option<WorkbenchMenuRegistry>>,
 ) {
-    let ctx = {
-        let Ok(mut contexts) = state.get_mut(world) else {
+    let (ctx, menu_registry_changed) = {
+        let Ok((mut contexts, menus)) = state.get_mut(world) else {
             return;
         };
-        match contexts.ctx_mut() {
+        let ctx = match contexts.ctx_mut() {
             Ok(ctx) => ctx.clone(),
             Err(_) => return,
-        }
+        };
+        (ctx, menus.is_changed())
     };
+    if menu_registry_changed || menu_snapshot.is_none() {
+        *menu_snapshot = Some(world.resource::<WorkbenchMenuRegistry>().clone());
+    }
 
     // egui's expansion diagnostics are developer overlays, not workbench UI.
     // Keep them disabled so debug builds cannot paint red layout markers over
@@ -147,11 +152,12 @@ pub(crate) fn render_workbench(
         Arc::clone(&cache.theme)
     };
 
-    // The menu registry is persistent shell state. Clone its callback handles
-    // for this frame instead of extracting the resource from the world. A
-    // render pass may borrow the dock state exclusively, while observers must
-    // still see the installed menu registry.
-    let menus = world.resource::<WorkbenchMenuRegistry>().clone();
+    // The menu registry remains installed in the world while the layout is
+    // scoped out. Its local snapshot is refreshed only when the typed resource
+    // changes, so stable frames do not clone the contribution vectors.
+    let menus = menu_snapshot
+        .as_ref()
+        .expect("the menu snapshot is initialized before the render pass");
     world.resource_scope(|world, mut layout: Mut<WorkbenchLayout>| {
         layout_render::render_layout(&ctx, &mut layout, world, &theme, &menus);
     });
