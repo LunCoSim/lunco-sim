@@ -166,6 +166,34 @@ send-safe snapshot and fence publication by root and stage generation.
   port 4191 was verified closed; the existing 4163, 45552, and 37431 sessions
   were left untouched.
 
+### 2026-09-24 — conservative spotlight shadow relevance
+
+`lunco-render-bevy` now disables only the extracted shadow-map flag for a
+spotlight whose conservative finite-frustum bound misses every extracted 3D
+camera on compatible render layers. Missing or malformed bounds and boundary
+contacts retain the shadow map. Authored lights, direct illumination, shadow
+resolution, and the High quality preset are unchanged. This removes irrelevant
+shadow-view preparation after extraction; Bevy's main-world per-light caster
+visibility work remains in place.
+
+- Six focused `spotlight_shadow_relevance` unit tests passed. The regular and
+  Tracy-enabled production binaries both built, and the High-quality Apollo
+  scene reached `/api/ready` with no pending work. Both owned sessions shut down
+  through typed API `Exit`; their ports were released.
+- The unprofiled diagnostic tail varied from 45–132 FPS and 7.6–22.1 ms per
+  frame while other simulator sessions were active, so it is contention-affected
+  and is not a clean FPS comparison.
+- Tracy capture:
+  `scripts/perf/captures/apollo-high-spotlight-20260924.tracy` (20.29 s, 518
+  profiler frames, 3.82 million zones, 139.12 MB). The full-trace CSV exporter
+  was stopped after several minutes at one low-priority core; no zone
+  attribution or performance delta is claimed from this capture.
+
+This change preserves authored visual quality by construction, but a settled,
+uncontended before/after FPS comparison and detailed Tracy zone inspection are
+still required; the 400 FPS acceptance target remains open. Other simulator
+sessions and an unrelated Cargo build were left untouched.
+
 ## Remaining blocker
 
 The 400 FPS acceptance target is not met. The maintained BigSpace dependency

@@ -37,6 +37,24 @@ structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
 
+For Bevy visibility costs, distinguish the active scene camera from auxiliary
+shadow-map subviews. If adapter capability supports GPU culling, put
+`NoCpuCulling` on the scene camera so camera frustum work can move to GPU
+preprocessing while per-mesh light and shadow visibility remains CPU-owned. Do
+not put it on shadow-casting `Mesh3d` entities: Bevy excludes those from its
+CPU-built per-light visibility lists. Unsupported adapters retain CPU camera
+culling. Measure GPU headroom and compare a clean FPS run plus a separate Tracy
+capture; do not trade away shadows or authored quality to reduce CPU time.
+
+Spotlight shadow views are filtered at the render boundary: compare a
+conservative bound of each extracted spotlight frustum with every active
+extracted `Camera3d` frustum and compatible `RenderLayers` before Bevy prepares
+shadow views. Do not mutate the authored `SpotLight`, omit offscreen cameras, or
+infer relevance from the light origin alone. Uncertain bounds and boundary
+cases keep the map. This saves only maps provably irrelevant to all outputs;
+Bevy's main-world per-light caster visibility pass is still a separate cost to
+measure.
+
 Treat Bevy `Changed<T>`/`Added<T>` filters as population filters, not free
 events: a no-match query can still inspect candidate entities, and separate
 `is_empty()` queries can repeat that work. Combine compatible invalidation
