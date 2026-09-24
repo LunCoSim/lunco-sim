@@ -96,6 +96,14 @@ Celestial body ephemerides are not ordinary USD animation: their render-only
 frames and solar projection read `lunco_time::CelestialTime`. That clock follows
 the mission epoch by default and can be rate-scaled up to 100,000× for sky
 presentation without advancing physical bodies, terrain, or Avian state.
+From a lunar surface, Earth stays near one sky position because the Moon is
+tidally locked; expect libration, while Earth's body-fixed presentation grid
+continues to rotate for the day/night cycle. At 100,000×, a lunar month takes
+about 24 seconds. Test both the parent-relative `CellCoord`/`Transform` and the
+BigSpace-propagated `GlobalTransform`; local transform checks alone do not
+prove a rendered pose reached its consumer. Causal `WorldTime` cadence commits
+the frame-start sample because the completed tick is published later in
+`PostUpdate`.
 
 For the local kinematic avatar, use the existing Avian `MoveAndSlide` query in
 `ActivePhysicsFrame`: convert the source Grid pose, displacement, and up vector

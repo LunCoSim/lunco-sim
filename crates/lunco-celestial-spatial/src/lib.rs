@@ -383,14 +383,17 @@ impl Plugin for CelestialPlugin {
         // change signal or hide an invalid low-precision subtree.
         app.init_resource::<cadence::CelestialSolvedEpoch>();
         app.init_resource::<cadence::CelestialPresentationSolvedEpoch>();
+        app.init_resource::<cadence::CelestialWorldTimeSample>();
         app.init_resource::<cadence::CelestialMotionBound>();
         lunco_settings::AppSettingsExt::register_settings_section::<
             cadence::CelestialCadenceSettings,
         >(app);
-        // One writer, in `Last`, under the same condition as its readers: every
-        // gated system in this frame saw the same `CelestialSolvedEpoch`, so the
-        // cluster advances together or not at all. A half-advanced tree would put
-        // the sun and the bodies at different instants.
+        // One writer, in `Last`, under the same condition as its readers. It
+        // commits the WorldTime sample captured in `First`, which is the epoch
+        // the PreUpdate consumers actually saw. WorldTime publishes the just-
+        // completed fixed tick in PostUpdate; committing that newer value here
+        // would close the gate before those consumers process it next frame.
+        // Keeping one epoch/revision pair makes the cluster advance together.
         // The structural half of the cluster gate: bumped in `First`, so an edge
         // (scene load, site edit, hierarchy rebuild) is visible to every gated
         // member in the same frame, and committed in `Last` with the epoch.
@@ -399,6 +402,7 @@ impl Plugin for CelestialPlugin {
             First,
             (
                 cadence::bump_celestial_inputs_revision,
+                cadence::capture_celestial_world_time,
                 cadence::refresh_motion_bound.run_if(
                     resource_changed::<cadence::CelestialInputsRevision>
                         .or_else(resource_changed::<CelestialBodyRegistry>)
@@ -453,7 +457,7 @@ impl Plugin for CelestialPlugin {
             )
                 .chain()
                 .run_if(lunco_time::scene_time_ready)
-                .after(lunco_time::CelestialTimeSet)
+                .after(lunco_time::WorldTimeSet)
                 .after(lunco_time::InteractionRenderSet)
                 .before(TransformSystems::Propagate),
         );

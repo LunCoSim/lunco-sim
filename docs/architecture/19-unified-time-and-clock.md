@@ -26,6 +26,12 @@ derived from `MissionClock`; no consumer accumulates its own calendar time.
 `SetMissionEpoch` re-anchors the calendar at the current tick without creating
 another running clock.
 
+Causal celestial systems consume that published value in the next `PreUpdate`.
+Their cadence commit records the start-of-frame `WorldTime` sample the systems
+actually read. It must not commit the newer value published later in the same
+frame's `PostUpdate`, or the gate would close before the celestial systems could
+process that completed tick.
+
 Fixed-step producers use the shared `SimTickSet` ordering anchor. The scripting
 set runs after that anchor, so lifecycle hooks and event delivery read the tick
 for the step they are changing. Telemetry records the tick and the `MissionClock`

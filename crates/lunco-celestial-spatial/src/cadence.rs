@@ -156,7 +156,7 @@ pub fn refresh_motion_bound(
     };
 }
 
-/// The epoch the celestial tree was last solved at.
+/// The causal epoch last consumed by the celestial tree.
 ///
 /// One resource, one writer ([`commit_celestial_epoch`]), read by the run
 /// condition every gated system shares — so the whole cluster solves for the
@@ -171,6 +171,15 @@ pub struct CelestialSolvedEpoch {
     /// [`CelestialInputsRevision`] at that solve — a structural change moves this
     /// and forces one re-solve regardless of the epoch.
     pub revision: u64,
+}
+
+/// Start-of-frame causal time sample consumed by the PreUpdate celestial solve.
+/// `WorldTime` publishes a newer completed tick in PostUpdate, so the Last-stage
+/// commit must retain the sample the consumers actually observed.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub(crate) struct CelestialWorldTimeSample {
+    /// World epoch captured before any celestial solve in this frame.
+    jd: Option<f64>,
 }
 
 /// The epoch and structural revision used by the render-only celestial
@@ -200,6 +209,16 @@ impl Default for CelestialSolvedEpoch {
             revision: 0,
         }
     }
+}
+
+/// Capture the causal epoch before fixed-step work and the later WorldTime
+/// publication can advance it. The solved-epoch writer commits this value only
+/// after every gated consumer has had a chance to run.
+pub(crate) fn capture_celestial_world_time(
+    world: Option<Res<WorldTime>>,
+    mut sample: ResMut<CelestialWorldTimeSample>,
+) {
+    sample.jd = world.map(|world| world.epoch_jd);
 }
 
 /// Structural changes the celestial cluster must re-solve for even when the epoch
@@ -392,29 +411,27 @@ pub(crate) fn celestial_presentation_needs_solve(
     )
 }
 
-/// Record the epoch AND the input revision the cluster just solved for.
+/// Record the frame-start epoch and input revision after the gated consumers.
 ///
-/// Runs in `Last`, after every gated consumer in both `PreUpdate` and `Update`,
-/// under the same condition — so within one frame every gated system sees the
-/// same `solved` state and either all of them run or none do. Committing the
-/// revision here is what makes one structural change cost exactly one extra
-/// solve instead of re-solving forever.
-pub fn commit_celestial_epoch(
-    world: Option<Res<WorldTime>>,
+/// Runs in `Last`, under the same condition as its consumers. This keeps all
+/// gated systems on one solve decision while committing the exact WorldTime
+/// sample they read before PostUpdate publishes the next completed tick.
+pub(crate) fn commit_celestial_epoch(
+    sample: Res<CelestialWorldTimeSample>,
     settings: Option<Res<CelestialCadenceSettings>>,
     motion: Res<CelestialMotionBound>,
     revision: Res<CelestialInputsRevision>,
     mut solved: ResMut<CelestialSolvedEpoch>,
     mut solves: Local<u64>,
 ) {
-    if let Some(world) = world {
+    if let Some(epoch_jd) = sample.jd {
         // Why the EPOCH branch of `celestial_needs_solve` fires, for when
         // `lunco_core::gate` reports the cluster ungated and the revision
         // attribution stays quiet (i.e. structure is NOT the cause). The delta
         // is what the gate compares against `max_epoch_step_jd`; if it exceeds
         // the step every frame the clock is advancing faster than the tolerance
         // allows, and the cadence cannot help.
-        let delta = (world.epoch_jd - solved.jd).abs();
+        let delta = (epoch_jd - solved.jd).abs();
         // The LIVE setting, resolved exactly as `celestial_needs_solve` resolves
         // it. Reading `default()` here instead was a real defect: with the
         // resource set to `EXACT` (tolerance 0 => step 0) the gate fires on
@@ -446,14 +463,14 @@ pub fn commit_celestial_epoch(
             bevy::log::info!(
                 "[celestial] epoch branch opens the gate: |{:.6} - {:.6}| = {:.3e} d \
                  >= step {:.3e} d ({:.1} s of epoch per solve)",
-                world.epoch_jd,
+                epoch_jd,
                 solved.jd,
                 delta,
                 step,
                 delta * 86_400.0,
             );
         }
-        solved.jd = world.epoch_jd;
+        solved.jd = epoch_jd;
     } else {
         // The gate returns TRUE unconditionally without a clock — worth saying
         // out loud, because it looks identical to "the epoch moved".

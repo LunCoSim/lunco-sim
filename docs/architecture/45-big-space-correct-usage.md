@@ -300,6 +300,20 @@ reparented into it as a way to make a view look aligned. Keeping the ownership
 split in the component contract makes an invalid wiring a compile-time field
 initialization error rather than a runtime timing symptom.
 
+From a lunar surface, Earth stays near one sky position because the Moon is
+tidally locked; the center moves mainly through lunar libration. At 100,000×,
+the 27.3-day lunar month takes about 24 seconds, so that smaller motion becomes
+visible over time. Earth's day/night motion is a separate change: its
+body-fixed presentation grid applies the IAU rotation at `CelestialTime`, and
+BigSpace propagates the changed cell/transform into `GlobalTransform` before
+the globe tiles render. Do not force the Earth center to sweep across a lunar
+sky to make its day/night cycle visible.
+
+The causal cadence uses the `WorldTime` sample captured at frame start. Since
+`WorldTime` publishes a completed fixed tick in `PostUpdate`, the `Last`-stage
+cadence commit must retain the sample the `PreUpdate` celestial systems saw;
+committing the later publication would mark an unprocessed epoch solved.
+
 The render presentation sample also drives the rendered solar direction and
 globe pose. A
 surface station remains a causal entity on the physical body-fixed grid; its
@@ -321,9 +335,11 @@ floating-origin world vector with camera-relative rays. BigSpace still owns
 `GlobalTransform` propagation to the rendered camera and presentation grids.
 Camera pose changes reopen this projection while physical time is paused.
 
-Focused regression coverage lives beside the owning crates, notably
-`lunco-celestial` frame/placement tests, `lunco-usd-avian` bridge tests, and
-`lunco-core` world/lifecycle tests. The production check is:
+Focused regression coverage includes
+`lunco-celestial-spatial/tests/celestial_integration.rs`, which exercises the
+detached Earth presentation pose, IAU spin, and BigSpace global propagation.
+Other frame/placement, bridge, and lifecycle coverage lives beside its owner.
+The production check is:
 
 ```sh
 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4
