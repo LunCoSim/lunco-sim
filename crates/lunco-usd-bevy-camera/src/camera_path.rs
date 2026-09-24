@@ -29,8 +29,8 @@
 //! clock"*). Each path owns a `TimeDomain` + `Playback` entity, so paths replay,
 //! loop and scrub independently of each other AND of the shared animation preview.
 //! `lunco:path:clock = "real"` hangs it on the wall root so the shot plays while
-//! the sim is paused — the same re-parent that runs the sky while paused. Pause is
-//! never a flag here; it is *where the clock hangs*.
+//! the sim is paused. CelestialTime remains a child of WorldTime and freezes with
+//! the simulation; camera paths have an explicit, separate playback contract.
 //!
 //! **The path is evaluated once per render frame, on its resolved domain time.**
 //! ([`drive_camera_paths`] samples, [`apply_camera_paths`] writes; both `PostUpdate`,

@@ -16,7 +16,7 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::{ApiQueryError, ApiQueryResult, api_param_u64};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_core::GlobalEntityId;
-use lunco_time::WorldTime;
+use lunco_time::CelestialTime;
 
 use crate::link::node_label;
 use lunco_celestial::CelestialBodyRegistry;
@@ -66,10 +66,13 @@ impl ApiQueryProvider for OccultationProvider {
                 "Occultation: `origin` and `target` [x,y,z] required",
             ));
         };
-        let Some(jd) = world.get_resource::<WorldTime>().map(|w| w.epoch_jd) else {
+        let Some(jd) = world
+            .get_resource::<CelestialTime>()
+            .map(|time| time.epoch_jd)
+        else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "Occultation: WorldTime is not installed",
+                "Occultation: CelestialTime is not installed",
             ));
         };
         let Some(eph) = world.get_resource::<EphemerisResource>() else {
@@ -125,10 +128,13 @@ impl ApiQueryProvider for BodyPositionProvider {
                 "BodyPosition: `body` must fit a signed 32-bit NAIF identifier",
             ));
         };
-        let Some(jd) = world.get_resource::<WorldTime>().map(|w| w.epoch_jd) else {
+        let Some(jd) = world
+            .get_resource::<CelestialTime>()
+            .map(|time| time.epoch_jd)
+        else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
-                "BodyPosition: WorldTime is not installed",
+                "BodyPosition: CelestialTime is not installed",
             ));
         };
         let Some(eph) = world.get_resource::<EphemerisResource>() else {

@@ -18,6 +18,8 @@ const PORT_WAIT_S = 30.0;
 const TRACK_S = 12.0;
 const DRIVE_S = 5.0;
 const CHARGE_S = 12.0;
+const CELESTIAL_NIGHT_WAIT_S = 36.0;
+const NIGHT_POWER_MAX_W = 0.1;
 const SUN_STEP = 1.0;
 const YAW_DELTA_MIN = 0.2;
 const HINGE_TOL = 0.18;
@@ -68,6 +70,14 @@ fn on_start(me, ctx) {
     this.soc_before_drive = ();
     this.soc_after_drive = ();
     this.soc_after_charge = ();
+    this.night_power = ();
+    this.night_incidence = ();
+    this.night_sun_up = ();
+    this.night_rate_command_ok = false;
+    this.night_reached = false;
+    this.night_clock_before = ();
+    this.night_clock_after = ();
+    this.night_first_sample_rate = ();
     this.power_before = ();
     this.power_after_step = ();
     this.available_before = ();
@@ -214,6 +224,36 @@ fn on_tick(me, ctx) {
         }
         if phase_t < CHARGE_S { return; }
         this.soc_after_charge = island_value(this.elec, BATTERY_SOC);
+        this.night_clock_before = clock_snapshot();
+        let rate_command = cmd("SetCelestialClock", #{ scale: 100000.0 });
+        this.night_rate_command_ok = rate_command != () && rate_command.ok == true;
+        this.phase = "celestial_night";
+        this.phase_started = this.t;
+        print("[solar-cycle] advancing the shared celestial sample through a lunar day");
+        return;
+    }
+
+    if this.phase == "celestial_night" {
+        if this.night_first_sample_rate == () {
+            let clock = clock_snapshot();
+            let world_step = clock.world_sim_s - this.night_clock_before.world_sim_s;
+            let celestial_step_s = (clock.celestial_epoch_jd -
+                this.night_clock_before.celestial_epoch_jd) * 86400.0;
+            if world_step > 0.0 {
+                this.night_first_sample_rate = celestial_step_s / world_step;
+            }
+        }
+        let available = island_value(this.elec, SOLAR_AVAILABLE_POWER);
+        let sun_up = get(this.tracker, "sun_mount_y");
+        if available != () && available <= NIGHT_POWER_MAX_W &&
+           sun_up != () && sun_up <= 0.0 {
+            this.night_reached = true;
+            this.night_power = available;
+            this.night_incidence = island_value(this.elec, SOLAR_INCIDENCE);
+            this.night_sun_up = sun_up;
+        }
+        if phase_t < CELESTIAL_NIGHT_WAIT_S { return; }
+        this.night_clock_after = clock_snapshot();
         this.done = true;
         verdict(this);
     }
@@ -224,6 +264,9 @@ fn verdict(s) {
     f.push(t_present(s.soc_before_drive, "battery SOC before drive"));
     f.push(t_present(s.soc_after_drive, "battery SOC after drive"));
     f.push(t_present(s.soc_after_charge, "battery SOC after charge"));
+    f.push(t_present(s.night_power, "solar panel power at lunar night"));
+    f.push(t_present(s.night_incidence, "solar panel incidence at lunar night"));
+    f.push(t_present(s.night_sun_up, "Sun direction up component at lunar night"));
     f.push(t_present(s.power_before, "panel power before sun step"));
     f.push(t_present(s.power_after_step, "panel power after sun step"));
     f.push(t_present(s.available_before, "panel available power before drive"));
@@ -284,6 +327,41 @@ fn verdict(s) {
         f.push(t_true(s.soc_after_charge - s.soc_after_drive > SOC_RECOVER_MIN,
             "battery SOC did not recover after the route stopped"));
     }
+    f.push(t_true(s.night_rate_command_ok,
+        "SetCelestialClock must accept the 100000x rate for the night check"));
+    f.push(t_present(s.night_first_sample_rate,
+        "first celestial sample after changing rate"));
+    if s.night_first_sample_rate != () {
+        f.push(t_true(s.night_first_sample_rate > 99000.0 &&
+                      s.night_first_sample_rate < 101000.0,
+            "changing CelestialTime rate must preserve the current sample and apply immediately"));
+    }
+    f.push(t_true(s.night_reached && s.night_power <= NIGHT_POWER_MAX_W,
+        "solar panel incidence and power did not fall to zero below the local horizon"));
+    if s.night_incidence != () && s.night_sun_up != () {
+        f.push(t_true(s.night_incidence <= 0.0 && s.night_sun_up <= 0.0,
+            "the night result must come from the shared below-horizon Sun vector"));
+    }
+    if s.night_clock_before != () && s.night_clock_after != () {
+        let world_delta = s.night_clock_after.world_sim_s - s.night_clock_before.world_sim_s;
+        let celestial_delta_s = (s.night_clock_after.celestial_epoch_jd -
+            s.night_clock_before.celestial_epoch_jd) * 86400.0;
+        let physical_tick_delta = (s.night_clock_after.sim_tick -
+            s.night_clock_before.sim_tick).to_float() * s.night_clock_after.fixed_dt_s;
+        f.push(t_true(s.night_clock_after.celestial_rate == 100000.0 &&
+                      s.night_clock_after.celestial_parent == "world_time",
+            "accelerated celestial time must remain a child of WorldTime"));
+        f.push(t_true(s.night_clock_after.transport_rate == s.night_clock_before.transport_rate &&
+                      s.night_clock_after.virtual_rate == s.night_clock_before.virtual_rate,
+            "celestial acceleration must leave the physical transport unchanged"));
+        f.push(t_true(world_delta >= CELESTIAL_NIGHT_WAIT_S - 0.1 &&
+                      (physical_tick_delta - world_delta).abs() < 0.1,
+            "physical time and fixed ticks must keep their ordinary cadence"));
+        f.push(t_true(world_delta > 0.0 &&
+                      celestial_delta_s / world_delta > 99000.0 &&
+                      celestial_delta_s / world_delta < 101000.0,
+            "Modelica solar inputs must follow the same 100000x CelestialTime sample"));
+    }
     if s.island_drive_left_after_stop != () && s.island_drive_right_after_stop != () {
         f.push(t_true(s.island_drive_left_after_stop.abs() < IDLE_DRIVE_TOL &&
                       s.island_drive_right_after_stop.abs() < IDLE_DRIVE_TOL,
@@ -308,5 +386,9 @@ fn verdict(s) {
           ", loaded-drive net-power max=" + r2(s.max_loaded_drive_net_power) + "W");
     print("[solar-cycle] post-stop electrical inputs left/right=" +
           r4(s.island_drive_left_after_stop) + "/" + r4(s.island_drive_right_after_stop));
+    print("[solar-cycle] night panel power=" + r2(s.night_power) +
+          "W, CelestialTime rate=" + r2(s.night_clock_after.celestial_rate) +
+          "x, WorldTime elapsed=" + r2(s.night_clock_after.world_sim_s -
+          s.night_clock_before.world_sim_s) + "s");
     report_verdict(f, "SOLAR ROVER ENERGY CYCLE", "SOLAR_ROVER_ENERGY_CYCLE");
 }

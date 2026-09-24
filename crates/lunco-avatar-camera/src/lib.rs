@@ -26,7 +26,7 @@ use lunco_camera_core::{
 };
 use lunco_camera_core::{FocusTarget, ReturnFromOrbit};
 use lunco_celestial::CelestialBody;
-use lunco_celestial_spatial::{CelestialPresentationGrid, LeaveSurface, TeleportToSurface};
+use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_celestial_spatial_core::{
     LocalGravityField, surface_axes_for_grid_position, surface_axes_in_grid,
 };
@@ -777,10 +777,7 @@ fn orbit_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<(Entity, &CelestialBody)>,
-    mut q_presentation_and_spatial: ParamSet<(
-        Query<(Entity, &CelestialPresentationGrid)>,
-        Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
-    )>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
     q_dragging: Query<(), With<lunco_interaction_core::GizmoDragging>>,
     defaults: Res<CameraDefaults>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -817,21 +814,7 @@ fn orbit_system(
             lunco_spatial::find_descendant_or_self(orbit.target, &q_children, &q_bodies)
                 .unwrap_or(orbit.target);
         let body = q_bodies.get(physical_target).ok().map(|(_, body)| body);
-        // Orbit view is a presentation concern. When a scene provides the
-        // render-only celestial hierarchy, resolve the camera into its
-        // co-located inertial anchor so the camera follows the rendered globe.
-        // The physical ReferenceFrame remains the fallback when no presentation
-        // content is available.
-        let presentation_orbit_grid = body.and_then(|body| {
-            q_presentation_and_spatial
-                .p0()
-                .iter()
-                .find(|(_, frame)| frame.body == body.ephemeris_id && !frame.body_fixed)
-                .map(|(entity, _)| entity)
-        });
-        let orbit_grid = if let Some(entity) = presentation_orbit_grid {
-            entity
-        } else if let Some(body) = body {
+        let orbit_grid = if let Some(body) = body {
             let Some(entity) =
                 frame_index.resolve(lunco_celestial::ReferenceFrame::EclipticJ2000 {
                     center: body.ephemeris_id,
@@ -850,24 +833,15 @@ fn orbit_system(
         let Ok(orbit_grid_ref) = q_grids.get(orbit_grid) else {
             continue;
         };
-        let q_spatial = q_presentation_and_spatial.p1();
-        let target_orbit = if presentation_orbit_grid.is_some() {
-            // The presentation inertial anchor is co-located with the visible
-            // globe and its origin is the body's centre. The causal body entity
-            // is intentionally not reparented into this render-only branch.
-            DVec3::ZERO
-        } else {
-            let centre_entity = body.map_or(orbit.target, |_| physical_target);
-            let Some((target_orbit, _)) = lunco_spatial::coords::pose_in_grid(
-                centre_entity,
-                orbit_grid,
-                &q_parents,
-                &q_grids,
-                &q_spatial,
-            ) else {
-                continue;
-            };
-            target_orbit
+        let centre_entity = body.map_or(orbit.target, |_| physical_target);
+        let Some((target_orbit, _)) = lunco_spatial::coords::pose_in_grid(
+            centre_entity,
+            orbit_grid,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
+            continue;
         };
         let Some((cam_orbit, _)) = lunco_spatial::coords::pose_in_grid_seeded(
             avatar_ent,

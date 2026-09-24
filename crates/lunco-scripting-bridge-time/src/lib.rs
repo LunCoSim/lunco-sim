@@ -301,12 +301,10 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                 .map(|domain| (clocks, domain))
         });
         let celestial_parent = celestial_domain.map(|(clocks, domain)| match domain.parent {
-            Some(parent) if parent == clocks.sim => "sim",
-            Some(parent) if parent == clocks.real => "real",
+            Some(parent) if parent == clocks.sim => "world_time",
             Some(_) => "other",
             None => match world.get::<ClockRoot>(clocks.celestial) {
-                Some(ClockRoot::Epoch) => "epoch",
-                Some(ClockRoot::Tick) => "sim",
+                Some(ClockRoot::Tick) => "tick_root",
                 Some(ClockRoot::Wall) => "real",
                 None => "unknown",
             },

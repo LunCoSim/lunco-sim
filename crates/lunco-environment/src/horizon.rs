@@ -385,7 +385,7 @@ pub struct HorizonShadowCacheConfig {
     pub samples_per_axis: usize,
     /// Minimum wall-clock interval between replacement requests for one
     /// terrain cache. A committed cache remains usable while the replacement
-    /// is pending, so a fast presentation clock cannot turn every completed
+    /// is pending, so accelerated CelestialTime cannot turn every completed
     /// bake into another immediate CPU/GPU workload.
     pub min_refresh_interval_secs: f32,
 }

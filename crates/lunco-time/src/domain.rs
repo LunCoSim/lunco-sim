@@ -7,8 +7,8 @@
 //!
 //! Node kinds:
 //! * **Root** ([`ClockRoot`]) — where raw time ENTERS the tree: `Tick` (the
-//!   deterministic `SimTick` master — freezes on pause), `Wall` (`Time<Real>` — never
-//!   freezes), and `Epoch` (mission elapsed time projected from that same tick).
+//!   deterministic `SimTick` master — freezes on pause) and `Wall` (`Time<Real>` —
+//!   never freezes).
 //! * **Derived** — `TimeDomain` alone. `local_t = offset + scale·parent_t`. Rigidly
 //!   follows the parent. *"Speed only the factory" = a derived clock, `scale = 100`.*
 //! * **Driven** — `TimeDomain` + [`Playback`]. Its own **playhead**, advanced by the
@@ -17,9 +17,9 @@
 //!
 //! **Pause propagates for free, with no flag** (doc §11a): if a parent stops advancing,
 //! `parent_t` is constant, so the whole subtree is constant.
-//! Celestial presentation defaults to the epoch root. The typed [`SetClock`] command
-//! can bind it to the simulation tick or wall clock and rate-scale it without changing
-//! causal world state.
+//! `CelestialTime` is an affine child of the deterministic world-time root.
+//! [`SetCelestialClock`] changes only its rate or epoch offset; it cannot detach from
+//! the physical timeline.
 //!
 //! Bindings: an entity carries a [`TimeBinding`] to a clock entity; absent ⇒ the sim
 //! clock. Per-project / per-selection / per-object are just different bound sets of the
@@ -164,8 +164,6 @@ pub struct TimeBinding {
 /// * [`Wall`](ClockRoot::Wall) — `t = Time<Real>`. Free-running, never pauses,
 ///   non-deterministic by construction. It is for interaction such as camera and
 ///   UI easing. Scene state remains on the tick root.
-/// * [`Epoch`](ClockRoot::Epoch) — `t = WorldTime.met_secs`, mission elapsed time
-///   projected from the deterministic tick. Celestial presentation uses this root.
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
 pub enum ClockRoot {
@@ -173,8 +171,6 @@ pub enum ClockRoot {
     Tick,
     /// Wall clock (`Time<Real>`). Never freezes.
     Wall,
-    /// Mission elapsed time projected from the deterministic tick.
-    Epoch,
 }
 
 /// One clock's resolved sample for this frame.
@@ -199,7 +195,7 @@ pub struct ClockSample {
 ///
 /// ```text
 ///   real ── ClockRoot::Wall                sim ── ClockRoot::Tick
-///    └── interaction                        ├── celestial (defaults to Epoch)
+///    └── interaction                        ├── celestial (scaled child)
 ///                                           └── <animation / per-object domains>
 /// ```
 #[derive(Resource, Debug, Clone, Copy)]
@@ -211,8 +207,7 @@ pub struct Clocks {
     /// Wall-rooted interaction clock: avatar, camera smoothing, UI easing. Keeps
     /// running while the sim is paused (that is its entire reason to exist).
     pub interaction: Entity,
-    /// Celestial presentation clock. Defaults to mission elapsed time and can be
-    /// re-parented to real time for independent presentation.
+    /// Celestial clock. It is always a scaled child of the deterministic sim root.
     pub celestial: Entity,
 }
 
@@ -349,15 +344,13 @@ pub struct RootTimes {
     pub sim_secs: f64,
     /// `Time<Real>` elapsed seconds. Never frozen.
     pub wall_secs: f64,
-    /// `WorldTime.met_secs`, projected from the deterministic tick.
-    pub epoch_secs: f64,
 }
 
 /// Resolve every clock in one memoized walk, stepping driven playheads by their
 /// **parent's** delta as it goes.
 ///
 /// Three node kinds, in precedence order:
-/// 1. **Root** — `t = offset + scale · (sim_secs | wall_secs | epoch_secs)`. The only entry point
+/// 1. **Root** — `t = offset + scale · (sim_secs | wall_secs)`. The only entry point
 ///    for raw time.
 /// 2. **Driven** (has [`Playback`]) — `t = head`, where the head advanced by the
 ///    *parent's* delta this frame. A frozen parent hands it `dt = 0`, so the head
@@ -409,7 +402,6 @@ fn resolve_one(
         let src = match root {
             ClockRoot::Tick => roots.sim_secs,
             ClockRoot::Wall => roots.wall_secs,
-            ClockRoot::Epoch => roots.epoch_secs,
         };
         derived_local_t(s.offset, s.scale, src)
     } else {
@@ -485,7 +477,6 @@ pub fn advance_and_resolve_domains(
     let roots = RootTimes {
         sim_secs: world.sim_secs,
         wall_secs: real.elapsed_secs_f64(),
-        epoch_secs: world.met_secs,
     };
     let sim_root = clocks.map(|c| c.sim);
 
@@ -524,8 +515,8 @@ pub fn advance_and_resolve_domains(
     resolved.0 = samples;
 }
 
-/// Publish the celestial calendar sample from its resolved clock-tree node.
-/// Physics and causal celestial state continue to read [`WorldTime`].
+/// Publish the celestial calendar sample from its resolved world-time child.
+/// Celestial rendering and environment providers consume this same sample.
 pub fn write_celestial_time(
     clocks: Option<Res<Clocks>>,
     resolved: Res<ResolvedDomains>,
@@ -540,7 +531,7 @@ pub fn write_celestial_time(
     celestial_time.epoch_jd = mission.mission_epoch0_jd + sample.t / crate::SECS_PER_DAY;
 }
 
-/// Startup: spawn the well-known roots and publish [`Clocks`].
+/// Startup: spawn the well-known roots, celestial child, and publish [`Clocks`].
 fn spawn_well_known_clocks(mut commands: Commands) {
     let real = commands
         .spawn((
@@ -566,8 +557,7 @@ fn spawn_well_known_clocks(mut commands: Commands) {
     let celestial = commands
         .spawn((
             Name::new("Clock:Celestial"),
-            TimeDomain::default(),
-            ClockRoot::Epoch,
+            TimeDomain::derived(Some(sim), 0.0, 1.0),
         ))
         .id();
     commands.insert_resource(Clocks {
@@ -740,8 +730,8 @@ fn on_set_simulation_execution_mode(
 /// one verb covers pause / play / rate — `{"type":"ExecuteCommand","command":"SetTimeTransport",
 /// "params":{"playing":false}}` PAUSES the whole simulation (tick + physics),
 /// `{"rate":4.0}` runs it 4× realtime, and the bounded causal ladder ends at
-/// 64×. Rates below 0.1× or above 64× are rejected. Celestial presentation has
-/// its own kinematic clock and never changes this causal transport.
+/// 64×. Rates below 0.1× or above 64× are rejected. CelestialTime has one scaled
+/// child clock; changing its rate never changes this causal transport.
 /// This is THE pause command:
 /// exposed on the API/MCP and wrapped by the rhai prelude verbs
 /// `pause()`/`play()`/`set_rate()`, so a cutscene or a "reload-then-pause"
@@ -908,43 +898,10 @@ fn apply_time_transport(transport: &mut crate::TimeTransport, cmd: &SetTimeTrans
     }
 }
 
-/// Which well-known kinematic clock to edit through [`SetClock`].
-#[derive(
-    serde::Serialize, serde::Deserialize, Reflect, Debug, Clone, Copy, PartialEq, Eq, Default,
-)]
-pub enum ClockId {
-    /// The celestial presentation clock.
-    #[default]
-    Celestial,
-    /// The avatar, camera, and UI interaction clock.
-    Interaction,
-}
-
-/// Parent choices for a clock edited by [`SetClock`].
-#[derive(serde::Serialize, serde::Deserialize, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClockParent {
-    /// Follow the deterministic simulation tick and freeze when it pauses.
-    Sim,
-    /// Follow wall time and keep advancing while the simulation is paused.
-    Real,
-}
-
-/// Highest rate accepted for an explicitly controlled kinematic clock.
-pub const MAX_KINEMATIC_CLOCK_RATE: f64 = crate::MAX_CELESTIAL_TIME_RATE;
-
-fn valid_kinematic_clock_rate(rate: f64) -> bool {
-    rate.is_finite() && rate.abs() <= MAX_KINEMATIC_CLOCK_RATE
-}
-
-/// Re-parent, rate-scale, or seek a well-known kinematic clock. A 100,000×
-/// celestial rate affects presentation only; physics and [`WorldTime`] remain on
-/// the bounded [`SetTimeTransport`] clock.
+/// Rate-scale or seek the celestial child of [`WorldTime`]. The command cannot
+/// re-parent it to wall time or another domain.
 #[Command(default)]
-pub struct SetClock {
-    /// Which kinematic clock to edit.
-    pub clock: ClockId,
-    /// Re-parent to simulation time or wall time; `None` keeps the current parent.
-    pub parent: Option<ClockParent>,
+pub struct SetCelestialClock {
     /// Rate relative to the selected parent, bounded to ±100,000×.
     pub scale: Option<f64>,
     /// Affine offset in seconds. For celestial time, `epoch_jd` is the clearer seek API.
@@ -953,136 +910,104 @@ pub struct SetClock {
     pub epoch_jd: Option<f64>,
 }
 
-fn clock_source_time(
-    domain: &TimeDomain,
-    root: Option<&ClockRoot>,
-    clocks: Clocks,
-    resolved: &ResolvedDomains,
-    roots: RootTimes,
-) -> Option<f64> {
-    if let Some(parent) = domain.parent {
-        if parent == clocks.sim {
-            return Some(roots.sim_secs);
-        }
-        if parent == clocks.real {
-            return Some(roots.wall_secs);
-        }
-        return resolved.get(parent);
-    }
-    match root {
-        Some(ClockRoot::Tick) => Some(roots.sim_secs),
-        Some(ClockRoot::Wall) => Some(roots.wall_secs),
-        Some(ClockRoot::Epoch) => Some(roots.epoch_secs),
-        None => None,
-    }
-}
-
-#[on_command(SetClock)]
-fn on_set_clock(
-    trigger: On<SetClock>,
+#[on_command(SetCelestialClock)]
+fn on_set_celestial_clock(
+    trigger: On<SetCelestialClock>,
     clocks: Option<Res<Clocks>>,
     mission: Res<crate::MissionClock>,
     resolved: Res<ResolvedDomains>,
-    world: Res<WorldTime>,
-    real: Res<Time<Real>>,
-    q_root: Query<&ClockRoot>,
     mut q: Query<&mut TimeDomain>,
-    mut commands: Commands,
 ) {
     let Some(clocks) = clocks else {
-        bevy::log::warn!("[time] rejected SetClock: well-known clocks are not ready");
+        bevy::log::warn!("[time] rejected SetCelestialClock: well-known clocks are not ready");
         return;
     };
     let cmd = trigger.event();
     if cmd
         .scale
-        .is_some_and(|rate| !valid_kinematic_clock_rate(rate))
+        .is_some_and(|rate| !rate.is_finite() || rate.abs() > crate::MAX_CELESTIAL_TIME_RATE)
     {
         bevy::log::warn!(
-            "[time] rejected clock rate {:?}; supported magnitude is at most {}x",
+            "[time] rejected celestial clock rate {:?}; supported magnitude is at most {}x",
             cmd.scale,
-            MAX_KINEMATIC_CLOCK_RATE
+            crate::MAX_CELESTIAL_TIME_RATE
         );
         return;
     }
     if cmd.offset.is_some_and(|offset| !offset.is_finite())
         || cmd.epoch_jd.is_some_and(|jd| !jd.is_finite() || jd == 0.0)
+        || (cmd.offset.is_some() && cmd.epoch_jd.is_some())
     {
-        bevy::log::warn!("[time] rejected SetClock with non-finite offset or invalid epoch");
+        bevy::log::warn!(
+            "[time] rejected SetCelestialClock with a non-finite offset, invalid epoch, or conflicting seek fields"
+        );
         return;
     }
 
-    let roots = RootTimes {
-        sim_secs: world.sim_secs,
-        wall_secs: real.elapsed_secs_f64(),
-        epoch_secs: world.met_secs,
-    };
-    let target = match cmd.clock {
-        ClockId::Celestial => clocks.celestial,
-        ClockId::Interaction => clocks.interaction,
-    };
-    let root = q_root.get(target).ok().copied();
-    if cmd.epoch_jd.is_some() && cmd.clock != ClockId::Celestial {
-        bevy::log::warn!("[time] rejected epoch seek for the interaction clock");
-        return;
-    }
-    let Ok(mut current) = q.get_mut(target) else {
-        bevy::log::warn!("[time] rejected SetClock: target domain {target:?} is missing");
+    let Ok(mut current) = q.get_mut(clocks.celestial) else {
+        bevy::log::warn!("[time] rejected SetCelestialClock: celestial domain is missing");
         return;
     };
-
     let mut next = *current;
-    let current_time = clock_source_time(&next, root.as_ref(), *clocks, &resolved, roots)
-        .map(|source| next.offset + next.scale * source);
-    if (cmd.parent.is_some() || cmd.scale.is_some()) && current_time.is_none() {
-        bevy::log::warn!("[time] rejected SetClock: current clock source is unresolved");
+    if next.parent != Some(clocks.sim) {
+        bevy::log::error!(
+            "[time] celestial domain is not a child of WorldTime; refusing clock update"
+        );
         return;
     }
-
-    if let Some(parent) = cmd.parent {
-        next.parent = Some(match parent {
-            ClockParent::Sim => clocks.sim,
-            ClockParent::Real => clocks.real,
-        });
-        let Some(source_t) = clock_source_time(&next, None, *clocks, &resolved, roots) else {
-            bevy::log::warn!("[time] rejected SetClock: requested parent clock is unresolved");
-            return;
-        };
-        let Some(current_time) = current_time else {
-            bevy::log::warn!("[time] rejected SetClock: current clock sample is unresolved");
-            return;
-        };
-        next.offset = current_time - next.scale * source_t;
+    let Some(source_t) = resolved.get(clocks.sim) else {
+        bevy::log::warn!(
+            "[time] rejected SetCelestialClock because WorldTime has no resolved sample"
+        );
+        return;
+    };
+    let Some(current_time) = resolved.get(clocks.celestial) else {
+        bevy::log::warn!(
+            "[time] rejected SetCelestialClock because CelestialTime has no resolved sample"
+        );
+        return;
+    };
+    if !source_t.is_finite()
+        || !current_time.is_finite()
+        || !mission.mission_epoch0_jd.is_finite()
+        || !next.offset.is_finite()
+        || !next.scale.is_finite()
+    {
+        bevy::log::error!(
+            "[time] rejected SetCelestialClock because its WorldTime parent sample is invalid"
+        );
+        return;
     }
     if let Some(scale) = cmd.scale {
-        let source_t = clock_source_time(&next, root.as_ref(), *clocks, &resolved, roots);
-        let Some(source_t) = source_t else {
-            bevy::log::warn!("[time] rejected SetClock: requested clock source is unresolved");
-            return;
-        };
         next.scale = scale;
-        let Some(current_time) = current_time else {
-            bevy::log::warn!("[time] rejected SetClock: current clock sample is unresolved");
-            return;
-        };
         next.offset = current_time - scale * source_t;
     }
     if let Some(offset) = cmd.offset {
         next.offset = offset;
     }
     if let Some(epoch_jd) = cmd.epoch_jd {
-        if matches!(cmd.clock, ClockId::Celestial) {
-            let desired_t = (epoch_jd - mission.mission_epoch0_jd) * crate::SECS_PER_DAY;
-            let source_t = clock_source_time(&next, root.as_ref(), *clocks, &resolved, roots);
-            let Some(source_t) = source_t else {
-                bevy::log::warn!("[time] rejected SetClock: requested clock source is unresolved");
-                return;
-            };
-            next.offset = desired_t - next.scale * source_t;
+        let desired_t = (epoch_jd - mission.mission_epoch0_jd) * crate::SECS_PER_DAY;
+        if !desired_t.is_finite() {
+            bevy::log::warn!(
+                "[time] rejected SetCelestialClock because the requested epoch is outside the representable range"
+            );
+            return;
         }
+        next.offset = desired_t - next.scale * source_t;
     }
-    if cmd.parent.is_some() {
-        commands.entity(target).remove::<ClockRoot>();
+    let sample_t = next.offset + next.scale * source_t;
+    let sample_epoch_jd = mission.mission_epoch0_jd + sample_t / crate::SECS_PER_DAY;
+    if !next.offset.is_finite()
+        || !next.scale.is_finite()
+        || next.scale.abs() > crate::MAX_CELESTIAL_TIME_RATE
+        || !sample_t.is_finite()
+        || !sample_epoch_jd.is_finite()
+        || sample_epoch_jd == 0.0
+    {
+        bevy::log::warn!(
+            "[time] rejected SetCelestialClock because its resulting epoch is not finite"
+        );
+        return;
     }
     *current = next;
 }
@@ -1104,7 +1029,6 @@ fn on_set_mission_epoch(
     tick: Res<crate::SimTick>,
     mut clock: ResMut<crate::MissionClock>,
     clocks: Option<Res<Clocks>>,
-    real: Res<Time<Real>>,
     mut domains: Query<&mut TimeDomain>,
 ) {
     let jd = trigger.event().epoch_jd;
@@ -1115,12 +1039,9 @@ fn on_set_mission_epoch(
     *clock = crate::MissionClock::anchored(jd, tick.0);
     if let Some(clocks) = clocks {
         if let Ok(mut domain) = domains.get_mut(clocks.celestial) {
-            let source_t = if domain.parent == Some(clocks.real) {
-                real.elapsed_secs_f64()
-            } else {
-                0.0
-            };
-            domain.offset = -domain.scale * source_t;
+            if domain.parent == Some(clocks.sim) {
+                domain.offset = 0.0;
+            }
         }
     }
     bevy::log::info!("[time] mission epoch re-anchored to JD {jd:.4}");
@@ -1162,7 +1083,7 @@ pub(crate) fn on_apply_scene_time_selection(
 /// This command restores the standing clock shape across scene reloads (doc 19
 /// §11b):
 ///
-/// * **celestial** → mission-epoch root at identity rate;
+/// * **celestial** → WorldTime child at identity rate and zero offset;
 /// * **interaction** → wall-rooted identity (its default);
 /// * **animation preview** → playhead 0, playing, 1×;
 /// * **transport** → Playing at 1×, except for an explicit pause requested while
@@ -1224,11 +1145,8 @@ fn on_reset_time(
 
     if let Some(clocks) = clocks {
         if let Ok(mut d) = q_domain.get_mut(clocks.celestial) {
-            *d = TimeDomain::default();
+            *d = TimeDomain::derived(Some(clocks.sim), 0.0, 1.0);
         }
-        commands
-            .entity(clocks.celestial)
-            .try_insert(ClockRoot::Epoch);
 
         // Interaction: wall-rooted identity (what `spawn_well_known_clocks`
         // builds).
@@ -1294,7 +1212,10 @@ fn on_reset_time(
     // before resolving the replacement scene.
     *resolved = ResolvedDomains::default();
     *last = LastClockT::default();
-    commands.insert_resource(CelestialTime::default());
+    commands.insert_resource(CelestialTime {
+        epoch_jd,
+        delta_secs: 0.0,
+    });
 
     bevy::log::info!("[time] clock tree reset for scene replacement");
 }
@@ -1304,7 +1225,7 @@ register_commands!(
     on_set_simulation_execution_mode,
     on_set_time_transport,
     on_set_mission_epoch,
-    on_set_clock,
+    on_set_celestial_clock,
     on_reset_time
 );
 
@@ -1318,8 +1239,6 @@ pub(crate) fn build_domain_tree(app: &mut App) {
         .register_type::<TimeBinding>()
         .register_type::<DomainRegime>()
         .register_type::<ClockRoot>()
-        .register_type::<ClockId>()
-        .register_type::<ClockParent>()
         .init_resource::<ResolvedDomains>()
         .init_resource::<LastClockT>()
         // The tree resolves in `PreUpdate` from the `WorldTime` published after
@@ -1382,7 +1301,6 @@ mod tests {
         let roots = RootTimes {
             sim_secs: sim,
             wall_secs: 0.0,
-            epoch_secs: sim,
         };
         resolve_clocks(m, &HashMap::new(), roots, roots, None)
             .get(&domain)
@@ -1772,7 +1690,6 @@ mod tests {
         let roots_running = RootTimes {
             sim_secs: 10.0,
             wall_secs: 99.0,
-            epoch_secs: 10.0,
         };
         let a = resolve_clocks(&m, &HashMap::new(), roots_running, roots_running, Some(sim));
         assert!((a[&grandchild].t - 600.0).abs() < EPS);
@@ -1783,7 +1700,6 @@ mod tests {
         let roots_paused = RootTimes {
             sim_secs: 10.0,
             wall_secs: 123.0,
-            epoch_secs: 10.0,
         };
         let b = resolve_clocks(&m, &last, roots_paused, roots_running, Some(sim));
         assert!((b[&grandchild].t - 600.0).abs() < EPS);
@@ -1808,7 +1724,6 @@ mod tests {
         let r1 = RootTimes {
             sim_secs: 10.0,
             wall_secs: 100.0,
-            epoch_secs: 10.0,
         };
         let a = resolve_clocks(&m, &HashMap::new(), r1, r1, Some(sim));
         let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
@@ -1817,7 +1732,6 @@ mod tests {
         let r2 = RootTimes {
             sim_secs: 10.0,
             wall_secs: 100.25,
-            epoch_secs: 10.0,
         };
         let b = resolve_clocks(&m, &last, r2, r1, Some(sim));
         assert!((b[&sim].dt).abs() < EPS, "the sim clock is paused");
@@ -1828,19 +1742,18 @@ mod tests {
     }
 
     #[test]
-    fn celestial_clock_runs_at_100000x_on_wall_time_while_sim_and_epoch_hold() {
+    fn celestial_clock_scales_world_time_and_freezes_with_its_parent() {
         let sim = e(11);
         let real = e(12);
         let celestial = e(13);
         let mut domains = HashMap::new();
         domains.insert(sim, root(ClockRoot::Tick));
         domains.insert(real, root(ClockRoot::Wall));
-        domains.insert(celestial, snap(Some(real), 0.0, 100_000.0, None));
+        domains.insert(celestial, snap(Some(sim), 0.0, 100_000.0, None));
 
         let roots_before = RootTimes {
             sim_secs: 25.0,
             wall_secs: 100.0,
-            epoch_secs: 25.0,
         };
         let first = resolve_clocks(
             &domains,
@@ -1852,28 +1765,22 @@ mod tests {
         let previous = first.iter().map(|(&id, sample)| (id, sample.t)).collect();
 
         let roots_after = RootTimes {
-            sim_secs: 25.0,
+            sim_secs: 25.01,
             wall_secs: 100.01,
-            epoch_secs: 25.0,
         };
         let next = resolve_clocks(&domains, &previous, roots_after, roots_before, Some(sim));
 
-        assert_eq!(next[&sim].dt, 0.0);
+        assert!((next[&sim].dt - 0.01).abs() < 1e-6);
         assert!((next[&celestial].dt - 1_000.0).abs() < 1e-6);
-        assert!(
-            (next[&celestial].dt - (roots_after.wall_secs - roots_before.wall_secs) * 100_000.0)
-                .abs()
-                < 1e-6
-        );
-    }
 
-    #[test]
-    fn kinematic_clock_rate_validation_includes_100000x_ceiling() {
-        assert!(valid_kinematic_clock_rate(MAX_KINEMATIC_CLOCK_RATE));
-        assert!(valid_kinematic_clock_rate(-MAX_KINEMATIC_CLOCK_RATE));
-        assert!(!valid_kinematic_clock_rate(MAX_KINEMATIC_CLOCK_RATE + 1.0));
-        assert!(!valid_kinematic_clock_rate(f64::INFINITY));
-        assert!(!valid_kinematic_clock_rate(f64::NAN));
+        let frozen = RootTimes {
+            sim_secs: 25.01,
+            wall_secs: 100.5,
+        };
+        let latest: HashMap<Entity, f64> =
+            next.iter().map(|(&id, sample)| (id, sample.t)).collect();
+        let paused = resolve_clocks(&domains, &latest, frozen, roots_after, Some(sim));
+        assert_eq!(paused[&celestial].dt, 0.0);
     }
 
     /// A driven playhead advances by its PARENT's delta — so a pause reaches driven
@@ -1899,7 +1806,6 @@ mod tests {
         let r1 = RootTimes {
             sim_secs: 5.0,
             wall_secs: 0.0,
-            epoch_secs: 5.0,
         };
         let a = resolve_clocks(&m, &HashMap::new(), r1, r1, Some(sim));
         let last: HashMap<Entity, f64> = a.iter().map(|(&k, s)| (k, s.t)).collect();
@@ -1908,7 +1814,6 @@ mod tests {
         let r2 = RootTimes {
             sim_secs: 8.0,
             wall_secs: 0.0,
-            epoch_secs: 8.0,
         };
         let b = resolve_clocks(&m, &last, r2, r1, Some(sim));
         assert!((b[&d].t - 6.0).abs() < EPS);
@@ -2003,7 +1908,7 @@ mod tests {
         assert_eq!(resolved.delta(driven), 0.0);
     }
 
-    /// The well-known clocks include the epoch-rooted celestial presentation clock.
+    /// CelestialTime is a scaled child of the deterministic WorldTime root.
     #[test]
     fn well_known_clocks_spawn_in_the_documented_shape() {
         let mut app = App::new();
@@ -2014,9 +1919,10 @@ mod tests {
         let w = app.world();
         assert_eq!(w.get::<ClockRoot>(clocks.real), Some(&ClockRoot::Wall));
         assert_eq!(w.get::<ClockRoot>(clocks.sim), Some(&ClockRoot::Tick));
+        assert_eq!(w.get::<ClockRoot>(clocks.celestial), None);
         assert_eq!(
-            w.get::<ClockRoot>(clocks.celestial),
-            Some(&ClockRoot::Epoch)
+            w.get::<TimeDomain>(clocks.celestial).unwrap().parent,
+            Some(clocks.sim)
         );
         // The interaction clock hangs off the wall root — that is what keeps the
         // avatar moving while the sim is paused.

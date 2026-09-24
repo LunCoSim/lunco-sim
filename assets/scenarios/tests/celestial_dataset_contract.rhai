@@ -25,9 +25,7 @@ fn on_tick(me, ctx) {
 
     if !this.clock_request_sent {
         this.clock_before = clock_snapshot();
-        let result = cmd("SetClock", #{
-            clock: "Celestial",
-            parent: "Real",
+        let result = cmd("SetCelestialClock", #{
             scale: 100000.0
         });
         this.clock_command_ok = result != () && result.ok == true;
@@ -70,18 +68,18 @@ fn on_tick(me, ctx) {
         && moon.artifact_uri == "lunco://textures/moon.png",
         "moon must expose its processed logical artifact URI"));
     checks.push(t_true(this.clock_command_ok,
-        "SetClock must accept the 100000x celestial presentation rate"));
+        "SetCelestialClock must accept the 100000x celestial rate"));
     checks.push(t_true(clock.celestial_time_available == true
-        && clock.celestial_rate == 100000.0 && clock.celestial_parent == "real",
-        "the celestial clock snapshot must report the selected wall-driven 100000x rate"));
+        && clock.celestial_rate == 100000.0 && clock.celestial_parent == "world_time",
+        "the celestial clock snapshot must report a 100000x child of WorldTime"));
     checks.push(t_true(clock.virtual_rate == this.clock_before.virtual_rate
         && clock.transport_rate == this.clock_before.transport_rate,
-        "changing the celestial presentation clock must leave physical transport unchanged"));
+        "scaling CelestialTime must leave the physics transport rate unchanged"));
     checks.push(t_true(clock.world_sim_s > this.clock_before.world_sim_s
         && clock.world_sim_s - this.clock_before.world_sim_s < 1.0,
         "the physical clock must advance normally while celestial time is accelerated"));
     checks.push(t_true(clock.celestial_delta_s > 0.0
         && clock.celestial_epoch_jd > this.clock_before.celestial_epoch_jd,
-        "the independent celestial presentation clock must advance on wall time"));
+        "CelestialTime must advance as a scaled child of the progressing WorldTime"));
     report_verdict(checks, "CELESTIAL DATASET CONTRACT", "CELESTIAL_DATASET_CONTRACT");
 }

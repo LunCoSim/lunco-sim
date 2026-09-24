@@ -92,18 +92,19 @@ between completed physical ticks and holds while transport is paused. Do not
 introduce a mission-specific trajectory component or independent clock for
 motion already represented by USD animation.
 
-Celestial body ephemerides are not ordinary USD animation: their render-only
-frames and solar projection read `lunco_time::CelestialTime`. That clock follows
-the mission epoch by default and can be rate-scaled up to 100,000× for sky
-presentation without advancing physical bodies, terrain, or Avian state.
+Celestial body ephemerides are not ordinary USD animation: body frames,
+rotation, the semantic SunState, shadows, and the sky readout share one
+`lunco_time::CelestialTime` sample. It is a child of `WorldTime` and can be
+rate-scaled up to 100,000× without changing Avian's fixed physics cadence.
+Modelica reads celestial-derived environment inputs at its ordinary
+communication points.
 From a lunar surface, Earth stays near one sky position because the Moon is
-tidally locked; expect libration, while Earth's body-fixed presentation grid
+tidally locked; expect libration, while Earth's single body-fixed grid
 continues to rotate for the day/night cycle. At 100,000×, a lunar month takes
 about 24 seconds. Test both the parent-relative `CellCoord`/`Transform` and the
 BigSpace-propagated `GlobalTransform`; local transform checks alone do not
-prove a rendered pose reached its consumer. Causal `WorldTime` cadence commits
-the frame-start sample because the completed tick is published later in
-`PostUpdate`.
+prove a rendered pose reached its consumer. The celestial cadence commits the
+`CelestialTime` sample it gated, and advances body position and spin together.
 
 For the local kinematic avatar, use the existing Avian `MoveAndSlide` query in
 `ActivePhysicsFrame`: convert the source Grid pose, displacement, and up vector
@@ -177,20 +178,19 @@ runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 `BillboardIndex` fact to the shared marker root. Keep both paths on this one
 renderer; do not overwrite `Name` or add a waypoint-specific overlay.
 
-For physics and co-simulation, keep `SunState` on `WorldTime`. When a surface
-scene detaches `CelestialTime`, its typed `SunRenderPresentation` may select a
-separate celestial-time direction for the render light; that selection never
-feeds the semantic source. Publish `SunRenderState` from the finalized
-scene-sun `GlobalTransform` after `BigSpaceSystems::PropagateLowPrecision`. Any
-conversion of that direction through a terrain `GlobalTransform` belongs
-after that phase in `PostUpdate`: static material wiring, horizon-cache
-validity/bake decisions, and streamed-tile shadow intent binding all consume
-that finalized frame. Put streamed-tile binding in the public
-`TerrainSurfaceSet::RenderShadowBinding` phase so it cannot observe a
-previous-frame terrain transform. Do not repair a stale projection with an
-offset or another per-frame transform writer. The projection is change-gated
-by the selected source revision and changed BigSpace ancestor chains, so stable
-frames do not rebuild f64 poses.
+For physics and co-simulation, derive `SunState` from `CelestialTime`. The
+render light and per-probe `LocalSolar` bridge project that semantic source;
+do not create a separate render-time sun source or local solar clock.
+Publish `SunRenderState` from the finalized scene-sun `GlobalTransform` after
+`BigSpaceSystems::PropagateLowPrecision`. Any conversion of that direction
+through a terrain `GlobalTransform` belongs after that phase in `PostUpdate`:
+static material wiring, horizon-cache validity/bake decisions, and
+streamed-tile shadow intent binding all consume that finalized frame. Put
+streamed-tile binding in the public `TerrainSurfaceSet::RenderShadowBinding`
+phase so it cannot observe a previous-frame terrain transform. Do not repair a
+stale projection with an offset or another per-frame transform writer. The
+projection is change-gated by the selected source revision and changed BigSpace
+ancestor chains, so stable frames do not rebuild f64 poses.
 
 The render backend samples the resulting cascades with Bevy's hardware 2x2
 comparison filter in standard and high profiles. Keep that choice separate from

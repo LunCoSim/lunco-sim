@@ -61,14 +61,13 @@ pub use lighting::{FULL_EARTH_EARTHSHINE_LUX, LunarSun, drive_earthshine_from_ph
 /// Solar direction as a co-simulation source (`LocalSolar` + the sun→cosim
 /// bridge). The lighting-direction analog of the gravity bridge.
 ///
-/// **Provider path is render-free.** `LocalSolar` and co-simulation read
-/// semantic [`SunState`]. A detached celestial clock can independently select
-/// a render-only direction for the scene light without changing provider data.
+/// **Render-free.** It reads semantic [`SunState`], not a render light. The
+/// render light is a projection of that state, so a headless provider and a
+/// GUI cannot silently disagree about the direction.
 pub mod solar;
 pub use solar::{
-    LocalSolar, SunRenderPresentation, SunRenderProjectionSet, SunRenderState, SunState,
-    compute_local_solar, finalize_sun_render_state, inject_local_solar_into_cosim,
-    project_sun_render_to_light,
+    LocalSolar, SunRenderState, SunState, compute_local_solar, finalize_sun_render_state,
+    inject_local_solar_into_cosim, project_sun_state_to_light,
 };
 
 /// Explicit USD-authored source of mount-local environmental signals.
@@ -720,13 +719,8 @@ register_commands!(on_set_environment_light);
 /// 2. [`EnvironmentSet::Apply`] — projects gravity onto Avian RigidBodies
 pub struct EnvironmentPlugin;
 
-fn clear_environment_sun_state(
-    mut sun: ResMut<SunState>,
-    mut presentation: ResMut<SunRenderPresentation>,
-    mut render_sun: ResMut<SunRenderState>,
-) {
+fn clear_environment_sun_state(mut sun: ResMut<SunState>, mut render_sun: ResMut<SunRenderState>) {
     sun.clear();
-    presentation.clear();
     render_sun.clear();
 }
 
@@ -794,7 +788,6 @@ impl Plugin for EnvironmentPlugin {
         // hierarchy reads as no-data rather than as a missing resource.
         app.init_resource::<EarthDirectionWorld>();
         app.init_resource::<SunState>();
-        app.init_resource::<SunRenderPresentation>();
         app.init_resource::<SunRenderState>();
 
         // SunState is scene-owned semantic state. Clear it at the same
@@ -802,15 +795,10 @@ impl Plugin for EnvironmentPlugin {
         // scene cannot inherit the outgoing scene's direction.
         app.add_systems(lunco_core::SceneTeardown, clear_environment_sun_state);
 
-        // Semantic sun state or a detached celestial presentation selects the
-        // render light's local pose before BigSpace propagation. The finalized
-        // world direction is published afterwards for render consumers.
-        app.add_systems(
-            PostUpdate,
-            project_sun_render_to_light
-                .in_set(SunRenderProjectionSet)
-                .before(TransformSystems::Propagate),
-        );
+        // Semantic sun state is the provider boundary. The light's local pose
+        // is projected before BigSpace propagation; its finalized world
+        // direction is published afterwards for render consumers.
+        app.add_systems(Update, project_sun_state_to_light);
         app.add_systems(
             PostUpdate,
             finalize_sun_render_state

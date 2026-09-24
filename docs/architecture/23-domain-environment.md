@@ -125,26 +125,30 @@ its own driver on the next frame. There is correspondingly no slider — the ins
 a readout, and what moves it is the sim clock.
 
 The Sun's shipped values are the documented calibration for scenes without a live solar
-distance model. `SunState` remains the `WorldTime` provider for physical direction,
-irradiance, and co-simulation. When a surface scene detaches `CelestialTime` from
-`WorldTime`, the celestial presentation producer supplies a typed `f64` direction
-to `SunRenderPresentation`. The environment projects that direction into the render
-light in the same frame, before transform propagation. This changes rendered
-Sun direction and shadows while physical state and Modelica inputs stay on `WorldTime`.
+distance model. The ephemeris provider samples the one `CelestialTime` child of
+`WorldTime` to publish `SunState` direction and irradiance. The render light,
+shadows, and the environment bridge project that same semantic state; none
+selects a second solar clock. `LocalSolar` is a per-probe mount-frame direction
+cache, not a time source. It is refreshed during ordinary `FixedUpdate` and
+published to Modelica at the existing co-simulation communication point.
 
 ```
-WorldTime ephemeris + site frame → SunState → LocalSolar → EnvironmentProbe → Modelica controller
-                                      └── semantic render selection ──┐
-CelestialTime ephemeris + site pose → SunRenderPresentation ──────────┤
-                                                                     ↓
-                                              DirectionalLight → SunRenderState → shadows
+CelestialTime ephemeris + site frame → SunState → LocalSolar → EnvironmentProbe → Modelica controller
+                                      └── DirectionalLight → SunRenderState → renderer and terrain shadows
 ```
+
+The celestial rate changes the sampled solar direction while the fixed physics
+and Modelica schedules keep their configured cadence. A panel on a horizontal
+mount receives the Sun's local up/down direction, so its incidence and
+available power fall to zero below the local horizon. The Sun tracker and
+panel model both consume the same mount-frame vector through authored USD
+connections.
 
 `SunRenderState` is published from the finalized light direction and feeds
-terrain shadow projection and the asynchronous horizon cache; Bevy's shadow
-extractor uses that same finalized light transform. The render light is not a
-provider endpoint, and a Modelica source does not drive it. Controllers such as
-`SunTracker` consume the environment-probe outputs and drive their actuators.
+terrain shadow projection and the asynchronous horizon cache. The render light
+is not a provider endpoint, and a Modelica source does not drive it. Controllers
+such as `SunTracker` consume the environment-probe outputs and drive their
+actuators.
 
 For a scene without a celestial site, the composed USD `DistantLight` is still
 the authored source of its fixed sun direction. `lunco-usd-sim` seeds that

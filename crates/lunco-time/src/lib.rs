@@ -6,8 +6,10 @@
 //! the conversion anchor (tick ↔ epoch), the transport (play/pause/rate), the
 //! derived causal [`WorldTime`] view, and the interpolated
 //! [`SimulationPresentationTime`] used by render-only consumers.
-//! Celestial render projection uses an explicit [`CelestialTime`] sample from
-//! the shared clock tree, separate from causal simulation time.
+//! Celestial state uses one explicit [`CelestialTime`] sample, an affine child
+//! of [`WorldTime`]. Ephemerides, body rotation, lighting, shadows, and
+//! environment inputs share it; physics and Modelica keep their fixed-step
+//! cadence and consume the resulting state at their normal communication points.
 //!
 //! The load-bearing rule is invariant 1 — **derive, never accumulate**. The
 //! calendar epoch is `epoch0 + (tick − tick0)/86400`, a pure function of the
@@ -49,8 +51,8 @@ pub const SECS_PER_DAY: f64 = 86_400.0;
 /// accepted live rate advances the causal simulation.
 pub const MAX_REALTIME_RATE: f64 = 64.0;
 
-/// Highest user-selectable rate for the presentation-only celestial clock.
-/// This clock never advances physics, co-simulation, or causal world state.
+/// Highest user-selectable rate for the celestial child of `WorldTime`.
+/// Scaling this sample does not change physics or co-simulation cadence.
 pub const MAX_CELESTIAL_TIME_RATE: f64 = 100_000.0;
 
 /// The slowest selectable live transport rate. Pause is represented by
@@ -508,7 +510,7 @@ pub fn advance_clock(rate: f64, paused: bool) -> f64 {
 #[derive(Resource, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Resource)]
 pub struct WorldTime {
-    /// Derived epoch (Julian Date, TDB) — the ephemeris/lighting input.
+    /// Base epoch (Julian Date, TDB) before the CelestialTime rate and offset.
     pub epoch_jd: f64,
     /// Integrator clock seconds since mission start — the animation sampler key.
     pub sim_secs: f64,
@@ -516,15 +518,16 @@ pub struct WorldTime {
     pub met_secs: f64,
 }
 
-/// Calendar sample published from the resolved celestial clock-tree domain.
-///
-/// By default this follows mission elapsed time. A user may re-parent it to wall
-/// time and rate-scale it for a presentation time-lapse; causal simulation and
-/// physical `SunState` continue to use [`WorldTime`].
+/// The single celestial epoch sample, published from the `CelestialTime`
+/// affine child of [`WorldTime`]. Celestial placement, body rotation, the
+/// semantic SunState, rendered shadows, and celestial geometry queries read
+/// this same sample. Physics and Modelica retain their ordinary cadence; model
+/// inputs derived from this sample are read at their existing communication
+/// points.
 #[derive(Resource, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Resource)]
 pub struct CelestialTime {
-    /// Presentation epoch (Julian Date, TDB).
+    /// Shared celestial epoch (Julian Date, TDB).
     pub epoch_jd: f64,
     /// Seconds advanced by the celestial clock this frame.
     pub delta_secs: f64,
@@ -705,8 +708,9 @@ fn project_time_transport(
 /// and presentation interpolation. Scene epoch selection belongs to the
 /// required `scene.time.select` Rhai policy; the settled USD owner submits its
 /// validated decision through [`ApplySceneTimeSelection`]. Add once
-/// (guarded callers use [`App::is_plugin_added`]). Causal consumers read
-/// [`WorldTime`]; celestial presentation receives its separate clock-tree sample.
+/// (guarded callers use [`App::is_plugin_added`]). The celestial sample is a
+/// scaled child of [`WorldTime`]; consumers share it without changing the
+/// physical fixed-step cadence.
 pub struct TimePlugin;
 
 impl Plugin for TimePlugin {

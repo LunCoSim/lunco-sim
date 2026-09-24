@@ -6,8 +6,7 @@
 //! `subdivide_face` (camera distance vs tile arc-size); this module integrates
 //! the selection with body-owned textures, grids, and appearance intent.
 //!
-//! Per body, [`GlobeLod`] carries the params + the physical surface grid + the
-//! render presentation grid + look;
+//! Per body, [`GlobeLod`] carries the params + the body-fixed surface grid + look;
 //! [`GlobeTiles`] tracks residency, the bounded mesh cache, and the cached
 //! selection inputs; [`update_globe_lod`] reconciles that state with the camera.
 //! Tile placement uses the grid's `translation_to_grid` together with a
@@ -38,18 +37,8 @@ use lunco_viewport_core::SceneViewport;
 pub struct GlobeLod {
     /// Body radius (m) — tile vertices ride this sphere.
     pub radius_m: f64,
-    /// Body-fixed physical grid for sites, terrain, cameras, and vehicles.
-    ///
-    /// This grid is intentionally outside the render interpolation branch.
-    /// It is the authoritative local frame for authored surface content and
-    /// remains at the authoritative physical tick.
+    /// Shared body-fixed grid for globe tiles, sites, terrain, cameras, and vehicles.
     pub surface_grid: Entity,
-    /// Interpolated presentation grid that owns streamed globe tiles.
-    ///
-    /// Globe tiles are visual derived data. Keeping their grid separate from
-    /// [`Self::surface_grid`] lets render interpolation update globe tiles
-    /// without reposing the physical surface scene.
-    pub globe_grid: Entity,
     /// Appearance intent applied to every tile (the body's blueprint look). Cloned
     /// onto each tile; the binder's content-keyed cache shares one
     /// `ShaderMaterial` per body.
@@ -513,7 +502,7 @@ pub(crate) fn globe_lod_update_due(
     }
 
     lods.iter()
-        .any(|lod| changed_grids.contains(lod.globe_grid))
+        .any(|lod| changed_grids.contains(lod.surface_grid))
 }
 
 /// Resource limits for live globe streaming.
@@ -847,7 +836,7 @@ pub(crate) fn update_globe_lod(
         // lossy, floating-origin-relative render `GlobalTransform` projection.
         let camera_body_local = camera_position_in_surface_grid(
             camera_entity,
-            lod.globe_grid,
+            lod.surface_grid,
             &q_parents,
             &grids,
             &q_spatial,
@@ -855,13 +844,13 @@ pub(crate) fn update_globe_lod(
         .unwrap_or_else(|| {
             panic!(
                 "globe LOD camera {camera_entity:?} and globe Grid {:?} are not connected through one BigSpace hierarchy",
-                lod.globe_grid
+                lod.surface_grid
             )
         });
-        let sg_grid = grids.get(lod.globe_grid).unwrap_or_else(|_| {
+        let sg_grid = grids.get(lod.surface_grid).unwrap_or_else(|_| {
             panic!(
                 "GlobeLod on body {body_ent:?} names {:?} as its globe Grid, but that entity has no Grid component",
-                lod.globe_grid
+                lod.surface_grid
             )
         });
         let tile_bytes = tile_mesh_bytes(lod.res);
@@ -872,8 +861,8 @@ pub(crate) fn update_globe_lod(
         let handoff_changed = tiles.last_solve_handoff.as_ref() != handoff;
         if handoff_changed {
             debug!(
-                "globe LOD handoff solve: body={body_ent:?} camera={camera_entity:?} globe_grid={:?} body_local={camera_body_local:?} radius={:.0} handoff={}",
-                lod.globe_grid,
+                "globe LOD handoff solve: body={body_ent:?} camera={camera_entity:?} surface_grid={:?} body_local={camera_body_local:?} radius={:.0} handoff={}",
+                lod.surface_grid,
                 lod.radius_m,
                 handoff.is_some()
             );
@@ -1189,7 +1178,7 @@ pub(crate) fn update_globe_lod(
                     )),
                     // Streamed runtime detail — hidden from author-facing lists.
                     lunco_core::SystemManaged,
-                    ChildOf(lod.globe_grid),
+                    ChildOf(lod.surface_grid),
                 ))
                 .id();
             tiles.resident.insert(coord, ent);

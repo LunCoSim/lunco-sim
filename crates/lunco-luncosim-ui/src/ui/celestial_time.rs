@@ -1,20 +1,7 @@
 //! Sky clock control (doc 19 §11b) — the luncosim's celestial-time panel.
 //!
-//! The workbench (`luncosim`) has a "Time Control" panel, but it drives
-//! `TimeTransport`: the *simulation* transport, which pauses physics and the tick.
-//! That is a different thing from the **celestial clock**, and conflating them is
-//! what made "speed up time to watch the Earth move" also fast-forward the rovers.
-//!
-//! This panel drives the celestial [`TimeDomain`] alone, via [`SetClock`]:
-//!
-//! * **Follow sim** — the clock hangs under the mission epoch projection: pausing the
-//!   world freezes the sky too (the default, and the deterministic/replay-safe one).
-//! * **Independent** — the clock is re-parented onto the wall root, so the sky keeps
-//!   running at its own rate **while the simulation is paused**. A clock is frozen
-//!   because of *where it hangs*, so running one anyway is a re-parent, not a flag.
-//! * **Rate** — selecting a rate also re-parents that clock onto the wall root,
-//!   so a time-lapse keeps moving when the simulation is paused. `1000×` moves
-//!   the Earth across the lunar sky in a couple of minutes; the sim is untouched.
+//! CelestialTime is a scaled child of WorldTime. The selected rate advances all
+//! celestial state and model inputs from one epoch; pausing WorldTime freezes it.
 //!
 //! Only drawn when the scene actually declared celestial bodies (§11e) — no sky, no
 //! sky clock.
@@ -32,40 +19,26 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
 use lunco_celestial::CelestialBody;
-use lunco_time::{CelestialTime, ClockId, ClockParent, ClockRoot, Clocks, SetClock, TimeDomain};
+use lunco_time::{CelestialTime, Clocks, SetCelestialClock, TimeDomain};
 use lunco_workbench_core::MenuCtx;
 
-fn sky_clock_state(
-    clocks: Clocks,
-    domain: Option<TimeDomain>,
-    root: Option<ClockRoot>,
-) -> Option<(bool, f64)> {
+fn sky_clock_state(clocks: Clocks, domain: Option<TimeDomain>) -> Option<f64> {
     let domain = domain?;
-    let independent = if domain.parent == Some(clocks.real) {
-        true
-    } else if domain.parent == Some(clocks.sim)
-        || (domain.parent.is_none() && root == Some(ClockRoot::Epoch))
-    {
-        false
-    } else {
-        return None;
-    };
-    Some((independent, domain.scale))
+    (domain.parent == Some(clocks.sim)).then_some(domain.scale)
 }
 
 /// The sky-clock controls, drawn into whatever `Ui` is given.
 ///
 /// Takes the state it needs rather than queries, so the same widget serves a
 /// system (which has `Res`/`Query`) and a menu callback.
-/// Returns the [`SetClock`] the user asked for, if any — the caller owns dispatch,
+/// Returns the [`SetCelestialClock`] the user asked for, if any — the caller owns dispatch,
 /// because triggering differs between the two contexts.
 fn sky_clock_ui(
     ui: &mut egui::Ui,
     utc: &str,
     epoch_jd: f64,
-    independent: bool,
     scale: f64,
-) -> Option<SetClock> {
+) -> Option<SetCelestialClock> {
     let mut request = None;
 
     ui.horizontal(|ui| {
@@ -100,8 +73,8 @@ fn sky_clock_ui(
                     .then_some(egui::Color32::from_rgb(220, 120, 120)),
             );
         let resp = ui.add(field).on_hover_text(
-            "UTC date to put the sky at — `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DD HH:MM` \
-             or `YYYY-MM-DD`. Moves the SKY only; the simulation clock is untouched.",
+            "UTC date to put the celestial clock at — `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DD HH:MM` \
+             or `YYYY-MM-DD`. All celestial consumers read this same epoch.",
         );
         let entered = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let go = ui
@@ -109,26 +82,21 @@ fn sky_clock_ui(
             .on_disabled_hover_text("Not a date this understands — see the field's tooltip.")
             .clicked();
         if let (Some(jd), true) = (parsed, go || entered) {
-            request = Some(SetClock {
-                clock: ClockId::Celestial,
+            request = Some(SetCelestialClock {
                 epoch_jd: Some(jd),
                 ..default()
             });
         }
-        // "Now" is the state the scene starts in when it authors no epoch, so it
-        // has to be reachable after a seek — otherwise the only way back to the
-        // real sky is a restart.
         if ui
             .button("Now")
-            .on_hover_text("Jump the sky back to the current wall-clock time.")
+            .on_hover_text("Seek the shared celestial clock to the current UTC date.")
             .clicked()
         {
             let now = lunco_time::utc_now_tdb_jd();
             buf = lunco_time::tdb_jd_to_utc_string(now)
                 .trim_end_matches(" UTC")
                 .to_string();
-            request = Some(SetClock {
-                clock: ClockId::Celestial,
+            request = Some(SetCelestialClock {
                 epoch_jd: Some(now),
                 ..default()
             });
@@ -136,44 +104,10 @@ fn sky_clock_ui(
     });
     ui.data_mut(|d| d.insert_temp(buf_id, buf));
 
-    ui.horizontal(|ui| {
-        // Coupling: this is the pause story. "Follow sim" hangs the clock under
-        // the tick master (freezes with the world); "Independent" re-parents it
-        // onto the wall clock so the sky runs even while the simulation is paused.
-        let follow = ui
-            .selectable_label(!independent, "Follow sim")
-            .on_hover_text(
-                "The sky is part of the simulation: pausing the world \
-                 freezes it too. Deterministic and replay-safe.",
-            );
-        if follow.clicked() && independent {
-            request = Some(SetClock {
-                clock: ClockId::Celestial,
-                parent: Some(ClockParent::Sim),
-                scale: Some(1.0),
-                ..default()
-            });
-        }
-        let indep = ui
-            .selectable_label(independent, "Independent")
-            .on_hover_text(
-                "Run the sky on its own clock — it keeps moving while \
-                 the simulation is paused.",
-            );
-        if indep.clicked() && !independent {
-            request = Some(SetClock {
-                clock: ClockId::Celestial,
-                parent: Some(ClockParent::Real),
-                ..default()
-            });
-        }
-    });
-
     ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new("Rate").weak().size(11.0));
-        // 1× is realtime, which on a lunar day is imperceptible — the useful range
-        // for watching Earth cross the sky starts around 1000×. The simulation's
-        // own rate is untouched by these.
+        // The celestial epoch scales from WorldTime. Physics retains its fixed
+        // timestep; models consume the shared celestial sample at that cadence.
         for m in [
             1.0_f64,
             100.0,
@@ -188,28 +122,16 @@ fn sky_clock_ui(
             };
             if ui
                 .selectable_label((scale - m).abs() < f64::EPSILON, label)
-                .on_hover_text(
-                    "Run the sky at this rate on its own clock. The simulation and rover stay unchanged.",
-                )
+                .on_hover_text("Scale the shared celestial epoch relative to WorldTime.")
                 .clicked()
             {
-                request = Some(SetClock {
-                    clock: ClockId::Celestial,
-                    parent: Some(ClockParent::Real),
+                request = Some(SetCelestialClock {
                     scale: Some(m),
                     ..default()
                 });
             }
         }
     });
-
-    if independent {
-        ui.label(
-            egui::RichText::new("sky detached from sim")
-                .weak()
-                .size(10.0),
-        );
-    }
 
     request
 }
@@ -227,12 +149,8 @@ pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     ) else {
         return;
     };
-    let state = sky_clock_state(
-        clocks,
-        ctx.get::<TimeDomain>(clocks.celestial).copied(),
-        ctx.get::<ClockRoot>(clocks.celestial).copied(),
-    );
-    let Some((independent, scale)) = state else {
+    let state = sky_clock_state(clocks, ctx.get::<TimeDomain>(clocks.celestial).copied());
+    let Some(scale) = state else {
         ui.label(
             egui::RichText::new("Celestial clock unavailable")
                 .weak()
@@ -242,20 +160,19 @@ pub(crate) fn sky_clock_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     };
 
     let utc = lunco_time::tdb_jd_to_utc_string(celestial.epoch_jd);
-    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, independent, scale) {
+    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, scale) {
         ctx.trigger(req);
     }
 }
 
 /// Paint the sky-clock pill (top-left, under the view switcher) and dispatch
-/// [`SetClock`]. Runs in `EguiPrimaryContextPass`; early-outs when the scene has no
+/// [`SetCelestialClock`]. Runs in `EguiPrimaryContextPass`; early-outs when the scene has no
 /// celestial bodies.
 pub(crate) fn draw_celestial_time(
     mut egui_ctx: EguiContexts,
     q_bodies: Query<(), With<CelestialBody>>,
     clocks: Option<Res<Clocks>>,
     q_domains: Query<&TimeDomain>,
-    q_roots: Query<&ClockRoot>,
     celestial: Option<Res<CelestialTime>>,
     mut commands: Commands,
 ) {
@@ -268,13 +185,8 @@ pub(crate) fn draw_celestial_time(
     let utc = lunco_time::tdb_jd_to_utc_string(celestial.epoch_jd);
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
 
-    // The sky is "independent" exactly when its clock hangs off the wall root.
-    let state = sky_clock_state(
-        *clocks,
-        q_domains.get(clocks.celestial).ok().copied(),
-        q_roots.get(clocks.celestial).ok().copied(),
-    );
-    let Some((independent, scale)) = state else {
+    let state = sky_clock_state(*clocks, q_domains.get(clocks.celestial).ok().copied());
+    let Some(scale) = state else {
         bevy::log::warn_once!("[ui] celestial clock is unavailable; hiding its overlay");
         return;
     };
@@ -287,9 +199,7 @@ pub(crate) fn draw_celestial_time(
             egui::Frame::popup(ui.style())
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    if let Some(req) =
-                        sky_clock_ui(ui, &utc, celestial.epoch_jd, independent, scale)
-                    {
+                    if let Some(req) = sky_clock_ui(ui, &utc, celestial.epoch_jd, scale) {
                         commands.trigger(req);
                     }
                 });

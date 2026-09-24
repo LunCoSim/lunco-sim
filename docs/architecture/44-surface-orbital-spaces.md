@@ -32,24 +32,13 @@ WorldRoot
     │   └── spacecraft / inertial trajectories
     └── body-fixed grid
         └── surface grid
-            └── terrain, rovers, surface camera, surface trajectories
-
-Separately, a body may have a render presentation branch below the inertial
-solar hierarchy:
-
-```text
-Solar inertial grid
-└── body presentation grid
-    └── globe presentation surface
-        └── streamed globe LOD tiles
+            └── terrain, globe tiles, rovers, surface camera, trajectories
 ```
 
-The two grids are deliberately not interchangeable. The physical surface grid
-is the authoritative parent for authored terrain, vehicles, physics, and local
-cameras. The globe presentation surface is derived render content sampled from
-the physical-time presentation resource. `GlobeLod` stores both identities
-explicitly; using the presentation grid as a site parent would move the
-physical scene during render interpolation.
+Each body has one body-fixed grid that owns its globe tiles, terrain, vehicles,
+physics, and surface cameras. `CelestialTime`, the affine child of `WorldTime`,
+drives the body's position and axial rotation on this shared grid. Globe
+imagery does not have a parallel presentation hierarchy or time sample.
 ```
 
 The body-fixed grid is the object that rotates. The body entity itself stays
