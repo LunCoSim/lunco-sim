@@ -724,6 +724,12 @@ const MAX_INPUT_FRAMES: usize = 128;
 /// presence of writes is NOT an activity signal — the *value* is.
 const INPUT_EPS: f64 = 1e-3;
 
+#[derive(Default)]
+struct VesselInputState {
+    ports_active: std::collections::HashMap<Entity, bool>,
+    takeover_requested: std::collections::HashSet<(Entity, Entity)>,
+}
+
 /// Fixed-tick input emission for prediction. Emits a [`lunco_cosim_core::commands::SetPorts`]
 /// while a controller is active and once on the active→idle edge, from its
 /// [`ControlBinding`] and held keys, stamped with a per-vessel `seq` + `SimTick`.
@@ -734,11 +740,11 @@ fn drive_from_bindings(
     role: Res<lunco_core_session::NetworkRole>,
     tick: Res<lunco_core_runtime::SimTick>,
     mut log: ResMut<lunco_core_session::OwnedInputLog>,
-    // Spec 034 yield: control authority is vessel ownership, so the human keyboard
-    // drives ONLY vessels the local session owns. A vessel owned by another actor
-    // (another player, or an autopilot's `AiAgent` session) is driven by that actor
-    // — the human yields on a single `owner_of` lookup, no per-frame arbiter. Both
-    // `Option` so a controller-only test app without the session substrate runs.
+    // Control authority is generic session ownership. If another session owns a
+    // target, an active operator intent requests the normal claim transition below;
+    // the authored authority policy decides whether the handoff is allowed. Both
+    // resources are optional so a controller-only app without the session
+    // substrate retains its local input path.
     registry: Option<Res<lunco_core_session::SessionRegistry>>,
     local_session: Option<Res<lunco_core_session::LocalSession>>,
     // The authored authorization POLICY applies to the local keyboard too — see the
@@ -746,7 +752,7 @@ fn drive_from_bindings(
     // substrate still runs ungated.
     rbac: Option<Res<lunco_core_session::SessionRbac>>,
     control_paths: Option<Res<lunco_core_session::ControlPathRegistry>>,
-    q_ctrl: Query<(&ControlLink, &ActionState<UserIntent>)>,
+    q_ctrl: Query<(Entity, &ControlLink, &ActionState<UserIntent>)>,
     q_binding: Query<&ControlBinding>,
     q_vessel: Query<(
         &lunco_core::GlobalEntityId,
@@ -759,9 +765,9 @@ fn drive_from_bindings(
     egui_focus: Option<Res<lunco_control_core::EguiFocus>>,
     // Intents forced by `SimulateIntent` — the headless/API/rhai stand-in for keys.
     sim_intents: Option<Res<SimulatedIntents>>,
-    // Per-vessel "keys were active last tick" memory for the idle-yield below.
-    mut was_active: Local<std::collections::HashMap<Entity, bool>>,
-    // Despawned vessels leave `was_active` — pruned below so a recycled
+    // Port idle-yield and held-input authority-request state.
+    mut input_state: Local<VesselInputState>,
+    // Despawned vessels leave `ports_active` — pruned below so a recycled
     // Entity id can't inherit a stale flag and mistime the all-zero batch.
     mut removed_bindings: RemovedComponents<ControlBinding>,
     // Previous semantic state used to publish pressed/released transitions once.
@@ -771,9 +777,15 @@ fn drive_from_bindings(
     // Prune despawned/unbound vessels before reading edges: a recycled Entity
     // id must start from "idle", not the previous vessel's last state.
     for vessel in removed_bindings.read() {
-        was_active.remove(&vessel);
+        input_state.ports_active.remove(&vessel);
         edge_state.retain(|(entity, _), _| *entity != vessel);
+        input_state
+            .takeover_requested
+            .retain(|(_, target)| *target != vessel);
     }
+    input_state
+        .takeover_requested
+        .retain(|(source, _)| q_ctrl.contains(*source));
 
     let client = matches!(*role, lunco_core_session::NetworkRole::Client);
 
@@ -787,7 +799,7 @@ fn drive_from_bindings(
         intent_held(vessel, intent, intents, sim_intents, egui_keyboard)
     };
 
-    for (link, intents) in q_ctrl.iter() {
+    for (source, link, intents) in q_ctrl.iter() {
         // Stage 1 (key→intent) is the shared leafwing `InputMap<UserIntent>`;
         // stage 2 maps this vessel's active intents → summed, clamped port writes.
         // The binding is authored ON THE VESSEL as a USD `Controls` child scope
@@ -796,23 +808,22 @@ fn drive_from_bindings(
             continue;
         };
 
-        // The vessel's id (gid + is-it-locally-owned) — used both by the ownership
-        // yield below and the client seq bookkeeping.
-        let vessel_id = q_vessel.get(link.target).ok();
-
-        // Spec 034 yield: if this vessel is owned by a session OTHER than ours, that
-        // actor (a remote player, or an autopilot's `AiAgent` session) is the single
-        // writer this tick — stay silent so the two never fight (no jitter). Owner
-        // `None` (unpossessed) or our own session → we drive. When an autopilot
-        // yields the vessel, ownership clears and this stops matching.
-        if let (Some(reg), Some(local), Some((gid, _))) =
-            (registry.as_ref(), local_session.as_ref(), vessel_id)
-        {
-            let owner = reg.owner_of(gid.get());
-            if owner.is_some_and(|owner| owner != local.0) {
-                continue;
-            }
+        let operator_intent_active =
+            has_active_control_intent(link.target, binding, intents, sim_intents, egui_keyboard);
+        if !operator_intent_active {
+            input_state
+                .takeover_requested
+                .retain(|(owner, _)| *owner != source);
         }
+
+        // The vessel's id (gid + is-it-locally-owned) — used both by the ownership
+        // handoff below and the client seq bookkeeping.
+        let vessel_id = q_vessel.get(link.target).ok();
+        let owns = registry
+            .as_ref()
+            .zip(local_session.as_ref())
+            .zip(vessel_id)
+            .is_some_and(|((reg, local), (gid, _))| reg.owns(local.0, gid.get()));
 
         // The authored authorization policy ([`AUTHORIZE_HOOK`]) gates the LOCAL
         // keyboard, not just the wire and script paths. Without this a policy like
@@ -823,19 +834,16 @@ fn drive_from_bindings(
         // this system triggers `SetPorts` directly.
         //
         // `authorize_policy`, NOT the full `authorize`: the role/ownership floor is a
-        // wire concern. This loop deliberately drives an UNPOSSESSED vessel (owner
-        // `None`, per the yield above), which the ownership-gated floor would refuse
-        // — gating the floor here would break ordinary local play. The policy is what
-        // must bind everywhere; the floor stays where it belongs.
+        // wire concern. This path drives locally unowned targets as well as targets
+        // already claimed by this session; applying the ownership-gated floor here
+        // would break ordinary local play. The policy is what must bind everywhere;
+        // the floor stays where it belongs.
         if let (Some(rbac), Some(paths), Some(local), Some((gid, _))) = (
             rbac.as_ref(),
             control_paths.as_ref(),
             local_session.as_ref(),
             vessel_id,
         ) {
-            let owns = registry
-                .as_ref()
-                .is_some_and(|reg| reg.owns(local.0, gid.get()));
             if lunco_core_session::authorize_policy(
                 rbac,
                 paths,
@@ -846,9 +854,38 @@ fn drive_from_bindings(
             )
             .is_err()
             {
+                input_state
+                    .takeover_requested
+                    .remove(&(source, link.target));
                 continue;
             }
         }
+
+        // A foreign session remains the only writer until the shared authority
+        // transaction accepts a local claim. An active semantic control intent
+        // requests that transaction once; the existing Rhai authority policy
+        // decides whether this session may take the endpoint. The input frame is
+        // applied on the next fixed tick, after ownership has changed.
+        if let (Some(reg), Some(local), Some((gid, _))) =
+            (registry.as_ref(), local_session.as_ref(), vessel_id)
+        {
+            let owner_is_other = reg
+                .owner_of(gid.get())
+                .is_some_and(|owner| owner != local.0);
+            if owner_is_other {
+                if operator_intent_active
+                    && input_state.takeover_requested.insert((source, link.target))
+                {
+                    commands.trigger(lunco_core_session::commands::ClaimControl {
+                        target: link.target,
+                    });
+                }
+                continue;
+            }
+        }
+        input_state
+            .takeover_requested
+            .remove(&(source, link.target));
 
         emit_intent_edges(
             link.target,
@@ -873,15 +910,18 @@ fn drive_from_bindings(
             .flatten();
         // Spec-034 scope B (idle-yield): an idle possessing human used to write
         // every bound port as 0 EVERY tick, stomping any scripted/API `SetPorts`
-        // on the same vessel — the "autopilot and avatar fight" (a tutorial's
-        // debug autopilot could not drive a vessel the player possessed). Go
+        // on the same vessel, so authored guidance could not drive a vessel the
+        // player possessed. Go
         // SILENT in steady idle and emit exactly ONE all-zero batch on the
         // active→idle edge — ports latch, so a single zero write still gives
         // the clean stop the every-tick stream provided. A pressed key resumes
         // writing immediately: the human always preempts a script mid-drive.
         //
         let active = writes.iter().any(|(_, v)| v.abs() > f64::EPSILON);
-        let prev = was_active.insert(link.target, active).unwrap_or(false);
+        let prev = input_state
+            .ports_active
+            .insert(link.target, active)
+            .unwrap_or(false);
         // An idle client does not own the control surface merely because it is
         // predicted. The active→idle edge above emits one real zero batch so
         // the actuator stops; subsequent idle ticks are silent and cannot
@@ -928,6 +968,28 @@ fn intent_held(
 ) -> bool {
     sim_intents.is_some_and(|s| s.0.get(&vessel).is_some_and(|set| set.contains(&intent)))
         || (!egui_keyboard && intents.pressed(&intent))
+}
+
+/// Whether the user has an active semantic control intent for this target.
+/// `Action` is included because authored programs may use it as a control
+/// action even when the vessel has no matching command port.
+fn has_active_control_intent(
+    vessel: Entity,
+    binding: &ControlBinding,
+    intents: &ActionState<UserIntent>,
+    sim_intents: Option<&SimulatedIntents>,
+    egui_keyboard: bool,
+) -> bool {
+    intent_held(
+        vessel,
+        UserIntent::Action,
+        intents,
+        sim_intents,
+        egui_keyboard,
+    ) || binding
+        .binds
+        .iter()
+        .any(|(intent, _, _)| intent_held(vessel, *intent, intents, sim_intents, egui_keyboard))
 }
 
 /// Publish each authored semantic intent transition exactly once for a target.

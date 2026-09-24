@@ -226,6 +226,13 @@ control link: the route remains active and continues publishing guidance. The
 rover status view follows the avatar's `ControlLink`, so it reports free flight
 after release and driving again after possession.
 
+A pressed or pulsed non-`Action` `intent.edge` addressed to the route subject is
+a manual override: `route_follow` disables guidance, clears any pending start,
+and safe-stops its guidance ports. The shared controller continues applying the
+operator's bound port frame on subsequent input ticks. `Action` remains the
+explicit route toggle; these rules use semantic intents and apply to any
+authored subject profile.
+
 ## Presentation
 
 The marker's dome is translucent, unlit, and shadowless. Its authored unvisited colour

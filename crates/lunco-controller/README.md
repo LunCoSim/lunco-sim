@@ -11,8 +11,10 @@ The shared persisted keymap is owned by `lunco-input-core`.
 - **Intent Translation** — Maps semantic `UserIntent` actions into the shared
   `SetPorts` command surface and authored per-vessel `ControlBinding`s.
 - **Context Awareness** — UI focus and session authority gates are applied at
-  the shared controller boundary, so input cannot fight a text field,
-  autopilot, or another owning session.
+  the shared controller boundary, so input cannot fight a text field or
+  another owning session. An active bound user intent requests the existing
+  `ClaimControl` transition for a foreign-owned target; the authored authority
+  policy decides whether that handoff is allowed.
 
 ## Architecture
 
@@ -106,6 +108,12 @@ read-only `CausalTrace` query to inspect the authored binding, selected
 does not choose a port or action policy;
 the consuming Twin's Rhai/Modelica layer does that. This avoids requiring
 callers to emulate a pulse with two ordered `SimulateIntent` writes.
+
+Keyboard and simulated control intents use the same target-scoped edge. Generic
+route guidance consumes a pressed or pulsed non-`Action` edge as a manual
+override and stops publishing its guidance setpoint; `Action` retains the
+authored route toggle. The default `pause` intent is bound to P and toggles the
+shared time transport through the avatar's semantic intent state.
 
 ## See Also
 

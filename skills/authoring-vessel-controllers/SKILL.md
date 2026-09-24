@@ -108,8 +108,12 @@ actuator-side Modelica/USD contract. A scene-level Rhai route program reads
 the route's composed point prims, waits for generic sensor enter events, and
 publishes current named-port guidance through the shared bridge. The route is
 not stored on the rover. User possession controls the local `ControlLink`, HUD,
-and manual-input session; it is independent of an enabled route program. Do not
-represent a guidance program as a user-session claim.
+and manual-input session; possession alone does not stop an enabled route
+program. The shared controller requests `ClaimControl` when the operator first
+presses a bound intent on a target owned by another session. The existing
+`control.authority.take` Rhai policy decides whether that handoff is allowed.
+After the claim, the target-scoped semantic edge reaches the route policy and
+the held port command is applied.
 
 ## 2. High-level logic → rhai, event-driven
 
@@ -174,6 +178,10 @@ parsed Modelica contract does not match the authored scene.
   `cmd = piloted ? pilot_stick : gnc`. Because it's wired it's a live input — **no
   in-model flag, no rhai toggle, no per-tick check.** Possession is the single source
   of truth; Rust never reasons about "autopilot" vs "user".
+- When a bound local control intent arrives while another session owns the target,
+  the shared controller requests the existing generic `ClaimControl` transition.
+  The authored `control.authority.take` policy decides whether the local session can
+  take the endpoint; Rust does not special-case an autopilot role.
 - The pilot's stick reaches `external_throttle`/`pitch`/… through the vessel's
   intent→port `Controls` scope (next section) when they possess. Camera-follow
 without taking control: `follow(entity)` (inserts a chase camera, no `ControlLink`).
@@ -195,10 +203,12 @@ remote session to the local camera.
 A route or mission program publishes authored guidance through the vessel's
 generic named-port surface and the model's existing guidance/actuation
 contract. It does not call `AcquireControl` or claim a user session. Releasing
-possession may safe the manual input ports for that transaction; an enabled
-program remains active and republishes its current guidance on its next event
-or program step. The model's control topology owns precedence when manual and
-autonomous inputs coexist. Do not set `Position`, `LinearVelocity`,
+possession may safe the manual input ports for that transaction; the enabled
+program remains active until a manual control intent arrives. The generic
+`route_follow` policy stops guidance on a pressed or pulsed non-`Action`
+`intent.edge` for its subject; `Action` remains the route toggle. Other authored
+autopilots should consume the same semantic edge contract to yield. Do not set
+`Position`, `LinearVelocity`,
 `ModelicaModel.inputs`, or a private actuator component to make a scenario move;
 those bypass the authored input and model contracts.
 
@@ -261,6 +271,9 @@ def "Controls" (
 - **A new control scheme** = new intents in the referenced profile (or authored inline) —
   data, not Rust. The key→intent half is the shared leafwing `UserIntent` map, so a saved
   keymap rebinds every vessel; you only choose what each intent *actuates* here.
+- The default P binding is the shared `pause` intent. The avatar hotkey toggles
+  `SetTimeTransport` from that intent; it is not a vehicle port or a raw-key
+  controller special case.
 - **Make an entity drivable at RUNTIME**: author the `Controls` child (and give it an
   actuation surface) via the USD-op API on the new prim — it composes immediately and the
   possessing avatar can drive it. No Rust, no restart. This is how you "build a new entity

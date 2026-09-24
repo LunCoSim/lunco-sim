@@ -434,6 +434,26 @@ are the current projection of `lunco-input-core::InputBindingsSettings`; UI help
 must resolve labels from that resource so remapping updates presentation while
 the semantic profile and physical actuator ownership remain unchanged.
 
+If another session owns the target, the first active intent in its authored
+`ControlBinding` requests the generic `ClaimControl` transition once for that
+held input. The existing `control.authority.take` Rhai policy decides whether
+the local session may take the endpoint; the controller stays silent until the
+claim succeeds, then applies the held command on the next fixed tick. This
+handoff applies to any entity with the shared control surface, without vehicle
+or autopilot type checks.
+
+The default P binding resolves to `UserIntent::Pause`. The avatar hotkey
+consumes that intent and toggles `SetTimeTransport`, so pausing and resuming
+follow the persisted semantic input map rather than reading a raw key in the
+simulation.
+
+The generic `route_follow` policy consumes the same target-scoped
+`intent.edge` events: `Action` keeps its route toggle, while a pressed or pulsed
+vehicle control intent stops route guidance and clears any pending start. The
+shared controller keeps applying the bound operator frame on subsequent input
+ticks. A future authored autopilot uses this shared edge contract to yield
+without adding a vehicle-specific Rust path.
+
 A press in the main scene is also the keyboard-focus handoff: the workbench
 surrenders retained egui editor focus before publishing `EguiFocus`, so a
 possessed vessel receives the shared input map immediately after the scene click.
