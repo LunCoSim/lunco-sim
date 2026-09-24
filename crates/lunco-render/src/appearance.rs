@@ -237,6 +237,10 @@ impl PbrLook {
 
     /// Cache key for material sharing.
     ///
+    /// Only values that affect the concrete material belong in this key.
+    /// `no_shadow_cast` is per-entity render intent applied through
+    /// `NotShadowCaster`, so it does not split otherwise identical materials.
+    ///
     /// Floats are quantised (1e-4) before hashing so that two looks a rounding
     /// error apart still share a handle rather than minting a second material and
     /// silently breaking batching. That is the whole point of the key: it is a
@@ -272,9 +276,7 @@ impl PbrLook {
                 tex(&self.textures.normal_map),
                 tex(&self.textures.occlusion),
             ],
-            flags: (self.unlit as u8)
-                | (self.double_sided as u8) << 1
-                | (self.no_shadow_cast as u8) << 2,
+            flags: (self.unlit as u8) | (self.double_sided as u8) << 1,
         }
     }
 }

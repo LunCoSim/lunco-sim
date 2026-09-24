@@ -603,7 +603,9 @@ fn rebind_changed_pbr_look(
                 // Private material: overwrite the asset it already owns.
                 if let Some(mut existing) = current.and_then(|m| materials.get_mut(&m.0)) {
                     *existing = standard_material(look, *profile);
-                    apply_shadow_flag(&mut commands, e, look);
+                    if has_not_shadow_caster != look.no_shadow_cast {
+                        apply_shadow_flag(&mut commands, e, look);
+                    }
                     continue;
                 }
             }
@@ -622,10 +624,21 @@ fn rebind_changed_pbr_look(
                         private: true,
                     },
                 ));
-            apply_shadow_flag(&mut commands, e, look);
+            if has_not_shadow_caster != look.no_shadow_cast {
+                apply_shadow_flag(&mut commands, e, look);
+            }
             continue;
         }
         let handle = material_for(look, *profile, &mut cache, &mut materials);
+        if !has_shader_material
+            && current.is_some_and(|current| current.0.id() == handle.id())
+            && binding.is_some_and(|binding| !binding.private && binding.material_id == handle.id())
+        {
+            if has_not_shadow_caster != look.no_shadow_cast {
+                apply_shadow_flag(&mut commands, e, look);
+            }
+            continue;
+        }
         // `try_insert`, not `insert`. The USD projector's despawns can no longer
         // race this (it runs in `PreUpdate`), but `ClearScene` and the preview
         // viewport still despawn entities *within* `Update`, and Bevy's deferred
@@ -643,7 +656,9 @@ fn rebind_changed_pbr_look(
                     private: false,
                 },
             ));
-        apply_shadow_flag(&mut commands, e, look);
+        if has_not_shadow_caster != look.no_shadow_cast {
+            apply_shadow_flag(&mut commands, e, look);
+        }
     }
 }
 
@@ -742,6 +757,34 @@ mod tests {
         assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 1);
     }
 
+    #[test]
+    fn shadow_cast_intent_does_not_split_identical_materials() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<StandardMaterial>()
+            .add_plugins(LuncoRenderPlugin);
+
+        let look = PbrLook::matte(LinearRgba::rgb(0.22, 0.21, 0.20));
+        let caster = app.world_mut().spawn(look.clone()).id();
+        let non_caster = app.world_mut().spawn(look.no_shadows()).id();
+        app.update();
+
+        let caster_material = app
+            .world()
+            .entity(caster)
+            .get::<MeshMaterial3d<StandardMaterial>>()
+            .expect("caster PBR binding");
+        let non_caster_material = app
+            .world()
+            .entity(non_caster)
+            .get::<MeshMaterial3d<StandardMaterial>>()
+            .expect("non-caster PBR binding");
+        assert_eq!(caster_material.0, non_caster_material.0);
+        assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 1);
+        assert!(!app.world().entity(caster).contains::<NotShadowCaster>());
+        assert!(app.world().entity(non_caster).contains::<NotShadowCaster>());
+    }
+
     /// Two different looks must NOT collide into one material.
     #[test]
     fn different_looks_get_different_materials() {
@@ -760,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn replacing_a_mesh_preserves_its_existing_pbr_binding() {
+    fn pbr_binding_skips_noop_rebinds_and_repairs_stale_state() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
             .init_asset::<StandardMaterial>()
@@ -846,6 +889,26 @@ mod tests {
             .world()
             .entity(entity)
             .contains::<MeshMaterial3d<StandardMaterial>>());
+
+        let shared_entity = app
+            .world_mut()
+            .spawn((
+                PbrLook::matte(LinearRgba::rgb(0.5, 0.6, 0.7)),
+                Mesh3d(Handle::<bevy::mesh::Mesh>::default()),
+            ))
+            .id();
+        app.update();
+        app.world_mut().resource_mut::<PbrMaterialInsertions>().0 = 0;
+        let mut look = app.world_mut().get_mut::<PbrLook>(shared_entity).unwrap();
+        *look = look.clone();
+        drop(look);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<PbrMaterialInsertions>().0,
+            0,
+            "unchanged shared looks must not reinsert their cached material"
+        );
     }
 
     #[test]
