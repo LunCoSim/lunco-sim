@@ -393,8 +393,11 @@ type PbrLookCache = look_cache::LookCache<PbrLook>;
 /// visit tinting is one such session-only change). Without this binding state,
 /// the first transition from a cached shared material to an unshared look would
 /// mutate the shared asset in place and recolour every entity using that handle.
+/// The asset ID also distinguishes a valid binding from an externally replaced
+/// material when mesh geometry is refreshed.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 struct PbrLookBinding {
+    material_id: AssetId<StandardMaterial>,
     private: bool,
 }
 
@@ -519,6 +522,10 @@ fn bind_pbr_look(
     let e = add.entity;
     let Ok(look) = looks.get(e) else { return };
     let handle = material_for(look, *profile, &mut cache, &mut materials);
+    let binding = PbrLookBinding {
+        material_id: handle.id(),
+        private: look.unshared,
+    };
 
     let mut ec = commands.entity(e);
     // Keep the concrete render material exclusive too. Although callers must
@@ -529,9 +536,7 @@ fn bind_pbr_look(
     // that into a formatted error through the command error handler every frame.
     ec.try_remove::<MeshMaterial3d<ShaderMaterial>>();
     ec.try_insert(MeshMaterial3d(handle));
-    ec.try_insert(PbrLookBinding {
-        private: look.unshared,
-    });
+    ec.try_insert(binding);
     // Reconcile both sides of the authored intent. An entity can be reused by
     // a scene reload after previously carrying `NotShadowCaster`; leaving that
     // marker in place would silently exclude a normal surface from every
@@ -539,12 +544,10 @@ fn bind_pbr_look(
     apply_shadow_flag(&mut commands, e, look);
 }
 
-/// Re-bind when a look or mesh is edited in place (the Inspector, a script, a
-/// USD reload). A live USD refresh may reuse the entity and replace its mesh
-/// while retaining an unchanged look; observing `Mesh3d` closes that lifecycle
-/// seam without making USD projection know about a concrete render material.
-///
-/// Change-driven: `Changed<PbrLook>` only, so a static scene costs nothing.
+/// Re-bind when a look is edited in place (the Inspector or a script), and repair
+/// a missing material when a mesh is attached to an existing look. Replacing a
+/// mesh does not invalidate its material binding; re-inserting that unchanged
+/// component dirties Bevy's material and shadow specialization caches.
 ///
 /// **Animated (`unshared`) looks are MUTATED IN PLACE**, not re-added. Adding a new
 /// material on every change would leak one per frame — the same trap the cache
@@ -560,9 +563,11 @@ fn rebind_changed_pbr_look(
     changed: Query<
         (
             Entity,
-            &PbrLook,
+            Ref<PbrLook>,
             Option<&MeshMaterial3d<StandardMaterial>>,
             Option<&PbrLookBinding>,
+            Has<MeshMaterial3d<ShaderMaterial>>,
+            Has<NotShadowCaster>,
         ),
         Or<(Changed<PbrLook>, Changed<Mesh3d>)>,
     >,
@@ -571,9 +576,30 @@ fn rebind_changed_pbr_look(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
-    for (e, look, current, binding) in &changed {
+    for (e, look_ref, current, binding, has_shader_material, has_not_shadow_caster) in &changed {
+        let look_changed = look_ref.is_changed();
+        let look = &*look_ref;
+        // Mesh identity and material identity are independent. Most meshes that
+        // enter this branch already have the correct PBR binding; leave it
+        // untouched so a geometry refresh cannot manufacture a material change
+        // (and trigger render-world specialization) of its own.
+        if !look_changed
+            && current.is_some_and(|current| {
+                binding.is_some_and(|binding| {
+                    binding.private == look.unshared && binding.material_id == current.0.id()
+                })
+            })
+            && !has_shader_material
+            && has_not_shadow_caster == look.no_shadow_cast
+        {
+            continue;
+        }
+
         if look.unshared {
-            if binding.is_some_and(|binding| binding.private) {
+            if binding.is_some_and(|binding| {
+                binding.private
+                    && current.is_some_and(|current| current.0.id() == binding.material_id)
+            }) {
                 // Private material: overwrite the asset it already owns.
                 if let Some(mut existing) = current.and_then(|m| materials.get_mut(&m.0)) {
                     *existing = standard_material(look, *profile);
@@ -589,7 +615,13 @@ fn rebind_changed_pbr_look(
             commands
                 .entity(e)
                 .try_remove::<MeshMaterial3d<ShaderMaterial>>()
-                .try_insert((MeshMaterial3d(handle), PbrLookBinding { private: true }));
+                .try_insert((
+                    MeshMaterial3d(handle.clone()),
+                    PbrLookBinding {
+                        material_id: handle.id(),
+                        private: true,
+                    },
+                ));
             apply_shadow_flag(&mut commands, e, look);
             continue;
         }
@@ -604,7 +636,13 @@ fn rebind_changed_pbr_look(
         commands
             .entity(e)
             .try_remove::<MeshMaterial3d<ShaderMaterial>>()
-            .try_insert((MeshMaterial3d(handle), PbrLookBinding { private: false }));
+            .try_insert((
+                MeshMaterial3d(handle.clone()),
+                PbrLookBinding {
+                    material_id: handle.id(),
+                    private: false,
+                },
+            ));
         apply_shadow_flag(&mut commands, e, look);
     }
 }
@@ -625,6 +663,16 @@ fn apply_shadow_flag(commands: &mut Commands, e: Entity, look: &PbrLook) {
 mod tests {
     use super::*;
     use bevy::light::ShadowFilteringMethod;
+
+    #[derive(Resource, Default)]
+    struct PbrMaterialInsertions(usize);
+
+    fn count_pbr_material_insertions(
+        _: On<Insert, MeshMaterial3d<StandardMaterial>>,
+        mut count: ResMut<PbrMaterialInsertions>,
+    ) {
+        count.0 += 1;
+    }
 
     #[test]
     fn graphics_selects_shadow_filtering_for_standard_cameras() {
@@ -709,6 +757,95 @@ mod tests {
         app.update();
 
         assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 2);
+    }
+
+    #[test]
+    fn replacing_a_mesh_preserves_its_existing_pbr_binding() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<StandardMaterial>()
+            .init_resource::<PbrMaterialInsertions>()
+            .add_plugins(LuncoRenderPlugin)
+            .add_observer(count_pbr_material_insertions);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                PbrLook::matte(LinearRgba::rgb(0.2, 0.3, 0.4)).unshared(),
+                Mesh3d(Handle::<bevy::mesh::Mesh>::default()),
+            ))
+            .id();
+        app.update();
+
+        let material = app
+            .world()
+            .entity(entity)
+            .get::<MeshMaterial3d<StandardMaterial>>()
+            .expect("initial PBR binding")
+            .0
+            .clone();
+        app.world_mut().resource_mut::<PbrMaterialInsertions>().0 = 0;
+
+        // A producer may replace or refresh geometry without changing its
+        // appearance intent. Rewriting the same mesh handle still marks its ECS
+        // component changed, which exercises that lifecycle without asset I/O.
+        let mut mesh = app.world_mut().get_mut::<Mesh3d>(entity).unwrap();
+        *mesh = mesh.clone();
+        drop(mesh);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<PbrMaterialInsertions>().0,
+            0,
+            "mesh-only changes must not reinsert or repack a valid material"
+        );
+        assert_eq!(
+            app.world()
+                .entity(entity)
+                .get::<MeshMaterial3d<StandardMaterial>>()
+                .unwrap()
+                .0,
+            material
+        );
+
+        let wrong = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(MeshMaterial3d(wrong.clone()));
+        app.world_mut().resource_mut::<PbrMaterialInsertions>().0 = 0;
+        let mut mesh = app.world_mut().get_mut::<Mesh3d>(entity).unwrap();
+        *mesh = mesh.clone();
+        drop(mesh);
+        app.update();
+
+        let rebound = app
+            .world()
+            .entity(entity)
+            .get::<MeshMaterial3d<StandardMaterial>>()
+            .unwrap();
+        assert_ne!(rebound.0, wrong, "stale material handles are rebound");
+        assert_eq!(
+            app.world().resource::<PbrMaterialInsertions>().0,
+            1,
+            "a stale binding is replaced exactly once"
+        );
+
+        // A mesh lifecycle event still repairs an absent material binding.
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<MeshMaterial3d<StandardMaterial>>();
+        let mut mesh = app.world_mut().get_mut::<Mesh3d>(entity).unwrap();
+        *mesh = mesh.clone();
+        drop(mesh);
+        app.update();
+
+        assert!(app
+            .world()
+            .entity(entity)
+            .contains::<MeshMaterial3d<StandardMaterial>>());
     }
 
     #[test]
