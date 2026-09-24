@@ -93,6 +93,199 @@ pub struct SysmlFeatureHandle {
     pub element: SysmlElementHandle,
 }
 
+/// Executable standard-library operations recognized by the current
+/// source-backed expression projection. The upstream function target remains
+/// the authoritative semantic identity; this enum selects generic runtime
+/// behavior without persisting a qualified-name string as a discriminator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlStandardFunction {
+    Abs,
+    Min,
+    Max,
+    Sqrt,
+    Floor,
+    Round,
+    Sum,
+    Product,
+    IsZero,
+    IsUnit,
+    Sin,
+    Cos,
+    Tan,
+    Cot,
+    ArcSin,
+    ArcCos,
+    ArcTan,
+    Deg,
+    Rad,
+    Size,
+    IsEmpty,
+    NotEmpty,
+    AllTrue,
+    AnyTrue,
+    ToStringBoolean,
+    ToStringInteger,
+    ToStringReal,
+    ToStringString,
+}
+
+impl SysmlStandardFunction {
+    pub const SUPPORTED: &'static [Self] = &[
+        Self::Abs,
+        Self::Min,
+        Self::Max,
+        Self::Sqrt,
+        Self::Floor,
+        Self::Round,
+        Self::Sum,
+        Self::Product,
+        Self::IsZero,
+        Self::IsUnit,
+        Self::Sin,
+        Self::Cos,
+        Self::Tan,
+        Self::Cot,
+        Self::ArcSin,
+        Self::ArcCos,
+        Self::ArcTan,
+        Self::Deg,
+        Self::Rad,
+        Self::Size,
+        Self::IsEmpty,
+        Self::NotEmpty,
+        Self::AllTrue,
+        Self::AnyTrue,
+        Self::ToStringBoolean,
+        Self::ToStringInteger,
+        Self::ToStringReal,
+        Self::ToStringString,
+    ];
+
+    pub fn standard_name(self) -> &'static str {
+        match self {
+            Self::Abs => "abs",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Sqrt => "sqrt",
+            Self::Floor => "floor",
+            Self::Round => "round",
+            Self::Sum => "sum",
+            Self::Product => "product",
+            Self::IsZero => "isZero",
+            Self::IsUnit => "isUnit",
+            Self::Sin => "sin",
+            Self::Cos => "cos",
+            Self::Tan => "tan",
+            Self::Cot => "cot",
+            Self::ArcSin => "arcsin",
+            Self::ArcCos => "arccos",
+            Self::ArcTan => "arctan",
+            Self::Deg => "deg",
+            Self::Rad => "rad",
+            Self::Size => "size",
+            Self::IsEmpty => "isEmpty",
+            Self::NotEmpty => "notEmpty",
+            Self::AllTrue => "allTrue",
+            Self::AnyTrue => "anyTrue",
+            Self::ToStringBoolean
+            | Self::ToStringInteger
+            | Self::ToStringReal
+            | Self::ToStringString => "ToString",
+        }
+    }
+
+    pub fn qualified_name(self) -> Option<&'static str> {
+        match self {
+            Self::ToStringBoolean => Some("BooleanFunctions::ToString"),
+            Self::ToStringInteger => Some("IntegerFunctions::ToString"),
+            Self::ToStringReal => Some("RealFunctions::ToString"),
+            Self::ToStringString => Some("StringFunctions::ToString"),
+            _ => None,
+        }
+    }
+
+    pub fn arity(self) -> usize {
+        match self {
+            Self::Min | Self::Max => 2,
+            _ => 1,
+        }
+    }
+
+    fn from_qualified_name(name: &str) -> Option<Self> {
+        match name {
+            "RealFunctions::abs" | "IntegerFunctions::abs" | "NumericalFunctions::abs" => {
+                Some(Self::Abs)
+            }
+            "RealFunctions::min" | "IntegerFunctions::min" | "NumericalFunctions::min" => {
+                Some(Self::Min)
+            }
+            "RealFunctions::max" | "IntegerFunctions::max" | "NumericalFunctions::max" => {
+                Some(Self::Max)
+            }
+            "RealFunctions::sqrt" => Some(Self::Sqrt),
+            "RealFunctions::floor" => Some(Self::Floor),
+            "RealFunctions::round" => Some(Self::Round),
+            "RealFunctions::sum" | "IntegerFunctions::sum" | "NumericalFunctions::sum" => {
+                Some(Self::Sum)
+            }
+            "RealFunctions::product"
+            | "IntegerFunctions::product"
+            | "NumericalFunctions::product" => Some(Self::Product),
+            "NumericalFunctions::isZero" => Some(Self::IsZero),
+            "NumericalFunctions::isUnit" => Some(Self::IsUnit),
+            "TrigFunctions::sin" => Some(Self::Sin),
+            "TrigFunctions::cos" => Some(Self::Cos),
+            "TrigFunctions::tan" => Some(Self::Tan),
+            "TrigFunctions::cot" => Some(Self::Cot),
+            "TrigFunctions::arcsin" => Some(Self::ArcSin),
+            "TrigFunctions::arccos" => Some(Self::ArcCos),
+            "TrigFunctions::arctan" => Some(Self::ArcTan),
+            "TrigFunctions::deg" => Some(Self::Deg),
+            "TrigFunctions::rad" => Some(Self::Rad),
+            "SequenceFunctions::size" => Some(Self::Size),
+            "SequenceFunctions::isEmpty" => Some(Self::IsEmpty),
+            "SequenceFunctions::notEmpty" => Some(Self::NotEmpty),
+            "ControlFunctions::allTrue" => Some(Self::AllTrue),
+            "ControlFunctions::anyTrue" => Some(Self::AnyTrue),
+            "BooleanFunctions::ToString" => Some(Self::ToStringBoolean),
+            "IntegerFunctions::ToString" => Some(Self::ToStringInteger),
+            "RealFunctions::ToString" => Some(Self::ToStringReal),
+            "StringFunctions::ToString" => Some(Self::ToStringString),
+            _ => None,
+        }
+    }
+}
+
+/// Standard-library constants that the expression bridge can evaluate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlStandardConstant {
+    Pi,
+}
+
+impl SysmlStandardConstant {
+    pub const SUPPORTED: &'static [Self] = &[Self::Pi];
+
+    pub fn standard_name(self) -> &'static str {
+        match self {
+            Self::Pi => "pi",
+        }
+    }
+
+    fn from_qualified_name(name: &str) -> Option<Self> {
+        match name {
+            "TrigFunctions::pi" => Some(Self::Pi),
+            _ => None,
+        }
+    }
+}
+
+/// Snapshot-scoped identity of a resolved function target.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlFunctionReference {
+    pub element: SysmlElementHandle,
+    pub standard_function: Option<SysmlStandardFunction>,
+}
+
 /// The category of a semantic diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SysmlDiagnosticKind {
@@ -251,6 +444,10 @@ impl SysmlExpressionOperator {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SysmlExpressionKind {
     FeatureReference,
+    StandardConstant,
+    Invocation,
+    Index,
+    Collection,
     IntegerLiteral,
     RealLiteral,
     BooleanLiteral,
@@ -270,6 +467,7 @@ pub enum SysmlExpressionKind {
 pub enum SysmlUnsupportedExpression {
     UnresolvedReference,
     NonFeatureReference,
+    NonFunctionCall,
     Operator,
     Call,
     Collection,
@@ -292,6 +490,17 @@ pub struct SysmlExpression {
     pub kind: SysmlExpressionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature: Option<SysmlFeatureHandle>,
+    /// Resolved target for a KerML function invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function: Option<SysmlFunctionReference>,
+    /// Resolved standard constant for a `StandardConstant` expression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard_constant: Option<SysmlStandardConstant>,
+    /// For invocations, the parameter handle bound to each argument. A
+    /// missing handle means the written argument could not be resolved to a
+    /// formal parameter and is rejected by the IR compiler.
+    #[serde(default)]
+    pub argument_parameters: Vec<Option<SysmlElementHandle>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator: Option<SysmlExpressionOperator>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1648,6 +1857,9 @@ fn lower_expression(
         source: source.clone(),
         kind: SysmlExpressionKind::Unsupported,
         feature: None,
+        function: None,
+        standard_constant: None,
+        argument_parameters: Vec::new(),
         operator: None,
         integer_value: None,
         real_value: None,
@@ -1678,6 +1890,9 @@ fn lower_expression(
         source: source.clone(),
         kind,
         feature: None,
+        function: None,
+        standard_constant: None,
+        argument_parameters: Vec::new(),
         operator: None,
         integer_value: None,
         real_value: None,
@@ -1742,10 +1957,20 @@ fn lower_expression(
                 source_fingerprint,
                 element_id: reference.target.index() as u32,
             };
+            let standard_constant = SysmlStandardConstant::from_qualified_name(
+                &workspace.qualified_name_of(reference.target),
+            );
             SysmlExpression {
                 source,
-                kind: SysmlExpressionKind::FeatureReference,
+                kind: if standard_constant.is_some() {
+                    SysmlExpressionKind::StandardConstant
+                } else {
+                    SysmlExpressionKind::FeatureReference
+                },
                 feature: Some(SysmlFeatureHandle { element }),
+                function: None,
+                standard_constant,
+                argument_parameters: Vec::new(),
                 operator: None,
                 integer_value: None,
                 real_value: None,
@@ -1767,6 +1992,9 @@ fn lower_expression(
                             source,
                             kind: SysmlExpressionKind::IntegerLiteral,
                             feature: None,
+                            function: None,
+                            standard_constant: None,
+                            argument_parameters: Vec::new(),
                             operator: None,
                             integer_value: Some(value),
                             real_value: None,
@@ -1780,6 +2008,9 @@ fn lower_expression(
                             source,
                             kind: SysmlExpressionKind::RealLiteral,
                             feature: None,
+                            function: None,
+                            standard_constant: None,
+                            argument_parameters: Vec::new(),
                             operator: None,
                             integer_value: None,
                             real_value: Some(value),
@@ -1799,6 +2030,9 @@ fn lower_expression(
                             source,
                             kind: SysmlExpressionKind::RealLiteral,
                             feature: None,
+                            function: None,
+                            standard_constant: None,
+                            argument_parameters: Vec::new(),
                             operator: None,
                             integer_value: None,
                             real_value: Some(value),
@@ -1814,6 +2048,9 @@ fn lower_expression(
                     source,
                     kind: SysmlExpressionKind::BooleanLiteral,
                     feature: None,
+                    function: None,
+                    standard_constant: None,
+                    argument_parameters: Vec::new(),
                     operator: None,
                     integer_value: None,
                     real_value: None,
@@ -1829,6 +2066,9 @@ fn lower_expression(
                             source,
                             kind: SysmlExpressionKind::StringLiteral,
                             feature: None,
+                            function: None,
+                            standard_constant: None,
+                            argument_parameters: Vec::new(),
                             operator: None,
                             integer_value: None,
                             real_value: None,
@@ -1844,6 +2084,9 @@ fn lower_expression(
                     source,
                     kind: SysmlExpressionKind::NullLiteral,
                     feature: None,
+                    function: None,
+                    standard_constant: None,
+                    argument_parameters: Vec::new(),
                     operator: None,
                     integer_value: None,
                     real_value: None,
@@ -1859,6 +2102,8 @@ fn lower_expression(
             let children = lower_children();
             if children.len() == 1 {
                 base(SysmlExpressionKind::Group, children)
+            } else if children.len() > 1 {
+                base(SysmlExpressionKind::Collection, children)
             } else {
                 unsupported(SysmlUnsupportedExpression::Collection)
             }
@@ -1909,8 +2154,159 @@ fn lower_expression(
                 unsupported(SysmlUnsupportedExpression::OtherSyntax)
             }
         }
-        SyntaxKind::CALL_EXPR => unsupported(SysmlUnsupportedExpression::Call),
-        SyntaxKind::INDEX_EXPR => unsupported(SysmlUnsupportedExpression::Index),
+        SyntaxKind::CALL_EXPR => {
+            let mut call_children = node.children();
+            let Some(callee) = call_children.next() else {
+                return unsupported(SysmlUnsupportedExpression::Call);
+            };
+            let callee_start = u32::from(callee.text_range().start());
+            let callee_end = u32::from(callee.text_range().end());
+            let resolved = workspace
+                .references()
+                .iter()
+                .find(|reference| {
+                    reference.file == file_index
+                        && u32::from(reference.range.start()) == callee_start
+                        && u32::from(reference.range.end()) == callee_end
+                })
+                .or_else(|| {
+                    workspace
+                        .references()
+                        .iter()
+                        .filter(|reference| {
+                            reference.file == file_index
+                                && u32::from(reference.range.start()) >= callee_start
+                                && u32::from(reference.range.end()) <= callee_end
+                                && u32::from(reference.range.end()) == callee_end
+                        })
+                        .max_by_key(|reference| u32::from(reference.range.start()))
+                });
+            let Some(function_reference) = resolved else {
+                return unsupported(SysmlUnsupportedExpression::UnresolvedReference);
+            };
+            if !workspace
+                .model()
+                .kind(function_reference.target)
+                .is_a(ElementKind::Function)
+            {
+                return unsupported(SysmlUnsupportedExpression::NonFunctionCall);
+            }
+
+            let function_qualified_name = workspace.qualified_name_of(function_reference.target);
+            let function = SysmlFunctionReference {
+                element: SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: function_reference.target.index() as u32,
+                },
+                standard_function: SysmlStandardFunction::from_qualified_name(
+                    &function_qualified_name,
+                ),
+            };
+            let input_parameters = workspace.model().input(function_reference.target);
+            let argument_list = call_children.find(|child| child.kind() == SyntaxKind::ARG_LIST);
+            let mut arguments = Vec::new();
+            if let Some(argument_list) = argument_list {
+                let named_argument_count = argument_list
+                    .children_with_tokens()
+                    .filter_map(|item| item.into_token())
+                    .filter(|token| token.kind() == SyntaxKind::EQ)
+                    .count();
+                if named_argument_count > 0 {
+                    let listed = argument_list.children().collect::<Vec<_>>();
+                    if listed.len() != named_argument_count * 2 {
+                        return unsupported(SysmlUnsupportedExpression::Call);
+                    }
+                    for pair in listed.chunks_exact(2) {
+                        let named = &pair[0];
+                        let value = &pair[1];
+                        let named_name = named.text().to_string();
+                        let parameter =
+                            input_parameters.iter().enumerate().find(|(_, parameter)| {
+                                workspace
+                                    .model()
+                                    .declared_short_name(**parameter)
+                                    .is_some_and(|candidate| candidate == named_name.trim())
+                            });
+                        arguments.push((
+                            parameter.map(|(index, _)| index),
+                            parameter.map(|(_, parameter)| SysmlElementHandle {
+                                source_revision,
+                                source_fingerprint,
+                                element_id: parameter.index() as u32,
+                            }),
+                            value.clone(),
+                        ));
+                    }
+                    arguments.sort_by_key(|(index, _, _)| *index);
+                } else {
+                    arguments.extend(argument_list.children().enumerate().map(|(index, value)| {
+                        (
+                            Some(index),
+                            input_parameters
+                                .get(index)
+                                .map(|parameter| SysmlElementHandle {
+                                    source_revision,
+                                    source_fingerprint,
+                                    element_id: parameter.index() as u32,
+                                }),
+                            value,
+                        )
+                    }));
+                }
+            }
+
+            let mut argument_expressions = Vec::with_capacity(arguments.len());
+            let mut argument_parameters = Vec::with_capacity(arguments.len());
+            for (_, parameter, argument) in arguments {
+                argument_expressions.push(lower_expression(
+                    &argument,
+                    workspace,
+                    file_index,
+                    file_name,
+                    source_revision,
+                    source_fingerprint,
+                    depth + 1,
+                ));
+                argument_parameters.push(parameter);
+            }
+            let mut invocation = base(SysmlExpressionKind::Invocation, argument_expressions);
+            invocation.function = Some(function);
+            invocation.argument_parameters = argument_parameters;
+            invocation
+        }
+        SyntaxKind::INDEX_EXPR => {
+            let operands = node
+                .children()
+                .flat_map(|child| {
+                    if child.kind() == SyntaxKind::ARG_LIST {
+                        child.children().collect::<Vec<_>>()
+                    } else {
+                        vec![child]
+                    }
+                })
+                .collect::<Vec<_>>();
+            if operands.len() != 2 {
+                return unsupported(SysmlUnsupportedExpression::Index);
+            }
+            base(
+                SysmlExpressionKind::Index,
+                operands
+                    .iter()
+                    .map(|operand| {
+                        lower_expression(
+                            operand,
+                            workspace,
+                            file_index,
+                            file_name,
+                            source_revision,
+                            source_fingerprint,
+                            depth + 1,
+                        )
+                    })
+                    .collect(),
+            )
+        }
         SyntaxKind::METADATA_ACCESS_EXPR => unsupported(SysmlUnsupportedExpression::Metadata),
         SyntaxKind::ARROW_EXPR | SyntaxKind::BODY_EXPR => {
             unsupported(SysmlUnsupportedExpression::Arrow)
@@ -2648,12 +3044,10 @@ mod tests {
     fn malformed_source_is_reported_without_panicking() {
         let analysis = SysmlAnalysis::from_files_without_stdlib([("broken.sysml", "package {")]);
         assert!(analysis.has_errors());
-        assert!(
-            analysis
-                .diagnostics()
-                .iter()
-                .any(|diagnostic| diagnostic.kind == SysmlDiagnosticKind::Syntax)
-        );
+        assert!(analysis
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.kind == SysmlDiagnosticKind::Syntax));
     }
 
     #[test]
@@ -2704,7 +3098,7 @@ mod tests {
 
     #[test]
     fn typed_fact_selection_follows_requirement_and_source_handles() {
-        use crate::lint_facts::{SysmlFactSelection, SysmlFactTable, selected_sysml_facts};
+        use crate::lint_facts::{selected_sysml_facts, SysmlFactSelection, SysmlFactTable};
         use lunco_hooks::HookValue;
 
         let source =
@@ -2796,11 +3190,9 @@ mod tests {
         let first = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
         let second = SysmlAnalysis::build_cached([("a.sysml", "part def B {}")], false, 0x1234);
         assert!(!Arc::ptr_eq(&first, &second));
-        assert!(
-            second
-                .elements()
-                .iter()
-                .any(|element| element.qualified_name == "B")
-        );
+        assert!(second
+            .elements()
+            .iter()
+            .any(|element| element.qualified_name == "B"));
     }
 }

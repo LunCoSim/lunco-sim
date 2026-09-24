@@ -7,10 +7,10 @@
 //! `lunco-modelica-ast::parse_to_ast` so Rumoca owns Modelica syntax and
 //! recovery/validation.
 
-use lunco_modelica_ast::{StoredDefinition, parse_to_ast};
+use lunco_modelica_ast::{parse_to_ast, StoredDefinition};
 use lunco_sysml_ir::{
     CompiledConstraint, ConstraintIr, IrExpression, IrExpressionKind, IrLiteral, IrOperator,
-    IrType, IrValueType,
+    IrStandardConstant, IrStandardFunction, IrType, IrValueType,
 };
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -39,6 +39,70 @@ impl Display for ModelicaLoweringError {
 }
 
 impl std::error::Error for ModelicaLoweringError {}
+
+#[derive(Clone, Copy)]
+enum ModelicaStandardFunction {
+    Abs,
+    Min,
+    Max,
+    Sqrt,
+    Floor,
+    Round,
+    Sin,
+    Cos,
+    Tan,
+    Cot,
+    ArcSin,
+    ArcCos,
+    ArcTan,
+    Deg,
+    Rad,
+    IsZero,
+    IsUnit,
+    Size,
+    IsEmpty,
+    NotEmpty,
+    Sum,
+}
+
+fn standard_function_lowering(function: IrStandardFunction) -> Option<ModelicaStandardFunction> {
+    Some(match function {
+        IrStandardFunction::Abs => ModelicaStandardFunction::Abs,
+        IrStandardFunction::Min => ModelicaStandardFunction::Min,
+        IrStandardFunction::Max => ModelicaStandardFunction::Max,
+        IrStandardFunction::Sqrt => ModelicaStandardFunction::Sqrt,
+        IrStandardFunction::Floor => ModelicaStandardFunction::Floor,
+        IrStandardFunction::Round => ModelicaStandardFunction::Round,
+        IrStandardFunction::Sin => ModelicaStandardFunction::Sin,
+        IrStandardFunction::Cos => ModelicaStandardFunction::Cos,
+        IrStandardFunction::Tan => ModelicaStandardFunction::Tan,
+        IrStandardFunction::Cot => ModelicaStandardFunction::Cot,
+        IrStandardFunction::ArcSin => ModelicaStandardFunction::ArcSin,
+        IrStandardFunction::ArcCos => ModelicaStandardFunction::ArcCos,
+        IrStandardFunction::ArcTan => ModelicaStandardFunction::ArcTan,
+        IrStandardFunction::Deg => ModelicaStandardFunction::Deg,
+        IrStandardFunction::Rad => ModelicaStandardFunction::Rad,
+        IrStandardFunction::IsZero => ModelicaStandardFunction::IsZero,
+        IrStandardFunction::IsUnit => ModelicaStandardFunction::IsUnit,
+        IrStandardFunction::Size => ModelicaStandardFunction::Size,
+        IrStandardFunction::IsEmpty => ModelicaStandardFunction::IsEmpty,
+        IrStandardFunction::NotEmpty => ModelicaStandardFunction::NotEmpty,
+        IrStandardFunction::Sum => ModelicaStandardFunction::Sum,
+        IrStandardFunction::Product
+        | IrStandardFunction::AllTrue
+        | IrStandardFunction::AnyTrue
+        | IrStandardFunction::ToStringBoolean
+        | IrStandardFunction::ToStringInteger
+        | IrStandardFunction::ToStringReal
+        | IrStandardFunction::ToStringString => return None,
+    })
+}
+
+/// Whether this backend can currently lower a supported standard-library call.
+/// The same mapping drives both capability reporting and expression lowering.
+pub fn supports_standard_function_lowering(function: IrStandardFunction) -> bool {
+    standard_function_lowering(function).is_some()
+}
 
 /// A typed Modelica module and the exact source admitted through Rumoca.
 #[derive(Clone, Debug)]
@@ -137,7 +201,7 @@ fn collect_features(
                 );
             }
         }
-        IrExpressionKind::Literal(_) => {}
+        IrExpressionKind::StandardConstant { .. } | IrExpressionKind::Literal(_) => {}
         IrExpressionKind::Unary { operand, .. } | IrExpressionKind::Group(operand) => {
             collect_features(operand, features)?;
         }
@@ -153,6 +217,20 @@ fn collect_features(
             collect_features(condition, features)?;
             collect_features(when_true, features)?;
             collect_features(when_false, features)?;
+        }
+        IrExpressionKind::Invocation { arguments, .. } => {
+            for argument in arguments {
+                collect_features(argument, features)?;
+            }
+        }
+        IrExpressionKind::Index { collection, index } => {
+            collect_features(collection, features)?;
+            collect_features(index, features)?;
+        }
+        IrExpressionKind::Collection(elements) => {
+            for element in elements {
+                collect_features(element, features)?;
+            }
         }
     }
     Ok(())
@@ -244,6 +322,9 @@ fn modelica_expression(
             }
             Ok(name)
         }
+        IrExpressionKind::StandardConstant { constant, .. } => Ok(match constant {
+            IrStandardConstant::Pi => "Modelica.Constants.pi".to_owned(),
+        }),
         IrExpressionKind::Literal(literal) => Ok(match literal {
             IrLiteral::Integer(value) => value.to_string(),
             IrLiteral::Real(value) => format!("{value:.17}"),
@@ -316,6 +397,89 @@ fn modelica_expression(
             modelica_expression(when_true, features)?,
             modelica_expression(when_false, features)?
         )),
+        IrExpressionKind::Index { collection, index } => Ok(format!(
+            "{}[{}]",
+            modelica_expression(collection, features)?,
+            modelica_expression(index, features)?
+        )),
+        IrExpressionKind::Collection(elements) => {
+            let elements = elements
+                .iter()
+                .map(|element| modelica_expression(element, features))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(format!("{{{}}}", elements.join(", ")))
+        }
+        IrExpressionKind::Invocation {
+            function,
+            arguments,
+            ..
+        } => {
+            let lowering = standard_function_lowering(*function).ok_or_else(|| {
+                ModelicaLoweringError::InvalidExpression(format!(
+                    "Modelica lowering does not yet implement the {function:?} standard function"
+                ))
+            })?;
+            let arguments = arguments
+                .iter()
+                .map(|argument| modelica_expression(argument, features))
+                .collect::<Result<Vec<_>, _>>()?;
+            let unary = || {
+                arguments.first().cloned().ok_or_else(|| {
+                    ModelicaLoweringError::InvalidExpression(
+                        "standard function argument is missing".to_owned(),
+                    )
+                })
+            };
+            Ok(match lowering {
+                ModelicaStandardFunction::Abs => format!("abs({})", unary()?),
+                ModelicaStandardFunction::Min | ModelicaStandardFunction::Max => {
+                    let left = arguments.first().ok_or_else(|| {
+                        ModelicaLoweringError::InvalidExpression(
+                            "standard function first argument is missing".to_owned(),
+                        )
+                    })?;
+                    let right = arguments.get(1).ok_or_else(|| {
+                        ModelicaLoweringError::InvalidExpression(
+                            "standard function second argument is missing".to_owned(),
+                        )
+                    })?;
+                    let name = if matches!(lowering, ModelicaStandardFunction::Min) {
+                        "min"
+                    } else {
+                        "max"
+                    };
+                    format!("{name}({left}, {right})")
+                }
+                ModelicaStandardFunction::Sqrt => format!("sqrt({})", unary()?),
+                ModelicaStandardFunction::Floor => format!("floor({})", unary()?),
+                ModelicaStandardFunction::Round => {
+                    let value = unary()?;
+                    format!("(if ({value}) >= 0 then floor(({value}) + 0.5) else -floor(-({value}) + 0.5))")
+                }
+                ModelicaStandardFunction::Sin => format!("sin({})", unary()?),
+                ModelicaStandardFunction::Cos => format!("cos({})", unary()?),
+                ModelicaStandardFunction::Tan => format!("tan({})", unary()?),
+                ModelicaStandardFunction::Cot => {
+                    let value = unary()?;
+                    format!("(cos({value}) / sin({value}))")
+                }
+                ModelicaStandardFunction::ArcSin => format!("asin({})", unary()?),
+                ModelicaStandardFunction::ArcCos => format!("acos({})", unary()?),
+                ModelicaStandardFunction::ArcTan => format!("atan({})", unary()?),
+                ModelicaStandardFunction::Deg => {
+                    format!("({} * 180 / Modelica.Constants.pi)", unary()?)
+                }
+                ModelicaStandardFunction::Rad => {
+                    format!("({} * Modelica.Constants.pi / 180)", unary()?)
+                }
+                ModelicaStandardFunction::IsZero => format!("({} == 0)", unary()?),
+                ModelicaStandardFunction::IsUnit => format!("({} == 1)", unary()?),
+                ModelicaStandardFunction::Size => format!("size({}, 1)", unary()?),
+                ModelicaStandardFunction::IsEmpty => format!("(size({}, 1) == 0)", unary()?),
+                ModelicaStandardFunction::NotEmpty => format!("(size({}, 1) <> 0)", unary()?),
+                ModelicaStandardFunction::Sum => format!("sum({})", unary()?),
+            })
+        }
         IrExpressionKind::Group(child) => {
             Ok(format!("({})", modelica_expression(child, features)?))
         }

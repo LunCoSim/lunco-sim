@@ -181,6 +181,59 @@ pub enum IrOperator {
     Equivalent,
 }
 
+impl IrOperator {
+    pub const SUPPORTED: &'static [Self] = &[
+        Self::Positive,
+        Self::Negative,
+        Self::Not,
+        Self::Add,
+        Self::Subtract,
+        Self::Multiply,
+        Self::Divide,
+        Self::Power,
+        Self::Equal,
+        Self::NotEqual,
+        Self::Less,
+        Self::LessEqual,
+        Self::Greater,
+        Self::GreaterEqual,
+        Self::And,
+        Self::Or,
+        Self::Implies,
+        Self::Equivalent,
+    ];
+
+    pub fn standard_name(self) -> &'static str {
+        match self {
+            Self::Positive => "+ (unary)",
+            Self::Negative => "- (unary)",
+            Self::Not => "not",
+            Self::Add => "+",
+            Self::Subtract => "-",
+            Self::Multiply => "*",
+            Self::Divide => "/",
+            Self::Power => "**",
+            Self::Equal => "==",
+            Self::NotEqual => "!=",
+            Self::Less => "<",
+            Self::LessEqual => "<=",
+            Self::Greater => ">",
+            Self::GreaterEqual => ">=",
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Implies => "implies",
+            Self::Equivalent => "equivalent",
+        }
+    }
+
+    pub fn arity(self) -> usize {
+        match self {
+            Self::Positive | Self::Negative | Self::Not => 1,
+            _ => 2,
+        }
+    }
+}
+
 impl From<SysmlExpressionOperator> for IrOperator {
     fn from(value: SysmlExpressionOperator) -> Self {
         match value {
@@ -222,6 +275,10 @@ pub enum IrExpressionKind {
         feature: SysmlFeatureHandle,
         qualified_name: String,
     },
+    StandardConstant {
+        constant: IrStandardConstant,
+        feature_element: SysmlElementHandle,
+    },
     Literal(IrLiteral),
     Unary {
         operator: IrOperator,
@@ -237,8 +294,24 @@ pub enum IrExpressionKind {
         when_true: Box<IrExpression>,
         when_false: Box<IrExpression>,
     },
+    Invocation {
+        function: IrStandardFunction,
+        function_element: SysmlElementHandle,
+        argument_parameters: Vec<SysmlElementHandle>,
+        arguments: Vec<IrExpression>,
+    },
+    Index {
+        collection: Box<IrExpression>,
+        index: Box<IrExpression>,
+    },
+    Collection(Vec<IrExpression>),
     Group(Box<IrExpression>),
 }
+
+/// Standard-library constants recognized by the source projection.
+pub use lunco_sysml_ast::SysmlStandardConstant as IrStandardConstant;
+/// Executable standard-library operations recognized by the source projection.
+pub use lunco_sysml_ast::SysmlStandardFunction as IrStandardFunction;
 
 /// A typed constraint parameter/member in the neutral IR.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -454,6 +527,28 @@ fn compile_expression(
                 qualified_name: feature_name,
             }
         }
+        SysmlExpressionKind::StandardConstant => {
+            let Some(constant) = expression.standard_constant else {
+                diagnostics.push(error(
+                    "SYSML-IR-033",
+                    &source,
+                    "standard constant has no resolved constant identity",
+                ));
+                return None;
+            };
+            let Some(feature) = expression.feature else {
+                diagnostics.push(error(
+                    "SYSML-IR-033",
+                    &source,
+                    "standard constant has no resolved source feature",
+                ));
+                return None;
+            };
+            IrExpressionKind::StandardConstant {
+                constant,
+                feature_element: feature.element,
+            }
+        }
         SysmlExpressionKind::IntegerLiteral => {
             IrExpressionKind::Literal(match expression.integer_value {
                 Some(value) => IrLiteral::Integer(value),
@@ -628,6 +723,149 @@ fn compile_expression(
                 when_false: Box::new(when_false),
             }
         }
+        SysmlExpressionKind::Invocation => {
+            let Some(function_reference) = expression.function.as_ref() else {
+                diagnostics.push(error(
+                    "SYSML-IR-029",
+                    &source,
+                    "function invocation has no resolved semantic target",
+                ));
+                return None;
+            };
+            let Some(function) = function_reference.standard_function else {
+                diagnostics.push(error(
+                    "SYSML-IR-029",
+                    &source,
+                    "resolved function is outside the executable standard-library subset",
+                ));
+                return None;
+            };
+            if expression.children.len() != function.arity() {
+                diagnostics.push(error(
+                    "SYSML-IR-030",
+                    &source,
+                    &format!(
+                        "standard function `{}` requires {} argument(s), found {}",
+                        function.standard_name(),
+                        function.arity(),
+                        expression.children.len()
+                    ),
+                ));
+                return None;
+            }
+            if expression.argument_parameters.len() != expression.children.len()
+                || expression.argument_parameters.iter().any(Option::is_none)
+            {
+                diagnostics.push(error(
+                    "SYSML-IR-031",
+                    &source,
+                    "function arguments could not all be bound to resolved input parameters",
+                ));
+                return None;
+            }
+            let mut bound_parameters = expression
+                .argument_parameters
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            bound_parameters.sort_unstable_by_key(|parameter| parameter.element_id);
+            if bound_parameters.windows(2).any(|pair| pair[0] == pair[1]) {
+                diagnostics.push(error(
+                    "SYSML-IR-031",
+                    &source,
+                    "more than one invocation argument is bound to the same input parameter",
+                ));
+                return None;
+            }
+            let arguments = expression
+                .children
+                .iter()
+                .map(|child| {
+                    compile_expression(
+                        child,
+                        attributes,
+                        parameters,
+                        diagnostics,
+                        dependencies,
+                        depth + 1,
+                    )
+                })
+                .collect::<Option<Vec<_>>>()?;
+            validate_standard_function(function, &arguments, &source, diagnostics);
+            IrExpressionKind::Invocation {
+                function,
+                function_element: function_reference.element,
+                argument_parameters: expression
+                    .argument_parameters
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                arguments,
+            }
+        }
+        SysmlExpressionKind::Index => {
+            let Some((collection, index)) = two_children(expression, diagnostics) else {
+                return None;
+            };
+            let collection = compile_expression(
+                collection,
+                attributes,
+                parameters,
+                diagnostics,
+                dependencies,
+                depth + 1,
+            )?;
+            let index = compile_expression(
+                index,
+                attributes,
+                parameters,
+                diagnostics,
+                dependencies,
+                depth + 1,
+            )?;
+            if !collection.result_type.multiplicity.is_collection()
+                || index.result_type.multiplicity.is_collection()
+                || !matches!(index.result_type.value, IrValueType::Integer)
+            {
+                diagnostics.push(error(
+                    "SYSML-IR-034",
+                    &source,
+                    "indexing requires a collection and a scalar Integer index",
+                ));
+                return None;
+            }
+            IrExpressionKind::Index {
+                collection: Box::new(collection),
+                index: Box::new(index),
+            }
+        }
+        SysmlExpressionKind::Collection => {
+            let values = expression
+                .children
+                .iter()
+                .map(|child| {
+                    compile_expression(
+                        child,
+                        attributes,
+                        parameters,
+                        diagnostics,
+                        dependencies,
+                        depth + 1,
+                    )
+                })
+                .collect::<Option<Vec<_>>>()?;
+            if collection_result_type(&values).is_none() {
+                diagnostics.push(error(
+                    "SYSML-IR-035",
+                    &source,
+                    "collection literal elements must have compatible scalar types and units",
+                ));
+                return None;
+            }
+            IrExpressionKind::Collection(values)
+        }
         SysmlExpressionKind::Group => {
             let child = match one_child(expression, diagnostics) {
                 Some(child) => compile_expression(
@@ -664,6 +902,120 @@ fn compile_expression(
     })
 }
 
+fn validate_standard_function(
+    function: IrStandardFunction,
+    arguments: &[IrExpression],
+    source: &SysmlSourceRef,
+    diagnostics: &mut Vec<IrDiagnostic>,
+) {
+    let types = arguments
+        .iter()
+        .map(|argument| &argument.result_type)
+        .collect::<Vec<_>>();
+    let scalar_numeric = |ty: &IrType| !ty.multiplicity.is_collection() && ty.value.is_numeric();
+    let scalar_real = |ty: &IrType| {
+        !ty.multiplicity.is_collection()
+            && matches!(ty.value, IrValueType::Integer | IrValueType::Real)
+    };
+    let valid = match function {
+        IrStandardFunction::Abs => types.first().is_some_and(|ty| scalar_numeric(ty)),
+        IrStandardFunction::Min | IrStandardFunction::Max => {
+            types.len() == 2
+                && scalar_numeric(types[0])
+                && scalar_numeric(types[1])
+                && types[0].value.is_comparable(&types[1].value)
+                && types[0].unit == types[1].unit
+        }
+        IrStandardFunction::Sqrt
+        | IrStandardFunction::Floor
+        | IrStandardFunction::Round
+        | IrStandardFunction::Sin
+        | IrStandardFunction::Cos
+        | IrStandardFunction::Tan
+        | IrStandardFunction::Cot
+        | IrStandardFunction::ArcSin
+        | IrStandardFunction::ArcCos
+        | IrStandardFunction::ArcTan
+        | IrStandardFunction::Deg
+        | IrStandardFunction::Rad => types.first().is_some_and(|ty| scalar_real(ty)),
+        IrStandardFunction::Sum => types
+            .first()
+            .is_some_and(|ty| ty.multiplicity.is_collection() && ty.value.is_numeric()),
+        IrStandardFunction::Product => types.first().is_some_and(|ty| {
+            ty.multiplicity.is_collection()
+                && matches!(ty.value, IrValueType::Integer | IrValueType::Real)
+        }),
+        IrStandardFunction::IsZero | IrStandardFunction::IsUnit => {
+            types.first().is_some_and(|ty| scalar_numeric(ty))
+        }
+        IrStandardFunction::Size | IrStandardFunction::IsEmpty | IrStandardFunction::NotEmpty => {
+            types
+                .first()
+                .is_some_and(|ty| ty.multiplicity.is_collection())
+        }
+        IrStandardFunction::AllTrue | IrStandardFunction::AnyTrue => {
+            types.first().is_some_and(|ty| {
+                ty.multiplicity.is_collection() && matches!(ty.value, IrValueType::Boolean)
+            })
+        }
+        IrStandardFunction::ToStringBoolean => types.first().is_some_and(|ty| {
+            !ty.multiplicity.is_collection()
+                && ty.unit.is_none()
+                && ty.value == IrValueType::Boolean
+        }),
+        IrStandardFunction::ToStringInteger => types.first().is_some_and(|ty| {
+            !ty.multiplicity.is_collection()
+                && ty.unit.is_none()
+                && ty.value == IrValueType::Integer
+        }),
+        IrStandardFunction::ToStringReal => types.first().is_some_and(|ty| {
+            !ty.multiplicity.is_collection()
+                && ty.unit.is_none()
+                && matches!(ty.value, IrValueType::Integer | IrValueType::Real)
+        }),
+        IrStandardFunction::ToStringString => types.first().is_some_and(|ty| {
+            !ty.multiplicity.is_collection() && ty.unit.is_none() && ty.value == IrValueType::String
+        }),
+    };
+    if !valid {
+        diagnostics.push(error(
+            "SYSML-IR-032",
+            source,
+            &format!(
+                "standard function {function:?} received argument types outside its supported typed subset"
+            ),
+        ));
+    }
+}
+
+fn collection_result_type(elements: &[IrExpression]) -> Option<IrType> {
+    let first = elements.first()?;
+    if elements
+        .iter()
+        .any(|element| element.result_type.multiplicity.is_collection())
+    {
+        return None;
+    }
+    let mut result = first.result_type.clone();
+    for element in &elements[1..] {
+        if !result.value.is_comparable(&element.result_type.value)
+            || result.unit != element.result_type.unit
+        {
+            return None;
+        }
+        if result.value.is_numeric() && element.result_type.value.is_numeric() {
+            result = numeric_result_type(&result, &element.result_type);
+        }
+    }
+    result.multiplicity = IrMultiplicity {
+        lower: elements.len(),
+        upper: Some(elements.len()),
+        ordered: true,
+        unique: false,
+    };
+    Some(result)
+}
+
 fn infer_result_type(
     kind: &IrExpressionKind,
     attributes: &[SysmlAttribute],
@@ -684,6 +1036,7 @@ fn infer_result_type(
             })
             .map(ir_type_from_sysml)
             .unwrap_or_else(|| IrType::scalar(IrValueType::Unknown)),
+        IrExpressionKind::StandardConstant { .. } => IrType::scalar(IrValueType::Real),
         IrExpressionKind::Literal(value) => IrType::scalar(match value {
             IrLiteral::Integer(_) => IrValueType::Integer,
             IrLiteral::Real(_) => IrValueType::Real,
@@ -728,9 +1081,70 @@ fn infer_result_type(
                 IrType::scalar(IrValueType::Unknown)
             }
         }
+        IrExpressionKind::Invocation {
+            function,
+            arguments,
+            ..
+        } => infer_standard_function_result(*function, arguments),
+        IrExpressionKind::Index { collection, .. } => {
+            let mut result = collection.result_type.clone();
+            result.multiplicity = IrMultiplicity::one();
+            result
+        }
+        IrExpressionKind::Collection(elements) => {
+            collection_result_type(elements).unwrap_or_else(|| IrType::scalar(IrValueType::Unknown))
+        }
         IrExpressionKind::Group(child) => child.result_type.clone(),
     }
     .tap_unknown_diagnostic(source_expression, diagnostics)
+}
+
+fn infer_standard_function_result(
+    function: IrStandardFunction,
+    arguments: &[IrExpression],
+) -> IrType {
+    let argument_type = || {
+        arguments
+            .first()
+            .map(|argument| argument.result_type.clone())
+            .unwrap_or_else(|| IrType::scalar(IrValueType::Unknown))
+    };
+    match function {
+        IrStandardFunction::Abs => argument_type(),
+        IrStandardFunction::Min | IrStandardFunction::Max => arguments
+            .first()
+            .zip(arguments.get(1))
+            .map(|(left, right)| numeric_result_type(&left.result_type, &right.result_type))
+            .unwrap_or_else(|| IrType::scalar(IrValueType::Unknown)),
+        IrStandardFunction::Sum | IrStandardFunction::Product => {
+            let mut result = argument_type();
+            result.multiplicity = IrMultiplicity::one();
+            result
+        }
+        IrStandardFunction::Floor | IrStandardFunction::Round | IrStandardFunction::Size => {
+            IrType::scalar(IrValueType::Integer)
+        }
+        IrStandardFunction::Sqrt
+        | IrStandardFunction::Sin
+        | IrStandardFunction::Cos
+        | IrStandardFunction::Tan
+        | IrStandardFunction::Cot
+        | IrStandardFunction::ArcSin
+        | IrStandardFunction::ArcCos
+        | IrStandardFunction::ArcTan
+        | IrStandardFunction::Deg
+        | IrStandardFunction::Rad => IrType::scalar(IrValueType::Real),
+        IrStandardFunction::IsZero
+        | IrStandardFunction::IsUnit
+        | IrStandardFunction::IsEmpty
+        | IrStandardFunction::NotEmpty
+        | IrStandardFunction::AllTrue
+        | IrStandardFunction::AnyTrue => IrType::scalar(IrValueType::Boolean),
+        IrStandardFunction::ToStringBoolean
+        | IrStandardFunction::ToStringInteger
+        | IrStandardFunction::ToStringReal
+        | IrStandardFunction::ToStringString => IrType::scalar(IrValueType::String),
+    }
 }
 
 trait IrTypeDiagnosticExt {
@@ -986,6 +1400,7 @@ fn unsupported_name(value: SysmlUnsupportedExpression) -> &'static str {
         SysmlUnsupportedExpression::NonFeatureReference => "non-feature reference",
         SysmlUnsupportedExpression::Operator => "unsupported operator",
         SysmlUnsupportedExpression::Call => "call expression",
+        SysmlUnsupportedExpression::NonFunctionCall => "call target is not a function",
         SysmlUnsupportedExpression::Collection => "collection expression",
         SysmlUnsupportedExpression::Index => "index expression",
         SysmlUnsupportedExpression::Metadata => "metadata expression",
@@ -1045,6 +1460,16 @@ fn fingerprint_expression(hash: &mut Fnv1a, expression: &IrExpression) {
             hash.write_bytes(b"feature");
             hash.write_u64(feature.element.element_id as u64);
         }
+        IrExpressionKind::StandardConstant {
+            constant,
+            feature_element,
+        } => {
+            hash.write_bytes(b"standard-constant");
+            hash.write_u64(*constant as u64);
+            hash.write_u64(feature_element.source_revision);
+            hash.write_u64(feature_element.source_fingerprint);
+            hash.write_u64(feature_element.element_id as u64);
+        }
         IrExpressionKind::Literal(value) => {
             match value {
                 IrLiteral::Integer(value) => hash.write_u64(*value as u64),
@@ -1078,6 +1503,37 @@ fn fingerprint_expression(hash: &mut Fnv1a, expression: &IrExpression) {
             fingerprint_expression(hash, condition);
             fingerprint_expression(hash, when_true);
             fingerprint_expression(hash, when_false);
+        }
+        IrExpressionKind::Invocation {
+            function,
+            function_element,
+            argument_parameters,
+            arguments,
+        } => {
+            hash.write_bytes(b"invocation");
+            hash.write_u64(*function as u64);
+            hash.write_u64(function_element.source_revision);
+            hash.write_u64(function_element.source_fingerprint);
+            hash.write_u64(function_element.element_id as u64);
+            for parameter in argument_parameters {
+                hash.write_u64(parameter.source_revision);
+                hash.write_u64(parameter.source_fingerprint);
+                hash.write_u64(parameter.element_id as u64);
+            }
+            for argument in arguments {
+                fingerprint_expression(hash, argument);
+            }
+        }
+        IrExpressionKind::Index { collection, index } => {
+            hash.write_bytes(b"index");
+            fingerprint_expression(hash, collection);
+            fingerprint_expression(hash, index);
+        }
+        IrExpressionKind::Collection(elements) => {
+            hash.write_bytes(b"collection");
+            for element in elements {
+                fingerprint_expression(hash, element);
+            }
         }
         IrExpressionKind::Group(child) => {
             hash.write_bytes(b"group");
@@ -1402,6 +1858,9 @@ fn evaluate_expression(
                 }
             }
         }
+        IrExpressionKind::StandardConstant { constant, .. } => match constant {
+            IrStandardConstant::Pi => Ok(EvaluationValue::Real(std::f64::consts::PI)),
+        },
         IrExpressionKind::Literal(value) => Ok(match value {
             IrLiteral::Integer(value) => EvaluationValue::Integer(*value),
             IrLiteral::Real(value) => EvaluationValue::Real(*value),
@@ -1433,7 +1892,363 @@ fn evaluate_expression(
                 "conditional guard did not evaluate to Boolean".to_owned(),
             )),
         },
+        IrExpressionKind::Invocation {
+            function,
+            arguments,
+            ..
+        } => {
+            let values = arguments
+                .iter()
+                .map(|argument| evaluate_expression(argument, context, options))
+                .collect::<Result<Vec<_>, _>>()?;
+            evaluate_standard_function(*function, values, &expression.result_type)
+        }
+        IrExpressionKind::Index { collection, index } => {
+            let collection = evaluate_expression(collection, context, options)?;
+            let index = evaluate_expression(index, context, options)?;
+            let EvaluationValue::Collection(values) = collection else {
+                return Err(EvaluationFailure::Error(
+                    "indexing requires a collection value".to_owned(),
+                ));
+            };
+            let EvaluationValue::Integer(index) = index else {
+                return Err(EvaluationFailure::Error(
+                    "collection index must evaluate to Integer".to_owned(),
+                ));
+            };
+            let offset = usize::try_from(index)
+                .ok()
+                .and_then(|index| index.checked_sub(1))
+                .ok_or_else(|| {
+                    EvaluationFailure::Error(
+                        "SysML collection indices are one-based positive integers".to_owned(),
+                    )
+                })?;
+            values.get(offset).cloned().ok_or_else(|| {
+                EvaluationFailure::Error(format!(
+                    "collection index {index} is outside its 1..={} extent",
+                    values.len()
+                ))
+            })
+        }
+        IrExpressionKind::Collection(elements) => elements
+            .iter()
+            .map(|element| evaluate_expression(element, context, options))
+            .collect::<Result<Vec<_>, _>>()
+            .map(EvaluationValue::Collection),
         IrExpressionKind::Group(child) => evaluate_expression(child, context, options),
+    }
+}
+
+fn evaluate_standard_function(
+    function: IrStandardFunction,
+    mut arguments: Vec<EvaluationValue>,
+    result_type: &IrType,
+) -> Result<EvaluationValue, EvaluationFailure> {
+    let mut unary = || {
+        arguments
+            .pop()
+            .ok_or_else(|| EvaluationFailure::Error("function argument is missing".to_owned()))
+    };
+    match function {
+        IrStandardFunction::Abs => match unary()? {
+            EvaluationValue::Integer(value) => value
+                .checked_abs()
+                .map(EvaluationValue::Integer)
+                .ok_or_else(|| EvaluationFailure::Error("integer abs overflow".to_owned())),
+            EvaluationValue::Real(value) if value.is_finite() => {
+                Ok(EvaluationValue::Real(value.abs()))
+            }
+            EvaluationValue::Quantity { value, unit } if value.is_finite() => {
+                Ok(EvaluationValue::Quantity {
+                    value: value.abs(),
+                    unit,
+                })
+            }
+            _ => Err(EvaluationFailure::Error(
+                "abs requires a finite numeric scalar".to_owned(),
+            )),
+        },
+        IrStandardFunction::Min | IrStandardFunction::Max => {
+            let right = unary()?;
+            let left = unary()?;
+            let ordering = numeric_ordering(&left, &right)?;
+            let select_left = match function {
+                IrStandardFunction::Min => ordering != std::cmp::Ordering::Greater,
+                IrStandardFunction::Max => ordering != std::cmp::Ordering::Less,
+                _ => unreachable!(),
+            };
+            coerce_numeric_result(if select_left { left } else { right }, result_type)
+        }
+        IrStandardFunction::Sqrt
+        | IrStandardFunction::Floor
+        | IrStandardFunction::Round
+        | IrStandardFunction::Sin
+        | IrStandardFunction::Cos
+        | IrStandardFunction::Tan
+        | IrStandardFunction::Cot
+        | IrStandardFunction::ArcSin
+        | IrStandardFunction::ArcCos
+        | IrStandardFunction::ArcTan
+        | IrStandardFunction::Deg
+        | IrStandardFunction::Rad => {
+            let value = unary()?;
+            let (number, unit) = numeric_value(value)?;
+            if unit.is_some() || !number.is_finite() {
+                return Err(EvaluationFailure::Error(
+                    "real standard function requires a finite unitless scalar".to_owned(),
+                ));
+            }
+            match function {
+                IrStandardFunction::Sqrt if number >= 0.0 => finite_real(number.sqrt(), "sqrt"),
+                IrStandardFunction::Floor => checked_integer(number.floor(), "floor"),
+                IrStandardFunction::Round => checked_integer(number.round(), "round"),
+                IrStandardFunction::Sin => finite_real(number.sin(), "sin"),
+                IrStandardFunction::Cos => finite_real(number.cos(), "cos"),
+                IrStandardFunction::Tan => finite_real(number.tan(), "tan"),
+                IrStandardFunction::Cot => finite_real(1.0 / number.tan(), "cot"),
+                IrStandardFunction::ArcSin if (-1.0..=1.0).contains(&number) => {
+                    finite_real(number.asin(), "arcsin")
+                }
+                IrStandardFunction::ArcCos if (-1.0..=1.0).contains(&number) => {
+                    finite_real(number.acos(), "arccos")
+                }
+                IrStandardFunction::ArcTan => finite_real(number.atan(), "arctan"),
+                IrStandardFunction::Deg => finite_real(number.to_degrees(), "deg"),
+                IrStandardFunction::Rad => finite_real(number.to_radians(), "rad"),
+                _ => Err(EvaluationFailure::Error(format!(
+                    "{function:?} argument is outside its mathematical domain"
+                ))),
+            }
+        }
+        IrStandardFunction::Sum | IrStandardFunction::Product => {
+            let collection = match unary()? {
+                EvaluationValue::Collection(values) => values,
+                _ => {
+                    return Err(EvaluationFailure::Error(
+                        "aggregate function requires a collection value".to_owned(),
+                    ));
+                }
+            };
+            evaluate_numeric_aggregate(function, collection, result_type)
+        }
+        IrStandardFunction::IsZero | IrStandardFunction::IsUnit => {
+            let (number, _) = numeric_value(unary()?)?;
+            if !number.is_finite() {
+                return Err(EvaluationFailure::Error(
+                    "numeric predicate requires a finite scalar".to_owned(),
+                ));
+            }
+            Ok(EvaluationValue::Boolean(
+                if function == IrStandardFunction::IsZero {
+                    number == 0.0
+                } else {
+                    number == 1.0
+                },
+            ))
+        }
+        IrStandardFunction::Size => match unary()? {
+            EvaluationValue::Collection(values) => i64::try_from(values.len())
+                .map(EvaluationValue::Integer)
+                .map_err(|_| {
+                    EvaluationFailure::Error("collection size exceeds Integer range".to_owned())
+                }),
+            _ => Err(EvaluationFailure::Error(
+                "size requires a collection value".to_owned(),
+            )),
+        },
+        IrStandardFunction::IsEmpty | IrStandardFunction::NotEmpty => match unary()? {
+            EvaluationValue::Collection(values) => Ok(EvaluationValue::Boolean(
+                if function == IrStandardFunction::IsEmpty {
+                    values.is_empty()
+                } else {
+                    !values.is_empty()
+                },
+            )),
+            _ => Err(EvaluationFailure::Error(
+                "collection predicate requires a collection value".to_owned(),
+            )),
+        },
+        IrStandardFunction::AllTrue | IrStandardFunction::AnyTrue => match unary()? {
+            EvaluationValue::Collection(values) => {
+                let mut booleans = values.into_iter().map(|value| match value {
+                    EvaluationValue::Boolean(value) => Ok(value),
+                    _ => Err(EvaluationFailure::Error(
+                        "Boolean aggregate contains a non-Boolean value".to_owned(),
+                    )),
+                });
+                let identity = function == IrStandardFunction::AllTrue;
+                let result = booleans.try_fold(identity, |accumulator, value| {
+                    value.map(|value| {
+                        if function == IrStandardFunction::AllTrue {
+                            accumulator && value
+                        } else {
+                            accumulator || value
+                        }
+                    })
+                })?;
+                Ok(EvaluationValue::Boolean(result))
+            }
+            _ => Err(EvaluationFailure::Error(
+                "Boolean aggregate requires a collection value".to_owned(),
+            )),
+        },
+        IrStandardFunction::ToStringBoolean
+        | IrStandardFunction::ToStringInteger
+        | IrStandardFunction::ToStringReal
+        | IrStandardFunction::ToStringString => {
+            let value = unary()?;
+            let string = match (function, value) {
+                (IrStandardFunction::ToStringBoolean, EvaluationValue::Boolean(value)) => {
+                    value.to_string()
+                }
+                (IrStandardFunction::ToStringInteger, EvaluationValue::Integer(value)) => {
+                    value.to_string()
+                }
+                (IrStandardFunction::ToStringReal, EvaluationValue::Real(value))
+                    if value.is_finite() =>
+                {
+                    value.to_string()
+                }
+                (IrStandardFunction::ToStringReal, EvaluationValue::Integer(value)) => {
+                    value.to_string()
+                }
+                (IrStandardFunction::ToStringString, EvaluationValue::String(value)) => value,
+                _ => {
+                    return Err(EvaluationFailure::Error(
+                        "ToString argument does not match its resolved standard overload"
+                            .to_owned(),
+                    ));
+                }
+            };
+            Ok(EvaluationValue::String(string))
+        }
+    }
+}
+
+fn numeric_ordering(
+    left: &EvaluationValue,
+    right: &EvaluationValue,
+) -> Result<std::cmp::Ordering, EvaluationFailure> {
+    let (left_value, left_unit) = numeric_value(left.clone())?;
+    let (right_value, right_unit) = numeric_value(right.clone())?;
+    if !left_value.is_finite() || !right_value.is_finite() {
+        return Err(EvaluationFailure::Error(
+            "numeric comparison requires finite values".to_owned(),
+        ));
+    }
+    if left_unit != right_unit {
+        return Err(EvaluationFailure::Error(
+            "numeric comparison requires matching units".to_owned(),
+        ));
+    }
+    left_value
+        .partial_cmp(&right_value)
+        .ok_or_else(|| EvaluationFailure::Error("numeric comparison is undefined".to_owned()))
+}
+
+fn evaluate_numeric_aggregate(
+    function: IrStandardFunction,
+    mut values: Vec<EvaluationValue>,
+    result_type: &IrType,
+) -> Result<EvaluationValue, EvaluationFailure> {
+    let is_sum = function == IrStandardFunction::Sum;
+    let Some(mut accumulator) = values.drain(..).next() else {
+        let identity = if is_sum { 0.0 } else { 1.0 };
+        return match (&result_type.value, &result_type.unit) {
+            (IrValueType::Integer, _) => Ok(EvaluationValue::Integer(identity as i64)),
+            (IrValueType::Real, _) => Ok(EvaluationValue::Real(identity)),
+            (IrValueType::Quantity { .. }, Some(unit)) if is_sum => Ok(EvaluationValue::Quantity {
+                value: identity,
+                unit: unit.clone(),
+            }),
+            (IrValueType::Quantity { .. }, _) => Err(EvaluationFailure::Error(
+                "empty quantity aggregate has no supported unit identity".to_owned(),
+            )),
+            _ => Err(EvaluationFailure::Error(
+                "numeric aggregate result type is not scalar".to_owned(),
+            )),
+        };
+    };
+
+    if matches!(&result_type.value, IrValueType::Integer) {
+        for value in values {
+            let (EvaluationValue::Integer(left), EvaluationValue::Integer(right)) =
+                (accumulator, value)
+            else {
+                return Err(EvaluationFailure::Error(
+                    "integer aggregate received a non-Integer value".to_owned(),
+                ));
+            };
+            let value = if is_sum {
+                left.checked_add(right)
+            } else {
+                left.checked_mul(right)
+            }
+            .ok_or_else(|| EvaluationFailure::Error("Integer aggregate overflow".to_owned()))?;
+            accumulator = EvaluationValue::Integer(value);
+        }
+    } else {
+        for value in values {
+            accumulator = if is_sum {
+                numeric_binary(accumulator, value, |left, right| left + right)?
+            } else {
+                numeric_binary(accumulator, value, |left, right| left * right)?
+            };
+        }
+    }
+    coerce_numeric_result(accumulator, result_type)
+}
+
+fn coerce_numeric_result(
+    value: EvaluationValue,
+    result_type: &IrType,
+) -> Result<EvaluationValue, EvaluationFailure> {
+    match (&result_type.value, value) {
+        (IrValueType::Integer, EvaluationValue::Integer(value)) => {
+            Ok(EvaluationValue::Integer(value))
+        }
+        (IrValueType::Real, value) => {
+            let (value, unit) = numeric_value(value)?;
+            if unit.is_some() || !value.is_finite() {
+                return Err(EvaluationFailure::Error(
+                    "Real result received a non-unitless or non-finite value".to_owned(),
+                ));
+            }
+            Ok(EvaluationValue::Real(value))
+        }
+        (IrValueType::Quantity { .. }, EvaluationValue::Quantity { value, unit })
+            if result_type
+                .unit
+                .as_deref()
+                .is_none_or(|expected| expected == unit) =>
+        {
+            Ok(EvaluationValue::Quantity { value, unit })
+        }
+        _ => Err(EvaluationFailure::Error(
+            "standard function result did not match its inferred SysML type".to_owned(),
+        )),
+    }
+}
+
+fn finite_real(value: f64, function: &str) -> Result<EvaluationValue, EvaluationFailure> {
+    if value.is_finite() {
+        Ok(EvaluationValue::Real(value))
+    } else {
+        Err(EvaluationFailure::Error(format!(
+            "{function} produced a non-finite result"
+        )))
+    }
+}
+
+fn checked_integer(value: f64, function: &str) -> Result<EvaluationValue, EvaluationFailure> {
+    const I64_UPPER_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0;
+    if value.is_finite() && value >= i64::MIN as f64 && value < I64_UPPER_EXCLUSIVE {
+        Ok(EvaluationValue::Integer(value as i64))
+    } else {
+        Err(EvaluationFailure::Error(format!(
+            "{function} result is outside the Integer range"
+        )))
     }
 }
 

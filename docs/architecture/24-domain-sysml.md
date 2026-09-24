@@ -136,7 +136,9 @@ suffixes remain authored symbols and unresolved symbols fail the adapter; no
 conversion is silently guessed or dropped.
 
 The parser and source projection retain the declared elements and resolved
-relationships from the selected files. The specialized typed records cover
+relationships from the selected files. Resolved function-call expressions now
+retain the target element handle, bound input-parameter handles, and an optional
+typed standard-function operation. The specialized typed records cover
 parts, items, ports, attributes, requirements, verification cases, and
 source-spanned constraint expression trees. Expression feature leaves carry
 snapshot-scoped resolved handles; relationship ends preserve both element and
@@ -149,11 +151,51 @@ is deliberately explicit about that boundary: it compiles the resolved
 expression subset into a typed neutral IR, then lets a Rhai policy select
 bindings and a Modelica/Rumoca adapter lower the supported equations. It does
 not silently turn an unsupported expression into a scalar or a passing
-verification result. General derived-feature evaluation, feature-chain
-navigation, invocation/default-parameter semantics, N-dimensional non-Real
-collections and aggregate operations, full quantity and unit conversion,
+verification result. The evaluator currently executes recognized standard
+numeric functions (`abs`, `min`, `max`, `sqrt`, `floor`, `round`, `sum`,
+`product`, `isZero`, `isUnit`), trigonometric functions and angle conversions
+(`sin`, `cos`, `tan`, `cot`, `arcsin`, `arccos`, `arctan`, `deg`, `rad`),
+sequence size predicates (`size`, `isEmpty`, `notEmpty`), and
+Boolean aggregates (`allTrue`, `anyTrue`) over typed provider collections,
+plus primitive scalar `ToString` overloads.
+Calls retain snapshot-scoped function identity and formal input handles and are
+exposed in the typed IR and Rhai reports; `sysml_standard_functions()` lists
+the implemented operations with evaluator and Modelica-lowering availability.
+`sysml_constraint_operators()` exposes the typed operator set used by the
+constraint compiler. The Rhai model tools `constraint_ir`,
+`modelica_constraint`, and `evaluate_constraint` expose compilation, backend
+lowering, and provider-backed evaluation respectively. Modelica support in the
+function catalog comes from the same lowering table used by the Modelica
+adapter, which reports an explicit error for calls it cannot lower.
+
+The standard `TrigFunctions::pi` feature is a source-linked numeric constant
+and is listed by `sysml_standard_constants()`.
+Parenthesized multi-value expressions compile to homogeneous typed collections;
+single-index `sequence[index]` and `sequence#(index)` access uses SysML's
+one-based indexing and is available to the evaluator and Modelica lowerer.
+Out-of-range and zero/negative indices produce explicit evaluation errors.
+
+General derived-feature evaluation, feature-chain navigation, user-defined
+function-body execution, default-argument expansion and overload resolution
+beyond recognized standard functions, feature-valued or N-dimensional
+collections and aggregates beyond the supported scalar functions, full quantity
+dimensional algebra/unit conversion,
 redefinition/subsetting semantics, temporal/behavioral execution, and
 applicability/configuration semantics still require generic language support.
+KerML defines operator expressions through function invocation and overload
+resolution; this subset currently lowers parsed operator syntax to `IrOperator`
+with built-in type rules, so it does not yet retain or dispatch the resolved
+operator-function target.
+Trigonometric calls currently require unitless real-valued radians; quantity
+angles and square roots of dimensioned quantities are rejected rather than
+silently interpreted. The evaluator does not yet implement string-to-numeric or
+string-to-Boolean parsing, and Modelica lowering does not advertise `ToString`
+until its output format can match evaluator semantics. Other standard-library
+gaps include exact Rational and Complex values, collection-object operations,
+sequence transforms, higher-order control functions with lambda bodies, and
+vector constructors/`norm`/`inner`.
+The call catalog is an executable subset, not a claim of full KerML Function
+Library conformance.
 Unsupported syntax and unresolved references remain explicit with source
 spans instead of being guessed from source text.
 
@@ -493,10 +535,12 @@ server (and can be explicitly removed with `--no-default-features`): the pure AS
 canonical journal domain, `.sysml`/`.kerml` classification, `[sysml]` Twin
 manifest source roots, manifest-aware source discovery, pre-flight validation,
 read-only Rhai requirement/verification reports, structured evidence,
-verification registry, CLI selector, typed constraint IR, and Rumoca-admitted
-Modelica constraint lowering are available. Full KerML expression execution,
-feature navigation/invocation, collection/aggregate semantics, a full editor,
-and automatic SysML-to-USD projection remain outside the supported subset.
+verification registry, CLI selector, typed constraint IR with the recognized
+standard-function subset, and Rumoca-admitted Modelica constraint lowering are
+available. Full KerML expression execution, feature navigation, user-defined
+function bodies/defaults, general collection/index/aggregate semantics, a full
+editor, and automatic SysML-to-USD projection remain outside the supported
+subset.
 
 ## 8. What this does NOT do
 

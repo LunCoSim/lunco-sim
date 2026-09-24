@@ -84,9 +84,9 @@ permanent semantic layer.
 |---|---|---|---|
 | Part usages, feature membership, roles, and multiplicity | Many `part def` and attribute declarations, but no complete lander usage graph with typed component roles and bounds | Arrays and parallel IDs can drift; policy cannot navigate an authored assembly | Resolved feature membership, usage identity, redefinition/subsetting, and multiplicity-preserving handles |
 | Ports, interfaces, connections, and bindings | Values such as `sourceComponent`, `usdPath`, and frame/unit strings | Rhai manually joins endpoints and providers; no typed contract says which observation supplies a feature | Typed endpoint/feature chains and standard binding/connectors with source spans and target identity |
-| Constraint definitions/usages | Relations live in Rhai mechanical calls or prose; no reusable source constraint library | A change to SysML values does not recompile a source-selected constraint plan | Generic `constraint def`, usage membership, parameter binding, defaults, result type, and invocation IR |
+| Constraint definitions/usages | Relations live in Rhai mechanical calls or prose; no reusable source constraint library | A change to SysML values does not recompile a source-selected constraint plan | Standard-library scalar/collection invocations now compile to typed IR; reusable constraint usage membership, user-function bodies, defaults, and general result binding remain required |
 | Feature navigation | No executable `configuration.tankStations`-style semantic navigation in the IR | `_qualified_attribute` maps and string joins replace the language feature | `FeatureChain` with typed navigation, collection result type, null/invalid propagation, and diagnostics |
-| Collections and aggregates | Parallel arrays and index assumptions | Index drift and hand-coded reductions for mass, COM, inertia, envelopes | Collection/index/aggregate IR nodes with ordered/unique/multiplicity semantics |
+| Collections and aggregates | Parallel arrays and index assumptions | Index drift and hand-coded reductions for mass, COM, inertia, envelopes | Homogeneous scalar sequence literals, one-based indexing, typed `sum`/`product`, size predicates, and Boolean aggregates now compile/evaluate; feature-valued, structured/N-dimensional collections and reductions remain required |
 | Quantities and units | Many anonymous `Real` values and naming conventions such as `...M`, `...Kg`, `...Deg`, plus string `frameUnits` | Unit correctness is policy convention rather than a source-checked contract | Standard quantity kinds, unit literals/conversion contracts, dimensional checking, and frame/time metadata |
 | Frames and realization | USD paths, component names, and frame information are strings | A value can be numerically valid but attached to the wrong prim/frame | Provider binding contract: source feature, provider (`usd`, `modelica`, telemetry, derived), target, frame, unit, and time validity |
 | Requirement/verification membership | Requirement text and verification IDs are present; checks are manually registered | Evidence cannot be derived from the constraint's standard membership/provenance | Requirement/constraint/verification graph with `satisfy`/`verify`/`assume`/`assert` provenance |
@@ -142,14 +142,19 @@ inside a provider binding.
 
 ### P1 — implement the language mechanisms Griffin will immediately need
 
-The current bounded IR handles typed scalar expressions and fixed primitive
-arrays, but Griffin needs more before it can remove its main workarounds:
+The current bounded IR handles typed scalar expressions, fixed primitive
+arrays, and a recognized subset of standard-library invocations. Griffin needs
+more before it can remove its main workarounds:
 
 1. `FeatureChain` and typed navigation through part/feature usages;
-2. `Invocation` plus reusable constraint parameters, argument binding,
-   defaults, direction, and result typing;
-3. collection construction, indexing, and aggregate expressions for station,
-   leg, engine, mass, COM, inertia, and envelope sets;
+2. reusable constraint definitions/usages, user-defined function-body
+   execution, default expansion, argument binding, direction, and result typing
+   (the current typed `Invocation` supports only recognized standard-library
+   calls with explicit arguments);
+3. feature-valued and structured collection construction, multidimensional
+   indexing, and reductions for station, leg, engine, mass, COM, inertia, and
+   envelope sets (homogeneous scalar sequences and one-based indexing now
+   compile through the IR);
 4. dimensional quantity/unit checking and conversion contracts, with no
    inference from suffixes or bare `Real` values;
 5. null/invalid/error semantics that preserve an inconclusive or invalid
