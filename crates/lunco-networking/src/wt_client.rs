@@ -143,7 +143,9 @@ fn native_client_config(url: &str, cert_digest: String) -> Result<ClientConfig> 
         // self-signed server. Skip validation entirely so it Just Works.
         // INSECURE (MITM-able) — use a hostname + CA cert for anything public.
         // Never reached for hostname URLs, which keep full CA validation below.
-        warn!("[net] connecting to {url} with NO cert validation (direct IP — insecure, LAN/dev only)");
+        warn!(
+            "[net] connecting to {url} with NO cert validation (direct IP — insecure, LAN/dev only)"
+        );
         config.with_no_cert_validation()
     } else {
         // Production: real CA cert on a domain (e.g. Let's Encrypt for

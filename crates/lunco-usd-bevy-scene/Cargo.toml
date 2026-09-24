@@ -1,7 +1,7 @@
 [package]
 name = "lunco-usd-bevy-scene"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Render-free USD scene identity, lifecycle, and geometry contracts for Bevy"
 

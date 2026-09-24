@@ -11,12 +11,12 @@
 
 use egui;
 use lunco_doc_bevy::rename::RenameOpenDocument;
-use lunco_workbench_core::source::{is_source_only_text_path, OpenTwinSource};
+use lunco_workbench_core::source::{OpenTwinSource, is_source_only_text_path};
 use lunco_workspace::rename::RenameTwinEntry;
 
 use super::{
-    path_tree::{build_path_tree, PathTree},
     BrowserAction, BrowserCtx, BrowserScope, BrowserSection,
+    path_tree::{PathTree, build_path_tree},
 };
 
 /// Map a domain kind id to its canonical file extension. Used to

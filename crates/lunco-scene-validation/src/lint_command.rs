@@ -32,14 +32,14 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::{api_param_u64, ApiQueryError, ApiQueryResult};
-use lunco_api_core::{api_value, ApiValue};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_api::{ApiQueryError, ApiQueryResult, api_param_u64};
+use lunco_api_core::{ApiValue, api_value};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, StageView, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_stage::{StageView, UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 
@@ -892,7 +892,7 @@ mod tests {
     use bevy::prelude::*;
     use lunco_port_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
     use lunco_usd_bevy_scene::UsdPrimPath;
-    use lunco_usd_bevy_stage::{canonical::CanonicalStage, UsdRead, UsdStageAsset};
+    use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStage};
     use lunco_usd_compose::recipe::StageRecipe;
 
     #[derive(Component)]
@@ -998,11 +998,13 @@ mod tests {
     #[test]
     fn collision_report_contains_structured_winner_and_shadowed_owner_fields() {
         let stage = composed_fixture();
-        assert!(stage
-            .view()
-            .prim_paths()
-            .iter()
-            .any(|path| path.to_string() == "/Lander1"));
+        assert!(
+            stage
+                .view()
+                .prim_paths()
+                .iter()
+                .any(|path| path.to_string() == "/Lander1")
+        );
 
         let mut world = World::new();
         world.spawn((
@@ -1024,18 +1026,22 @@ mod tests {
         assert_eq!(finding.rule, "port-owner-collision");
         assert_eq!(finding.severity, lunco_lint::LintSeverity::Warn);
         assert_eq!(finding.subject, "/Lander1");
-        assert!(finding
-            .message
-            .contains("PORT_OWNER_COLLISION: `release` has 2 input owners"));
+        assert!(
+            finding
+                .message
+                .contains("PORT_OWNER_COLLISION: `release` has 2 input owners")
+        );
         assert!(finding.message.contains("Modelica/OBC"));
         assert!(finding.message.contains("hardware port"));
         assert!(finding.message.contains("/Lander1.inputs:release"));
         assert!(finding.message.contains("/Lander1.inputs/outputs:release"));
         assert!(finding.message.contains("registry precedence 1"));
         assert!(finding.message.contains("registry precedence 2"));
-        assert!(finding
-            .message
-            .contains("writes may be routed to the winner"));
+        assert!(
+            finding
+                .message
+                .contains("writes may be routed to the winner")
+        );
     }
 
     #[test]
@@ -1049,11 +1055,13 @@ mod tests {
              }\n",
         ))
         .expect("clean port fixture composes");
-        assert!(stage
-            .view()
-            .prim_paths()
-            .iter()
-            .any(|path| path.to_string() == "/Lander1"));
+        assert!(
+            stage
+                .view()
+                .prim_paths()
+                .iter()
+                .any(|path| path.to_string() == "/Lander1")
+        );
 
         let mut world = World::new();
         world.spawn((

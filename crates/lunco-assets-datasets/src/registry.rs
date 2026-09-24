@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use lunco_core::Command;
 
-use crate::{entry_dest_path, process_output_path, AssetEntry, AssetManifest};
+use crate::{AssetEntry, AssetManifest, entry_dest_path, process_output_path};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{installed_destination_present, processed_output_present};
 
@@ -793,9 +793,11 @@ dest = "data/demo.csv"
             registry.register_scoped(MANIFEST, "school", scope.clone()),
             1
         );
-        assert!(registry
-            .declared_artifact(&scope, Path::new("data/demo.csv"))
-            .is_some());
+        assert!(
+            registry
+                .declared_artifact(&scope, Path::new("data/demo.csv"))
+                .is_some()
+        );
     }
 
     #[test]

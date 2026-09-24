@@ -25,17 +25,17 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica_runner::resolve_setup_bounds;
 use lunco_modelica_runtime::{
-    ModelicaChannels, ModelicaCommand, ModelicaModel, DEFAULT_COMMUNICATION_PERIOD_SECS,
+    DEFAULT_COMMUNICATION_PERIOD_SECS, ModelicaChannels, ModelicaCommand, ModelicaModel,
 };
 use std::collections::{BTreeSet, HashMap};
 
 #[cfg(feature = "api")]
-use lunco_api::{executor::PendingApiRequest, DeferredCommandAppExt};
+use lunco_api::{DeferredCommandAppExt, executor::PendingApiRequest};
 #[cfg(feature = "api")]
 use lunco_command_contracts::{Ack, OpId};
 #[cfg(feature = "api")]
 use lunco_core::ActiveCommandId;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 #[cfg(feature = "api")]
 use lunco_hooks::HookValue;
 

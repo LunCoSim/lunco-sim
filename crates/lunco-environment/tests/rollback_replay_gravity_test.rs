@@ -74,10 +74,11 @@ fn rollback_replay_applies_local_gravity() {
     // persistent acceleration component. Rollback then consumes that component
     // without re-running the live environment schedule.
     app.world_mut().run_schedule(FixedUpdate);
-    assert!(app
-        .world()
-        .get::<ConstantLinearAcceleration>(body)
-        .is_some());
+    assert!(
+        app.world()
+            .get::<ConstantLinearAcceleration>(body)
+            .is_some()
+    );
 
     let dt = std::time::Duration::from_secs_f64(1.0 / 60.0);
     for _ in 0..10 {

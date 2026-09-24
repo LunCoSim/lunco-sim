@@ -13,8 +13,8 @@ use lunco_doc_bevy::{
 use lunco_twin::{DocumentKindId, DocumentKindRegistry};
 use lunco_usd_commands::UsdCommandsPlugin;
 use lunco_usd_core::commands::{
-    ApplyUsdOp, CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal, UsdProposalReviewAction,
-    USD_DOCUMENT_KIND,
+    ApplyUsdOp, CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal, USD_DOCUMENT_KIND,
+    UsdProposalReviewAction,
 };
 use lunco_usd_core::edit_session::{UsdEditScope, UsdEditSessions, UsdProposalState};
 use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
@@ -32,35 +32,40 @@ fn plugin_boots_and_registers_kind() {
     app.add_plugins((UsdCommandsPlugin, UsdQueriesPlugin));
     app.update();
 
-    assert!(app
-        .world()
-        .contains_resource::<DocumentRegistry<UsdDocument>>());
+    assert!(
+        app.world()
+            .contains_resource::<DocumentRegistry<UsdDocument>>()
+    );
     let kinds = app.world().resource::<DocumentKindRegistry>();
     let meta = kinds
         .meta(&DocumentKindId::new(USD_DOCUMENT_KIND))
         .expect("usd kind registered");
     assert_eq!(meta.display_name, "USD Stage");
     assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
-    assert!(app
-        .world()
-        .resource::<lunco_api::queries::ApiQueryRegistry>()
-        .names()
-        .any(|name| name == "InspectUsdDocument"));
-    assert!(app
-        .world()
-        .resource::<lunco_api::queries::ApiQueryRegistry>()
-        .names()
-        .any(|name| name == "InspectUsdEditSession"));
-    assert!(app
-        .world()
-        .resource::<lunco_api::queries::ApiQueryRegistry>()
-        .names()
-        .any(|name| name == "ResolveUsdTarget"));
-    assert!(app
-        .world()
-        .resource::<lunco_api::queries::ApiQueryRegistry>()
-        .names()
-        .any(|name| name == "SyncUsdDocument"));
+    assert!(
+        app.world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "InspectUsdDocument")
+    );
+    assert!(
+        app.world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "InspectUsdEditSession")
+    );
+    assert!(
+        app.world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "ResolveUsdTarget")
+    );
+    assert!(
+        app.world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "SyncUsdDocument")
+    );
 }
 
 fn proposal_test_op(name: &str) -> UsdOp {
@@ -112,14 +117,15 @@ fn proposal_commands_keep_review_separate_from_usd_and_commit_as_one_edit() {
         assert_eq!(proposal.ops.len(), 1);
         proposal.id
     };
-    assert!(!app
-        .world()
-        .resource::<DocumentRegistry<UsdDocument>>()
-        .host(doc)
-        .expect("document")
-        .document()
-        .source()
-        .contains("Chassis"));
+    assert!(
+        !app.world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .expect("document")
+            .document()
+            .source()
+            .contains("Chassis")
+    );
 
     app.world_mut().trigger(ReviewUsdProposal {
         proposal,
@@ -154,22 +160,24 @@ fn proposal_commands_keep_review_separate_from_usd_and_commit_as_one_edit() {
     let host = registry.host(doc).expect("committed document");
     assert_eq!(host.generation(), 1);
     assert!(host.document().source().contains("Chassis"));
-    assert!(app
-        .world()
-        .resource::<UsdEditSessions>()
-        .proposal(proposal)
-        .is_none());
+    assert!(
+        app.world()
+            .resource::<UsdEditSessions>()
+            .proposal(proposal)
+            .is_none()
+    );
 
     app.world_mut().trigger(UndoDocument { doc_id: doc });
     app.update();
-    assert!(!app
-        .world()
-        .resource::<DocumentRegistry<UsdDocument>>()
-        .host(doc)
-        .expect("undo document")
-        .document()
-        .source()
-        .contains("Chassis"));
+    assert!(
+        !app.world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .expect("undo document")
+            .document()
+            .source()
+            .contains("Chassis")
+    );
 }
 
 #[test]
@@ -201,10 +209,12 @@ fn proposal_commit_marks_a_stale_plan_as_conflict_without_overwriting_edits() {
     let sessions = app.world().resource::<UsdEditSessions>();
     let conflicted = sessions.proposal(proposal).expect("conflict retained");
     assert_eq!(conflicted.state, UsdProposalState::Conflict);
-    assert!(conflicted
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.contains("stale document generation")));
+    assert!(
+        conflicted
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("stale document generation"))
+    );
     let source = app
         .world()
         .resource::<DocumentRegistry<UsdDocument>>()
@@ -241,11 +251,12 @@ fn rejecting_a_proposal_removes_only_review_state() {
     });
     app.update();
 
-    assert!(app
-        .world()
-        .resource::<UsdEditSessions>()
-        .proposal(proposal)
-        .is_none());
+    assert!(
+        app.world()
+            .resource::<UsdEditSessions>()
+            .proposal(proposal)
+            .is_none()
+    );
     assert_eq!(
         app.world()
             .resource::<DocumentRegistry<UsdDocument>>()
@@ -373,23 +384,27 @@ fn fork_and_discard_use_document_lifecycle_commands() {
             .document()
             .source()
     );
-    assert!(registry
-        .host(fork)
-        .expect("fork host")
-        .document()
-        .origin()
-        .is_untitled());
+    assert!(
+        registry
+            .host(fork)
+            .expect("fork host")
+            .document()
+            .origin()
+            .is_untitled()
+    );
 
     app.world_mut().trigger(DiscardDocument { doc_id: fork });
     app.update();
-    assert!(!app
-        .world()
-        .resource::<DocumentRegistry<UsdDocument>>()
-        .contains(fork));
-    assert!(app
-        .world()
-        .resource::<DocumentRegistry<UsdDocument>>()
-        .contains(source));
+    assert!(
+        !app.world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(fork)
+    );
+    assert!(
+        app.world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(source)
+    );
 }
 
 fn wait_for_one_usd_document(app: &mut App) {

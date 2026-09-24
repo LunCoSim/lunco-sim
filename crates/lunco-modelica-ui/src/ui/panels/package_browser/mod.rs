@@ -195,7 +195,7 @@ fn find_and_update_node(
                 *is_loading = false;
                 return true;
             }
-            if let Some(ref mut sub_children) = node_children {
+            if let Some(sub_children) = node_children {
                 if find_and_update_node(sub_children, parent_id, children.clone()) {
                     return true;
                 }

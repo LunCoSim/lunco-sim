@@ -14,17 +14,17 @@
 //! a documented follow-up.
 
 use celestial_time::{
+    GMST,
     // `UTC`/`TDB` are named directly; `TAI`/`TT`/`UT1` flow through by inference.
     // The `To*` traits are imported for their `to_*` methods on the scale newtypes.
     JulianDate,
+    TDB,
     ToTAI,
     ToTDB,
     ToTT,
     ToTTFromTDB,
     ToUT1WithDUT1,
     ToUTC,
-    GMST,
-    TDB,
     UTC,
 };
 

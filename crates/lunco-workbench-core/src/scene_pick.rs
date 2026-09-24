@@ -207,7 +207,7 @@ impl PressLatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{pos2, Rect};
+    use egui::{Rect, pos2};
 
     const USD_PREVIEW: PanelId = PanelId("usd::viewport");
 

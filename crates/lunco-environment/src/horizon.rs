@@ -1409,17 +1409,25 @@ mod tests {
     #[test]
     fn bake_cache_rejects_resolution_below_two() {
         let field = make_field(2, Vec2::ZERO, Vec2::splat(1.0), vec![0.0; 4]);
-        assert!(field
-            .bake_visibility_cache(Vec3::Y, 0.0046, 0, 48, 2)
-            .is_empty());
-        assert!(field
-            .bake_visibility_cache(Vec3::Y, 0.0046, 1, 48, 2)
-            .is_empty());
-        assert!(field
-            .bake_visibility_cache(Vec3::Y, 0.0046, 2, 0, 2)
-            .is_empty());
-        assert!(field
-            .bake_visibility_cache(Vec3::Y, 0.0046, 2, 48, 0)
-            .is_empty());
+        assert!(
+            field
+                .bake_visibility_cache(Vec3::Y, 0.0046, 0, 48, 2)
+                .is_empty()
+        );
+        assert!(
+            field
+                .bake_visibility_cache(Vec3::Y, 0.0046, 1, 48, 2)
+                .is_empty()
+        );
+        assert!(
+            field
+                .bake_visibility_cache(Vec3::Y, 0.0046, 2, 0, 2)
+                .is_empty()
+        );
+        assert!(
+            field
+                .bake_visibility_cache(Vec3::Y, 0.0046, 2, 48, 0)
+                .is_empty()
+        );
     }
 }

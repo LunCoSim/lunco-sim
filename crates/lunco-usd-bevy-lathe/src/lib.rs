@@ -926,21 +926,25 @@ mod tests {
             length: 1.9,
             contour: 0.55,
         };
-        assert!((UsdLathe {
-            profile: valid_profile.clone(),
-            rings: 1,
-            v_order: 2,
-            left_handed: false,
-        })
-        .surface()
-        .is_none());
-        assert!((UsdLathe {
-            profile: valid_profile,
-            rings: 4,
-            v_order: 5,
-            left_handed: false,
-        })
-        .surface()
-        .is_none());
+        assert!(
+            (UsdLathe {
+                profile: valid_profile.clone(),
+                rings: 1,
+                v_order: 2,
+                left_handed: false,
+            })
+            .surface()
+            .is_none()
+        );
+        assert!(
+            (UsdLathe {
+                profile: valid_profile,
+                rings: 4,
+                v_order: 5,
+                left_handed: false,
+            })
+            .surface()
+            .is_none()
+        );
     }
 }

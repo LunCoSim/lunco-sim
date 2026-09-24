@@ -39,8 +39,8 @@ use std::sync::Arc;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_materials::{rgba8_mip_chain, ParamValue, Rgba8MipMode, ShaderLook, TextureLayer};
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
+use lunco_materials::{ParamValue, Rgba8MipMode, ShaderLook, TextureLayer, rgba8_mip_chain};
 // `wgpu-types`, not `bevy::render` — these are plain POD texture descriptors
 // (`bevy_image` itself takes them from here) and carry no pipeline, no wgpu device,
 // no naga. `bevy::render::render_resource` merely re-exports them, and importing it
@@ -48,8 +48,8 @@ use lunco_materials::{rgba8_mip_chain, ParamValue, Rgba8MipMode, ShaderLook, Tex
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 use lunco_terrain_core::{
-    albedo_map, ao_map, normal_slope_maps, pack_normal_rgba8, pack_surface_rgba8,
-    roughness_from_slope, BoundedHeightSource, Square,
+    BoundedHeightSource, Square, albedo_map, ao_map, normal_slope_maps, pack_normal_rgba8,
+    pack_surface_rgba8, roughness_from_slope,
 };
 
 use crate::band::SurfaceBand;

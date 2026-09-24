@@ -458,12 +458,13 @@ mod tests {
 
         app.update();
         assert!(app.world().get::<LocalEarth>(entity).is_some());
-        assert!(app
-            .world()
-            .get::<lunco_cosim_core::SimComponent>(entity)
-            .unwrap()
-            .outputs
-            .contains_key(EARTH_MOUNT_Z_CONNECTOR));
+        assert!(
+            app.world()
+                .get::<lunco_cosim_core::SimComponent>(entity)
+                .unwrap()
+                .outputs
+                .contains_key(EARTH_MOUNT_Z_CONNECTOR)
+        );
 
         app.world_mut().resource_mut::<EarthDirectionWorld>().0 = Vec3::ZERO;
         app.update();
@@ -509,12 +510,13 @@ mod tests {
             .id();
         app.update();
         assert!(app.world().get::<LocalEarth>(e).is_none());
-        assert!(app
-            .world()
-            .resource::<lunco_core::RuntimeDiagnostics>()
-            .findings
-            .iter()
-            .any(|finding| finding.code == "earth-mount"));
+        assert!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .iter()
+                .any(|finding| finding.code == "earth-mount")
+        );
     }
 
     /// The published direction must be relative to the MOUNT, because that is

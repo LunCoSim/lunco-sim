@@ -209,11 +209,10 @@ mod render_profile_tests {
 
     #[test]
     fn rejects_an_unknown_render_profile() {
-        assert!(parse_render_profile(&[
-            "luncosim".to_string(),
-            "--render-profile=turbo".to_string()
-        ])
-        .is_err());
+        assert!(
+            parse_render_profile(&["luncosim".to_string(), "--render-profile=turbo".to_string()])
+                .is_err()
+        );
     }
 
     #[test]
@@ -242,11 +241,10 @@ mod render_profile_tests {
 
     #[test]
     fn rejects_an_unknown_render_quality() {
-        assert!(parse_render_quality(&[
-            "luncosim".to_string(),
-            "--render-quality=ultra".to_string(),
-        ])
-        .is_err());
+        assert!(
+            parse_render_quality(&["luncosim".to_string(), "--render-quality=ultra".to_string(),])
+                .is_err()
+        );
     }
 
     #[test]
@@ -267,19 +265,23 @@ mod render_profile_tests {
 
     #[test]
     fn recording_limits_require_an_output_and_positive_values() {
-        assert!(parse_recording_args(&[
-            "luncosim".to_string(),
-            "--record-frames".to_string(),
-            "1".to_string(),
-        ])
-        .is_err());
-        assert!(parse_recording_args(&[
-            "luncosim".to_string(),
-            "--record-offline".to_string(),
-            "take".to_string(),
-            "--record-fps=0".to_string(),
-        ])
-        .is_err());
+        assert!(
+            parse_recording_args(&[
+                "luncosim".to_string(),
+                "--record-frames".to_string(),
+                "1".to_string(),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_recording_args(&[
+                "luncosim".to_string(),
+                "--record-offline".to_string(),
+                "take".to_string(),
+                "--record-fps=0".to_string(),
+            ])
+            .is_err()
+        );
     }
 }
 
@@ -461,7 +463,7 @@ pub fn run_gui() -> AppExit {
     // below; a Bevy system drains it into the confirm prompt.
     #[cfg(all(feature = "networking", not(target_family = "wasm")))]
     let deeplink_inbox = if !offscreen {
-        use lunco_networking::single_instance::{acquire, LaunchOutcome};
+        use lunco_networking::single_instance::{LaunchOutcome, acquire};
         crate::url_scheme::register_best_effort();
         match acquire() {
             // This process is just a courier — it forwarded the link to the
@@ -652,7 +654,7 @@ fn luncosim_window(
 
 #[cfg(test)]
 mod window_tests {
-    use super::{luncosim_window, LunCoSimRenderProfile};
+    use super::{LunCoSimRenderProfile, luncosim_window};
 
     #[test]
     fn custom_chrome_window_remains_resizable() {

@@ -158,10 +158,11 @@ mod tests {
                 .map(lunco_core::GlobalEntityId::get),
             Some(expected)
         );
-        assert!(app
-            .world()
-            .get::<lunco_core::GlobalEntityId>(local_entity)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<lunco_core::GlobalEntityId>(local_entity)
+                .is_none()
+        );
     }
 
     #[test]

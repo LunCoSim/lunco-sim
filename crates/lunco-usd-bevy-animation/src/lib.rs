@@ -18,8 +18,8 @@ use lunco_usd_bevy_stage::read::{
     stage_time_codes_per_second,
 };
 use lunco_usd_bevy_stage::{
-    compose_xform_order_at, grid_translation_d_at, resolve_bound_shader, stage_convention,
-    UsdReadObject, UsdStageAsset,
+    UsdReadObject, UsdStageAsset, compose_xform_order_at, grid_translation_d_at,
+    resolve_bound_shader, stage_convention,
 };
 
 /// Install the USD animation planner and samplers.
@@ -230,7 +230,8 @@ pub fn sample_usd_animation(
                 if let Some(Err(error)) = grid_pose.as_ref() {
                     error_once!(
                         "[usd-animation] {} has a double-precision translation that cannot be represented by its authored xform stack: {}",
-                        plan.path.as_str(), error
+                        plan.path.as_str(),
+                        error
                     );
                     continue;
                 }

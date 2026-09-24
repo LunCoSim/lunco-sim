@@ -81,7 +81,7 @@ use lunco_usd_bevy_stage::read::has_runtime_port_surface;
 use lunco_usd_bevy_stage::{StageView, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
-use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
+use openusd::usd::{Collection, PrimPredicate, compute_included_paths};
 
 /// The lint domain these facts belong to: hook `lint.usd`, policy
 /// `assets/scripting/policy/lint_usd.rhai`.

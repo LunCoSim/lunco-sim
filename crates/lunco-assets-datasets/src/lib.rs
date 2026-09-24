@@ -12,9 +12,9 @@ mod plugin;
 mod registry;
 
 pub use manifest::{
-    archive_extension, bake_stamp_path, default_dem_pixel_scale_m, entry_artifact_path,
-    entry_dest_path, install_marker_path, process_output_path, source_pool_path, AssetEntry,
-    AssetManifest, ProcessConfig, PROCESS_PIPELINE_VERSION,
+    AssetEntry, AssetManifest, PROCESS_PIPELINE_VERSION, ProcessConfig, archive_extension,
+    bake_stamp_path, default_dem_pixel_scale_m, entry_artifact_path, entry_dest_path,
+    install_marker_path, process_output_path, source_pool_path,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use manifest::{
@@ -22,7 +22,7 @@ pub use manifest::{
 };
 pub use plugin::{DatasetProvisioningActive, DatasetRegistryPlugin};
 pub use registry::{
-    dataset_failed, dataset_id, CancelDataset, DatasetEntry, DatasetInstalled, DatasetRegistry,
-    DatasetScope, DatasetScopeReady, DatasetScopeRemoved, DatasetState, ProcessDataset,
-    RequestDataset, DATASET_FAILED,
+    CancelDataset, DATASET_FAILED, DatasetEntry, DatasetInstalled, DatasetRegistry, DatasetScope,
+    DatasetScopeReady, DatasetScopeRemoved, DatasetState, ProcessDataset, RequestDataset,
+    dataset_failed, dataset_id,
 };

@@ -1,7 +1,7 @@
 [package]
 name = "lunco-scene-camera"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Render-free camera commands and focus transactions for the active scene frame"
 

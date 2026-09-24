@@ -6,7 +6,7 @@
 //! the masking rules defined by OpenUSD. The returned transforms are canonical
 //! Bevy transforms; rendering remains owned by the visual adapter.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use bevy::prelude::{Quat, Transform, Vec3};
 use openusd::sdf::{Path as SdfPath, Value};
 

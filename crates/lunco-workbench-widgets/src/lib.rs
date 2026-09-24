@@ -9,4 +9,4 @@ pub mod icons;
 pub mod text_editor;
 pub mod tree;
 
-pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, UiIcon};
+pub use icons::{UiIcon, icon_button, icon_button_sized, icon_text_button, paint_icon};

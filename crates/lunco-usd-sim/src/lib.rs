@@ -56,11 +56,11 @@ use lunco_usd_avian_contracts::{
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
 use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
 use lunco_usd_bevy_scene::{
-    instance_key, is_preview_only, UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending,
+    UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending, instance_key, is_preview_only,
 };
 use lunco_usd_bevy_stage::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_stage::{
-    canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
+    UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset, canonical::CanonicalStages,
 };
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -79,8 +79,8 @@ use lunco_port_core::{Port, PortSurface, PortSurfacePort};
 use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_usd_sim_authoring::{
-    is_gear_drive, read_gear_drive_type, read_gear_drive_values, read_gear_ratio, GearDriveValues,
-    SuspensionParams, WheelParams,
+    GearDriveValues, SuspensionParams, WheelParams, is_gear_drive, read_gear_drive_type,
+    read_gear_drive_values, read_gear_ratio,
 };
 use lunco_usd_sim_core::{
     GroundColliderPending, PendingDifferential, PendingEntityWork, PhysicalWheel, UsdSimProcessed,
@@ -291,10 +291,11 @@ mod runtime_safety_tests {
         // the process.
         lunco_core::run_scene_teardown(app.world_mut());
         assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
-        assert!(!app
-            .world()
-            .resource::<lunco_physics::PhysicsHolds>()
-            .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE));
+        assert!(
+            !app.world()
+                .resource::<lunco_physics::PhysicsHolds>()
+                .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE)
+        );
 
         app.insert_resource(LoadedScene("replacement"));
         assert_eq!(
@@ -796,28 +797,32 @@ mod raycast_tests {
 
     #[test]
     fn malformed_authored_offset_is_rejected() {
-        assert!(read(
-            r#"#usda 1.0
+        assert!(
+            read(
+                r#"#usda 1.0
 def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
 {
     string lunco:raycast:offset = "bad"
 }
 "#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn non_positive_authored_distance_is_rejected() {
-        assert!(read(
-            r#"#usda 1.0
+        assert!(
+            read(
+                r#"#usda 1.0
 def Xform "Sensor" (prepend apiSchemas = ["LunCoRaycastAPI"])
 {
     float lunco:raycast:maxDistance = 0.0
 }
 "#
-        )
-        .is_err());
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1992,10 +1997,16 @@ fn spawn_wheel_visual(
     }
     // `ShaderLook` and `PbrLook` are mutually exclusive render intents. The
     // shader path wins, preserving the composed USD material through the split.
-    if let Some(shader) = maybe_shader_mat.cloned() {
-        visual.try_insert(shader);
-    } else if let Some(material) = maybe_mat.cloned() {
-        visual.try_insert(material);
+    match maybe_shader_mat.cloned() {
+        Some(shader) => {
+            visual.try_insert(shader);
+        }
+        _ => match maybe_mat.cloned() {
+            Some(material) => {
+                visual.try_insert(material);
+            }
+            _ => {}
+        },
     }
     if shader_bound {
         visual.try_insert(lunco_usd_bevy_scene::UsdVisualShaderBound);
@@ -2862,11 +2873,12 @@ mod pending_sim_work_tests {
             .add_observer(queue_invalidated_usd_sim_prim);
 
         let waiting_for_visuals = app.world_mut().spawn(UsdPrimPath::default()).id();
-        assert!(app
-            .world()
-            .resource::<PendingUsdSimPrimWork>()
-            .0
-            .contains(waiting_for_visuals));
+        assert!(
+            app.world()
+                .resource::<PendingUsdSimPrimWork>()
+                .0
+                .contains(waiting_for_visuals)
+        );
 
         // Once a pass finds the path before visual projection, the visual
         // lifecycle edge must enqueue it again when the readiness boundary lands.
@@ -2877,20 +2889,22 @@ mod pending_sim_work_tests {
         app.world_mut()
             .entity_mut(waiting_for_visuals)
             .insert(lunco_usd_bevy_scene::UsdSceneProjected);
-        assert!(app
-            .world()
-            .resource::<PendingUsdSimPrimWork>()
-            .0
-            .contains(waiting_for_visuals));
+        assert!(
+            app.world()
+                .resource::<PendingUsdSimPrimWork>()
+                .0
+                .contains(waiting_for_visuals)
+        );
 
         app.world_mut()
             .entity_mut(waiting_for_visuals)
             .remove::<UsdPrimPath>();
-        assert!(!app
-            .world()
-            .resource::<PendingUsdSimPrimWork>()
-            .0
-            .contains(waiting_for_visuals));
+        assert!(
+            !app.world()
+                .resource::<PendingUsdSimPrimWork>()
+                .0
+                .contains(waiting_for_visuals)
+        );
 
         let invalidated = app
             .world_mut()
@@ -2903,11 +2917,12 @@ mod pending_sim_work_tests {
         app.world_mut()
             .entity_mut(invalidated)
             .remove::<UsdSimProcessed>();
-        assert!(app
-            .world()
-            .resource::<PendingUsdSimPrimWork>()
-            .0
-            .contains(invalidated));
+        assert!(
+            app.world()
+                .resource::<PendingUsdSimPrimWork>()
+                .0
+                .contains(invalidated)
+        );
     }
 
     #[test]

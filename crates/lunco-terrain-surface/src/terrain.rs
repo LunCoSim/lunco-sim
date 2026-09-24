@@ -18,7 +18,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_materials::ShaderLook;
 use lunco_obstacle_field::field::{HeightGrid, MeshData};
 use lunco_obstacle_field::sampler::{salt, sample_layer};
@@ -1189,8 +1189,8 @@ fn get_wasm_bake_failures_tx() -> &'static std::sync::mpsc::Sender<WasmBakeFailu
 }
 
 #[cfg(target_arch = "wasm32")]
-fn get_wasm_bake_failures_rx(
-) -> &'static std::sync::Mutex<std::sync::mpsc::Receiver<WasmBakeFailure>> {
+fn get_wasm_bake_failures_rx()
+-> &'static std::sync::Mutex<std::sync::mpsc::Receiver<WasmBakeFailure>> {
     &wasm_bake_failures().rx
 }
 
@@ -3023,18 +3023,20 @@ mod visual_product_tests {
         lunco_core::run_scene_teardown(app.world_mut());
 
         assert!(app.world().get_entity(entity).is_ok());
-        assert!(app
-            .world()
-            .get_entity(entity)
-            .is_ok_and(|entity| !entity.contains::<DemTerrainRequest>()));
+        assert!(
+            app.world()
+                .get_entity(entity)
+                .is_ok_and(|entity| !entity.contains::<DemTerrainRequest>())
+        );
         let status = app.world().resource::<TerrainGenStatus>();
         assert!(!status.active);
         assert!(status.site.is_empty());
         assert!(!status.user_dismissed);
-        assert!(!app
-            .world()
-            .resource::<lunco_physics::PhysicsHolds>()
-            .holds(lunco_physics::PhysicsHolds::TERRAIN_READY));
+        assert!(
+            !app.world()
+                .resource::<lunco_physics::PhysicsHolds>()
+                .holds(lunco_physics::PhysicsHolds::TERRAIN_READY)
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 [package]
 name = "lunco-usd-bevy-lathe"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Parametric USD NURBS surfaces and their Bevy mesh projection"
 

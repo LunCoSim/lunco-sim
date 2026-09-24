@@ -8,10 +8,10 @@ use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
 use lunco_geometry_core::bounds::{Bounds3, BoundsRelation, OrientedBounds3};
 use lunco_geometry_core::profile_extrusion::{
-    extrude_profile, ProfileExtrusionError, ProfileMeshData, ProfilePlane,
+    ProfileExtrusionError, ProfileMeshData, ProfilePlane, extrude_profile,
 };
 use lunco_geometry_core::profile_revolution::{
-    revolve_profile, ProfileRevolutionError, RevolvedProfileMeshData,
+    ProfileRevolutionError, RevolvedProfileMeshData, revolve_profile,
 };
 use rhai::{Array, Dynamic, Engine, EvalAltResult, Position};
 

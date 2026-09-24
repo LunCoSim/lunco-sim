@@ -34,16 +34,16 @@
 use bevy::prelude::*;
 use lunco_materials::engine_params::prim_color_value;
 use lunco_materials::{
-    to_snake_case, AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer,
+    AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer, to_snake_case,
 };
 use lunco_render::{PbrLook, ProceduralSkybox, SurfaceAlpha};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
 use lunco_usd_bevy_scene::{UsdSceneProjectionReset, UsdVisualProjectionSet};
 use lunco_usd_bevy_stage::read::get_attribute_as_vec3;
 use lunco_usd_bevy_stage::read::{
-    read_authored_bool_strict, read_primvar_f32_strict, read_primvar_vec3_strict, UsdReadObject,
+    UsdReadObject, read_authored_bool_strict, read_primvar_f32_strict, read_primvar_vec3_strict,
 };
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_sim_core::UsdSimSet;
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;

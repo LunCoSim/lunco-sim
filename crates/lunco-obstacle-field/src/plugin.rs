@@ -16,7 +16,7 @@ use bevy::prelude::*;
 // `wgpu-types` and needs no render pipeline. See docs/architecture/render-decoupling.md.
 use bevy_mesh::Indices;
 use bevy_mesh::PrimitiveTopology;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 use crate::spec::{ObstacleFieldSpec, Pattern};
 

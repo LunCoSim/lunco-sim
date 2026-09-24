@@ -6,7 +6,7 @@
 //! authoring remain separate production packages.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};

@@ -17,10 +17,10 @@ use big_space::prelude::{CellCoord, Grid};
 // `SetEnvironmentLight` that IS render-bound — `bloom_intensity` — is applied by a
 // second observer in `lunco-render-bevy` (`env_light.rs`), so this crate names no
 // post-processing type. See docs/architecture/render-decoupling.md.
-use bevy::camera::visibility::RenderLayers;
 use bevy::camera::Exposure;
+use bevy::camera::visibility::RenderLayers;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 /// USD prim type for the scene-level **environment settings** prim (a singleton
 /// under the default prim, e.g. `/World/Environment`). It carries the render
@@ -49,14 +49,14 @@ pub const LUNCO_ENVIRONMENT_PRIM_TYPE: &str = "LunCoEnvironment";
 /// *systems* in `lunco_celestial` import these.
 pub mod gravity_types;
 pub use gravity_types::{
-    Gravity, GravityBody, GravityModel, GravityProvider, PhysicsSceneGravity,
-    EARTH_SURFACE_GRAVITY, MOON_SURFACE_GRAVITY,
+    EARTH_SURFACE_GRAVITY, Gravity, GravityBody, GravityModel, GravityProvider,
+    MOON_SURFACE_GRAVITY, PhysicsSceneGravity,
 };
 
 /// Physical lighting parameters of the lunar sky (`LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`)
 /// — environmental state, the lighting analog of gravity. See the module docs.
 pub mod lighting;
-pub use lighting::{drive_earthshine_from_phase, LunarSun, FULL_EARTH_EARTHSHINE_LUX};
+pub use lighting::{FULL_EARTH_EARTHSHINE_LUX, LunarSun, drive_earthshine_from_phase};
 
 /// Solar direction as a co-simulation source (`LocalSolar` + the sun→cosim
 /// bridge). The lighting-direction analog of the gravity bridge.
@@ -66,8 +66,8 @@ pub use lighting::{drive_earthshine_from_phase, LunarSun, FULL_EARTH_EARTHSHINE_
 /// GUI cannot silently disagree about the direction.
 pub mod solar;
 pub use solar::{
-    compute_local_solar, finalize_sun_render_state, inject_local_solar_into_cosim,
-    project_sun_state_to_light, LocalSolar, SunRenderState, SunState,
+    LocalSolar, SunRenderState, SunState, compute_local_solar, finalize_sun_render_state,
+    inject_local_solar_into_cosim, project_sun_state_to_light,
 };
 
 /// Explicit USD-authored source of mount-local environmental signals.
@@ -101,7 +101,7 @@ pub struct EarthDirectionRequired;
 pub mod earth;
 mod mount_frame;
 pub use earth::{
-    compute_local_earth, inject_local_earth_into_cosim, EarthDirectionWorld, LocalEarth,
+    EarthDirectionWorld, LocalEarth, compute_local_earth, inject_local_earth_into_cosim,
 };
 
 /// Baked horizon-map terrain self-shadowing (the long-range half of the
@@ -110,8 +110,8 @@ pub use earth::{
 /// `lunco-render-bevy::horizon_shade`. See the module docs.
 pub mod horizon;
 pub use horizon::{
-    install_horizon_map_from_field, pick_sun, HeightField, HorizonMap, HorizonShadowCache,
-    HorizonShadowCacheConfig, HorizonShadowPlugin, SunQuery,
+    HeightField, HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig, HorizonShadowPlugin,
+    SunQuery, install_horizon_map_from_field, pick_sun,
 };
 
 /// System sets for environment computation and consumption.

@@ -126,8 +126,8 @@ fn install_listeners() {
 #[cfg(target_arch = "wasm32")]
 mod inner {
     use std::cell::RefCell;
-    use wasm_bindgen::prelude::*;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::*;
     use wasm_bindgen_futures::JsFuture;
 
     /// Wasm is single-threaded, so `RefCell` in a `thread_local!` is

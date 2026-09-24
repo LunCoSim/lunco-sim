@@ -788,11 +788,12 @@ mod tests {
         app.world_mut().despawn(e);
         app.update();
         assert!(app.world().resource::<ReadinessRegistry>().is_empty());
-        assert!(app
-            .world()
-            .resource::<ReadinessState>()
-            .held_entities
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<ReadinessState>()
+                .held_entities
+                .is_empty()
+        );
     }
 
     /// Policy overrides the built-in rule, and re-registering it takes effect on

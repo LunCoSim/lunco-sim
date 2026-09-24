@@ -11,8 +11,8 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-use crate::world::{ActivePhysicsFrame, WorldGrid};
 use crate::GridAnchor;
+use crate::world::{ActivePhysicsFrame, WorldGrid};
 
 /// Failure while resolving a BigSpace coordinate chain.
 ///
@@ -366,16 +366,16 @@ mod active_frame_pose_tests {
             .id();
 
         let before = read_pose(&mut world, entity);
-        assert!((before.0 .0 - local_position).length() < 1.0e-4);
-        assert!(before.1 .0.angle_between(local_rotation).abs() < 1.0e-6);
+        assert!((before.0.0 - local_position).length() < 1.0e-4);
+        assert!(before.1.0.angle_between(local_rotation).abs() < 1.0e-6);
 
         world.entity_mut(body).insert((
             CellCoord::new(-120_000, 17_000, 99_000),
             Transform::from_rotation(Quat::from_rotation_x(-1.1)),
         ));
         let after = read_pose(&mut world, entity);
-        assert!((after.0 .0 - local_position).length() < 1.0e-4);
-        assert!(after.1 .0.angle_between(local_rotation).abs() < 1.0e-6);
+        assert!((after.0.0 - local_position).length() < 1.0e-4);
+        assert!(after.1.0.angle_between(local_rotation).abs() < 1.0e-6);
     }
 
     #[test]

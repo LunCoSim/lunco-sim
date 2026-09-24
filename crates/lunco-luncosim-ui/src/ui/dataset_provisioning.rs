@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lunco_assets_datasets::{
     DatasetRegistry, DatasetScope, DatasetScopeReady, DatasetScopeRemoved, DatasetState,
 };
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_exposure_core::{EngineExposures, ExposureValue};
 use lunco_hooks::HookValue;
 use lunco_workspace::WorkspaceResource;

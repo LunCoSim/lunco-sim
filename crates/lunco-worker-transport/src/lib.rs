@@ -18,8 +18,8 @@
 use std::rc::Rc;
 
 use js_sys::{Array, Uint8Array};
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
 /// Caller-supplied event handlers. All are `Rc<dyn Fn>` so the pool can keep them

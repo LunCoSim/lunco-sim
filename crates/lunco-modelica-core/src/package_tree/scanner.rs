@@ -84,8 +84,8 @@ pub(crate) fn library_inmem_top_level_libs() -> Vec<String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn library_inmem_index(
-) -> &'static std::collections::HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>>
+fn library_inmem_index()
+-> &'static std::collections::HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>>
 {
     use std::sync::OnceLock;
     static CACHE: OnceLock<
@@ -95,8 +95,8 @@ fn library_inmem_index(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn build_library_inmem_index(
-) -> std::collections::HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>> {
+fn build_library_inmem_index()
+-> std::collections::HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>> {
     use std::collections::HashMap;
     let mut tree: HashMap<String, Vec<(String, lunco_modelica_index::index::ClassKind)>> =
         HashMap::new();

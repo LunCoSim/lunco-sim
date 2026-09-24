@@ -26,11 +26,11 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_datasets::{
-    archive_extension, entry_dest_path, install_marker_path, installed_destination_present,
-    process_output_path, processed_output_present, AssetEntry, AssetManifest,
+    AssetEntry, AssetManifest, archive_extension, entry_dest_path, install_marker_path,
+    installed_destination_present, process_output_path, processed_output_present,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use lunco_assets_transport::{download_to_writer, TransferError};
+use lunco_assets_transport::{TransferError, download_to_writer};
 use lunco_settings::DownloadSettings;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{Seek, Write};
@@ -910,7 +910,7 @@ fn parse_download_policy(value: lunco_hooks::HookValue) -> Result<DownloadPolicy
         _ => {
             return Err(DownloadError::PolicyInvalid(
                 "cache must be `use_existing` or `refresh`".to_owned(),
-            ))
+            ));
         }
     };
     let install_mode = match get("install_mode").as_str() {
@@ -920,7 +920,7 @@ fn parse_download_policy(value: lunco_hooks::HookValue) -> Result<DownloadPolicy
         _ => {
             return Err(DownloadError::PolicyInvalid(
                 "install_mode must be `replace`, `keep_existing`, or `reject`".to_owned(),
-            ))
+            ));
         }
     };
     let backup = match get("backup").as_str() {
@@ -929,7 +929,7 @@ fn parse_download_policy(value: lunco_hooks::HookValue) -> Result<DownloadPolicy
         _ => {
             return Err(DownloadError::PolicyInvalid(
                 "backup must be `discard_after_commit` or `retain`".to_owned(),
-            ))
+            ));
         }
     };
     let retain_max_count = match get("retain_max_count") {
@@ -937,7 +937,7 @@ fn parse_download_policy(value: lunco_hooks::HookValue) -> Result<DownloadPolicy
         HookValue::Int(value) => {
             return Err(DownloadError::PolicyInvalid(format!(
                 "retain_max_count must be between 0 and 32, got {value}"
-            )))
+            )));
         }
         value => return Err(policy_type("retain_max_count", "int", value)),
     };
@@ -1424,15 +1424,17 @@ mod tests {
             ),
             "staging tree must be moved, not copied"
         );
-        assert!(lunco_storage::read_directory_sync(root.path())
-            .expect("list install root")
-            .iter()
-            .all(|entry| {
-                entry
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_none_or(|name| !name.starts_with(".lunco-install-backup-"))
-            }));
+        assert!(
+            lunco_storage::read_directory_sync(root.path())
+                .expect("list install root")
+                .iter()
+                .all(|entry| {
+                    entry
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_none_or(|name| !name.starts_with(".lunco-install-backup-"))
+                })
+        );
     }
 
     #[test]

@@ -29,12 +29,12 @@ use bevy_egui::egui;
 use lunco_experiments::{ExperimentId, ExperimentRegistry};
 use lunco_modelica_ui_core::MODELICA_PLOT_KIND_ID;
 use lunco_viz::{
-    kinds::line_plot::LinePlot, view::Panel2DCtx, SignalRegistry, VisualizationRegistry,
-    VizFitRequests, VizId,
+    SignalRegistry, VisualizationRegistry, VizFitRequests, VizId, kinds::line_plot::LinePlot,
+    view::Panel2DCtx,
 };
 use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 
-use crate::ui::viz::{ensure_default_modelica_graph, DEFAULT_MODELICA_GRAPH};
+use crate::ui::viz::{DEFAULT_MODELICA_GRAPH, ensure_default_modelica_graph};
 
 /// Multi-instance kind id. Each instance is a `VizId.0`.
 pub(crate) const MODELICA_PLOT_KIND: PanelId = PanelId(MODELICA_PLOT_KIND_ID);

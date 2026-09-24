@@ -846,30 +846,34 @@ mod tests {
     fn malformed_trim_is_skipped_not_guessed() {
         assert!(eval_rational_2d(&[[0.0, 0.0, 1.0]], &[0.0, 1.0], 3, 0.5).is_none());
         assert!(eval_rational_2d(&[], &[], 3, 0.5).is_none());
-        assert!(assemble_loops(
-            &[1],
-            &[1],
-            &[1],
-            &[0.0, 1.0],
-            &[],
-            &[[0.0, 0.0, 1.0]],
-            [0.0, 1.0],
-            [0.0, 1.0],
-            4
-        )
-        .is_empty());
-        assert!(assemble_loops(
-            &[1],
-            &[2],
-            &[2],
-            &[0.0, 0.0, 1.0, 1.0],
-            &[[0.0, 2.0]],
-            &[[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]],
-            [0.0, 1.0],
-            [0.0, 1.0],
-            4
-        )
-        .is_empty());
+        assert!(
+            assemble_loops(
+                &[1],
+                &[1],
+                &[1],
+                &[0.0, 1.0],
+                &[],
+                &[[0.0, 0.0, 1.0]],
+                [0.0, 1.0],
+                [0.0, 1.0],
+                4
+            )
+            .is_empty()
+        );
+        assert!(
+            assemble_loops(
+                &[1],
+                &[2],
+                &[2],
+                &[0.0, 0.0, 1.0, 1.0],
+                &[[0.0, 2.0]],
+                &[[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]],
+                [0.0, 1.0],
+                [0.0, 1.0],
+                4
+            )
+            .is_empty()
+        );
         assert!(triangulate_trimmed(&TrimLoops::default(), 1).is_none());
     }
 }

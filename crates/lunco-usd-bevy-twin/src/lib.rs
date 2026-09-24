@@ -13,8 +13,8 @@ use bevy::asset::{AssetId, AssetServer};
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_usd_bevy_stage::{
-    canonical::{CanonicalStage, CanonicalStages},
     UsdStageAsset,
+    canonical::{CanonicalStage, CanonicalStages},
 };
 
 /// A USD document transitioned from a Twin-only scene lease to a user-facing

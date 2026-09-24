@@ -1,7 +1,7 @@
 [package]
 name = "lunco-tools-rhai"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 
 # rhai adapter for the runtime-agnostic lunco-tools registry: concrete tool

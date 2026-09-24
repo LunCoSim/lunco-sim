@@ -1060,10 +1060,11 @@ mod tests {
     #[test]
     fn editor_perspective_stacks_prims_above_twin_browser() {
         let plan = EditorPerspective.layout();
-        assert!(plan
-            .side_browser
-            .primary
-            .contains(&PanelId("usd_prim_tree")));
+        assert!(
+            plan.side_browser
+                .primary
+                .contains(&PanelId("usd_prim_tree"))
+        );
         assert!(plan.side_browser.secondary.contains(&TWIN_BROWSER_PANEL_ID));
         assert_eq!(EditorPerspective.layout_revision(), 1);
     }

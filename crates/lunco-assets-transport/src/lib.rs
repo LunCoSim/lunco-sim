@@ -294,9 +294,9 @@ mod native {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{
-    download_bytes_with_resume, download_to_writer, is_retryable_download_error,
-    retry_with_backoff, TransferError, TransferStats, BODY_READ_TIMEOUT, CONNECT_TIMEOUT,
-    RECV_RESPONSE_TIMEOUT, SEND_REQUEST_TIMEOUT,
+    BODY_READ_TIMEOUT, CONNECT_TIMEOUT, RECV_RESPONSE_TIMEOUT, SEND_REQUEST_TIMEOUT, TransferError,
+    TransferStats, download_bytes_with_resume, download_to_writer, is_retryable_download_error,
+    retry_with_backoff,
 };
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -323,11 +323,7 @@ mod tests {
             &settings,
             || {
                 calls += 1;
-                if calls < 3 {
-                    Err("transient")
-                } else {
-                    Ok(42)
-                }
+                if calls < 3 { Err("transient") } else { Ok(42) }
             },
             |error| *error == "transient",
             || true,

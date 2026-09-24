@@ -753,9 +753,11 @@ class "Sphere"
                 stage_units_per_unit: 0.1,
             }
         );
-        assert!(registry
-            .missing_core_linear_units()
-            .any(|missing| missing == ("Sphere", "radius")));
+        assert!(
+            registry
+                .missing_core_linear_units()
+                .any(|missing| missing == ("Sphere", "radius"))
+        );
 
         assert!(registry.ingest(sphere, false));
         registry.apply_core_linear_units();

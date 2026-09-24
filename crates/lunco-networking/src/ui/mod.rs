@@ -18,7 +18,7 @@
 //! bridge events then go unobserved (no-op) and the sim runs single-player.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use lunco_core_session::{LocalSession, NetConnectRequest, NetStatus};
 use lunco_doc_bevy::Presence;
 use lunco_workbench_core::WorkbenchMenuRegistry;
@@ -400,7 +400,7 @@ pub fn draw_collaborator_cursors(
     // active student. (When follow_mode is on, the "Mirroring" banner above
     // already conveys it, so skip to avoid stacking two banners.)
     let is_targeted =
-        tutor_status.target_client.is_none() || tutor_status.target_client == Some(local.0 .0);
+        tutor_status.target_client.is_none() || tutor_status.target_client == Some(local.0.0);
     let is_active_student =
         tutor_status.tutor_active && !tutorial_settings.follow_mode && is_targeted;
     if is_active_student {
@@ -472,7 +472,7 @@ pub fn draw_collaborator_cursors(
 
     for (user_id, info) in &presence.users {
         // Skip drawing the local user's cursor
-        if user_id.0 == local.0 .0 {
+        if user_id.0 == local.0.0 {
             continue;
         }
 

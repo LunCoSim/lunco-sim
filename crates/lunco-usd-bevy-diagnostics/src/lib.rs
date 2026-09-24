@@ -11,9 +11,9 @@ use bevy::prelude::*;
 use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
 use lunco_usd_bevy_scene::{GlbPlaceholder, PlaceholderAssetUri, UsdPrimPath};
 use lunco_usd_bevy_stage::{
-    canonical::CanonicalStages,
-    read::{get_attribute_as_vec3, UsdRead},
     UsdStageAsset,
+    canonical::CanonicalStages,
+    read::{UsdRead, get_attribute_as_vec3},
 };
 use openusd::sdf::Path as SdfPath;
 
@@ -166,7 +166,7 @@ fn rasterize_label(
     font: &ab_glyph::FontVec,
     cfg: &DiagnosticLabelConfig,
 ) -> Option<Image> {
-    use ab_glyph::{point, Font, PxScale, ScaleFont};
+    use ab_glyph::{Font, PxScale, ScaleFont, point};
     // The POD texture descriptors, straight from `wgpu-types` — the same types
     // `bevy_image` itself takes. NOT `bevy::render::render_resource`, which is a
     // `bevy_render` re-export and would drag wgpu + naga into this crate.
@@ -463,13 +463,13 @@ pub fn reveal_placeholder_on_failure(
 
                 // Helper to check attributes
                 let check_path = |path: &str| -> Option<Vec3> {
-                    if let Ok(sdf_path) = SdfPath::new(path) {
-                        get_attribute_as_vec3(&reader, &sdf_path, "xformOp:scale").or_else(|| {
-                            UsdRead::real(&reader, &sdf_path, "size")
-                                .map(|size| Vec3::splat(size as f32))
-                        })
-                    } else {
-                        None
+                    match SdfPath::new(path) {
+                        Ok(sdf_path) => get_attribute_as_vec3(&reader, &sdf_path, "xformOp:scale")
+                            .or_else(|| {
+                                UsdRead::real(&reader, &sdf_path, "size")
+                                    .map(|size| Vec3::splat(size as f32))
+                            }),
+                        _ => None,
                     }
                 };
 

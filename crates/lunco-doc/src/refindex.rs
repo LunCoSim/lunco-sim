@@ -20,7 +20,7 @@
 //! The index is incremental — these calls only reshuffle entries for the
 //! one doc, not the whole workspace.
 
-use crate::{domain_engine::SymbolRef, DocumentId, NodeId, ResolvedRef, SymbolPath};
+use crate::{DocumentId, NodeId, ResolvedRef, SymbolPath, domain_engine::SymbolRef};
 use std::collections::{HashMap, HashSet};
 
 /// Workspace-wide cross-document reference table.

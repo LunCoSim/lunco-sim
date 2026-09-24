@@ -9,13 +9,13 @@
 use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use lunco_physics::joint::{bounded_brake_torque, revolute_hinge_axis_world, JointTorqueActuator};
+use lunco_physics::joint::{JointTorqueActuator, bounded_brake_torque, revolute_hinge_axis_world};
 use lunco_port_core::InputPorts;
 use lunco_port_core::Port;
 
 use crate::wheel_kinematics::body_point_velocity;
 use crate::{
-    contact_plane_basis, longitudinal_tire_step, tire_patch_force, TireLateralStiffnessGraph,
+    TireLateralStiffnessGraph, contact_plane_basis, longitudinal_tire_step, tire_patch_force,
 };
 
 /// Authored tire parameters and topology for one Avian-backed wheel body.

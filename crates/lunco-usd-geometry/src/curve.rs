@@ -5,10 +5,10 @@
 //! use the evaluated position or tangent; this module owns only validation,
 //! interpolation, and USD's periodic/open control-point rules.
 
+use bevy_math::Vec3;
 use bevy_math::cubic_splines::{
     CubicBezier, CubicCardinalSpline, CubicGenerator, CyclicCubicGenerator,
 };
-use bevy_math::Vec3;
 
 /// Which standard basis the curve interpolates with (uniform token basis).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

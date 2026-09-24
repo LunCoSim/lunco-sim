@@ -9,7 +9,7 @@ use avian3d::prelude::{Collider, RigidBody};
 use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
 use lunco_obstacle_field::rock::faceted_rock_mesh;
-use lunco_obstacle_field::sampler::{salt, sample_layer, Placement};
+use lunco_obstacle_field::sampler::{Placement, salt, sample_layer};
 use lunco_obstacle_field::spec::{Pattern, RockLayer, SizeDist};
 
 use super::{

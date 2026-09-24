@@ -222,15 +222,17 @@ mod tests {
     fn visual_terrain_work_is_opt_in_at_composition() {
         let mut app = App::new();
         app.add_plugins(TerrainSurfacePlugin);
-        assert!(app
-            .world()
-            .get_resource::<crate::stream_viz::TerrainDetailDemands>()
-            .is_none());
+        assert!(
+            app.world()
+                .get_resource::<crate::stream_viz::TerrainDetailDemands>()
+                .is_none()
+        );
 
         app.add_plugins(TerrainSurfaceVisualizationPlugin);
-        assert!(app
-            .world()
-            .get_resource::<crate::stream_viz::TerrainDetailDemands>()
-            .is_some());
+        assert!(
+            app.world()
+                .get_resource::<crate::stream_viz::TerrainDetailDemands>()
+                .is_some()
+        );
     }
 }

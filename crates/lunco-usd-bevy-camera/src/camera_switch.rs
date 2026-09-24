@@ -27,11 +27,11 @@
 //!   transitions;
 //! - the `KeyC` hotkey ([`cycle_active_camera`]) when a host runs with input.
 
-use bevy::camera::{primitives::Aabb, RenderTarget, Viewport};
+use bevy::camera::{RenderTarget, Viewport, primitives::Aabb};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_camera_core::DEFAULT_PRESENTATION_HOOK;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_embodiment_core::roles::{LocalEmbodiment, TheLocalEmbodiment};
 use lunco_hooks::HookValue;
 use lunco_render::{GraphicsCameraDefaults, LightGraphicsDefaults, SceneCamera};
@@ -2249,7 +2249,9 @@ mod tests {
         assert!(!state.pending);
         assert_eq!(
             state.error.as_deref(),
-            Some("standalone USD assembly has no finite renderable bounds for generated presentation")
+            Some(
+                "standalone USD assembly has no finite renderable bounds for generated presentation"
+            )
         );
     }
 
@@ -2270,12 +2272,13 @@ mod tests {
             state.error.as_deref(),
             Some("standalone presentation camera_direction must be finite and non-zero")
         );
-        assert!(app
-            .world_mut()
-            .query_filtered::<Entity, With<StandalonePresentationCamera>>()
-            .iter(app.world())
-            .next()
-            .is_none());
+        assert!(
+            app.world_mut()
+                .query_filtered::<Entity, With<StandalonePresentationCamera>>()
+                .iter(app.world())
+                .next()
+                .is_none()
+        );
     }
 
     #[test]
@@ -2291,12 +2294,13 @@ mod tests {
         assert!(state.camera.is_none());
         assert!(state.light.is_none());
         assert!(!state.pending);
-        assert!(app
-            .world_mut()
-            .query_filtered::<Entity, With<StandalonePresentationCamera>>()
-            .iter(app.world())
-            .next()
-            .is_none());
+        assert!(
+            app.world_mut()
+                .query_filtered::<Entity, With<StandalonePresentationCamera>>()
+                .iter(app.world())
+                .next()
+                .is_none()
+        );
     }
 
     #[test]
@@ -2323,12 +2327,13 @@ mod tests {
         let selection = app.world().resource::<ViewportCameraSelection>();
         assert_eq!(selection.owner(), CameraSelectionOwner::User);
         assert_eq!(selection.requested, Some(RequestedCamera::Entity(explicit)));
-        assert!(app
-            .world_mut()
-            .query_filtered::<Entity, With<StandalonePresentationCamera>>()
-            .iter(app.world())
-            .next()
-            .is_none());
+        assert!(
+            app.world_mut()
+                .query_filtered::<Entity, With<StandalonePresentationCamera>>()
+                .iter(app.world())
+                .next()
+                .is_none()
+        );
     }
 
     #[test]
@@ -2344,12 +2349,13 @@ mod tests {
 
         lunco_core::run_scene_teardown(app.world_mut());
 
-        assert!(app
-            .world_mut()
-            .query_filtered::<Entity, With<StandalonePresentationCamera>>()
-            .iter(app.world())
-            .next()
-            .is_none());
+        assert!(
+            app.world_mut()
+                .query_filtered::<Entity, With<StandalonePresentationCamera>>()
+                .iter(app.world())
+                .next()
+                .is_none()
+        );
         assert_eq!(
             app.world().resource::<StandalonePresentationState>().camera,
             None
@@ -2360,11 +2366,15 @@ mod tests {
         );
     }
 
-    fn window_cam(is_active: bool, name: &str) -> impl Bundle {
+    fn window_cam(is_active: bool, name: &str) -> impl Bundle + use<> {
         window_cam_with_target(is_active, name, true)
     }
 
-    fn window_cam_with_target(is_active: bool, name: &str, target_ready: bool) -> impl Bundle {
+    fn window_cam_with_target(
+        is_active: bool,
+        name: &str,
+        target_ready: bool,
+    ) -> impl Bundle + use<> {
         let mut camera = Camera {
             is_active,
             ..default()
@@ -2607,16 +2617,18 @@ mod tests {
             Vec3::new(321.25, -44.5, 17.75)
         );
         assert!(anchor_has_origin);
-        assert!(app
-            .world()
-            .get::<big_space::prelude::FloatingOrigin>(camera)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<big_space::prelude::FloatingOrigin>(camera)
+                .is_none()
+        );
 
-        assert!(app
-            .world()
-            .resource::<lunco_core::RuntimeDiagnostics>()
-            .findings
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .is_empty()
+        );
     }
 
     /// The reconciler activates exactly the bound camera and deactivates every

@@ -8,8 +8,8 @@
 
 use bevy::prelude::*;
 use lunco_viz::{
-    SignalBinding, SignalRef, ViewTarget, VisualizationConfig, VisualizationRegistry, VizId,
-    LINE_PLOT_KIND,
+    LINE_PLOT_KIND, SignalBinding, SignalRef, ViewTarget, VisualizationConfig,
+    VisualizationRegistry, VizId,
 };
 
 /// Stable id of the singleton "Modelica" time-series plot. Reserved

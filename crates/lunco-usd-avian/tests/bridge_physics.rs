@@ -919,10 +919,11 @@ fn active_frame_handoff_is_transport_on_the_first_physics_read() {
     // schedule read. This is the ordering produced while scene activation is
     // held; a prior physics tick is not part of the transport contract.
     app.world_mut().run_schedule(FixedPostUpdate);
-    assert!(app
-        .world()
-        .get::<lunco_physics::PhysicsPoseSeeded>(body)
-        .is_some());
+    assert!(
+        app.world()
+            .get::<lunco_physics::PhysicsPoseSeeded>(body)
+            .is_some()
+    );
     let old_linear = app.world().get::<LinearVelocity>(body).unwrap().0;
     let old_angular = app.world().get::<AngularVelocity>(body).unwrap().0;
     let frame_rotation = app
@@ -1006,10 +1007,11 @@ fn frame_handoff_seeds_late_bodies_in_the_committed_frame() {
         (late_position - late_local).length() < 1.0e-6,
         "late body was seeded or transported in the wrong frame: expected={late_local:?} actual={late_position:?}"
     );
-    assert!(app
-        .world()
-        .get::<lunco_physics::PhysicsPoseSeeded>(late)
-        .is_some());
+    assert!(
+        app.world()
+            .get::<lunco_physics::PhysicsPoseSeeded>(late)
+            .is_some()
+    );
 }
 
 #[test]

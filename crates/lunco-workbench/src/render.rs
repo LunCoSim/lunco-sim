@@ -5,10 +5,10 @@
 
 use super::*;
 use lunco_viz::{
-    cached_telemetry_sparkline_stats, render_telemetry_sparkline, SignalRef,
-    TelemetrySparklineOptions,
+    SignalRef, TelemetrySparklineOptions, cached_telemetry_sparkline_stats,
+    render_telemetry_sparkline,
 };
-use lunco_workbench_core::{trigger_or_defer, DeferredWorldTriggers};
+use lunco_workbench_core::{DeferredWorldTriggers, trigger_or_defer};
 use lunco_workbench_perf_ui::{PerfHudSettings, PerfStats};
 
 #[derive(Resource)]
@@ -300,87 +300,97 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             TabId::Singleton(id) => {
                 // Take-and-return pattern so the panel can itself borrow
                 // other panels' metadata via the layout (future-proof).
-                if let Some(mut panel) = self.panels.remove(&id) {
-                    // Capability-narrowed context (no raw &mut World).
-                    // Mutations the panel emits are queued and applied
-                    // after paint (WP-8 structural prevention).
-                    let is_main_scene =
-                        panel.scene_target() == Some(PanelRenderTarget::MainViewport);
-                    let transparent = panel_body_is_transparent(
-                        self.world,
-                        panel.transparent_background(),
-                        is_main_scene,
-                    );
-                    // Full leaf body (egui_dock clips the tab-content ui to the
-                    // whole leaf area, below the tab bar) — NOT `max_rect()`, which
-                    // only spans the growable content and misses the transparent
-                    // area below a short card.
-                    let body = ui.clip_rect();
-                    let scroll_policy = panel.scroll_policy();
-                    let mut ctx = PanelCtx::with_surface(self.world, self.surface);
-                    match scroll_policy {
-                        PanelScrollPolicy::Vertical => {
-                            egui::ScrollArea::vertical()
-                                .id_salt(("workbench_panel_body", id.as_str()))
-                                .auto_shrink([false; 2])
-                                .show(ui, |ui| panel.render(ui, &mut ctx));
+                match self.panels.remove(&id) {
+                    Some(mut panel) => {
+                        // Capability-narrowed context (no raw &mut World).
+                        // Mutations the panel emits are queued and applied
+                        // after paint (WP-8 structural prevention).
+                        let is_main_scene =
+                            panel.scene_target() == Some(PanelRenderTarget::MainViewport);
+                        let transparent = panel_body_is_transparent(
+                            self.world,
+                            panel.transparent_background(),
+                            is_main_scene,
+                        );
+                        // Full leaf body (egui_dock clips the tab-content ui to the
+                        // whole leaf area, below the tab bar) — NOT `max_rect()`, which
+                        // only spans the growable content and misses the transparent
+                        // area below a short card.
+                        let body = ui.clip_rect();
+                        let scroll_policy = panel.scroll_policy();
+                        let mut ctx = PanelCtx::with_surface(self.world, self.surface);
+                        match scroll_policy {
+                            PanelScrollPolicy::Vertical => {
+                                egui::ScrollArea::vertical()
+                                    .id_salt(("workbench_panel_body", id.as_str()))
+                                    .auto_shrink([false; 2])
+                                    .show(ui, |ui| panel.render(ui, &mut ctx));
+                            }
+                            PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
                         }
-                        PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
+                        let intents = ctx.take_intents();
+                        self.panels.insert(id, panel);
+                        intents.apply(self.world);
+                        if !is_main_scene {
+                            record_chrome(self.world, ui, body, transparent);
+                        }
                     }
-                    let intents = ctx.take_intents();
-                    self.panels.insert(id, panel);
-                    intents.apply(self.world);
-                    if !is_main_scene {
-                        record_chrome(self.world, ui, body, transparent);
+                    _ => {
+                        let error_color = self
+                            .world
+                            .get_resource::<lunco_theme::Theme>()
+                            .map(|t| t.tokens.error)
+                            .unwrap_or(egui::Color32::LIGHT_RED);
+                        ui.colored_label(
+                            error_color,
+                            format!("Panel `{}` not registered", id.as_str()),
+                        );
                     }
-                } else {
-                    let error_color = self
-                        .world
-                        .get_resource::<lunco_theme::Theme>()
-                        .map(|t| t.tokens.error)
-                        .unwrap_or(egui::Color32::LIGHT_RED);
-                    ui.colored_label(
-                        error_color,
-                        format!("Panel `{}` not registered", id.as_str()),
-                    );
                 }
             }
             TabId::Instance { kind, instance } => {
-                if let Some(mut panel) = self.instance_panels.remove(&kind) {
-                    // Instance tabs are always chrome — no `InstancePanel` hosts a
-                    // live scene (the scene viewport and the USD preview are both
-                    // singleton `Panel`s).
-                    let transparent = panel_body_is_transparent(
-                        self.world,
-                        panel.transparent_background(),
-                        false,
-                    );
-                    let body = ui.clip_rect();
-                    let scroll_policy = panel.scroll_policy();
-                    let mut ctx = PanelCtx::with_surface(self.world, self.surface);
-                    match scroll_policy {
-                        PanelScrollPolicy::Vertical => {
-                            egui::ScrollArea::vertical()
-                                .id_salt(("workbench_instance_panel_body", kind.as_str(), instance))
-                                .auto_shrink([false; 2])
-                                .show(ui, |ui| panel.render(ui, &mut ctx, instance));
+                match self.instance_panels.remove(&kind) {
+                    Some(mut panel) => {
+                        // Instance tabs are always chrome — no `InstancePanel` hosts a
+                        // live scene (the scene viewport and the USD preview are both
+                        // singleton `Panel`s).
+                        let transparent = panel_body_is_transparent(
+                            self.world,
+                            panel.transparent_background(),
+                            false,
+                        );
+                        let body = ui.clip_rect();
+                        let scroll_policy = panel.scroll_policy();
+                        let mut ctx = PanelCtx::with_surface(self.world, self.surface);
+                        match scroll_policy {
+                            PanelScrollPolicy::Vertical => {
+                                egui::ScrollArea::vertical()
+                                    .id_salt((
+                                        "workbench_instance_panel_body",
+                                        kind.as_str(),
+                                        instance,
+                                    ))
+                                    .auto_shrink([false; 2])
+                                    .show(ui, |ui| panel.render(ui, &mut ctx, instance));
+                            }
+                            PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx, instance),
                         }
-                        PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx, instance),
+                        let intents = ctx.take_intents();
+                        self.instance_panels.insert(kind, panel);
+                        intents.apply(self.world);
+                        record_chrome(self.world, ui, body, transparent);
                     }
-                    let intents = ctx.take_intents();
-                    self.instance_panels.insert(kind, panel);
-                    intents.apply(self.world);
-                    record_chrome(self.world, ui, body, transparent);
-                } else {
-                    let error_color = self
-                        .world
-                        .get_resource::<lunco_theme::Theme>()
-                        .map(|t| t.tokens.error)
-                        .unwrap_or(egui::Color32::LIGHT_RED);
-                    ui.colored_label(
-                        error_color,
-                        format!("InstancePanel kind `{}` not registered", kind.as_str()),
-                    );
+                    _ => {
+                        let error_color = self
+                            .world
+                            .get_resource::<lunco_theme::Theme>()
+                            .map(|t| t.tokens.error)
+                            .unwrap_or(egui::Color32::LIGHT_RED);
+                        ui.colored_label(
+                            error_color,
+                            format!("InstancePanel kind `{}` not registered", kind.as_str()),
+                        );
+                    }
                 }
             }
         }
@@ -2073,30 +2083,33 @@ pub(crate) fn render_panel_solo(
         ui.label(egui::RichText::new(panel.title()).strong());
         ui.separator();
     }
-    if let Some(mut panel) = layout.panels.remove(id) {
-        let scroll_policy = panel.scroll_policy();
-        let mut ctx = PanelCtx::with_surface(world, surface);
-        match scroll_policy {
-            PanelScrollPolicy::Vertical => {
-                egui::ScrollArea::vertical()
-                    .id_salt(("workbench_solo_panel_body", id.as_str()))
-                    .auto_shrink([false; 2])
-                    .show(ui, |ui| panel.render(ui, &mut ctx));
+    match layout.panels.remove(id) {
+        Some(mut panel) => {
+            let scroll_policy = panel.scroll_policy();
+            let mut ctx = PanelCtx::with_surface(world, surface);
+            match scroll_policy {
+                PanelScrollPolicy::Vertical => {
+                    egui::ScrollArea::vertical()
+                        .id_salt(("workbench_solo_panel_body", id.as_str()))
+                        .auto_shrink([false; 2])
+                        .show(ui, |ui| panel.render(ui, &mut ctx));
+                }
+                PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
             }
-            PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
+            let intents = ctx.take_intents();
+            layout.panels.insert(*id, panel);
+            intents.apply(world);
         }
-        let intents = ctx.take_intents();
-        layout.panels.insert(*id, panel);
-        intents.apply(world);
-    } else {
-        let error_color = world
-            .get_resource::<lunco_theme::Theme>()
-            .map(|t| t.tokens.error)
-            .unwrap_or(egui::Color32::LIGHT_RED);
-        ui.colored_label(
-            error_color,
-            format!("Panel `{}` not registered", id.as_str()),
-        );
+        _ => {
+            let error_color = world
+                .get_resource::<lunco_theme::Theme>()
+                .map(|t| t.tokens.error)
+                .unwrap_or(egui::Color32::LIGHT_RED);
+            ui.colored_label(
+                error_color,
+                format!("Panel `{}` not registered", id.as_str()),
+            );
+        }
     }
 }
 
@@ -3298,17 +3311,21 @@ mod tests {
         // globally, but its tab is not part of this perspective's dock.
         layout.side_browser.clear();
         layout.rebuild_dock();
-        assert!(layout
-            .dock
-            .find_tab(&TabId::Singleton(PanelId("focus_fixture")))
-            .is_none());
+        assert!(
+            layout
+                .dock
+                .find_tab(&TabId::Singleton(PanelId("focus_fixture")))
+                .is_none()
+        );
 
         focus_panel_now(&mut layout, "focus_fixture");
 
-        assert!(layout
-            .dock
-            .find_tab(&TabId::Singleton(PanelId("focus_fixture")))
-            .is_some());
+        assert!(
+            layout
+                .dock
+                .find_tab(&TabId::Singleton(PanelId("focus_fixture")))
+                .is_some()
+        );
         assert_eq!(layout.side_browser, [PanelId("focus_fixture")]);
     }
 
@@ -3320,7 +3337,7 @@ mod tests {
         }
 
         fn title(&self) -> String {
-            self.0 .0.to_string()
+            self.0.0.to_string()
         }
 
         fn default_slot(&self) -> PanelSlot {
@@ -3403,10 +3420,12 @@ mod tests {
 
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("view")));
         assert!(layout.center.is_empty());
-        assert!(!layout
-            .dock
-            .iter_all_tabs()
-            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("late_center"))));
+        assert!(
+            !layout
+                .dock
+                .iter_all_tabs()
+                .any(|(_, tab)| *tab == TabId::Singleton(PanelId("late_center")))
+        );
         assert!(layout.panels.contains_key(&PanelId("late_center")));
     }
 
@@ -3664,10 +3683,12 @@ mod tests {
 
         assert_eq!(layout.active_perspective(), Some(PerspectiveId("a")));
         assert!(layout.dock_cache.is_empty());
-        assert!(!layout
-            .dock
-            .iter_all_tabs()
-            .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale"))));
+        assert!(
+            !layout
+                .dock
+                .iter_all_tabs()
+                .any(|(_, tab)| *tab == TabId::Singleton(PanelId("stale")))
+        );
         assert_eq!(layout.side_browser, vec![PanelId("panel_a")]);
     }
 

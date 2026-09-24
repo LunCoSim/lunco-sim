@@ -76,7 +76,7 @@ fn set_placement_replaces_existing_placement() {
         "M",
         "x",
         |class, e| {
-            ast_mut::set_placement(class, e,"x", &Placement::at(50.0, 75.0))
+            ast_mut::set_placement(class, e, "x", &Placement::at(50.0, 75.0))
                 .expect("set_placement");
         },
     );
@@ -109,8 +109,7 @@ fn set_placement_preserves_non_placement_annotations() {
         "M",
         "x",
         |class, e| {
-            ast_mut::set_placement(class, e,"x", &Placement::at(0.0, 0.0))
-                .expect("set_placement");
+            ast_mut::set_placement(class, e, "x", &Placement::at(0.0, 0.0)).expect("set_placement");
         },
     );
     assert!(

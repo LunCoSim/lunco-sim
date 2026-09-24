@@ -36,16 +36,16 @@
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid, Stationary};
-use lunco_core::{on_command, register_commands, Command, HorizonShadowTerrain};
+use lunco_core::{Command, HorizonShadowTerrain, on_command, register_commands};
 use lunco_environment::HorizonMap;
 use lunco_materials::{
-    ParamValue, ShaderLook, ShaderLookReady, TextureLayer, ATTRIBUTE_MORPH_EDGE,
-    ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
+    ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET, ParamValue, ShaderLook,
+    ShaderLookReady, TextureLayer,
 };
 use lunco_obstacle_field::grid_mesh;
-use lunco_terrain_core::{measure_node_error, HeightSource};
+use lunco_terrain_core::{HeightSource, measure_node_error};
 use std::collections::{HashMap, HashSet};
 
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
@@ -319,7 +319,7 @@ pub struct TerrainLodViz;
 #[derive(Clone, Copy)]
 struct TileSlot {
     entity: Entity,
-    gen: u32,
+    r#gen: u32,
     /// The tile's selected morph-band end (parent refine range) — kept so a live
     /// quality-profile change can rebuild the right band material without re-selecting.
     morph_end: f32,
@@ -993,7 +993,7 @@ fn stitch_edges(coord: QuadCoord, draw: &HashSet<QuadCoord>) -> [f32; 4] {
 pub struct LodTiles {
     tiles: HashMap<QuadCoord, TileSlot>,
     morph_ratio: f32,
-    gen: u32,
+    r#gen: u32,
     /// Signature of the inputs the tile SELECTION is a pure function of (camera
     /// focus + eye height + heading — heading drives bake PRIORITY via
     /// `benefit()` — generation, oracle identity, LOD knobs). When it
@@ -1081,7 +1081,7 @@ impl LodTiles {
     /// heights, near-camera-first, while still covering the surface until replaced.
     /// Called by the live re-bake instead of despawning the whole tile set.
     pub fn invalidate(&mut self) {
-        self.gen = self.gen.wrapping_add(1);
+        self.r#gen = self.r#gen.wrapping_add(1);
         self.coarse_ready = false;
     }
 
@@ -1094,17 +1094,17 @@ impl LodTiles {
     /// same as [`invalidate`]. `root_half_extent` is the DEM half-extent (the
     /// quadtree root region), so each tile's square derives from its `QuadCoord`.
     pub fn invalidate_region(&mut self, bounds: Option<[f64; 4]>, root_half_extent: f64) {
-        let new_gen = self.gen.wrapping_add(1);
+        let new_gen = self.r#gen.wrapping_add(1);
         if let Some(aabb) = bounds {
             for (coord, slot) in self.tiles.iter_mut() {
                 // Non-overlapping tiles keep the NEW gen → stay fresh (skipped).
                 // Overlapping tiles keep their OLD gen → stale → re-baked.
                 if !node_overlaps_aabb(*coord, root_half_extent, aabb) {
-                    slot.gen = new_gen;
+                    slot.r#gen = new_gen;
                 }
             }
         }
-        self.gen = new_gen;
+        self.r#gen = new_gen;
         self.coarse_ready = false;
     }
 
@@ -1114,10 +1114,10 @@ impl LodTiles {
     /// generation of hole-cover instead of piling up generations of dead tiles (which
     /// made the per-frame tile bookkeeping go O(n²) and tanked the frame rate).
     pub fn reap_stale(&mut self) -> Vec<Entity> {
-        let cur = self.gen;
+        let cur = self.r#gen;
         let mut dead = Vec::new();
         self.tiles.retain(|_, slot| {
-            if slot.gen == cur {
+            if slot.r#gen == cur {
                 true
             } else {
                 dead.push(slot.entity);
@@ -1153,7 +1153,7 @@ fn selected_cover_status(tiles: &LodTiles, current_generation: u32) -> SelectedC
             tiles
                 .tiles
                 .get(coord)
-                .is_some_and(|slot| slot.gen == current_generation && slot.ready && slot.drawn)
+                .is_some_and(|slot| slot.r#gen == current_generation && slot.ready && slot.drawn)
         });
     SelectedCoverStatus {
         wanted,
@@ -1525,7 +1525,7 @@ pub(crate) fn invalidate_visual_products(
             commands.entity(entity).try_despawn();
         }
         tiles.invalidate_region(change.dirty_bounds, root_half_extent);
-        Some(tiles.gen)
+        Some(tiles.r#gen)
     } else {
         None
     };
@@ -2377,7 +2377,7 @@ pub fn update_lod_tiles(
             }
             // The terrain's current height generation: a tile/bake tagged with an older
             // gen is stale (a live re-bake changed the heights) and is replaced near-first.
-            let cur_gen = tiles.gen;
+            let cur_gen = tiles.r#gen;
             // A quality-profile morph change only changes the material's shared morph
             // bands. Restate resident looks in place; geometry and the production
             // material remain the same.
@@ -2747,8 +2747,8 @@ pub fn update_lod_tiles(
             // The retained coarse base is always kept pending until its generation is
             // complete; fine requests are admitted only after that cover is ready.
             let pending_before = pending.0.len();
-            pending.0.retain(|coord, (gen, _)| {
-                *gen == cur_gen
+            pending.0.retain(|coord, (r#gen, _)| {
+                *r#gen == cur_gen
                     && (wanted.contains(coord)
                         || parent_fallbacks.contains(coord)
                         || is_coarse_fallback(*coord))
@@ -2832,7 +2832,7 @@ pub fn update_lod_tiles(
             // gen, from before a live re-bake) still renders but no longer counts as
             // satisfied, so a current-gen replacement is queued for it.
             let fresh_tile = |tiles: &LodTiles, c: &QuadCoord| {
-                tiles.tiles.get(c).is_some_and(|s| s.gen == cur_gen)
+                tiles.tiles.get(c).is_some_and(|s| s.r#gen == cur_gen)
             };
 
             // ── Finalize completed off-thread bakes ──────────────────────
@@ -2847,8 +2847,8 @@ pub fn update_lod_tiles(
             // See [`TerrainStreamLockstep`] for the measurement that motivated this.
             done.clear();
             if lockstep {
-                for (coord, (gen, task)) in pending.0.drain() {
-                    done.push((coord, gen, block_on(task)));
+                for (coord, (r#gen, task)) in pending.0.drain() {
+                    done.push((coord, r#gen, block_on(task)));
                 }
                 // `drain()` on a `HashMap` yields in an arbitrary (hash-seed-dependent)
                 // order, and downstream `done` handling inserts into `LodTiles`/despawns
@@ -2856,20 +2856,20 @@ pub fn update_lod_tiles(
                 // unique per terrain, so this is a total order.
                 done.sort_by_key(|(coord, _, _)| (coord.depth, coord.x, coord.z));
             } else {
-                pending.0.retain(|coord, (gen, task)| {
+                pending.0.retain(|coord, (r#gen, task)| {
                     match block_on(future::poll_once(&mut *task)) {
                         Some(baked) => {
-                            done.push((*coord, *gen, baked));
+                            done.push((*coord, *r#gen, baked));
                             false
                         }
                         None => true,
                     }
                 });
             }
-            for (coord, gen, baked) in done.drain(..) {
+            for (coord, r#gen, baked) in done.drain(..) {
                 // A bake from a superseded generation (heights changed while it ran) is
                 // discarded — its mesh would show the OLD terrain.
-                if gen != cur_gen {
+                if r#gen != cur_gen {
                     continue;
                 }
                 let handle = meshes.add(baked.mesh);
@@ -2915,7 +2915,7 @@ pub fn update_lod_tiles(
                     coord,
                     TileSlot {
                         entity: ent,
-                        gen: cur_gen,
+                        r#gen: cur_gen,
                         morph_end: baked.morph_end,
                         drawn: false,
                         ready: false,
@@ -2999,7 +2999,7 @@ pub fn update_lod_tiles(
                         s.coord,
                         TileSlot {
                             entity: ent,
-                            gen: cur_gen,
+                            r#gen: cur_gen,
                             morph_end,
                             drawn: false,
                             ready: false,
@@ -3087,7 +3087,7 @@ pub fn update_lod_tiles(
                     tiles
                         .tiles
                         .get(&s.coord)
-                        .is_some_and(|slot| slot.gen == cur_gen && slot.ready)
+                        .is_some_and(|slot| slot.r#gen == cur_gen && slot.ready)
                 });
             }
 
@@ -3759,7 +3759,7 @@ mod draw_partition_tests {
             QuadCoord::ROOT,
             TileSlot {
                 entity: tile,
-                gen: 0,
+                r#gen: 0,
                 morph_end: f32::INFINITY,
                 drawn: true,
                 ready: true,
@@ -3948,7 +3948,7 @@ mod draw_partition_tests {
             QuadCoord::ROOT,
             TileSlot {
                 entity: tile,
-                gen: 0,
+                r#gen: 0,
                 morph_end: f32::INFINITY,
                 drawn: true,
                 ready: true,
@@ -3999,7 +3999,7 @@ mod draw_partition_tests {
             QuadCoord::ROOT,
             TileSlot {
                 entity: tile,
-                gen: 0,
+                r#gen: 0,
                 morph_end: f32::INFINITY,
                 drawn: true,
                 ready: true,
@@ -4042,7 +4042,7 @@ mod draw_partition_tests {
             QuadCoord::ROOT,
             TileSlot {
                 entity: Entity::PLACEHOLDER,
-                gen: 0,
+                r#gen: 0,
                 morph_end: f32::INFINITY,
                 drawn: false,
                 ready: false,
@@ -4053,7 +4053,7 @@ mod draw_partition_tests {
             unready,
             TileSlot {
                 entity: Entity::PLACEHOLDER,
-                gen: 0,
+                r#gen: 0,
                 morph_end: 0.0,
                 drawn: false,
                 ready: false,
@@ -4079,7 +4079,7 @@ mod draw_partition_tests {
             QuadCoord::ROOT,
             TileSlot {
                 entity: tile,
-                gen: 0,
+                r#gen: 0,
                 morph_end: f32::INFINITY,
                 drawn: true,
                 ready: true,
@@ -4109,7 +4109,7 @@ mod draw_partition_tests {
             QuadCoord::ROOT,
             TileSlot {
                 entity: tile,
-                gen: 0,
+                r#gen: 0,
                 morph_end: f32::INFINITY,
                 drawn: true,
                 ready: true,
@@ -4414,7 +4414,7 @@ mod draw_partition_tests {
                 *coord,
                 TileSlot {
                     entity: Entity::PLACEHOLDER,
-                    gen: 7,
+                    r#gen: 7,
                     morph_end: 0.0,
                     drawn: true,
                     ready: true,
@@ -4425,7 +4425,7 @@ mod draw_partition_tests {
         let not_bound = *cover.iter().next().expect("cover has four leaves");
         tiles.tiles.get_mut(&not_bound).unwrap().ready = false;
         let stale = *cover.iter().nth(1).expect("cover has four leaves");
-        tiles.tiles.get_mut(&stale).unwrap().gen = 6;
+        tiles.tiles.get_mut(&stale).unwrap().r#gen = 6;
 
         let status = selected_cover_status(&tiles, 7);
         assert_eq!(status.wanted, 4);
@@ -4436,7 +4436,7 @@ mod draw_partition_tests {
         );
 
         tiles.tiles.get_mut(&not_bound).unwrap().ready = true;
-        tiles.tiles.get_mut(&stale).unwrap().gen = 7;
+        tiles.tiles.get_mut(&stale).unwrap().r#gen = 7;
         let status = selected_cover_status(&tiles, 7);
         assert_eq!(status.resident, status.wanted);
         assert!(status.complete);

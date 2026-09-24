@@ -39,28 +39,29 @@ pub mod view;
 pub mod viz;
 
 #[cfg(feature = "ui")]
-pub use kinds::line_plot::{LinePlot, LINE_PLOT_KIND};
+pub use kinds::line_plot::{LINE_PLOT_KIND, LinePlot};
 #[cfg(feature = "ui")]
 pub use lunco_viz_core::VizId;
 #[cfg(feature = "ui")]
-pub use panel::{VizPanel, VIZ_PANEL_KIND};
+pub use panel::{VIZ_PANEL_KIND, VizPanel};
 #[cfg(feature = "ui")]
 pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
 pub use signal::{
+    PersistedSignalRef, ScalarHistory, ScalarSample, SignalExposure, SignalMeta,
+    SignalPresentation, SignalRef, SignalRegistry, SignalType, TelemetryFocus,
     compact_channel_label, display_channel_label, humanize_identifier, operator_channel_label,
-    operator_identifier_label, PersistedSignalRef, ScalarHistory, ScalarSample, SignalExposure,
-    SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalType, TelemetryFocus,
+    operator_identifier_label,
 };
 #[cfg(feature = "ui")]
 pub use telemetry_browser::{
-    bind_dropped_channel, drain_plot_drops, plot_node_at, ChannelDragPayload, PlotDropRequest,
-    SetTelemetryBrowserView, TelemetryBrowserPanel, TelemetryBrowserView, TelemetryDisplaySettings,
-    TELEMETRY_BROWSER_PANEL_ID,
+    ChannelDragPayload, PlotDropRequest, SetTelemetryBrowserView, TELEMETRY_BROWSER_PANEL_ID,
+    TelemetryBrowserPanel, TelemetryBrowserView, TelemetryDisplaySettings, bind_dropped_channel,
+    drain_plot_drops, plot_node_at,
 };
 #[cfg(feature = "ui")]
 pub use telemetry_sparkline::{
-    cached_telemetry_sparkline_stats, render_telemetry_sparkline, telemetry_history_stats,
-    TelemetrySparklineOptions, TelemetrySparklineStats,
+    TelemetrySparklineOptions, TelemetrySparklineStats, cached_telemetry_sparkline_stats,
+    render_telemetry_sparkline, telemetry_history_stats,
 };
 #[cfg(feature = "ui")]
 pub use view::{Panel2DCtx, ViewKind, ViewTarget};

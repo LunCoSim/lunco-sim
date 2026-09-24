@@ -423,9 +423,11 @@ mod tests {
         assert!(validation.is_valid(), "{validation:?}");
         assert_eq!(validation.generation, 0);
         assert_eq!(validation.affected_paths, vec!["/Assembly/Chassis"]);
-        assert!(!document
-            .authored_prim_exists(&LayerId::root(), "/Assembly/Chassis")
-            .unwrap());
+        assert!(
+            !document
+                .authored_prim_exists(&LayerId::root(), "/Assembly/Chassis")
+                .unwrap()
+        );
     }
 
     #[test]
@@ -437,10 +439,12 @@ mod tests {
 
         let stale = validate_proposal(&document, UsdEditScope::Assembly, 1, &[add_prim("Chassis")]);
         assert!(!stale.is_valid());
-        assert!(stale
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("stale document")));
+        assert!(
+            stale
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("stale document"))
+        );
 
         let runtime = UsdOp::AddPrim {
             edit_target: LayerId::runtime(),
@@ -452,10 +456,12 @@ mod tests {
         };
         let runtime_plan = validate_proposal(&document, UsdEditScope::Assembly, 0, &[runtime]);
         assert!(!runtime_plan.is_valid());
-        assert!(runtime_plan
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("@root@")));
+        assert!(
+            runtime_plan
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("@root@"))
+        );
     }
 
     #[test]
@@ -488,10 +494,12 @@ mod tests {
             &[instance_override],
         );
         assert!(!source.is_valid());
-        assert!(source
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("InstanceOverride")));
+        assert!(
+            source
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("InstanceOverride"))
+        );
     }
 
     #[test]

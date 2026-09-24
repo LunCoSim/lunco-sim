@@ -41,13 +41,13 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlo
 use lunco_doc::DocumentId;
 use lunco_modelica_ui_core::FocusDocumentByName;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_document::document::{LayerId, UsdOp};
 use lunco_usd_viewport_core::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 
 use projection::{
-    build_scene, collect_graph, project_schema, schema_roots, PrimNode, UsdPrimNodeData,
-    UsdWireData, Wire, WireKind, EDGE_KIND, NODE_KIND,
+    EDGE_KIND, NODE_KIND, PrimNode, UsdPrimNodeData, UsdWireData, Wire, WireKind, build_scene,
+    collect_graph, project_schema, schema_roots,
 };
 
 pub use lunco_usd_ui::USD_CONNECTION_CANVAS_PANEL_ID as USD_CANVAS_PANEL_ID;

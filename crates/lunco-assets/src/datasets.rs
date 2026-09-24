@@ -13,8 +13,8 @@ use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_datasets::AssetEntry;
 use lunco_assets_datasets::{
-    dataset_failed, CancelDataset, DatasetEntry, DatasetInstalled, DatasetRegistry, DatasetScope,
-    DatasetScopeRemoved, DatasetState, ProcessDataset, RequestDataset,
+    CancelDataset, DatasetEntry, DatasetInstalled, DatasetRegistry, DatasetScope,
+    DatasetScopeRemoved, DatasetState, ProcessDataset, RequestDataset, dataset_failed,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_command_contracts::OpId;
@@ -238,7 +238,7 @@ fn spawn_download(
 ) -> bevy::tasks::Task<DatasetState> {
     use std::sync::atomic::Ordering;
 
-    use lunco_assets_download::download::{download_asset_with_control, DownloadControl};
+    use lunco_assets_download::download::{DownloadControl, download_asset_with_control};
 
     let key = entry.key.clone();
     let spec = entry.spec.clone();

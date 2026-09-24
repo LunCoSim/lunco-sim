@@ -204,9 +204,21 @@ fn test_tile_positions_match_grid_decomposition() {
                 let reassembled =
                     grid.grid_position_double(&cell, &Transform::from_translation(local));
                 let error = (reassembled - tile_center).length();
-                assert!(error < 0.01,
+                assert!(
+                    error < 0.01,
                     "Face {} tile [{},{}] grid decomposition error: {:.4} (center={:?}, cell=({},{},{}), local=({},{},{}))",
-                    face, tile_i, tile_j, error, tile_center, cell.x, cell.y, cell.z, local.x, local.y, local.z);
+                    face,
+                    tile_i,
+                    tile_j,
+                    error,
+                    tile_center,
+                    cell.x,
+                    cell.y,
+                    cell.z,
+                    local.x,
+                    local.y,
+                    local.z
+                );
             }
         }
     }

@@ -18,8 +18,8 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(clippy::disallowed_methods))]
 
 use lunco_assets_datasets::{
-    entry_artifact_path, entry_dest_path, installed_destination_present, processed_output_present,
-    AssetEntry, AssetManifest,
+    AssetEntry, AssetManifest, entry_artifact_path, entry_dest_path, installed_destination_present,
+    processed_output_present,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_download::download;
@@ -456,12 +456,18 @@ fn print_usage() {
     println!(
         "  cargo run -p lunco-assets -- download --bundle TARGET  Download package-declared assets"
     );
-    println!("  cargo run -p lunco-assets -- download -t DIR       Download a Twin folder's assets (into the Twin)");
-    println!("  cargo run -p lunco-assets -- download -t DIR -a KEY  Download one Twin asset by key (skips the rest)");
+    println!(
+        "  cargo run -p lunco-assets -- download -t DIR       Download a Twin folder's assets (into the Twin)"
+    );
+    println!(
+        "  cargo run -p lunco-assets -- download -t DIR -a KEY  Download one Twin asset by key (skips the rest)"
+    );
     println!(
         "  cargo run -p lunco-assets -- process  -t DIR -a KEY  Process one Twin asset by key"
     );
-    println!("  cargo run -p lunco-assets -- process  -t DIR --quality coarse   Quick-start bake (¼ resolution; re-run with `good` for full)");
+    println!(
+        "  cargo run -p lunco-assets -- process  -t DIR --quality coarse   Quick-start bake (¼ resolution; re-run with `good` for full)"
+    );
     println!("  cargo run -p lunco-assets -- process               Process all downloaded assets");
     println!("  cargo run -p lunco-assets -- process -g GROUP      Process one manifest group");
     println!("  cargo run -p lunco-assets -- process  -t DIR       Process a Twin folder's assets");
@@ -472,10 +478,18 @@ fn print_usage() {
     println!();
     println!("Process kinds (in an Assets.toml [name.process] section):");
     println!("  kind = \"texture\"  resize/re-encode an image (PNG/JPEG/TIFF/...) [default]");
-    println!("  kind = \"gltf\"     normalize Draco geometry in a .glb (WebP extension conversion pending)");
-    println!("  kind = \"dem\"      crop a square georeferenced float32 heightmap from a raw DTM (GeoTIFF or PDS3 .IMG)");
-    println!("  kind = \"map\"      crop a co-registered ortho/shade/slope raster to the same ROI as an 8-bit PNG layer map");
-    println!("  kind = \"albedo\"   bake a stable material albedo from a calibrated raster or illumination-bearing orthophoto");
+    println!(
+        "  kind = \"gltf\"     normalize Draco geometry in a .glb (WebP extension conversion pending)"
+    );
+    println!(
+        "  kind = \"dem\"      crop a square georeferenced float32 heightmap from a raw DTM (GeoTIFF or PDS3 .IMG)"
+    );
+    println!(
+        "  kind = \"map\"      crop a co-registered ortho/shade/slope raster to the same ROI as an 8-bit PNG layer map"
+    );
+    println!(
+        "  kind = \"albedo\"   bake a stable material albedo from a calibrated raster or illumination-bearing orthophoto"
+    );
     println!("  kind = \"normalmap\" derive a world-space normal-map PNG from a DTM crop");
     println!();
     println!("Examples:");

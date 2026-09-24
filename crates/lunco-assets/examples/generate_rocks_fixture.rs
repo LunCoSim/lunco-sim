@@ -15,7 +15,7 @@
 use std::{env, fs::File, path::PathBuf};
 
 use lunco_geotiff::{GeoTransform, LunarFrame};
-use tiff::encoder::{colortype, TiffEncoder};
+use tiff::encoder::{TiffEncoder, colortype};
 
 const SAMPLE_SIDE: usize = 257;
 const TERRAIN_SIDE_M: f64 = 1_000.0;

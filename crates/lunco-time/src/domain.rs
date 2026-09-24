@@ -34,7 +34,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 use crate::{CelestialTime, TransportMode, WorldTime};
 
@@ -1393,7 +1393,7 @@ mod tests {
     #[test]
     fn control_animation_pauses_seeks_and_rates_independently() {
         let mut pb = Playback::default(); // playing, head 0, rate 1
-                                          // Pause only.
+        // Pause only.
         apply_control_animation(
             &mut pb,
             &ControlAnimation {

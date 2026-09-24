@@ -6,10 +6,10 @@
 //! from the replicated spec alone.
 
 use bevy::math::Vec2;
-use rand::seq::SliceRandom;
 use rand::RngExt;
-use rand_chacha::rand_core::SeedableRng;
+use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
+use rand_chacha::rand_core::SeedableRng;
 
 use crate::spec::{Pattern, SizeDist};
 

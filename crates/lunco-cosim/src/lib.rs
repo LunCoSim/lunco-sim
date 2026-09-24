@@ -554,10 +554,12 @@ mod binding_lifecycle_tests {
             .world()
             .resource::<lunco_port_core::ports::PortRegistry>()
             .clone();
-        assert!(registry
-            .entity_ports(app.world(), entity)
-            .iter()
-            .all(|port| port.name != "position_x" || port.direction != PortDirection::In));
+        assert!(
+            registry
+                .entity_ports(app.world(), entity)
+                .iter()
+                .all(|port| port.name != "position_x" || port.direction != PortDirection::In)
+        );
 
         *app.world_mut()
             .get_mut::<lunco_core::Mobility>(entity)
@@ -569,10 +571,12 @@ mod binding_lifecycle_tests {
             .resource::<lunco_port_core::ports::PortTopologyRevision>()
             .0;
         assert_ne!(after_transition, before_transition);
-        assert!(registry
-            .entity_ports(app.world(), entity)
-            .iter()
-            .any(|port| { port.name == "position_x" && port.direction == PortDirection::In }));
+        assert!(
+            registry
+                .entity_ports(app.world(), entity)
+                .iter()
+                .any(|port| { port.name == "position_x" && port.direction == PortDirection::In })
+        );
     }
 
     #[test]
@@ -597,10 +601,12 @@ mod binding_lifecycle_tests {
             .resource::<lunco_port_core::ports::PortTopologyRevision>()
             .0;
         let initial_key = registry.entity_port_topology_key(app.world(), entity);
-        assert!(registry
-            .entity_ports(app.world(), entity)
-            .iter()
-            .any(|port| port.name == "position_x"));
+        assert!(
+            registry
+                .entity_ports(app.world(), entity)
+                .iter()
+                .any(|port| port.name == "position_x")
+        );
 
         app.world_mut()
             .entity_mut(entity)
@@ -616,10 +622,12 @@ mod binding_lifecycle_tests {
             initial_key,
             "a backing-component removal must change the cached candidate key"
         );
-        assert!(!registry
-            .entity_ports(app.world(), entity)
-            .iter()
-            .any(|port| port.name == "position_x"));
+        assert!(
+            !registry
+                .entity_ports(app.world(), entity)
+                .iter()
+                .any(|port| port.name == "position_x")
+        );
 
         app.world_mut()
             .entity_mut(entity)
@@ -635,10 +643,12 @@ mod binding_lifecycle_tests {
             initial_key,
             "restoring the same structural surface must restore the same key"
         );
-        assert!(registry
-            .entity_ports(app.world(), entity)
-            .iter()
-            .any(|port| port.name == "position_x"));
+        assert!(
+            registry
+                .entity_ports(app.world(), entity)
+                .iter()
+                .any(|port| port.name == "position_x")
+        );
 
         app.world_mut()
             .get_mut::<avian3d::prelude::Position>(entity)
@@ -663,10 +673,12 @@ mod binding_lifecycle_tests {
             .resource::<lunco_port_core::ports::PortTopologyRevision>()
             .0;
         assert_ne!(after_second_remove, after_position);
-        assert!(!registry
-            .entity_ports(app.world(), entity)
-            .iter()
-            .any(|port| port.name == "position_x"));
+        assert!(
+            !registry
+                .entity_ports(app.world(), entity)
+                .iter()
+                .any(|port| port.name == "position_x")
+        );
     }
 
     #[test]
@@ -843,10 +855,11 @@ mod binding_lifecycle_tests {
         app.update();
         app.update();
 
-        assert!(app
-            .world()
-            .get::<lunco_port_core::PortSurfaceReady>(actuator)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<lunco_port_core::PortSurfaceReady>(actuator)
+                .is_some()
+        );
         assert!(app.world().get::<BoundConnection>(edge).is_some());
     }
 
@@ -929,10 +942,11 @@ mod binding_lifecycle_tests {
             app.world().get::<EndpointLifecycle>(entity),
             Some(&EndpointLifecycle::Ready)
         );
-        assert!(app
-            .world()
-            .get::<lunco_port_core::PortSurfaceReady>(entity)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<lunco_port_core::PortSurfaceReady>(entity)
+                .is_some()
+        );
     }
 
     #[test]
@@ -973,10 +987,11 @@ mod binding_lifecycle_tests {
         assert!(diagnostics.broken.is_empty());
         assert!(diagnostics.faults.is_empty());
         assert!(diagnostics.landed.is_empty());
-        assert!(app
-            .world_mut()
-            .resource_mut::<CosimDiagnostics>()
-            .report_once("target:entity:0:drive_left"));
+        assert!(
+            app.world_mut()
+                .resource_mut::<CosimDiagnostics>()
+                .report_once("target:entity:0:drive_left")
+        );
         assert!(app.world().resource::<PortHolds>().is_empty());
         assert!(!app.world().resource::<ControlWriteFence>().blocks(entity));
         assert!(!app.world().resource::<BindingRevision>().pending());

@@ -34,11 +34,11 @@ use avian3d::prelude::{
 use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3, Dir3};
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_spatial::coords::{GridPos, GridRot};
-use lunco_terrain_core::{quantize, HeightSource};
+use lunco_terrain_core::{HeightSource, quantize};
 use serde::{Deserialize, Serialize};
 
 use crate::band::SurfaceBand;

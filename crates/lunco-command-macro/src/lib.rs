@@ -45,8 +45,8 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
-    parse_macro_input, parse_quote, punctuated::Punctuated, Data, DeriveInput, Field, Fields,
-    Ident, ItemFn, Path, Token,
+    Data, DeriveInput, Field, Fields, Ident, ItemFn, Path, Token, parse_macro_input, parse_quote,
+    punctuated::Punctuated,
 };
 
 // ── #[Command] — struct attribute ─────────────────────────────────────────
@@ -137,13 +137,13 @@ pub fn Command(attr: TokenStream, item: TokenStream) -> TokenStream {
                     "Command requires named fields, e.g. `pub struct Foo { bar: u32 }`",
                 )
                 .to_compile_error()
-                .into()
+                .into();
             }
         },
         _ => {
             return syn::Error::new_spanned(&input, "Command can only be used on structs")
                 .to_compile_error()
-                .into()
+                .into();
         }
     };
 

@@ -1,7 +1,7 @@
 [package]
 name = "lunco-workbench-core"
 version = "0.1.0-dev"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Renderer-independent contracts and read models for LunCoSim workbench panels and perspectives"
 

@@ -1,8 +1,8 @@
-use bevy::prelude::{error, Quat, Vec3};
+use bevy::prelude::{Quat, Vec3, error};
 use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::stage_convention;
 use openusd::schemas::geom::tokens;
-use openusd::schemas::physics::{tokens as physics_tokens, CollisionApprox};
+use openusd::schemas::physics::{CollisionApprox, tokens as physics_tokens};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
@@ -429,7 +429,7 @@ fn read_int_array(reader: &dyn UsdReadObject, path: &SdfPath, attr: &str) -> Opt
 
 #[cfg(test)]
 mod primitive_attribute_tests {
-    use super::{read_shape_dims, ShapeDims};
+    use super::{ShapeDims, read_shape_dims};
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use openusd::sdf::Path as SdfPath;
 
@@ -475,24 +475,30 @@ def Xform "World"
             read_shape_dims(&reader, &SdfPath::new("/World/Default").unwrap(), "Sphere"),
             Some(ShapeDims::Sphere { radius: 1.0 })
         );
-        assert!(read_shape_dims(
-            &reader,
-            &SdfPath::new("/World/Negative").unwrap(),
-            "Cylinder"
-        )
-        .is_none());
-        assert!(read_shape_dims(
-            &reader,
-            &SdfPath::new("/World/WrongType").unwrap(),
-            "Cylinder"
-        )
-        .is_none());
-        assert!(read_shape_dims(
-            &reader,
-            &SdfPath::new("/World/BadAxis").unwrap(),
-            "Cylinder"
-        )
-        .is_none());
+        assert!(
+            read_shape_dims(
+                &reader,
+                &SdfPath::new("/World/Negative").unwrap(),
+                "Cylinder"
+            )
+            .is_none()
+        );
+        assert!(
+            read_shape_dims(
+                &reader,
+                &SdfPath::new("/World/WrongType").unwrap(),
+                "Cylinder"
+            )
+            .is_none()
+        );
+        assert!(
+            read_shape_dims(
+                &reader,
+                &SdfPath::new("/World/BadAxis").unwrap(),
+                "Cylinder"
+            )
+            .is_none()
+        );
     }
 }
 
@@ -550,7 +556,7 @@ mod stage_metrics_import_tests {
     //! (`docs/architecture/41-axes-and-units.md`: "convert once, at the
     //! importer"). These tests pin the authored Z-up/centimetre input contract
     //! and its canonical SI Y-up output.
-    use super::{read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, UsdGeomAxis};
+    use super::{ShapeDims, UsdGeomAxis, read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat};
     use bevy::prelude::{Quat, Vec3};
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_bevy_stage::{local_transform_at, stage_convention};
@@ -715,9 +721,11 @@ def Xform "World"
         let __cs = parse(YUP_M);
         let reader = __cs.view();
         let tower = SdfPath::new("/World/Tower").unwrap();
-        assert!(stage_convention(&reader)
-            .expect("valid stage convention")
-            .is_identity());
+        assert!(
+            stage_convention(&reader)
+                .expect("valid stage convention")
+                .is_identity()
+        );
         let tf = local_transform_at(&reader, &tower, 0.0).unwrap().unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(1.0, 3.0, 0.0), 1e-6));
         assert!(tf.rotation.abs_diff_eq(Quat::IDENTITY, 1e-6));

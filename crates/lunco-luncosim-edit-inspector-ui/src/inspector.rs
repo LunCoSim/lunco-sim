@@ -27,7 +27,7 @@ use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::PbrLook;
 use lunco_scene_command_contracts::{DeleteEntity, MoveEntity};
 
-use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
+use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 use lunco_physics::joint::JOINT_ANGLE_PORT;
 
 use lunco_scene_selection::SelectedEntities;

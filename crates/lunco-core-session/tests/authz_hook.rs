@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use lunco_command_contracts::SessionId;
 use lunco_core_session::{
-    authorize, AuthorityRole, CommandPolicyRegistry, ControlPathRegistry, SessionRbac,
-    SessionRegistry, UserSession, AUTHORIZE_HOOK,
+    AUTHORIZE_HOOK, AuthorityRole, CommandPolicyRegistry, ControlPathRegistry, SessionRbac,
+    SessionRegistry, UserSession, authorize,
 };
 use lunco_hooks::{HookError, HookResult, HookValue, RegisteredHook, ScriptHook};
 

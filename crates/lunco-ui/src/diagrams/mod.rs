@@ -15,4 +15,4 @@
 
 pub mod time_series;
 
-pub use time_series::{time_series_plot, ChartSeries};
+pub use time_series::{ChartSeries, time_series_plot};

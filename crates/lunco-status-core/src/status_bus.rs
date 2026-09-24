@@ -33,8 +33,8 @@
 //! saw and skip the DOM/UI update when nothing moved.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use bevy::prelude::*;
 use web_time::Instant;

@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryResult};
-use lunco_api_core::{api_value, ApiValue};
+use lunco_api_core::{ApiValue, api_value};
 use lunco_cosim_core::CosimDiagnostics;
 
 /// `GetBrokenConnections` — backs `GET /api/diagnostics`. Reports the co-sim

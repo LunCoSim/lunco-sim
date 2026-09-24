@@ -18,7 +18,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use std::collections::HashMap;
 
-use lunco_modelica_index::visual_diagram::{library_class_library, VisualDiagram};
+use lunco_modelica_index::visual_diagram::{VisualDiagram, library_class_library};
 
 fn resolved_engine_class_entry(
     qualified: &str,
@@ -163,11 +163,7 @@ fn canonical_edge_key(
     // Sort the pair so the two orderings hash to the same key.
     let a = (a_inst.to_string(), a_port.to_string());
     let b = (b_inst.to_string(), b_port.to_string());
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 /// Default cap for the "don't project absurdly huge models" guard.
@@ -273,7 +269,7 @@ pub fn import_model_to_diagram_from_ast(
                 None => {
                     return Err(
                         "the Modelica source contains no diagrammable class to display".into(),
-                    )
+                    );
                 }
             }
         }
@@ -1362,8 +1358,8 @@ fn classify_connector(
     Vec<lunco_modelica_index::visual_diagram::FlowVarMeta>,
 ) {
     use lunco_modelica_index::visual_diagram::{FlowVarMeta, PortKind};
-    use rumoca_compile::parsing::ast::Connection;
     use rumoca_compile::parsing::Causality;
+    use rumoca_compile::parsing::ast::Connection;
 
     // Short-form type alias (`connector X = input Real`) — causality
     // is on the class itself, no components to walk.
@@ -1444,7 +1440,7 @@ fn classify_connector(
 // single resolve-class site.
 
 fn connector_icon_color(class: &rumoca_compile::parsing::ast::ClassDef) -> Option<[u8; 3]> {
-    use lunco_modelica_ast::annotations::{extract_icon, GraphicItem};
+    use lunco_modelica_ast::annotations::{GraphicItem, extract_icon};
     let icon = extract_icon(&class.annotation)?;
     for g in &icon.graphics {
         let (line, fill) = match g {
@@ -1478,9 +1474,9 @@ fn eval_condition(
     expr: &rumoca_compile::parsing::ast::Expression,
     params_map: &std::collections::HashMap<&str, &rumoca_compile::parsing::ast::Component>,
 ) -> bool {
+    use rumoca_compile::parsing::OpBinary;
     use rumoca_compile::parsing::ast::Expression;
     use rumoca_compile::parsing::ir_core::OpUnary;
-    use rumoca_compile::parsing::OpBinary;
     match expr {
         Expression::Terminal { token, .. } => {
             // Accept any terminal whose text reads "true"/"false"; the

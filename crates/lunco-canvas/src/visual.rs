@@ -329,7 +329,7 @@ impl EdgeVisual for PlaceholderEdgeVisual {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{empty_node_data, Port, PortId};
+    use crate::scene::{Port, PortId, empty_node_data};
 
     fn mk_node() -> Node {
         Node {

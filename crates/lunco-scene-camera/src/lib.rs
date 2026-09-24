@@ -12,7 +12,7 @@
 use bevy::prelude::*;
 use big_space::prelude::Grid;
 use lunco_camera_core::{CameraPoseMode, SetCameraLookAt};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_render::SceneCamera;
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -278,10 +278,11 @@ mod tests {
             app.world().get::<CameraPoseMode>(avatar),
             Some(&CameraPoseMode::Explicit)
         );
-        assert!(app
-            .world()
-            .get::<lunco_camera_core::CameraPoseLock>(avatar)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<lunco_camera_core::CameraPoseLock>(avatar)
+                .is_some()
+        );
     }
 }
 

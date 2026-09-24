@@ -38,15 +38,15 @@ use lunco_render::SceneCamera;
 use lunco_time::{AnimationPreview, Playback, ResolvedDomains, TimeBinding, WorldTime};
 
 use crate::camera_switch::{
-    resolve_named_camera, ActivateCamera, CameraSelectionOwner, CameraSelectionStatus,
-    ViewportCameraSelection,
+    ActivateCamera, CameraSelectionOwner, CameraSelectionStatus, ViewportCameraSelection,
+    resolve_named_camera,
 };
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_usd_bevy_stage::canonical::CanonicalStages;
 use lunco_usd_bevy_stage::read::{
     attr_has_time_samples, read_token_timesamples, stage_time_codes_per_second,
 };
-use lunco_usd_bevy_stage::UsdStageAsset;
 use openusd::sdf::Path as SdfPath;
 
 /// The token channel a camera track keys: which camera is live over time.

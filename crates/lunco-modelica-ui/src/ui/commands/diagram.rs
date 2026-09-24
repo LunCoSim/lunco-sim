@@ -1,7 +1,7 @@
 //! Diagram-specific commands: MoveComponent and AddCanvasPlot.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 

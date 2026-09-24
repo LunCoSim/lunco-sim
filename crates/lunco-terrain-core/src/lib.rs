@@ -43,8 +43,8 @@ pub mod transfer;
 pub use carve::{CarveField, CarvePrimitive};
 pub use collider::{prepare_collider_heights, slope_limit_grid};
 pub use crater::{
-    crater_profile, crater_profile_rim_limited, Crater, CraterField, Craters,
-    ANALYTIC_RADIUS_FLOOR_M, CRATER_REACH, MAX_CRATERS_PER_HA,
+    ANALYTIC_RADIUS_FLOOR_M, CRATER_REACH, Crater, CraterField, Craters, MAX_CRATERS_PER_HA,
+    crater_profile, crater_profile_rim_limited,
 };
 pub use error::measure_node_error;
 // `FieldKind` is NOT re-exported: it has no definition (optimization removed it as dead
@@ -53,16 +53,16 @@ pub use derive::{
     albedo_map, ao_map, hazard_from_slope, los_hit, normal_map, normal_slope_maps,
     pack_normal_rgba8, pack_surface_rgba8, roughness_from_slope, slope_map, upsample_bilinear,
 };
-pub use field::{field_map, AspectField, ElevationField, SlopeField, SurfaceField};
+pub use field::{AspectField, ElevationField, SlopeField, SurfaceField, field_map};
 pub use modifier::{
     BodyCurvature, BrushModifier, FlattenModifier, HeightModifier, LayeredHeightSource,
 };
 pub use overzoom::Overzoom;
 pub use quadtree::{QuadCoord, Quadtree, Selected, Square};
-pub use quantize::{quantize, QuantizedHeightSource};
+pub use quantize::{QuantizedHeightSource, quantize};
 pub use source::{
-    normal_at_bounded, AnalyticHeightSource, BoundedHeightSource, CompositeHeightSource,
-    HeightSource,
+    AnalyticHeightSource, BoundedHeightSource, CompositeHeightSource, HeightSource,
+    normal_at_bounded,
 };
 pub use tile::{TileCoord, TileGrid};
-pub use transfer::{hazard_color, Rgba, TransferFn, HAZARD_CLIFF, HAZARD_SAFE, HAZARD_WARN};
+pub use transfer::{HAZARD_CLIFF, HAZARD_SAFE, HAZARD_WARN, Rgba, TransferFn, hazard_color};

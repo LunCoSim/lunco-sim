@@ -1,7 +1,7 @@
 //! Public integration coverage for the shared USD BasisCurves evaluator.
 
 use bevy_math::Vec3;
-use lunco_usd_geometry::curve::{eval_curve, eval_curve_tangent, CurveBasis};
+use lunco_usd_geometry::curve::{CurveBasis, eval_curve, eval_curve_tangent};
 
 fn ring() -> Vec<Vec3> {
     // Four points on a radius-1 circle in the XZ plane.

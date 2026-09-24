@@ -32,8 +32,7 @@ impl std::fmt::Display for StageDependencyDiagnostic {
             formatter,
             "USD composition dependency `{}` referenced by `{}` was not found; the available parts \
              were loaded, but this authored arc remains unresolved",
-            self.dependency,
-            self.referring_layer
+            self.dependency, self.referring_layer
         )
     }
 }

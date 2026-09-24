@@ -4,7 +4,7 @@
 //! Each rule's *helper-level* contract pins here; observer wiring is
 //! exercised in single-file harness tests where Bevy is required.
 
-use lunco_modelica_ui::ui::wasm_autosave::{should_autosave, IsGestureActive};
+use lunco_modelica_ui::ui::wasm_autosave::{IsGestureActive, should_autosave};
 
 // ─────────────────────────────────────────────────────────────────────
 // R3 — mode-switch flush. Helper-level: the *condition* under which

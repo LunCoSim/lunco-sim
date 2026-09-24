@@ -50,10 +50,11 @@
 //! - **Command palette** — `Ctrl+P` unbound.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-use egui_dock::{widgets::tab_viewer::OnCloseResponse, DockArea, Style, TabViewer};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use egui_dock::{DockArea, Style, TabViewer, widgets::tab_viewer::OnCloseResponse};
 use lunco_core::{on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
+use lunco_workbench_core::WorkbenchPanelAppExt;
 use lunco_workbench_core::commands::{CloseTab, FocusPanel, OpenTab, OpenTabPreserveFocus};
 use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
@@ -61,14 +62,13 @@ use lunco_workbench_core::scene_pick::ScenePickGate;
 use lunco_workbench_core::tabs::PendingTabCloses;
 use lunco_workbench_core::uri::UriRegistry;
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
-use lunco_workbench_core::WorkbenchPanelAppExt;
 use lunco_workbench_core::{
     ApplicationOverlayRenderSet, InstancePanel, MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup,
     PanelRenderTarget, PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, Perspective, PerspectiveId,
     TabId, UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchPanelRegistry, WorkbenchRenderSet,
     WorkbenchSnapshot,
 };
-use lunco_workbench_widgets::{icon_button_sized, text_editor, UiIcon};
+use lunco_workbench_widgets::{UiIcon, icon_button_sized, text_editor};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -82,12 +82,12 @@ use lunco_workbench_layout::sanitize_dock_fractions;
 pub(crate) use lunco_workbench_layout::{WorkbenchLayout, WorkbenchLayoutStateProvider};
 pub use render::menu_popup_max_width;
 pub(crate) use render::{
-    dock_group_rects, measured_menu_row_width, measured_titlebar_right_width, menu_item,
-    needs_full_backdrop, new_document_menu_label, perspective_help_anchor,
-    perspective_switcher_tabs, publish_panel_anchor, render_custom_menus, render_edit_menu,
-    render_help_menu, render_network_menu, render_panel_solo, render_settings_menu,
-    render_status_bar_inner, render_time_menu, run_menu_callback, scene_camera_is_rendering,
-    top_menu_mode, truncate_title_to_width, PanelTabViewer, TopMenuMode,
+    PanelTabViewer, TopMenuMode, dock_group_rects, measured_menu_row_width,
+    measured_titlebar_right_width, menu_item, needs_full_backdrop, new_document_menu_label,
+    perspective_help_anchor, perspective_switcher_tabs, publish_panel_anchor, render_custom_menus,
+    render_edit_menu, render_help_menu, render_network_menu, render_panel_solo,
+    render_settings_menu, render_status_bar_inner, render_time_menu, run_menu_callback,
+    scene_camera_is_rendering, top_menu_mode, truncate_title_to_width,
 };
 use render::{
     register_graphics_settings_menu, register_workbench_appearance_settings_menu, render_workbench,

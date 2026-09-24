@@ -259,23 +259,6 @@ fn build_modelica_core(app: &mut App) {
         app.add_plugins(lunco_modelica_runtime::ModelicaSourceAssetPlugin);
     }
 
-    if let Some(library) = lunco_modelica_library::source_library::source_library_root_path() {
-        std::env::set_var("MODELICAPATH", library.to_string_lossy().to_string());
-    }
-
-    // Point rumoca at the workspace's shared `.cache/rumoca/`, the same one
-    // the Modelica asset indexer uses. Honor an externally-set
-    // `RUMOCA_CACHE_DIR` when the caller wants a sandboxed location (CI, tests).
-    #[cfg(not(target_arch = "wasm32"))]
-    if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
-        let target = lunco_assets_core::cache_dir().join("rumoca");
-        std::env::set_var("RUMOCA_CACHE_DIR", &target);
-        log::info!(
-            "[ModelicaCore] using rumoca cache at {} (set RUMOCA_CACHE_DIR to override)",
-            target.display(),
-        );
-    }
-
     // ── Document foundation (moved out of the UI plugin so a headless server
     // journals + replicates Modelica edits, not just the GUI) ──────────────
     // The registry (source-of-truth for open `.mo` docs), the A3 journal-wire
@@ -305,7 +288,7 @@ fn build_modelica_core(app: &mut App) {
 // ---------------------------------------------------------------------------
 // Re-export diagram types for public API
 // ---------------------------------------------------------------------------
-pub use diagram::{list_class_names, DiagramType, ModelicaComponentBuilder};
+pub use diagram::{DiagramType, ModelicaComponentBuilder, list_class_names};
 
 #[derive(Component, Reflect, Default)]
 pub struct ModelicaInput {

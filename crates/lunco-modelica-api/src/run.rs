@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use lunco_command_contracts::{Ack, OpId};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_experiments::{ExperimentRegistry, ExperimentRunner, ModelRef, RunBounds, TwinId};

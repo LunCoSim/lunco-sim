@@ -5,7 +5,7 @@
 //! language-neutral scripting package's optional Python source boundary small.
 
 #[cfg(feature = "python")]
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 #[cfg(feature = "python")]
 use bevy::prelude::*;
 

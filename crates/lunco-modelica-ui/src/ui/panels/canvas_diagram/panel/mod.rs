@@ -10,7 +10,7 @@ use bevy_egui::egui;
 use lunco_canvas::Scene;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
-use super::{active_doc_from_world_ctx, CanvasDiagramState, CANVAS_DIAGRAM_PANEL_ID};
+use super::{CANVAS_DIAGRAM_PANEL_ID, CanvasDiagramState, active_doc_from_world_ctx};
 use crate::model_tabs_types::TabRenderContext;
 use projection_sync::{poll_and_swap_projection, trigger_projection_if_needed};
 use render::render_diagram_canvas;

@@ -8,7 +8,7 @@
 
 use bevy::math::{DVec3, Vec3};
 
-use crate::{coords::GridPos, SteeringGeometry};
+use crate::{SteeringGeometry, coords::GridPos};
 
 /// One validated command produced by [`nav_setpoint`].
 #[derive(Clone, Copy, Debug, PartialEq)]

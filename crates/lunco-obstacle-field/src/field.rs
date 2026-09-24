@@ -96,7 +96,7 @@ impl HeightGrid {
         }
         let s = self.spacing();
         let reach = radius * 1.6; // bowl + rim falloff
-                                  // Bounding box of affected samples (clamped to grid).
+        // Bounding box of affected samples (clamped to grid).
         let to_i = |w: f32| -> i32 { ((w + self.half_extent) / s).round() as i32 };
         let min_x = to_i(center.x - reach).max(0);
         let max_x = to_i(center.x + reach).min(self.res as i32 - 1);

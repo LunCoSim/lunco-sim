@@ -140,13 +140,15 @@ mod tests {
 
         assert!(app.is_plugin_added::<AssetPlugin>());
         assert!(app.world().get_resource::<AssetServer>().is_some());
-        assert!(app
-            .world()
-            .get_resource::<Assets<bevy::shader::Shader>>()
-            .is_some());
-        assert!(app
-            .world()
-            .get_resource::<Assets<bevy::image::Image>>()
-            .is_some());
+        assert!(
+            app.world()
+                .get_resource::<Assets<bevy::shader::Shader>>()
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get_resource::<Assets<bevy::image::Image>>()
+                .is_some()
+        );
     }
 }

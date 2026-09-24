@@ -31,8 +31,8 @@
 //! by name, and is repacked the moment the schema lands. That machinery is
 //! untouched.
 
-use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
-use crate::shader_material::{build_shader_material, wgsl_source, ShaderMaterial};
+use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
+use crate::shader_material::{ShaderMaterial, build_shader_material, wgsl_source};
 use bevy::asset::AssetId;
 use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
@@ -41,10 +41,10 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureDimension, TextureFormat};
 use bevy::shader::Shader;
-use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use lunco_materials::{
-    rgba8_mip_chain, validate_shader_stage, ParamSchema, Rgba8MipMode, ShaderLook, ShaderLookBound,
-    ShaderLookKey, ShaderLookReady, ShaderStage, TextureLayer,
+    ParamSchema, Rgba8MipMode, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady,
+    ShaderStage, TextureLayer, rgba8_mip_chain, validate_shader_stage,
 };
 use lunco_render::{ProceduralSkybox, SurfaceAlpha};
 use std::sync::Arc;
@@ -1282,9 +1282,11 @@ mod tests {
         cache.invalidate(id);
         assert!(cache.stage_failures.is_empty());
         assert!(cache.ids_by_path.is_empty());
-        assert!(cache
-            .failure(id, ShaderStage::Fragment, "not a fragment shader")
-            .is_some());
+        assert!(
+            cache
+                .failure(id, ShaderStage::Fragment, "not a fragment shader")
+                .is_some()
+        );
     }
 
     fn material_of(app: &App, e: Entity) -> Handle<ShaderMaterial> {

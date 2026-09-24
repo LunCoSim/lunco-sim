@@ -382,11 +382,7 @@ fn outward_to_dir(v: (f32, f32)) -> Dir {
         return Dir::None;
     }
     if ax >= ay {
-        if v.0 >= 0.0 {
-            Dir::E
-        } else {
-            Dir::W
-        }
+        if v.0 >= 0.0 { Dir::E } else { Dir::W }
     } else if v.1 >= 0.0 {
         Dir::S
     } else {

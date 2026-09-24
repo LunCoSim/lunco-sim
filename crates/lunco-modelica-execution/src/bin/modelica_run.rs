@@ -205,20 +205,6 @@ mod native {
     }
 
     pub(crate) fn main() {
-        // Same one-liner as modelica_library_indexer / ClassCachePlugin: route rumoca's
-        // on-disk cache to the workspace's shared `.cache/rumoca`, so a
-        // run here hits warm bytes from `modelica_library_indexer --warm` and vice
-        // versa. Honors an explicit `RUMOCA_CACHE_DIR` if the user set one.
-        if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
-            let target = lunco_assets_core::cache_dir().join("rumoca");
-            // This happens before the compiler or any worker is created, so
-            // the process-wide cache setting has a single initialization
-            // owner. Rust 2024 requires the environment mutation to be
-            // explicit because concurrent environment access is unsound.
-            unsafe { std::env::set_var("RUMOCA_CACHE_DIR", &target) };
-            eprintln!("[modelica_run] using rumoca cache at {}", target.display());
-        }
-
         let opts = Options::parse();
 
         let t_total = Instant::now();

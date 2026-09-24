@@ -2,7 +2,7 @@
 
 use lunco_api_codec::{value_from_json, value_to_json};
 use lunco_api_contracts::{ApiRequestEnvelope, ApiResponseEnvelope};
-use lunco_api_core::{api_value, ApiErrorCode, ApiRequest, ApiResponse};
+use lunco_api_core::{ApiErrorCode, ApiRequest, ApiResponse, api_value};
 
 /// Decode a transport request into the API runtime's semantic request.
 pub(crate) fn decode_request(envelope: ApiRequestEnvelope) -> Result<ApiRequest, String> {

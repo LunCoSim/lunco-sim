@@ -221,9 +221,11 @@ mod tests {
     fn incompatible_units_fail_explicitly() {
         let length = Unit::new("length", Dimension::LENGTH, 1.0, 0.0).unwrap();
         let time = Unit::new("time", Dimension([0, 0, 1, 0, 0, 0, 0]), 1.0, 0.0).unwrap();
-        assert!(Quantity::with_unit(1.0, length)
-            .unwrap()
-            .value_in(time)
-            .is_err());
+        assert!(
+            Quantity::with_unit(1.0, length)
+                .unwrap()
+                .value_in(time)
+                .is_err()
+        );
     }
 }

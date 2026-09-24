@@ -13,7 +13,7 @@ use lunco_modelica_document::ModelicaOp;
 
 use super::ops::{component_headers, op_remove_component, op_remove_edge};
 use super::palette::{self, PaletteSettings};
-use super::{active_doc_from_world_ctx, CanvasDiagramState};
+use super::{CanvasDiagramState, active_doc_from_world_ctx};
 use crate::model_tabs_types::TabRenderContext;
 
 /// Build a `SetConnectionLine` op from the current edge's waypoints

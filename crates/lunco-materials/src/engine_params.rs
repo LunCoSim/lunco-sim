@@ -36,8 +36,8 @@
 //! fill SKIPS the name. Same rule authored params always have — the author's
 //! opinion is the most specific one.
 
-use crate::dyn_params::{ParamField, ParamType, ParamValue, UiKind};
 use crate::ParamSchema;
+use crate::dyn_params::{ParamField, ParamType, ParamValue, UiKind};
 use std::sync::OnceLock;
 
 /// How the raw USD value of a [`EngineSource::PrimAttr`] parameter is turned

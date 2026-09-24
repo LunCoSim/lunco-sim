@@ -4,9 +4,9 @@ use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_usd_avian::UsdAvianPlugin;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::{
+    UsdStageAsset,
     canonical::{CanonicalStage, CanonicalStages},
     compose::compose_file_to_stage,
-    UsdStageAsset,
 };
 use lunco_usd_sim::UsdSimPlugin;
 

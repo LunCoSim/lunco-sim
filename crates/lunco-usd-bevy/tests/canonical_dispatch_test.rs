@@ -14,8 +14,8 @@
 use bevy::prelude::*;
 use lunco_render::{PbrLook, ProceduralSkybox};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjectionFailed, UsdSceneProjectionQueued};
-use lunco_usd_bevy_stage::canonical::{CanonicalStage, CanonicalStages};
 use lunco_usd_bevy_stage::UsdStageAsset;
+use lunco_usd_bevy_stage::canonical::{CanonicalStage, CanonicalStages};
 use lunco_usd_compose::recipe::StageRecipe;
 
 const SCENE: &str = r#"#usda 1.0
@@ -239,10 +239,11 @@ def Cylinder "Post" {
 }
 "#,
     );
-    assert!(app
-        .world_mut()
-        .non_send_mut::<CanonicalStages>()
-        .rebuild(stage_id, &rebuilt));
+    assert!(
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .rebuild(stage_id, &rebuilt)
+    );
     assert!(
         app.world()
             .non_send::<CanonicalStages>()

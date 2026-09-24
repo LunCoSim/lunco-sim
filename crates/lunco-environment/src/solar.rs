@@ -864,12 +864,13 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<LocalSolar>(probe).is_none());
-        assert!(app
-            .world()
-            .resource::<lunco_core::RuntimeDiagnostics>()
-            .findings
-            .iter()
-            .any(|finding| finding.code == "solar-mount"));
+        assert!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .iter()
+                .any(|finding| finding.code == "solar-mount")
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! hook, so the editor does not acquire waypoint, vehicle, or program policy.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use lunco_scripting_rhai_core::ui_bridge::{ScriptMenuItem, ScriptUiRequest};
 
 #[derive(Clone, Debug)]

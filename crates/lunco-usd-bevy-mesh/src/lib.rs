@@ -12,10 +12,10 @@ use openusd::sdf::Path as SdfPath;
 
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_scene::{
-    read_usd_mesh_points, read_usd_mesh_topology, ShapeDims, UsdPrimPath, UsdStageRevision,
+    ShapeDims, UsdPrimPath, UsdStageRevision, read_usd_mesh_points, read_usd_mesh_topology,
 };
 use lunco_usd_bevy_stage::{
-    canonical::CanonicalStages, read, stage_convention, UsdRead, UsdStageAsset,
+    UsdRead, UsdStageAsset, canonical::CanonicalStages, read, stage_convention,
 };
 
 /// Dimensions are decoded by `lunco-usd-bevy-scene`, the shared owner used by
@@ -147,7 +147,9 @@ pub fn refresh_curve_meshes_on_stage_or_quality_change(
     let profile = match quality.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
-            warn!("[usd-bevy-mesh] invalid Graphics curve quality; retaining current meshes: {reason}");
+            warn!(
+                "[usd-bevy-mesh] invalid Graphics curve quality; retaining current meshes: {reason}"
+            );
             return;
         }
     };
@@ -230,9 +232,9 @@ pub fn build_usd_curve_mesh(
     quality: lunco_render::RenderQualityProfile,
 ) -> Option<Mesh> {
     use bevy::math::DVec3;
-    use lunco_usd_geometry::curve::{eval_curve, CurveBasis};
+    use lunco_usd_geometry::curve::{CurveBasis, eval_curve};
     use lunco_usd_geometry::curve_sweep::sweep_tube;
-    use lunco_usd_geometry::ribbon::{build_ribbon_mesh, RibbonPoint};
+    use lunco_usd_geometry::ribbon::{RibbonPoint, build_ribbon_mesh};
 
     // Canonical-frame points — same conversion the mesh path takes.
     let points = read_usd_mesh_points(reader, path)?;

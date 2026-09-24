@@ -8,7 +8,7 @@
 //! can drift.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 /// Records that an application-level interactive close-flow adapter owns the
 /// non-forced exit path. The adapter sets this when it registers its observer;

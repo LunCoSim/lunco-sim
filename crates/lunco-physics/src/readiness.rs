@@ -234,7 +234,7 @@ impl Plugin for ReadinessEffectPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_readiness::{kinds, ReadinessRegistry, Subject};
+    use lunco_readiness::{ReadinessRegistry, Subject, kinds};
 
     fn app() -> App {
         let mut app = App::new();
@@ -374,10 +374,11 @@ mod tests {
 
         assert!(app.world().entity(body).contains::<RigidBodyDisabled>());
         assert!(app.world().entity(joint).contains::<JointDisabled>());
-        assert!(app
-            .world()
-            .entity(joint)
-            .contains::<FrozenJointForReadiness>());
+        assert!(
+            app.world()
+                .entity(joint)
+                .contains::<FrozenJointForReadiness>()
+        );
 
         app.world_mut()
             .resource_mut::<ReadinessRegistry>()
@@ -386,10 +387,11 @@ mod tests {
 
         assert!(!app.world().entity(body).contains::<RigidBodyDisabled>());
         assert!(!app.world().entity(joint).contains::<JointDisabled>());
-        assert!(!app
-            .world()
-            .entity(joint)
-            .contains::<FrozenJointForReadiness>());
+        assert!(
+            !app.world()
+                .entity(joint)
+                .contains::<FrozenJointForReadiness>()
+        );
     }
 
     /// A world-scoped wait pauses the physics clock through the ordinary hold
@@ -407,10 +409,11 @@ mod tests {
             "scene.usda",
         );
         app.update();
-        assert!(app
-            .world()
-            .resource::<PhysicsHolds>()
-            .holds(PhysicsHolds::READINESS));
+        assert!(
+            app.world()
+                .resource::<PhysicsHolds>()
+                .holds(PhysicsHolds::READINESS)
+        );
 
         app.world_mut()
             .resource_mut::<ReadinessRegistry>()

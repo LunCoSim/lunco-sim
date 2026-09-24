@@ -179,7 +179,7 @@ fn from_hex(s: &str) -> StorageResult<Vec<u8>> {
             _ => {
                 return Err(StorageError::Io(std::io::Error::other(
                     "corrupt localStorage record (non-hex digit)",
-                )))
+                )));
             }
         }
     }

@@ -54,7 +54,7 @@ pub use cycles::{
     RuntimeProducerStamp, RuntimeRoute, RuntimeScope,
 };
 pub use derived::RebuildOnChange;
-pub use events::{trigger_runtime_error, CommandOccurred, RuntimeError, SubsystemStateChanged};
+pub use events::{CommandOccurred, RuntimeError, SubsystemStateChanged, trigger_runtime_error};
 pub use faults::{
     DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics, RuntimeFault, RuntimeFaults,
 };
@@ -62,10 +62,10 @@ pub use identity::Provenance;
 pub use labels::{entity_display_name, humanize_identifier};
 pub use markers::NoSelectionBounds;
 pub use markers::{
-    CatalogEntryId, EmbeddedScenarioPath, EmbeddedScenarioSource, HorizonShadowTerrain,
-    PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams, SunAngularDiameter, TriggerZone,
-    UsdPrimKind, CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG,
-    TRIGGER_COLLISION_LAYER,
+    CELESTIAL_COLLISION_LAYER, CatalogEntryId, EmbeddedScenarioPath, EmbeddedScenarioSource,
+    HorizonShadowTerrain, NON_PHYSICAL_QUERY_LAYERS, PhysicsPoseAuthoritative,
+    SOLAR_ANGULAR_DIAMETER_DEG, ScenarioProgramPrim, ScriptParams, SunAngularDiameter,
+    TRIGGER_COLLISION_LAYER, TriggerZone, UsdPrimKind,
 };
 pub use math::DTransform;
 pub use mobility::Mobility;
@@ -76,7 +76,7 @@ pub use scene::{
     SceneTransitionCoordinator, SceneTransitionFailed, SceneTransitionId, SceneTransitionIntent,
     SceneTransitionRequest, SceneTransitionStarted,
 };
-pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};
+pub use scene_lifecycle::{SceneMountState, SceneTeardown, run_scene_teardown};
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
 //
@@ -94,7 +94,7 @@ pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};
 //   → generates pub fn register_all_commands(app) that wires every
 //     listed observer up. Entries may be bare idents or module paths.
 
-pub use lunco_command_macro::{on_command, register_commands, Command};
+pub use lunco_command_macro::{Command, on_command, register_commands};
 
 /// Re-exported `serde` so the `#[Command]` proc-macro can reference it
 /// via an absolute path (`::lunco_core::serde::*`). Crates using

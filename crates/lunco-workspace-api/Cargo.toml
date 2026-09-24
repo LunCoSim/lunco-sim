@@ -1,7 +1,7 @@
 [package]
 name = "lunco-workspace-api"
 version = "0.1.0-dev"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "API query providers for the headless-capable LunCoSim workspace session"
 

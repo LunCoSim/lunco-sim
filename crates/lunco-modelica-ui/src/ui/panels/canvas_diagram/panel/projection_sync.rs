@@ -1,12 +1,12 @@
 //! Projection task management and polling.
 
 use super::super::projection::{
-    project_scene, projection_relevant_source_hash, recover_edges_from_ast, target_unit_instance,
-    ProjectedScene,
+    ProjectedScene, project_scene, projection_relevant_source_hash, recover_edges_from_ast,
+    target_unit_instance,
 };
 use super::super::{
-    active_doc_from_world_ctx, decorations, render_target_ctx, CanvasDiagramState,
-    DiagramProjectionLimits, ProjectionTask,
+    CanvasDiagramState, DiagramProjectionLimits, ProjectionTask, active_doc_from_world_ctx,
+    decorations, render_target_ctx,
 };
 use crate::model_tabs::ModelTabs;
 use crate::ui::document_context::ModelicaDocuments;
@@ -67,16 +67,16 @@ pub(crate) fn poll_and_swap_projection(
         })
     });
 
-    let done_task = done_task.and_then(|(gen, doc, target, source_hash, projected)| {
-        if gen < docstate.canvas_acked_gen {
+    let done_task = done_task.and_then(|(r#gen, doc, target, source_hash, projected)| {
+        if r#gen < docstate.canvas_acked_gen {
             docstate.projection_task = None;
             None
         } else {
-            Some((gen, doc, target, source_hash, projected))
+            Some((r#gen, doc, target, source_hash, projected))
         }
     });
 
-    if let Some((gen, task_doc, target, source_hash, projected)) = done_task {
+    if let Some((r#gen, task_doc, target, source_hash, projected)) = done_task {
         let projected = match projected {
             Ok(projected) => projected,
             Err(error) => {
@@ -90,7 +90,7 @@ pub(crate) fn poll_and_swap_projection(
                 docstate.projection_error = Some(error);
                 docstate.canvas.scene = Scene::new();
                 docstate.canvas.selection.clear();
-                docstate.last_seen_gen = gen;
+                docstate.last_seen_gen = r#gen;
                 docstate.last_seen_target = target;
                 docstate.last_seen_source_hash = source_hash;
                 ui.ctx().request_repaint();
@@ -103,7 +103,7 @@ pub(crate) fn poll_and_swap_projection(
         } = projected;
         bevy::log::info!(
             "[CanvasDiagram] poll_done gen={} target={:?} new_scene_nodes={} old_scene_nodes={}",
-            gen,
+            r#gen,
             target,
             scene.node_count(),
             docstate.canvas.scene.node_count(),
@@ -112,7 +112,7 @@ pub(crate) fn poll_and_swap_projection(
         docstate.target_unit_instance = projected_target_unit_instance;
         docstate.projection_error = None;
         if scene.node_count() == 0 && docstate.canvas.scene.node_count() > 0 {
-            docstate.last_seen_gen = gen;
+            docstate.last_seen_gen = r#gen;
             docstate.last_seen_target = target;
             docstate.last_seen_source_hash = source_hash;
             return;
@@ -217,7 +217,7 @@ pub(crate) fn poll_and_swap_projection(
                     .add(lunco_canvas::SelectItem::Node(id));
             }
         }
-        docstate.last_seen_gen = gen;
+        docstate.last_seen_gen = r#gen;
         docstate.last_seen_target = target;
         docstate.last_seen_source_hash = source_hash;
 
@@ -250,7 +250,7 @@ pub(crate) fn trigger_projection_if_needed(
     let Some(doc_id) = active_doc_from_world_ctx(ctx) else {
         return;
     };
-    let gen = ctx
+    let r#gen = ctx
         .resource::<ModelicaDocuments>()
         .and_then(|r| r.host(doc_id))
         .map(|h| h.document().generation())
@@ -272,7 +272,7 @@ pub(crate) fn trigger_projection_if_needed(
             Some(t) => state.has_entry_for_tab(t),
             None => state.has_entry(doc_id),
         };
-        let gen_advanced = gen != docstate.last_seen_gen && gen > docstate.canvas_acked_gen;
+        let gen_advanced = r#gen != docstate.last_seen_gen && r#gen > docstate.canvas_acked_gen;
         let live_target = render_target_ctx(ctx)
             .filter(|(d, _)| *d == doc_id)
             .and_then(|(_, drilled)| drilled)
@@ -305,15 +305,15 @@ pub(crate) fn trigger_projection_if_needed(
     };
 
     if needs_project {
-        spawn_projection_task(ctx, state, doc_id, gen, render_tab_id);
+        spawn_projection_task(ctx, state, doc_id, r#gen, render_tab_id);
     } else {
         let new_hash = projection_relevant_source_hash(&current_source);
         let docstate = state.get_mut_for_render(render_tab_id, Some(doc_id));
-        if gen != docstate.last_seen_gen
-            && gen > docstate.canvas_acked_gen
+        if r#gen != docstate.last_seen_gen
+            && r#gen > docstate.canvas_acked_gen
             && new_hash == docstate.last_seen_source_hash
         {
-            docstate.last_seen_gen = gen;
+            docstate.last_seen_gen = r#gen;
         }
     }
 }
@@ -322,7 +322,7 @@ fn spawn_projection_task(
     ctx: &mut PanelCtx,
     state: &mut CanvasDiagramState,
     doc_id: lunco_doc::DocumentId,
-    gen: u64,
+    r#gen: u64,
     render_tab_id: Option<crate::model_tabs_types::TabId>,
 ) {
     let resolved = {
@@ -413,7 +413,7 @@ fn spawn_projection_task(
         }
 
         if let Some(t) = docstate.projection_task.as_ref() {
-            if t.gen_at_spawn != gen {
+            if t.gen_at_spawn != r#gen {
                 t.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
@@ -492,7 +492,7 @@ fn spawn_projection_task(
     // spawn satisfies it.
     docstate.force_reproject = false;
     docstate.projection_task = Some(ProjectionTask {
-        gen_at_spawn: gen,
+        gen_at_spawn: r#gen,
         doc_at_spawn: doc_id,
         target_at_spawn: target_class,
         spawned_at,

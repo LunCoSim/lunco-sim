@@ -1,6 +1,6 @@
 //! User interaction handlers: menus, DND, and clicks.
 
-use super::super::{menus, ops, CanvasDiagramState, ContextMenuTarget, PendingContextMenu, ICON_W};
+use super::super::{CanvasDiagramState, ContextMenuTarget, ICON_W, PendingContextMenu, menus, ops};
 use crate::ui::document_context::ModelicaDocuments;
 use bevy_egui::egui;
 use lunco_canvas::{Pos as CanvasPos, Rect as CanvasRect};

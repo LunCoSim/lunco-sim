@@ -14,10 +14,10 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_command_contracts::{Ack, OpId};
-use lunco_core::{on_command, register_commands, Command, SpawnEntity};
+use lunco_core::{Command, SpawnEntity, on_command, register_commands};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
-use lunco_scene_catalog::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
+use lunco_scene_catalog::catalog::{SpawnAnchor, SpawnCatalog, SpawnSource, spawn_usd_entry};
 use lunco_scene_command_contracts::{DeleteEntity, MoveEntity, TransformEntity};
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
@@ -2578,10 +2578,11 @@ mod tests {
             "angular pulse={angular:?}"
         );
         assert!(angular.x.abs() < 1.0e-9 && angular.z.abs() < 1.0e-9);
-        assert!(app
-            .world()
-            .get::<JustMovedKinematic>(body)
-            .is_some_and(|marker| marker.angular_pulse));
+        assert!(
+            app.world()
+                .get::<JustMovedKinematic>(body)
+                .is_some_and(|marker| marker.angular_pulse)
+        );
     }
 
     #[test]

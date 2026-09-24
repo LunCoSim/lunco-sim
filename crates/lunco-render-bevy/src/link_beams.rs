@@ -33,7 +33,7 @@ use lunco_celestial_spatial_core::{LinkNode, LinkState};
 use lunco_core::programs::{ProgramDriverAppExt, ProgramDriverId};
 use lunco_core::{GlobalEntityId, ScriptParams};
 use lunco_render::{CommunicationLineSettings, SceneCamera};
-use lunco_spatial::coords::{world_pose, GridPos};
+use lunco_spatial::coords::{GridPos, world_pose};
 use lunco_viewport_core::SceneViewport;
 
 /// The `info:id` the beam part authors.

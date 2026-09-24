@@ -149,8 +149,8 @@ impl HttpBridge {
 mod tests {
     use super::ApiWakerSlot;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     #[test]
@@ -235,7 +235,7 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) -> std::io::Re
 
 #[cfg(all(test, feature = "transport-http", not(target_arch = "wasm32")))]
 mod http_server_tests {
-    use super::{spawn_server, HttpBridge, HttpServerConfig};
+    use super::{HttpBridge, HttpServerConfig, spawn_server};
     use std::net::TcpListener;
 
     #[test]

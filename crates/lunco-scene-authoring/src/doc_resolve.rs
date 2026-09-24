@@ -15,7 +15,7 @@ use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::ParamValue;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{resolve_bound_shader, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, resolve_bound_shader};
 use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::Path as SdfPath;
 

@@ -1,7 +1,7 @@
 [package]
 name = "lunco-scene-commands"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "The render-free scene/document mutation layer: runtime spawn, move, delete, camera, and USD edits authored on the open document's runtime layer"
 

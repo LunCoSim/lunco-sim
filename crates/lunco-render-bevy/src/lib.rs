@@ -33,7 +33,7 @@ pub use shader_look::ShaderLookCache;
 pub use shader_material::*;
 
 use bevy::light::NotShadowCaster;
-use bevy::pbr::{wireframe::Wireframe, MeshMaterial3d, StandardMaterial};
+use bevy::pbr::{MeshMaterial3d, StandardMaterial, wireframe::Wireframe};
 use bevy::prelude::*;
 use bevy::render::RenderApp;
 use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
@@ -917,10 +917,11 @@ mod tests {
         drop(mesh);
         app.update();
 
-        assert!(app
-            .world()
-            .entity(entity)
-            .contains::<MeshMaterial3d<StandardMaterial>>());
+        assert!(
+            app.world()
+                .entity(entity)
+                .contains::<MeshMaterial3d<StandardMaterial>>()
+        );
 
         let shared_entity = app
             .world_mut()

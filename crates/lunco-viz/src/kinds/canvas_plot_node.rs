@@ -38,7 +38,7 @@ use bevy::prelude::Entity;
 use egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use lunco_canvas::scene::Node;
-use lunco_canvas::{visual::DrawCtx, NodeVisual};
+use lunco_canvas::{NodeVisual, visual::DrawCtx};
 use lunco_theme::ColorAlpha;
 use serde::{Deserialize, Serialize};
 

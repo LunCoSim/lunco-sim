@@ -8,11 +8,11 @@ use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, Ra
 use bevy::prelude::*;
 
 use bevy::camera::primitives::Aabb;
-use bevy::math::primitives::Cuboid;
 use bevy::math::Isometry3d;
+use bevy::math::primitives::Cuboid;
 
 use lunco_control_core::ControlLink;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_luncosim_edit_gizmo_ui::GizmoSelected;
 use lunco_scene_selection::{
@@ -705,11 +705,7 @@ pub fn compute_selection_aabb(
         }
     }
 
-    if has_aabb {
-        Some((min, max))
-    } else {
-        None
-    }
+    if has_aabb { Some((min, max)) } else { None }
 }
 
 /// Draws body-frame bounds for objects explicitly selected for gizmo editing.

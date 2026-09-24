@@ -21,8 +21,8 @@
 //! command with the decoded `source`, reusing the one creation + tab-open
 //! pipeline every "New model" entry point already funnels through.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 /// URL-fragment parameter key carrying the encoded model source.
 pub const FRAGMENT_KEY: &str = "model";

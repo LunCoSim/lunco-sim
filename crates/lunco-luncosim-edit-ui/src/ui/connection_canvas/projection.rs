@@ -31,7 +31,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use lunco_canvas::{empty_node_data, Edge, Node, Port, PortId, PortRef, Pos, Rect, Scene};
+use lunco_canvas::{Edge, Node, Port, PortId, PortRef, Pos, Rect, Scene, empty_node_data};
 use lunco_usd_bevy_stage::{StageView, UsdRead};
 use openusd::sdf::Path as SdfPath;
 

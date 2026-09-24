@@ -1103,10 +1103,10 @@ pub fn run() -> u8 {
         return list_scene_tests();
     }
 
-    // Every production scene-test process is throwaway by design. Set this
+    // Every production scene-test process is throwaway by design. Mark this
     // before app construction so runtime persistence owners cannot restore or
     // write a developer's Twin overlay during the run.
-    unsafe { std::env::set_var(lunco_twin::ISOLATED_RUN_ENV, "1") };
+    lunco_twin::request_isolated_run();
 
     // BEFORE the `App` exists, because building it registers settings sections and
     // that is what loads (and installs the flush for) `settings.json`.

@@ -1,7 +1,7 @@
 [package]
 name = "lunco-readiness"
 version = "0.1.0-dev"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Readiness registry: what the world is still waiting on, and — by authored policy — whether that waiting freezes the world, one object, or nothing"
 

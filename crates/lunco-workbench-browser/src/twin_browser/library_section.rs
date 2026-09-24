@@ -8,8 +8,8 @@ use std::{
 use egui;
 
 use super::{
-    path_tree::{build_path_tree, PathTree},
     BrowserCtx, BrowserScope, BrowserSection,
+    path_tree::{PathTree, build_path_tree},
 };
 use lunco_workbench_core::scene::CurrentSceneName;
 use lunco_workbench_core::source::OpenSourceView;

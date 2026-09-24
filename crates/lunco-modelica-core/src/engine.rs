@@ -262,9 +262,9 @@ impl ModelicaEngine {
 
     /// Worker reports its parse finished. Clears the in-flight slot
     /// and queues the result for the adapter to drain.
-    pub fn finish_parse(&mut self, doc_id: DocumentId, gen: u64) {
+    pub fn finish_parse(&mut self, doc_id: DocumentId, r#gen: u64) {
         self.pending.remove(&doc_id);
-        self.completed.push((doc_id, gen));
+        self.completed.push((doc_id, r#gen));
     }
 
     /// Cancel a parse that was not admitted to a worker queue.
@@ -1170,9 +1170,11 @@ mod tests {
             engine.finish_source_root_load("BrokenRoot", Vec::new(), Vec::new()),
             0
         );
-        assert!(engine
-            .source_root_failure("BrokenRoot")
-            .is_some_and(|message| message.contains("no Modelica source definitions")));
+        assert!(
+            engine
+                .source_root_failure("BrokenRoot")
+                .is_some_and(|message| message.contains("no Modelica source definitions"))
+        );
         assert!(!engine.begin_source_root_load("BrokenRoot"));
         assert!(!engine.ensure_source_root("BrokenRoot"));
     }
@@ -1189,9 +1191,11 @@ mod tests {
             ),
             0
         );
-        assert!(engine
-            .source_root_failure("BrokenRoot")
-            .is_some_and(|message| message.contains("Broken.mo")));
+        assert!(
+            engine
+                .source_root_failure("BrokenRoot")
+                .is_some_and(|message| message.contains("Broken.mo"))
+        );
         assert!(!engine.begin_source_root_load("BrokenRoot"));
     }
 

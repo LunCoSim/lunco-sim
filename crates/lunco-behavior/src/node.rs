@@ -801,8 +801,8 @@ mod tests {
         let mut ctx = ();
         assert_eq!(seq.tick(&mut ctx), Status::Running); // guard ok, action running
         assert_eq!(seq.tick(&mut ctx), Status::Running); // guard ok, action running
-                                                         // A plain Sequence would have latched the running action and NEVER re-check
-                                                         // the guard; the reactive one re-evaluates it and bails.
+        // A plain Sequence would have latched the running action and NEVER re-check
+        // the guard; the reactive one re-evaluates it and bails.
         assert_eq!(seq.tick(&mut ctx), Status::Failure); // guard now false → Failure
     }
 
@@ -824,7 +824,7 @@ mod tests {
         let mut ctx = ();
         assert_eq!(sel.tick(&mut ctx), Status::Running); // high fails → low runs
         assert_eq!(sel.tick(&mut ctx), Status::Running); // high fails → low runs
-                                                         // Reactive: the high-priority child is re-checked and preempts the low one.
+        // Reactive: the high-priority child is re-checked and preempts the low one.
         assert_eq!(sel.tick(&mut ctx), Status::Success); // high now succeeds
     }
 

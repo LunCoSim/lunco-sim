@@ -524,14 +524,18 @@ mod tests {
     #[test]
     fn exact_override_is_not_accepted_as_a_persisted_preference() {
         assert!(CelestialCadenceSettings::EXACT.validate_section().is_err());
-        assert!(CelestialCadenceSettings {
-            tolerance_deg: f64::NAN
-        }
-        .validate_section()
-        .is_err());
-        assert!(CelestialCadenceSettings::default()
+        assert!(
+            CelestialCadenceSettings {
+                tolerance_deg: f64::NAN
+            }
             .validate_section()
-            .is_ok());
+            .is_err()
+        );
+        assert!(
+            CelestialCadenceSettings::default()
+                .validate_section()
+                .is_ok()
+        );
     }
 
     #[test]

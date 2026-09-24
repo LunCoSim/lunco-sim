@@ -18,8 +18,8 @@ use std::rc::Rc;
 use js_sys::{Array, Float64Array, Object, Reflect, Uint8Array};
 use lunco_obstacle_field::field::HeightGrid;
 use lunco_worker_transport::{Callbacks, WorkerPool};
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
 use crate::{BakeReplyHeader, BakeStage, DemBakeJob};
 

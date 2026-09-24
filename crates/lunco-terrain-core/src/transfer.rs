@@ -101,7 +101,7 @@ mod tests {
         assert!(close(t.sample(0.0), HAZARD_SAFE)); // flat → green
         assert!(close(t.sample(cliff), HAZARD_CLIFF)); // at cliff → red
         assert!(close(t.sample(45f32.to_radians()), HAZARD_CLIFF)); // beyond → red
-                                                                    // Mid-band is neither pure green nor pure red.
+        // Mid-band is neither pure green nor pure red.
         let mid = t.sample(22.5f32.to_radians());
         assert!(!close(mid, HAZARD_SAFE) && !close(mid, HAZARD_CLIFF));
     }

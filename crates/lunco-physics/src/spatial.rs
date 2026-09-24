@@ -42,7 +42,7 @@ use bevy::ecs::system::{SystemParam, SystemState};
 use bevy::math::Dir3;
 use bevy::prelude::{ChildOf, Query, Res, Resource, Transform, World};
 use big_space::prelude::{CellCoord, Grid};
-use lunco_spatial::coords::{pose_in_grid, render_to_grid_absolute, GridPos, RenderPos};
+use lunco_spatial::coords::{GridPos, RenderPos, pose_in_grid, render_to_grid_absolute};
 use std::sync::Mutex;
 
 /// Bevy state for the read-only API raycast adapter.

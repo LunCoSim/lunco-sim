@@ -2,7 +2,7 @@
 
 use crate::ui::document_context::ModelicaDocuments;
 use bevy::prelude::*;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 
 /// Dump the active document's registry state to the log — id, source length,
 /// parse status, linked entities. A debugging verb for "what does the app

@@ -16,7 +16,7 @@
 //! and assembles the attributes into a Bevy `Mesh`.
 
 use lunco_obstacle_field::field::grid_indices;
-use lunco_terrain_core::{normal_at_bounded, HeightSource};
+use lunco_terrain_core::{HeightSource, normal_at_bounded};
 
 use lunco_terrain_core::quadtree::Square;
 

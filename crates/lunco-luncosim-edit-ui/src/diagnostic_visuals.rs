@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::SceneMountState;
-use lunco_core::{on_command, register_commands, Command, GlobalEntityId};
+use lunco_core::{Command, GlobalEntityId, on_command, register_commands};
 use lunco_render::SceneCamera;
 use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_viewport_core::SceneViewport;
@@ -849,24 +849,28 @@ mod tests {
         let replacement = Entity::from_raw_u32(3).unwrap();
         let root = Entity::from_raw_u32(2).unwrap();
         let (id, _) = store.acquire(target, DiagnosticVisualKind::Camera, "default".into(), root);
-        assert!(!store
-            .update(
-                id,
-                target,
-                DiagnosticVisualKind::Camera,
-                "default".into(),
-                root
-            )
-            .unwrap());
-        assert!(store
-            .update(
-                id,
-                replacement,
-                DiagnosticVisualKind::Camera,
-                "default".into(),
-                root
-            )
-            .unwrap());
+        assert!(
+            !store
+                .update(
+                    id,
+                    target,
+                    DiagnosticVisualKind::Camera,
+                    "default".into(),
+                    root
+                )
+                .unwrap()
+        );
+        assert!(
+            store
+                .update(
+                    id,
+                    replacement,
+                    DiagnosticVisualKind::Camera,
+                    "default".into(),
+                    root
+                )
+                .unwrap()
+        );
         assert_eq!(store.leases.get(&id).unwrap().revision, 1);
     }
 }

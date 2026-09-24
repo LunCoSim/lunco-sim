@@ -60,12 +60,12 @@ pub mod tile_mesh;
 /// quality or selection controls the other. See [`band`].
 pub use band::SurfaceBand;
 pub use collider_ring::{
-    resolve_collider_settings, ColliderTileOf, ColliderTiles, TerrainColliderRing,
-    TerrainColliderSettings, MAX_COLLIDER_DEPTH, MAX_COLLIDER_RESOLUTION, MIN_COLLIDER_DEPTH,
-    MIN_COLLIDER_RESOLUTION,
+    ColliderTileOf, ColliderTiles, MAX_COLLIDER_DEPTH, MAX_COLLIDER_RESOLUTION, MIN_COLLIDER_DEPTH,
+    MIN_COLLIDER_RESOLUTION, TerrainColliderRing, TerrainColliderSettings,
+    resolve_collider_settings,
 };
 pub use derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps, TerrainDerivedStatus};
-pub use georef::{FlatSiteSurface, TerrainGeoref, DEFAULT_ANCHOR_BODY};
+pub use georef::{DEFAULT_ANCHOR_BODY, FlatSiteSurface, TerrainGeoref};
 /// The base raster [`SurfaceOracle`] composes over.
 ///
 /// Re-exported because it is already part of this crate's PUBLIC surface —
@@ -75,34 +75,34 @@ pub use georef::{FlatSiteSurface, TerrainGeoref, DEFAULT_ANCHOR_BODY};
 /// type happens to live.
 pub use lunco_obstacle_field::field::HeightGrid;
 pub use lunco_terrain_core::{
-    hazard_color, hazard_from_slope, AnalyticHeightSource, HeightSource, QuadCoord, Quadtree,
-    Selected, Square, TileCoord, TileGrid, TransferFn,
+    AnalyticHeightSource, HeightSource, QuadCoord, Quadtree, Selected, Square, TileCoord, TileGrid,
+    TransferFn, hazard_color, hazard_from_slope,
 };
 pub use oracle::{
-    raycast_surface, DemHeightField, HeightContribution, SurfaceOracle, TerrainBodyCurvature,
+    DemHeightField, HeightContribution, SurfaceOracle, TerrainBodyCurvature, raycast_surface,
 };
 pub use plugin::{TerrainSurfacePlugin, TerrainSurfaceSet, TerrainSurfaceVisualizationPlugin};
-pub use query::{register_terrain_queries, TerrainHeightProvider};
+pub use query::{TerrainHeightProvider, register_terrain_queries};
 pub use stream_viz::{
     LodFrozen, LodTileOf, LodTiles, SetTerrainRenderingQuality, TerrainLodViz, TerrainNodeErrors,
     TerrainStreamLockstep, TerrainStreamStatus, TerrainVisualFocus, TileShadowCache,
 };
 pub use surface_query::report_unreachable_dem_frame;
 pub use surface_query::{
-    fit_footprint, height_in_footprint, GridSurfaceQuery, SurfaceFit, SurfaceHit, SurfaceSample,
-    TerrainPoseInPhysicsFrame,
+    GridSurfaceQuery, SurfaceFit, SurfaceHit, SurfaceSample, TerrainPoseInPhysicsFrame,
+    fit_footprint, height_in_footprint,
 };
 pub use terrain::{
-    resolve_dem_request_parameters, BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource,
-    DemTerrainSurface, DocBackedTerrain, FlattenTerrain, PlaceCrater, PlaceRock,
-    RegenerateTerrainLayers, RemoveTerrainLayer, SpawnDemTerrain, TerrainGenPhase,
-    TerrainGenStatus, TERRAIN_BUILD_FAULT_KIND,
+    BrushTerrain, DemBaseGrid, DemTerrainRequest, DemTerrainSource, DemTerrainSurface,
+    DocBackedTerrain, FlattenTerrain, PlaceCrater, PlaceRock, RegenerateTerrainLayers,
+    RemoveTerrainLayer, SpawnDemTerrain, TERRAIN_BUILD_FAULT_KIND, TerrainGenPhase,
+    TerrainGenStatus, resolve_dem_request_parameters,
 };
 pub use terrain_layers::{
-    edit_attr_writes, make_crater_layer, parse_edit, rock_instance_layer, terrain_layer_params,
-    EditKind, EditsLayer, LayerAttrSource, LayerEntry, LayerId, LayerScatterCx, TerrainLayer,
-    TerrainLayerAppExt, TerrainLayerParams, TerrainLayerParser, TerrainLayerParserRegistry,
-    TerrainLayerStack, TerrainLayersApplied, TerrainRock, TerrainScatterEntity,
-    TerrainScatterOwner, EDITS_LAYER_ID,
+    EDITS_LAYER_ID, EditKind, EditsLayer, LayerAttrSource, LayerEntry, LayerId, LayerScatterCx,
+    TerrainLayer, TerrainLayerAppExt, TerrainLayerParams, TerrainLayerParser,
+    TerrainLayerParserRegistry, TerrainLayerStack, TerrainLayersApplied, TerrainRock,
+    TerrainScatterEntity, TerrainScatterOwner, edit_attr_writes, make_crater_layer, parse_edit,
+    rock_instance_layer, terrain_layer_params,
 };
-pub use tile_mesh::{bake_tile_mesh, TileMesh};
+pub use tile_mesh::{TileMesh, bake_tile_mesh};

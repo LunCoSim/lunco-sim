@@ -32,7 +32,7 @@
 use bevy::prelude::*;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_command_contracts::SessionId;
@@ -40,9 +40,9 @@ use lunco_doc::{Diagnostic, DocumentId};
 use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_telemetry_core::TelemetryEvent;
 
+use crate::ScriptRegistry;
 use crate::doc::ScenarioParameters;
 use crate::doc::{ScriptLanguage, ScriptedModel};
-use crate::ScriptRegistry;
 use lunco_scripting_bridge_core as bridge_core;
 use lunco_scripting_bridge_core::{ScenarioAudience, ValueBuilder};
 
@@ -2580,7 +2580,7 @@ pub fn collect_script_events(
 
 #[cfg(test)]
 mod tests {
-    use super::{ScriptEventInbox, SCRIPT_EVENT_INBOX_CAPACITY};
+    use super::{SCRIPT_EVENT_INBOX_CAPACITY, ScriptEventInbox};
     use bevy::prelude::App;
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
@@ -2626,10 +2626,12 @@ mod tests {
         assert!(inbox.pending.is_empty());
         assert_eq!(inbox.dropped, 1);
         let diagnostics = app.world().resource::<lunco_core::RuntimeDiagnostics>();
-        assert!(diagnostics
-            .findings
-            .iter()
-            .any(|finding| finding.code == "telemetry-event-overflow"));
+        assert!(
+            diagnostics
+                .findings
+                .iter()
+                .any(|finding| finding.code == "telemetry-event-overflow")
+        );
     }
 }
 
@@ -2637,7 +2639,7 @@ mod tests {
 mod lifecycle_readiness_tests {
     use super::*;
     use crate::doc::ScriptDocument;
-    use std::sync::{mpsc, Arc, Condvar, Mutex};
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
 
     #[test]
     fn scenario_directives_bind_only_to_supported_peer_and_timing_values() {
@@ -2735,6 +2737,7 @@ mod lifecycle_readiness_tests {
                         parameters_revision: 0,
                         scene_generation: 2,
                         runtime_revision: 0,
+                        source_dependency_revision: 0,
                         queued: false,
                         result_ready: false,
                         capacity_revision: 0,
@@ -2745,14 +2748,18 @@ mod lifecycle_readiness_tests {
 
         ScenarioDriver::<RecordingRuntime>::prepare_compiles(&mut world, ScriptLanguage::Rhai);
 
-        assert!(world
-            .resource::<ScenarioDriver<RecordingRuntime>>()
-            .fsm
-            .get(&entity)
-            .is_some_and(|state| state.pending_compile.is_none()));
-        assert!(!world
-            .resource::<lunco_core_runtime::SimulationProgress>()
-            .is_held());
+        assert!(
+            world
+                .resource::<ScenarioDriver<RecordingRuntime>>()
+                .fsm
+                .get(&entity)
+                .is_some_and(|state| state.pending_compile.is_none())
+        );
+        assert!(
+            !world
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
     }
 
     #[test]
@@ -2819,12 +2826,16 @@ mod lifecycle_readiness_tests {
             .get(DocumentId::new(72))
             .expect("invalid scope is visible to the document owner");
         assert_eq!(status.diagnostics.len(), 2);
-        assert!(status.diagnostics[0]
-            .message
-            .contains("unknown scenario @scope"));
-        assert!(status.diagnostics[1]
-            .message
-            .contains("unsupported scenario @timing"));
+        assert!(
+            status.diagnostics[0]
+                .message
+                .contains("unknown scenario @scope")
+        );
+        assert!(
+            status.diagnostics[1]
+                .message
+                .contains("unsupported scenario @timing")
+        );
 
         run_scenarios(&mut world);
         assert_eq!(calls.lock().unwrap().len(), 4);
@@ -3099,10 +3110,11 @@ mod lifecycle_readiness_tests {
             started_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
         ];
         assert_eq!(started.iter().collect::<HashSet<_>>().len(), 2);
-        assert!(app
-            .world()
-            .resource::<lunco_core_runtime::SimulationProgress>()
-            .is_held());
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
 
         beta_gate.release();
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -3118,10 +3130,11 @@ mod lifecycle_readiness_tests {
         }
         app.update();
         assert!(committed.lock().unwrap().is_empty());
-        assert!(app
-            .world()
-            .resource::<lunco_core_runtime::SimulationProgress>()
-            .is_held());
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
 
         alpha_gate.release();
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -3138,18 +3151,20 @@ mod lifecycle_readiness_tests {
         app.update();
 
         assert_eq!(*committed.lock().unwrap(), ["alpha", "beta"]);
-        assert!(app
-            .world()
-            .resource::<lunco_core_runtime::SimulationProgress>()
-            .is_held());
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
         ScenarioDriver::<GatedRuntime>::run_without_simulation_tick(
             app.world_mut(),
             ScriptLanguage::Rhai,
         );
-        assert!(!app
-            .world()
-            .resource::<lunco_core_runtime::SimulationProgress>()
-            .is_held());
+        assert!(
+            !app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
     }
 
     #[test]
@@ -3195,12 +3210,14 @@ mod lifecycle_readiness_tests {
             ]
         );
 
-        assert!(world
-            .resource_mut::<ScriptRegistry>()
-            .reload_external_source(
-                DocumentId::new(73),
-                "// @scope clinet\n// @timing presentation\n",
-            ));
+        assert!(
+            world
+                .resource_mut::<ScriptRegistry>()
+                .reload_external_source(
+                    DocumentId::new(73),
+                    "// @scope clinet\n// @timing presentation\n",
+                )
+        );
         run_scenarios(&mut world);
 
         assert_eq!(
@@ -3217,9 +3234,11 @@ mod lifecycle_readiness_tests {
             .get(DocumentId::new(73))
             .expect("the edited source revision publishes its own diagnostics");
         assert_eq!(diagnostics.diagnostics.len(), 3);
-        assert!(diagnostics.diagnostics[2]
-            .message
-            .contains("on_stop failed"));
+        assert!(
+            diagnostics.diagnostics[2]
+                .message
+                .contains("on_stop failed")
+        );
 
         run_scenarios(&mut world);
         assert_eq!(calls.lock().unwrap().len(), 4);
@@ -3304,10 +3323,12 @@ mod lifecycle_readiness_tests {
             .resource_mut::<ScriptEventInbox>()
             .enqueue(event("current_tick", 5));
         run_scenarios(&mut world);
-        assert!(!calls
-            .lock()
-            .unwrap()
-            .contains(&RecordedCall::Event("current_tick".into())));
+        assert!(
+            !calls
+                .lock()
+                .unwrap()
+                .contains(&RecordedCall::Event("current_tick".into()))
+        );
 
         world.resource_mut::<lunco_core_runtime::SimTick>().0 = 6;
         run_scenarios(&mut world);
@@ -3321,10 +3342,12 @@ mod lifecycle_readiness_tests {
             .resource_mut::<ScriptEventInbox>()
             .enqueue(event("paused_update", 6));
         run_scenarios_without_simulation_tick(&mut world);
-        assert!(calls
-            .lock()
-            .unwrap()
-            .contains(&RecordedCall::Event("paused_update".into())));
+        assert!(
+            calls
+                .lock()
+                .unwrap()
+                .contains(&RecordedCall::Event("paused_update".into()))
+        );
 
         let contexts = contexts.lock().unwrap();
         assert!(contexts.iter().any(|context| {

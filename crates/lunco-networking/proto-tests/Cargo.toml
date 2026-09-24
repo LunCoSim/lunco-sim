@@ -6,7 +6,7 @@
 [package]
 name = "lunco-net-proto-tests"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [workspace]

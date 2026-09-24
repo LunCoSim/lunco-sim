@@ -10,7 +10,7 @@ use openusd::sdf::{Path as SdfPath, Value};
 use lunco_usd_bevy_stage::read::{
     attr_has_time_samples, read_vec3_f64_at, stage_time_codes_per_second,
 };
-use lunco_usd_bevy_stage::{resolve_bound_shader, UsdRead, UsdReadObject};
+use lunco_usd_bevy_stage::{UsdRead, UsdReadObject, resolve_bound_shader};
 
 /// The USD rotation xform ops, in sampler precedence: quaternion `orient`, the
 /// six Euler-order triples, then the single-axis scalars.
@@ -426,9 +426,11 @@ def Xform "Matrixed"
         // A single-axis `rotateZ` time-sample marks the prim animated.
         assert!(prim_has_xform_time_samples(&reader, &hinge));
         // Held start = 0° → identity; midway (code 2) = 45° about Z.
-        assert!(local_rotation_at(&reader, &hinge, 0.0)
-            .unwrap()
-            .abs_diff_eq(Quat::IDENTITY, 1e-6));
+        assert!(
+            local_rotation_at(&reader, &hinge, 0.0)
+                .unwrap()
+                .abs_diff_eq(Quat::IDENTITY, 1e-6)
+        );
         let q = local_rotation_at(&reader, &hinge, 2.0).unwrap();
         assert!(q.abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4), 1e-5));
     }
@@ -525,9 +527,10 @@ def Xform "Std"
             .unwrap()
             .unwrap();
         assert!(tf.translation.abs_diff_eq(Vec3::new(5.0, 6.0, 7.0), 1e-5));
-        assert!(tf
-            .rotation
-            .abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-5));
+        assert!(
+            tf.rotation
+                .abs_diff_eq(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2), 1e-5)
+        );
         assert!(tf.scale.abs_diff_eq(Vec3::ONE, 1e-5));
     }
 

@@ -14,12 +14,12 @@
 //! two later). Screenshot responses come back as a base64 PNG string under
 //! `data.png_base64` rather than the HTTP `image/png` body.
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
-use crate::transports::envelope::{decode_request, encode_response};
 use crate::transports::HttpBridge;
+use crate::transports::envelope::{decode_request, encode_response};
 use lunco_api_contracts::{ApiRequestEnvelope, ApiResponseEnvelope};
 use lunco_api_core::{ApiRequest, ApiResponse};
 

@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{CloseDocument, DocumentSaved, NewDocument, OpenFile};
 use lunco_modelica_ui_core::{ClassAction, OpenClass};
@@ -10,12 +10,12 @@ use std::sync::Arc;
 
 use crate::model_tabs::ModelTabs;
 use crate::package_tree::PackageTreeCache;
+use crate::ui::MODEL_VIEW_KIND;
 use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::duplicate::{
     build_duplicate_source, collect_parent_imports, extract_class_spans_inline,
 };
 use crate::ui::workbench_state::WorkbenchState;
-use crate::ui::MODEL_VIEW_KIND;
 
 #[cfg(feature = "api")]
 use lunco_command_contracts::{Ack, OpId};

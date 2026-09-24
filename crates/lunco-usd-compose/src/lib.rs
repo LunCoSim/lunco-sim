@@ -16,7 +16,7 @@ use recipe::StageClosureLimits;
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use openusd::ar::ResolvedPath;
 use openusd::sdf::Data;
 use openusd::usd::Stage;
@@ -152,7 +152,7 @@ pub fn check_stage_closure_limits(
     Ok(())
 }
 
-pub use resolver::{canonicalize_at, is_binary_asset, LuncoUsdResolver, SharedLayerBytes};
+pub use resolver::{LuncoUsdResolver, SharedLayerBytes, canonicalize_at, is_binary_asset};
 
 /// True when `path` is a USD layer that can declare further asset dependencies.
 pub fn is_usd_layer(path: &Path) -> bool {

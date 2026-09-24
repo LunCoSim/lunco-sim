@@ -39,7 +39,7 @@ use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_notifications_core::{ScreenNotifications, ShowNotification, Toast};
 use lunco_settings::{AppSettingsExt, ProfileSettings};
-use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
+use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, is_preview_only, is_preview_only_entity};
 
 // Render-bound screenshots and deterministic offline recording are owned by
 // `lunco-capture`; this crate remains responsible for camera intent,
@@ -758,7 +758,7 @@ fn sync_profile(
     mut last_name: Local<Option<String>>,
     mut commands: Commands,
 ) {
-    let session = local.0 .0;
+    let session = local.0.0;
     if *role == NetworkRole::Client && session == 0 {
         *last_sent = None;
         return;

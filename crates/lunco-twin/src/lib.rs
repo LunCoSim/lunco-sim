@@ -59,6 +59,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod document_kind_registry;
 mod error;
@@ -71,10 +72,10 @@ pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindR
 pub use error::TwinError;
 pub use file_kind::{FileEntry, FileKind};
 pub use manifest::{
-    glob_matches, ComponentManifest, DownloadManifest, JournalManifest, ModelicaExternal,
-    ModelicaManifest, NativePluginManifest, SysmlManifest, TwinChildRef, TwinManifest,
-    TwinSettingValue, UsdManifest, VerificationCase, VerificationManifest, DEFAULT_SCENE_GLOBS,
-    MANIFEST_FILENAME, RESULTS_DIR_NAME,
+    ComponentManifest, DEFAULT_SCENE_GLOBS, DownloadManifest, JournalManifest, MANIFEST_FILENAME,
+    ModelicaExternal, ModelicaManifest, NativePluginManifest, RESULTS_DIR_NAME, SysmlManifest,
+    TwinChildRef, TwinManifest, TwinSettingValue, UsdManifest, VerificationCase,
+    VerificationManifest, glob_matches,
 };
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
@@ -157,16 +158,23 @@ pub enum TwinMode {
 /// disposable cache rather than a durable record.
 pub const RUNTIME_SUBDIR: &str = ".lunco/runtime";
 
-/// Environment marker used by throwaway scene, render, and editor acceptance
-/// runs. Those processes use a fresh in-memory workspace and must never read or
-/// write runtime overlays from a developer Twin. The production test launchers
-/// set this marker; normal interactive runs leave it unset so their explicit
-/// Twin persistence policy remains authoritative.
+/// Optional environment marker for throwaway scene, render, and editor
+/// acceptance runs. External launchers can set this before starting the process;
+/// in-process launchers use [`request_isolated_run`]. These runs use a fresh
+/// in-memory workspace and must never read or write runtime overlays from a
+/// developer Twin.
 pub const ISOLATED_RUN_ENV: &str = "LUNCOSIM_ISOLATED_RUN";
+
+static ISOLATED_RUN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Mark this process as an isolated acceptance run.
+pub fn request_isolated_run() {
+    ISOLATED_RUN_REQUESTED.store(true, Ordering::Release);
+}
 
 /// Whether the current process is an isolated acceptance run.
 pub fn isolated_run_requested() -> bool {
-    std::env::var_os(ISOLATED_RUN_ENV).is_some()
+    ISOLATED_RUN_REQUESTED.load(Ordering::Acquire) || std::env::var_os(ISOLATED_RUN_ENV).is_some()
 }
 
 /// Is this twin-relative path **session state** rather than twin CONTENT?
@@ -1298,18 +1306,26 @@ script = "test.rhai"
             panic!("expected Twin mode");
         };
         let errors = twin.component_registry_errors();
-        assert!(errors
-            .iter()
-            .any(|error| error.contains("share requirement source")));
-        assert!(errors
-            .iter()
-            .any(|error| error.contains("share verification `A::Verify`")));
-        assert!(errors
-            .iter()
-            .any(|error| error.contains("share verification scene")));
-        assert!(errors
-            .iter()
-            .any(|error| error.contains("share verification script")));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("share requirement source"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("share verification `A::Verify`"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("share verification scene"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("share verification script"))
+        );
     }
 
     #[test]

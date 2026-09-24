@@ -6,7 +6,7 @@
 //! no Bevy, filesystem, Twin, or scripting dependency.
 
 use lunco_sysml_ast::{SysmlAnalysis, SysmlAttribute, SysmlLiteral};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 /// Return attributes keyed by their local (short) name.

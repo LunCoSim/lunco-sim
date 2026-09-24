@@ -7,17 +7,17 @@
 //! processing closure from `lunco-assets`.
 
 use bevy::prelude::*;
-use lunco_workbench_core::commands::FocusPanel;
 use lunco_workbench_core::WorkbenchPanelAppExt;
+use lunco_workbench_core::commands::FocusPanel;
 
 mod files_panel;
 pub mod twin_browser;
 
-pub use files_panel::{FilesPanel, FILES_PANEL_ID};
+pub use files_panel::{FILES_PANEL_ID, FilesPanel};
 pub use twin_browser::{
     BrowserAction, BrowserActions, BrowserCtx, BrowserQuery, BrowserScope, BrowserSection,
-    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry,
-    UnsavedDocs, TWIN_BROWSER_PANEL_ID,
+    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TWIN_BROWSER_PANEL_ID,
+    TwinBrowserPanel, UnsavedDocEntry, UnsavedDocs,
 };
 
 /// Install the reusable Twin and Files browser feature.

@@ -119,20 +119,22 @@ mod tests {
 
         assert!(app.world().get::<LinkState>(a).is_none());
         assert!(app.world().get::<LinkState>(b).is_none());
-        assert!(app
-            .world()
-            .get::<WifiState>(a)
-            .unwrap()
-            .peers
-            .iter()
-            .any(|peer| peer.peer == 2 && peer.connected));
-        assert!(app
-            .world()
-            .get::<WifiState>(b)
-            .unwrap()
-            .peers
-            .iter()
-            .any(|peer| peer.peer == 1 && peer.connected));
+        assert!(
+            app.world()
+                .get::<WifiState>(a)
+                .unwrap()
+                .peers
+                .iter()
+                .any(|peer| peer.peer == 2 && peer.connected)
+        );
+        assert!(
+            app.world()
+                .get::<WifiState>(b)
+                .unwrap()
+                .peers
+                .iter()
+                .any(|peer| peer.peer == 1 && peer.connected)
+        );
     }
 
     #[test]

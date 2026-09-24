@@ -19,7 +19,7 @@
 //! linearly-filtered texture is read by the planar-UV terrain shader.
 
 use crate::quadtree::Square;
-use crate::source::{normal_at_bounded, HeightSource};
+use crate::source::{HeightSource, normal_at_bounded};
 
 /// World XZ of texel `(ix, iz)` at the centre of its cell in a `res×res` raster
 /// over `region`.
@@ -256,27 +256,31 @@ mod los_tests {
     fn ray_above_relief_and_outside_footprint_miss() {
         let s = Ramp;
         // Horizontal ray well above the highest terrain (0.1·10 = 1.0 at the edge).
-        assert!(los_hit(
-            &s,
-            [-10.0, 100.0, 0.0],
-            [1.0, 0.0, 0.0],
-            20.0,
-            10.0,
-            0.5,
-            0.05
-        )
-        .is_none());
+        assert!(
+            los_hit(
+                &s,
+                [-10.0, 100.0, 0.0],
+                [1.0, 0.0, 0.0],
+                20.0,
+                10.0,
+                0.5,
+                0.05
+            )
+            .is_none()
+        );
         // Entirely outside the ±10 footprint → open sky, no hit.
-        assert!(los_hit(
-            &s,
-            [200.0, 5.0, 0.0],
-            [1.0, 0.0, 0.0],
-            10.0,
-            10.0,
-            0.5,
-            0.05
-        )
-        .is_none());
+        assert!(
+            los_hit(
+                &s,
+                [200.0, 5.0, 0.0],
+                [1.0, 0.0, 0.0],
+                10.0,
+                10.0,
+                0.5,
+                0.05
+            )
+            .is_none()
+        );
     }
 }
 
@@ -525,11 +529,7 @@ mod tests {
     struct EdgeWall;
     impl HeightSource for EdgeWall {
         fn height_at(&self, x: f64, _z: f64) -> f64 {
-            if x > 100.0 {
-                100.0
-            } else {
-                0.0
-            }
+            if x > 100.0 { 100.0 } else { 0.0 }
         }
     }
 

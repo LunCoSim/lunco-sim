@@ -93,9 +93,9 @@ mod native {
                 }
                 "-h" | "--help" => {
                     eprintln!(
-                    "usage: build_modelica_library_assets --out <dir> [--source-root <dir>]... \
+                        "usage: build_modelica_library_assets --out <dir> [--source-root <dir>]... \
                      [--exclude <name>]..."
-                );
+                    );
                     return;
                 }
                 other => {

@@ -40,7 +40,7 @@
 
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_render::{camera::SceneCamera, ScreenConstantMarker, ScreenConstantMarkerVisibility};
+use lunco_render::{ScreenConstantMarker, ScreenConstantMarkerVisibility, camera::SceneCamera};
 
 /// Scale (= radius, on unit geometry) that makes `angular_deg` of apparent
 /// DIAMETER at `distance`. Shared by the system and its tests so the size

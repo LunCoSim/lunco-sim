@@ -4,7 +4,7 @@ use super::util::resolve_doc;
 use crate::ModelicaDocuments;
 use bevy::prelude::*;
 use lunco_command_contracts::{Ack, OpId};
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_doc::DocumentId;
 use lunco_experiments::ExperimentRegistry;
 use lunco_modelica_document::ModelicaOp;
@@ -304,26 +304,30 @@ mod tests {
         let doc = DocumentId(2);
         assert!(live_runs(doc, doc, RunStatus::Done { wall_time_ms: 5 }).is_empty());
         assert!(live_runs(doc, doc, RunStatus::Cancelled).is_empty());
-        assert!(live_runs(
-            doc,
-            doc,
-            RunStatus::Failed {
-                error: "x".into(),
-                partial: false
-            }
-        )
-        .is_empty());
+        assert!(
+            live_runs(
+                doc,
+                doc,
+                RunStatus::Failed {
+                    error: "x".into(),
+                    partial: false
+                }
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn ignores_live_run_on_a_different_document() {
         // A live run on doc 3 must not be cancelled when editing doc 2.
-        assert!(live_runs(
-            DocumentId(2),
-            DocumentId(3),
-            RunStatus::Running { t_current: 1.0 }
-        )
-        .is_empty());
+        assert!(
+            live_runs(
+                DocumentId(2),
+                DocumentId(3),
+                RunStatus::Running { t_current: 1.0 }
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -340,8 +344,8 @@ mod tests {
     #[test]
     fn stop_live_runs_cancels_only_target_doc() {
         use lunco_modelica_runner::PendingHandles;
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let doc = DocumentId(2);
         let other = DocumentId(3);

@@ -90,8 +90,8 @@ use lunco_materials::dyn_params::ParamValue;
 use lunco_materials::look::ShaderLook;
 use lunco_materials::naming::to_snake_case;
 use lunco_port_core::ports::{
-    port_name_set_key, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
-    PortTopologyRevision, PortTopologyState,
+    PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry, PortTopologyRevision,
+    PortTopologyState, port_name_set_key,
 };
 
 /// Does this entity drive a shader parameter called `key`?
@@ -327,19 +327,21 @@ mod tests {
         app.world_mut().clear_trackers();
 
         assert!(reg.write_port(app.world_mut(), e, "glow", 0.25));
-        assert!(!app
-            .world()
-            .entity(e)
-            .get_ref::<ShaderLook>()
-            .unwrap()
-            .is_changed());
+        assert!(
+            !app.world()
+                .entity(e)
+                .get_ref::<ShaderLook>()
+                .unwrap()
+                .is_changed()
+        );
 
         assert!(reg.write_port(app.world_mut(), e, "glow", 0.75));
-        assert!(app
-            .world()
-            .entity(e)
-            .get_ref::<ShaderLook>()
-            .unwrap()
-            .is_changed());
+        assert!(
+            app.world()
+                .entity(e)
+                .get_ref::<ShaderLook>()
+                .unwrap()
+                .is_changed()
+        );
     }
 }

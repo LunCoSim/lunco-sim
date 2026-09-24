@@ -828,7 +828,7 @@ impl AppliedInputSeq {
     pub fn changed_owner_gids(&self, registry: &SessionRegistry) -> Vec<u64> {
         self.slots
             .iter()
-            .filter(|(&gid, slot)| slot.owner != registry.owner_of(gid))
+            .filter(|&(&gid, ref slot)| slot.owner != registry.owner_of(gid))
             .map(|(&gid, _)| gid)
             .collect()
     }
@@ -1807,7 +1807,7 @@ mod tests {
         // A different session cannot take an owned vessel.
         assert_eq!(reg.claim(B, R1), Err(A));
         assert_eq!(reg.owner_of(R1), Some(A)); // unchanged
-                                               // Same session re-claim is idempotent.
+        // Same session re-claim is idempotent.
         assert!(reg.claim(A, R1).is_ok());
         assert_eq!(reg.owner_of(R1), Some(A));
     }
@@ -1848,7 +1848,7 @@ mod tests {
         assert_eq!(reg.owner_of(R1), None);
         assert_eq!(reg.owner_of(R2), None);
         assert_eq!(reg.owner_of(0xC3), Some(B)); // B untouched
-                                                 // Freed vessel is now claimable by anyone, even under Exclusive.
+        // Freed vessel is now claimable by anyone, even under Exclusive.
         assert!(reg.claim(B, R1).is_ok());
     }
 
@@ -1959,16 +1959,18 @@ mod tests {
         }
         // Owner-Observer A may drive what it owns, and possess/structural commands.
         assert!(authorize(&reg, &observer_rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_ok());
-        assert!(authorize(
-            &reg,
-            &observer_rbac,
-            &pol,
-            &paths,
-            A,
-            "AcquireControl",
-            Some(R1)
-        )
-        .is_ok());
+        assert!(
+            authorize(
+                &reg,
+                &observer_rbac,
+                &pol,
+                &paths,
+                A,
+                "AcquireControl",
+                Some(R1)
+            )
+            .is_ok()
+        );
         // An authenticated non-owner is still rejected by the ownership gate.
         assert!(authorize(&reg, &observer_rbac, &pol, &paths, B, "SetPorts", Some(R1)).is_err());
 
@@ -2003,16 +2005,18 @@ mod tests {
             },
         );
         assert!(authorize(&reg, &tokenless_rbac, &pol, &paths, A, "SetPorts", Some(R1)).is_err());
-        assert!(authorize(
-            &reg,
-            &tokenless_rbac,
-            &pol,
-            &paths,
-            A,
-            "AcquireControl",
-            Some(R1)
-        )
-        .is_err());
+        assert!(
+            authorize(
+                &reg,
+                &tokenless_rbac,
+                &pol,
+                &paths,
+                A,
+                "AcquireControl",
+                Some(R1)
+            )
+            .is_err()
+        );
     }
 
     #[test]

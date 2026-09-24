@@ -1,7 +1,7 @@
 [package]
 name = "lunco-twin-journal"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Twin journal — append-only, author-scoped op log with per-user undo. Local-only today; CRDT-backed (yrs) and network-syncable later via the same API."
 

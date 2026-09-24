@@ -8,7 +8,7 @@
 //! both modes without driving the GUI.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::{Theme, ThemeMode};
 use serde::{Deserialize, Serialize};

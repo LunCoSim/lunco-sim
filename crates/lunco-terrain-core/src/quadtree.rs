@@ -521,10 +521,11 @@ mod tests {
     fn morph_end_matches_parent_refine_range() {
         let q = qt();
         let err = |c: QuadCoord| q.geometric_error(c.depth);
-        assert!(q
-            .selected(QuadCoord::ROOT, f64::INFINITY)
-            .morph_end
-            .is_infinite());
+        assert!(
+            q.selected(QuadCoord::ROOT, f64::INFINITY)
+                .morph_end
+                .is_infinite()
+        );
         for child in QuadCoord::ROOT.children() {
             let parent_range = q.error_refine_range(err(QuadCoord::ROOT));
             let s = q.selected(child, parent_range);
@@ -570,9 +571,9 @@ mod tests {
         // cover of the root (REPLACE refinement invariant).
         let q = qt();
         let flat = |_c: QuadCoord, _r: Square| 0.05; // near-flat → coarse everywhere
-                                                     // The coarsest legal cover — one root leaf. This is the shape `evolve_cover`
-                                                     // starts from and reads off via `selected`, so forcing detail into it is
-                                                     // exactly what production does under a rover.
+        // The coarsest legal cover — one root leaf. This is the shape `evolve_cover`
+        // starts from and reads off via `selected`, so forcing detail into it is
+        // exactly what production does under a rover.
         let mut sel = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
         assert!(
             sel.iter().all(|s| s.coord.depth < q.max_depth),
@@ -638,10 +639,11 @@ mod tests {
             "output must not depend on input order"
         );
         // …and it is the total (depth, x, z) order.
-        assert!(a2
-            .windows(2)
-            .all(|w| (w[0].coord.depth, w[0].coord.x, w[0].coord.z)
-                < (w[1].coord.depth, w[1].coord.x, w[1].coord.z)));
+        assert!(
+            a2.windows(2)
+                .all(|w| (w[0].coord.depth, w[0].coord.x, w[0].coord.z)
+                    < (w[1].coord.depth, w[1].coord.x, w[1].coord.z))
+        );
     }
 
     /// `refine_selection_at_with(.., pin_morph: true)` emits the max-depth

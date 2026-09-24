@@ -35,7 +35,7 @@
 use avian3d::dynamics::joints::EntityConstraint;
 use avian3d::dynamics::solver::{
     solver_body::{SolverBody, SolverBodyInertia},
-    xpbd::{joints::PrismaticJointSolverData, XpbdConstraint},
+    xpbd::{XpbdConstraint, joints::PrismaticJointSolverData},
 };
 pub use avian3d::prelude::Physics;
 use avian3d::prelude::{
@@ -69,12 +69,12 @@ pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery, SimulationPoseReadState};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::{GridSpatialQuery, GridSpatialQueryState};
 pub use support::{
-    evaluate_initialization_policy, PhysicsInitializationExternalValidator,
+    PHYSICS_INITIALIZATION_HOOK_PREFIX, PhysicsInitializationExternalValidator,
     PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
     PhysicsInitializationSubject, PhysicsJointDetachRequested, PhysicsJointDetachSet,
     PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact, PhysicsSupportFootprint,
     PhysicsSupportSet, PhysicsSupportState, PhysicsWheelContact, PhysicsWheelRaycastFilter,
-    PHYSICS_INITIALIZATION_HOOK_PREFIX, STRICT_AUTHORED_INITIALIZATION_POLICY,
+    STRICT_AUTHORED_INITIALIZATION_POLICY, evaluate_initialization_policy,
 };
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.
@@ -1488,10 +1488,11 @@ mod tests {
         app.update();
 
         assert_eq!(app.world().get::<Position>(entity).unwrap().0, authored);
-        assert!(app
-            .world()
-            .get::<PhysicsInitializationPending>(entity)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<PhysicsInitializationPending>(entity)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1514,10 +1515,11 @@ mod tests {
 
         app.update();
 
-        assert!(app
-            .world()
-            .get::<PhysicsInitializationPending>(entity)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<PhysicsInitializationPending>(entity)
+                .is_some()
+        );
         assert_eq!(
             app.world().resource::<lunco_core::RuntimeDiagnostics>().findings,
             vec![lunco_core::RuntimeDiagnostic {
@@ -1574,15 +1576,17 @@ mod tests {
         assert!((snapshot.dynamic - 0.8).abs() < 1e-6);
         assert!((snapshot.static_coefficient - 1.0).abs() < 1e-6);
 
-        assert!(set_contact_friction(
-            &mut world,
-            entity,
-            ContactFrictionParameters {
-                dynamic: -0.1,
-                static_coefficient: 1.0,
-            },
-        )
-        .is_err());
+        assert!(
+            set_contact_friction(
+                &mut world,
+                entity,
+                ContactFrictionParameters {
+                    dynamic: -0.1,
+                    static_coefficient: 1.0,
+                },
+            )
+            .is_err()
+        );
         assert_eq!(contact_friction_snapshot(&world, entity), Some(snapshot));
     }
 
@@ -1620,15 +1624,17 @@ mod tests {
                 angular: 4.0,
             })
         );
-        assert!(set_joint_damping(
-            &mut world,
-            joint,
-            JointDampingParameters {
-                linear: -0.1,
-                angular: 1.0,
-            },
-        )
-        .is_err());
+        assert!(
+            set_joint_damping(
+                &mut world,
+                joint,
+                JointDampingParameters {
+                    linear: -0.1,
+                    angular: 1.0,
+                },
+            )
+            .is_err()
+        );
     }
 
     #[test]

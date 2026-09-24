@@ -251,7 +251,7 @@ fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_rhai_source, SceneTestKind};
+    use super::{SceneTestKind, classify_rhai_source};
 
     #[test]
     fn omitted_kind_is_headless() {

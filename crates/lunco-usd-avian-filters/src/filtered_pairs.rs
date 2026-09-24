@@ -44,7 +44,7 @@ use avian3d::{
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use lunco_usd_bevy_scene::{instance_key, UsdPrimPath};
+use lunco_usd_bevy_scene::{UsdPrimPath, instance_key};
 use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;

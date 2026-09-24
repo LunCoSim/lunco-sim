@@ -51,19 +51,19 @@
 //!   -error with a logging handler, so the render system no longer unwinds
 //!   mid-frame and panic (2) is avoided.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use bevy::prelude::*;
 use bevy::render::{
+    Render, RenderApp, RenderStartup, RenderSystems,
     extract_resource::{ExtractResource, ExtractResourcePlugin},
     renderer::{RenderAdapterInfo, RenderDevice},
-    Render, RenderApp, RenderStartup, RenderSystems,
 };
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 use lunco_render::{
-    estimate_shadow_allocation_bytes, LightGraphicsDefaults, RenderingQualitySettings,
-    ShadowRangeAuthorship,
+    LightGraphicsDefaults, RenderingQualitySettings, ShadowRangeAuthorship,
+    estimate_shadow_allocation_bytes,
 };
 
 /// Hook id for the authored render-shadow warning policy.
@@ -2063,9 +2063,11 @@ mod tests {
             .count();
         assert_eq!(enabled, 5);
         let mut point_lights = world.query::<&bevy::light::PointLight>();
-        assert!(point_lights
-            .iter(world)
-            .all(|light| light.intensity == 321.0 && light.range == 37.0));
+        assert!(
+            point_lights
+                .iter(world)
+                .all(|light| light.intensity == 321.0 && light.range == 37.0)
+        );
         assert!(estimate_shadow_allocation_bytes(1024, 512, 0, 0, enabled, 0) > 16 * 1024 * 1024);
         assert_eq!(
             health.shadow_estimated_bytes.load(Ordering::Relaxed),
@@ -2085,9 +2087,11 @@ mod tests {
                 .count(),
             1
         );
-        assert!(status_bus
-            .history()
-            .any(|event| event.message.contains("policy warning")));
+        assert!(
+            status_bus
+                .history()
+                .any(|event| event.message.contains("policy warning"))
+        );
 
         let exposures = app
             .world()

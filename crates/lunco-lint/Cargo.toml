@@ -1,7 +1,7 @@
 [package]
 name = "lunco-lint"
 version = "0.1.0-dev"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Universal lint substrate: domain crates supply FACTS, authored rhai policy supplies the RULES, findings land in one report"
 

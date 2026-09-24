@@ -24,11 +24,11 @@
 //! core actually knows (doc 49 §1).
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 
 use lunco_core::GlobalEntityId;
 use lunco_core_session::ControlPathRegistry;
-use lunco_workbench_widgets::{paint_icon, UiIcon};
+use lunco_workbench_widgets::{UiIcon, paint_icon};
 
 /// Draws the control-blackout badge described in the module docs.
 ///

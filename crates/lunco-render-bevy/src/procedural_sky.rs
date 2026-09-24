@@ -11,16 +11,17 @@
 
 use bevy::camera::Camera3d;
 use bevy::core_pipeline::{
-    core_3d::{Opaque3d, Opaque3dBatchSetKey, Opaque3dBinKey, CORE_3D_DEPTH_FORMAT},
     FullscreenShader,
+    core_3d::{CORE_3D_DEPTH_FORMAT, Opaque3d, Opaque3dBatchSetKey, Opaque3dBinKey},
 };
 use bevy::ecs::{
     query::ROQueryItem,
-    system::{lifetimeless::SRes, SystemParamItem},
+    system::{SystemParamItem, lifetimeless::SRes},
 };
 use bevy::pbr::{MaterialBindGroupAllocators, PreparedMaterial, RenderMaterialBindings};
 use bevy::prelude::*;
 use bevy::render::{
+    GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
     erased_render_asset::ErasedRenderAssets,
     extract_component::{ExtractComponent, ExtractComponentPlugin},
     mesh::allocator::MeshSlabs,
@@ -30,17 +31,16 @@ use bevy::render::{
         ViewBinnedRenderPhases,
     },
     render_resource::{
-        binding_types::uniform_buffer, AsBindGroup, BindGroup, BindGroupEntries,
-        BindGroupLayoutDescriptor, BindGroupLayoutEntries, ColorTargetState, ColorWrites,
-        CompareFunction, DepthBiasState, DepthStencilState, FragmentState, MultisampleState,
-        PipelineCache, PrimitiveState, RenderPipelineDescriptor, ShaderStages,
-        SpecializedRenderPipeline, SpecializedRenderPipelines, StencilFaceState, StencilState,
-        TextureFormat, VertexState,
+        AsBindGroup, BindGroup, BindGroupEntries, BindGroupLayoutDescriptor,
+        BindGroupLayoutEntries, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState,
+        DepthStencilState, FragmentState, MultisampleState, PipelineCache, PrimitiveState,
+        RenderPipelineDescriptor, ShaderStages, SpecializedRenderPipeline,
+        SpecializedRenderPipelines, StencilFaceState, StencilState, TextureFormat, VertexState,
+        binding_types::uniform_buffer,
     },
     renderer::RenderDevice,
     sync_world::MainEntity,
     view::{ExtractedView, Msaa, RetainedViewEntity, ViewUniform, ViewUniformOffset, ViewUniforms},
-    GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
 };
 use bevy::shader::Shader;
 use bevy::shader::ShaderDefVal;
@@ -205,7 +205,9 @@ fn wire_celestial_sun_inputs(
             }
             (None, None) => (Vec3::NEG_Z, 0.0),
             _ => {
-                warn_once!("[render] incomplete celestial Sun presentation state; background disc is disabled");
+                warn_once!(
+                    "[render] incomplete celestial Sun presentation state; background disc is disabled"
+                );
                 (Vec3::NEG_Z, 0.0)
             }
         },
@@ -222,7 +224,9 @@ fn wire_celestial_sun_inputs(
             continue;
         }
         if !(has_direction && has_radius) {
-            warn_once!("[render] procedural sky declares only one of `sun_dir_view` and `sun_tan_radius`; celestial Sun inputs require both");
+            warn_once!(
+                "[render] procedural sky declares only one of `sun_dir_view` and `sun_tan_radius`; celestial Sun inputs require both"
+            );
             continue;
         }
         let current_direction = material.get_vec3("sun_dir_view");

@@ -654,8 +654,8 @@ fn workspace_session_key(root: &Path) -> String {
 
 /// Resolve the on-disk path for a Twin's state file (the root must be
 /// non-empty):
-/// `<config>/workspace-state/<fnv1a-hex>.json`. Honours the
-/// `LUNCOSIM_CONFIG` override via `lunco_settings::user_config_dir`.
+/// `<config>/workspace-state/<fnv1a-hex>.json`. Uses the resolved directory
+/// from `lunco_settings::user_config_dir`, including `LUNCOSIM_CONFIG`.
 ///
 /// The root is canonicalized first when possible so cwd-relative and
 /// absolute spellings of the same folder collapse to one key; falls back
@@ -1559,9 +1559,9 @@ mod tests {
     }
 
     /// Per-perspective docks round-trip through serde, and the written form
-    /// carries no single-`dock` field. In-memory — avoids
-    /// the process-global `LUNCOSIM_CONFIG` env var the disk test above
-    /// uses, so it can run in parallel with it.
+    /// carries no single-`dock` field. In-memory — avoids the process-local
+    /// test config override the disk test above installs, so it can run in
+    /// parallel with it.
     #[test]
     fn per_perspective_docks_serde_roundtrip() {
         let state = WorkspaceState {

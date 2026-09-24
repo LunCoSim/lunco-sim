@@ -60,27 +60,27 @@ pub use theme::CanvasThemeSnapshot;
 // `__register_on_auto_arrange_diagram` is the registrar `#[on_command]` generates
 // next to the handler; `register_commands!` in `ui::commands` names the observer by
 // path, so the generated helper has to travel with it through this re-export.
-pub(crate) use loads::on_drill_into_class_requested;
 pub(crate) use loads::DrillIntoClassRequested;
-pub(crate) use ops::on_apply_ops_requested;
+pub(crate) use loads::on_drill_into_class_requested;
 pub(crate) use ops::ApplyOpsRequested;
+pub(crate) use ops::on_apply_ops_requested;
 pub use ops::{
     __register_on_auto_arrange_diagram, active_class_for_doc, active_class_for_doc_ctx,
     apply_ops_public,
 };
 // Op-application core moved to the egui-free `crate::doc_ops` module.
-pub use crate::doc_ops::{apply_one_op_as, drain_pending_structural_ops, PendingStructuralOps};
+pub use crate::doc_ops::{PendingStructuralOps, apply_one_op_as, drain_pending_structural_ops};
 // API-feedback queue data moved to the egui-free `crate::canvas_feedback`.
 pub use edge::ConnectionEdgeData;
 pub use loads::{
-    drill_into_class, drive_drill_in_loads, drive_duplicate_loads, DrillInBinding, DuplicateBinding,
+    DrillInBinding, DuplicateBinding, drill_into_class, drive_drill_in_loads, drive_duplicate_loads,
 };
 pub use node::IconNodeData;
 pub use palette::{DiagramProjectionLimits, PaletteSettings};
 pub use projection::ProjectionTask;
 pub use pulse::{
-    drive_pending_api_connections, drive_pending_api_focus, EdgePulseHandle, PulseEntry,
-    PulseHandle,
+    EdgePulseHandle, PulseEntry, PulseHandle, drive_pending_api_connections,
+    drive_pending_api_focus,
 };
 use pulse::{EdgePulseLayer, PulseGlowLayer};
 

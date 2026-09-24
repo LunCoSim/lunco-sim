@@ -6,7 +6,7 @@
 //! peer (and the worker) regenerates identical basins with nothing to transfer.
 
 use lunco_obstacle_field::field::HeightGrid;
-use lunco_obstacle_field::sampler::{salt, sample_layer, Placement};
+use lunco_obstacle_field::sampler::{Placement, salt, sample_layer};
 use lunco_obstacle_field::spec::{CraterLayer, Pattern};
 
 /// Stamp the [`CraterLayer`] into a DEM working grid as REAL geometry — so the

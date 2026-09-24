@@ -247,11 +247,13 @@ mod tests {
             .unwrap();
         assert_eq!(document.source(), "part def Example {}");
         assert_eq!(document.generation(), 1);
-        assert!(document
-            .analysis()
-            .elements()
-            .iter()
-            .any(|element| element.qualified_name == "Example"));
+        assert!(
+            document
+                .analysis()
+                .elements()
+                .iter()
+                .any(|element| element.qualified_name == "Example")
+        );
         document.apply(inverse).unwrap();
         assert_eq!(document.source(), "part def Rover {}");
     }

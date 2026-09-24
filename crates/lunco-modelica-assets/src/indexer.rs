@@ -1090,17 +1090,6 @@ pub fn run_with_cancel(
         };
     }
     bail_if_cancelled!();
-    // Point rumoca at the same on-disk parse cache the workbench
-    // uses (`<workspace>/.cache/rumoca`), so a run here warms the
-    // cache for the app and vice versa. Same one-liner as
-    // `ClassCachePlugin::build` — keeps all tooling cache under
-    // one roof. Honors an explicit `RUMOCA_CACHE_DIR` the user set.
-    if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
-        let target = lunco_assets_core::cache_dir().join("rumoca");
-        std::env::set_var("RUMOCA_CACHE_DIR", &target);
-        println!("[indexer] using rumoca parse cache at {}", target.display());
-    }
-
     let library_root = opts
         .source_root
         .clone()

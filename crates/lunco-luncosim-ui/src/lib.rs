@@ -20,7 +20,7 @@ pub use offscreen::LunCoSimOffscreenPlugin;
 pub(crate) use save_scenario::SaveScenario;
 #[cfg(feature = "package-icons")]
 pub use ui::WindowIconBytes;
-pub use ui::{add_runtime_ui_layer, InitialScenePath, LunCoSimUiConfig, LunCoSimUiPlugin};
+pub use ui::{InitialScenePath, LunCoSimUiConfig, LunCoSimUiPlugin, add_runtime_ui_layer};
 
 /// Rasterized 64x64 RGBA bytes for the packaged native LunCoSim window icon.
 #[cfg(feature = "package-icons")]

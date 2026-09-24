@@ -76,18 +76,22 @@ def BasisCurves "WrongBasis"
 "#,
         );
         let reader = stage.view();
-        assert!(build_usd_curve_mesh(
-            &reader,
-            &SdfPath::new("/MissingKnots").unwrap(),
-            curve_profile(8, 12),
-        )
-        .is_none());
-        assert!(build_usd_curve_mesh(
-            &reader,
-            &SdfPath::new("/WrongBasis").unwrap(),
-            curve_profile(8, 12),
-        )
-        .is_none());
+        assert!(
+            build_usd_curve_mesh(
+                &reader,
+                &SdfPath::new("/MissingKnots").unwrap(),
+                curve_profile(8, 12),
+            )
+            .is_none()
+        );
+        assert!(
+            build_usd_curve_mesh(
+                &reader,
+                &SdfPath::new("/WrongBasis").unwrap(),
+                curve_profile(8, 12),
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -158,15 +162,17 @@ mod primitive_mesh_quality_tests {
     fn invalid_primitive_mesh_quality_is_rejected() {
         let mut quality = primitive_profile(48, 32);
         quality.primitive_radial_segments = 2;
-        assert!(build_primitive_mesh(
-            ShapeDims::Cylinder {
-                radius: 1.0,
-                height: 2.0,
-                axis: UsdGeomAxis::Y,
-            },
-            quality
-        )
-        .is_none());
+        assert!(
+            build_primitive_mesh(
+                ShapeDims::Cylinder {
+                    radius: 1.0,
+                    height: 2.0,
+                    axis: UsdGeomAxis::Y,
+                },
+                quality
+            )
+            .is_none()
+        );
     }
 }
 

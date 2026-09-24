@@ -1,7 +1,7 @@
 [package]
 name = "lunco-workbench-widgets"
 version = "0.1.0-dev"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Reusable egui widgets shared by LunCoSim domain UI crates"
 

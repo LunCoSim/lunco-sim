@@ -790,8 +790,8 @@ fn propagate_connections_with_cache(
 #[cfg(test)]
 mod wire_order_tests {
     use super::*;
-    use lunco_core::GlobalEntityId;
     use SimComponent;
+    use lunco_core::GlobalEntityId;
 
     /// P10: the fabric is compiled from ECS iteration order, but the SUMMATION
     /// order must be a function of the wires' *identities*, not of the order the
@@ -1310,10 +1310,12 @@ mod wire_order_tests {
             "unexpected faults: {:?}",
             world.resource::<CosimDiagnostics>().faults
         );
-        assert!(world
-            .resource::<lunco_core::RuntimeFaults>()
-            .first
-            .is_none());
+        assert!(
+            world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .is_none()
+        );
 
         let mut unsafe_world = World::new();
         init_builtin_ports(&mut unsafe_world);

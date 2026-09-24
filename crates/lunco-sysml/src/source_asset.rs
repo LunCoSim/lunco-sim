@@ -4,7 +4,7 @@
 //! routed through [`lunco_sysml_ast::SysmlAnalysis`] so editor, test, and
 //! headless paths cannot drift into separate parser behavior.
 
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;
 
 /// The text contents of a `.sysml` or `.kerml` source file.

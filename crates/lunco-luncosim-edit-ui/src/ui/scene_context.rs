@@ -1,7 +1,7 @@
 //! Pointer policies for USD-authored scene markers.
 
-use bevy::picking::pointer::PointerButton;
 use bevy::picking::Pickable;
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use lunco_interaction_core::{PointerInteraction, ScenePointerPolicy};
 

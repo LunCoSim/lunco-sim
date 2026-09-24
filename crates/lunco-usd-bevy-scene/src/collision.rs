@@ -8,14 +8,14 @@
 
 use bevy::prelude::{Quat, Transform, Vec3};
 use lunco_usd_bevy_stage::{
-    effective_purpose, local_transform_at, stage_convention, Purpose, StageView, UsdReadObject,
+    Purpose, StageView, UsdReadObject, effective_purpose, local_transform_at, stage_convention,
 };
 use openusd::schemas::physics::CollisionApprox;
 use openusd::sdf::Path as SdfPath;
 
 use crate::{
-    read_mesh_collision_approximation, read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat,
-    usd_plane_surface_vertices, ShapeDims,
+    ShapeDims, read_mesh_collision_approximation, read_shape_dims, read_usd_mesh_indexed,
+    usd_axis_to_quat, usd_plane_surface_vertices,
 };
 
 /// Small gap (metres) left between an asset's lowest collision point and the

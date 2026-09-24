@@ -388,7 +388,7 @@ impl PdsImage {
                 _ => {
                     return Err(io_err(format!(
                         "unsupported PDS sample layout: {stype} / {bits} bits"
-                    )))
+                    )));
                 }
             };
             // Relative tolerance: a label's decimal missing constant and the

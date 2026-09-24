@@ -52,11 +52,11 @@ use tiff::tags::Tag;
 // projection-parameter keys below are not in its constant set, so they are spelled
 // out here against the spec.
 use geotiff_core::geokeys::{
-    GEOGRAPHIC_TYPE as KEY_GEOG_TYPE, GEOG_ANGULAR_UNITS as KEY_GEOG_ANGULAR_UNITS,
-    GEOG_CITATION as KEY_GEOG_CITATION, GT_CITATION as KEY_GT_CITATION,
+    GEOG_ANGULAR_UNITS as KEY_GEOG_ANGULAR_UNITS, GEOG_CITATION as KEY_GEOG_CITATION,
+    GEOGRAPHIC_TYPE as KEY_GEOG_TYPE, GT_CITATION as KEY_GT_CITATION,
     GT_MODEL_TYPE as KEY_GT_MODEL_TYPE, GT_RASTER_TYPE as KEY_GT_RASTER_TYPE,
-    PROJECTED_CS_TYPE as KEY_PROJECTED_CS_TYPE, PROJECTION as KEY_PROJECTION,
     PROJ_COORD_TRANS as KEY_PROJ_COORD_TRANS, PROJ_LINEAR_UNITS as KEY_PROJ_LINEAR_UNITS,
+    PROJECTED_CS_TYPE as KEY_PROJECTED_CS_TYPE, PROJECTION as KEY_PROJECTION,
 };
 const KEY_GEOG_SEMI_MAJOR: u16 = 2057;
 const KEY_GEOG_SEMI_MINOR: u16 = 2058;
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn tags_written_are_tags_read() {
         use std::io::Cursor;
-        use tiff::encoder::{colortype, TiffEncoder};
+        use tiff::encoder::{TiffEncoder, colortype};
 
         let res = 512usize;
         let want = GeoTransform::centred_square(1002.0, res, 1737.0e3, 26.0371, 3.6584)
@@ -675,7 +675,7 @@ mod tests {
     #[test]
     fn undeclared_frame_reads_back_unknown() {
         use std::io::Cursor;
-        use tiff::encoder::{colortype, TiffEncoder};
+        use tiff::encoder::{TiffEncoder, colortype};
 
         let res = 4usize;
         let tf = GeoTransform::centred_square(8.0, res, 1737.0e3, 0.0, 0.0);
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn area_registered_raster_converts_to_node_based() {
         use std::io::Cursor;
-        use tiff::encoder::{colortype, TiffEncoder};
+        use tiff::encoder::{TiffEncoder, colortype};
 
         let mut buf = Vec::new();
         {
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn anisotropic_pixels_are_rejected() {
         use std::io::Cursor;
-        use tiff::encoder::{colortype, TiffEncoder};
+        use tiff::encoder::{TiffEncoder, colortype};
 
         let mut buf = Vec::new();
         {
@@ -781,7 +781,7 @@ mod tests {
     #[test]
     fn plain_tiff_reports_missing_georeferencing() {
         use std::io::Cursor;
-        use tiff::encoder::{colortype, TiffEncoder};
+        use tiff::encoder::{TiffEncoder, colortype};
 
         let mut buf = Vec::new();
         {

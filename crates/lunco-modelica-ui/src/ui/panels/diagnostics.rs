@@ -22,7 +22,7 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_ui::log::{render_log_view, LogEntry, LogLevel, SourceLoc};
+use lunco_ui::log::{LogEntry, LogLevel, SourceLoc, render_log_view};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::ui::document_context::ModelicaDocuments;
@@ -467,8 +467,8 @@ fn lint_worker_state() -> &'static std::sync::Mutex<LintWorkerState> {
 /// buffer — the main thread drains it every refresh. `None` means
 /// no completion since the last drain.
 #[allow(clippy::type_complexity)]
-fn lint_result_slot(
-) -> &'static std::sync::Arc<std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>>
+fn lint_result_slot()
+-> &'static std::sync::Arc<std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>>
 {
     use std::sync::OnceLock;
     static SLOT: OnceLock<

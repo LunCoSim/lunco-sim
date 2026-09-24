@@ -22,7 +22,7 @@
 
 use bevy::math::DVec3;
 use lunco_celestial::ephemeris::EphemerisProvider;
-use lunco_celestial::geo::{solar_tangent_frame, Geodetic};
+use lunco_celestial::geo::{Geodetic, solar_tangent_frame};
 use lunco_celestial::registry::CelestialBodyRegistry;
 use lunco_celestial_ephemeris::CelestialEphemerisProvider;
 
@@ -62,11 +62,7 @@ fn az_el(
 /// Circular difference in degrees, in [-180, 180].
 fn ang_diff(a: f64, b: f64) -> f64 {
     let d = (a - b).rem_euclid(360.0);
-    if d > 180.0 {
-        d - 360.0
-    } else {
-        d
-    }
+    if d > 180.0 { d - 360.0 } else { d }
 }
 
 fn main() {

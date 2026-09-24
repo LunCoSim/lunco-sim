@@ -509,14 +509,14 @@ pub trait ScriptHook: Send + Sync + 'static {
 #[macro_export]
 macro_rules! declare_hook {
     (
-        id: $id:expr,
-        owner: $owner:expr,
-        description: $description:expr,
+        id: $id:expr_2021,
+        owner: $owner:expr_2021,
+        description: $description:expr_2021,
         signature: [$($parameter:ident : $parameter_type:ident),* $(,)?],
         output: $output:ident,
-        deterministic: $deterministic:expr,
-        required: $required:expr,
-        installable: $installable:expr $(,)?
+        deterministic: $deterministic:expr_2021,
+        required: $required:expr_2021,
+        installable: $installable:expr_2021 $(,)?
     ) => {
         $crate::__inventory::submit! {
             $crate::HookDeclaration {
@@ -829,12 +829,13 @@ pub fn unregister_if(id: &str, expected: &Arc<RegisteredHook>) -> bool {
             .is_some_and(|current| Arc::ptr_eq(current, expected))
             .then(|| hooks.remove(id))
             .flatten()
-            .is_some()
     };
-    if removed {
+    let was_removed = removed.is_some();
+    drop(removed);
+    if was_removed {
         generation_cell().fetch_add(1, Ordering::Relaxed);
     }
-    removed
+    was_removed
 }
 
 /// The declared contract under `id`, if any.

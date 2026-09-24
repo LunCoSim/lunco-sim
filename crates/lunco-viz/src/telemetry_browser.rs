@@ -55,17 +55,17 @@ use std::{collections::HashMap, sync::Arc};
 use bevy::prelude::*;
 use egui;
 use egui_plot::{Line, Plot, PlotPoints};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_settings::SettingsSection;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench_core::commands::OpenTab;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 
-use crate::kinds::canvas_plot_node::{PlotBinding, PlotNodeData, PLOT_NODE_KIND};
+use crate::kinds::canvas_plot_node::{PLOT_NODE_KIND, PlotBinding, PlotNodeData};
 use crate::registry::VisualizationRegistry;
 use crate::signal::{
-    display_channel_label, humanize_identifier, operator_identifier_label, ScalarHistory,
-    SignalExposure, SignalPresentation, SignalRef, SignalRegistry, TelemetryFocus,
+    ScalarHistory, SignalExposure, SignalPresentation, SignalRef, SignalRegistry, TelemetryFocus,
+    display_channel_label, humanize_identifier, operator_identifier_label,
 };
 use crate::view::ViewTarget;
 use crate::viz::{SignalBinding, VisualizationConfig};
@@ -1661,8 +1661,8 @@ impl Panel for TelemetryBrowserPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signal::compact_channel_label;
     use crate::signal::SignalRef;
+    use crate::signal::compact_channel_label;
 
     fn ent(n: u32) -> Entity {
         Entity::from_raw_u32(n).unwrap()

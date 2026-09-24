@@ -55,12 +55,12 @@
 mod api;
 
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_port_core::ports::{PortRegistry, ResolvedPort};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_signal::TelemetryDeadband;
 use lunco_telemetry_core::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
-use lunco_time::{domain_time, ResolvedDomains, TimeBinding, WorldTime};
+use lunco_time::{ResolvedDomains, TimeBinding, WorldTime, domain_time};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
@@ -1202,8 +1202,8 @@ fn read_reflect(world: &World, entity: Entity, path: &str) -> Option<TelemetryVa
 mod tests {
     use super::*;
     use bevy::time::TimeUpdateStrategy;
-    use lunco_port_core::ports::PortDirection;
     use lunco_port_core::Port;
+    use lunco_port_core::ports::PortDirection;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -2071,11 +2071,12 @@ mod tests {
             .id();
         step_fixed(&mut app, 3);
         let sig = lunco_signal::SignalRef::new(e, "doomed".to_string());
-        assert!(app
-            .world()
-            .resource::<lunco_signal::SignalRegistry>()
-            .scalar_history(&sig)
-            .is_some());
+        assert!(
+            app.world()
+                .resource::<lunco_signal::SignalRegistry>()
+                .scalar_history(&sig)
+                .is_some()
+        );
 
         app.world_mut().entity_mut(e).despawn();
         app.update();
@@ -2402,7 +2403,9 @@ mod tests {
 
         let signals = app.world().resource::<lunco_signal::SignalRegistry>();
         assert!(
-            signals.scalar_history(&lunco_signal::SignalRef::new(rover, "keep".to_string())).is_some(),
+            signals
+                .scalar_history(&lunco_signal::SignalRef::new(rover, "keep".to_string()))
+                .is_some(),
             "a sibling channel's history must survive — this is why removal is per-signal, not drop_entity"
         );
         assert!(

@@ -22,12 +22,12 @@ use bevy::prelude::*;
 use lunco_core::MobilityRoot;
 use lunco_mobility::wheel_kinematics::wheel_hub_pose;
 use lunco_mobility::{
-    raycast_contact_point, JointedWheelTire, Suspension, WheelBodyMount, WheelRaycast,
+    JointedWheelTire, Suspension, WheelBodyMount, WheelRaycast, raycast_contact_point,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_spatial::coords::{GridPos, GridRot};
 use lunco_spatial::ActivePhysicsFrame;
-use lunco_usd_geometry::ribbon::{build_ribbon_mesh, RibbonPoint};
+use lunco_spatial::coords::{GridPos, GridRot};
+use lunco_usd_geometry::ribbon::{RibbonPoint, build_ribbon_mesh};
 use lunco_usd_sim_core::PhysicalWheel;
 
 /// Minimum horizontal travel before a new history sample is admitted.

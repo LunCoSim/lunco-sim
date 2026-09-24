@@ -1,7 +1,7 @@
 [package]
 name = "lunco-tools-bevy"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Bevy adapter for the lunco-tools registry: dispatches behaviour-tree `ToolFired` events to the registered tool's `execute()` handler, backed by real ECS access. Keeps lunco-tools itself bevy-free; this is the one crate that bridges the tool abstraction to the ECS world."
 

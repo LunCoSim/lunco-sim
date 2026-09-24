@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use lunco_obstacle_field::spec::{CraterLayer, SizeDist};
-use lunco_terrain_core::{Crater, Craters, ANALYTIC_RADIUS_FLOOR_M};
+use lunco_terrain_core::{ANALYTIC_RADIUS_FLOOR_M, Crater, Craters};
 
 use super::{LayerAttrSource, TerrainLayer};
 use crate::oracle::HeightContribution;

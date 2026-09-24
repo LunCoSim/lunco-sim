@@ -39,7 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub use lunco_hash::{fnv1a64, Fnv1a};
+pub use lunco_hash::{Fnv1a, fnv1a64};
 pub use lunco_storage::{StorageError, StorageResult};
 
 /// Cross-peer content address of a baked blob (CIDv1 raw + sha2-256). Use for an
@@ -47,7 +47,7 @@ pub use lunco_storage::{StorageError, StorageResult};
 /// and verify by identity. A purely local cache never needs it (the fast key
 /// suffices), which is why it is behind the `cid` feature.
 #[cfg(feature = "cid")]
-pub use lunco_hash::content::{cid as blob_cid, Cid};
+pub use lunco_hash::content::{Cid, cid as blob_cid};
 
 /// A cacheable precompute: a pure `bake` plus how to persist/restore its output.
 ///

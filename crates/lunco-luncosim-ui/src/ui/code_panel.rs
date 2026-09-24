@@ -16,8 +16,8 @@ use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_modelica_document::ModelicaDocument;
 use lunco_scene_selection::SelectedEntities;
-use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_scripting::ScriptRegistry;
+use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub(crate) struct CodePanel;

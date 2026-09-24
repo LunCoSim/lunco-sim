@@ -1,7 +1,7 @@
 [package]
 name = "lunco-terrain-bake"
 version = "0.1.0-dev"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Pure (bevy/avian-free) DEM bake pipeline shared by the native async task and the wasm Web Worker: decode GeoTIFF → crop/resample → stamp craters → HeightGrid."
 

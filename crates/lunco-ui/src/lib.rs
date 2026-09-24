@@ -55,14 +55,14 @@ pub mod modal;
 
 /// Common exports. Use `use lunco_ui::prelude::*;`
 pub mod prelude {
-    pub use crate::diagrams::{time_series_plot, ChartSeries};
-    pub use crate::widget;
     pub use crate::Label3D;
     pub use crate::UiSelection;
     pub use crate::WidgetCache;
     pub use crate::WidgetId;
     pub use crate::WidgetSystem;
     pub use crate::WorldPanel;
+    pub use crate::diagrams::{ChartSeries, time_series_plot};
+    pub use crate::widget;
     pub use bevy_egui::egui;
     pub use lunco_theme::{Theme, ThemeMode, ThemePlugin};
 }

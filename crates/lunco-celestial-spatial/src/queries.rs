@@ -13,16 +13,16 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api::{api_param_u64, ApiQueryError, ApiQueryResult};
-use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
+use lunco_api::{ApiQueryError, ApiQueryResult, api_param_u64};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_core::GlobalEntityId;
 use lunco_time::WorldTime;
 
 use crate::link::node_label;
+use lunco_celestial::CelestialBodyRegistry;
 use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
 use lunco_celestial::geo::segment_hits_sphere;
-use lunco_celestial::CelestialBodyRegistry;
 use lunco_celestial_spatial_core::{LinkNode, LinkState, WifiNode, WifiState};
 
 /// Read a `[x,y,z]` array or `{x,y,z}` map into a solar-frame [`DVec3`].

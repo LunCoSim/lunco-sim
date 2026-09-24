@@ -63,7 +63,7 @@ fn script_runtime_error(message: String) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into(), rhai::Position::NONE).into()
 }
 
-use rhai::{Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map, NativeCallContext, AST};
+use rhai::{AST, Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map, NativeCallContext};
 
 use lunco_doc::Diagnostic;
 use lunco_hooks::HookValue;
@@ -5356,9 +5356,11 @@ mod tests {
         );
         let src = "fn on_tick(me, ctx) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
-        assert!(super::build_hoisted_ast(&engine, src, &full, None)
-            .unwrap()
-            .is_none());
+        assert!(
+            super::build_hoisted_ast(&engine, src, &full, None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// Two closures over one outer local SHARE it when either mutates it.

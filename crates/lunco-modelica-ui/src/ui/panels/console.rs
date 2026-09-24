@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_ui::log::{render_log_view, LogBuffer};
+use lunco_ui::log::{LogBuffer, render_log_view};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Panel id.

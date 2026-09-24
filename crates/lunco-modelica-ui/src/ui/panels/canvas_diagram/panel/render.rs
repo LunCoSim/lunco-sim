@@ -1,6 +1,6 @@
 //! Canvas scene rendering and event routing.
 
-use super::super::{ops, overlays, CanvasDiagramState, CanvasSnapSettings};
+use super::super::{CanvasDiagramState, CanvasSnapSettings, ops, overlays};
 use super::interaction::{handle_context_menu, handle_drag_and_drop, handle_node_double_click};
 use super::snapshots::stash_snapshots;
 use super::util::{log_frame_times, mark};

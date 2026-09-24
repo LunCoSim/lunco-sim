@@ -36,14 +36,14 @@ pub mod shader_stage;
 pub mod vertex;
 
 pub use catalog::{
-    is_prop_pickable_source, shader_template, shader_template_kinds, ShaderCatalog, ShaderEntry,
+    ShaderCatalog, ShaderEntry, is_prop_pickable_source, shader_template, shader_template_kinds,
 };
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
-pub use engine_params::{engine_params, AttrRead, EngineParam, EngineParams, EngineSource};
-pub use image_mips::{rgba8_mip_chain, Rgba8MipMode};
+pub use engine_params::{AttrRead, EngineParam, EngineParams, EngineSource, engine_params};
+pub use image_mips::{Rgba8MipMode, rgba8_mip_chain};
 pub use look::{ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, TextureLayer};
 pub use naming::to_snake_case;
-pub use shader_stage::{validate_shader_stage, ShaderStage, ShaderStageError};
+pub use shader_stage::{ShaderStage, ShaderStageError, validate_shader_stage};
 pub use vertex::{
     ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
 };

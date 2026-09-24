@@ -19,13 +19,13 @@ use big_space::prelude::{CellCoord, Grid};
 
 use lunco_time::WorldTime;
 
+use lunco_celestial::CelestialBodyRegistry;
 use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
 use lunco_celestial::frames::{BodyInertial, Pos};
-use lunco_celestial::geo::{solar_tangent_frame, GeodeticAnchor, SiteAnchor};
+use lunco_celestial::geo::{GeodeticAnchor, SiteAnchor, solar_tangent_frame};
 use lunco_celestial::kepler::KeplerOrbit;
 use lunco_celestial::transform::{FrameTree, LibrationAnchor};
-use lunco_celestial::CelestialBodyRegistry;
 use lunco_celestial_spatial_core::{LinkNode, SolarTracked, WifiNode};
 
 /// WHOSE horizon an elevation is measured against — and whether one exists.

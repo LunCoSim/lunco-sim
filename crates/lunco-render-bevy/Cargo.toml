@@ -1,7 +1,7 @@
 [package]
 name = "lunco-render-bevy"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "The bevy_pbr binding layer for LunCoSim. Domain crates state appearance INTENT (lunco-render); this crate is the only one that turns it into a concrete material. Keeping bevy_pbr (and therefore bevy_render → wgpu/naga) confined here is what lets the --no-ui server and the wasm worker link without a GPU stack. Mirrors the lunco-doc / lunco-doc-bevy and focused USD projection package split."
 

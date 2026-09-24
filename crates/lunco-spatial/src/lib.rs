@@ -57,11 +57,11 @@ pub fn find_descendant_or_self<T: Component>(
 }
 
 pub use invariants::BigSpaceInvariantsPlugin;
-pub use navigation::{approach_factor, nav_setpoint, steering_command, NavigationCommand};
+pub use navigation::{NavigationCommand, approach_factor, nav_setpoint, steering_command};
 pub use scene_handoff::SceneSpatialHandoffSet;
 pub use world::{
-    ensure_world_root, ActivePhysicsFrame, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot,
-    WorldShellPlugin, WorldShellSet,
+    ActivePhysicsFrame, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot, WorldShellPlugin,
+    WorldShellSet, ensure_world_root,
 };
 
 use bevy::prelude::*;

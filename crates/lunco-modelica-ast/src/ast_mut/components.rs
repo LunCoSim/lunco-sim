@@ -9,7 +9,7 @@ use rumoca_ir_ast::ClassDef;
 use super::clause;
 use super::edit::Edit;
 use super::errors::AstMutError;
-use super::parsing::{parse_component_fragment, parse_value_fragment, FRAGMENT_CLASS_NAME};
+use super::parsing::{FRAGMENT_CLASS_NAME, parse_component_fragment, parse_value_fragment};
 use super::text;
 use crate::pretty;
 

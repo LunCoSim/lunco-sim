@@ -759,14 +759,18 @@ mod tests {
             Err(TwinRootsError::InvalidOverlayPath(_))
         ));
 
-        assert!(roots
-            .overlay_for(Path::new("moonbase/../outside.usda"))
-            .expect("read overlay registry")
-            .is_none());
-        assert!(roots
-            .overlay_for(Path::new("../outside/scene.usda"))
-            .expect("read overlay registry")
-            .is_none());
+        assert!(
+            roots
+                .overlay_for(Path::new("moonbase/../outside.usda"))
+                .expect("read overlay registry")
+                .is_none()
+        );
+        assert!(
+            roots
+                .overlay_for(Path::new("../outside/scene.usda"))
+                .expect("read overlay registry")
+                .is_none()
+        );
     }
 
     /// Two unrelated folders can carry the same name (`twin.toml` name, or a
@@ -905,10 +909,12 @@ mod tests {
 
         assert!(roots.names().expect("read Twin registry").is_empty());
         assert!(roots.root_of(&name).expect("read Twin registry").is_none());
-        assert!(roots
-            .overlay_for(Path::new("moonbase/scene.usda"))
-            .expect("read overlay registry")
-            .is_none());
+        assert!(
+            roots
+                .overlay_for(Path::new("moonbase/scene.usda"))
+                .expect("read overlay registry")
+                .is_none()
+        );
     }
 
     #[test]
@@ -931,18 +937,24 @@ mod tests {
         roots.unregister_name(&session).expect("unregister session");
 
         assert!(roots.root_of(&twin).expect("read Twin registry").is_some());
-        assert!(roots
-            .root_of(&session)
-            .expect("read Twin registry")
-            .is_none());
-        assert!(roots
-            .overlay_for(Path::new("moonbase/scene.usda"))
-            .expect("read overlay registry")
-            .is_some());
-        assert!(roots
-            .overlay_for(Path::new("__viewport_1/scene.usda"))
-            .expect("read overlay registry")
-            .is_none());
+        assert!(
+            roots
+                .root_of(&session)
+                .expect("read Twin registry")
+                .is_none()
+        );
+        assert!(
+            roots
+                .overlay_for(Path::new("moonbase/scene.usda"))
+                .expect("read overlay registry")
+                .is_some()
+        );
+        assert!(
+            roots
+                .overlay_for(Path::new("__viewport_1/scene.usda"))
+                .expect("read overlay registry")
+                .is_none()
+        );
     }
 
     #[test]

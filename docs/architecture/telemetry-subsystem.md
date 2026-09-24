@@ -553,7 +553,8 @@ travelled through the *filesystem* rather than through the code.
 Nine crates register settings sections; two isolated their config dir. Rather than patch seven
 test suites (which the next new test would forget), the gate now lives at the two I/O sites in
 `lunco-settings`: `disk_backed()` makes a **cargo-test binary in-memory-only** — no read, no
-write — unless it explicitly names a config dir via `LUNCOSIM_CONFIG`. A test binary is detected
+write — unless it explicitly names a config dir via `LUNCOSIM_CONFIG` or
+`isolate_config_dir_for_tests`. A test binary is detected
 by its parent directory being `deps/` (nothing legitimately runs an app from there), and
 `a_test_binary_is_detected_as_such` asserts this from *inside* a test binary, so the guard fails
 loudly rather than silently opening back up.

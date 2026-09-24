@@ -13,9 +13,9 @@ use crate::ui::document_context::ModelicaDocuments;
 use lunco_modelica_ast::pretty::{self, Placement};
 use lunco_modelica_document::ModelicaOp;
 
-use super::coords::{canvas_to_modelica, ModelicaPos};
+use super::coords::{ModelicaPos, canvas_to_modelica};
 use super::projection::projection_relevant_source_hash;
-use super::{active_doc_from_world, active_doc_from_world_ctx, CanvasDiagramState, IconNodeData};
+use super::{CanvasDiagramState, IconNodeData, active_doc_from_world, active_doc_from_world_ctx};
 use crate::model_tabs_types::TabRenderContext;
 
 /// Apply canvas-authored operations after the panel has finished painting.

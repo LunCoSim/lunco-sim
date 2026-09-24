@@ -37,7 +37,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3, Dir3};
 use bevy::prelude::*;
 use lunco_spatial::coords::{GridPos, RenderPos};
-use lunco_terrain_core::{normal_at_bounded, HeightSource};
+use lunco_terrain_core::{HeightSource, normal_at_bounded};
 
 use crate::oracle::DemHeightField;
 

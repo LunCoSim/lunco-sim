@@ -19,7 +19,7 @@ use lunco_terrain_core::{HeightSource, QuadCoord, Square};
 
 use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
-use crate::tile_mesh::{bake_tile_mesh, TileMesh};
+use crate::tile_mesh::{TileMesh, bake_tile_mesh};
 
 /// Bump when `bake_tile_mesh` math (heights, normals eps, morph snap, edge masks,
 /// detail gating) or the blob layout changes.

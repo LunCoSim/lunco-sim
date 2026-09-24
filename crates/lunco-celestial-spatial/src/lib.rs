@@ -9,8 +9,8 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::{
-    update_reference_frame_index, AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSunPresentation,
-    LocalGravityField, OrbitalViewPin, ReferenceFrameIndex, SolarSystemRoot,
+    AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSunPresentation, LocalGravityField,
+    OrbitalViewPin, ReferenceFrameIndex, SolarSystemRoot, update_reference_frame_index,
 };
 use lunco_render::SceneCamera;
 // Gravity *types* now live in lunco-environment; celestial owns only the

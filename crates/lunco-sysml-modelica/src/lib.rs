@@ -7,7 +7,7 @@
 //! `lunco-modelica-ast::parse_to_ast` so Rumoca owns Modelica syntax and
 //! recovery/validation.
 
-use lunco_modelica_ast::{parse_to_ast, StoredDefinition};
+use lunco_modelica_ast::{StoredDefinition, parse_to_ast};
 use lunco_sysml_ir::{
     CompiledConstraint, ConstraintIr, IrExpression, IrExpressionKind, IrLiteral, IrOperator,
     IrStandardConstant, IrStandardFunction, IrType, IrValueType,
@@ -456,7 +456,9 @@ fn modelica_expression(
                 ModelicaStandardFunction::Floor => format!("floor({})", unary()?),
                 ModelicaStandardFunction::Round => {
                     let value = unary()?;
-                    format!("(if ({value}) >= 0 then floor(({value}) + 0.5) else -floor(-({value}) + 0.5))")
+                    format!(
+                        "(if ({value}) >= 0 then floor(({value}) + 0.5) else -floor(-({value}) + 0.5))"
+                    )
                 }
                 ModelicaStandardFunction::Sin => format!("sin({})", unary()?),
                 ModelicaStandardFunction::Cos => format!("cos({})", unary()?),

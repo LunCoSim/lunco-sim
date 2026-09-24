@@ -15,11 +15,12 @@ use lunco_sysml_ast::{
     SysmlUnsupportedExpression,
 };
 use lunco_sysml_ir::{
-    compile_constraint_by_name, evaluate_constraint, BindingContract, BindingProvider,
-    CompiledConstraint, CompiledConstraint as IrCompiledConstraint, ConstraintIr,
-    DiagnosticSeverity, EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation,
-    IrDiagnostic, IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
+    BindingContract, BindingProvider, CompiledConstraint,
+    CompiledConstraint as IrCompiledConstraint, ConstraintIr, DiagnosticSeverity,
+    EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
+    IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
     IrStandardFunction, IrType, IrValue, IrValueType, ObservationState, VerificationVerdict,
+    compile_constraint_by_name, evaluate_constraint,
 };
 use lunco_sysml_modelica::{lower_constraint, supports_standard_function_lowering};
 use rhai::{Dynamic, Engine, Map};

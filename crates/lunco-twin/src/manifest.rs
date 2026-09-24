@@ -776,22 +776,30 @@ suppress_missing_prompt = true
     fn generic_settings_validate_and_update_without_schema_fields() {
         let mut manifest = TwinManifest::new("x");
         assert_eq!(manifest.setting("ui.camera_status"), None);
-        assert!(manifest
-            .set_setting("ui.camera_status", TwinSettingValue::Bool(true))
-            .unwrap());
-        assert!(!manifest
-            .set_setting("ui.camera_status", TwinSettingValue::Bool(true))
-            .unwrap());
+        assert!(
+            manifest
+                .set_setting("ui.camera_status", TwinSettingValue::Bool(true))
+                .unwrap()
+        );
+        assert!(
+            !manifest
+                .set_setting("ui.camera_status", TwinSettingValue::Bool(true))
+                .unwrap()
+        );
         assert_eq!(
             manifest.setting("ui.camera_status"),
             Some(&TwinSettingValue::Bool(true))
         );
-        assert!(manifest
-            .set_setting("ui.bad key", TwinSettingValue::Bool(true))
-            .is_err());
-        assert!(manifest
-            .set_setting("ui.bad", TwinSettingValue::Number(f64::NAN))
-            .is_err());
+        assert!(
+            manifest
+                .set_setting("ui.bad key", TwinSettingValue::Bool(true))
+                .is_err()
+        );
+        assert!(
+            manifest
+                .set_setting("ui.bad", TwinSettingValue::Number(f64::NAN))
+                .is_err()
+        );
     }
 
     #[test]
@@ -859,13 +867,15 @@ path = "plugins/libchrono_terrain.so"
             plugin.resolve(Path::new("/twins/demo")).unwrap(),
             PathBuf::from("/twins/demo/plugins/libchrono_terrain.so")
         );
-        assert!(NativePluginManifest {
-            id: "chrono-terrain".into(),
-            path: PathBuf::from("../escape.so"),
-            enabled: true,
-        }
-        .resolve(Path::new("/twins/demo"))
-        .is_err());
+        assert!(
+            NativePluginManifest {
+                id: "chrono-terrain".into(),
+                path: PathBuf::from("../escape.so"),
+                enabled: true,
+            }
+            .resolve(Path::new("/twins/demo"))
+            .is_err()
+        );
     }
 
     #[test]
@@ -976,14 +986,20 @@ uuid = "{id}"
     fn a_twin_that_declares_nothing_still_finds_its_scenes() {
         // Undeclared is the existing state of every twin on disk; the fallback
         // is what keeps them working until they say so themselves.
-        assert!(DEFAULT_SCENE_GLOBS
-            .iter()
-            .any(|g| glob_matches(g, "sim/scenes/traverse.usda")));
-        assert!(DEFAULT_SCENE_GLOBS
-            .iter()
-            .any(|g| glob_matches(g, "scenes/tests/link.usda")));
-        assert!(!DEFAULT_SCENE_GLOBS
-            .iter()
-            .any(|g| glob_matches(g, "models/rover.usda")));
+        assert!(
+            DEFAULT_SCENE_GLOBS
+                .iter()
+                .any(|g| glob_matches(g, "sim/scenes/traverse.usda"))
+        );
+        assert!(
+            DEFAULT_SCENE_GLOBS
+                .iter()
+                .any(|g| glob_matches(g, "scenes/tests/link.usda"))
+        );
+        assert!(
+            !DEFAULT_SCENE_GLOBS
+                .iter()
+                .any(|g| glob_matches(g, "models/rover.usda"))
+        );
     }
 }

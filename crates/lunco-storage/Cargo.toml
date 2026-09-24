@@ -1,7 +1,7 @@
 [package]
 name = "lunco-storage"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "I/O abstraction for LunCoSim — Storage trait + backends (FileStorage today; IndexedDB/OPFS/HTTP tomorrow). Keeps the document and workspace layers free of filesystem assumptions so the same save/load flow works on native, web, and remote twins."
 

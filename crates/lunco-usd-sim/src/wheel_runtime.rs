@@ -7,7 +7,7 @@ use bevy::math::DVec3;
 use bevy::prelude::{Entity, World};
 use lunco_mobility::{JointedWheelTire, Suspension, WheelRaycast};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_sim_authoring::WheelParams;
 use lunco_usd_sim_core::PhysicalWheel;
 use openusd::sdf::Path as SdfPath;

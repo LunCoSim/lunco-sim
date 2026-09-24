@@ -1,7 +1,7 @@
 [package]
 name = "lunco-hash"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "The workspace hashing substrate — two tiers behind one field-streaming front-end. Fast tier: FNV-1a change/cache keys (dependency-free, wasm-clean, byte-locked). CID tier (feature `cid`): CIDv1 raw+sha2-256 content addresses for on-disk/on-wire content. Draws the firewall between process-local ephemeral keys and cross-peer persisted content."
 

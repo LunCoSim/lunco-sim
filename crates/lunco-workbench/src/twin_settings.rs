@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_twin::TwinSettingValue;
-use lunco_workbench_widgets::{icon_button, text_editor, UiIcon};
+use lunco_workbench_widgets::{UiIcon, icon_button, text_editor};
 use lunco_workspace::{
     ResetTwinSetting, SetTwinSetting, TwinClosed, TwinId, TwinSettingInput, WorkspaceResource,
 };

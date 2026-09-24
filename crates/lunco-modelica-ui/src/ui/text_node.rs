@@ -16,8 +16,8 @@
 //! handles `DynamicSelect`.
 
 use bevy_egui::egui;
-use lunco_canvas::visual::{DrawCtx, NodeVisual};
 use lunco_canvas::Node;
+use lunco_canvas::visual::{DrawCtx, NodeVisual};
 
 /// Stable kind id used in `Node::kind` and the `VisualRegistry`.
 pub const TEXT_NODE_KIND: &str = "lunco.modelica.text";

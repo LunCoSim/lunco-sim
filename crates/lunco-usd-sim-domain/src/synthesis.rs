@@ -1453,9 +1453,11 @@ pub(super) fn partition_network(network: &DomainNetwork) -> Vec<NetworkUnitFact>
                 .unwrap_or(first)
                 .trim_matches('/');
             let name = format!("Unit_{}", modelica_path_identifier(relative));
-            debug_assert!(component_paths
-                .iter()
-                .all(|path| component_by_path.contains_key(path.as_str())));
+            debug_assert!(
+                component_paths
+                    .iter()
+                    .all(|path| component_by_path.contains_key(path.as_str()))
+            );
             NetworkUnitFact {
                 name,
                 component_paths,

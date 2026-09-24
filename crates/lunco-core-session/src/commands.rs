@@ -1,7 +1,7 @@
 //! Typed commands owned by the session and identity subsystem.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 use crate::authority::{claim_control, release_control_target};
 use crate::{LocalSession, NetworkRole, SessionRbac, SessionRegistry, SyncApplyGuard};

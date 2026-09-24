@@ -41,9 +41,17 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::prelude::*;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+static EPHEMERAL_SETTINGS: AtomicBool = AtomicBool::new(false);
+static TEST_CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Environment variable that marks child processes as ephemeral settings users.
+pub const EPHEMERAL_SETTINGS_VAR: &str = "LUNCOSIM_EPHEMERAL_SETTINGS";
 
 /// A slice of `settings.json` owned by one feature.
 ///
@@ -84,8 +92,12 @@ pub trait SettingsSection:
 ///
 /// This is the single owner of the configuration path used by settings,
 /// recents, identities, layouts, and other per-user state. It is separate
-/// from the regenerable asset cache owned by `lunco-assets-core`.
+/// from the regenerable asset cache owned by `lunco-assets-core`. A
+/// process-local test directory takes precedence over `LUNCOSIM_CONFIG`.
 pub fn user_config_dir() -> PathBuf {
+    if let Some(dir) = TEST_CONFIG_DIR.get() {
+        return dir.clone();
+    }
     if let Some(val) = std::env::var_os("LUNCOSIM_CONFIG") {
         return PathBuf::from(val);
     }
@@ -376,11 +388,6 @@ fn is_test_binary() -> bool {
     false
 }
 
-/// Environment variable that forces the settings plane in-memory for this process.
-///
-/// See [`use_ephemeral_settings`] — set through that function, never by hand.
-pub const EPHEMERAL_SETTINGS_VAR: &str = "LUNCOSIM_EPHEMERAL_SETTINGS";
-
 /// Declare that this process must never write the user's settings file.
 ///
 /// [`is_test_binary`] catches `cargo test` harnesses because they live in
@@ -402,10 +409,10 @@ pub const EPHEMERAL_SETTINGS_VAR: &str = "LUNCOSIM_EPHEMERAL_SETTINGS";
 /// [`AppSettingsExt::register_settings_section`], which is what auto-adds
 /// [`SettingsPlugin`] and performs the initial load). It gates the whole plane,
 /// so a harness declares it once regardless of how many sections it registers.
+/// The environment marker [`EPHEMERAL_SETTINGS_VAR`] remains available to
+/// launchers that need to pass the setting to a child process.
 pub fn use_ephemeral_settings() {
-    // SAFETY-adjacent: must be called before the App is built, i.e. before any
-    // settings system spawns a thread that could read the environment.
-    unsafe { std::env::set_var(EPHEMERAL_SETTINGS_VAR, "1") };
+    EPHEMERAL_SETTINGS.store(true, Ordering::Release);
 }
 
 /// Whether the settings plane may touch the filesystem at all.
@@ -423,23 +430,23 @@ pub fn use_ephemeral_settings() {
 /// count*, because the poison travelled through the filesystem rather than the code.
 ///
 /// So: a test binary is **in-memory only** — no read, no write — unless it explicitly names
-/// a config dir via `LUNCOSIM_CONFIG` (which is how a test that genuinely wants to exercise
-/// persistence opts in, pointing at a temp dir; see [`isolate_config_dir_for_tests`]).
+/// a config dir via `LUNCOSIM_CONFIG` or [`isolate_config_dir_for_tests`] (which is how a
+/// test that genuinely wants to exercise persistence opts in, pointing at a temp dir).
 ///
 /// Nine crates register settings sections. Gating here means none of them has to remember.
 fn disk_backed() -> bool {
-    // Checked FIRST, ahead of `LUNCOSIM_CONFIG`: this is the safety direction. A
-    // harness that declared itself ephemeral must stay ephemeral even if the
-    // ambient environment also names a config dir.
-    if std::env::var_os(EPHEMERAL_SETTINGS_VAR).is_some() {
-        return false;
-    }
-    // An explicit config dir is an explicit choice — honour it. Tests that want to test
-    // persistence set it to a throwaway path.
-    if std::env::var_os("LUNCOSIM_CONFIG").is_some() {
-        return true;
-    }
-    !is_test_binary()
+    let explicit_config =
+        TEST_CONFIG_DIR.get().is_some() || std::env::var_os("LUNCOSIM_CONFIG").is_some();
+    settings_are_disk_backed(
+        EPHEMERAL_SETTINGS.load(Ordering::Acquire)
+            || std::env::var_os(EPHEMERAL_SETTINGS_VAR).is_some(),
+        explicit_config,
+        is_test_binary(),
+    )
+}
+
+fn settings_are_disk_backed(ephemeral: bool, explicit_config: bool, test_binary: bool) -> bool {
+    !ephemeral && (explicit_config || !test_binary)
 }
 
 /// Point the settings plane at a throwaway config directory.
@@ -462,13 +469,11 @@ fn disk_backed() -> bool {
 ///
 /// Idempotent and safe to call from every test.
 pub fn isolate_config_dir_for_tests(tag: &str) {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
+    TEST_CONFIG_DIR.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!("lunco-test-config-{tag}"));
         let _ = lunco_storage::ensure_directory_sync(&dir);
         let _ = lunco_storage::delete_file_sync(&dir.join("settings.json"));
-        // `user_config_dir()` reads this first — see its docs.
-        std::env::set_var("LUNCOSIM_CONFIG", &dir);
+        dir
     });
 }
 
@@ -900,7 +905,7 @@ mod disk_guard_tests {
     fn a_test_process_does_not_touch_the_real_config_by_default() {
         // Only meaningful when the env override is absent — which is the state a plain
         // `cargo test` runs in.
-        if std::env::var_os("LUNCOSIM_CONFIG").is_none() {
+        if std::env::var_os("LUNCOSIM_CONFIG").is_none() && TEST_CONFIG_DIR.get().is_none() {
             assert!(
                 !disk_backed(),
                 "a test binary must never read or write the real settings"
@@ -912,44 +917,25 @@ mod disk_guard_tests {
     /// making a safety claim; an ambient `LUNCOSIM_CONFIG` in the surrounding shell
     /// must not quietly re-open the developer's real settings file underneath it.
     ///
-    /// Serial by construction: it mutates process environment, so it restores both
-    /// variables before returning.
     #[test]
     fn ephemeral_beats_an_explicit_config_dir() {
-        let prev_cfg = std::env::var_os("LUNCOSIM_CONFIG");
-        let prev_eph = std::env::var_os(EPHEMERAL_SETTINGS_VAR);
-
-        unsafe { std::env::set_var("LUNCOSIM_CONFIG", "/nonexistent/should-not-be-read") };
         assert!(
-            disk_backed(),
+            settings_are_disk_backed(false, true, true),
             "an explicit config dir must still opt a test process back in"
         );
-
-        use_ephemeral_settings();
         assert!(
-            !disk_backed(),
+            !settings_are_disk_backed(true, true, true),
             "`use_ephemeral_settings` must win over LUNCOSIM_CONFIG — this is the guard \
              that keeps `scene_test` from persisting CelestialCadenceSettings::EXACT into \
              the developer's real settings.json"
         );
-
-        unsafe {
-            match prev_cfg {
-                Some(v) => std::env::set_var("LUNCOSIM_CONFIG", v),
-                None => std::env::remove_var("LUNCOSIM_CONFIG"),
-            }
-            match prev_eph {
-                Some(v) => std::env::set_var(EPHEMERAL_SETTINGS_VAR, v),
-                None => std::env::remove_var(EPHEMERAL_SETTINGS_VAR),
-            }
-        }
     }
 
     /// A dirty in-memory Settings must NOT write when the guard is closed — and must clear
     /// its dirty bit so it doesn't retry every frame.
     #[test]
     fn write_if_dirty_is_a_noop_under_the_guard() {
-        if std::env::var_os("LUNCOSIM_CONFIG").is_some() {
+        if std::env::var_os("LUNCOSIM_CONFIG").is_some() || TEST_CONFIG_DIR.get().is_some() {
             return; // persistence is explicitly enabled; nothing to assert here
         }
         let mut s = Settings::default();
@@ -969,9 +955,15 @@ mod disk_guard_tests {
     fn an_explicit_config_dir_re_enables_persistence() {
         // Deliberately not mutating the process env here (it is global and would race with
         // the tests above). Assert the policy directly.
-        assert!(
-            disk_backed() == std::env::var_os("LUNCOSIM_CONFIG").is_some() || !is_test_binary(),
-            "LUNCOSIM_CONFIG must be the opt-in for a test binary"
+        assert_eq!(
+            disk_backed(),
+            settings_are_disk_backed(
+                EPHEMERAL_SETTINGS.load(Ordering::Acquire)
+                    || std::env::var_os(EPHEMERAL_SETTINGS_VAR).is_some(),
+                std::env::var_os("LUNCOSIM_CONFIG").is_some() || TEST_CONFIG_DIR.get().is_some(),
+                is_test_binary(),
+            ),
+            "settings persistence must follow the process-local and explicit path policy"
         );
     }
 }

@@ -28,7 +28,7 @@ use big_space::prelude::CellCoord;
 use lunco_render::SceneCamera;
 use lunco_terrain_surface::{BrushTerrain, FlattenTerrain, PlaceCrater, PlaceRock};
 
-use crate::surface_pick::{cursor_surface_hit, SurfacePickPolicy};
+use crate::surface_pick::{SurfacePickPolicy, cursor_surface_hit};
 
 /// Which terrain brush is armed. `None` = the tool is off and clicks pass
 /// through to possess / select as usual.

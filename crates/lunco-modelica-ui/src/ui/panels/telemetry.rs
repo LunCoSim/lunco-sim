@@ -693,7 +693,7 @@ fn render_selected_components_inspector(
     muted: egui::Color32,
 ) {
     use crate::ui::panels::canvas_diagram::{
-        active_class_for_doc_ctx, active_doc_from_world_ctx, CanvasDiagramState, IconNodeData,
+        CanvasDiagramState, IconNodeData, active_class_for_doc_ctx, active_doc_from_world_ctx,
     };
     use lunco_modelica_document::ModelicaOp;
 

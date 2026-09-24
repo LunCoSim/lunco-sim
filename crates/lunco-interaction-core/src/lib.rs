@@ -87,9 +87,7 @@ impl SceneInteractionMode {
     /// Whether the configured semantic intents assign this click exclusively
     /// to the simulation's ordinary selection/possession gesture.
     pub fn possession_owns_pointer(self, intents: &[String]) -> bool {
-        matches!(self, Self::Simulation)
-            && intents.len() == 1
-            && intents[0] == "selection.replace"
+        matches!(self, Self::Simulation) && intents.len() == 1 && intents[0] == "selection.replace"
     }
 }
 

@@ -128,10 +128,7 @@ fn runtime_has_content(runtime: &openusd::sdf::Data) -> bool {
     runtime.iter().any(|(_, spec)| spec.ty == SpecType::Prim)
 }
 
-async fn persist_runtime_overlay(
-    path: PathBuf,
-    runtime: openusd::sdf::Data,
-) -> Result<(), String> {
+async fn persist_runtime_overlay(path: PathBuf, runtime: openusd::sdf::Data) -> Result<(), String> {
     let handle = StorageHandle::File(path.clone());
     if !runtime_has_content(&runtime) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -261,7 +258,8 @@ fn restore_pending_runtime(
         return false;
     };
     if let Some(host) = registry.host_mut(doc) {
-        host.document_mut().restore_runtime(job.latest.runtime.clone());
+        host.document_mut()
+            .restore_runtime(job.latest.runtime.clone());
     }
     true
 }
@@ -410,7 +408,9 @@ fn poll_runtime_save_jobs(
 ) {
     let mut completed = Vec::new();
     for (path, job) in &mut saves.0 {
-        let Some(task) = job.task.as_mut() else { continue };
+        let Some(task) = job.task.as_mut() else {
+            continue;
+        };
         if let Some(outcome) = future::block_on(future::poll_once(task)) {
             completed.push((path.clone(), outcome));
         }
@@ -425,15 +425,12 @@ fn poll_runtime_save_jobs(
         match outcome.result {
             Ok(()) => {
                 if registry.host(outcome.doc).is_some() {
-                    saved_revisions
-                        .0
-                        .insert(outcome.doc, outcome.revision);
+                    saved_revisions.0.insert(outcome.doc, outcome.revision);
                 }
             }
             Err(error) => warn!(
                 "[usd-runtime] save of document {} revision {} failed: {error}",
-                outcome.doc,
-                outcome.revision
+                outcome.doc, outcome.revision
             ),
         }
         if let Some(request) = job.pending.take() {
@@ -493,9 +490,9 @@ mod tests {
     use super::*;
     use lunco_doc::{Document, DocumentOrigin};
     use lunco_storage::StorageEntryKind;
+    use lunco_usd_authoring::author::usda_to_data;
     use lunco_usd_core::runtime::RUNTIME_PERSISTENCE_SETTING;
     use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
-    use lunco_usd_authoring::author::usda_to_data;
     use openusd::sdf::Path as SdfPath;
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
@@ -746,8 +743,7 @@ mod tests {
                 reference_prim_path: None,
             })
             .unwrap();
-        let stale_text =
-            lunco_usd_authoring::author::data_to_usda(stale.runtime_data()).unwrap();
+        let stale_text = lunco_usd_authoring::author::data_to_usda(stale.runtime_data()).unwrap();
         write_bytes(&latest_path, stale_text.as_bytes()).unwrap();
 
         let mut latest = UsdDocument::with_origin(
@@ -783,14 +779,18 @@ mod tests {
         let (latest_doc, _) = registry.open_file(latest_scene, TINY.to_owned());
         restore_doc_runtime_with_pending(&ws, &mut registry, &saves, latest_doc);
         let latest_document = registry.host(latest_doc).unwrap().document();
-        assert!(latest_document
-            .runtime_data()
-            .spec(&SdfPath::new("/World/latest").unwrap())
-            .is_some());
-        assert!(latest_document
-            .runtime_data()
-            .spec(&SdfPath::new("/World/stale").unwrap())
-            .is_none());
+        assert!(
+            latest_document
+                .runtime_data()
+                .spec(&SdfPath::new("/World/latest").unwrap())
+                .is_some()
+        );
+        assert!(
+            latest_document
+                .runtime_data()
+                .spec(&SdfPath::new("/World/stale").unwrap())
+                .is_none()
+        );
 
         let empty_scene = dir.path().join("empty.usda");
         let empty_path = runtime_path(&ws, &empty_scene).unwrap();
@@ -829,40 +829,35 @@ mod tests {
         app.add_systems(Last, defer_exit_until_runtime_saves_finish);
 
         let path = PathBuf::from("/twin/.lunco/runtime/scene.usda");
-        app.world_mut()
-            .resource_mut::<RuntimeSaveJobs>()
-            .0
-            .insert(
-                path.clone(),
-                RuntimeSaveJob {
-                    task: None,
-                    pending: None,
-                    latest: RuntimeSaveRequest {
-                        doc: DocumentId::new(43),
-                        revision: 1,
-                        path,
-                        runtime: usda_to_data(TINY).unwrap(),
-                    },
+        app.world_mut().resource_mut::<RuntimeSaveJobs>().0.insert(
+            path.clone(),
+            RuntimeSaveJob {
+                task: None,
+                pending: None,
+                latest: RuntimeSaveRequest {
+                    doc: DocumentId::new(43),
+                    revision: 1,
+                    path,
+                    runtime: usda_to_data(TINY).unwrap(),
                 },
-            );
+            },
+        );
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<AppExit>>()
             .write(AppExit::Success);
 
         app.update();
-        assert!(app
-            .world()
-            .resource::<bevy::ecs::message::Messages<AppExit>>()
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<bevy::ecs::message::Messages<AppExit>>()
+                .is_empty()
+        );
         assert_eq!(
             app.world().resource::<DeferredRuntimeExit>().0,
             [AppExit::Success]
         );
 
-        app.world_mut()
-            .resource_mut::<RuntimeSaveJobs>()
-            .0
-            .clear();
+        app.world_mut().resource_mut::<RuntimeSaveJobs>().0.clear();
         app.update();
         assert_eq!(
             app.world()

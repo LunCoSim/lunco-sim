@@ -337,7 +337,6 @@ fn install_panic_hook() {
         eprint!("{msg}");
         default(info);
     }));
-    std::env::set_var("RUST_BACKTRACE", "1");
 }
 
 // ─────────────────────────────────────────────────────────────────────

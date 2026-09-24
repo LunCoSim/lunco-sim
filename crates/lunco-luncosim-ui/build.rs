@@ -104,8 +104,8 @@ mod package_icons {
     }
 
     fn write_windows_ico(tree: &usvg::Tree, destination: &Path) {
-        use image::codecs::ico::{IcoEncoder, IcoFrame};
         use image::ExtendedColorType;
+        use image::codecs::ico::{IcoEncoder, IcoFrame};
 
         let sizes = [16_u32, 24, 32, 48, 64, 128, 256];
         let frames: Vec<IcoFrame<'static>> = sizes

@@ -17,7 +17,7 @@ use lunco_canvas::{
 
 use lunco_modelica_index::visual_diagram::{DiagramNodeId, VisualDiagram};
 
-use super::edge::{port_edge_dir, ConnectionEdgeData, PortDir};
+use super::edge::{ConnectionEdgeData, PortDir, port_edge_dir};
 use super::node::IconNodeData;
 use super::port::{port_fallback_offset_for_size, port_kind_str, resolve_port_icons};
 use super::si_unit_suffix;
@@ -107,11 +107,7 @@ pub(super) fn recover_edges_from_ast(
                 e.target_port.clone(),
             );
             // Canonicalise to min/max so (A.x, B.y) == (B.y, A.x).
-            if a <= b {
-                (a, b)
-            } else {
-                (b, a)
-            }
+            if a <= b { (a, b) } else { (b, a) }
         })
         .collect();
 
@@ -156,11 +152,7 @@ pub(super) fn recover_edges_from_ast(
             let pair = {
                 let a = (src_comp.clone(), src_port.clone());
                 let b = (tgt_comp.clone(), tgt_port.clone());
-                if a <= b {
-                    (a, b)
-                } else {
-                    (b, a)
-                }
+                if a <= b { (a, b) } else { (b, a) }
             };
             if existing.contains(&pair) {
                 continue;

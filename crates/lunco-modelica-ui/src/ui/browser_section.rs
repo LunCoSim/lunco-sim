@@ -440,11 +440,7 @@ fn generated_network_open_class(
 }
 
 fn plural_suffix(count: usize) -> &'static str {
-    if count == 1 {
-        ""
-    } else {
-        "s"
-    }
+    if count == 1 { "" } else { "s" }
 }
 
 fn class_tree_matches(class: &ClassEntry, query: &BrowserQuery) -> bool {
@@ -1322,10 +1318,12 @@ end CompositeFixture;
             );
         }
         // Qualified path correctness.
-        assert!(cs[0]
-            .children
-            .iter()
-            .any(|c| c.qualified_path == "CompositeFixture.Engine"));
+        assert!(
+            cs[0]
+                .children
+                .iter()
+                .any(|c| c.qualified_path == "CompositeFixture.Engine")
+        );
     }
 
     #[test]

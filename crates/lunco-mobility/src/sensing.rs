@@ -9,11 +9,11 @@ use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{
-    api_param_u64, ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult,
+    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_u64,
 };
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::{api_param_array, api_param_bool, api_param_f64};
-use lunco_api_core::{api_value, api_value_from_u64, ApiErrorCode, ApiValue};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value, api_value_from_u64};
 use lunco_core::{GlobalEntityId, TriggerZone};
 use lunco_spatial::coords::GridPos;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
@@ -572,16 +572,18 @@ mod tests {
         // A static terrain/body contact is not a vehicle arrival, even when the
         // zone side is named. The bridge supplies this predicate from Avian's
         // authoritative rigid-body state.
-        assert!(zone_events(
-            "enter",
-            pad,
-            None,
-            ghost,
-            Some(ghost),
-            zone_name,
-            &reg,
-            |body| body == Some(rover),
-        )
-        .is_empty());
+        assert!(
+            zone_events(
+                "enter",
+                pad,
+                None,
+                ghost,
+                Some(ghost),
+                zone_name,
+                &reg,
+                |body| body == Some(rover),
+            )
+            .is_empty()
+        );
     }
 }

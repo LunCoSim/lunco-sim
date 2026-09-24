@@ -14,8 +14,8 @@
 
 use image::GenericImageView;
 use lunco_assets_datasets::{
-    bake_key, bake_stamp_path, default_dem_pixel_scale_m, process_output_path,
-    processed_output_present, ProcessConfig,
+    ProcessConfig, bake_key, bake_stamp_path, default_dem_pixel_scale_m, process_output_path,
+    processed_output_present,
 };
 use resvg::tiny_skia;
 use std::collections::BTreeMap;
@@ -584,7 +584,7 @@ fn process_dem(
     std::fs::create_dir_all(&tex_dir)?;
     let tif_path = tex_dir.join("heightmap.tif");
     {
-        use tiff::encoder::{colortype, TiffEncoder};
+        use tiff::encoder::{TiffEncoder, colortype};
         let mut enc = TiffEncoder::new(std::fs::File::create(&tif_path)?).map_err(tiff_io_err)?;
 
         // The GEO half — without it QGIS opens the raster in pixel units and every
@@ -1886,7 +1886,7 @@ mod tests {
     /// Encode a `w*h` row-major f32 raster as an in-memory TIFF — the same
     /// proven pattern `lunco-terrain-bake` uses for its fixtures.
     fn encode_tiff_f32(w: u32, h: u32, data: &[f32]) -> Vec<u8> {
-        use tiff::encoder::{colortype, TiffEncoder};
+        use tiff::encoder::{TiffEncoder, colortype};
         let mut buf = Cursor::new(Vec::new());
         {
             let mut enc = TiffEncoder::new(&mut buf).unwrap();
@@ -1958,9 +1958,10 @@ mod tests {
                 // Values are a resampled slice of the gradient — all finite,
                 // and within the source's min..max range (0..880).
                 assert!(v.iter().all(|x| x.is_finite()));
-                assert!(v
-                    .iter()
-                    .all(|x| (*x as f64) >= -1.0 && (*x as f64) <= 900.0));
+                assert!(
+                    v.iter()
+                        .all(|x| (*x as f64) >= -1.0 && (*x as f64) <= 900.0)
+                );
             }
             other => panic!("expected F32 heightmap, got {other:?}"),
         }

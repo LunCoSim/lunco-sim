@@ -35,10 +35,10 @@
 //! land through the same [`lunco_port_core::ports::PortRegistry`].
 
 use bevy::input::{
+    ButtonState,
     keyboard::{Key, KeyCode, KeyboardInput, NativeKey},
     mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
     touch::TouchPhase,
-    ButtonState,
 };
 use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
@@ -46,9 +46,9 @@ use leafwing_input_manager::prelude::ActionState;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_control_core::ControlLink;
 use lunco_control_core::{
-    ensure_control_plugin, ControlBinding, InteractionControlSet, UserIntent,
+    ControlBinding, InteractionControlSet, UserIntent, ensure_control_plugin,
 };
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_hooks::HookValue;
 use lunco_input_core::InputBindingsSettings;
 use serde::{Deserialize, Serialize};
@@ -1523,12 +1523,14 @@ mod tests {
         );
         let trace = app.world().resource::<lunco_control_core::CausalTrace>();
         assert_eq!(trace.len(), 1);
-        assert!(trace
-            .find(
-                lunco_core::GlobalEntityId::from_raw(0x11),
-                observed.typed[0].correlation_id
-            )
-            .is_some());
+        assert!(
+            trace
+                .find(
+                    lunco_core::GlobalEntityId::from_raw(0x11),
+                    observed.typed[0].correlation_id
+                )
+                .is_some()
+        );
 
         app.world_mut().trigger(SimulateIntentEdge {
             target,
@@ -1833,12 +1835,13 @@ mod tests {
             Some(&(vessel, vec![("throttle".into(), 1.0)])),
             "KeyW on the possessed avatar must reach the vessel's named control surface"
         );
-        assert!(app
-            .world()
-            .entity(avatar)
-            .get::<ActionState<UserIntent>>()
-            .expect("avatar action state")
-            .pressed(&UserIntent::MoveForward));
+        assert!(
+            app.world()
+                .entity(avatar)
+                .get::<ActionState<UserIntent>>()
+                .expect("avatar action state")
+                .pressed(&UserIntent::MoveForward)
+        );
     }
 
     /// Shift is a movement modifier, not a second input path.  It must remain

@@ -298,16 +298,17 @@ impl EditorBufferState {
     /// fields. Returns `true` if a snapshot was found (caller can
     /// skip the registry-source re-sync), `false` otherwise.
     pub fn restore_snapshot(&mut self, doc: lunco_doc::DocumentId) -> bool {
-        if let Some(snap) = self.per_doc.remove(&doc) {
-            self.generation = snap.generation;
-            self.text = snap.text;
-            self.detected_name = snap.detected_name;
-            self.cached_galley = snap.cached_galley;
-            self.pending_commit_at = snap.pending_commit_at;
-            self.bound_doc = Some(doc);
-            true
-        } else {
-            false
+        match self.per_doc.remove(&doc) {
+            Some(snap) => {
+                self.generation = snap.generation;
+                self.text = snap.text;
+                self.detected_name = snap.detected_name;
+                self.cached_galley = snap.cached_galley;
+                self.pending_commit_at = snap.pending_commit_at;
+                self.bound_doc = Some(doc);
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -675,11 +676,7 @@ impl Panel for CodeEditorPanel {
                 let a = r.primary.index.0;
                 let b = r.secondary.index.0;
                 let (s, e) = (a.min(b), a.max(b));
-                if e > s {
-                    Some((s, e))
-                } else {
-                    None
-                }
+                if e > s { Some((s, e)) } else { None }
             });
             let has_selection = selection_chars.is_some();
 

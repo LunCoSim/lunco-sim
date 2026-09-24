@@ -23,9 +23,7 @@ package checks after changing skill metadata or packaging.
 
 ## Architecture
 
-- Rust edition policy: the repository's established crates remain on edition
-  2021 unless deliberately migrated. New production crates use the current
-  stable Rust edition, 2024.
+- Rust edition policy: every repository-owned Rust package uses edition 2024.
 
 - **Discover capabilities before declaring them absent.** A missing symbol,
   unfamiliar UI, failed first command, stale report, or one empty search is not

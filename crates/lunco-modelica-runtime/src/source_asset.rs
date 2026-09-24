@@ -5,11 +5,11 @@
 //! gives callers hot reload and `AssetEvent`s without coupling them to the
 //! compiler worker.
 
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy::tasks::AsyncComputeTaskPool;
-use lunco_modelica_ast::ast_extract::{parse_model_interface, ModelInterface};
+use lunco_modelica_ast::ast_extract::{ModelInterface, parse_model_interface};
 use lunco_modelica_ast::normalize_modelica_source;
 
 /// The text contents of a `.mo` file, surfaced as an asset.

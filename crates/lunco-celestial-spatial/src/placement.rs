@@ -27,8 +27,8 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_time::WorldTime;
 
 use lunco_celestial::geo::{
-    body_rotation, equatorial_frame, geodetic_to_body_fixed, GeodeticAnchor, LocalTangentFrame,
-    SiteAnchor,
+    GeodeticAnchor, LocalTangentFrame, SiteAnchor, body_rotation, equatorial_frame,
+    geodetic_to_body_fixed,
 };
 use lunco_celestial::kepler::KeplerOrbit;
 use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
@@ -796,7 +796,7 @@ pub fn sync_terrain_body_curvature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_celestial::geo::{solar_tangent_frame, Geodetic};
+    use lunco_celestial::geo::{Geodetic, solar_tangent_frame};
 
     /// The align quaternion maps the site ENU axes onto the scene axes.
     #[test]
@@ -1268,10 +1268,11 @@ mod tests {
             app.world().get::<ChildOf>(avatar).unwrap().parent(),
             camera_grid
         );
-        assert!(app
-            .world()
-            .get::<lunco_environment::GravityBody>(avatar)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<lunco_environment::GravityBody>(avatar)
+                .is_none()
+        );
         assert_eq!(
             app.world()
                 .resource::<lunco_spatial::ActivePhysicsFrame>()
@@ -1279,9 +1280,10 @@ mod tests {
             site
         );
         assert!(app.world().get::<CelestialBody>(body).is_some());
-        assert!(app
-            .world()
-            .get::<lunco_spatial::WorldGrid>(world_grid)
-            .is_some());
+        assert!(
+            app.world()
+                .get::<lunco_spatial::WorldGrid>(world_grid)
+                .is_some()
+        );
     }
 }

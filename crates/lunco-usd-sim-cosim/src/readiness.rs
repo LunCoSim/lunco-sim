@@ -28,7 +28,7 @@
 
 use bevy::prelude::*;
 use lunco_modelica_runtime::ModelicaModel;
-use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
+use lunco_readiness::{ReadinessRegistry, ReadinessTicket, Subject, kinds};
 
 use lunco_cosim_core::{SimComponent, UsdSourcedCosim};
 use lunco_usd_avian_contracts::ShouldBeDynamic;

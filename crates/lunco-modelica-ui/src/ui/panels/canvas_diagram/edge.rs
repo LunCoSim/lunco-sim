@@ -159,11 +159,7 @@ impl EdgeVisual for OrthogonalEdgeVisual {
         let mapped = palette.remap(self.color);
         let col = if selected { brighten(mapped) } else { mapped };
         let base_width = if selected {
-            if self.is_causal {
-                2.2
-            } else {
-                1.7
-            }
+            if self.is_causal { 2.2 } else { 1.7 }
         } else if self.is_causal {
             1.6
         } else {

@@ -5,7 +5,7 @@ use rumoca_ir_ast::ClassDef;
 use super::connections::insert_equation;
 use super::edit::Edit;
 use super::errors::AstMutError;
-use super::parsing::{parse_stub_cached, FRAGMENT_CLASS_NAME};
+use super::parsing::{FRAGMENT_CLASS_NAME, parse_stub_cached};
 use crate::pretty;
 
 /// Append a generic equation to a class.

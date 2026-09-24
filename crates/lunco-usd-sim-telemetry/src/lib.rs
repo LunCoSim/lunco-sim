@@ -896,11 +896,12 @@ mod tests {
 
         app.update();
         let signal = SignalRef::new(body, "linear_velocity.x");
-        assert!(app
-            .world()
-            .resource::<SignalRegistry>()
-            .scalar_history(&signal)
-            .is_some());
+        assert!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&signal)
+                .is_some()
+        );
 
         app.world_mut().entity_mut(body).remove::<RigidBody>();
         app.update();
@@ -909,10 +910,11 @@ mod tests {
         assert!(!state.previous.contains_key(&body));
         assert!(!state.metadata_group_paths.contains_key(&body));
         assert!(state.metadata.keys().all(|key| key.entity != body));
-        assert!(app
-            .world()
-            .resource::<SignalRegistry>()
-            .scalar_history(&signal)
-            .is_some());
+        assert!(
+            app.world()
+                .resource::<SignalRegistry>()
+                .scalar_history(&signal)
+                .is_some()
+        );
     }
 }

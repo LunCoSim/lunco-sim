@@ -54,12 +54,12 @@ use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
 use lunco_usd_bevy_scene::{
-    instance_key, is_preview_only, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected,
-    UsdSceneRoot,
+    UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected, UsdSceneRoot, instance_key,
+    is_preview_only,
 };
 use lunco_usd_bevy_stage::{
-    effective_purpose, world_transform, Purpose, TransformReadError, UsdInstanceProjection,
-    UsdInstanceRoot, UsdRead, UsdStageAsset,
+    Purpose, TransformReadError, UsdInstanceProjection, UsdInstanceRoot, UsdRead, UsdStageAsset,
+    effective_purpose, world_transform,
 };
 use openusd::sdf::Path as SdfPath;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
@@ -72,8 +72,8 @@ use lunco_usd_avian_contracts::{
 };
 use lunco_usd_avian_reader::{
     collider::{
-        build_collider_from_usd, collect_child_colliders_from_usd, ColliderBuildOutcome,
-        ColliderProjectionError,
+        ColliderBuildOutcome, ColliderProjectionError, build_collider_from_usd,
+        collect_child_colliders_from_usd,
     },
     joint::{has_rigid_body_ancestor, joint_targets_simulated_wheel, read_joint_spec},
     read_authored_bool_or_default, read_authored_quat, read_authored_real, read_authored_vec3,
@@ -2267,7 +2267,7 @@ mod collider_parity_tests {
     //! live `StageView` over the canonical stage. Exercises the geometry read
     //! (the highest-risk physics read), including the mesh-approximation selector.
 
-    use super::{build_collider_from_usd, ColliderBuildOutcome};
+    use super::{ColliderBuildOutcome, build_collider_from_usd};
     use bevy::math::DVec3;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
@@ -2381,8 +2381,8 @@ mod extract_parity_tests {
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
     use lunco_usd_avian_filters::collision_groups::CollisionGroupTable;
-    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_bevy_stage::StageView;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
@@ -3631,9 +3631,11 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let lander = SdfPath::new("/Mission/BareLander").unwrap();
         let view = cs.view();
-        assert!(collect_child_colliders_from_usd(&view, &lander)
-            .expect("valid transforms")
-            .is_empty());
+        assert!(
+            collect_child_colliders_from_usd(&view, &lander)
+                .expect("valid transforms")
+                .is_empty()
+        );
         assert!(matches!(
             build_collider_from_usd(&view, &lander),
             Ok(ColliderBuildOutcome::Built(_))
@@ -3727,8 +3729,8 @@ def Cube "Part" (
             2,
             "live composition must keep root and child shapes"
         );
-        assert_eq!(live_shapes[0].0 .0, DVec3::ZERO);
-        assert_eq!(live_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(live_shapes[0].0.0, DVec3::ZERO);
+        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
 
         let child_recipe = StageRecipe::new(
             "child.usda",
@@ -3748,8 +3750,8 @@ def Cube "Part" (
             2,
             "prepared composition must keep root and child shapes"
         );
-        assert_eq!(prepared_shapes[0].0 .0, DVec3::ZERO);
-        assert_eq!(prepared_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(prepared_shapes[0].0.0, DVec3::ZERO);
+        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
     }
 
     #[test]

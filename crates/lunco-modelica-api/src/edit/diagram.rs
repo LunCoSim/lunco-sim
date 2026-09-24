@@ -2,7 +2,7 @@
 
 use super::util::{parse_port_ref, resolve_doc};
 use bevy::prelude::*;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_doc::DocumentId;
 use lunco_modelica_ast::pretty::ConnectEquation;
 use lunco_modelica_document::ModelicaOp;

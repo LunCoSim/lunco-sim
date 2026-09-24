@@ -1595,13 +1595,16 @@ def DistantLight "Sun"
         let sun = SdfPath::new("/Sun").unwrap();
 
         assert!(read_intensity_with_exposure(&view, &sun, 77_000.0).is_err());
-        assert!(read_shadow_distance(
-            &view,
-            &sun,
-            1500.0,
-            lunco_usd_bevy_stage::units::stage_convention(&view).expect("valid stage convention"),
-        )
-        .is_err());
+        assert!(
+            read_shadow_distance(
+                &view,
+                &sun,
+                1500.0,
+                lunco_usd_bevy_stage::units::stage_convention(&view)
+                    .expect("valid stage convention"),
+            )
+            .is_err()
+        );
         assert!(read_shadow_enable(&view, &sun).is_err());
     }
 

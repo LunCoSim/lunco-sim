@@ -7,11 +7,11 @@
 //! policy, and policy that needs a rebuild to change is policy in the wrong
 //! place.
 
+use lunco_usd_sim_domain::MemberClasses;
 use lunco_usd_sim_domain::network::read_network;
 use lunco_usd_sim_domain::synthesis::{
-    network_facts, register_hook_synthesizer, SynthContext, SynthOutcome, SynthesizerRegistry,
+    SynthContext, SynthOutcome, SynthesizerRegistry, network_facts, register_hook_synthesizer,
 };
-use lunco_usd_sim_domain::MemberClasses;
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 
@@ -292,9 +292,11 @@ fn a_policy_cannot_extend_the_authored_boundary_surface() {
             },
         )
         .expect_err("a policy cannot invent a root boundary output");
-    assert!(errors[0]
-        .message
-        .contains("root declares undeclared boundary output `invented`"));
+    assert!(
+        errors[0]
+            .message
+            .contains("root declares undeclared boundary output `invented`")
+    );
 }
 
 #[test]

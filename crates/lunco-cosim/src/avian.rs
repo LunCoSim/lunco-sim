@@ -28,7 +28,7 @@ use bevy::prelude::*;
 
 use crate::ports::{AvianGroup, AvianPort};
 use lunco_cosim_core::{ForceActuator, TorqueActuator};
-use lunco_physics::joint::{bounded_brake_torque, revolute_hinge_axis_world, JointTorqueActuator};
+use lunco_physics::joint::{JointTorqueActuator, bounded_brake_torque, revolute_hinge_axis_world};
 use lunco_port_core::ports::PortDirection;
 
 /// Per-entity force accumulator written by `force_*` input ports and drained

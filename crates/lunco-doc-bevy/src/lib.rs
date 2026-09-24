@@ -58,7 +58,7 @@ pub use diagnostics::DocumentDiagnostics;
 
 // The pure-data half lives in lunco-doc; re-export for convenience so callers
 // can reach the whole diagnostics surface from one place.
-pub use lunco_doc::{document_status, DiagnosticStatus, DocDiagnostics, DocStatus};
+pub use lunco_doc::{DiagnosticStatus, DocDiagnostics, DocStatus, document_status};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

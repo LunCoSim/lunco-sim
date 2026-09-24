@@ -1,7 +1,7 @@
 [package]
 name = "lunco-hooks"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Backend-agnostic internal HOOK registry — the extension-point substrate that lets any scripting runtime (rhai now, python/wasm later) implement internal Rust decision points (merge policy, authorization, …)."
 

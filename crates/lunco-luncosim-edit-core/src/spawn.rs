@@ -3,7 +3,7 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::GridPos;
 use lunco_usd_bevy_stage::UsdStageAsset;
@@ -11,10 +11,10 @@ use lunco_usd_bevy_stage::{canonical::CanonicalStages, stage_default_prim};
 use lunco_viewport_core::SceneViewport;
 use std::collections::HashMap;
 
-use crate::surface_pick::{
-    cursor_surface_hit, SurfacePickPolicy, EDITOR_PLACEMENT_RAY_MAX_DISTANCE,
-};
 use crate::SpawnState;
+use crate::surface_pick::{
+    EDITOR_PLACEMENT_RAY_MAX_DISTANCE, SurfacePickPolicy, cursor_surface_hit,
+};
 use lunco_scene_catalog::catalog::{SpawnCatalog, SpawnSource};
 
 /// Ghost entity shown at the spawn placement point.
@@ -97,7 +97,7 @@ fn on_set_spawn_diagnostics(
 
 register_commands!(on_set_spawn_diagnostics,);
 
-use lunco_usd_bevy_scene::collision::{collision_aabb, ObjectAabb, SPAWN_GROUND_CLEARANCE};
+use lunco_usd_bevy_scene::collision::{ObjectAabb, SPAWN_GROUND_CLEARANCE, collision_aabb};
 
 /// Cached, real-time-derived spawn footprints per catalog entry.
 ///
@@ -774,7 +774,7 @@ mod tests {
         let preview = placement_root_pose(fit, footprint);
         let commit = placement_root_pose(fit, footprint);
         assert_eq!(preview, commit);
-        assert!((preview.0 .0 - (fit.point.0 + fit.normal * footprint.lift)).length() < 1e-12);
+        assert!((preview.0.0 - (fit.point.0 + fit.normal * footprint.lift)).length() < 1e-12);
     }
 
     #[test]

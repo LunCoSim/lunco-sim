@@ -28,8 +28,8 @@ use lunco_terrain_globe::TerrainTile;
 // Two read planes, two traits: `UsdRead` = the live COMPOSED stage (what the terrain
 // projects from); `UsdDataExt` = a raw authored `sdf::Data` layer, which is what the
 // document registry hands back for the authoring tier's child walks.
-use lunco_usd_bevy_scene::{read_shape_dims, ShapeDims, UsdGeomAxis};
-use lunco_usd_bevy_stage::{read_transform_from_usd, StageView, UsdRead};
+use lunco_usd_bevy_scene::{ShapeDims, UsdGeomAxis, read_shape_dims};
+use lunco_usd_bevy_stage::{StageView, UsdRead, read_transform_from_usd};
 use lunco_usd_data::usd_data::UsdDataExt;
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
@@ -1108,9 +1108,9 @@ fn refresh_docbacked_terrain_from_doc(
                 use lunco_usd_document::document::UsdChange;
                 let mut touched = false;
                 let mut oldest_seen: Option<u64> = None;
-                for (gen, change) in host.document().changes_since(last) {
+                for (r#gen, change) in host.document().changes_since(last) {
                     if oldest_seen.is_none() {
-                        oldest_seen = Some(gen);
+                        oldest_seen = Some(r#gen);
                     }
                     let hit = match change {
                         UsdChange::FullReload => true,
@@ -1577,7 +1577,14 @@ fn on_obstacle_spec_authored(
             }
             match layer_type.as_str() {
                 "craters" => {
-                    info!("[obstacle-usd] authoring craters enabled={} density={} sizeMode={} seed={:#x} → {path} (doc {})", spec.craters.enabled, spec.craters.density, spec.craters.size.mode, spec.seed, td.doc);
+                    info!(
+                        "[obstacle-usd] authoring craters enabled={} density={} sizeMode={} seed={:#x} → {path} (doc {})",
+                        spec.craters.enabled,
+                        spec.craters.density,
+                        spec.craters.size.mode,
+                        spec.seed,
+                        td.doc
+                    );
                     author_crater_layer_attrs(&mut ops, &path, spec);
                 }
                 "overzoom" => {
@@ -1600,7 +1607,14 @@ fn on_obstacle_spec_authored(
                         .and_then(|attrs| attrs.get_i64("seed"))
                         .map(|seed| seed as u64)
                         .unwrap_or(spec.seed);
-                    info!("[obstacle-usd] authoring rocks enabled={} density={} sizeMode={} seed={:#x} → {path} (doc {})", spec.rocks.enabled, spec.rocks.density, spec.rocks.size.mode, rock_seed, td.doc);
+                    info!(
+                        "[obstacle-usd] authoring rocks enabled={} density={} sizeMode={} seed={:#x} → {path} (doc {})",
+                        spec.rocks.enabled,
+                        spec.rocks.density,
+                        spec.rocks.size.mode,
+                        rock_seed,
+                        td.doc
+                    );
                     author_rock_layer_attrs(&mut ops, &path, spec, rock_seed);
                 }
                 _ => {}
@@ -1680,9 +1694,9 @@ fn bridge_usd_dem_terrain(
             continue;
         };
         commands.entity(entity).try_insert(DemBridged); // examined — don't re-scan
-                                                        // Newest pass wins: retire any prior terrain realized for this same
-                                                        // authored prim (same path + same stage asset). Its LOD tiles, ring
-                                                        // tiles, and scatter are reaped by their respective orphan reapers.
+        // Newest pass wins: retire any prior terrain realized for this same
+        // authored prim (same path + same stage asset). Its LOD tiles, ring
+        // tiles, and scatter are reaped by their respective orphan reapers.
         for (prior, prior_path) in &q_prior_terrains {
             if prior != entity
                 && !lunco_usd_bevy_scene::is_preview_only(prior, &parents, &preview_roots)
@@ -2810,9 +2824,11 @@ def Plane "Terrain" (
         let scene = "#usda 1.0\n(\n    defaultPrim = \"Terrain\"\n)\n\
                      def Xform \"Terrain\"\n{\n    bool lunco:terrain:lodFrozen = true\n}\n";
         let (world, e) = bridge(scene);
-        assert!(world
-            .get::<lunco_terrain_surface::DemTerrainRequest>(e)
-            .is_none());
+        assert!(
+            world
+                .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+                .is_none()
+        );
         assert!(
             world.get::<lunco_terrain_surface::LodFrozen>(e).is_none(),
             "lodFrozen on a non-terrain prim must not freeze anything"
@@ -2829,9 +2845,11 @@ def Plane "Terrain" (
                      \x20   def Xform \"ground\"\n    {\n\
                      \x20       token lunco:layer = \"dem\"\n    }\n}\n";
         let (world, e) = bridge(scene);
-        assert!(world
-            .get::<lunco_terrain_surface::DemTerrainRequest>(e)
-            .is_none());
+        assert!(
+            world
+                .get::<lunco_terrain_surface::DemTerrainRequest>(e)
+                .is_none()
+        );
     }
 
     /// The change filter that keeps unrelated runtime ops (spawns, attr edits

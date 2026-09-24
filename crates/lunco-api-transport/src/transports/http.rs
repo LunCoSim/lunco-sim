@@ -1,10 +1,10 @@
 use crate::transports::{
-    envelope::{decode_request, encode_response},
     HttpBridge,
+    envelope::{decode_request, encode_response},
 };
 use axum::{
     extract::{Json, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use lunco_api_contracts::ApiRequestEnvelope;

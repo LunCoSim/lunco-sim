@@ -52,7 +52,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use lunco_render::{RenderQualityProfile, RenderingQualitySettings, SceneCamera};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
 use lunco_usd_bevy_stage::canonical::CanonicalStages;

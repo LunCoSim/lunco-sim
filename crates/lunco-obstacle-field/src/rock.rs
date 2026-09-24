@@ -12,8 +12,8 @@ use bevy::prelude::*;
 use bevy_mesh::Indices;
 use bevy_mesh::PrimitiveTopology;
 use rand::RngExt;
-use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use rand_chacha::rand_core::SeedableRng;
 
 fn axis(i: usize) -> Vec3 {
     match i % 3 {

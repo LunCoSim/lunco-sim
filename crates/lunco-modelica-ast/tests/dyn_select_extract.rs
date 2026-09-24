@@ -4,7 +4,7 @@
 //! inline so editing shipped assets does not invalidate this Rust test target;
 //! shipped icon behavior is covered at the authored scenario boundary.
 
-use lunco_modelica_ast::annotations::{extract_icon, DynExpr, DynValue, GraphicItem};
+use lunco_modelica_ast::annotations::{DynExpr, DynValue, GraphicItem, extract_icon};
 use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression};
 
 const SOURCE: &str = r#"

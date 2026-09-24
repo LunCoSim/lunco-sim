@@ -26,12 +26,12 @@ use bevy::prelude::*;
 use std::hash::{Hash, Hasher};
 
 use lunco_port_core::ports::{
-    port_entity_map_key, port_name_set_key, push_map, PortBackend, PortDirection, PortMetadata,
-    PortRef, PortRegistry, PortTopologyRevision, PortTopologyState,
+    PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry, PortTopologyRevision,
+    PortTopologyState, port_entity_map_key, port_name_set_key, push_map,
 };
 use lunco_port_core::{InputPorts, OutputPorts, Port, PortSurface};
 
-use lunco_cosim_core::{DeclaredOutputPorts, SimComponent, SimConnection, PORT_NAME};
+use lunco_cosim_core::{DeclaredOutputPorts, PORT_NAME, SimComponent, SimConnection};
 
 /// The fixed port name a [`Port`] exposes (its `f64` `value`).
 
@@ -721,11 +721,7 @@ fn piloted_value(w: &World, e: Entity) -> f64 {
     let owned = w
         .get_resource::<lunco_core_session::SessionRegistry>()
         .is_some_and(|r| r.owner_of(gid).is_some());
-    if owned {
-        1.0
-    } else {
-        0.0
-    }
+    if owned { 1.0 } else { 0.0 }
 }
 
 /// Detect in-place changes to the map-backed port owners without sampling every
@@ -839,14 +835,18 @@ mod tests {
         let mut ports = PortRegistry::default();
         register_builtin_port_backends(&mut ports);
 
-        assert!(ports
-            .entity_ports(&world, mesh)
-            .iter()
-            .all(|port| port.name != "piloted"));
-        assert!(ports
-            .entity_ports(&world, vessel)
-            .iter()
-            .any(|port| port.name == "piloted"));
+        assert!(
+            ports
+                .entity_ports(&world, mesh)
+                .iter()
+                .all(|port| port.name != "piloted")
+        );
+        assert!(
+            ports
+                .entity_ports(&world, vessel)
+                .iter()
+                .any(|port| port.name == "piloted")
+        );
     }
 
     #[test]

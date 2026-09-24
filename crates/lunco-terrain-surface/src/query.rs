@@ -31,15 +31,15 @@ use bevy::ecs::query::QueryState;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_api::queries::{
-    api_param_array, api_param_f64, api_param_str, api_param_u64, ApiQueryError, ApiQueryProvider,
-    ApiQueryRegistry, ApiQueryResult,
+    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_array,
+    api_param_f64, api_param_str, api_param_u64,
 };
 use lunco_api::registry::ApiEntityRegistry;
-use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_spatial::coords::GridPos;
 use lunco_terrain_core::{
-    field_map, normal_at_bounded, AspectField, BoundedHeightSource, ElevationField, SlopeField,
-    Square, SurfaceField,
+    AspectField, BoundedHeightSource, ElevationField, SlopeField, Square, SurfaceField, field_map,
+    normal_at_bounded,
 };
 
 use crate::oracle::DemHeightField;

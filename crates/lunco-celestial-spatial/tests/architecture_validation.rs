@@ -559,7 +559,10 @@ fn test_gravity_direction_from_body_local_position() {
             assert!(
                 error < 1e-10,
                 "Gravity direction error at local pos {:?}. Expected: {:?}, Got: {:?}, Error: {:.6}",
-                local_pos, expected_dir, gravity_dir, error
+                local_pos,
+                expected_dir,
+                gravity_dir,
+                error
             );
         } else {
             // For the 45° case, verify it points toward center

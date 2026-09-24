@@ -34,8 +34,8 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::{ApiQueryError, ApiQueryResult};
 use lunco_api_core::ApiErrorCode;
-use lunco_api_core::{api_value, ApiValue};
-use lunco_core::{on_command, Command};
+use lunco_api_core::{ApiValue, api_value};
+use lunco_core::{Command, on_command};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::UsdInstanceRoot;
 
@@ -476,7 +476,7 @@ fn categorize(rel: &str) -> String {
         .unwrap_or_else(|| "Other".to_string())
 }
 
-use crate::spawn_meta::{parse_spawn_meta, SpawnMeta};
+use crate::spawn_meta::{SpawnMeta, parse_spawn_meta};
 use lunco_assets_runtime::discovery::AssetFile;
 
 /// What every project `*.usda` says about itself, keyed by its asset path.

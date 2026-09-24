@@ -22,10 +22,10 @@ fn main() {
 mod wasm {
     use js_sys::{Array, Float64Array, Object, Reflect, Uint8Array};
     use lunco_terrain_bake::{
-        decode_raw, finish_bake, BakeReplyHeader, BakeStage, BakedGrid, DemBakeJob,
+        BakeReplyHeader, BakeStage, BakedGrid, DemBakeJob, decode_raw, finish_bake,
     };
-    use wasm_bindgen::prelude::*;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::*;
     use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
     fn scope() -> DedicatedWorkerGlobalScope {

@@ -53,7 +53,7 @@ use big_space::prelude::{CellCoord, Grid};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_hooks::HookValue;
 use lunco_spatial::coords::world_pose;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
@@ -61,10 +61,10 @@ use lunco_terrain_surface::{DemHeightField, SurfaceOracle};
 use lunco_time::WorldTime;
 
 use crate::pose::SolarFramePose;
+use lunco_celestial::CelestialBodyRegistry;
 use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
 use lunco_celestial::geo::{segment_hits_obb, segment_hits_sphere};
-use lunco_celestial::CelestialBodyRegistry;
 use lunco_celestial_spatial_core::{
     LinkGeometryPeer, LinkGeometryState, LinkNode, LinkOccluder, LinkPeer, LinkState,
 };
@@ -760,11 +760,7 @@ fn occluder_blocks(a: DVec3, b: DVec3, occluders: &[(DVec3, DQuat, DVec3)]) -> b
 
 /// An undirected pair, ordered so `(a,b)` and `(b,a)` are the same edge.
 fn pair_key(a: u64, b: u64) -> (u64, u64) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a <= b { (a, b) } else { (b, a) }
 }
 
 /// An AOS/LOS edge event. `source` is one endpoint's GID (so a per-entity
@@ -1190,9 +1186,11 @@ mod tests {
         let mut listed = Vec::new();
         (LINK_PORT_BACKEND.list)(&world, e, &mut listed);
         assert_eq!(listed.len(), 3, "range + verdict + elevation, enumerable");
-        assert!(listed
-            .iter()
-            .all(|p| p.direction == lunco_port_core::ports::PortDirection::Out));
+        assert!(
+            listed
+                .iter()
+                .all(|p| p.direction == lunco_port_core::ports::PortDirection::Out)
+        );
     }
 
     #[test]

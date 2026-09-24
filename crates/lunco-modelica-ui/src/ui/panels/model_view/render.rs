@@ -10,10 +10,10 @@ use lunco_workbench_core::{InstancePanel, Panel, PanelCtx, PanelId, PanelScrollP
 use super::context::{resolve_tab_target, resolve_tab_title, sync_active_tab_to_doc};
 use crate::model_tabs::ModelTabs;
 use crate::model_tabs_types::{ModelViewMode, TabId, TabRenderContext};
-use crate::ui::document_context::{is_generated_document, ModelicaDocuments};
+use crate::ui::MODEL_VIEW_KIND;
+use crate::ui::document_context::{ModelicaDocuments, is_generated_document};
 use crate::ui::panels::canvas_diagram::CanvasDiagramPanel;
 use crate::ui::panels::code_editor::{CodeEditorPanel, EditorBufferState};
-use crate::ui::MODEL_VIEW_KIND;
 use lunco_doc::CompileState;
 use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_modelica_runner::resolve_setup_bounds;

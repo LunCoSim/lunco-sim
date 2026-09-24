@@ -22,7 +22,7 @@
 
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::collections::{HashMap, VecDeque};
 
 pub mod sim;

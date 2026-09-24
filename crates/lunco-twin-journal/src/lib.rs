@@ -433,11 +433,7 @@ fn summarize_op_value(op: &serde_json::Value) -> EntrySummary {
     // class lives under `class` for most ops, `parent` for class-authoring.
     let class = {
         let c = field("class");
-        if c.is_empty() {
-            field("parent")
-        } else {
-            c
-        }
+        if c.is_empty() { field("parent") } else { c }
     };
     // name is top-level for some ops, nested in `decl` for add-component/-variable.
     let name = {
@@ -1433,7 +1429,7 @@ impl Journal {
         let (mut indeg, children) = self.dag_edges();
         let mut ready: Vec<EntryId> = indeg
             .iter()
-            .filter(|(_, &d)| d == 0)
+            .filter(|&(_, &d)| d == 0)
             .map(|(id, _)| id.clone())
             .collect();
 

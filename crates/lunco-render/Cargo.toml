@@ -1,7 +1,7 @@
 [package]
 name = "lunco-render"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Shared render-look configuration for LunCoSim: lunar sun shadows, Graphics quality presets, and render-owned camera/light/terrain budgets."
 

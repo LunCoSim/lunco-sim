@@ -3,7 +3,7 @@
 use super::util::resolve_doc;
 use crate::ModelicaDocuments;
 use bevy::prelude::*;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_doc::DocumentId;
 use lunco_modelica_document::ModelicaOp;
 

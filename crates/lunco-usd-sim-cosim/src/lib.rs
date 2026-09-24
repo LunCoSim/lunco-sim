@@ -37,19 +37,19 @@ use lunco_modelica_runtime::{
 #[cfg(feature = "python")]
 use lunco_scripting::doc::{ScriptDocument, ScriptLanguage};
 #[cfg(feature = "python")]
-use lunco_scripting::python::{get_python_status, PythonStatus};
+use lunco_scripting::python::{PythonStatus, get_python_status};
 #[cfg(feature = "python")]
 use lunco_scripting::source_asset::PythonSource;
 #[cfg(feature = "python")]
-use lunco_scripting::{doc::ScriptedModel, SceneOwnedScript, ScriptRegistry};
+use lunco_scripting::{SceneOwnedScript, ScriptRegistry, doc::ScriptedModel};
 use lunco_telemetry_core::{ChannelSource, Parameter};
 use lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight;
 use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath};
-use lunco_usd_bevy_stage::read::read_authored_bool_strict;
 use lunco_usd_bevy_stage::read::UsdReadObject;
+use lunco_usd_bevy_stage::read::read_authored_bool_strict;
 use lunco_usd_bevy_stage::{
-    canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
-    UsdWiringDirty,
+    UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset, UsdWiringDirty,
+    canonical::CanonicalStages,
 };
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -64,15 +64,15 @@ pub mod readiness;
 pub mod sync;
 mod wiring;
 
+pub use wiring::{
+    BindingEpochWait, UsdWiredConnection, install_wiring_system, modelica_models_terminal,
+};
 use wiring::{
-    causal_participants_changed, derive_causal_barrier_participants, forget_binding_model_status,
+    BindingModelStatuses, WiringFactsCache, causal_participants_changed,
+    derive_causal_barrier_participants, forget_binding_model_status,
     install_wiring_invalidation_observers, request_binding_epoch,
     request_binding_epoch_on_model_change, request_binding_epoch_on_remove,
     reset_wiring_facts_cache, rewire_usd_connections, settle_binding_epoch, wiring_due,
-    BindingModelStatuses, WiringFactsCache,
-};
-pub use wiring::{
-    install_wiring_system, modelica_models_terminal, BindingEpochWait, UsdWiredConnection,
 };
 
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2531,8 +2531,8 @@ impl Plugin for UsdSimCosimPlugin {
 mod tests {
     use super::*;
     use crate::sync::{
-        copy_modelica_input_values, event_rising_edge, fire_connected_events, modelica_status,
-        parse_event_severity, EventBinding,
+        EventBinding, copy_modelica_input_values, event_rising_edge, fire_connected_events,
+        modelica_status, parse_event_severity,
     };
     #[derive(Resource, Default)]
     struct WiringRuns(usize);
@@ -2631,39 +2631,43 @@ mod tests {
             .add_observer(queue_removed_usd_sourced_cosim);
 
         let unprocessed = app.world_mut().spawn(UsdPrimPath::default()).id();
-        assert!(app
-            .world()
-            .resource::<PendingUsdCosimPrimWork>()
-            .0
-            .contains(unprocessed));
+        assert!(
+            app.world()
+                .resource::<PendingUsdCosimPrimWork>()
+                .0
+                .contains(unprocessed)
+        );
 
         let already_sourced = app
             .world_mut()
             .spawn((UsdPrimPath::default(), UsdSourcedCosim))
             .id();
-        assert!(!app
-            .world()
-            .resource::<PendingUsdCosimPrimWork>()
-            .0
-            .contains(already_sourced));
+        assert!(
+            !app.world()
+                .resource::<PendingUsdCosimPrimWork>()
+                .0
+                .contains(already_sourced)
+        );
 
         app.world_mut()
             .entity_mut(unprocessed)
             .remove::<UsdPrimPath>();
-        assert!(!app
-            .world()
-            .resource::<PendingUsdCosimPrimWork>()
-            .0
-            .contains(unprocessed));
+        assert!(
+            !app.world()
+                .resource::<PendingUsdCosimPrimWork>()
+                .0
+                .contains(unprocessed)
+        );
 
         app.world_mut()
             .entity_mut(already_sourced)
             .remove::<UsdSourcedCosim>();
-        assert!(app
-            .world()
-            .resource::<PendingUsdCosimPrimWork>()
-            .0
-            .contains(already_sourced));
+        assert!(
+            app.world()
+                .resource::<PendingUsdCosimPrimWork>()
+                .0
+                .contains(already_sourced)
+        );
     }
 
     #[test]
@@ -2684,21 +2688,23 @@ mod tests {
         app.world_mut()
             .entity_mut(owner)
             .insert(ModelicaModel::default());
-        assert!(app
-            .world()
-            .resource::<PendingModelicaWrapWork>()
-            .0
-            .contains(owner));
+        assert!(
+            app.world()
+                .resource::<PendingModelicaWrapWork>()
+                .0
+                .contains(owner)
+        );
 
         let model_first = app.world_mut().spawn(ModelicaModel::default()).id();
         app.world_mut()
             .entity_mut(model_first)
             .insert(UsdSourcedCosim);
-        assert!(app
-            .world()
-            .resource::<PendingModelicaWrapWork>()
-            .0
-            .contains(model_first));
+        assert!(
+            app.world()
+                .resource::<PendingModelicaWrapWork>()
+                .0
+                .contains(model_first)
+        );
 
         let already_wrapped = app
             .world_mut()
@@ -2708,38 +2714,42 @@ mod tests {
                 SimComponent::default(),
             ))
             .id();
-        assert!(!app
-            .world()
-            .resource::<PendingModelicaWrapWork>()
-            .0
-            .contains(already_wrapped));
+        assert!(
+            !app.world()
+                .resource::<PendingModelicaWrapWork>()
+                .0
+                .contains(already_wrapped)
+        );
 
         app.world_mut()
             .entity_mut(already_wrapped)
             .remove::<SimComponent>();
-        assert!(app
-            .world()
-            .resource::<PendingModelicaWrapWork>()
-            .0
-            .contains(already_wrapped));
+        assert!(
+            app.world()
+                .resource::<PendingModelicaWrapWork>()
+                .0
+                .contains(already_wrapped)
+        );
 
         app.world_mut()
             .entity_mut(already_wrapped)
             .remove::<ModelicaModel>();
-        assert!(!app
-            .world()
-            .resource::<PendingModelicaWrapWork>()
-            .0
-            .contains(already_wrapped));
+        assert!(
+            !app.world()
+                .resource::<PendingModelicaWrapWork>()
+                .0
+                .contains(already_wrapped)
+        );
 
         app.world_mut()
             .entity_mut(owner)
             .remove::<UsdSourcedCosim>();
-        assert!(!app
-            .world()
-            .resource::<PendingModelicaWrapWork>()
-            .0
-            .contains(owner));
+        assert!(
+            !app.world()
+                .resource::<PendingModelicaWrapWork>()
+                .0
+                .contains(owner)
+        );
     }
 
     #[test]
@@ -2795,11 +2805,12 @@ mod tests {
 
         app.world_mut().run_schedule(lunco_core::SceneTeardown);
 
-        assert!(!app
-            .world()
-            .resource::<PendingModelicaWrapWork>()
-            .0
-            .has_work());
+        assert!(
+            !app.world()
+                .resource::<PendingModelicaWrapWork>()
+                .0
+                .has_work()
+        );
     }
 
     #[derive(Resource, Default)]
@@ -2867,10 +2878,11 @@ mod tests {
 
         app.update();
 
-        assert!(app
-            .world()
-            .get::<UsdTelemetryProjected>(declaration)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<UsdTelemetryProjected>(declaration)
+                .is_none()
+        );
         assert!(app.world().get_entity(channel).is_err());
         assert!(app.world().resource::<UsdTelemetryProjectionIndex>().dirty);
     }
@@ -3088,9 +3100,11 @@ mod tests {
             .get::<DeclaredOutputPorts>(entity)
             .expect("the generated wrapper must publish its complete output contract");
         assert!(declared.names.contains("soc"));
-        assert!(declared
-            .names
-            .contains("__member_Rig_x2f_Battery_terminal_voltage_v"));
+        assert!(
+            declared
+                .names
+                .contains("__member_Rig_x2f_Battery_terminal_voltage_v")
+        );
     }
 
     #[test]

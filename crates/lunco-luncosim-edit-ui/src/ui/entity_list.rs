@@ -22,7 +22,7 @@ use lunco_camera_core::camera_display_labels;
 use lunco_render::SceneCamera;
 use lunco_scene_selection::{SelectEntityTarget, SelectionIntent};
 use lunco_settings::SettingsSection;
-use lunco_usd_core::runtime::{runtime_persistence_for_twin, RUNTIME_PERSISTENCE_SETTING};
+use lunco_usd_core::runtime::{RUNTIME_PERSISTENCE_SETTING, runtime_persistence_for_twin};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workspace::{SetTwinSetting, TwinClosed, TwinSettingInput, WorkspaceResource};
 use serde::{Deserialize, Serialize};

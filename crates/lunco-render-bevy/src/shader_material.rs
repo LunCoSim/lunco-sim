@@ -68,8 +68,8 @@ use std::sync::{Arc, OnceLock};
 
 use lunco_materials::dyn_params::{self, ParamSchema, ParamValue};
 use lunco_materials::{
-    to_snake_case, validate_shader_stage, ShaderCatalog, ShaderStage, ATTRIBUTE_GLOBE_DIRECTION,
-    ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET,
+    ATTRIBUTE_GLOBE_DIRECTION, ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL,
+    ATTRIBUTE_MORPH_TARGET, ShaderCatalog, ShaderStage, to_snake_case, validate_shader_stage,
 };
 
 /// A general custom-shader material whose parameters are **dynamic**: each

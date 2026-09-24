@@ -13,7 +13,7 @@ use lunco_theme::ColorAlpha;
 
 use super::edge::port_edge_dir;
 use super::paint::paint_dashed_rect;
-use super::port::{paint_input_control_widget, paint_port_shape, PortShape};
+use super::port::{PortShape, paint_input_control_widget, paint_port_shape};
 use super::theme::{canvas_theme_from_ctx, modelica_icon_palette_from_ctx};
 
 /// Typed payload carried in `lunco_canvas::Node.data` for every

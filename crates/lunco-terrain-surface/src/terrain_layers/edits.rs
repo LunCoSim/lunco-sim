@@ -19,7 +19,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use lunco_terrain_core::{BrushModifier, Crater, FlattenModifier, HeightModifier, CRATER_REACH};
+use lunco_terrain_core::{BrushModifier, CRATER_REACH, Crater, FlattenModifier, HeightModifier};
 
 use super::{LayerAttrSource, LayerId, TerrainLayer};
 use crate::oracle::HeightContribution;

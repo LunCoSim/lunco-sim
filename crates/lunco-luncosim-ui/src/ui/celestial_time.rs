@@ -29,7 +29,7 @@
 //! celestial clock with it.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 
 use lunco_celestial::CelestialBody;
 use lunco_time::{CelestialTime, ClockId, ClockParent, ClockRoot, Clocks, SetClock, TimeDomain};

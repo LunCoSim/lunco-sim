@@ -75,24 +75,24 @@ use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::{
-    api_param_array, api_param_bool, api_param_str, api_param_u64, ApiQueryError, ApiQueryResult,
+    ApiQueryError, ApiQueryResult, api_param_array, api_param_bool, api_param_str, api_param_u64,
 };
-use lunco_api_core::{api_value, ApiErrorCode, ApiValue};
+use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_authoring::author::open_doc_stage;
-use lunco_usd_bevy_scene::collision::{
-    collision_aabb, prim_collision_geometry, prim_geometry_aabb, ObjectAabb,
-};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
+use lunco_usd_bevy_scene::collision::{
+    ObjectAabb, collision_aabb, prim_collision_geometry, prim_geometry_aabb,
+};
 use lunco_usd_bevy_stage::read::UsdRead;
 use lunco_usd_bevy_stage::view::StageView;
 use lunco_usd_bevy_stage::{
-    canonical::CanonicalStages, effective_purpose, is_descendant_or_self, resolve_bound_shader,
-    MaterialPurpose, UsdStageAsset,
+    MaterialPurpose, UsdStageAsset, canonical::CanonicalStages, effective_purpose,
+    is_descendant_or_self, resolve_bound_shader,
 };
-use lunco_usd_bevy_twin::{canonical_stage_for_document, scene_document_for, DocBackedTwinScenes};
+use lunco_usd_bevy_twin::{DocBackedTwinScenes, canonical_stage_for_document, scene_document_for};
 use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};

@@ -1,7 +1,7 @@
 //! Visualization/Plotting commands: NewPlotPanel and AddSignalToPlot.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -35,10 +35,10 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         use lunco_viz::{
+            SignalRef, VisualizationRegistry, VizId,
             kinds::line_plot::LINE_PLOT_KIND,
             view::ViewTarget,
             viz::{SignalBinding, VisualizationConfig},
-            SignalRef, VisualizationRegistry, VizId,
         };
         let id = world.resource::<VisualizationRegistry>().allocate_id();
         let source_viz = (ev.source != 0).then_some(VizId(ev.source));
@@ -129,7 +129,7 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
 pub fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        use lunco_viz::{viz::SignalBinding, SignalRef, VisualizationRegistry, VizId};
+        use lunco_viz::{SignalRef, VisualizationRegistry, VizId, viz::SignalBinding};
         let id = if ev.plot == 0 {
             crate::ui::viz::DEFAULT_MODELICA_GRAPH
         } else {

@@ -1,7 +1,7 @@
 //! Document-level operations: Undo, Redo, Save, and Format.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentSaved, RedoDocument, SaveAsDocument, SaveDocument, UndoDocument};
 

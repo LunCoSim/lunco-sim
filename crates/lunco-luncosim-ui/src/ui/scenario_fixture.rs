@@ -6,7 +6,7 @@
 //! real registry failure uses.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 /// Transient state used only by the explicit scenario-menu failure fixture.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]

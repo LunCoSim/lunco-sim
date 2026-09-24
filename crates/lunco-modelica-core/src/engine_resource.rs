@@ -240,31 +240,31 @@ impl ModelicaEngineHandle {
     pub fn install_worker_parsed_ast(
         &self,
         doc_id: DocumentId,
-        gen: u64,
+        r#gen: u64,
         ast: rumoca_compile::parsing::ast::StoredDefinition,
     ) {
         let mut engine = self.lock();
         engine.install_parsed_ast(doc_id, ast);
-        engine.finish_parse(doc_id, gen);
+        engine.finish_parse(doc_id, r#gen);
         self.wake_sync();
     }
 
     /// Drop the pending slot without installing anything — used when
     /// the worker reports a parse failure so the dedup gate clears
     /// and the next gen can retry.
-    pub fn finish_pending_failed(&self, doc_id: DocumentId, gen: u64) {
+    pub fn finish_pending_failed(&self, doc_id: DocumentId, r#gen: u64) {
         let mut engine = self.lock();
-        engine.finish_parse(doc_id, gen);
+        engine.finish_parse(doc_id, r#gen);
         self.wake_sync();
     }
 
     /// Record a terminal worker parse failure and clear the in-flight slot.
     /// The next engine-sync pass installs the diagnostic into the document's
     /// syntax cache, so the same source generation is not retried forever.
-    pub fn finish_worker_parse_failed(&self, doc_id: DocumentId, gen: u64, error: String) {
+    pub fn finish_worker_parse_failed(&self, doc_id: DocumentId, r#gen: u64, error: String) {
         let mut engine = self.lock();
         engine.set_parse_diags(doc_id, vec![lunco_doc::Diagnostic::message_only(error)]);
-        engine.finish_parse(doc_id, gen);
+        engine.finish_parse(doc_id, r#gen);
         self.wake_sync();
     }
 
@@ -284,7 +284,7 @@ impl ModelicaEngineHandle {
     pub fn upsert_document_async<F>(
         &self,
         doc_id: DocumentId,
-        gen: u64,
+        r#gen: u64,
         source: std::sync::Arc<str>,
         admit_fn: F,
     ) -> bool
@@ -324,13 +324,13 @@ impl ModelicaEngineHandle {
             let mut engine = me.lock();
             engine.install_parsed_ast(doc_id, ast);
             engine.set_parse_diags(doc_id, diags);
-            engine.finish_parse(doc_id, gen);
+            engine.finish_parse(doc_id, r#gen);
             me.wake_sync();
             let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
             bevy::log::info!(
                 "[engine] async parse doc={} gen={} bytes={} parse={:.1}ms install={:.1}ms total={:.1}ms has_errors={}",
                 doc_id.raw(),
-                gen,
+                r#gen,
                 bytes,
                 parse_ms,
                 install_ms,
@@ -636,9 +636,9 @@ pub fn drive_engine_sync(
     for (doc_id, host) in registry.iter() {
         alive.insert(doc_id);
         let doc = host.document();
-        let gen = doc.generation();
+        let r#gen = doc.generation();
         let needs = match cursor.last_synced.get(&doc_id) {
-            Some(prev) => *prev < gen,
+            Some(prev) => *prev < r#gen,
             None => true,
         };
         if !needs {
@@ -658,7 +658,7 @@ pub fn drive_engine_sync(
             Some(ast) => SyncPlan::Sync(ast),
             None => SyncPlan::Async(doc.source_arc()),
         };
-        to_upsert.push((doc_id, gen, plan));
+        to_upsert.push((doc_id, r#gen, plan));
     }
     let removed: Vec<DocumentId> = cursor
         .last_synced
@@ -681,24 +681,24 @@ pub fn drive_engine_sync(
         std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>,
     )> = Vec::new();
     let mut async_only: Vec<(DocumentId, u64, std::sync::Arc<str>)> = Vec::new();
-    for (doc_id, gen, plan) in to_upsert {
+    for (doc_id, r#gen, plan) in to_upsert {
         match plan {
-            SyncPlan::Sync(ast) => sync_only.push((doc_id, gen, ast)),
-            SyncPlan::Async(src) => async_only.push((doc_id, gen, src)),
+            SyncPlan::Sync(ast) => sync_only.push((doc_id, r#gen, ast)),
+            SyncPlan::Async(src) => async_only.push((doc_id, r#gen, src)),
         }
     }
     {
         let Some(mut engine) = handle.try_lock() else {
             return;
         };
-        for (doc_id, gen, ast) in sync_only {
+        for (doc_id, r#gen, ast) in sync_only {
             engine.upsert_document_with_ast(doc_id, (*ast).clone());
             bevy::log::info!(
                 "[EngineSync] upsert(parsed) doc={} gen={}",
                 doc_id.raw(),
-                gen,
+                r#gen,
             );
-            cursor.last_synced.insert(doc_id, gen);
+            cursor.last_synced.insert(doc_id, r#gen);
         }
         for doc_id in &removed {
             engine.close_document(*doc_id);
@@ -722,16 +722,16 @@ pub fn drive_engine_sync(
     // document-registry iteration. Shared dispatch applies the same active-tab
     // priority across all producers.
     if let Some(active) = active_doc {
-        async_only.sort_by_key(|(doc_id, gen, _)| {
-            (if *doc_id == active { 0 } else { 1 }, doc_id.raw(), *gen)
+        async_only.sort_by_key(|(doc_id, r#gen, _)| {
+            (if *doc_id == active { 0 } else { 1 }, doc_id.raw(), *r#gen)
         });
     } else {
-        async_only.sort_by_key(|(doc_id, gen, _)| (doc_id.raw(), *gen));
+        async_only.sort_by_key(|(doc_id, r#gen, _)| (doc_id.raw(), *r#gen));
     }
     let max_in_flight = pacing.max_in_flight.max(1);
     let mut next_debounce_at: Option<web_time::Instant> = None;
 
-    for (doc_id, gen, source) in async_only {
+    for (doc_id, r#gen, source) in async_only {
         let pending_count = {
             let Some(eng) = handle.try_lock() else {
                 return;
@@ -749,7 +749,7 @@ pub fn drive_engine_sync(
                 "[EngineSync] Modelica parse limit reached ({pending_count} pending) — \
                  deferring doc={} gen={} until admission capacity changes",
                 doc_id.raw(),
-                gen,
+                r#gen,
             );
             break;
         }
@@ -832,12 +832,12 @@ pub fn drive_engine_sync(
                 };
                 if let Some(ast) = cached_ast {
                     let t0 = web_time::Instant::now();
-                    handle.install_worker_parsed_ast(doc_id, gen, ast.clone());
+                    handle.install_worker_parsed_ast(doc_id, r#gen, ast.clone());
                     let t_engine = t0.elapsed().as_secs_f64() * 1000.0;
                     let t1 = web_time::Instant::now();
                     if let Some(host) = registry.host_mut(doc_id) {
                         let syntax = lunco_modelica_document::SyntaxCache {
-                            generation: gen,
+                            generation: r#gen,
                             ast: std::sync::Arc::new(ast),
                             errors: Vec::new(),
                         };
@@ -851,20 +851,20 @@ pub fn drive_engine_sync(
                         "[EngineSync] reuse pre-parsed source library AST doc={} gen={} \
                          engine={:.0}ms doc={:.0}ms",
                         doc_id.raw(),
-                        gen,
+                        r#gen,
                         t_engine,
                         t_doc,
                     );
                     continue;
                 }
                 if let Err(error) =
-                    worker_bridge.dispatch_parse(doc_id, gen, uri, source.to_string())
+                    worker_bridge.dispatch_parse(doc_id, r#gen, uri, source.to_string())
                 {
-                    handle.finish_worker_parse_failed(doc_id, gen, error.clone());
+                    handle.finish_worker_parse_failed(doc_id, r#gen, error.clone());
                     bevy::log::error!(
                         "[EngineSync] Modelica worker parse dispatch failed doc={} gen={}: {}",
                         doc_id.raw(),
-                        gen,
+                        r#gen,
                         error,
                     );
                     continue;
@@ -885,7 +885,7 @@ pub fn drive_engine_sync(
             bevy::log::debug!(
                 "[EngineSync] Modelica Web Worker not ready; retrying parse doc={} gen={}",
                 doc_id.raw(),
-                gen,
+                r#gen,
             );
             continue;
         }
@@ -903,26 +903,25 @@ pub fn drive_engine_sync(
                 lunco_core_runtime::AsyncWorkKind::ModelicaSourceParse,
                 0,
                 u128::from(doc_id.raw()),
-                gen,
+                r#gen,
                 0,
             );
             let mut rejection = None;
-            let accepted =
-                handle.upsert_document_async(doc_id, gen, source, |task| {
-                    match admission.submit(priority, key, task) {
-                        Ok(()) => true,
-                        Err(error) => {
-                            rejection = Some(error);
-                            false
-                        }
+            let accepted = handle.upsert_document_async(doc_id, r#gen, source, |task| {
+                match admission.submit(priority, key, task) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        rejection = Some(error);
+                        false
                     }
-                });
+                }
+            });
             if !accepted {
                 if let Some(error) = rejection {
                     bevy::log::warn!(
                         "[EngineSync] shared async admission rejected Modelica parse doc={} gen={}: {error:?}",
                         doc_id.raw(),
-                        gen,
+                        r#gen,
                     );
                 }
                 continue;
@@ -931,7 +930,7 @@ pub fn drive_engine_sync(
         bevy::log::info!(
             "[EngineSync] async parse admitted doc={} gen={} src={}B (first_parse={}, target={}{})",
             doc_id.raw(),
-            gen,
+            r#gen,
             src_len,
             !was_parsed,
             if dispatched_to_worker {

@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use lunco_hooks::HookValue as H;
 use std::time::Duration;
 
-use lunco_core_runtime::{SimTick, SECS_PER_TICK};
+use lunco_core_runtime::{SECS_PER_TICK, SimTick};
 
 pub mod domain;
 pub use domain::*;
@@ -36,7 +36,7 @@ pub use interaction::{
 
 pub mod scales;
 pub use scales::{
-    tdb_jd_to_utc_string, utc_jd_to_tdb_jd, utc_now_tdb_jd, utc_string_to_tdb_jd, TimeScales,
+    TimeScales, tdb_jd_to_utc_string, utc_jd_to_tdb_jd, utc_now_tdb_jd, utc_string_to_tdb_jd,
 };
 
 /// Seconds in one day — the JD/epoch unit conversion.
@@ -500,11 +500,7 @@ pub fn advance_clock(rate: f64, paused: bool) -> f64 {
     } else {
         0.0
     };
-    if paused || rate == 0.0 {
-        0.0
-    } else {
-        rate
-    }
+    if paused || rate == 0.0 { 0.0 } else { rate }
 }
 
 /// The derived causal time view every simulation consumer reads. Published after
@@ -891,16 +887,20 @@ mod tests {
             REALTIME_RATE_OPTIONS.first().copied(),
             Some(MIN_REALTIME_RATE)
         );
-        assert!(REALTIME_RATE_OPTIONS
-            .windows(2)
-            .all(|rates| rates[0] < rates[1]));
+        assert!(
+            REALTIME_RATE_OPTIONS
+                .windows(2)
+                .all(|rates| rates[0] < rates[1])
+        );
         assert_eq!(
             REALTIME_RATE_OPTIONS.last().copied(),
             Some(MAX_REALTIME_RATE)
         );
-        assert!(REALTIME_RATE_OPTIONS
-            .iter()
-            .all(|&rate| advance_clock(rate, false) > 0.0));
+        assert!(
+            REALTIME_RATE_OPTIONS
+                .iter()
+                .all(|&rate| advance_clock(rate, false) > 0.0)
+        );
         assert_eq!(realtime_rate_label(0.1), "0.1x");
         assert_eq!(realtime_rate_label(1.0), "1x");
     }

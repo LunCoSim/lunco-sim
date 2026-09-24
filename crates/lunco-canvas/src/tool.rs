@@ -1567,7 +1567,7 @@ fn cleanup_collinear(pts: &[Pos]) -> Vec<Pos> {
 mod tests {
     use super::*;
     use crate::event::Modifiers;
-    use crate::scene::{empty_node_data, Edge, EdgeId, Node, Port, PortId};
+    use crate::scene::{Edge, EdgeId, Node, Port, PortId, empty_node_data};
 
     fn mk_scene() -> Scene {
         let mut s = Scene::new();
@@ -1882,9 +1882,10 @@ mod tests {
                 up(Pos::new(200.0, 200.0)),
             ],
         );
-        assert!(!ev
-            .iter()
-            .any(|e| matches!(e, SceneEvent::EdgeCreated { .. })));
+        assert!(
+            !ev.iter()
+                .any(|e| matches!(e, SceneEvent::EdgeCreated { .. }))
+        );
     }
 
     #[test]

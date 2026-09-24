@@ -3,7 +3,7 @@ use big_space::prelude::*;
 
 use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
-use lunco_celestial::geo::{solar_tangent_frame, GeodeticAnchor};
+use lunco_celestial::geo::{GeodeticAnchor, solar_tangent_frame};
 use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::{
     CelestialSunPresentation, OrbitalViewPin, SolarSystemRoot, SurfacePoseQuery,

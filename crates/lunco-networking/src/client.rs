@@ -2,8 +2,8 @@
 //! ferry. Compiles for native and wasm.
 
 use bevy::prelude::*;
-use lightyear::netcode::client_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeClient;
+use lightyear::netcode::client_plugin::NetcodeConfig;
 // `Authentication` comes from `lightyear::prelude::*` (glob-imported below).
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
@@ -13,7 +13,7 @@ use lunco_command_contracts::{SessionId, SyncChannel};
 use lunco_core_session::{LocalSession, NetDisconnectRequest, NetStatus, NetworkRole};
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
-use crate::shared::{netcode_key, PROTOCOL_ID};
+use crate::shared::{PROTOCOL_ID, netcode_key};
 use lunco_networking_sync::codec::{deserialize_env, serialize_env};
 use lunco_networking_sync::sync::{SyncInbox, SyncOutbox};
 
@@ -319,7 +319,7 @@ fn port_of(server: &str) -> u16 {
 /// Reflect the handshake (non-zero [`LocalSession`]) into [`NetStatus`] so the
 /// status bar flips from "connecting…" to "connected".
 fn update_client_netstatus(local: Res<LocalSession>, mut status: ResMut<NetStatus>) {
-    let connected = local.0 .0 != 0;
+    let connected = local.0.0 != 0;
     if status.connected != connected {
         status.connected = connected;
         status.peers = u32::from(connected);

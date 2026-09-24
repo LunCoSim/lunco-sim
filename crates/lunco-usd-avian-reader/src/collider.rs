@@ -3,12 +3,12 @@ use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_usd_bevy_scene::{
-    read_mesh_collision_approximation, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
-    usd_axis_to_quat, usd_plane_surface_vertices, ShapeDims,
+    ShapeDims, read_mesh_collision_approximation, read_primitive_axis, read_shape_dims,
+    read_usd_mesh_indexed, usd_axis_to_quat, usd_plane_surface_vertices,
 };
-use lunco_usd_bevy_stage::{effective_purpose, local_transform_at, Purpose, TransformReadError};
-use openusd::schemas::physics::tokens as ptok;
+use lunco_usd_bevy_stage::{Purpose, TransformReadError, effective_purpose, local_transform_at};
 use openusd::schemas::physics::CollisionApprox;
+use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 
 use crate::read_authored_bool_or_default;

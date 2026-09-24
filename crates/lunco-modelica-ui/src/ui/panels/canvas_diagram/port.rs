@@ -48,11 +48,7 @@ pub(super) fn port_kind_str(kind: lunco_modelica_index::visual_diagram::PortKind
 /// strip. Non-negative values stay non-negative.
 fn fallback_range(value: f64) -> (f64, f64) {
     let mag = value.abs().max(1.0) * 2.0;
-    if value < 0.0 {
-        (-mag, mag)
-    } else {
-        (0.0, mag)
-    }
+    if value < 0.0 { (-mag, mag) } else { (0.0, mag) }
 }
 
 /// Stable heuristic domain for an unbounded input, cached per-input in
@@ -206,11 +202,7 @@ pub(super) fn paint_input_control_widget(
                 .strip_prefix(&prefix)
                 .map(|rest| {
                     let trimmed = rest.trim_end_matches(".value");
-                    if trimmed.is_empty() {
-                        rest
-                    } else {
-                        trimmed
-                    }
+                    if trimmed.is_empty() { rest } else { trimmed }
                 })
                 .unwrap_or_else(|| name.rsplit('.').next().unwrap_or(name));
             response.on_hover_text(var_name.to_string());

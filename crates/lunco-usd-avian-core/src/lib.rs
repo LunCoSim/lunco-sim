@@ -71,8 +71,8 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_spatial::coords::{
-    grid_absolute_from_components, grid_local_remainder, grid_relative_pose_seeded,
-    grid_transform_between_grids, pose_in_grid, pose_in_grid_seeded, GridPos, GridRot,
+    GridPos, GridRot, grid_absolute_from_components, grid_local_remainder,
+    grid_relative_pose_seeded, grid_transform_between_grids, pose_in_grid, pose_in_grid_seeded,
 };
 use lunco_usd_bevy_scene::UsdPrimPath;
 
@@ -1715,14 +1715,18 @@ mod tests {
             .run_system_once(validate_physics_frame_contract)
             .expect("frame validation system runs");
 
-        assert!(world
-            .resource::<lunco_physics::PhysicsHolds>()
-            .holds(lunco_physics::PhysicsHolds::FRAME_CONTRACT));
-        assert!(world
-            .resource::<lunco_core::RuntimeDiagnostics>()
-            .findings
-            .iter()
-            .any(|finding| finding.code == "physics-frame"));
+        assert!(
+            world
+                .resource::<lunco_physics::PhysicsHolds>()
+                .holds(lunco_physics::PhysicsHolds::FRAME_CONTRACT)
+        );
+        assert!(
+            world
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .iter()
+                .any(|finding| finding.code == "physics-frame")
+        );
         assert!(!world.resource::<PhysicsFrameContractStatus>().ready);
     }
 
@@ -1752,9 +1756,11 @@ mod tests {
             .expect("unrepresentable body raises a terminal fault");
         assert_eq!(fault.kind, "avian-backend-pose-invalid");
         assert_eq!(fault.entity, Some(entity));
-        assert!(world
-            .resource::<lunco_physics::PhysicsHolds>()
-            .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE));
+        assert!(
+            world
+                .resource::<lunco_physics::PhysicsHolds>()
+                .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE)
+        );
     }
 
     #[test]
@@ -1783,9 +1789,11 @@ mod tests {
             .expect("unrepresentable collider raises a terminal fault");
         assert_eq!(fault.kind, "avian-collider-aabb-invalid");
         assert_eq!(fault.entity, Some(entity));
-        assert!(world
-            .resource::<lunco_physics::PhysicsHolds>()
-            .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE));
+        assert!(
+            world
+                .resource::<lunco_physics::PhysicsHolds>()
+                .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE)
+        );
     }
 
     #[test]

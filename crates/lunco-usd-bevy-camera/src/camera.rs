@@ -925,10 +925,11 @@ mod tests {
             app.world().get::<Visibility>(entity),
             Some(&Visibility::Hidden)
         );
-        assert!(app
-            .world()
-            .get::<lunco_render::SceneCamera>(entity)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<lunco_render::SceneCamera>(entity)
+                .is_none()
+        );
     }
 
     #[test]

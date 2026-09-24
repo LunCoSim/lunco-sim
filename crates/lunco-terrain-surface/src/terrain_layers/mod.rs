@@ -39,9 +39,9 @@ use lunco_terrain_core::Overzoom;
 use crate::oracle::DemHeightField;
 
 pub use craters::{crater_layer, make_crater_layer};
-pub use edits::{edit_attr_writes, parse_edit, EditKind, EditsLayer};
+pub use edits::{EditKind, EditsLayer, edit_attr_writes, parse_edit};
 pub(crate) use rocks::ProceduralRock;
-pub use rocks::{rock_instance_layer, rock_layer, TerrainRock};
+pub use rocks::{TerrainRock, rock_instance_layer, rock_layer};
 
 /// Parameters decoded from one built-in USD-free terrain layer.
 ///

@@ -40,7 +40,7 @@
 
 use bevy::asset::AssetId;
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid};
 // Appearance **intent**, not a material: this crate must never name
 // `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
@@ -50,22 +50,22 @@ use lunco_render::{PbrLook, PbrTextures, ProceduralSkybox, SurfaceAlpha};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
-use lunco_usd_bevy_core::animation::{prim_is_animated, ANIMATED_SHADER_INPUTS};
+use lunco_usd_bevy_core::animation::{ANIMATED_SHADER_INPUTS, prim_is_animated};
 use lunco_usd_bevy_core::point_instancer::read_point_instancer;
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_light::light;
 use lunco_usd_bevy_mesh::{
-    build_primitive_mesh, build_usd_curve_mesh, build_usd_mesh, build_usd_nurbs_patch_mesh,
-    has_authored_nurbs_trim, read_nurbs_patch_surface,
+    UsdCurveMesh, UsdPrimitiveMesh, build_primitive_mesh, build_usd_curve_mesh, build_usd_mesh,
+    build_usd_nurbs_patch_mesh, has_authored_nurbs_trim, read_nurbs_patch_surface,
     refresh_curve_meshes_on_stage_or_quality_change,
-    retessellate_primitive_meshes_on_quality_change, UsdCurveMesh, UsdPrimitiveMesh,
+    retessellate_primitive_meshes_on_quality_change,
 };
 use lunco_usd_bevy_scene::{
-    is_preview_only, read_primitive_axis, read_shape_dims, scene_root_ancestor, usd_axis_to_quat,
     GlbPlaceholder, PlaceholderAssetUri, UsdAnimated, UsdPointInstance, UsdPointInstancer,
     UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdScenePlugin,
     UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot,
-    UsdSceneSyncSet, UsdVisualMeshTarget, UsdVisualProjectionSet,
+    UsdSceneSyncSet, UsdVisualMeshTarget, UsdVisualProjectionSet, is_preview_only,
+    read_primitive_axis, read_shape_dims, scene_root_ancestor, usd_axis_to_quat,
 };
 use lunco_usd_bevy_stage::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
@@ -73,13 +73,13 @@ use lunco_usd_bevy_stage::read::{
 };
 use lunco_usd_bevy_stage::source::{UsdSourceText, UsdSourceTextLoader};
 use lunco_usd_bevy_stage::{
-    canonical, read, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader,
-    UsdStageAsset,
+    UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader, UsdStageAsset, canonical,
+    read,
 };
 use lunco_usd_bevy_stage::{
-    canonical::CanonicalStages, grid_translation_d_at, local_transform_at, parent_prim_path,
-    read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path, stage_convention,
-    UsdRead, UsdReadObject,
+    UsdRead, UsdReadObject, canonical::CanonicalStages, grid_translation_d_at, local_transform_at,
+    parent_prim_path, read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path,
+    stage_convention,
 };
 /// Bevy plugin for USD visual synchronization.
 ///
@@ -1180,7 +1180,8 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 Err(error) => {
                     error!(
                         "[usd-bevy] {} has a double-precision translation that cannot be represented by its authored xform stack: {}",
-                        sdf_path.as_str(), error
+                        sdf_path.as_str(),
+                        error
                     );
                     commands.entity(entity).try_insert((
                         UsdSceneProjectionFailed(error.to_string()),
@@ -2947,7 +2948,7 @@ mod instance_identity_tests {
     //! hierarchical identity from the instance root, so two spawns of the same
     //! asset (identical composed prim paths) don't collide.
     use super::*;
-    use lunco_core::{identity::derive_id, GlobalEntityId, Provenance};
+    use lunco_core::{GlobalEntityId, Provenance, identity::derive_id};
 
     #[test]
     fn preview_projection_is_local_even_when_source_has_a_content_path() {

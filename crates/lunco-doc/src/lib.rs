@@ -69,10 +69,10 @@ pub mod diagnostics;
 pub mod domain_engine;
 pub mod refindex;
 
-pub use diagnostics::{document_status, DiagnosticStatus, DocDiagnostics, DocStatus};
+pub use diagnostics::{DiagnosticStatus, DocDiagnostics, DocStatus, document_status};
 pub use domain_engine::{
-    line_col_to_offset, offset_to_line_col, CompileState, Diagnostic, DiagnosticSeverity,
-    DomainEngine, DomainEngineError, NodeId, ResolvedRef, SymbolRef, TextRange,
+    CompileState, Diagnostic, DiagnosticSeverity, DomainEngine, DomainEngineError, NodeId,
+    ResolvedRef, SymbolRef, TextRange, line_col_to_offset, offset_to_line_col,
 };
 pub use refindex::RefIndex;
 
@@ -918,7 +918,7 @@ impl<D: Document> DocumentHost<D> {
                 Ok(inverse) => inverse,
                 Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
                 Err(DocumentError::ValidationFailed(msg)) | Err(DocumentError::Internal(msg)) => {
-                    return Err(Reject::InvalidOp(msg))
+                    return Err(Reject::InvalidOp(msg));
                 }
             };
             inverses.push(inverse);
@@ -964,7 +964,7 @@ impl<D: Document> DocumentHost<D> {
                 Ok(_) => {}
                 Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
                 Err(DocumentError::ValidationFailed(msg)) | Err(DocumentError::Internal(msg)) => {
-                    return Err(Reject::InvalidOp(msg))
+                    return Err(Reject::InvalidOp(msg));
                 }
             }
         }

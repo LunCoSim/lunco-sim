@@ -1,7 +1,7 @@
 [package]
 name = "lunco-usd-bevy-mesh"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Render-free USD geometry projection into Bevy mesh assets"
 

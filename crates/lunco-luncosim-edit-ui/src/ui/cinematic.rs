@@ -26,7 +26,7 @@ use bevy::math::{DQuat, EulerRot};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::SceneCamera;
 use lunco_time::{ControlAnimation, Playback, TransportMode};

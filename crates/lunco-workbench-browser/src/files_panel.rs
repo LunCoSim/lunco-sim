@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use egui;
 
 use crate::twin_browser::{
-    render_search_bar, BrowserActions, BrowserCtx, BrowserScope, BrowserSectionRegistry,
+    BrowserActions, BrowserCtx, BrowserScope, BrowserSectionRegistry, render_search_bar,
 };
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 

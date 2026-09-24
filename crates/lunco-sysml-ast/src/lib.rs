@@ -3066,10 +3066,12 @@ mod tests {
     fn malformed_source_is_reported_without_panicking() {
         let analysis = SysmlAnalysis::from_files_without_stdlib([("broken.sysml", "package {")]);
         assert!(analysis.has_errors());
-        assert!(analysis
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| diagnostic.kind == SysmlDiagnosticKind::Syntax));
+        assert!(
+            analysis
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.kind == SysmlDiagnosticKind::Syntax)
+        );
     }
 
     #[test]
@@ -3120,7 +3122,7 @@ mod tests {
 
     #[test]
     fn typed_fact_selection_follows_requirement_and_source_handles() {
-        use crate::lint_facts::{selected_sysml_facts, SysmlFactSelection, SysmlFactTable};
+        use crate::lint_facts::{SysmlFactSelection, SysmlFactTable, selected_sysml_facts};
         use lunco_hooks::HookValue;
 
         let source =
@@ -3212,9 +3214,11 @@ mod tests {
         let first = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
         let second = SysmlAnalysis::build_cached([("a.sysml", "part def B {}")], false, 0x1234);
         assert!(!Arc::ptr_eq(&first, &second));
-        assert!(second
-            .elements()
-            .iter()
-            .any(|element| element.qualified_name == "B"));
+        assert!(
+            second
+                .elements()
+                .iter()
+                .any(|element| element.qualified_name == "B")
+        );
     }
 }

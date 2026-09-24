@@ -1,7 +1,7 @@
 [package]
 name = "lunco-assets-core"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license.workspace = true
 description = "Lightweight LunCoSim asset identity, resolution, storage, and shared fetch contracts"
 

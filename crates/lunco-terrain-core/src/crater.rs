@@ -140,9 +140,9 @@ impl Crater {
             return 0.0;
         }
         let d = d2.sqrt() / r; // normalised radial distance
-                               // Sampling kernel width, normalised by the rim radius (σ ≈ half the
-                               // sample spacing — the classic anti-alias kernel), combined in
-                               // quadrature with the crater's own degradation blur.
+        // Sampling kernel width, normalised by the rim radius (σ ≈ half the
+        // sample spacing — the classic anti-alias kernel), combined in
+        // quadrature with the crater's own degradation blur.
         let sample_sigma = 0.5 * min_wavelength / r;
         let sigma_n = (sample_sigma * sample_sigma + self.softness * self.softness).sqrt();
         let tail = crater_profile_limited(
@@ -1105,7 +1105,7 @@ mod tests {
         );
         assert_eq!(c.delta_at(16.0, 0.0), 0.0); // d = 1.6 exactly
         assert_eq!(c.delta_at(20.0, 0.0), 0.0); // d = 2.0
-                                                // Floor is a deep depression, rim is positive.
+        // Floor is a deep depression, rim is positive.
         assert!(crater_profile(0.0, 3.0, 0.5, 4.0) < -2.0);
         assert!(crater_profile(0.98, 0.0, 0.5, 4.0) > 0.0);
     }

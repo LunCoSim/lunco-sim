@@ -285,11 +285,7 @@ fn empty_hint(ui: &mut egui::Ui, msg: &str) {
 /// Height to reserve for the diagnostics strip so the editor sizes to fill the
 /// rest.
 fn diagnostics_height(diags: &[Diagnostic]) -> f32 {
-    if diags.is_empty() {
-        0.0
-    } else {
-        130.0
-    }
+    if diags.is_empty() { 0.0 } else { 130.0 }
 }
 
 fn status_label(

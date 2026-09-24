@@ -1,6 +1,6 @@
 //! Bevy asset-source adapters over the platform-neutral asset path algebra.
 
-use bevy::asset::{io::AssetSourceId, AssetPath};
+use bevy::asset::{AssetPath, io::AssetSourceId};
 
 pub(crate) use lunco_assets_path::{
     has_scheme, is_anchored, is_safe_relative_components, is_safe_relative_path, normalize,

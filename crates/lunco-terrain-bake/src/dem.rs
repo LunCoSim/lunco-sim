@@ -336,7 +336,7 @@ impl From<lunco_geotiff::GrayDecodeError> for DemError {
 mod tests {
     use super::*;
     use lunco_terrain_core::source::HeightSource;
-    use tiff::encoder::{colortype, TiffEncoder};
+    use tiff::encoder::{TiffEncoder, colortype};
 
     /// The real Apollo-15 shape: a clean nodata margin on ONE side (the crop
     /// overran its source raster). The trim must shrink symmetrically about the

@@ -24,8 +24,8 @@ pub mod presentation;
 
 pub use build_identity::BuildIdentity;
 pub use menu::{
-    trigger_or_defer, CustomMenu, DeferredWorldTriggers, MenuCallback, MenuCtx, MenuIntents,
-    ScriptedMenu, SettingsSubmenu, UndoProbe, UndoProbeCtx, WorkbenchMenuRegistry,
+    CustomMenu, DeferredWorldTriggers, MenuCallback, MenuCtx, MenuIntents, ScriptedMenu,
+    SettingsSubmenu, UndoProbe, UndoProbeCtx, WorkbenchMenuRegistry, trigger_or_defer,
 };
 pub use panel::{
     InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelIntents, PanelMenuGroup,

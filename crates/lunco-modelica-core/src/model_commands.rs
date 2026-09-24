@@ -7,13 +7,13 @@
 
 use bevy::prelude::*;
 #[cfg(feature = "api")]
-use lunco_api::executor::{finish_command_result, PendingApiRequest};
+use lunco_api::executor::{PendingApiRequest, finish_command_result};
 #[cfg(feature = "api")]
 use lunco_api_core::ApiErrorCode;
 use lunco_command_contracts::{Ack, OpId};
 #[cfg(not(feature = "api"))]
 use lunco_core::CommandResults;
-use lunco_core::{on_command, register_commands, ActiveCommandId, Command};
+use lunco_core::{ActiveCommandId, Command, on_command, register_commands};
 use lunco_doc::DocumentId;
 use lunco_modelica_runtime::ModelicaModel;
 

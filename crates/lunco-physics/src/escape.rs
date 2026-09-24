@@ -831,10 +831,11 @@ mod tests {
             app.world().resource::<ReportedEscapes>().0.is_empty(),
             "a held loading pose must not become a terminal runtime fault"
         );
-        assert!(!app
-            .world()
-            .resource::<PhysicsHolds>()
-            .holds(PhysicsHolds::SAFETY_FAILURE));
+        assert!(
+            !app.world()
+                .resource::<PhysicsHolds>()
+                .holds(PhysicsHolds::SAFETY_FAILURE)
+        );
 
         app.world_mut().resource_mut::<Time<Physics>>().unpause();
         app.update();
@@ -876,9 +877,11 @@ mod tests {
 
         assert_eq!(world.get::<Position>(entity).unwrap().0, position);
         assert_eq!(world.get::<LinearVelocity>(entity).unwrap().0, velocity);
-        assert!(world
-            .resource::<PhysicsHolds>()
-            .holds(PhysicsHolds::SAFETY_FAILURE));
+        assert!(
+            world
+                .resource::<PhysicsHolds>()
+                .holds(PhysicsHolds::SAFETY_FAILURE)
+        );
         let fault = world.resource::<lunco_core::RuntimeFaults>();
         assert_eq!(
             fault.first.as_ref().map(|fault| fault.kind),

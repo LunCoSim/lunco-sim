@@ -11,7 +11,7 @@
 use bevy::prelude::*;
 
 use crate::{
-    dataset_failed, DatasetRegistry, DatasetScope, DatasetScopeReady, DatasetScopeRemoved,
+    DatasetRegistry, DatasetScope, DatasetScopeReady, DatasetScopeRemoved, dataset_failed,
 };
 
 /// Marker installed by the native provisioning plugin while it owns dataset

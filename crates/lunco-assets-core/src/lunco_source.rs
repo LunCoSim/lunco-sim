@@ -469,7 +469,7 @@ fn local_root_allows(_root: &str, _path: &Path) -> std::io::Result<bool> {
 
 /// Try each root in order; the first non-`NotFound` answer wins.
 macro_rules! try_both {
-    ($self:ident, $method:ident, $path:expr) => {{
+    ($self:ident, $method:ident, $path:expr_2021) => {{
         // `readers` is non-empty by construction (`assets/` is always first),
         // so the loop always assigns before the unwrap.
         let mut last = None;

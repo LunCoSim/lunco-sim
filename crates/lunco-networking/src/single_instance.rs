@@ -48,7 +48,7 @@ fn deeplink_arg() -> Option<String> {
 /// Decide this process's role (see module docs). Never panics — IPC errors fall
 /// back to running as a standalone primary with no cross-instance forwarding.
 pub fn acquire() -> LaunchOutcome {
-    use interprocess::local_socket::{prelude::*, GenericNamespaced, ListenerOptions, Stream};
+    use interprocess::local_socket::{GenericNamespaced, ListenerOptions, Stream, prelude::*};
 
     let url = deeplink_arg();
 

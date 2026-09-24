@@ -77,8 +77,8 @@ pub use layer::{EdgesLayer, GridLayer, Layer, NodesLayer, SelectionLayer, ToolPr
 #[cfg(feature = "ui")]
 pub use overlay::{Anchor, NavBarOverlay, Overlay, OverlayCtx};
 pub use scene::{
-    empty_node_data, Edge, EdgeHitKind, EdgeId, Node, NodeData, NodeHitKind, NodeId, Port, PortId,
-    PortRef, Pos, Rect, Scene,
+    Edge, EdgeHitKind, EdgeId, Node, NodeData, NodeHitKind, NodeId, Port, PortId, PortRef, Pos,
+    Rect, Scene, empty_node_data,
 };
 pub use selection::{SelectItem, Selection};
 pub use tool::{CanvasOps, DefaultTool, SnapSettings, Tool, ToolOutcome};

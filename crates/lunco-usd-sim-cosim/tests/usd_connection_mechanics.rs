@@ -9,7 +9,7 @@ use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use lunco_cosim_core::{ConnectionBinding, SimConnection};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdStageAsset, UsdWiringDirty};
+use lunco_usd_bevy_stage::{UsdStageAsset, UsdWiringDirty, canonical::CanonicalStages};
 use lunco_usd_compose::recipe::StageRecipe;
 use lunco_usd_sim_cosim::install_wiring_system;
 use openusd::sdf::Path as SdfPath;
@@ -265,10 +265,11 @@ fn unrelated_endpoint_arrival_does_not_toggle_earth_direction_demand() {
     ));
     app.update();
 
-    assert!(app
-        .world()
-        .entity(source)
-        .contains::<lunco_environment::EarthDirectionRequired>());
+    assert!(
+        app.world()
+            .entity(source)
+            .contains::<lunco_environment::EarthDirectionRequired>()
+    );
     assert_eq!(
         app.world().resource::<EarthRequirementEvents>().added,
         1,
@@ -285,10 +286,11 @@ fn unrelated_endpoint_arrival_does_not_toggle_earth_direction_demand() {
     ));
     app.update();
 
-    assert!(app
-        .world()
-        .entity(source)
-        .contains::<lunco_environment::EarthDirectionRequired>());
+    assert!(
+        app.world()
+            .entity(source)
+            .contains::<lunco_environment::EarthDirectionRequired>()
+    );
     assert_eq!(
         app.world().resource::<EarthRequirementEvents>().added,
         1,

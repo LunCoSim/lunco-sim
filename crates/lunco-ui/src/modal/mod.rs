@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 /// Opaque id for a queued modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

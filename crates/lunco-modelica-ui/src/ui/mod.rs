@@ -182,8 +182,8 @@ fn close_drilled_tabs_on_class_removed(
     let mut highest_gen = last_seen;
     let mut to_close: Vec<String> = Vec::new();
     let mut to_rename: Vec<(String, String)> = Vec::new();
-    for (gen, change) in changes {
-        highest_gen = highest_gen.max(*gen);
+    for (r#gen, change) in changes {
+        highest_gen = highest_gen.max(*r#gen);
         match change {
             lunco_modelica_document::ModelicaChange::ClassRemoved { qualified } => {
                 to_close.push(qualified.clone());

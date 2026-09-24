@@ -39,41 +39,41 @@ fn load_authored_render_quality_profiles(
     mut settings: ResMut<RenderingQualitySettings>,
 ) {
     let previous_preset = settings.preset(&profiles);
-    let default_quality =
-        match lunco_hooks::invoke(crate::RENDER_DEFAULT_QUALITY_PROFILE_HOOK, &[]) {
-            Some(Ok(lunco_hooks::HookValue::Str(id))) => match RenderingQuality::parse_id(&id) {
-                Some(quality) => quality,
-                None => {
-                    let reason = format!(
-                        "authored default rendering-quality policy returned unknown profile id '{id}'"
-                    );
-                    profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                    warn!("[render] {reason}");
-                    return;
-                }
-            },
-            Some(Err(error)) => {
-                let reason = format!("authored default rendering-quality policy failed: {error}");
-                profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                warn!("[render] {reason}");
-                return;
-            }
+    let default_quality = match lunco_hooks::invoke(crate::RENDER_DEFAULT_QUALITY_PROFILE_HOOK, &[])
+    {
+        Some(Ok(lunco_hooks::HookValue::Str(id))) => match RenderingQuality::parse_id(&id) {
+            Some(quality) => quality,
             None => {
-                let reason = "authored default rendering-quality policy is unavailable".to_string();
-                profiles.mark_unavailable(&reason, lunco_hooks::generation());
-                warn!("[render] {reason}");
-                return;
-            }
-            Some(Ok(value)) => {
                 let reason = format!(
-                    "authored default rendering-quality policy returned {}, expected string",
-                    value.type_name()
+                    "authored default rendering-quality policy returned unknown profile id '{id}'"
                 );
                 profiles.mark_unavailable(&reason, lunco_hooks::generation());
                 warn!("[render] {reason}");
                 return;
             }
-        };
+        },
+        Some(Err(error)) => {
+            let reason = format!("authored default rendering-quality policy failed: {error}");
+            profiles.mark_unavailable(&reason, lunco_hooks::generation());
+            warn!("[render] {reason}");
+            return;
+        }
+        None => {
+            let reason = "authored default rendering-quality policy is unavailable".to_string();
+            profiles.mark_unavailable(&reason, lunco_hooks::generation());
+            warn!("[render] {reason}");
+            return;
+        }
+        Some(Ok(value)) => {
+            let reason = format!(
+                "authored default rendering-quality policy returned {}, expected string",
+                value.type_name()
+            );
+            profiles.mark_unavailable(&reason, lunco_hooks::generation());
+            warn!("[render] {reason}");
+            return;
+        }
+    };
 
     let mut loaded = Vec::with_capacity(RenderingQuality::all().len());
     for quality in RenderingQuality::all() {

@@ -37,8 +37,8 @@ impl Plugin for RecentsPlugin {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Path resolution for the recents file. Lifted into a helper so the
-/// `LUNCOSIM_CONFIG` env override (set by `lunco_settings::user_config_dir`)
-/// flows through to both the load and save paths.
+/// settings crate's resolved config directory, including its `LUNCOSIM_CONFIG`
+/// override, flows through to both the load and save paths.
 fn recents_path() -> std::path::PathBuf {
     lunco_settings::user_config_dir().join("recents.json")
 }

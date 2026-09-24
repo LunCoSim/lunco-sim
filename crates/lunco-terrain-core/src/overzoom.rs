@@ -26,7 +26,7 @@
 
 use std::sync::Arc;
 
-use crate::crater::{crater_profile_rim_limited, CRATER_REACH};
+use crate::crater::{CRATER_REACH, crater_profile_rim_limited};
 use crate::modifier::HeightModifier;
 use crate::source::{hash01, vnoise};
 

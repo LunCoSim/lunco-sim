@@ -37,13 +37,9 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             name: "ray_hit_valid",
             dir: PortDirection::Out,
             read: Some(|world, entity| {
-                world.get::<RaycastObservation>(entity).map(|observation| {
-                    if observation.hit_valid {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                })
+                world
+                    .get::<RaycastObservation>(entity)
+                    .map(|observation| if observation.hit_valid { 1.0 } else { 0.0 })
             }),
             write: None,
         },

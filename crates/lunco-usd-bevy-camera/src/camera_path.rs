@@ -40,11 +40,11 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, TransportMode};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
-use lunco_usd_geometry::curve::{eval_curve, eval_curve_tangent, CurveBasis};
+use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
+use lunco_usd_geometry::curve::{CurveBasis, eval_curve, eval_curve_tangent};
 use openusd::schemas::geom::tokens;
 use openusd::sdf::Path as SdfPath;
 

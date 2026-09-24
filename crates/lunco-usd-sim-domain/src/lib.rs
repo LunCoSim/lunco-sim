@@ -9,25 +9,25 @@ use std::sync::Arc;
 
 use bevy::asset::AssetId;
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_modelica_ast::ast_extract::{
-    parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
+    ModelInterface, ModelicaVariableMetadata, parse_model_interface_from_ast,
 };
 use lunco_modelica_ast::{Causality, StoredDefinition};
-use lunco_modelica_runtime::{resolve_communication_period_secs, ModelicaSource};
 use lunco_modelica_runtime::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
     ModelicaSignalProvenance, NoticeLevel,
 };
+use lunco_modelica_runtime::{ModelicaSource, resolve_communication_period_secs};
 use lunco_usd_bevy_core::program::{
+    ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER, ProgramGraph,
     is_modelica_identifier, modelica_identifier, modelica_path_identifier, modelica_source_ref,
-    select_synthesizer_name, ProgramGraph, ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER,
-    DEFAULT_DOMAIN_SYNTHESIZER,
+    select_synthesizer_name,
 };
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::read::UsdReadObject as ComposedReader;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdInstanceProjection, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_sim_core::PendingEntityWork;
 use openusd::sdf::Path as SdfPath;
 
@@ -2273,11 +2273,12 @@ mod tests {
         assert!(candidates.projection.is_empty());
         assert!(candidates.waiting_for_stage.is_empty());
         assert!(candidates.initial_discovery);
-        assert!(app
-            .world()
-            .resource::<PendingGeneratedSourceDocuments>()
-            .0
-            .has_work());
+        assert!(
+            app.world()
+                .resource::<PendingGeneratedSourceDocuments>()
+                .0
+                .has_work()
+        );
         assert_eq!(
             app.world().resource::<MemberClasses>().resolve("motor.mo"),
             Ok(Some("LunCo.Electrical.Motor".into()))
@@ -2323,11 +2324,12 @@ mod tests {
         app.world_mut()
             .entity_mut(entity)
             .remove::<lunco_core::GlobalEntityId>();
-        assert!(app
-            .world()
-            .resource::<PendingDomainProjectionCandidates>()
-            .discovery
-            .contains(&entity));
+        assert!(
+            app.world()
+                .resource::<PendingDomainProjectionCandidates>()
+                .discovery
+                .contains(&entity)
+        );
     }
 
     #[test]
@@ -2358,38 +2360,42 @@ mod tests {
         app.world_mut()
             .entity_mut(entity)
             .insert(ModelicaModel::default());
-        assert!(!app
-            .world()
-            .resource::<PendingGeneratedSourceDocuments>()
-            .0
-            .contains(entity));
+        assert!(
+            !app.world()
+                .resource::<PendingGeneratedSourceDocuments>()
+                .0
+                .contains(entity)
+        );
 
         app.world_mut().entity_mut(entity).insert(source());
-        assert!(app
-            .world()
-            .resource::<PendingGeneratedSourceDocuments>()
-            .0
-            .contains(entity));
+        assert!(
+            app.world()
+                .resource::<PendingGeneratedSourceDocuments>()
+                .0
+                .contains(entity)
+        );
 
         app.world_mut()
             .entity_mut(entity)
             .remove::<GeneratedModelicaSource>();
-        assert!(!app
-            .world()
-            .resource::<PendingGeneratedSourceDocuments>()
-            .0
-            .contains(entity));
+        assert!(
+            !app.world()
+                .resource::<PendingGeneratedSourceDocuments>()
+                .0
+                .contains(entity)
+        );
 
         app.world_mut().entity_mut(entity).insert(source());
         app.world_mut().entity_mut(entity).remove::<ModelicaModel>();
         app.world_mut()
             .entity_mut(entity)
             .insert(ModelicaModel::default());
-        assert!(app
-            .world()
-            .resource::<PendingGeneratedSourceDocuments>()
-            .0
-            .contains(entity));
+        assert!(
+            app.world()
+                .resource::<PendingGeneratedSourceDocuments>()
+                .0
+                .contains(entity)
+        );
     }
 
     fn component(path: &str, target: Option<&str>) -> DomainComponent {
@@ -2867,9 +2873,11 @@ def Scope "Rig"
             pending_sources: false,
         };
         let errors = network::validate_network(&network);
-        assert!(errors
-            .iter()
-            .any(|error| error.message.contains("outside collection")));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("outside collection"))
+        );
         assert_eq!(synthesis::partition_network(&network).len(), 2);
     }
 
@@ -2959,9 +2967,11 @@ def Scope "Rig"
             communication_period_secs: lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
-        assert!(network::validate_network(&network)
-            .iter()
-            .any(|error| error.message.contains("boundary identity is ambiguous")));
+        assert!(
+            network::validate_network(&network)
+                .iter()
+                .any(|error| error.message.contains("boundary identity is ambiguous"))
+        );
     }
 
     #[test]
@@ -2978,9 +2988,11 @@ def Scope "Rig"
             communication_period_secs: lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
-        assert!(network::validate_network(&network)
-            .iter()
-            .any(|error| error.message.contains("not a valid Modelica identifier")));
+        assert!(
+            network::validate_network(&network)
+                .iter()
+                .any(|error| error.message.contains("not a valid Modelica identifier"))
+        );
     }
 
     #[test]
@@ -3098,11 +3110,12 @@ def Scope "Rig"
             .resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
             .host(document)
             .is_none());
-        assert!(app
-            .world()
-            .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
-            .entries
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
+                .entries
+                .is_empty()
+        );
     }
 
     #[test]

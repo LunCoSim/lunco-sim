@@ -25,11 +25,11 @@ use lunco_doc_bevy::{
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench_browser::{BrowserSectionRegistry, TwinBrowserPlugin};
-use lunco_workbench_core::presentation::ViewportPlaceholder;
 use lunco_workbench_core::PanelId;
+use lunco_workbench_core::presentation::ViewportPlaceholder;
 
 use lunco_usd_bevy_twin::UsdDocumentUserOwned;
-use lunco_usd_core::commands::{EmptyViewportReason, UsdDocumentReady, USD_DOCUMENT_KIND};
+use lunco_usd_core::commands::{EmptyViewportReason, USD_DOCUMENT_KIND, UsdDocumentReady};
 use lunco_usd_document::document::UsdDocument;
 use lunco_workspace::WorkspaceResource;
 
@@ -46,11 +46,11 @@ pub const USD_CONNECTION_CANVAS_PANEL_ID: PanelId = PanelId("usd_connection_canv
 
 pub use browser_section::{ConnectionsSection, UsdSceneSection};
 pub use loaded_stages::{
-    produce_usd_browser_view, LoadedStage, LoadedUsdStages, UsdBrowserView, WorkspaceStage,
+    LoadedStage, LoadedUsdStages, UsdBrowserView, WorkspaceStage, produce_usd_browser_view,
 };
 pub use scene_files::{
-    produce_scene_file_view, SceneFileKind, SceneFileRescan, SceneFileRow, SceneFileView,
-    SceneFilesSection,
+    SceneFileKind, SceneFileRescan, SceneFileRow, SceneFileView, SceneFilesSection,
+    produce_scene_file_view,
 };
 
 /// Plugin that installs the USD Twin-browser section and the lifecycle

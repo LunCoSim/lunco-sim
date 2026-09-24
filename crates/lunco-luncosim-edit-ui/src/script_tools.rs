@@ -32,7 +32,7 @@ use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_input_core::InputBindingsSettings;
 use lunco_scene_selection::SelectedEntities;
 use lunco_spatial::coords::{
-    ActiveFrameCoordinates, RenderPos, ACTIVE_FRAME_NAME, RENDER_FRAME_NAME,
+    ACTIVE_FRAME_NAME, ActiveFrameCoordinates, RENDER_FRAME_NAME, RenderPos,
 };
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 use std::collections::HashSet;
@@ -188,9 +188,7 @@ fn scene_tool_context(
     q_mobility: &Query<Entity, With<lunco_core::MobilityRoot>>,
     q_ids: &Query<&lunco_core::GlobalEntityId>,
     q_prim: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
-    q_pointer_policy: &Query<
-        &lunco_interaction_core::ScenePointerPolicy,
-    >,
+    q_pointer_policy: &Query<&lunco_interaction_core::ScenePointerPolicy>,
     q_scene_roots: &Query<
         &lunco_usd_bevy_scene::UsdPrimPath,
         With<lunco_usd_bevy_scene::UsdSceneRoot>,
@@ -212,12 +210,7 @@ fn scene_tool_context(
     viewport: &lunco_viewport_core::SceneViewport,
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> TelemetryValue {
-    let root = crate::selection::find_selectable(
-        click.entity,
-        q_selectable,
-        q_mobility,
-        q_parents,
-    );
+    let root = crate::selection::find_selectable(click.entity, q_selectable, q_mobility, q_parents);
 
     let mut prim_paths = Vec::new();
     let mut inspector_part = None;

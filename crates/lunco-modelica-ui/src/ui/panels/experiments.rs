@@ -19,13 +19,13 @@ use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 use lunco_experiments_ui::{
     ActivePlot, ExperimentVisibility, ExperimentsViewModel, PlotPanelStates,
 };
-use lunco_viz::multi_series_plot::{
-    render_multi_series_plot, MultiSeriesLine, MultiSeriesOverlay, MultiSeriesPlotOptions,
-    MultiSeriesStyle,
-};
 use lunco_viz::VizId;
+use lunco_viz::multi_series_plot::{
+    MultiSeriesLine, MultiSeriesOverlay, MultiSeriesPlotOptions, MultiSeriesStyle,
+    render_multi_series_plot,
+};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
-use lunco_workbench_widgets::{icon_button, UiIcon};
+use lunco_workbench_widgets::{UiIcon, icon_button};
 
 pub const EXPERIMENTS_PANEL_ID: PanelId = PanelId("modelica_experiments");
 

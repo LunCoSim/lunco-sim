@@ -27,11 +27,11 @@ use bevy::pbr::MeshMaterial3d;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_environment::horizon::{
-    pick_sun, HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig, SunQuery,
-    TerrainSunProjectionCache,
-};
 use lunco_environment::SunRenderState;
+use lunco_environment::horizon::{
+    HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig, SunQuery, TerrainSunProjectionCache,
+    pick_sun,
+};
 use lunco_materials::ParamValue;
 
 struct TerrainEngineInputs {
@@ -821,7 +821,7 @@ mod tests {
                 lunco_spatial::coords::GridRot(bevy::math::DQuat::IDENTITY),
             )
             .0
-             .0
+            .0
             .as_vec3()
         };
         let actual = app

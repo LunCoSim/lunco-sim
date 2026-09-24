@@ -8,7 +8,7 @@
 
 use bevy::camera::{ClearColorConfig, Hdr};
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::light::{cluster::ClusterConfig, ClusteredDecal, LightProbe, PointLight, SpotLight};
+use bevy::light::{ClusteredDecal, LightProbe, PointLight, SpotLight, cluster::ClusterConfig};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use lunco_render::camera::{MsaaLevel, SceneCamera, ToneMap};
@@ -539,13 +539,14 @@ mod tests {
             .camera_bloom_intensity = 0.0;
         a.update();
 
-        assert!(a
-            .world()
-            .entity(owned)
-            .get::<SceneCamera>()
-            .unwrap()
-            .bloom
-            .is_none());
+        assert!(
+            a.world()
+                .entity(owned)
+                .get::<SceneCamera>()
+                .unwrap()
+                .bloom
+                .is_none()
+        );
         assert!(!a.world().entity(owned).get::<SceneCamera>().unwrap().hdr);
         assert_eq!(
             a.world()

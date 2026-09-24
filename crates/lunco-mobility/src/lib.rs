@@ -23,7 +23,7 @@
 //! realizes those values as wheel, suspension, tire, and brake mechanics.
 
 use avian3d::dynamics::solver::solver_body::{SolverBody, SolverBodyInertia};
-use avian3d::dynamics::solver::xpbd::{solve_xpbd_joint, XpbdSolverSystems};
+use avian3d::dynamics::solver::xpbd::{XpbdSolverSystems, solve_xpbd_joint};
 use avian3d::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
@@ -38,7 +38,7 @@ use std::collections::HashSet;
 mod jointed_tire;
 mod sensing;
 mod wheel_spin;
-pub use jointed_tire::{apply_jointed_tire_forces, JointedWheelTire};
+pub use jointed_tire::{JointedWheelTire, apply_jointed_tire_forces};
 use wheel_spin::update_wheel_spin;
 
 /// Orient an Avian contact normal so it points from the support surface toward
@@ -1091,7 +1091,7 @@ pub fn longitudinal_tire_step(
 
 #[cfg(test)]
 mod tire_patch_tests {
-    use super::{longitudinal_tire_step, tire_patch_force, TireLateralStiffnessGraph};
+    use super::{TireLateralStiffnessGraph, longitudinal_tire_step, tire_patch_force};
     use bevy::math::DVec3;
 
     #[test]

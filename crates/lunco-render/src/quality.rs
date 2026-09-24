@@ -1560,17 +1560,19 @@ mod tests {
     #[test]
     fn catalog_rejects_duplicate_or_missing_profile_ids() {
         let mut profiles = RenderingQualityProfiles::default();
-        assert!(profiles
-            .install(
-                vec![
-                    (RenderingQuality::Low, valid_profile()),
-                    (RenderingQuality::Low, valid_profile()),
-                    (RenderingQuality::High, valid_profile()),
-                ],
-                RenderingQuality::High,
-                lunco_hooks::generation(),
-            )
-            .is_err());
+        assert!(
+            profiles
+                .install(
+                    vec![
+                        (RenderingQuality::Low, valid_profile()),
+                        (RenderingQuality::Low, valid_profile()),
+                        (RenderingQuality::High, valid_profile()),
+                    ],
+                    RenderingQuality::High,
+                    lunco_hooks::generation(),
+                )
+                .is_err()
+        );
         assert!(!profiles.is_available());
     }
 
