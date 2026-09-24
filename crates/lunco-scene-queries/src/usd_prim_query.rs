@@ -769,7 +769,8 @@ fn execute_query_paths(
 
     // Unscoped queries belong to the live simulation root. Preview stages and
     // detached cached stages cannot satisfy a live-scene query.
-    let Some(mut live_roots) = QueryState::<&UsdPrimPath, With<UsdSceneRoot>>::try_new(world)
+    let Some(mut live_roots) =
+        QueryState::<(Entity, &UsdPrimPath), With<UsdSceneRoot>>::try_new(world)
     else {
         return Err(ApiQueryError::new(
             ApiErrorCode::InternalError,
@@ -778,7 +779,8 @@ fn execute_query_paths(
     };
     let mut live_stages = live_roots
         .iter(world)
-        .map(|p| p.stage_handle.id())
+        .filter(|(entity, _)| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity))
+        .map(|(_, path)| path.stage_handle.id())
         .collect::<HashSet<_>>();
     if doc.is_none() && live_stages.len() != 1 {
         return Err(ApiQueryError::new(

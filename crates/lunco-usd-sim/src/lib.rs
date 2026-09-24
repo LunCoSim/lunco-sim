@@ -2781,9 +2781,10 @@ fn activate_dynamic_bodies(
             Without<lunco_physics::PhysicsInitializationInvalid>,
         ),
     >,
-    q_pending_joints: Query<(&UsdPrimPath, &PendingUsdJoint), With<PendingUsdJoint>>,
+    q_pending_joints: Query<(Entity, &UsdPrimPath, &PendingUsdJoint), With<PendingUsdJoint>>,
     q_pending_admissions: Query<&PendingJointAdmission>,
     q_joint_states: Query<(
+        Entity,
         &UsdPrimPath,
         Option<&PendingUsdJoint>,
         Option<&PendingJointAdmission>,
@@ -2793,8 +2794,10 @@ fn activate_dynamic_bodies(
         Has<SphericalJoint>,
         Has<DistanceJoint>,
     )>,
-    q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
+    q_pending_diffs: Query<(Entity, &UsdPrimPath), With<PendingDifferential>>,
     q_detached: Query<Option<&lunco_physics::PhysicsJointDetachSet>>,
+    q_child_of: Query<&ChildOf>,
+    q_preview_only: Query<(), With<UsdPreviewOnly>>,
     topology_index: Res<JointTopologyIndex>,
     mut binding_epoch: ResMut<lunco_cosim_core::BindingEpochDirty>,
 ) {
@@ -2814,13 +2817,20 @@ fn activate_dynamic_bodies(
     // Keep it independent of ECS allocation order for the same reason as the
     // projection pass: async layer completion must not choose which rigid body
     // enters the native solver island first.
-    let mut kinematic: Vec<_> = q_kinematic.iter().collect();
+    let mut kinematic: Vec<_> = q_kinematic
+        .iter()
+        .filter(|(entity, ..)| !is_preview_only(*entity, &q_child_of, &q_preview_only))
+        .collect();
     kinematic.sort_by(|left, right| left.1.path.cmp(&right.1.path));
     for (entity, path, authored_velocity, body_disabled) in kinematic {
-        let has_pending_joint = q_pending_joints.iter().any(|(joint_path, pending)| {
-            joint_path.stage_handle == path.stage_handle
-                && (pending.body0_path == path.path || pending.body1_path == path.path)
-        });
+        let has_pending_joint =
+            q_pending_joints
+                .iter()
+                .any(|(joint_entity, joint_path, pending)| {
+                    !is_preview_only(joint_entity, &q_child_of, &q_preview_only)
+                        && joint_path.stage_handle == path.stage_handle
+                        && (pending.body0_path == path.path || pending.body1_path == path.path)
+                });
         let has_pending_admission = q_pending_admissions
             .iter()
             .any(|pending| pending.body0 == entity || pending.body1 == entity);
@@ -2848,11 +2858,16 @@ fn activate_dynamic_bodies(
                         }
                         let joint_ready = q_joint_states
                             .iter()
-                            .find(|(joint, ..)| {
-                                joint.stage_handle == path.stage_handle && joint.path == *joint_path
+                            .find(|(joint_entity, joint, ..)| {
+                                // Preview descendants can share a composed path with the live
+                                // stage, but their joints are not part of its physics graph.
+                                !is_preview_only(*joint_entity, &q_child_of, &q_preview_only)
+                                    && joint.stage_handle == path.stage_handle
+                                    && joint.path == *joint_path
                             })
                             .is_some_and(
                                 |(
+                                    _,
                                     _,
                                     pending_usd,
                                     pending_native,
@@ -2871,9 +2886,10 @@ fn activate_dynamic_bodies(
                     })
             })
             .is_some();
-        let has_pending_diff = q_pending_diffs
-            .iter()
-            .any(|d_path| d_path.stage_handle == path.stage_handle);
+        let has_pending_diff = q_pending_diffs.iter().any(|(entity, diff_path)| {
+            !is_preview_only(entity, &q_child_of, &q_preview_only)
+                && diff_path.stage_handle == path.stage_handle
+        });
         // Readiness deliberately disables the body before the fixed physics
         // schedule can admit its island node. A native joint may therefore be
         // parked while this marker is present, but it must not keep the

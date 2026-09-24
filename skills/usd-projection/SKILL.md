@@ -142,6 +142,8 @@ Consumers that can create simulation side effects must use the shared bounded
 `is_preview_only` ancestry helper rather than names, stage handles, or missing
 physics components; live operator entities are admitted only through their
 `UsdSceneRoot` ownership.
+Unscoped `QueryUsdPrim` reads select the mounted scene by ignoring
+`UsdPreviewOnly` roots; preview roots do not make live queries ambiguous.
 Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity
 that lacks an explicit document binding.
