@@ -37,6 +37,12 @@ pub use perspective::{
 pub use registration::{WorkbenchPanelAppExt, WorkbenchPanelRegistry};
 pub use snapshot::WorkbenchSnapshot;
 
+/// Ordering boundary for publishing the shell-independent workbench snapshot.
+/// Domain renderers that gate panel-owned work can reconcile after the exact
+/// active-tab set has been published without depending on the concrete shell.
+#[derive(bevy::ecs::schedule::SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WorkbenchSnapshotPublishSet;
+
 /// System set occupied by the concrete workbench egui pass.
 ///
 /// Consumers that render an overlay after the shell use this contract label;

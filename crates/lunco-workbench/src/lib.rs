@@ -66,7 +66,7 @@ use lunco_workbench_core::{
     ApplicationOverlayRenderSet, InstancePanel, MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup,
     PanelRenderTarget, PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, Perspective, PerspectiveId,
     TabId, UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchPanelRegistry, WorkbenchRenderSet,
-    WorkbenchSnapshot,
+    WorkbenchSnapshot, WorkbenchSnapshotPublishSet,
 };
 use lunco_workbench_widgets::{UiIcon, icon_button_sized, text_editor};
 use std::collections::HashMap;
@@ -315,19 +315,20 @@ fn drain_pending_layout_requests(
 /// The dock remains authoritative for concrete rendering and persistence. The
 /// snapshot is the only layout fact domain crates should consume, so they do
 /// not acquire a dependency on `egui_dock` or the shell's private resource.
-pub(crate) fn publish_workbench_snapshot(
-    layout: &WorkbenchLayout,
-    snapshot: &mut WorkbenchSnapshot,
-) {
+pub(crate) fn publish_workbench_snapshot(layout: &WorkbenchLayout) -> WorkbenchSnapshot {
     let tabs: Vec<TabId> = layout.dock.iter_all_tabs().map(|(_, tab)| *tab).collect();
     let focused_tab = layout.focused_tab().copied();
-    let visible_panels = layout
+    let visible_tabs: Vec<TabId> = layout
         .dock
         .iter_all_nodes()
         .filter_map(|(_, node)| match node {
             egui_dock::Node::Leaf(leaf) => leaf.tabs.get(leaf.active.0),
             _ => None,
         })
+        .copied()
+        .collect();
+    let visible_panels = visible_tabs
+        .iter()
         .map(|tab| match tab {
             TabId::Singleton(id) => *id,
             TabId::Instance { kind, .. } => *kind,
@@ -348,18 +349,31 @@ pub(crate) fn publish_workbench_snapshot(
             docked_panels.push(id);
         }
     }
+    let mut snapshot = WorkbenchSnapshot::default();
     snapshot.replace(
         layout.active_perspective,
         focused_tab,
         tabs,
+        visible_tabs,
         visible_panels,
         registered_perspectives,
         docked_panels,
     );
+    snapshot
+}
+
+pub(crate) fn snapshot_for_layout_if_changed(
+    layout: &WorkbenchLayout,
+    current: &WorkbenchSnapshot,
+) -> Option<WorkbenchSnapshot> {
+    let next = publish_workbench_snapshot(layout);
+    (current != &next).then_some(next)
 }
 
 fn sync_workbench_snapshot(layout: Res<WorkbenchLayout>, mut snapshot: ResMut<WorkbenchSnapshot>) {
-    publish_workbench_snapshot(&layout, &mut snapshot);
+    if let Some(next) = snapshot_for_layout_if_changed(&layout, &snapshot) {
+        *snapshot = next;
+    }
 }
 
 /// Focus requests emitted while the dock layout is scoped out during egui
@@ -768,7 +782,7 @@ impl Plugin for WorkbenchPlugin {
                     drain_registered_panels,
                     drain_pending_layout_requests,
                     drain_pending_tab_requests,
-                    sync_workbench_snapshot,
+                    sync_workbench_snapshot.in_set(WorkbenchSnapshotPublishSet),
                 )
                     .chain(),
             )

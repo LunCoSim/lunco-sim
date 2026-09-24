@@ -76,6 +76,8 @@ use lunco_usd_bevy_scene::{
     UsdStageRevision, UsdVisualMeshTarget, is_preview_entity,
 };
 use lunco_usd_bevy_stage::{UsdStageAsset, is_descendant_or_self};
+#[cfg(test)]
+use lunco_usd_viewport_core::UsdPreviewTextLayer;
 use lunco_usd_viewport_core::{
     ApplyUsdInspectionPreset, CloseUsdPreview, CloseUsdPreviewView, DeleteUsdInspectionPreset,
     ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView, FrameUsdPreviewSelection,
@@ -84,15 +86,13 @@ use lunco_usd_viewport_core::{
     SetUsdPreviewViewMode, SetUsdPrimDisplayMode, USD_PREVIEW_VIEW_PANEL_KIND, UsdInspectionPreset,
     UsdInspectionSettings, UsdPreviewExplodeAction, UsdPreviewExplodeState, UsdPreviewExplodedPart,
     UsdPreviewId, UsdPreviewProjection, UsdPreviewSession, UsdPreviewView, UsdPreviewViewId,
-    UsdPreviewViewMeasured, UsdPrimDisplayModes, UsdViewportMeasured, UsdViewportOrbitInput,
-    UsdViewportState, ZoomUsdPreviewView,
+    UsdPreviewViewMeasured, UsdPreviewViewMode, UsdPrimDisplayModes, UsdViewportMeasured,
+    UsdViewportOrbitInput, UsdViewportState, ZoomUsdPreviewView,
 };
-#[cfg(test)]
-use lunco_usd_viewport_core::{UsdPreviewTextLayer, UsdPreviewViewMode};
 use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::PanelRects;
 use lunco_workbench_core::{
-    PanelId, TabId,
+    PanelId, TabId, WorkbenchSnapshot, WorkbenchSnapshotPublishSet,
     commands::{CloseTab, OpenTab},
     source::OpenTwinSource,
     tabs::PendingTabCloses,
@@ -246,7 +246,7 @@ impl Plugin for UsdViewportPlugin {
         app.add_systems(
             Update,
             (
-                reset_preview_view_visibility,
+                reset_preview_view_visibility.after(WorkbenchSnapshotPublishSet),
                 drain_preview_view_closes,
                 apply_restored_preview_view_settings,
                 propagate_preview_render_layer,
@@ -719,8 +719,14 @@ fn on_viewport_measured(
         SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
         event.over_scene,
     );
-    if let Some(view) = state.view_mut(event.view) {
-        view.interactive_rect = event.visible.then_some(event.image_rect).flatten();
+    let interactive_rect = event.visible.then_some(event.image_rect).flatten();
+    if state
+        .view(event.view)
+        .is_some_and(|view| view.interactive_rect() != interactive_rect)
+    {
+        if let Some(view) = state.view_mut(event.view) {
+            view.interactive_rect = interactive_rect;
+        }
     }
     if event.visible {
         if let Some(rect) = event
@@ -753,8 +759,14 @@ fn on_preview_view_measured(
         SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
         event.over_scene,
     );
-    if let Some(view) = state.view_mut(event.view) {
-        view.interactive_rect = event.visible.then_some(event.image_rect).flatten();
+    let interactive_rect = event.visible.then_some(event.image_rect).flatten();
+    if state
+        .view(event.view)
+        .is_some_and(|view| view.interactive_rect() != interactive_rect)
+    {
+        if let Some(view) = state.view_mut(event.view) {
+            view.interactive_rect = interactive_rect;
+        }
     }
     if event.visible {
         if let Some(rect) = event
@@ -787,18 +799,27 @@ fn mark_view_visible(
     let Some(view) = state.view(id) else {
         return;
     };
+    let Ok(mut camera) = cameras.get_mut(view.camera()) else {
+        return;
+    };
     let Some(target) = bounded_view_size(requested, budget) else {
+        if camera.is_active {
+            camera.is_active = false;
+        }
         return;
     };
     let pixels = u64::from(target.x) * u64::from(target.y);
     if visibility.pixels.saturating_add(pixels) > budget.max_total_pixels {
+        if camera.is_active {
+            camera.is_active = false;
+        }
         return;
     }
-    if let Ok(mut camera) = cameras.get_mut(view.camera()) {
+    if !camera.is_active {
         camera.is_active = true;
-        visibility.views.insert(id);
-        visibility.pixels = visibility.pixels.saturating_add(pixels);
     }
+    visibility.views.insert(id);
+    visibility.pixels = visibility.pixels.saturating_add(pixels);
 }
 
 fn on_viewport_orbit_input(
@@ -1209,11 +1230,11 @@ fn propagate_preview_render_layer(
     }
 }
 
-/// Park every preview camera before the egui pass. A visible singleton or
-/// instance panel explicitly reactivates its view through a typed measurement
-/// event, so cameras in background tabs do not render merely because their
-/// entities remain alive.
+/// Park preview cameras whose exact Visual tab is not visible. Visible cameras
+/// stay active across frames; panel measurements admit each into the per-frame
+/// pixel budget without toggling Bevy change detection on every frame.
 fn reset_preview_view_visibility(
+    snapshot: Option<Res<WorkbenchSnapshot>>,
     state: Res<UsdViewportState>,
     mut visibility: ResMut<UsdPreviewFrameVisibility>,
     mut cameras: Query<&mut Camera>,
@@ -1221,10 +1242,32 @@ fn reset_preview_view_visibility(
     visibility.views.clear();
     visibility.pixels = 0;
     for view in state.views() {
-        if let Ok(mut camera) = cameras.get_mut(view.camera()) {
-            camera.is_active = false;
+        let visible = snapshot
+            .as_deref()
+            .is_some_and(|snapshot| preview_view_is_visible(snapshot, &state, view.id()));
+        if !visible {
+            if let Ok(mut camera) = cameras.get_mut(view.camera()) {
+                if camera.is_active {
+                    camera.is_active = false;
+                }
+            }
         }
     }
+}
+
+fn preview_view_is_visible(
+    snapshot: &WorkbenchSnapshot,
+    state: &UsdViewportState,
+    view_id: UsdPreviewViewId,
+) -> bool {
+    let Some(view) = state.view(view_id) else {
+        return false;
+    };
+    if view.mode() != UsdPreviewViewMode::Visual {
+        return false;
+    }
+    (state.focused_view_id() == Some(view_id) && snapshot.is_panel_visible(USD_VIEWPORT_PANEL_ID))
+        || snapshot.is_tab_visible(TabId::instance(USD_PREVIEW_VIEW_PANEL_ID, view_id.0))
 }
 
 /// Apply persisted presentation settings after the requested preview camera
@@ -1269,6 +1312,7 @@ fn resize_viewport_image(
     state: Res<UsdViewportState>,
     render_targets: Res<UsdPreviewRenderTargets>,
     budget: Res<UsdPreviewRenderBudget>,
+    snapshot: Option<Res<WorkbenchSnapshot>>,
     images: Option<ResMut<Assets<Image>>>,
     mut last_applied: Local<HashMap<UsdPreviewViewId, UVec2>>,
 ) {
@@ -1276,6 +1320,12 @@ fn resize_viewport_image(
         return;
     };
     for view in state.views() {
+        if !snapshot
+            .as_deref()
+            .is_some_and(|snapshot| preview_view_is_visible(snapshot, &state, view.id()))
+        {
+            continue;
+        }
         let rect = if state.focused_view_id() == Some(view.id()) {
             rects
                 .get(USD_VIEWPORT_PANEL_ID)
@@ -3764,6 +3814,129 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn preview_rendering_requires_the_exact_visible_visual_tab() {
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let camera = world.spawn_empty().id();
+        let light = world.spawn_empty().id();
+        let fill_light = world.spawn_empty().id();
+        let preview = UsdPreviewId(21);
+        let view_id = UsdPreviewViewId(34);
+        let mut state = UsdViewportState::default();
+        state.insert(UsdPreviewSession::new(
+            preview,
+            DocumentId::new(21),
+            LayerId::root(),
+            root,
+            Handle::default(),
+            FIRST_PREVIEW_RENDER_LAYER,
+            view_id,
+        ));
+        assert!(
+            state
+                .insert_view(UsdPreviewView::new(
+                    view_id, preview, camera, light, fill_light,
+                ))
+                .is_ok()
+        );
+
+        let mut snapshot = WorkbenchSnapshot::default();
+        let tab = TabId::instance(USD_PREVIEW_VIEW_PANEL_ID, view_id.0);
+        snapshot.replace(
+            None,
+            None,
+            vec![tab],
+            vec![tab],
+            vec![USD_PREVIEW_VIEW_PANEL_ID],
+            Vec::new(),
+            vec![USD_PREVIEW_VIEW_PANEL_ID],
+        );
+        assert!(preview_view_is_visible(&snapshot, &state, view_id));
+
+        let sibling_tab = TabId::instance(USD_PREVIEW_VIEW_PANEL_ID, view_id.0 + 1);
+        snapshot.replace(
+            None,
+            None,
+            vec![tab, sibling_tab],
+            vec![sibling_tab],
+            vec![USD_PREVIEW_VIEW_PANEL_ID],
+            Vec::new(),
+            vec![USD_PREVIEW_VIEW_PANEL_ID],
+        );
+        assert!(!preview_view_is_visible(&snapshot, &state, view_id));
+
+        let singleton = TabId::singleton(USD_VIEWPORT_PANEL_ID);
+        snapshot.replace(
+            None,
+            None,
+            vec![singleton],
+            vec![singleton],
+            vec![USD_VIEWPORT_PANEL_ID],
+            Vec::new(),
+            vec![USD_VIEWPORT_PANEL_ID],
+        );
+        assert!(preview_view_is_visible(&snapshot, &state, view_id));
+
+        state.view_mut(view_id).expect("view exists").mode = UsdPreviewViewMode::Text;
+        assert!(!preview_view_is_visible(&snapshot, &state, view_id));
+    }
+
+    #[test]
+    fn repeated_preview_measurement_does_not_mark_view_state_changed() {
+        let mut app = App::new();
+        app.init_resource::<PanelRects>();
+        app.init_resource::<ScenePickGate>();
+        app.init_resource::<UsdPreviewFrameVisibility>();
+        app.init_resource::<UsdPreviewRenderBudget>();
+        app.add_observer(on_viewport_measured);
+
+        let root = app.world_mut().spawn_empty().id();
+        let camera = app
+            .world_mut()
+            .spawn(Camera {
+                is_active: true,
+                ..default()
+            })
+            .id();
+        let light = app.world_mut().spawn_empty().id();
+        let fill_light = app.world_mut().spawn_empty().id();
+        let preview = UsdPreviewId(41);
+        let view_id = UsdPreviewViewId(42);
+        let rect = lunco_viewport_core::PanelRect {
+            origin: UVec2::ZERO,
+            size: UVec2::splat(640),
+        };
+        let mut state = UsdViewportState::default();
+        state.insert(UsdPreviewSession::new(
+            preview,
+            DocumentId::new(41),
+            LayerId::root(),
+            root,
+            Handle::default(),
+            FIRST_PREVIEW_RENDER_LAYER,
+            view_id,
+        ));
+        let mut view = UsdPreviewView::new(view_id, preview, camera, light, fill_light);
+        view.interactive_rect = Some(rect);
+        assert!(state.insert_view(view).is_ok());
+        app.insert_resource(state);
+        app.world_mut().clear_trackers();
+
+        app.world_mut().trigger(UsdViewportMeasured {
+            view: view_id,
+            over_scene: false,
+            visible: true,
+            image_rect: Some(rect),
+        });
+
+        let state = app
+            .world()
+            .get_resource_ref::<UsdViewportState>()
+            .expect("preview state remains installed");
+        assert!(!state.is_changed());
     }
 
     #[test]

@@ -351,6 +351,7 @@ pub(crate) fn ensure_vehicle_trail_history(
 pub(crate) fn sample_vehicle_trails(
     active_frame: Res<ActivePhysicsFrame>,
     mut q_histories: Query<&mut VehicleTrailHistory, With<MobilityRoot>>,
+    mut request: ResMut<TrailProjectionRebuildRequested>,
     q_roots: Query<(), With<MobilityRoot>>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<(&Position, &Rotation)>,
@@ -414,39 +415,63 @@ pub(crate) fn sample_vehicle_trails(
             continue;
         }
         if let Ok(mut history) = q_histories.get_mut(vehicle) {
-            history.record(active_frame.0, wheel, contact);
+            if history
+                .bypass_change_detection()
+                .record(active_frame.0, wheel, contact)
+            {
+                history.set_changed();
+                request.pending = true;
+            }
         }
     }
     for mut history in q_histories.iter_mut() {
-        history
-            .lanes
-            .retain(|wheel, _| active_wheels.contains(wheel));
+        let lanes_changed = {
+            let history_data = history.bypass_change_detection();
+            let previous_lane_count = history_data.lanes.len();
+            history_data
+                .lanes
+                .retain(|wheel, _| active_wheels.contains(wheel));
+            history_data.lanes.len() != previous_lane_count
+        };
+        if lanes_changed {
+            history.set_changed();
+            request.pending = true;
+        }
     }
 }
 
 /// Arm a projection rebuild from authoritative changes. In steady state this
-/// is only change detection and one surface-key comparison; terrain sampling
-/// is deferred to [`rebuild_vehicle_trail_projection`].
+/// checks sampled-history invalidation, projected wheel widths, and one
+/// surface-key comparison; terrain sampling is deferred to
+/// [`rebuild_vehicle_trail_projection`]. Physics pose and wheel components
+/// include continuously changing fields that do not change the visible trail,
+/// so their broad `Changed` filters are not projection invalidators.
 pub(crate) fn arm_trail_projection_rebuild(
     mut request: ResMut<TrailProjectionRebuildRequested>,
-    q_vehicles: Query<
-        (),
-        (
-            With<MobilityRoot>,
-            Or<(Changed<Position>, Changed<VehicleTrailHistory>)>,
-        ),
-    >,
-    q_raycast_widths: Query<(), Changed<WheelRaycast>>,
-    q_physical_widths: Query<(), Changed<PhysicalWheel>>,
+    q_raycast_widths: Query<&WheelRaycast>,
+    q_physical_widths: Query<&PhysicalWheel>,
     mut removed_histories: RemovedComponents<VehicleTrailHistory>,
     active_frame: Res<ActivePhysicsFrame>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     projection: Res<TrailVisualProjection>,
 ) {
-    if !q_vehicles.is_empty()
-        || !q_raycast_widths.is_empty()
-        || !q_physical_widths.is_empty()
-        || removed_histories.read().next().is_some()
+    let width_changed = projection.trails.values().flatten().any(|lane| {
+        let width = q_raycast_widths
+            .get(lane.wheel)
+            .map(|wheel| wheel.wheel_width)
+            .or_else(|_| {
+                q_physical_widths
+                    .get(lane.wheel)
+                    .map(|wheel| wheel.wheel_width as f64)
+            })
+            .ok()
+            .filter(|width| width.is_finite() && *width > 0.0)
+            .map(|width| (width as f32) * 0.5);
+        width != Some(lane.half_width)
+    });
+    let histories_removed = removed_histories.read().count() > 0;
+    if width_changed
+        || histories_removed
         || active_frame.is_changed()
         || projection.frame != Some(active_frame.0)
         || projection.surface != surface.surface_key()
@@ -763,6 +788,28 @@ mod tests {
             );
         }
         assert_eq!(history.lanes[&wheel].points.len(), TRAIL_MAX_POINTS);
+    }
+
+    #[test]
+    fn history_rejects_sub_spacing_motion_until_the_visual_path_changes() {
+        let frame = Entity::PLACEHOLDER;
+        let wheel = Entity::from_bits(17);
+        let mut history = VehicleTrailHistory::default();
+
+        assert!(history.record(frame, wheel, flat_contact(DVec3::ZERO)));
+        assert!(!history.record(
+            frame,
+            wheel,
+            flat_contact(DVec3::new(TRAIL_SAMPLE_SPACING_M * 0.5, 0.0, 0.0)),
+        ));
+        assert_eq!(history.lanes[&wheel].points.len(), 1);
+
+        assert!(history.record(
+            frame,
+            wheel,
+            flat_contact(DVec3::new(TRAIL_SAMPLE_SPACING_M, 0.0, 0.0)),
+        ));
+        assert_eq!(history.lanes[&wheel].points.len(), 2);
     }
 
     #[test]

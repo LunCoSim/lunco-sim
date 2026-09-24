@@ -10641,6 +10641,7 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-document",
  "lunco-usd-viewport-core",
+ "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workspace",
  "openusd",

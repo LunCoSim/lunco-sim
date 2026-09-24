@@ -21,9 +21,38 @@ use lunco_celestial::ephemeris_id::{EARTH, EARTH_MOON_BARYCENTER, MOON, SUN};
 use lunco_celestial::frames::{EclipticAu, IcrfAu};
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lunco_celestial::ephemeris::{EphemerisProvider, EphemerisResource};
+
+/// Reuses the small analytic body set when frame consumers ask for the same
+/// exact ephemeris sample during one render/physics transaction.
+#[derive(Default)]
+struct EpochPositionCache {
+    epoch_bits: Option<u64>,
+    positions: HashMap<i32, Option<EclipticAu>>,
+}
+
+impl EpochPositionCache {
+    fn get_or_evaluate(
+        &mut self,
+        body_id: i32,
+        epoch_jd: f64,
+        evaluate: impl FnOnce() -> Option<EclipticAu>,
+    ) -> Option<EclipticAu> {
+        let epoch_bits = epoch_jd.to_bits();
+        if self.epoch_bits != Some(epoch_bits) {
+            self.epoch_bits = Some(epoch_bits);
+            self.positions.clear();
+        }
+        if let Some(position) = self.positions.get(&body_id) {
+            return *position;
+        }
+        let position = evaluate();
+        self.positions.insert(body_id, position);
+        position
+    }
+}
 
 /// Concrete implementation of the analytic [`EphemerisProvider`].
 pub struct CelestialEphemerisProvider {
@@ -33,6 +62,8 @@ pub struct CelestialEphemerisProvider {
     moon: ElpMpp02Moon,
     /// Parent relationships from the canonical body catalog.
     parents: HashMap<i32, i32>,
+    /// Same-epoch consumers share ELP/MPP02 and VSOP evaluations.
+    position_cache: Mutex<EpochPositionCache>,
 }
 
 /// The parent tree, straight out of the body registry — no second copy.
@@ -53,6 +84,7 @@ impl CelestialEphemerisProvider {
             emb: Vsop2013Emb,
             moon: ElpMpp02Moon::new(),
             parents: parents_from_registry(),
+            position_cache: Mutex::default(),
         }
     }
 }
@@ -60,6 +92,49 @@ impl CelestialEphemerisProvider {
 impl Default for CelestialEphemerisProvider {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod position_cache_tests {
+    use super::*;
+
+    #[test]
+    fn position_cache_reuses_exact_epoch_results_and_replaces_stale_epoch() {
+        let mut cache = EpochPositionCache::default();
+        let mut evaluations = 0;
+        let epoch = 2_451_545.0;
+        let expected = Some(EclipticAu::new(DVec3::new(1.0, 2.0, 3.0)));
+
+        let first = cache.get_or_evaluate(MOON, epoch, || {
+            evaluations += 1;
+            expected
+        });
+        let repeated = cache.get_or_evaluate(MOON, epoch, || {
+            evaluations += 1;
+            expected
+        });
+
+        assert_eq!(first.map(EclipticAu::raw), expected.map(EclipticAu::raw));
+        assert_eq!(
+            repeated.map(EclipticAu::raw),
+            expected.map(EclipticAu::raw)
+        );
+        assert_eq!(evaluations, 1, "same-epoch Moon work must be reused");
+
+        let next_epoch = epoch + 1.0;
+        let next = cache.get_or_evaluate(MOON, next_epoch, || {
+            evaluations += 1;
+            None
+        });
+        let repeated_missing = cache.get_or_evaluate(MOON, next_epoch, || {
+            evaluations += 1;
+            expected
+        });
+
+        assert!(next.is_none());
+        assert!(repeated_missing.is_none());
+        assert_eq!(evaluations, 2, "a new epoch recomputes, including None");
     }
 }
 
@@ -100,6 +175,7 @@ impl CelestialEphemerisProvider {
     }
 
     fn moon_geocentric_icrs(&self, tdb: &TDB) -> Option<[f64; 3]> {
+        let _span = bevy::log::info_span!("celestial_ephemeris_elp_mpp02").entered();
         self.moon.geocentric_position_icrs(tdb).ok().or_else(|| {
             bevy::log::warn_once!(
                 "[ephemeris] ELP/MPP02 Moon evaluation failed — the Moon will not be placed."
@@ -118,11 +194,33 @@ impl EphemerisProvider for CelestialEphemerisProvider {
         if !epoch_jd.is_finite() {
             return None;
         }
+        if body_id == SUN {
+            return Some(EclipticAu::ZERO);
+        }
+        if !matches!(body_id, EARTH_MOON_BARYCENTER | EARTH | MOON) {
+            return self.evaluate_position(body_id, epoch_jd);
+        }
+        let mut cache = self
+            .position_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.get_or_evaluate(body_id, epoch_jd, || {
+            self.evaluate_position(body_id, epoch_jd)
+        })
+    }
+
+    fn maximum_angular_rate_rad_per_day(&self) -> f64 {
+        std::f64::consts::TAU / 27.321_661
+    }
+}
+
+impl CelestialEphemerisProvider {
+    fn evaluate_position(&self, body_id: i32, epoch_jd: f64) -> Option<EclipticAu> {
+        let _span = bevy::log::info_span!("celestial_ephemeris_position", body_id).entered();
         let julian = JulianDate::new(epoch_jd, 0.0);
         let tdb = TDB::from_julian_date(julian);
 
         match body_id {
-            SUN => Some(EclipticAu::ZERO), // the Sun IS the origin of this frame
             EARTH_MOON_BARYCENTER => {
                 let p = self.emb_heliocentric(&tdb)?;
                 Some(equatorial_to_ecliptic(IcrfAu::new(DVec3::new(
@@ -162,10 +260,6 @@ impl EphemerisProvider for CelestialEphemerisProvider {
                 None
             }
         }
-    }
-
-    fn maximum_angular_rate_rad_per_day(&self) -> f64 {
-        std::f64::consts::TAU / 27.321_661
     }
 }
 

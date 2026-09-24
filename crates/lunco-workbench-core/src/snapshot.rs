@@ -14,6 +14,7 @@ pub struct WorkbenchSnapshot {
     active_perspective: Option<PerspectiveId>,
     focused_tab: Option<TabId>,
     tabs: Vec<TabId>,
+    visible_tabs: Vec<TabId>,
     visible_panels: Vec<PanelId>,
     registered_perspectives: Vec<PerspectiveId>,
     docked_panels: Vec<PanelId>,
@@ -39,6 +40,7 @@ impl WorkbenchSnapshot {
         active_perspective: Option<PerspectiveId>,
         focused_tab: Option<TabId>,
         tabs: Vec<TabId>,
+        visible_tabs: Vec<TabId>,
         visible_panels: Vec<PanelId>,
         registered_perspectives: Vec<PerspectiveId>,
         docked_panels: Vec<PanelId>,
@@ -46,6 +48,7 @@ impl WorkbenchSnapshot {
         self.active_perspective = active_perspective;
         self.focused_tab = focused_tab;
         self.tabs = tabs;
+        self.visible_tabs = visible_tabs;
         self.visible_panels = visible_panels;
         self.registered_perspectives = registered_perspectives;
         self.docked_panels = docked_panels;
@@ -93,6 +96,17 @@ impl WorkbenchSnapshot {
         self.visible_panels.contains(&id)
     }
 
+    /// Return whether this exact singleton or instance tab is visible in an
+    /// active dock leaf.
+    pub fn is_tab_visible(&self, id: TabId) -> bool {
+        self.visible_tabs.contains(&id)
+    }
+
+    /// Return all singleton and instance tabs currently visible in dock leaves.
+    pub fn visible_tabs(&self) -> &[TabId] {
+        &self.visible_tabs
+    }
+
     /// Return whether a perspective is registered with the shell.
     pub fn has_perspective(&self, id: PerspectiveId) -> bool {
         self.registered_perspectives.contains(&id)
@@ -126,6 +140,7 @@ mod tests {
             Some(editor),
             Some(document),
             vec![TabId::singleton(PanelId("browser")), document],
+            vec![document],
             vec![model],
             vec![editor],
             vec![model],
@@ -136,5 +151,8 @@ mod tests {
         assert_eq!(snapshot.active_tab_instance(), Some(7));
         assert_eq!(snapshot.instances_in_order(model), vec![7]);
         assert!(snapshot.is_panel_docked(model));
+        assert!(snapshot.is_panel_visible(model));
+        assert!(snapshot.is_tab_visible(document));
+        assert!(!snapshot.is_tab_visible(TabId::instance(model, 8)));
     }
 }
