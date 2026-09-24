@@ -27,14 +27,14 @@
 //!   transitions;
 //! - the `KeyC` hotkey ([`cycle_active_camera`]) when a host runs with input.
 
-use bevy::camera::{RenderTarget, Viewport, primitives::Aabb};
+use bevy::camera::{Exposure, RenderTarget, Viewport, primitives::Aabb};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_camera_core::DEFAULT_PRESENTATION_HOOK;
 use lunco_core::{Command, on_command};
 use lunco_embodiment_core::roles::{LocalEmbodiment, TheLocalEmbodiment};
 use lunco_hooks::HookValue;
-use lunco_render::{GraphicsCameraDefaults, LightGraphicsDefaults, SceneCamera};
+use lunco_render::SceneCamera;
 use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_viewport_core::SceneViewport;
@@ -168,6 +168,10 @@ pub struct StandalonePresentationSettings {
     pub light_direction: Vec3,
     /// Illuminance of the generated presentation light.
     pub light_illuminance: f32,
+    /// Fixed photographic exposure for the generated presentation camera.
+    /// This is part of the standalone presentation rig and is independent of
+    /// render-quality selection.
+    pub camera_exposure_ev100: f32,
     /// Near clip plane in metres.
     pub near_clip: f32,
     /// Minimum far clip plane in metres.
@@ -181,6 +185,7 @@ impl Default for StandalonePresentationSettings {
             camera_direction: Vec3::new(1.0, 0.65, 1.0),
             light_direction: Vec3::new(-1.0, 1.5, 1.0),
             light_illuminance: 128_000.0,
+            camera_exposure_ev100: 16.0,
             near_clip: 0.01,
             minimum_far_clip: 1_000.0,
         }
@@ -215,6 +220,9 @@ impl StandalonePresentationSettings {
             return Err(
                 "standalone presentation light_illuminance must be finite and positive".to_string(),
             );
+        }
+        if !self.camera_exposure_ev100.is_finite() {
+            return Err("standalone presentation camera_exposure_ev100 must be finite".to_string());
         }
         if !(self.near_clip.is_finite()
             && self.near_clip > 0.0
@@ -1382,7 +1390,9 @@ pub(crate) fn ensure_standalone_presentation(
         .spawn((
             StandalonePresentationCamera,
             SceneCamera::agx(),
-            GraphicsCameraDefaults,
+            Exposure {
+                ev100: settings.camera_exposure_ev100,
+            },
             Camera {
                 is_active: false,
                 ..default()
@@ -1408,14 +1418,10 @@ pub(crate) fn ensure_standalone_presentation(
                     StandalonePresentationLight,
                     DirectionalLight {
                         illuminance: settings.light_illuminance,
-                        shadow_maps_enabled: false,
+                        shadow_maps_enabled: true,
                         ..default()
                     },
-                    LightGraphicsDefaults {
-                        intensity_uses_graphics_default: false,
-                        intensity_scale: 1.0,
-                        range_uses_graphics_default: false,
-                    },
+                    bevy::light::CascadeShadowConfig::default(),
                     light_transform,
                     GlobalTransform::default(),
                     Visibility::Visible,

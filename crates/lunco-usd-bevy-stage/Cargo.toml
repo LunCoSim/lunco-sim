@@ -11,11 +11,9 @@ anyhow = { workspace = true }
 openusd = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
+lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-data = { path = "../lunco-usd-data" }
-
-[dev-dependencies]
-lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 
 [lints]
 workspace = true

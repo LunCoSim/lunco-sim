@@ -205,7 +205,8 @@ fn dome_has_texture(data: &openusd::sdf::Data, prim: &SdfPath) -> Result<bool, L
 
 /// `inputs:intensity` × 2^`inputs:exposure` on `prim` — the layer-data twin of
 /// [`read_intensity_with_exposure`], which needs a `UsdRead`. `None` when
-/// `inputs:intensity` is unauthored: the sum counts only authored opinions.
+/// `inputs:intensity` is unauthored: this authoring-layer sum counts explicit
+/// opinions only and does not inject OpenUSD schema fallbacks.
 fn dome_intensity(
     data: &openusd::sdf::Data,
     prim: &SdfPath,
@@ -303,12 +304,11 @@ pub fn ambient_fill_saturates(requested_total: f32, other_domes_total: f32) -> b
     other_domes_total > requested_total
 }
 
-/// Read a UsdLux light's authored intensity scaled by its exposure stops:
-/// `inputs:intensity` × 2^`inputs:exposure`. Used wherever a UsdLux light is
-/// turned into a Bevy light — the *unit* of the result depends on the target
-/// component (lux for `DirectionalLight`, lumens for `Point`/`Spot`/`RectLight`),
-/// but the photometric conversion is identical, so it lives here once. `Err`
-/// means an authored intensity/exposure could not be interpreted safely.
+/// Read a UsdLux light's resolved intensity scaled by its exposure stops:
+/// `inputs:intensity` × 2^`inputs:exposure`. The composed USD schema fallback
+/// wins when the scene omits intensity; `default_intensity` is retained only
+/// for hosts whose schema registry does not provide that property's fallback.
+/// `Err` means an authored value could not be interpreted safely.
 pub fn read_intensity_with_exposure(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
@@ -323,12 +323,23 @@ fn resolve_intensity_with_exposure(
     default_intensity: f32,
 ) -> Result<(f32, bool, f32), LightReadError> {
     let authored_intensity = read_authored_real(reader, path, ltok::A_INTENSITY)?;
-    let intensity = authored_intensity.unwrap_or(default_intensity);
+    let schema_intensity = if authored_intensity.is_none() {
+        reader.real_f32_with_schema_fallback(path, ltok::A_INTENSITY)
+    } else {
+        None
+    };
+    let intensity = authored_intensity
+        .or(schema_intensity)
+        .unwrap_or(default_intensity);
     let exposure = read_authored_real(reader, path, ltok::A_EXPOSURE)?.unwrap_or(0.0);
     let exposure_scale = exposure.exp2();
     let scaled = intensity * exposure_scale;
     if scaled.is_finite() && scaled >= 0.0 {
-        Ok((scaled, authored_intensity.is_none(), exposure_scale))
+        Ok((
+            scaled,
+            authored_intensity.is_none() && schema_intensity.is_none(),
+            exposure_scale,
+        ))
     } else {
         error!(
             "[usd-bevy] {} has non-finite or negative light intensity after exposure",
@@ -570,7 +581,7 @@ fn read_light_range(
     convention: lunco_usd_data::units::ConventionTransform,
 ) -> Result<(f32, bool), LightReadError> {
     match read_authored_real(reader, path, "lunco:light:range")? {
-        None | Some(0.0) => Ok((default, true)),
+        None | Some(0.0) => Ok((default, false)),
         Some(r) if r > 0.0 => {
             let metres = convention.length(r as f64) as f32;
             if metres.is_finite() {
@@ -653,6 +664,26 @@ fn read_shadow_enable(
     Ok(read_authored_bool(reader, path, ltok::A_SHADOW_ENABLE)?.unwrap_or(USDLUX_SHADOW_ENABLE))
 }
 
+/// Convert the USD distant-light emission convention into Bevy's directional
+/// illuminance. With `normalize`, USD defines intensity directly in lux. With
+/// normalization off, intensity is emitted luminance and USD scales received
+/// illuminance by the distant source's angular size factor.
+fn distant_light_illuminance(intensity: f32, normalize: bool, angle_degrees: f32) -> f32 {
+    if normalize {
+        return intensity;
+    }
+    let theta_max = (angle_degrees.to_radians() * 0.5).clamp(0.0, std::f32::consts::PI);
+    let sin_squared = theta_max.sin().powi(2);
+    let size_factor = if theta_max == 0.0 {
+        1.0
+    } else if theta_max <= std::f32::consts::FRAC_PI_2 {
+        std::f32::consts::PI * sin_squared
+    } else {
+        std::f32::consts::PI * (2.0 - sin_squared)
+    };
+    intensity * size_factor
+}
+
 /// If `prim_type` is a supported UsdLux light, attach the corresponding
 /// Bevy light components to `entity` and return `true`. Called from
 /// `instantiate_usd_prim`; the prim's transform/visibility are applied by
@@ -690,10 +721,9 @@ pub fn instantiate_light_prim(
     };
     match prim_type {
         Some(ltok::T_DISTANT_LIGHT) => {
-            // UsdLux spec default intensity is 1.0, but 1 lx is invisible
-            // under Bevy's physically-based exposure — an unauthored
-            // intensity almost certainly means "give me a sun", so default
-            // to the calibrated 128 000 lx lunar sun and let authors override.
+            // Resolve the current USD DistantLight schema fallback (50,000) if
+            // intensity is omitted. This is scene data resolved by USD, not a
+            // value selected by the render-quality profile.
             let Ok((illuminance_lux, intensity_uses_graphics_default, intensity_scale)) =
                 resolve_intensity_with_exposure(
                     reader,
@@ -720,24 +750,35 @@ pub fn instantiate_light_prim(
             // `inputs:angle` is the sun's angular diameter driving the
             // horizon-shadow penumbra.
             let d = LunarSunShadow::for_profile(quality);
-            // Physical identity (illuminance + apparent size) is *authored* on
-            // this prim: illuminance from `intensity`×2^`exposure`, angular size
-            // from `inputs:angle`. The unauthored fallback is
-            // `UsdLuxDistantLight`'s own — one constant, shared with
-            // `lunco_environment::LunarSun`, which sits above this loader and so
-            // cannot be read from here.
-            let angular_diameter_deg = match read_authored_real(reader, sdf_path, ltok::A_ANGLE) {
-                Ok(Some(angle)) if (0.0..=180.0).contains(&angle) => angle,
-                Ok(Some(angle)) => {
-                    error!(
-                        "[usd-bevy] {} has invalid DistantLight inputs:angle = {angle}; expected a finite angle in [0, 180] degrees",
-                        sdf_path.as_str()
-                    );
-                    return false;
-                }
-                Ok(None) => lunco_core::SOLAR_ANGULAR_DIAMETER_DEG,
+            // Physical identity (illuminance + apparent size) follows USD's
+            // `normalize`, `intensity`, `exposure`, and `angle` semantics. USD
+            // schema fallbacks resolve through the composed reader; the solar
+            // angle constant is only a guard for hosts without core schemas.
+            let authored_angle = match read_authored_real(reader, sdf_path, ltok::A_ANGLE) {
+                Ok(angle) => angle,
                 Err(_) => return false,
             };
+            let angle = authored_angle
+                .or_else(|| reader.real_f32_with_schema_fallback(sdf_path, ltok::A_ANGLE))
+                .unwrap_or(lunco_core::SOLAR_ANGULAR_DIAMETER_DEG);
+            if !angle.is_finite() {
+                error!(
+                    "[usd-bevy] {} has non-finite DistantLight inputs:angle = {angle}",
+                    sdf_path.as_str()
+                );
+                return false;
+            }
+            let angular_diameter_deg = angle.clamp(0.0, 360.0);
+            let normalize = match read_authored_bool(reader, sdf_path, ltok::A_NORMALIZE) {
+                Ok(value) => value
+                    .or_else(|| reader.boolean_with_schema_fallback(sdf_path, ltok::A_NORMALIZE))
+                    .unwrap_or(false),
+                Err(_) => return false,
+            };
+            let usd_illuminance_scale =
+                distant_light_illuminance(1.0, normalize, angular_diameter_deg);
+            let illuminance_lux = illuminance_lux * usd_illuminance_scale;
+            let intensity_scale = intensity_scale * usd_illuminance_scale;
             // Renderer settings supply defaults. Authored content overrides
             // only the two range attributes below, and the provenance marker
             // preserves that distinction for live Graphics edits.
@@ -997,7 +1038,7 @@ pub fn instantiate_light_prim(
             let Ok((range, range_uses_graphics_default)) = read_light_range(
                 reader,
                 sdf_path,
-                quality.local_light_default_range,
+                bevy::light::PointLight::default().range,
                 convention,
             ) else {
                 return false;
@@ -1192,7 +1233,7 @@ pub fn instantiate_light_prim(
             let Ok((range, range_uses_graphics_default)) = read_light_range(
                 reader,
                 sdf_path,
-                quality.local_light_default_range,
+                bevy::light::RectLight::default().range,
                 convention,
             ) else {
                 return false;

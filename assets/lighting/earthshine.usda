@@ -55,6 +55,9 @@ def DistantLight "Earthshine" (
 {
     # Derived at runtime from the body's phase; inert until then.
     float inputs:intensity = 0
+    # The runtime value is reflected illuminance in lux. USD's normalize mode
+    # makes that the direct meaning of a DistantLight intensity.
+    bool inputs:normalize = 1
 
     # Cool blue: sunlight twice-filtered through Earth's atmosphere, which is
     # why the lunar night side reads cold against the neutral direct sun.

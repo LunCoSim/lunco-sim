@@ -46,10 +46,13 @@ def DistantLight "Sun" (
     prepend apiSchemas = ["ShadowAPI", "LunCoShadowAPI"]
 )
 {
-    # The calibrated lunar sun. When a camera omits exposure, the active
-    # Graphics profile supplies the matching EV100; an authored camera exposure
-    # remains authoritative.
+    # The calibrated lunar sun. With normalize enabled, USD defines distant
+    # light intensity as illuminance in lux, which matches Bevy's directional
+    # light component and keeps this physical solar value independent of render
+    # quality. When a camera omits exposure, the scene-camera policy supplies
+    # the matching EV100; an authored camera exposure remains authoritative.
     float inputs:intensity = 128000
+    bool inputs:normalize = 1
 
     # Sol's angular diameter, driving physically-scaled penumbra width in the
     # horizon-shadow march. Not a look knob: it is how big the sun is.

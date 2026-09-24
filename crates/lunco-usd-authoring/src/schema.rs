@@ -275,6 +275,8 @@ const CORE_LINEAR_UNITS: &[(&str, &str, LinearUnit)] = &[
 pub struct PropertySpec {
     /// The schema's declared USD type name (`"float"`, `"uniform token"` → `"token"`).
     pub type_name: String,
+    /// Schema fallback value, if the declaration authors one.
+    pub default_value: Option<sdf::Value>,
     /// `uniform` or `varying`, per the schema.
     pub variability: sdf::Variability,
     /// The schema that declares it — `"LunCoTerrainAPI"`, `"UsdShadeShader"`.
@@ -303,6 +305,8 @@ pub struct SchemaRegistry {
     /// alone, the second file to declare a name ERASED the first — the registry
     /// then answered for a schema the prim does not even apply.
     properties: HashMap<(String, String), PropertySpec>,
+    /// Applied API schemas declared as built-ins by a concrete typed schema.
+    typed_api_schemas: HashMap<String, Vec<String>>,
     /// Which declaration answers a lookup by BARE NAME — the shape almost every
     /// caller has, because an authoring call site knows the property it is
     /// writing and not the schema that declared it.
@@ -443,13 +447,19 @@ impl SchemaRegistry {
         for (path, spec) in data.iter() {
             match spec.ty {
                 SpecType::Prim => {
-                    if !own {
-                        continue;
-                    }
                     let Some(class) = path.as_str().strip_prefix('/') else {
                         continue;
                     };
                     if class.contains('/') {
+                        continue;
+                    }
+                    if let Some(sdf::Value::TokenVec(schemas)) = spec.get("apiSchemas") {
+                        reg.typed_api_schemas.insert(
+                            class.to_string(),
+                            schemas.iter().map(ToString::to_string).collect(),
+                        );
+                    }
+                    if !own {
                         continue;
                     }
                     // `customData = { token apiSchemaType = "singleApply" }` is what
@@ -511,6 +521,7 @@ impl SchemaRegistry {
                     };
                     let prop = PropertySpec {
                         type_name,
+                        default_value: spec.get("default").cloned(),
                         linear,
                         ui_hint,
                         // Unauthored ⇒ `varying`, USD's default. `uniform` is
@@ -583,6 +594,35 @@ impl SchemaRegistry {
     /// fallback to another schema's declaration of the same name.
     pub fn property_in(&self, schema: &str, name: &str) -> Option<&PropertySpec> {
         self.properties.get(&(schema.to_string(), name.to_string()))
+    }
+
+    /// Resolve a property's schema fallback for one composed prim declaration.
+    /// A concrete typed-schema fallback has precedence over its applied API
+    /// schemas; applied schemas are checked in reverse composition order.
+    pub fn fallback_value(
+        &self,
+        prim_type: &str,
+        api_schemas: &[String],
+        name: &str,
+    ) -> Option<&sdf::Value> {
+        self.property_in(prim_type, name)
+            .and_then(|property| property.default_value.as_ref())
+            .or_else(|| {
+                api_schemas
+                    .iter()
+                    .rev()
+                    .chain(
+                        self.typed_api_schemas
+                            .get(prim_type)
+                            .into_iter()
+                            .flatten()
+                            .rev(),
+                    )
+                    .find_map(|schema| {
+                        self.property_in(schema, name)
+                            .and_then(|property| property.default_value.as_ref())
+                    })
+            })
     }
 
     /// Whether `schema`'s `name` is a length, and in what multiple of the stage's

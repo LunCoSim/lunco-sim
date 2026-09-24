@@ -106,6 +106,45 @@ pub trait UsdRead {
         false
     }
 
+    /// The declared USD schema fallback for an unauthored property on `prim`.
+    /// This is resolved from the prim's concrete type and applied API schemas,
+    /// so renderer consumers can honor USD defaults even when the runtime
+    /// stage reader does not embed OpenUSD's native schema registry.
+    fn schema_fallback_value(&self, prim: &SdfPath, name: &str) -> Option<Value> {
+        let prim_type = self.type_name(prim)?;
+        let api_schemas = self.api_schemas(prim);
+        let registry = lunco_usd_authoring::schema::SchemaRegistry::global()
+            .read()
+            .ok()?;
+        registry
+            .fallback_value(&prim_type, &api_schemas, name)
+            .cloned()
+    }
+
+    /// Read a real scalar from the composed value or, when absent, its USD
+    /// schema fallback. Authorship can still be checked separately when the
+    /// caller needs provenance.
+    fn real_f32_with_schema_fallback(&self, prim: &SdfPath, name: &str) -> Option<f32> {
+        self.real_f32(prim, name).or_else(|| {
+            self.schema_fallback_value(prim, name)
+                .as_ref()
+                .and_then(numeric_value_as_f64)
+                .map(|value| value as f32)
+        })
+    }
+
+    /// Read a boolean from the composed value or, when absent, its USD schema
+    /// fallback.
+    fn boolean_with_schema_fallback(&self, prim: &SdfPath, name: &str) -> Option<bool> {
+        self.boolean(prim, name).or_else(|| {
+            self.schema_fallback_value(prim, name)
+                .and_then(|value| match value {
+                    Value::Bool(value) => Some(value),
+                    _ => None,
+                })
+        })
+    }
+
     /// The composed USD `doc` metadata for `prim`, or `None` when no authored
     /// opinion exists. Implementations must resolve the prim's authored stack
     /// in strength order; this is metadata, not a custom attribute namespace.
