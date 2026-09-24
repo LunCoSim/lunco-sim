@@ -127,7 +127,7 @@ struct CachedSparkline {
 /// screen-ready points; the `SignalRegistry` remains the sole sample owner.
 pub fn render_telemetry_sparkline(
     ui: &mut Ui,
-    registry: &SignalRegistry,
+    registry: Option<&SignalRegistry>,
     signal: &SignalRef,
     theme: &Theme,
     options: TelemetrySparklineOptions,
@@ -136,7 +136,13 @@ pub fn render_telemetry_sparkline(
         Vec2::new(options.width.max(1.0), options.height.max(1.0)),
         Sense::hover(),
     );
-    let Some(history) = registry.scalar_history(signal) else {
+    let Some(history) = registry.and_then(|registry| registry.scalar_history(signal)) else {
+        ui.painter_at(rect).rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(0.5, theme.tokens.text_subdued.gamma_multiply(0.55)),
+            egui::StrokeKind::Inside,
+        );
         return (response, None);
     };
     let fingerprint = history_fingerprint(history);
@@ -169,6 +175,12 @@ pub fn render_telemetry_sparkline(
     });
 
     let Some(stats) = cached.stats else {
+        ui.painter_at(rect).rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(0.5, theme.tokens.text_subdued.gamma_multiply(0.55)),
+            egui::StrokeKind::Inside,
+        );
         return (response, None);
     };
     let mut low = stats.min;
