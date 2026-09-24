@@ -32,6 +32,15 @@ The authored data and body radius are the only inputs to the composed surface.
 The tangent-plane footprint and the globe are separate ownership regions, joined
 by the measured boundary source.
 
+The globe cutout projects the authored square from the site's radial datum
+(`body radius + site datum`). Its collar transitions the gnomonic coordinates to
+the body's mean radius and ends on the exact radial globe. The surface and globe
+boundaries therefore share the same angular footprint at nonzero site elevation.
+The cutout edge is split at the local surface's authored grid samples so both
+meshes follow the same boundary curve.
+Globe tiles throughout the collar use that same handoff, even when they do not
+intersect the cutout.
+
 ### Authoring guidance
 
 The authored DEM square is preserved through its boundary. Do not place

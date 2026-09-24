@@ -557,10 +557,15 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
    live `CompositeHeightSource` from the retained DEM oracle and authored site
    tangent frame. Globe triangles are clipped only inside the exact DEM square;
    boundary triangles use a one-posting C1 continuation that fades measured edge
-   relief onto the same body-curved datum, then meet the radial globe through the
-   existing source blend. There is no shell sink, guessed wall, or second terrain
-   source. Full lat/lon↔XZ reprojection for non-equirectangular DEMs remains
-   deferred.
+   relief onto the same body-curved datum. The cutout uses the site's radial
+   datum, and the collar moves its gnomonic coordinates back to the body's mean
+   radius before meeting the radial globe. Cutout boundary edges are split at
+   the DEM's authored grid samples so the globe and site use the same source
+   points. Globe tiles throughout the collar receive the same handoff, including
+   tiles that do not cross the cutout, so neighboring tile edges stay continuous.
+   This keeps the merge registered at nonzero site elevations. There is no shell
+   sink, guessed wall, or second terrain source. Full lat/lon↔XZ reprojection for
+   non-equirectangular DEMs remains deferred.
 6. **Tile bake cache** — **partly done**: visual tile meshes are
    content-addressed on disk (`tile_cache`, keyed on `SurfaceOracle::surface_key`
    + tile coord), so a warm reload of the same composed surface streams instead

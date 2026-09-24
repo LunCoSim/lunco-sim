@@ -241,7 +241,9 @@ pub struct GlobeHandoff {
     pub north: DVec3,
     pub half_extent: f64,
     pub radius_m: f64,
+    pub site_radius_m: f64,
     pub blend_m: f64,
+    boundary_grid_resolution: usize,
     source: HandoffSource,
     source_key: u64,
 }
@@ -253,7 +255,9 @@ impl PartialEq for GlobeHandoff {
             && self.north == other.north
             && self.half_extent == other.half_extent
             && self.radius_m == other.radius_m
+            && self.site_radius_m == other.site_radius_m
             && self.blend_m == other.blend_m
+            && self.boundary_grid_resolution == other.boundary_grid_resolution
             && self.source_key == other.source_key
     }
 }
@@ -297,7 +301,9 @@ impl GlobeHandoff {
             north,
             half_extent,
             radius_m,
+            site_radius_m: radius_m + border_datum,
             blend_m,
+            boundary_grid_resolution: oracle.grid().res,
             source,
             source_key: oracle.surface_key(),
         }
@@ -333,7 +339,9 @@ impl GlobeHandoff {
             north,
             half_extent,
             radius_m,
+            site_radius_m: radius_m + height_m,
             blend_m,
+            boundary_grid_resolution: 0,
             source,
             source_key: height_m.to_bits() ^ half_extent.to_bits().rotate_left(17),
         }
@@ -345,6 +353,7 @@ impl GlobeHandoff {
             east: self.east,
             north: self.north,
             radius_m: self.radius_m,
+            site_radius_m: self.site_radius_m,
             half_extent: self.half_extent,
             blend_m: self.blend_m,
         }
@@ -354,6 +363,7 @@ impl GlobeHandoff {
         GlobeSurfacePatch {
             handoff: self.geometry(),
             source: &self.source,
+            boundary_grid_resolution: self.boundary_grid_resolution,
         }
     }
 }
