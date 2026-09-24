@@ -5,7 +5,7 @@
 // presentation commands into an actionable authoring workflow. It contains no
 // vehicle names, no second graph, and no Rust-side product policy.
 
-import "lunco://scripting/tools/assembly_edit" as assembly_edit;
+import "assembly_edit" as assembly_edit;
 
 fn query_ok(record) {
     record != () && record.ok != false

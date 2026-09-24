@@ -2,7 +2,7 @@
 // Acceptance predicates belong in source SysML constraints. Twin Rhai binds
 // composed observations and chooses provider-specific checks.
 
-import "lunco://scripting/tools/sysml_requirements" as sysml_requirements;
+import "sysml_requirements" as sysml_requirements;
 
 fn source_text_list(source, qualified_name) {
     let values = sysml_requirements::native_value(source, qualified_name);

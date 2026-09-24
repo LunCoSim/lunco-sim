@@ -5,7 +5,7 @@
 // and topology-preserving bundle planner so a human-facing Editor assistant
 // and an AI use one discoverable contract. It never guesses a recipe and
 // never commits a USD edit.
-import "lunco://scripting/tools/assembly_builder" as builder;
+import "assembly_builder" as builder;
 
 fn component_error(message) {
     #{ ok: false, kind: "component_editor", error: message, ops: [] }

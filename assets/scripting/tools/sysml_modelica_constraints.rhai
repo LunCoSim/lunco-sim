@@ -2,11 +2,11 @@
 // Rust supplies the resolved typed graph. This library selects relevant
 // definitions/usages and generates Modelica only at the Modelica source edge.
 
-import "lunco://scripting/tools/modelica_editor" as modelica_editor;
-import "lunco://scripting/tools/assembly_builder" as assembly_builder;
-import "lunco://scripting/tools/assembly_edit" as assembly_edit;
-import "lunco://scripting/tools/engineering_units" as engineering_units;
-import "lunco://scripting/tools/numerical_settings" as numerical_settings;
+import "modelica_editor" as modelica_editor;
+import "assembly_builder" as assembly_builder;
+import "assembly_edit" as assembly_edit;
+import "engineering_units" as engineering_units;
+import "numerical_settings" as numerical_settings;
 
 fn analyze(path) {
     let report = sysml_analysis(path);
