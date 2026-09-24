@@ -653,14 +653,19 @@ fn runtime_program_action(me, payload, state) {
 }
 
 fn advance_on_sensor(me, evt, state) {
-    // Discrete control is a semantic input edge. The controller publishes it
-    // for every authored control surface, even when no port named `action`
-    // exists; this program owns the route-specific meaning of F.
+    // Discrete controls arrive through the shared semantic intent path. Action
+    // toggles route guidance; any other pressed/pulsed control intent yields an
+    // active route to the operator, regardless of vehicle kind or key binding.
     if evt.name == "intent.edge" && intent_targets_route_subject(me, evt, state)
         && evt.value != ()
-        && evt.value["intent"] == "action"
         && (evt.value["edge"] == "pressed" || evt.value["edge"] == "pulse") {
-        return #{ kind: "toggle", enabled: !state.enabled };
+        let intent = evt.value["intent"];
+        if intent == "action" {
+            return #{ kind: "toggle", enabled: !state.enabled };
+        }
+        if state.enabled || state.start_requested {
+            return #{ kind: "manual_override" };
+        }
     }
     // Selection is transient runtime state. Reconcile it at the event edge as
     // well as in the task so a program-selection event and an operator action
@@ -743,6 +748,7 @@ fn apply_toggle_transition(me, state, enabled) {
         return state;
     }
     state.enabled = false;
+    state.start_requested = false;
     let stopped = ensure_route_safe_stop(me, state);
     if stopped.ok == true { state.safe_stopped = true; }
     emit("route_stopped");
@@ -919,6 +925,8 @@ fn on_event(me, evt, ctx) {
     if transition == () { return; }
     if transition.kind == "toggle" {
         this = apply_toggle_transition(me, this, transition.enabled);
+    } else if transition.kind == "manual_override" {
+        this = apply_toggle_transition(me, this, false);
     } else if transition.kind == "start" {
         let started = start_route(me, this);
         if started.ok == true {
