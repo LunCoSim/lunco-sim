@@ -205,28 +205,29 @@ fn clear_sun_material(
     materials: &mut Assets<ShaderMaterial>,
     handle: &MeshMaterial3d<ShaderMaterial>,
 ) {
-    let Some(mut material) = materials.get_mut(&handle.0) else {
-        return;
-    };
-    let needs_clear = material
-        .get_vec3("sun_dir")
-        .is_some_and(|value| value.length_squared() > 1.0e-12)
-        || material
-            .get_vec3("sun_dir_world")
+    let needs_clear = materials.get(&handle.0).is_some_and(|material| {
+        material
+            .get_vec3("sun_dir")
             .is_some_and(|value| value.length_squared() > 1.0e-12)
-        || material
-            .get_scalar("sun_tan_radius")
-            .is_some_and(|value| value.abs() > 1.0e-6)
-        || material
-            .get_scalar("shadow_cache_on")
-            .is_some_and(|value| value.abs() > 1.0e-6);
+            || material
+                .get_vec3("sun_dir_world")
+                .is_some_and(|value| value.length_squared() > 1.0e-12)
+            || material
+                .get_scalar("sun_tan_radius")
+                .is_some_and(|value| value.abs() > 1.0e-6)
+            || material
+                .get_scalar("shadow_cache_on")
+                .is_some_and(|value| value.abs() > 1.0e-6)
+    });
     if needs_clear {
-        material.set_many([
-            ("sun_dir", ParamValue::Vec3([0.0, 0.0, 0.0])),
-            ("sun_dir_world", ParamValue::Vec3([0.0, 0.0, 0.0])),
-            ("sun_tan_radius", ParamValue::F32(0.0)),
-            ("shadow_cache_on", ParamValue::F32(0.0)),
-        ]);
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            material.set_many([
+                ("sun_dir", ParamValue::Vec3([0.0, 0.0, 0.0])),
+                ("sun_dir_world", ParamValue::Vec3([0.0, 0.0, 0.0])),
+                ("sun_tan_radius", ParamValue::F32(0.0)),
+                ("shadow_cache_on", ParamValue::F32(0.0)),
+            ]);
+        }
     }
 }
 
@@ -259,6 +260,11 @@ pub fn wire_terrain_materials(
     >,
     // Hysteresis state for the cache↔march handoff, per terrain (see below).
     mut cache_engaged: Local<std::collections::HashMap<Entity, bool>>,
+    // The visible tile set is rebuilt from ECS every frame, but its grouping
+    // buffers persist so streaming does not allocate a new map/vector set per
+    // frame.
+    mut streamed_materials: Local<std::collections::HashMap<Entity, Vec<Handle<ShaderMaterial>>>>,
+    mut written_materials: Local<HashSet<AssetId<ShaderMaterial>>>,
     // Reuses the local sun direction while both the finalized terrain frame and
     // the render sun revision remain unchanged; entries follow the terrain's
     // lifecycle cleanup below.
@@ -269,17 +275,23 @@ pub fn wire_terrain_materials(
         cache_engaged.remove(&e);
         sun_projection_cache.remove(e);
     }
-    let mut streamed_materials: std::collections::HashMap<Entity, Vec<Handle<ShaderMaterial>>> =
-        std::collections::HashMap::new();
+    let Some(mut shader_mats) = shader_mats else {
+        return;
+    };
+
+    // Recycle the per-owner vectors while dropping storage for owners that have
+    // left the terrain query. Rebuild membership from the current tile query so
+    // streamed tile replacement remains immediately visible to this binder.
+    for materials in streamed_materials.values_mut() {
+        materials.clear();
+    }
+    streamed_materials.retain(|owner, _| terrains.get(*owner).is_ok());
     for (owner, material) in &tile_materials {
         streamed_materials
             .entry(owner.0)
             .or_default()
             .push(material.0.clone());
     }
-    let Some(mut shader_mats) = shader_mats else {
-        return;
-    };
     let Some((_, tan_r, csm_far)) = pick_sun(&sun) else {
         for (entity, _, _, _, _, shader_mat) in &terrains {
             if let Some(shader_mat) = shader_mat {
@@ -324,16 +336,16 @@ pub fn wire_terrain_materials(
     let cache_quality_valid = cfg.quality_is_valid();
 
     for (entity, terrain_gt, map, shadow_cache, _mesh, shader_mat) in &terrains {
-        let mut materials = streamed_materials.remove(&entity).unwrap_or_default();
-        if let Some(shader_mat) = shader_mat {
-            materials.push(shader_mat.0.clone());
-        }
+        let tiles = streamed_materials
+            .get(&entity)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         // A streamed terrain owner has no mesh: its visible materials live on
         // the LOD tile children. The same engine contract must nevertheless be
         // projected to those children; otherwise replacing a tile changes the
         // terrain's lighting model. A terrain with no material yet has nothing
         // to bind, but remains eligible on the next material-creation pass.
-        if materials.is_empty() {
+        if tiles.is_empty() && shader_mat.is_none() {
             continue;
         }
         let sun_local = sun_projection_cache.project_sun_local(
@@ -407,10 +419,15 @@ pub fn wire_terrain_materials(
         // though the tile set itself is dynamic. The handle, heightfield/cache
         // identity, sun revision epsilon, and all engine scalars cover the
         // complete terrain shader contract.
-        let mut written = std::collections::HashSet::new();
-        for handle in materials {
-            if written.insert(handle.id()) {
-                write_terrain_material_if_needed(&mut shader_mats, &handle, &inputs);
+        written_materials.clear();
+        for handle in tiles {
+            if written_materials.insert(handle.id()) {
+                write_terrain_material_if_needed(&mut shader_mats, handle, &inputs);
+            }
+        }
+        if let Some(shader_mat) = shader_mat {
+            if written_materials.insert(shader_mat.0.id()) {
+                write_terrain_material_if_needed(&mut shader_mats, &shader_mat.0, &inputs);
             }
         }
     }
@@ -659,6 +676,58 @@ mod tests {
         });
         app.add_systems(Update, wire_sun_for_non_terrain_materials);
         app
+    }
+
+    #[test]
+    fn clearing_an_already_clear_material_does_not_modify_the_asset() {
+        #[derive(Resource, Default)]
+        struct Modified(usize);
+
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<ShaderMaterial>();
+        let mut material = ShaderMaterial::default();
+        material.set_many([
+            ("sun_dir", ParamValue::Vec3([0.0, 0.0, 1.0])),
+            ("sun_dir_world", ParamValue::Vec3([0.0, 0.0, 1.0])),
+            ("sun_tan_radius", ParamValue::F32(0.01)),
+            ("shadow_cache_on", ParamValue::F32(1.0)),
+        ]);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(material);
+        app.world_mut().spawn(MeshMaterial3d(handle));
+        app.init_resource::<Modified>();
+        app.add_systems(
+            Update,
+            (
+                |mut materials: ResMut<Assets<ShaderMaterial>>,
+                 meshes: Query<&MeshMaterial3d<ShaderMaterial>>| {
+                    for handle in &meshes {
+                        clear_sun_material(&mut materials, handle);
+                    }
+                },
+                |mut events: MessageReader<AssetEvent<ShaderMaterial>>,
+                 mut modified: ResMut<Modified>| {
+                    modified.0 += events
+                        .read()
+                        .filter(|event| matches!(event, AssetEvent::Modified { .. }))
+                        .count();
+                },
+            )
+                .chain(),
+        );
+
+        for _ in 0..6 {
+            app.update();
+        }
+
+        assert_eq!(
+            app.world().resource::<Modified>().0,
+            1,
+            "clear should upload once when values change and remain quiet afterward"
+        );
     }
 
     /// The blueprint material must use the same finalized render transform as
@@ -945,11 +1014,14 @@ mod tests {
             .world_mut()
             .resource_mut::<Assets<ShaderMaterial>>()
             .add(ShaderMaterial::default());
-        app.world_mut().spawn((
-            lunco_terrain_surface::DemTerrainSurface,
-            GlobalTransform::IDENTITY,
-            MeshMaterial3d(handle.clone()),
-        ));
+        let terrain = app
+            .world_mut()
+            .spawn((
+                lunco_terrain_surface::DemTerrainSurface,
+                GlobalTransform::IDENTITY,
+                MeshMaterial3d(handle.clone()),
+            ))
+            .id();
 
         app.add_systems(
             PostUpdate,
@@ -969,6 +1041,24 @@ mod tests {
             actual.abs_diff_eq(expected, 1.0e-6),
             "terrain shadow direction must use the finalized render transform: got {actual:?}, expected {expected:?}"
         );
+
+        let tile_handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        app.world_mut().spawn((
+            lunco_terrain_surface::LodTileOf(terrain),
+            MeshMaterial3d(tile_handle.clone()),
+        ));
+        app.update();
+
+        let tile_sun = app
+            .world()
+            .resource::<Assets<ShaderMaterial>>()
+            .get(&tile_handle)
+            .and_then(|material| material.get_vec3("sun_dir"))
+            .expect("a newly streamed terrain tile must receive the owner projection");
+        assert!(tile_sun.abs_diff_eq(expected, 1.0e-6));
     }
 
     /// A `ShaderMaterial` on a mesh with NO `HorizonMap` must still get the sun.

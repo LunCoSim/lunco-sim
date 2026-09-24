@@ -329,6 +329,9 @@ only on initial binding, when the sun becomes available/unavailable, or when its
 direction or angular radius crosses the existing uniform tolerance. Between those
 changes it visits only newly added or reassigned material bindings. This changes
 CPU-side discovery work, not the shader values or terrain quality settings.
+The terrain path rebuilds membership from the live LOD-tile query but reuses its
+per-terrain handle vectors and unique-material set; invalid-sun clears inspect
+before mutable access so already-clear assets are not marked modified again.
 
 Screenshots do **not** live there either.
 `CaptureScreenshot` needs `bevy_render`, and that dependency sat inside **`lunco-api`** behind a
