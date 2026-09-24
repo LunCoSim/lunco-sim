@@ -773,16 +773,48 @@ mod tests {
             .world()
             .entity(caster)
             .get::<MeshMaterial3d<StandardMaterial>>()
-            .expect("caster PBR binding");
+            .expect("caster PBR binding")
+            .0
+            .clone();
         let non_caster_material = app
             .world()
             .entity(non_caster)
             .get::<MeshMaterial3d<StandardMaterial>>()
-            .expect("non-caster PBR binding");
-        assert_eq!(caster_material.0, non_caster_material.0);
+            .expect("non-caster PBR binding")
+            .0
+            .clone();
+        assert_eq!(caster_material, non_caster_material);
         assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 1);
         assert!(!app.world().entity(caster).contains::<NotShadowCaster>());
         assert!(app.world().entity(non_caster).contains::<NotShadowCaster>());
+
+        let mut look = app.world_mut().get_mut::<PbrLook>(caster).unwrap();
+        look.no_shadow_cast = true;
+        drop(look);
+        app.update();
+        assert_eq!(
+            app.world()
+                .entity(caster)
+                .get::<MeshMaterial3d<StandardMaterial>>()
+                .unwrap()
+                .0,
+            caster_material
+        );
+        assert!(app.world().entity(caster).contains::<NotShadowCaster>());
+
+        let mut look = app.world_mut().get_mut::<PbrLook>(caster).unwrap();
+        look.no_shadow_cast = false;
+        drop(look);
+        app.update();
+        assert_eq!(
+            app.world()
+                .entity(caster)
+                .get::<MeshMaterial3d<StandardMaterial>>()
+                .unwrap()
+                .0,
+            caster_material
+        );
+        assert!(!app.world().entity(caster).contains::<NotShadowCaster>());
     }
 
     /// Two different looks must NOT collide into one material.
