@@ -571,12 +571,22 @@ projection work set until every referenced member source has a terminal class
 verdict; asset arrival waves therefore do not repeatedly traverse a partially
 resolved network. Invalid source verdicts are terminal and still reach
 synthesis so the authored error is reported. A full discovery is reserved for
-initial admission, a USD-stage asset change, or a changed generation on a live
-canonical stage. Endpoint lifecycle continues to requeue only its entity; the
-broader `UsdWiringDirty` latch is not a domain-membership signal. Scene teardown
-clears the reverse index, stage-generation cursor, and pending
-discovery/projection candidate sets; resolved member-class facts remain
+initial admission. Each canonical sink drain publishes one
+`UsdSceneChangeBatch` with its projected generation, resynced paths, and
+info-changed owning prim paths. The domain index maps canonical stage/root/member
+paths back to their network roots: structural paths invalidate overlapping
+network/member scopes, while info paths invalidate the exact network root or a
+member subtree. Runtime-instance plans are excluded because they are immutable
+projections, not readers of the canonical stage. A changed USD asset requeues
+indexed roots on that stage; a missed generation batch does the same as a safety
+pass. Neither path scans every USD prim. Endpoint lifecycle continues to requeue
+only its entity; the broader `UsdWiringDirty` latch is not a domain-membership
+signal. Scene teardown clears the reverse index, stage-generation cursor, and
+pending discovery/projection candidate sets; resolved member-class facts remain
 reusable because they belong to shared Modelica source assets, not a scene.
+Prim arrivals whose stage asset is not ready wait in a stage-keyed set and are
+requeued by that asset's readiness event, rather than being retried on stable
+frames.
 
 Generated Modelica source documents use the same lifecycle discipline: source
 insert/replace queues only that wrapper for document synchronization, while a

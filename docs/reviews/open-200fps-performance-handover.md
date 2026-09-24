@@ -533,9 +533,10 @@ Modelica assets it uses; and a class asset completion or modification queues
 only dependent roots. A candidate root stays out of the projection work set
 until every member source has a terminal class verdict, so asynchronous source
 arrival does not repeatedly traverse a partially resolved network. Unrelated
-in-flight synthesis remains live. A full discovery is kept for initial
-admission and a live USD wiring revision that may change composed network
-membership.
+in-flight synthesis remains live. The all-prim discovery is reserved for
+initial admission; typed live-stage path batches route membership changes to
+the affected roots, while asset replacement and missed batches requeue only
+roots indexed to the affected stage.
 
 Cosim prim discovery and Python-availability readiness now share a coalesced
 set populated by `UsdPrimPath`/`UsdSourcedCosim` lifecycle events, with a
@@ -607,6 +608,13 @@ max), while `project_domain_islands` ran 9 times for 5.719 s total (635 ms
 mean, 2.853 s max). The wiring result is a large reduction in composed-read
 and reconciliation time; domain projection no longer runs every frame, but
 its remaining startup calls still dominate the USD projection work.
+
+Those captures predate path-scoped domain invalidation. Live canonical edits
+now publish `UsdSceneChangeBatch` paths, routed through a stage/root/member
+reverse index; a missed generation batch or changed stage asset requeues only
+roots indexed to that stage. The broad prim sweep is reserved for initial
+discovery. This is a source-level work reduction; a new clean Tracy capture is
+still required to quantify its cost and any resulting FPS change.
 
 That Tracy window also attributed 12.207 s (34.54%) to
 `avian3d::spatial_query::raycast` over 841 calls (14.51 ms mean). The app was

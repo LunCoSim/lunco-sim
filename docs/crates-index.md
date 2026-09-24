@@ -116,7 +116,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
 | **`lunco-usd-bevy-stage`** | Renderer-independent composed-USD stage boundary: stage loading/composition, authored-layer reads, canonical stage ownership, instance identity, projection plans, standard material/purpose/variant readers, transforms, units, authoring helpers, and stage integration tests. It has no runtime projection systems. |
 | **`lunco-usd-bevy-core`** | Small runtime projection-mechanism package: authored animation, live edits, mount coordination, point instancers, and executable program runtime. It consumes `lunco-usd-bevy-stage`; stage readers and canonical APIs are not re-exported from this crate. |
-| **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, generic projection-reset and authored info-change messages, visual-split markers, preview/ancestry ownership, authored billboard contracts, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
+| **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, generic projection-reset and coalesced stage-change path/generation messages, visual-split markers, preview/ancestry ownership, authored billboard contracts, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, projection cursors, user-ownership events, and the live-projection wake signal. It owns no stage loading, composition, rendering, or UI. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection/look-at intent, camera roles/pose, mounted/cinematic camera pose, camera-track selection, the `camera.default_presentation` fact/decision boundary, and the single-authority viewport-camera reconciler. It contains no avatar behavior parser or raw input mapping and does not own geometry math or visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
@@ -673,8 +673,8 @@ with the assembly editor proposal gate.
 
 **`lunco-usd-bevy-runtime-core`**
 Headless-safe scene runtime boundary. Installs scene admission, Twin-backed
-stage loading, live document-to-stage projection, generic authored info-change
-publication, authored control/program projection, scene
+stage loading, live document-to-stage projection, coalesced stage-change
+path/generation publication, authored control/program projection, scene
 commands, and the stage terminal-outcome contract. It does not assemble the
 complete visual,
 diagnostics, physics, simulation, or document-command bundle.
@@ -729,7 +729,7 @@ re-export layer.
 Render-free ECS contract between USD projection domains. It owns `UsdPrimPath`,
 `UsdSceneProjected`, `UsdSceneRoot`, `UsdPreviewOnly`, `UsdAnimated`, the
 projection ordering boundaries, the generic `UsdSceneProjectionReset` and
-`UsdSceneInfoChanged` messages,
+coalesced `UsdSceneChangeBatch` path/generation message,
 visual-split markers, and the
 stage revision/ancestry helpers, authored billboard contracts, plus the shared
 USD primitive and indexed-mesh readers and the composed collision/placement envelope readers in

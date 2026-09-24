@@ -55,9 +55,12 @@ signals instead of repeated `Added`/`Changed` population queries in both its
 run condition and invalidation system. BigSpace still owns all propagation
 work and the origin-settle pass is unchanged. Physics-validation and telemetry
 scratch buffers also retain capacity across calls. Domain member-class
-discovery now uses the existing canonical-stage generations and USD-asset
-change signal for whole-scene rediscovery; endpoint wiring invalidation keeps
-using the narrower queued-entity path. Generated Modelica document sync also
+discovery now consumes a typed `UsdSceneChangeBatch` and routes its
+resynced/info paths through a canonical stage/root/member reverse index.
+Stage-asset changes and missed generation batches requeue only roots on the
+affected stage; the all-prim discovery is limited to initial admission.
+Endpoint wiring invalidation keeps using the narrower queued-entity path.
+Generated Modelica document sync also
 uses lifecycle-queued wrappers and a dirty publisher latch rather than per-frame
 `Changed` filters. Domain synthesis uses direct authored-property lookup for
 member communication periods and enumerates root attributes once for both

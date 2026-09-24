@@ -317,6 +317,7 @@ pub struct PendingDomainProjections {
 pub struct PendingDomainProjectionCandidates {
     discovery: HashSet<Entity>,
     projection: HashSet<Entity>,
+    waiting_for_stage: HashMap<AssetId<UsdStageAsset>, HashSet<Entity>>,
     initial_discovery: bool,
     observed_stage_generations: HashMap<AssetId<UsdStageAsset>, u64>,
 }
@@ -326,6 +327,7 @@ impl Default for PendingDomainProjectionCandidates {
         Self {
             discovery: HashSet::new(),
             projection: HashSet::new(),
+            waiting_for_stage: HashMap::new(),
             initial_discovery: true,
             observed_stage_generations: HashMap::new(),
         }
@@ -337,21 +339,33 @@ impl PendingDomainProjectionCandidates {
         !self.projection.is_empty()
     }
 
-    fn observe_canonical_stage_generations(&mut self, stages: &CanonicalStages) -> bool {
-        let mut changed = false;
-        for (asset, stage) in stages.iter() {
-            let generation = stage.generation();
-            if self.observed_stage_generations.get(&asset) != Some(&generation) {
-                self.observed_stage_generations.insert(asset, generation);
-                changed = true;
-            }
-        }
-        if self.observed_stage_generations.len() != stages.len() {
-            self.observed_stage_generations
-                .retain(|asset, _| stages.get(*asset).is_some());
-            changed = true;
-        }
-        changed
+    fn observe_stage_generation(
+        &mut self,
+        stage_id: AssetId<UsdStageAsset>,
+        generation: u64,
+    ) -> bool {
+        let previous = self.observed_stage_generations.insert(stage_id, generation);
+        previous.is_none_or(|previous| generation > previous && generation - previous > 1)
+    }
+
+    fn wait_for_stage(&mut self, stage_id: AssetId<UsdStageAsset>, entity: Entity) {
+        self.waiting_for_stage
+            .entry(stage_id)
+            .or_default()
+            .insert(entity);
+    }
+
+    fn take_stage_waiters(&mut self, stage_id: AssetId<UsdStageAsset>) -> HashSet<Entity> {
+        self.waiting_for_stage.remove(&stage_id).unwrap_or_default()
+    }
+
+    fn forget_entity(&mut self, entity: Entity) {
+        self.discovery.remove(&entity);
+        self.projection.remove(&entity);
+        self.waiting_for_stage.retain(|_, waiting| {
+            waiting.remove(&entity);
+            !waiting.is_empty()
+        });
     }
 
     fn reset_for_scene(&mut self) {
@@ -411,11 +425,21 @@ pub fn domain_projection_due(candidates: Res<PendingDomainProjectionCandidates>)
 }
 
 /// Reverse index from a Modelica source asset to the domain roots that depend
-/// on its declared class. Source completion then invalidates those roots only.
+/// on its declared class, plus a stage/path index for authored USD changes.
+/// Source completion and live path changes then invalidate only dependent roots.
 #[derive(Resource, Default)]
 pub struct DomainClassUsers {
     roots_by_asset: HashMap<String, HashSet<Entity>>,
     assets_by_root: HashMap<Entity, HashSet<String>>,
+    roots_by_stage: HashMap<AssetId<UsdStageAsset>, HashSet<Entity>>,
+    paths_by_root: HashMap<Entity, DomainRootPaths>,
+}
+
+#[derive(Debug)]
+struct DomainRootPaths {
+    stage_id: AssetId<UsdStageAsset>,
+    root_path: String,
+    member_paths: HashSet<String>,
 }
 
 impl DomainClassUsers {
@@ -425,7 +449,12 @@ impl DomainClassUsers {
             .is_none_or(|assets| assets.iter().all(|asset| classes.known.contains_key(asset)))
     }
 
-    fn replace_root_assets(&mut self, root: Entity, assets: HashSet<String>) {
+    fn replace_root_facts(
+        &mut self,
+        root: Entity,
+        assets: HashSet<String>,
+        paths: Option<DomainRootPaths>,
+    ) {
         self.remove_root(root);
         for asset in &assets {
             self.roots_by_asset
@@ -436,17 +465,87 @@ impl DomainClassUsers {
         if !assets.is_empty() {
             self.assets_by_root.insert(root, assets);
         }
+        if let Some(paths) = paths {
+            self.roots_by_stage
+                .entry(paths.stage_id)
+                .or_default()
+                .insert(root);
+            self.paths_by_root.insert(root, paths);
+        }
     }
 
     fn remove_root(&mut self, root: Entity) {
-        let Some(assets) = self.assets_by_root.remove(&root) else {
-            return;
-        };
-        for asset in assets {
-            if let Some(roots) = self.roots_by_asset.get_mut(&asset) {
+        if let Some(assets) = self.assets_by_root.remove(&root) {
+            for asset in assets {
+                if let Some(roots) = self.roots_by_asset.get_mut(&asset) {
+                    roots.remove(&root);
+                    if roots.is_empty() {
+                        self.roots_by_asset.remove(&asset);
+                    }
+                }
+            }
+        }
+        if let Some(paths) = self.paths_by_root.remove(&root) {
+            if let Some(roots) = self.roots_by_stage.get_mut(&paths.stage_id) {
                 roots.remove(&root);
                 if roots.is_empty() {
-                    self.roots_by_asset.remove(&asset);
+                    self.roots_by_stage.remove(&paths.stage_id);
+                }
+            }
+        }
+    }
+
+    fn extend_roots_for_stage(
+        &self,
+        stage_id: AssetId<UsdStageAsset>,
+        candidates: &mut HashSet<Entity>,
+    ) {
+        if let Some(roots) = self.roots_by_stage.get(&stage_id) {
+            candidates.extend(roots.iter().copied());
+        }
+    }
+
+    fn extend_roots_affected_by_resync(
+        &self,
+        stage_id: AssetId<UsdStageAsset>,
+        changed_path: &str,
+        candidates: &mut HashSet<Entity>,
+    ) {
+        if let Some(roots) = self.roots_by_stage.get(&stage_id) {
+            for root in roots {
+                let Some(paths) = self.paths_by_root.get(root) else {
+                    continue;
+                };
+                if usd_paths_overlap(changed_path, &paths.root_path)
+                    || paths
+                        .member_paths
+                        .iter()
+                        .any(|member| usd_paths_overlap(changed_path, member))
+                {
+                    candidates.insert(*root);
+                }
+            }
+        }
+    }
+
+    fn extend_roots_affected_by_info(
+        &self,
+        stage_id: AssetId<UsdStageAsset>,
+        changed_path: &str,
+        candidates: &mut HashSet<Entity>,
+    ) {
+        if let Some(roots) = self.roots_by_stage.get(&stage_id) {
+            for root in roots {
+                let Some(paths) = self.paths_by_root.get(root) else {
+                    continue;
+                };
+                if changed_path == paths.root_path
+                    || paths
+                        .member_paths
+                        .iter()
+                        .any(|member| usd_paths_overlap(changed_path, member))
+                {
+                    candidates.insert(*root);
                 }
             }
         }
@@ -455,7 +554,20 @@ impl DomainClassUsers {
     fn clear(&mut self) {
         self.roots_by_asset.clear();
         self.assets_by_root.clear();
+        self.roots_by_stage.clear();
+        self.paths_by_root.clear();
     }
+}
+
+fn usd_paths_overlap(left: &str, right: &str) -> bool {
+    fn is_same_or_descendant(path: &str, parent: &str) -> bool {
+        path == parent
+            || path
+                .strip_prefix(parent)
+                .is_some_and(|suffix| parent.ends_with('/') || suffix.starts_with('/'))
+    }
+
+    is_same_or_descendant(left, right) || is_same_or_descendant(right, left)
 }
 
 /// Retire scene-owned discovery state before a replacement scene is admitted.
@@ -523,8 +635,7 @@ pub fn forget_domain_projection_entity(
     mut pending: ResMut<PendingDomainProjectionCandidates>,
 ) {
     users.remove_root(trigger.entity);
-    pending.discovery.remove(&trigger.entity);
-    pending.projection.remove(&trigger.entity);
+    pending.forget_entity(trigger.entity);
 }
 
 fn queue_domain_projection(
@@ -1676,6 +1787,8 @@ pub fn resolve_member_classes(
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
+    mut scene_changes: MessageReader<lunco_usd_bevy_scene::UsdSceneChangeBatch>,
+    mut stage_asset_events: MessageReader<AssetEvent<UsdStageAsset>>,
     asset_server: Res<AssetServer>,
     sources: Res<Assets<ModelicaSource>>,
     mut source_events: MessageReader<AssetEvent<ModelicaSource>>,
@@ -1698,14 +1811,67 @@ pub fn resolve_member_classes(
         .read()
         .map(|event| (event.id, event.error.to_string()))
         .collect();
-    // `UsdWiringDirty` also covers endpoint additions/removals, which already
-    // arrive through `candidates.discovery`. Only authored canonical-stage
-    // generations and USD asset changes can invalidate composed member
-    // membership for every network root.
-    let canonical_stage_changed = candidates.observe_canonical_stage_generations(&canonical);
-    let full_discovery =
-        candidates.initial_discovery || canonical_stage_changed || stages.is_changed();
-    let discover = full_discovery || !candidates.discovery.is_empty();
+    // Every canonical sink drain publishes its reconciled paths and generation.
+    // Route those paths through the domain-root reverse index; a missed batch
+    // falls back to all known roots on that stage, never every USD prim.
+    let mut latest_generation_by_stage = HashMap::new();
+    let mut stages_with_generation_gaps = HashSet::new();
+    for change in scene_changes.read() {
+        let missed_generation =
+            candidates.observe_stage_generation(change.stage_id, change.stage_generation);
+        if missed_generation {
+            stages_with_generation_gaps.insert(change.stage_id);
+        }
+        latest_generation_by_stage.insert(change.stage_id, change.stage_generation);
+        for path in &change.resynced_prim_paths {
+            class_users.extend_roots_affected_by_resync(
+                change.stage_id,
+                path,
+                &mut candidates.discovery,
+            );
+        }
+        for path in &change.info_prim_paths {
+            class_users.extend_roots_affected_by_info(
+                change.stage_id,
+                path,
+                &mut candidates.discovery,
+            );
+        }
+    }
+    for (stage_id, published_generation) in latest_generation_by_stage {
+        let current_generation = canonical.generation_for(stage_id);
+        if stages_with_generation_gaps.contains(&stage_id)
+            || current_generation != published_generation
+        {
+            class_users.extend_roots_for_stage(stage_id, &mut candidates.discovery);
+        }
+        candidates
+            .observed_stage_generations
+            .insert(stage_id, current_generation);
+    }
+
+    // A replaced/loaded USD asset invalidates only the indexed roots on its
+    // stage. New roots are independently queued by their UsdPrimPath observer.
+    for event in stage_asset_events.read() {
+        match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => {
+                class_users.extend_roots_for_stage(*id, &mut candidates.discovery);
+                let waiting = candidates.take_stage_waiters(*id);
+                candidates.discovery.extend(waiting);
+                candidates
+                    .observed_stage_generations
+                    .insert(*id, canonical.generation_for(*id));
+            }
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                candidates.observed_stage_generations.remove(id);
+            }
+        }
+    }
+
+    let initial_discovery = candidates.initial_discovery;
+    let discover = initial_discovery || !candidates.discovery.is_empty();
     if !discover && loaded.is_empty() && modified.is_empty() && failed.is_empty() {
         return;
     }
@@ -1726,10 +1892,16 @@ pub fn resolve_member_classes(
         classes.pending.insert(asset, handle);
     }
     if discover {
-        let discovery_entities: Vec<_> = if full_discovery {
+        let discovery_entities: Vec<_> = if initial_discovery {
             class_users.clear();
             candidates.discovery.clear();
             candidates.initial_discovery = false;
+            candidates.observed_stage_generations.clear();
+            candidates.observed_stage_generations.extend(
+                canonical
+                    .iter()
+                    .map(|(asset, stage)| (asset, stage.generation())),
+            );
             prims.iter().collect()
         } else {
             let mut entities: Vec<_> = candidates.discovery.drain().collect();
@@ -1746,6 +1918,7 @@ pub fn resolve_member_classes(
             }
             let id = prim.stage_handle.id();
             let Some(stage_asset) = stages.get(&prim.stage_handle) else {
+                candidates.wait_for_stage(id, entity);
                 continue;
             };
             let (reader, _generation) =
@@ -1763,7 +1936,9 @@ pub fn resolve_member_classes(
                 continue;
             };
             let mut source_assets = HashSet::new();
+            let mut member_paths = HashSet::new();
             for member in members {
+                member_paths.insert(member.to_string());
                 if !view.has_api_schema(&member, "LunCoProgramAPI") {
                     continue;
                 }
@@ -1787,7 +1962,12 @@ pub fn resolve_member_classes(
                 classes.handles.insert(asset.clone(), handle.clone());
                 classes.pending.insert(asset, handle);
             }
-            class_users.replace_root_assets(entity, source_assets);
+            let canonical_paths = instance_projection.is_none().then(|| DomainRootPaths {
+                stage_id: id,
+                root_path: prim.path.clone(),
+                member_paths,
+            });
+            class_users.replace_root_facts(entity, source_assets, canonical_paths);
             candidates.projection.insert(entity);
         }
     }
@@ -1886,11 +2066,12 @@ mod tests {
         let mut users = DomainClassUsers::default();
         let motor = Entity::from_bits(1);
         let battery = Entity::from_bits(2);
-        users.replace_root_assets(
+        users.replace_root_facts(
             motor,
             HashSet::from(["motor.mo".to_string(), "battery.mo".to_string()]),
+            None,
         );
-        users.replace_root_assets(battery, HashSet::from(["battery.mo".to_string()]));
+        users.replace_root_facts(battery, HashSet::from(["battery.mo".to_string()]), None);
 
         assert_eq!(users.roots_by_asset["motor.mo"], HashSet::from([motor]));
         assert_eq!(
@@ -1898,7 +2079,7 @@ mod tests {
             HashSet::from([motor, battery])
         );
 
-        users.replace_root_assets(motor, HashSet::from(["motor.mo".to_string()]));
+        users.replace_root_facts(motor, HashSet::from(["motor.mo".to_string()]), None);
         assert_eq!(users.roots_by_asset["battery.mo"], HashSet::from([battery]));
 
         users.remove_root(motor);
@@ -1907,12 +2088,109 @@ mod tests {
     }
 
     #[test]
+    fn scene_change_paths_invalidate_only_intersecting_canonical_roots() {
+        let stage = AssetId::<UsdStageAsset>::default();
+        let other_stage = AssetId::Uuid {
+            uuid: bevy::asset::uuid::Uuid::from_u128(7),
+        };
+        let network_a = Entity::from_bits(20);
+        let network_b = Entity::from_bits(21);
+        let mut users = DomainClassUsers::default();
+        users.replace_root_facts(
+            network_a,
+            HashSet::from(["motor.mo".to_string()]),
+            Some(DomainRootPaths {
+                stage_id: stage,
+                root_path: "/World/NetworkA".into(),
+                member_paths: HashSet::from(["/Library/Motor".into()]),
+            }),
+        );
+        users.replace_root_facts(
+            network_b,
+            HashSet::from(["battery.mo".to_string()]),
+            Some(DomainRootPaths {
+                stage_id: stage,
+                root_path: "/World/NetworkB".into(),
+                member_paths: HashSet::from(["/Library/Battery".into()]),
+            }),
+        );
+        users.replace_root_facts(
+            Entity::from_bits(22),
+            HashSet::new(),
+            Some(DomainRootPaths {
+                stage_id: other_stage,
+                root_path: "/World/NetworkA".into(),
+                member_paths: HashSet::from(["/Library/Motor".into()]),
+            }),
+        );
+
+        let mut affected = HashSet::new();
+        users.extend_roots_affected_by_resync(
+            stage,
+            "/World/NetworkA/Components/NewMotor",
+            &mut affected,
+        );
+        assert_eq!(affected, HashSet::from([network_a]));
+        affected.clear();
+        users.extend_roots_affected_by_info(stage, "/Library/Motor", &mut affected);
+        assert_eq!(affected, HashSet::from([network_a]));
+        affected.clear();
+        users.extend_roots_affected_by_info(stage, "/World/NetworkA/Visual", &mut affected);
+        assert!(affected.is_empty());
+        users.extend_roots_affected_by_resync(
+            stage,
+            "/World/NetworkAB/Components/NewMotor",
+            &mut affected,
+        );
+        users.extend_roots_affected_by_info(stage, "/Library/Motorcycle", &mut affected);
+        assert!(affected.is_empty());
+        users.extend_roots_affected_by_resync(
+            other_stage,
+            "/World/NetworkA/Components/NewMotor",
+            &mut affected,
+        );
+        assert!(affected.contains(&Entity::from_bits(22)));
+        affected.clear();
+        users.extend_roots_for_stage(stage, &mut affected);
+        assert_eq!(affected, HashSet::from([network_a, network_b]));
+    }
+
+    #[test]
+    fn removing_assetless_domain_root_retires_its_stage_path_index() {
+        let stage = AssetId::<UsdStageAsset>::default();
+        let root = Entity::from_bits(23);
+        let mut users = DomainClassUsers::default();
+        users.replace_root_facts(
+            root,
+            HashSet::new(),
+            Some(DomainRootPaths {
+                stage_id: stage,
+                root_path: "/World/Network".into(),
+                member_paths: HashSet::new(),
+            }),
+        );
+
+        users.remove_root(root);
+
+        let mut affected = HashSet::new();
+        users.extend_roots_affected_by_resync(
+            stage,
+            "/World/Network/Components/New",
+            &mut affected,
+        );
+        assert!(affected.is_empty());
+        users.extend_roots_for_stage(stage, &mut affected);
+        assert!(affected.is_empty());
+    }
+
+    #[test]
     fn domain_projection_waits_for_every_member_class_verdict() {
         let root = Entity::from_bits(3);
         let mut users = DomainClassUsers::default();
-        users.replace_root_assets(
+        users.replace_root_facts(
             root,
             HashSet::from(["motor.mo".to_string(), "battery.mo".to_string()]),
+            None,
         );
         let mut classes = MemberClasses::default();
 
@@ -1924,25 +2202,36 @@ mod tests {
     }
 
     #[test]
-    fn full_domain_discovery_tracks_canonical_stage_generations() {
+    fn stage_generation_cursor_detects_missed_change_batches() {
         let asset = AssetId::<UsdStageAsset>::default();
-        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
-            "domain.usda",
-            "#usda 1.0\ndef Xform \"Root\" {}\n",
-        );
-        let mut stages = CanonicalStages::default();
-        stages.insert(
-            asset,
-            CanonicalStage::from_recipe(&recipe).expect("canonical stage builds"),
-        );
         let mut candidates = PendingDomainProjectionCandidates::default();
+        candidates.initial_discovery = false;
+        candidates.observed_stage_generations.insert(asset, 0);
 
-        assert!(candidates.observe_canonical_stage_generations(&stages));
-        assert!(!candidates.observe_canonical_stage_generations(&stages));
+        assert!(!candidates.observe_stage_generation(asset, 1));
+        assert!(!candidates.observe_stage_generation(asset, 2));
+        assert!(candidates.observe_stage_generation(asset, 4));
+    }
 
-        assert!(stages.rebuild(asset, &recipe));
-        assert!(candidates.observe_canonical_stage_generations(&stages));
-        assert!(!candidates.observe_canonical_stage_generations(&stages));
+    #[test]
+    fn stage_readiness_requeues_only_entities_waiting_on_that_asset() {
+        let stage_a = AssetId::<UsdStageAsset>::default();
+        let stage_b = AssetId::Uuid {
+            uuid: bevy::asset::uuid::Uuid::from_u128(8),
+        };
+        let entity_a = Entity::from_bits(24);
+        let entity_b = Entity::from_bits(25);
+        let mut candidates = PendingDomainProjectionCandidates::default();
+        candidates.wait_for_stage(stage_a, entity_a);
+        candidates.wait_for_stage(stage_b, entity_b);
+
+        assert_eq!(
+            candidates.take_stage_waiters(stage_a),
+            HashSet::from([entity_a])
+        );
+        assert!(candidates.take_stage_waiters(stage_a).is_empty());
+        candidates.forget_entity(entity_b);
+        assert!(candidates.take_stage_waiters(stage_b).is_empty());
     }
 
     #[test]
@@ -1950,11 +2239,20 @@ mod tests {
         let mut app = App::new();
         let root = Entity::from_bits(4);
         let mut users = DomainClassUsers::default();
-        users.replace_root_assets(root, HashSet::from(["motor.mo".to_string()]));
+        users.replace_root_facts(
+            root,
+            HashSet::from(["motor.mo".to_string()]),
+            Some(DomainRootPaths {
+                stage_id: AssetId::default(),
+                root_path: "/World/Network".into(),
+                member_paths: HashSet::from(["/World/Network/Motor".into()]),
+            }),
+        );
         let mut candidates = PendingDomainProjectionCandidates::default();
         candidates.initial_discovery = false;
         candidates.discovery.insert(root);
         candidates.projection.insert(root);
+        candidates.wait_for_stage(AssetId::default(), root);
         let mut classes = MemberClasses::default();
         classes.declare("motor.mo", "LunCo.Electrical.Motor");
 
@@ -1968,9 +2266,12 @@ mod tests {
         let users = app.world().resource::<DomainClassUsers>();
         assert!(users.roots_by_asset.is_empty());
         assert!(users.assets_by_root.is_empty());
+        assert!(users.roots_by_stage.is_empty());
+        assert!(users.paths_by_root.is_empty());
         let candidates = app.world().resource::<PendingDomainProjectionCandidates>();
         assert!(candidates.discovery.is_empty());
         assert!(candidates.projection.is_empty());
+        assert!(candidates.waiting_for_stage.is_empty());
         assert!(candidates.initial_discovery);
         assert!(app
             .world()
@@ -1989,6 +2290,7 @@ mod tests {
         app.insert_resource(PendingDomainProjectionCandidates {
             discovery: HashSet::new(),
             projection: HashSet::new(),
+            waiting_for_stage: HashMap::new(),
             initial_discovery: false,
             observed_stage_generations: HashMap::new(),
         })

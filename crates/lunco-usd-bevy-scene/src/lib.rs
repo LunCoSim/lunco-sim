@@ -150,17 +150,22 @@ pub struct UsdSceneProjectionReset {
     pub entity: Entity,
 }
 
-/// Publishes the prim paths whose authored, non-structural USD properties
-/// changed during one live-stage projection pass.
+/// Publishes one coalesced live-stage change batch after its ECS projection.
 ///
-/// Domain projectors consume this boundary when an edit is cheaper to apply in
-/// place than to rebuild through the generic subtree refresh path.
+/// Consumers use the owning prim paths to invalidate only derived facts that
+/// depend on those paths. The generation identifies the canonical composed
+/// view that the batch reconciled; it is not itself a request for a whole-stage
+/// scan.
 #[derive(Message, Debug, Clone)]
-pub struct UsdSceneInfoChanged {
-    /// Stage whose composed view contains the changed prims.
+pub struct UsdSceneChangeBatch {
+    /// Stage whose composed view was reconciled.
     pub stage_id: AssetId<UsdStageAsset>,
-    /// Prim paths that received authored property changes.
-    pub prim_paths: Vec<String>,
+    /// Canonical stage generation projected by this batch.
+    pub stage_generation: u64,
+    /// Structurally resynced prim paths, including composed dependents.
+    pub resynced_prim_paths: Vec<String>,
+    /// Owning prim paths for authored, non-structural property changes.
+    pub info_prim_paths: Vec<String>,
 }
 
 /// Boundary after the USD asset has been synchronized into the live ECS scene.

@@ -200,9 +200,12 @@ scope those projections.
 
 Generated Modelica domain projection follows the same ownership and change
 set rule: apply the shared `is_domain_network_root` predicate before selecting
-a synthesizer, then use Bevy identity change detection to revisit only changed
-prim entities. Reserve the full root pass for a USD wiring or member-source
-invalidation. Do not add a second stage scan or a name-based candidate list.
+a synthesizer, then revisit only queued root entities. Live USD changes arrive
+as typed `UsdSceneChangeBatch` path sets and are routed through the canonical
+stage/root/member reverse index; stage-asset changes and generation gaps only
+requeue roots on that stage. Reserve the all-prim pass for initial discovery.
+Do not use the USD wiring latch as a membership signal, add a second stage scan,
+or use a name-based candidate list.
 The generated-source browser/API projection has its own source/document
 invalidation boundary. Do not gate it on live `ModelicaModel` output or clock
 changes; those are solver state and must stay in the Modelica runtime owner.

@@ -54,7 +54,7 @@ use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_render::{RenderQualityProfile, RenderingQualitySettings, SceneCamera};
-use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneInfoChanged};
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
 use lunco_usd_bevy_stage::canonical::CanonicalStages;
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use openusd::schemas::lux::tokens as ltok;
@@ -161,8 +161,8 @@ pub struct DomePlugin;
 
 impl Plugin for DomePlugin {
     fn build(&self, app: &mut App) {
+        app.add_message::<UsdSceneChangeBatch>();
         app.init_resource::<RenderingQualitySettings>();
-        app.add_message::<UsdSceneInfoChanged>();
         app.add_systems(
             Update,
             (
@@ -176,15 +176,15 @@ impl Plugin for DomePlugin {
     }
 }
 
-/// Consume the generic live-stage info boundary and apply authored dome
+/// Consume info paths from the generic live-stage batch and apply authored dome
 /// changes through the light-owned reader and entity state.
 fn refresh_domes_from_scene_info(
-    mut changes: MessageReader<UsdSceneInfoChanged>,
+    mut changes: MessageReader<UsdSceneChangeBatch>,
     mut commands: Commands,
 ) {
     for change in changes.read() {
         let stage_id = change.stage_id;
-        let paths = change.prim_paths.clone();
+        let paths = change.info_prim_paths.clone();
         commands.queue(move |world: &mut World| refresh_domes_live(world, stage_id, &paths));
     }
 }

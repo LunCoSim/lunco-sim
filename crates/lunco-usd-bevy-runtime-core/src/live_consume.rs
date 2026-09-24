@@ -14,7 +14,7 @@
 //! `twin_projection`; ordinary authored route edits use the incremental path.
 
 use bevy::prelude::*;
-use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneInfoChanged};
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::Path as SdfPath;
@@ -77,6 +77,26 @@ pub(crate) fn queue_stage_projection(
 fn remove_pending_stage_projection(world: &mut World, stage_id: AssetId<UsdStageAsset>) {
     if let Some(mut pending) = world.get_resource_mut::<PendingStageProjections>() {
         pending.stages.remove(&stage_id);
+    }
+}
+
+fn publish_scene_change_batch(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    resynced_prim_paths: Vec<String>,
+    info_prim_paths: Vec<String>,
+) {
+    let generation = world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .and_then(|stages| stages.get(stage_id))
+        .map(|stage| stage.generation());
+    if let Some(stage_generation) = generation {
+        world.write_message(UsdSceneChangeBatch {
+            stage_id,
+            stage_generation,
+            resynced_prim_paths,
+            info_prim_paths,
+        });
     }
 }
 
@@ -401,6 +421,16 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         resynced.dedup();
         info_only.sort();
         info_only.dedup();
+        let mut info_prim_paths: Vec<String> = info_only
+            .iter()
+            .map(|path| {
+                path.split_once('.')
+                    .map_or(path.as_str(), |(prim, _)| prim)
+                    .to_string()
+            })
+            .collect();
+        info_prim_paths.sort();
+        info_prim_paths.dedup();
         input_defaults_changed |= authored_input_defaults_changed(&info_only);
         for path in &info_only {
             if let Some((prim_path, attribute)) = path.split_once('.') {
@@ -411,6 +441,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         }
 
         if resynced.is_empty() && info_only.is_empty() && authored_transform_edits.is_empty() {
+            publish_scene_change_batch(world, id, resynced, info_prim_paths);
             if let Some((doc, generation)) = mark_stage_projected(world, id) {
                 publish_stage_projected(world, doc, generation);
                 remove_pending_stage_projection(world, id);
@@ -425,25 +456,12 @@ pub(crate) fn project_stage_changes(world: &mut World) {
             transform_edits.entry(path).or_default().merge(channels);
         }
         apply_transform_edits_live(world, id, &transform_edits);
-        // Publish all changed prim paths so domain projectors can apply their
-        // own cheap in-place updates before the generic subtree refresh below.
-        let mut changed_prim_paths: Vec<String> = info_only
-            .iter()
-            .filter_map(|path| path.split_once('.').map(|(prim, _)| prim.to_string()))
-            .collect();
-        changed_prim_paths.sort();
-        changed_prim_paths.dedup();
-        if !changed_prim_paths.is_empty() {
-            world.write_message(UsdSceneInfoChanged {
-                stage_id: id,
-                prim_paths: changed_prim_paths,
-            });
-        }
         // EVERYTHING ELSE. Any other authored attribute — a colour, a material
         // input, a light's intensity, a radius, `visibility` — re-projects here,
         // so a live edit shows up without reloading the scene.
         refresh_edited_prims_live(world, id, &info_only);
         reconcile_structural_live(world, id, &resynced);
+        publish_scene_change_batch(world, id, resynced, info_prim_paths);
         // The write-side projector has already authored this batch onto the
         // canonical stage. Publish the read-side generation only after this
         // sink batch has been reconciled into the live ECS projection. A query
@@ -725,7 +743,7 @@ mod translate_seat_tests {
 /// - **anything else** — re-instantiate just that prim's subtree.
 ///
 /// `DomeLight`s are excluded: the light projection consumes
-/// [`UsdSceneInfoChanged`] and handles them in place, which keeps the projected
+/// [`UsdSceneChangeBatch`] and handles them in place, which keeps the projected
 /// cubemap when only the intensity or skybox flag moved instead of re-projecting
 /// a 1024² cubemap per edit.
 pub(crate) fn refresh_edited_prims_live(
@@ -1506,20 +1524,11 @@ mod tests {
         );
     }
 
-    /// **The shape of an `info_only` entry.** An attribute edit reports BOTH the
-    /// owning prim path (`/World/Ball`) and the property path
-    /// (`/World/Ball.primvars:displayColor`).
-    ///
-    /// Pinned by a test because the live-edit bridge depends on both halves and
-    /// they are easy to assume away in either direction:
-    /// - the prim path is what [`apply_transform_edits_live`] matches on (drop it and
-    ///   gizmo moves stop projecting);
-    /// - the property path is what names the CHANGED ATTRIBUTE, which is the only
-    ///   way [`refresh_edited_prims_live`] can tell "the colour moved, re-project
-    ///   the look" from "it was just a drag, use the cheap transform path".
+    /// Pin the typed scene-change boundary to the live canonical generation and
+    /// owning prim path after the stage edit has been reconciled.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn info_only_reports_both_prim_and_property_paths() {
+    fn scene_change_batch_carries_reconciled_generation_and_info_prim_paths() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
         use lunco_usd_bevy_stage::canonical::CanonicalStages;
@@ -1528,7 +1537,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
-            .init_non_send::<CanonicalStages>();
+            .init_non_send::<CanonicalStages>()
+            .add_message::<UsdSceneChangeBatch>();
 
         let recipe = StageRecipe::from_source("scene.usda", TINY);
         let handle = app
@@ -1564,32 +1574,22 @@ mod tests {
                 .unwrap();
         }
 
-        let batches = app
-            .world_mut()
-            .non_send_mut::<CanonicalStages>()
-            .drain_all_changes();
-        let paths: Vec<String> = batches
-            .into_iter()
-            .flat_map(|(_, cs)| cs)
-            .flat_map(|c| {
-                c.info_only
-                    .iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        project_stage_changes(app.world_mut());
+        let batch = app
+            .world()
+            .resource::<Messages<UsdSceneChangeBatch>>()
+            .iter_current_update_messages()
+            .next()
+            .expect("live projection publishes one scene-change batch");
 
         assert!(
-            paths.iter().any(|p| p == "/World/Ball"),
-            "info_only must carry the owning PRIM path (what the transform fast \
-             path matches on). got: {paths:?}"
+            batch.info_prim_paths.iter().any(|p| p == "/World/Ball"),
+            "scene-change batch must carry the owning prim path. got: {:?}",
+            batch.info_prim_paths
         );
         assert!(
-            paths
-                .iter()
-                .any(|p| p == "/World/Ball.primvars:displayColor"),
-            "info_only must carry the PROPERTY path, naming the changed attribute. \
-             got: {paths:?}"
+            batch.stage_generation > 0,
+            "scene-change batch must identify the reconciled canonical generation"
         );
     }
 }

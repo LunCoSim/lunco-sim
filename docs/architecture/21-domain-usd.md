@@ -43,8 +43,9 @@ curve-sweep substrate;
 `lunco-usd-bevy-core` owns the generic runtime projection mechanisms and
 domain-owned live-edit registry;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
-projection ordering boundaries, the generic projection-reset and authored
-info-change messages,
+projection ordering boundaries, the generic projection-reset and coalesced
+`UsdSceneChangeBatch` messages carrying the projected canonical generation,
+resynced paths, and info-changed owning prim paths,
 visual-split markers, authored billboard
 contracts, shared geometry decoding, and composed collision/placement
 envelopes; `lunco-usd-bevy-camera` owns render-free camera
@@ -65,7 +66,7 @@ the complete application plugin composition;
 projection; `lunco-usd-bevy-mesh` owns built-in, native-mesh, curve, and
 NurbsPatch visual mesh projection plus quality invalidation;
 `lunco-usd-bevy-light` owns UsdLux light and dome projection, including live
-refresh from the generic authored info-change message;
+refresh from info paths in the generic stage-change batch;
 `lunco-usd-bevy-animation` owns the render-free time-sample projection;
 `lunco-usd-bevy` owns hierarchy, transform, async projection orchestration, and
 material intent while consuming the camera, light, lathe, and mesh packages
