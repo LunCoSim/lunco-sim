@@ -54,12 +54,12 @@ use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
 use lunco_usd_bevy_scene::{
-    instance_key, is_preview_only, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected,
-    UsdSceneRoot,
+    UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected, UsdSceneRoot, instance_key,
+    is_preview_only,
 };
 use lunco_usd_bevy_stage::{
-    effective_purpose, world_transform, Purpose, TransformReadError, UsdInstanceProjection,
-    UsdInstanceRoot, UsdRead, UsdStageAsset,
+    Purpose, TransformReadError, UsdInstanceProjection, UsdInstanceRoot, UsdRead, UsdStageAsset,
+    effective_purpose, world_transform,
 };
 use openusd::sdf::Path as SdfPath;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
@@ -72,7 +72,7 @@ use lunco_usd_avian_contracts::{
 };
 use lunco_usd_avian_reader::{
     collider::{
-        build_collider_from_usd, collect_child_colliders_from_usd, ColliderProjectionError,
+        ColliderProjectionError, build_collider_from_usd, collect_child_colliders_from_usd,
     },
     joint::{has_rigid_body_ancestor, joint_targets_simulated_wheel, read_joint_spec},
     read_authored_bool_or_default, read_authored_quat, read_authored_real, read_authored_vec3,
@@ -654,15 +654,27 @@ fn add_collider_from_usd(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), ColliderProjectionError> {
-    if let Some(collider) = build_collider_from_usd(reader, sdf_path)? {
-        if !lunco_physics::avian_backend_collider_shape_is_valid(&collider) {
+    match build_collider_from_usd(reader, sdf_path)? {
+        Some(collider) => {
+            if !lunco_physics::avian_backend_collider_shape_is_valid(&collider) {
+                return Err(ColliderProjectionError::Backend {
+                    prim: sdf_path.to_string(),
+                    detail: "collider local bounds are not finite, ordered, or f32-representable"
+                        .to_owned(),
+                });
+            }
+            commands.entity(entity).try_insert(collider);
+        }
+        None if reader.has_api_schema(sdf_path, ptok::API_COLLISION) => {
             return Err(ColliderProjectionError::Backend {
                 prim: sdf_path.to_string(),
-                detail: "collider local bounds are not finite, ordered, or f32-representable"
-                    .to_owned(),
+                detail: format!(
+                    "{} has PhysicsCollisionAPI but no supported collider geometry",
+                    sdf_path
+                ),
             });
         }
-        commands.entity(entity).try_insert(collider);
+        None => {}
     }
     Ok(())
 }
@@ -2336,8 +2348,8 @@ mod extract_parity_tests {
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
     use lunco_usd_avian_filters::collision_groups::CollisionGroupTable;
-    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_bevy_stage::StageView;
+    use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
@@ -3586,12 +3598,16 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let lander = SdfPath::new("/Mission/BareLander").unwrap();
         let view = cs.view();
-        assert!(collect_child_colliders_from_usd(&view, &lander)
-            .expect("valid transforms")
-            .is_empty());
-        assert!(build_collider_from_usd(&view, &lander)
-            .expect("valid transform")
-            .is_some());
+        assert!(
+            collect_child_colliders_from_usd(&view, &lander)
+                .expect("valid transforms")
+                .is_empty()
+        );
+        assert!(
+            build_collider_from_usd(&view, &lander)
+                .expect("valid transform")
+                .is_some()
+        );
         let (has_collider, _) = extract(&view, "/Mission/BareLander");
         assert!(
             has_collider,
@@ -3681,8 +3697,8 @@ def Cube "Part" (
             2,
             "live composition must keep root and child shapes"
         );
-        assert_eq!(live_shapes[0].0 .0, DVec3::ZERO);
-        assert_eq!(live_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(live_shapes[0].0.0, DVec3::ZERO);
+        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
 
         let child_recipe = StageRecipe::new(
             "child.usda",
@@ -3702,8 +3718,8 @@ def Cube "Part" (
             2,
             "prepared composition must keep root and child shapes"
         );
-        assert_eq!(prepared_shapes[0].0 .0, DVec3::ZERO);
-        assert_eq!(prepared_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(prepared_shapes[0].0.0, DVec3::ZERO);
+        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
     }
 
     #[test]

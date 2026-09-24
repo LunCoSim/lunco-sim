@@ -8,12 +8,12 @@
 
 use bevy::prelude::{Quat, Transform, Vec3};
 use lunco_usd_bevy_stage::{
-    effective_purpose, local_transform_at, Purpose, StageView, UsdReadObject,
+    Purpose, StageView, UsdReadObject, effective_purpose, local_transform_at,
 };
 use openusd::sdf::Path as SdfPath;
 
 use crate::{
-    read_primitive_axis, read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims,
+    ShapeDims, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat,
 };
 
 /// Small gap (metres) left between an asset's lowest collision point and the
@@ -191,11 +191,12 @@ pub fn prim_collision_geometry(
     }
     match UsdReadObject::boolean(reader, &path, "physics:collisionEnabled") {
         Some(false) => return Ok(None),
-        Some(true) | None if !UsdReadObject::has_authored_attribute(
-            reader,
-            &path,
-            "physics:collisionEnabled",
-        ) => {}
+        Some(true) | None
+            if !UsdReadObject::has_authored_attribute(
+                reader,
+                &path,
+                "physics:collisionEnabled",
+            ) => {}
         Some(true) => {}
         None => {
             return Err(CollisionAabbError::InvalidCollisionEnabled {
@@ -377,9 +378,12 @@ fn local_shape_corners(
         ),
     };
     let axis_q = if axial {
-        read_primitive_axis(reader, path, ty)
-            .and_then(|axis| usd_axis_to_quat(&axis))
-            .unwrap_or(Quat::IDENTITY)
+        let axis = read_primitive_axis(reader, path, ty)?;
+        match axis.as_str() {
+            "Y" => Quat::IDENTITY,
+            "X" | "Z" => usd_axis_to_quat(&axis)?,
+            _ => return None,
+        }
     } else {
         Quat::IDENTITY
     };
