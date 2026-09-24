@@ -422,6 +422,13 @@ coalesced to the bounded exposure cadence (`EXPOSURE_UPDATE_HZ`, currently
 is the latter. `EngineExposures.revision` advances only when a visibility flag
 or value actually changes; it is not a frame counter.
 
+The runtime-surface producer keeps authored USD metadata behind its existing
+active-root and `UsdStageRevision` cache. That includes surface membership,
+program source metadata, and per-participant declared public output names.
+Simulation status, telemetry, participant outputs, and Rhai policy results
+remain live at the bounded publication cadence. Do not reread composed USD to
+rebuild those static facts on each publication or add a second revision owner.
+
 The render-world readiness acknowledgement keeps its derived set of visible
 required namespaces at that same revision boundary. Stable frames therefore
 reuse the set while still querying live `RuntimeUiSurface` roots and extracted

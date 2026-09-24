@@ -135,8 +135,11 @@ values are coalesced to the current bounded presentation cadence (20 Hz).
 it is not a frame counter. Do not use JSON to detect internal changes.
 When one producer owns several surfaces, keep invalidation domains separate so
 continuous motion does not rebuild static authored topology. Use the existing
-authoritative stage revision for USD-derived membership and cache only that
-derived membership; do not rescan all prims or add a second source registry.
+authoritative stage revision for USD-derived membership and cache that
+membership plus static authored metadata such as program source facts and
+declared public-output names. Do not reread those facts at publication cadence,
+rescan all prims, or add a second revision/source registry. Keep simulation
+status, telemetry, outputs, and Rhai policy results live.
 
 For camera status, Rust publishes the current camera fact and compact label
 through the generic exposure namespace. The shared
