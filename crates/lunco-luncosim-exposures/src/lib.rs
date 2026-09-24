@@ -24,7 +24,7 @@ use lunco_core_runtime::{ApplicationCadence, EngineHealthSnapshot, PhysicsHealth
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_exposure_core::{
-    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
+    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
 };
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
@@ -33,7 +33,7 @@ use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use lunco_usd_bevy_stage::read::UsdReadObject;
-use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
+use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
@@ -316,6 +316,8 @@ fn runtime_ui_facts(
     control_owner: &str,
     control_claimed: bool,
     visibility_mode: &str,
+    authored_programs: &[AuthoredRuntimeProgram],
+    public_output_names: &mut HashMap<Entity, Option<HashSet<String>>>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
@@ -347,7 +349,7 @@ fn runtime_ui_facts(
     let root_path = root
         .and_then(|root| q_paths.get(root).ok())
         .map(|(_, path)| path.path.clone());
-    let programs = authored_program_facts(root_path.as_deref(), q_sim, q_paths, stages, canonical);
+    let programs = runtime_program_facts(authored_programs, q_sim);
     // A generic subject may expose command inputs through the map-backed
     // `InputPorts` surface, a simulation participant's `SimComponent`, or
     // both. Present one merged typed input fact to Rhai so a policy does not
@@ -421,15 +423,19 @@ fn runtime_ui_facts(
         })
         .unwrap_or_else(|| HookValue::Array(Vec::new()));
 
-    let mut participants = q_sim
-        .iter()
-        .filter(|(entity, _)| root.is_some_and(|root| is_owned_by_vessel(*entity, root, q_parents)))
-        .map(|(entity, sim)| {
+    let mut participants = Vec::new();
+    if let Some(root) = root {
+        for (entity, sim) in q_sim.iter() {
+            if !is_owned_by_vessel(entity, root, q_parents) {
+                continue;
+            }
             let path = q_paths
                 .get(entity)
                 .map(|(_, path)| path.path.clone())
                 .unwrap_or_default();
-            let public_names = authored_output_names(entity, q_paths, stages, canonical);
+            let public_names = cached_public_output_names(public_output_names, entity, || {
+                authored_output_names(entity, q_paths, stages, canonical)
+            });
             let outputs = sim
                 .outputs
                 .iter()
@@ -438,11 +444,7 @@ fn runtime_ui_facts(
             let public_outputs = sim
                 .outputs
                 .iter()
-                .filter(|(name, _)| {
-                    public_names
-                        .as_ref()
-                        .is_some_and(|names| names.contains(*name))
-                })
+                .filter(|(name, _)| public_names.is_some_and(|names| names.contains(*name)))
                 .map(|(name, value)| (name.clone(), HookValue::Float(*value)))
                 .collect::<Vec<_>>();
             let (status, error) = sim_status_facts(&sim.status);
@@ -451,7 +453,7 @@ fn runtime_ui_facts(
                 .ok()
                 .map(|gid| HookValue::Int(gid.get() as i64))
                 .unwrap_or(HookValue::Unit);
-            (
+            participants.push((
                 path.clone(),
                 HookValue::map([
                     ("entity_gid", gid),
@@ -463,9 +465,9 @@ fn runtime_ui_facts(
                     ("outputs", HookValue::Map(outputs)),
                     ("public_outputs", HookValue::Map(public_outputs)),
                 ]),
-            )
-        })
-        .collect::<Vec<_>>();
+            ));
+        }
+    }
     participants.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     let telemetry = telemetry
@@ -520,86 +522,32 @@ fn runtime_ui_facts(
     ])
 }
 
-/// Read the generic executable programs directly authored below one surface
-/// root. This is presentation data only: source selection and program edits
-/// remain Rhai/typed-USD operations, while the runtime bridge merely exposes a
-/// bounded, model-neutral snapshot for any HUD or remote client.
-fn authored_program_facts(
-    root_path: Option<&str>,
+/// Project cached authored program metadata together with the program's live
+/// simulation status. USD reads happen only when the active-stage revision
+/// refreshes the owning runtime-surface cache.
+fn runtime_program_facts(
+    authored_programs: &[AuthoredRuntimeProgram],
     q_sim: &Query<(Entity, &SimComponent)>,
-    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
-    stages: &Assets<UsdStageAsset>,
-    canonical: &CanonicalStages,
 ) -> Vec<HookValue> {
-    let Some(root_path) = root_path else {
-        return Vec::new();
-    };
-    let Some((_, root_prim)) = q_paths.iter().find(|(_, path)| path.path == root_path) else {
-        return Vec::new();
-    };
-    let Some(stage_asset) = stages.get(&root_prim.stage_handle) else {
-        return Vec::new();
-    };
-    let (reader, _) = canonical.reader_for(root_prim.stage_handle.id(), stage_asset);
-    let reader: &dyn UsdReadObject = &reader;
-    let Ok(root) = SdfPath::new(root_path) else {
-        return Vec::new();
-    };
-    // A surface may own programs directly, or bind them through the generic
-    // USD `programs` relationship. The latter keeps programs in a
-    // separate authored route/program asset while preserving a dynamic HUD.
-    let mut program_paths = reader
-        .children(&root)
-        .into_iter()
-        .filter(|path| reader.has_api_schema(path, "LunCoProgramAPI"))
-        .collect::<Vec<_>>();
-    for path in reader.rel_targets(&root, "programs") {
-        if !program_paths.iter().any(|candidate| candidate == &path)
-            && reader.has_api_schema(&path, "LunCoProgramAPI")
-        {
-            program_paths.push(path);
-        }
-    }
-    let mut programs = program_paths
-        .into_iter()
-        .map(|path| {
-            let path_text = path.as_str().to_owned();
-            let status = q_sim
-                .iter()
-                .find(|(entity, _)| {
-                    q_paths
-                        .get(*entity)
-                        .is_ok_and(|(_, prim)| prim.path == path_text)
-                })
+    authored_programs
+        .iter()
+        .map(|program| {
+            let status = program
+                .entity
+                .and_then(|entity| q_sim.get(entity).ok())
                 .map(|(_, sim)| sim_status_facts(&sim.status).0)
                 .unwrap_or_else(|| "authored".to_owned());
-            let facts = HookValue::map([
-                ("path", HookValue::str(path_text.clone())),
+            HookValue::map([
+                ("path", HookValue::str(program.path.clone())),
                 (
                     "implementation_source",
-                    HookValue::str(
-                        reader
-                            .text(&path, "info:implementationSource")
-                            .unwrap_or_default(),
-                    ),
+                    HookValue::str(program.implementation_source.clone()),
                 ),
-                (
-                    "source",
-                    HookValue::str(
-                        reader
-                            .asset(&path, "info:sourceAsset")
-                            .or_else(|| reader.text(&path, "info:id"))
-                            .or_else(|| reader.text(&path, "info:sourceCode"))
-                            .unwrap_or_default(),
-                    ),
-                ),
+                ("source", HookValue::str(program.source.clone())),
                 ("status", HookValue::str(status)),
-            ]);
-            (path_text, facts)
+            ])
         })
-        .collect::<Vec<_>>();
-    programs.sort_by(|(left, _), (right, _)| left.cmp(right));
-    programs.into_iter().map(|(_, facts)| facts).collect()
+        .collect()
 }
 
 fn scalar_hook_map(values: &HashMap<String, f64>) -> HookValue {
@@ -1235,6 +1183,45 @@ mod exposure_schedule_tests {
 }
 
 #[cfg(test)]
+mod public_output_cache_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn caches_authored_names_and_missing_authored_names() {
+        let mut cache = HashMap::new();
+        let authored_entity = Entity::from_bits(1);
+        let missing_entity = Entity::from_bits(2);
+        let authored_reads = Cell::new(0);
+        let missing_reads = Cell::new(0);
+
+        let names = cached_public_output_names(&mut cache, authored_entity, || {
+            authored_reads.set(authored_reads.get() + 1);
+            Some(HashSet::from(["position".to_owned()]))
+        });
+        assert!(names.is_some_and(|names| names.contains("position")));
+        let names = cached_public_output_names(&mut cache, authored_entity, || {
+            authored_reads.set(authored_reads.get() + 1);
+            None
+        });
+        assert!(names.is_some_and(|names| names.contains("position")));
+        assert_eq!(authored_reads.get(), 1);
+
+        assert!(cached_public_output_names(&mut cache, missing_entity, || {
+            missing_reads.set(missing_reads.get() + 1);
+            None
+        })
+        .is_none());
+        assert!(cached_public_output_names(&mut cache, missing_entity, || {
+            missing_reads.set(missing_reads.get() + 1);
+            Some(HashSet::from(["stale".to_owned()]))
+        })
+        .is_none());
+        assert_eq!(missing_reads.get(), 1);
+    }
+}
+
+#[cfg(test)]
 mod engine_health_exposure_tests {
     use super::*;
 
@@ -1737,6 +1724,12 @@ pub(crate) fn publish_exposure(
             &runtime.stages,
             &runtime.canonical,
         );
+        let RuntimeSurfaceRootCache {
+            roots,
+            public_output_names,
+            retired_surface_ids,
+            ..
+        } = &mut *runtime_surface_roots;
         publish_runtime_surface_exposures(
             &mut runtime.exposures,
             &queries.name,
@@ -1755,13 +1748,14 @@ pub(crate) fn publish_exposure(
             &queries.usd_paths,
             &runtime.stages,
             &runtime.canonical,
-            &runtime_surface_roots.roots,
-            &runtime_surface_roots.retired_surface_ids,
+            roots,
+            public_output_names,
+            retired_surface_ids,
             &runtime.sessions,
             runtime.local_session.0,
             &queries.inputs,
         );
-        runtime_surface_roots.retired_surface_ids.clear();
+        retired_surface_ids.clear();
     }
 
     if update_driven {
@@ -1841,11 +1835,12 @@ pub(crate) fn publish_exposure(
                 }
             }
 
-            if let Some(surface) = runtime_surface_roots
-                .roots
-                .iter()
-                .find(|surface| surface.entity == vessel.entity)
-            {
+            let RuntimeSurfaceRootCache {
+                roots,
+                public_output_names,
+                ..
+            } = &mut *runtime_surface_roots;
+            if let Some(surface) = roots.iter().find(|surface| surface.entity == vessel.entity) {
                 if seminar.current_surface.as_deref() != Some(surface.surface_id.as_str()) {
                     if let Some(previous) =
                         seminar.current_surface.replace(surface.surface_id.clone())
@@ -1875,6 +1870,8 @@ pub(crate) fn publish_exposure(
                     control_owner,
                     control_claimed,
                     &surface.visibility_mode,
+                    &surface.programs,
+                    public_output_names,
                     &queries.name,
                     &queries.callsign,
                     &queries.catalog_id,
@@ -2253,6 +2250,7 @@ pub(crate) struct RuntimeSurfaceRootCache {
     active_root: Option<Entity>,
     initialized: bool,
     roots: Vec<AuthoredRuntimeSurface>,
+    public_output_names: HashMap<Entity, Option<HashSet<String>>>,
     retired_surface_ids: Vec<String>,
 }
 
@@ -2261,6 +2259,15 @@ struct AuthoredRuntimeSurface {
     entity: Entity,
     surface_id: String,
     visibility_mode: String,
+    programs: Vec<AuthoredRuntimeProgram>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AuthoredRuntimeProgram {
+    path: String,
+    entity: Option<Entity>,
+    implementation_source: String,
+    source: String,
 }
 
 impl RuntimeSurfaceRootCache {
@@ -2295,6 +2302,7 @@ impl RuntimeSurfaceRootCache {
         );
         self.roots
             .sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
+        self.public_output_names.clear();
         let current = self
             .roots
             .iter()
@@ -2335,6 +2343,7 @@ fn publish_runtime_surface_exposures(
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     roots: &[AuthoredRuntimeSurface],
+    public_output_names: &mut HashMap<Entity, Option<HashSet<String>>>,
     retired_surface_ids: &[String],
     sessions: &lunco_core_session::SessionRegistry,
     local_session: lunco_command_contracts::SessionId,
@@ -2369,6 +2378,8 @@ fn publish_runtime_surface_exposures(
             control_owner,
             control_claimed,
             &root.visibility_mode,
+            &root.programs,
+            public_output_names,
             &telemetry,
             q_name,
             q_callsign,
@@ -2397,6 +2408,8 @@ fn publish_selected_control_exposure(
     control_owner: &str,
     control_claimed: bool,
     visibility_mode: &str,
+    authored_programs: &[AuthoredRuntimeProgram],
+    public_output_names: &mut HashMap<Entity, Option<HashSet<String>>>,
     telemetry: &[PublicTelemetryValue],
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
@@ -2421,6 +2434,8 @@ fn publish_selected_control_exposure(
         control_owner,
         control_claimed,
         visibility_mode,
+        authored_programs,
+        public_output_names,
         q_name,
         q_callsign,
         q_catalog_id,
@@ -2508,6 +2523,16 @@ fn authored_runtime_surfaces(
             visibility_mode: reader
                 .text(&path, "lunco:ui:visibilityMode")
                 .unwrap_or_else(|| "possessed".to_owned()),
+            programs: authored_runtime_programs(
+                prim_path.stage_handle.id(),
+                reader,
+                &path,
+                q_paths,
+                scene_mount,
+                q_parents,
+                q_scene_roots,
+                q_entities,
+            ),
         });
     }
     roots
@@ -2559,6 +2584,74 @@ fn authored_output_names(
         .filter_map(|name| name.strip_prefix("outputs:").map(str::to_owned))
         .collect::<std::collections::HashSet<_>>();
     (!names.is_empty()).then_some(names)
+}
+
+fn cached_public_output_names<'a>(
+    cache: &'a mut HashMap<Entity, Option<HashSet<String>>>,
+    entity: Entity,
+    load: impl FnOnce() -> Option<HashSet<String>>,
+) -> Option<&'a HashSet<String>> {
+    cache.entry(entity).or_insert_with(load).as_ref()
+}
+
+fn authored_runtime_programs(
+    stage_id: AssetId<UsdStageAsset>,
+    reader: &dyn UsdReadObject,
+    root: &SdfPath,
+    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
+    scene_mount: &SceneMountState,
+    q_parents: &Query<&ChildOf>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+    q_entities: &Query<Entity>,
+) -> Vec<AuthoredRuntimeProgram> {
+    // A surface may own programs directly, or bind them through the generic
+    // USD `programs` relationship. The latter keeps programs in a separate
+    // authored route/program asset while preserving a dynamic HUD.
+    let mut program_paths = reader
+        .children(root)
+        .into_iter()
+        .filter(|path| reader.has_api_schema(path, "LunCoProgramAPI"))
+        .collect::<Vec<_>>();
+    for path in reader.rel_targets(root, "programs") {
+        if !program_paths.iter().any(|candidate| candidate == &path)
+            && reader.has_api_schema(&path, "LunCoProgramAPI")
+        {
+            program_paths.push(path);
+        }
+    }
+
+    let mut program_entities = HashMap::new();
+    for (entity, prim) in q_paths.iter() {
+        if prim.stage_handle.id() == stage_id
+            && is_active_scene_entity(entity, scene_mount, q_parents, q_scene_roots, q_entities)
+        {
+            program_entities.entry(prim.path.clone()).or_insert(entity);
+        }
+    }
+
+    let mut programs = program_paths
+        .into_iter()
+        .map(|path| {
+            let path_text = path.as_str().to_owned();
+            let implementation_source = reader
+                .text(&path, "info:implementationSource")
+                .unwrap_or_default();
+            let source = reader
+                .asset(&path, "info:sourceAsset")
+                .or_else(|| reader.text(&path, "info:id"))
+                .or_else(|| reader.text(&path, "info:sourceCode"))
+                .unwrap_or_default();
+            let entity = program_entities.get(&path_text).copied();
+            AuthoredRuntimeProgram {
+                path: path_text,
+                entity,
+                implementation_source,
+                source,
+            }
+        })
+        .collect::<Vec<_>>();
+    programs.sort_by(|left, right| left.path.cmp(&right.path));
+    programs
 }
 
 fn publish_runtime_overlay_exposures(
