@@ -2521,6 +2521,8 @@ fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::camera::NormalizedRenderTarget;
+    use bevy::picking::pointer::{Location, PointerId};
     use lunco_workbench_core::scene_pick::EguiPointerState;
 
     #[test]
@@ -2705,6 +2707,88 @@ mod tests {
 
         assert_eq!(dragged.min, egui::pos2(516.0, 489.0));
         assert_eq!(dragged.size(), egui::vec2(224.0, 184.0));
+    }
+
+    #[test]
+    fn drag_from_retained_child_moves_its_draggable_surface_root() {
+        let mut app = App::new();
+        app.add_message::<RuntimeUiSurfaceDragged>()
+            .add_message::<RuntimeUiSurfaceReset>()
+            .init_resource::<RuntimeSurfaceLayouts>()
+            .add_systems(Update, apply_runtime_ui_surface_interactions);
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+
+        let root = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                RuntimeUiSurface {
+                    layout_id: "view-switcher".to_owned(),
+                    namespace: "view-switcher".to_owned(),
+                    template: Handle::default(),
+                    stylesheet: Handle::default(),
+                    bindings: HashMap::new(),
+                    collections: Vec::new(),
+                    visible_in_perspective: None,
+                    gate: None,
+                    setting: None,
+                    setting_default: false,
+                    interactive: true,
+                    modal: false,
+                    dismiss_action: None,
+                    draggable: true,
+                    mounted: true,
+                    presentation_ready: false,
+                    presentation_visible: false,
+                    presentation_generation: 0,
+                    placement: RuntimeUiPlacement::Window {
+                        anchor: RuntimeUiWindowAnchor::TopCenter,
+                        offset: Vec2::ZERO,
+                        width: 200.0,
+                        height: 100.0,
+                    },
+                    applied_revision: 0,
+                    applied_placement: Some(ResolvedRuntimeUiPlacement {
+                        rect: egui::Rect::from_min_size(
+                            egui::pos2(10.0, 20.0),
+                            egui::vec2(200.0, 100.0),
+                        ),
+                    }),
+                },
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(root)
+            .observe(emit_runtime_ui_surface_drag);
+        let button = app.world_mut().spawn(ChildOf(root)).id();
+
+        app.world_mut().trigger(Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: NormalizedRenderTarget::None {
+                    width: 0,
+                    height: 0,
+                },
+                position: Vec2::ZERO,
+            },
+            Drag {
+                button: PointerButton::Primary,
+                distance: Vec2::new(12.0, 18.0),
+                delta: Vec2::new(12.0, 18.0),
+            },
+            button,
+        ));
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<RuntimeSurfaceLayouts>()
+                .get("view-switcher"),
+            Some(RuntimeSurfaceLayout {
+                left: 22.0,
+                top: 38.0,
+            })
+        );
     }
 
     #[test]
