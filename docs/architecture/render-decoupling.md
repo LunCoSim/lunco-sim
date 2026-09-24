@@ -324,6 +324,12 @@ Not everything visual is *appearance*. Three things had no honest intent represe
 - **Terrain map source reconciliation** remains a render-free `ShaderLook` update in
   `lunco-terrain-surface`; this crate only turns that intent into a GPU material.
 
+For non-terrain shader materials, the same binder performs a full material pass
+only on initial binding, when the sun becomes available/unavailable, or when its
+direction or angular radius crosses the existing uniform tolerance. Between those
+changes it visits only newly added or reassigned material bindings. This changes
+CPU-side discovery work, not the shader values or terrain quality settings.
+
 Screenshots do **not** live there either.
 `CaptureScreenshot` needs `bevy_render`, and that dependency sat inside **`lunco-api`** behind a
 `render` feature that was **on by default**. So render-free was the *non-default* path, every consumer

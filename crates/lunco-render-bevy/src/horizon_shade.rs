@@ -433,61 +433,110 @@ pub fn wire_terrain_materials(
 ///
 /// Terrain is EXCLUDED (`Without<HorizonMap>`) — it is already written above,
 /// with the local-space `sun_dir` this system has no business computing.
+// The memo remains private; consumers install the public system as a whole.
+#[allow(private_interfaces)]
 pub fn wire_sun_for_non_terrain_materials(
     sun: SunQuery,
     render_sun: Option<Res<SunRenderState>>,
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     meshes: Query<&MeshMaterial3d<ShaderMaterial>, (Without<HorizonMap>, Without<RenderLayers>)>,
+    changed_meshes: Query<
+        &MeshMaterial3d<ShaderMaterial>,
+        (
+            Changed<MeshMaterial3d<ShaderMaterial>>,
+            Without<HorizonMap>,
+            Without<RenderLayers>,
+        ),
+    >,
+    mut binding_state: Local<NonTerrainSunBindingState>,
 ) {
     let Some(mut shader_mats) = shader_mats else {
         return;
     };
-    let Some((_, tan_r, _csm_far)) = pick_sun(&sun) else {
-        for handle in &meshes {
-            clear_sun_material(&mut shader_mats, handle);
-        }
-        return;
-    };
-    let Some(to_sun_world) = render_sun
-        .as_deref()
-        .and_then(|state| state.direction_to_sun_world)
-    else {
-        for handle in &meshes {
-            clear_sun_material(&mut shader_mats, handle);
-        }
-        return;
-    };
-    let sun_dir_world = ParamValue::Vec3([to_sun_world.x, to_sun_world.y, to_sun_world.z]);
+    let next = pick_sun(&sun).and_then(|(_, tan_radius, _)| {
+        render_sun
+            .as_deref()
+            .and_then(|state| state.direction_to_sun_world)
+            .map(|direction| NonTerrainSunUniform {
+                direction,
+                tan_radius,
+            })
+    });
 
-    // Shared materials already handled this run. Batching means MANY meshes share
-    // one `ShaderMaterial` (that is the point of the look cache), so without this
-    // the same shared asset is compared — and, on a sun move, repacked — once per
-    // ENTITY instead of once per ASSET. Same guard as
-    // `rebind_changed_shader_look`'s `written` set.
+    // Accumulate motion against the last fully applied value, not the previous
+    // frame. This retains the material-space tolerance while avoiding a full
+    // mesh query and per-frame de-duplication below it. Changed/new bindings are
+    // still initialized immediately.
+    if binding_state.requires_full_refresh(next) {
+        wire_non_terrain_sun_uniforms(&mut shader_mats, &meshes, next);
+        binding_state.publish(next);
+    } else {
+        wire_non_terrain_sun_uniforms(&mut shader_mats, &changed_meshes, next);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct NonTerrainSunUniform {
+    direction: Vec3,
+    tan_radius: f32,
+}
+
+#[derive(Default)]
+struct NonTerrainSunBindingState {
+    applied: Option<NonTerrainSunUniform>,
+    initialized: bool,
+}
+
+impl NonTerrainSunBindingState {
+    fn requires_full_refresh(&self, next: Option<NonTerrainSunUniform>) -> bool {
+        if !self.initialized {
+            return true;
+        }
+        match (self.applied, next) {
+            (Some(applied), Some(next)) => {
+                (applied.direction - next.direction).length() > SUN_DIR_EPSILON
+                    || (applied.tan_radius - next.tan_radius).abs() > 1.0e-6
+            }
+            (None, None) => false,
+            _ => true,
+        }
+    }
+
+    fn publish(&mut self, applied: Option<NonTerrainSunUniform>) {
+        self.applied = applied;
+        self.initialized = true;
+    }
+}
+
+fn wire_non_terrain_sun_uniforms<'a>(
+    shader_mats: &mut Assets<ShaderMaterial>,
+    meshes: impl IntoIterator<Item = &'a MeshMaterial3d<ShaderMaterial>>,
+    sun: Option<NonTerrainSunUniform>,
+) {
     let mut written: HashSet<AssetId<ShaderMaterial>> = HashSet::default();
-
-    for handle in &meshes {
+    for handle in meshes {
         if !written.insert(handle.0.id()) {
             continue;
         }
-        // Compare before `get_mut`, or every frame re-uploads the asset (MAT-3).
-        //
-        // Compare via `get_vec3`, not `get_vec4`. `sun_dir_world` is written as a
-        // `Vec3`, and `get_vec4` matches only `ParamValue::Vec4` — so it answers
-        // `None` for a value that is present and correct, `needs` is always true,
-        // and the asset is re-uploaded every frame. `SUN_DIR_EPSILON` for the same
-        // reason as the terrain path above: an exact compare only stays quiet while
-        // the sun is parked, and re-enters the per-frame repack as soon as the
-        // simulation epoch moves it.
-        let needs = shader_mats.get(&handle.0).is_some_and(|m| {
-            m.get_vec3("sun_dir_world")
-                .is_none_or(|v| (v - to_sun_world).length() > SUN_DIR_EPSILON)
+        let Some(sun) = sun else {
+            clear_sun_material(shader_mats, handle);
+            continue;
+        };
+
+        // Compare before get_mut, or every frame re-uploads the asset (MAT-3).
+        let needs = shader_mats.get(&handle.0).is_some_and(|material| {
+            material
+                .get_vec3("sun_dir_world")
+                .is_none_or(|value| (value - sun.direction).length() > SUN_DIR_EPSILON)
+                || material
+                    .get_scalar("sun_tan_radius")
+                    .is_none_or(|value| (value - sun.tan_radius).abs() > 1.0e-6)
         });
         if needs {
-            if let Some(mut m) = shader_mats.get_mut(&handle.0) {
-                m.set_many([
-                    ("sun_dir_world", sun_dir_world),
-                    ("sun_tan_radius", ParamValue::F32(tan_r)),
+            if let Some(mut material) = shader_mats.get_mut(&handle.0) {
+                material.set_many([
+                    ("sun_dir_world", ParamValue::Vec3(sun.direction.to_array())),
+                    ("sun_tan_radius", ParamValue::F32(sun.tan_radius)),
                 ]);
             }
         }
@@ -1162,6 +1211,70 @@ mod tests {
             "expected a single write over {FRAMES} frames of a slowly moving sun; \
              the direction guard is comparing exactly and failing open on sub-\
              threshold motion — every terrain material is repacking every frame"
+        );
+    }
+
+    #[test]
+    fn new_materials_get_current_sun_and_existing_materials_refresh_at_tolerance() {
+        let mut app = test_app();
+        app.world_mut().spawn((
+            GlobalTransform::IDENTITY,
+            DirectionalLight {
+                illuminance: 10_000.0,
+                ..Default::default()
+            },
+        ));
+        let original = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        app.world_mut().spawn(MeshMaterial3d(original.clone()));
+        app.update();
+
+        let subthreshold = Quat::from_rotation_x(5.0e-5) * Vec3::Z;
+        app.world_mut()
+            .insert_resource(lunco_environment::SunRenderState {
+                direction_to_sun_world: Some(subthreshold),
+                revision: 1,
+            });
+        let added = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(ShaderMaterial::default());
+        app.world_mut().spawn(MeshMaterial3d(added.clone()));
+        app.update();
+
+        let materials = app.world().resource::<Assets<ShaderMaterial>>();
+        assert_eq!(
+            materials
+                .get(&original)
+                .and_then(|material| material.get_vec3("sun_dir_world")),
+            Some(Vec3::Z),
+            "existing materials retain the same sub-threshold directional tolerance"
+        );
+        assert_eq!(
+            materials
+                .get(&added)
+                .and_then(|material| material.get_vec3("sun_dir_world")),
+            Some(subthreshold),
+            "a new binding receives the current sun without a full material traversal"
+        );
+
+        let above_threshold = Quat::from_rotation_x(1.2e-4) * Vec3::Z;
+        app.world_mut()
+            .insert_resource(lunco_environment::SunRenderState {
+                direction_to_sun_world: Some(above_threshold),
+                revision: 2,
+            });
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<Assets<ShaderMaterial>>()
+                .get(&original)
+                .and_then(|material| material.get_vec3("sun_dir_world")),
+            Some(above_threshold),
+            "crossing the established tolerance refreshes all bound materials"
         );
     }
 
