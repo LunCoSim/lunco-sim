@@ -1318,6 +1318,13 @@ pub struct SysmlVerificationRecord {
     pub subjects: Vec<SysmlSubject>,
     /// Requirements named by `verify` memberships.
     pub verifies: Vec<String>,
+    /// Resolved requirement-usage targets of the `verify` memberships.
+    ///
+    /// These handles belong to the same immutable source snapshot as
+    /// `element`; consumers should use them for coverage decisions and keep
+    /// `verifies` for authored-name display and diagnostics.
+    #[serde(default)]
+    pub verified_requirements: Vec<SysmlElementHandle>,
     /// Written realization targets, when present.
     pub realizations: Vec<String>,
 }
@@ -1535,7 +1542,7 @@ impl SysmlAnalysis {
         let records = project_records(&attributes, source_revision);
         let requirements =
             project_requirements(&workspace, &project_indices, &files, &elements, &attributes);
-        let verifications = project_verifications(&files, &elements);
+        let verifications = project_verifications(&files, &elements, &references);
 
         Self {
             files,
@@ -2943,7 +2950,12 @@ fn project_requirement_constraints(
 fn project_verifications(
     files: &[SysmlFile],
     elements: &[SysmlElement],
+    references: &[SysmlReference],
 ) -> Vec<SysmlVerificationRecord> {
+    let elements_by_handle = elements
+        .iter()
+        .map(|element| (element.handle, element))
+        .collect::<HashMap<_, _>>();
     elements
         .iter()
         .filter(|element| {
@@ -2957,15 +2969,64 @@ fn project_verifications(
                 .as_str();
             let block = source.get(element.start as usize..element.end as usize)?;
             let fields = parse_block_fields(block);
+            let verify_names = fields
+                .verifies
+                .iter()
+                .filter_map(|name| name.rsplit("::").next())
+                .collect::<HashSet<_>>();
+            let mut verified_requirements = Vec::new();
+            for reference in references.iter().filter(|reference| {
+                reference.file == element.file
+                    && reference.start >= element.start
+                    && reference.end <= element.end
+                    && verify_names.contains(reference.name.as_str())
+                    && reference_belongs_to(reference, element.handle, &elements_by_handle)
+                    && elements_by_handle
+                        .get(&reference.from)
+                        .is_some_and(|from| from.kind == "RequirementUsage")
+                    && elements_by_handle
+                        .get(&reference.target)
+                        .is_some_and(|target| {
+                            target.kind == "RequirementUsage"
+                                || target.kind == "RequirementDefinition"
+                        })
+            }) {
+                if !verified_requirements.contains(&reference.target) {
+                    verified_requirements.push(reference.target);
+                }
+            }
             Some(SysmlVerificationRecord {
                 element: element.clone(),
                 documentation: fields.documentation,
                 subjects: fields.subjects,
                 verifies: fields.verifies,
+                verified_requirements,
                 realizations: fields.realizations,
             })
         })
         .collect()
+}
+
+fn reference_belongs_to(
+    reference: &SysmlReference,
+    owner: SysmlElementHandle,
+    elements: &HashMap<SysmlElementHandle, &SysmlElement>,
+) -> bool {
+    let mut current = Some(reference.from_owner.unwrap_or(reference.from));
+    let mut remaining = elements.len();
+    while let Some(handle) = current {
+        if handle == owner {
+            return true;
+        }
+        if remaining == 0 {
+            return false;
+        }
+        remaining -= 1;
+        current = elements
+            .get(&handle)
+            .and_then(|element| element.owner_handle);
+    }
+    false
 }
 
 #[derive(Default)]

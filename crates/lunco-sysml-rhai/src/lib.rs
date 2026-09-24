@@ -24,7 +24,7 @@ use lunco_sysml_ir::{
 };
 use lunco_sysml_modelica::{lower_constraint, supports_standard_function_lowering};
 use rhai::{Dynamic, Engine, Map};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// A source-backed SysML record exposed as a native Rhai object.
@@ -34,6 +34,69 @@ use std::sync::Arc;
 #[derive(Clone, Debug)]
 pub struct SysmlRecordValue {
     inner: SysmlRecord,
+}
+
+/// Snapshot-local, typed requirement coverage edges exposed to Rhai.
+///
+/// Requirement and verification names are resolved at the report boundary;
+/// coverage itself is keyed only by semantic handles, never concatenated
+/// strings.
+#[derive(Clone, Debug, Default)]
+pub struct SysmlRequirementCoverageValue {
+    links: HashSet<(SysmlElementHandle, SysmlElementHandle)>,
+}
+
+impl SysmlRequirementCoverageValue {
+    fn covers(&self, verification: SysmlElementHandle, requirement: SysmlElementHandle) -> bool {
+        self.links.contains(&(verification, requirement))
+    }
+}
+
+fn coverage_value_error(message: impl Into<String>) -> Box<rhai::EvalAltResult> {
+    rhai::EvalAltResult::ErrorRuntime(message.into().into(), rhai::Position::NONE).into()
+}
+
+fn dynamic_element_handle(value: &Dynamic) -> Option<SysmlElementHandle> {
+    if let Some(handle) = value.clone().try_cast::<SysmlElementHandle>() {
+        return Some(handle);
+    }
+    let fields = value.clone().try_cast::<Map>()?;
+    Some(SysmlElementHandle {
+        source_revision: dynamic_u64(fields.get("source_revision")?)?,
+        source_fingerprint: dynamic_u64(fields.get("source_fingerprint")?)?,
+        element_id: u32::try_from(dynamic_u64(fields.get("element_id")?)?).ok()?,
+    })
+}
+
+fn requirement_coverage_from_records(
+    verifications: rhai::Array,
+) -> Result<SysmlRequirementCoverageValue, Box<rhai::EvalAltResult>> {
+    let mut links = HashSet::new();
+    for verification in verifications {
+        let record = verification
+            .try_cast::<Map>()
+            .ok_or_else(|| coverage_value_error("verification record is not a map"))?;
+        let element = record
+            .get("element")
+            .cloned()
+            .and_then(|value| value.try_cast::<Map>())
+            .ok_or_else(|| coverage_value_error("verification record has no element"))?;
+        let verification_handle = element
+            .get("handle")
+            .and_then(dynamic_element_handle)
+            .ok_or_else(|| coverage_value_error("verification element has no typed handle"))?;
+        let targets = record
+            .get("verified_requirements")
+            .cloned()
+            .and_then(|value| value.try_cast::<rhai::Array>())
+            .ok_or_else(|| coverage_value_error("verification record has no resolved targets"))?;
+        for target in targets {
+            let requirement_handle = dynamic_element_handle(&target)
+                .ok_or_else(|| coverage_value_error("verified requirement has no typed handle"))?;
+            links.insert((verification_handle, requirement_handle));
+        }
+    }
+    Ok(SysmlRequirementCoverageValue { links })
 }
 
 /// One immutable, revision-pinned SysML source session exposed to Rhai.
@@ -565,6 +628,19 @@ pub fn semantic_snapshot_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
         .map(|element| (element.handle, element))
         .collect::<HashMap<_, _>>();
     let mut report = Map::new();
+    let requirement_coverage = SysmlRequirementCoverageValue {
+        links: analysis
+            .verifications()
+            .iter()
+            .flat_map(|verification| {
+                verification
+                    .verified_requirements
+                    .iter()
+                    .copied()
+                    .map(|requirement| (verification.element.handle, requirement))
+            })
+            .collect(),
+    };
     report.insert(
         "source_revision".into(),
         Dynamic::from(analysis.source_revision()),
@@ -669,6 +745,10 @@ pub fn semantic_snapshot_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
         ),
     );
     report.insert(
+        "requirement_coverage".into(),
+        Dynamic::from(requirement_coverage),
+    );
+    report.insert(
         "diagnostics".into(),
         Dynamic::from_array(
             analysis
@@ -716,6 +796,24 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_fn(
             "!=",
             |left: SysmlElementHandle, right: SysmlElementHandle| left != right,
+        )
+        .register_type_with_name::<SysmlRequirementCoverageValue>("SysmlRequirementCoverageValue")
+        .register_fn(
+            "covers",
+            |coverage: &mut SysmlRequirementCoverageValue,
+             verification: Dynamic,
+             requirement: Dynamic|
+             -> Result<bool, Box<rhai::EvalAltResult>> {
+                let verification = dynamic_element_handle(&verification)
+                    .ok_or_else(|| coverage_value_error("verification handle is malformed"))?;
+                let requirement = dynamic_element_handle(&requirement)
+                    .ok_or_else(|| coverage_value_error("requirement handle is malformed"))?;
+                Ok(coverage.covers(verification, requirement))
+            },
+        )
+        .register_fn(
+            "sysml_requirement_coverage",
+            requirement_coverage_from_records,
         )
         .register_type_with_name::<SysmlFeatureHandle>("SysmlFeatureHandle")
         .register_get("element", |handle: &mut SysmlFeatureHandle| handle.element)
@@ -1889,6 +1987,17 @@ fn verification_dynamic(record: &lunco_sysml_ast::SysmlVerificationRecord) -> Dy
     value.insert("documentation".into(), string_array(&record.documentation));
     value.insert("subjects".into(), subject_array(&record.subjects));
     value.insert("verifies".into(), string_array(&record.verifies));
+    value.insert(
+        "verified_requirements".into(),
+        Dynamic::from_array(
+            record
+                .verified_requirements
+                .iter()
+                .copied()
+                .map(Dynamic::from)
+                .collect(),
+        ),
+    );
     value.insert("realizations".into(), string_array(&record.realizations));
     Dynamic::from_map(value)
 }

@@ -216,8 +216,12 @@ The current supported subset is source-backed and deterministic:
 The shared `sysml_requirements::evaluate` call resolves those short identities
 once against the mounted source report and rewrites each check to the
 canonical qualified name before observing USD or source-derived predicates.
+Verification coverage is evaluated from resolved snapshot-scoped SysML
+element handles, not by joining requirement and verification names into a
+string key. The authored name selects the source element; the resolved handle
+pair determines coverage.
 Missing or colliding identities fail the evaluation; observers must not add a
-package-prefix guess or a second registry.  Use
+package-prefix guess or a second registry. Use
 `sysml_requirements::requirement_name(report, id)` and
 `sysml_requirements::verification_name(report, id)` when a canonical identity
 is needed before constructing additional evidence.

@@ -417,23 +417,6 @@ fn text(report, name) {
     _text(resolved.record.value.literal)
 }
 
-fn _verification_covers(report, requirement, verification_name) {
-    if report == () || report.verification_records == () { return false; }
-    let wanted = _short_name(requirement);
-    for verification in report.verification_records {
-        let name = _record_name(verification);
-        if verification_name != () && verification_name != ""
-            && name != verification_name && _short_name(name) != verification_name {
-            continue;
-        }
-        if verification.verifies == () { continue; }
-        for covered in verification.verifies {
-            if covered == requirement || _short_name(covered) == wanted { return true; }
-        }
-    }
-    false
-}
-
 // Build lookup tables once per evaluation.  Component checks can be numerous
 // (one transform observation per station), so repeatedly walking the complete
 // SysML requirement and verification arrays makes an otherwise linear test
@@ -441,12 +424,26 @@ fn _verification_covers(report, requirement, verification_name) {
 fn _indexes(report) {
     let requirements = #{};
     let requirement_identities = #{};
+    let requirement_handles = #{};
+    let requirement_handle_ambiguities = #{};
     if report.requirement_records != () {
         for record in report.requirement_records {
             let name = _record_name(record);
             if name != "" {
+                let handle = record.element.handle;
                 requirements[name] = true;
                 requirements[_short_name(name)] = true;
+                if requirement_handles[name] == () {
+                    requirement_handles[name] = handle;
+                } else if requirement_handles[name] != handle {
+                    requirement_handle_ambiguities[name] = true;
+                }
+                let handle_short = _short_name(name);
+                if requirement_handles[handle_short] == () {
+                    requirement_handles[handle_short] = handle;
+                } else if requirement_handles[handle_short] != handle {
+                    requirement_handle_ambiguities[handle_short] = true;
+                }
                 if requirement_identities[name] == () {
                     requirement_identities[name] = name;
                 }
@@ -460,14 +457,27 @@ fn _indexes(report) {
         }
     }
     let verification_identities = #{};
+    let verification_handles = #{};
+    let verification_handle_ambiguities = #{};
     if report.verification_records != () {
         for verification in report.verification_records {
             let name = _record_name(verification);
             if name == "" { continue; }
+            let handle = verification.element.handle;
+            if verification_handles[name] == () {
+                verification_handles[name] = handle;
+            } else if verification_handles[name] != handle {
+                verification_handle_ambiguities[name] = true;
+            }
             if verification_identities[name] == () {
                 verification_identities[name] = name;
             }
             let short = _short_name(name);
+            if verification_handles[short] == () {
+                verification_handles[short] = handle;
+            } else if verification_handles[short] != handle {
+                verification_handle_ambiguities[short] = true;
+            }
             if verification_identities[short] == () {
                 verification_identities[short] = name;
             } else if verification_identities[short] != name {
@@ -475,23 +485,14 @@ fn _indexes(report) {
             }
         }
     }
-    let coverage = #{};
-    if report.verification_records != () {
-        for verification in report.verification_records {
-            let verification_name = _record_name(verification);
-            if verification_name == "" || verification.verifies == () { continue; }
-            let verification_short = _short_name(verification_name);
-            for covered in verification.verifies {
-                coverage[verification_name + "|" + covered] = true;
-                coverage[verification_name + "|" + _short_name(covered)] = true;
-                coverage[verification_short + "|" + covered] = true;
-                coverage[verification_short + "|" + _short_name(covered)] = true;
-            }
-        }
-    }
-    #{requirements: requirements, coverage: coverage,
+    #{requirements: requirements,
+      coverage_graph: report.requirement_coverage,
       requirement_identities: requirement_identities,
-      verification_identities: verification_identities}
+      verification_identities: verification_identities,
+      requirement_handles: requirement_handles,
+      verification_handles: verification_handles,
+      requirement_handle_ambiguities: requirement_handle_ambiguities,
+      verification_handle_ambiguities: verification_handle_ambiguities}
 }
 
 fn _indexed_requirement(indexes, expected) {
@@ -502,10 +503,22 @@ fn _indexed_requirement(indexes, expected) {
 
 fn _indexed_coverage(indexes, requirement, verification_name) {
     if requirement == () || verification_name == () { return false; }
-    indexes.coverage[verification_name + "|" + requirement] == true
-        || indexes.coverage[_short_name(verification_name) + "|" + requirement] == true
-        || indexes.coverage[verification_name + "|" + _short_name(requirement)] == true
-        || indexes.coverage[_short_name(verification_name) + "|" + _short_name(requirement)] == true
+    if indexes.requirement_handle_ambiguities[requirement] == true
+        || indexes.requirement_handle_ambiguities[_short_name(requirement)] == true
+        || indexes.verification_handle_ambiguities[verification_name] == true
+        || indexes.verification_handle_ambiguities[_short_name(verification_name)] == true {
+        return false;
+    }
+    let requirement_handle = indexes.requirement_handles[requirement];
+    if requirement_handle == () {
+        requirement_handle = indexes.requirement_handles[_short_name(requirement)];
+    }
+    let verification_handle = indexes.verification_handles[verification_name];
+    if verification_handle == () {
+        verification_handle = indexes.verification_handles[_short_name(verification_name)];
+    }
+    if requirement_handle == () || verification_handle == () { return false; }
+    indexes.coverage_graph.covers(verification_handle, requirement_handle)
 }
 
 fn _expected(report, check) {
@@ -1287,14 +1300,15 @@ fn source_with_constraints(names) {
 // requirement details remain available through source_with_selection().
 fn _compact_requirement_identity(record) {
     let name = _record_name(record);
-    #{element: #{qualified_name: name}, qualified_name: name,
+    #{element: #{qualified_name: name, handle: record.element.handle}, qualified_name: name,
       kind: record.kind}
 }
 
 fn _compact_verification_identity(record) {
     let name = _record_name(record);
-    #{element: #{qualified_name: name}, qualified_name: name,
-      verifies: record.verifies}
+    #{element: #{qualified_name: name, handle: record.element.handle},
+      qualified_name: name, verifies: record.verifies,
+      verified_requirements: record.verified_requirements}
 }
 
 fn _paged_twin_source(path, tables) {
@@ -1413,6 +1427,7 @@ fn _source_projection(names, requirement_names, verification_names,
         source_fact_totals: if analyzed.source_fact_totals == () { () } else { analyzed.source_fact_totals },
         requirement_records: analyzed.analysis.requirements,
         verification_records: analyzed.analysis.verifications,
+        requirement_coverage: sysml_requirement_coverage(analyzed.analysis.verifications),
         attributes: #{}, attributes_qualified: #{}, attribute_collisions: [],
         constraints: if analyzed.analysis.constraints == () { [] } else { analyzed.analysis.constraints },
         relationships: if analyzed.analysis.relationships == () { [] } else { analyzed.analysis.relationships },

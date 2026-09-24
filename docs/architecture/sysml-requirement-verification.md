@@ -170,7 +170,9 @@ short local identity. Before the first observation, `evaluate` resolves both
 through the mounted source report and rewrites the records to their canonical
 qualified names. A missing or colliding short identity is a failed check, not
 a guessed package prefix. This lets a Twin keep repeated arrays compact while
-the evidence and coverage index retain one unambiguous SysML identity. The
+the evidence reports canonical names and the coverage decision compares
+snapshot-scoped SysML element handles. The authored name is used only to
+select a source element; it is not the stored coverage key. The
 helpers are available to authored code as
 `sysml_requirements::requirement_name(report, id)` and
 `sysml_requirements::verification_name(report, id)` when a test needs the

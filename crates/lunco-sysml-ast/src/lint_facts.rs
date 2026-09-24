@@ -1058,6 +1058,17 @@ fn verification(value: &SysmlVerificationRecord) -> H {
         ("documentation", strings(&value.documentation)),
         ("subjects", subjects(&value.subjects)),
         ("verifies", strings(&value.verifies)),
+        (
+            "verified_requirements",
+            H::Array(
+                value
+                    .verified_requirements
+                    .iter()
+                    .copied()
+                    .map(element_handle)
+                    .collect(),
+            ),
+        ),
         ("realizations", strings(&value.realizations)),
     ])
 }
