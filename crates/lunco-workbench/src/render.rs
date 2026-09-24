@@ -30,10 +30,11 @@ impl Default for WorkbenchVisualsCache {
     }
 }
 
-pub(crate) fn render_workbench(world: &mut World) {
+pub(crate) fn render_workbench(
+    world: &mut World,
+    state: &mut bevy::ecs::system::SystemState<EguiContexts>,
+) {
     let ctx = {
-        let mut state: bevy::ecs::system::SystemState<EguiContexts> =
-            bevy::ecs::system::SystemState::new(world);
         let Ok(mut contexts) = state.get_mut(world) else {
             return;
         };

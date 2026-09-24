@@ -277,6 +277,10 @@ snapshot, never the dock resource. The workbench drains deferred layout
 requests before deferred tab requests so a request that changes both the
 perspective and the active tab is applied in authored order.
 
+The exclusive render system keeps its `SystemState<EguiContexts>` as a
+scheduler-owned system parameter. Its query state is initialized with the
+scheduled system and reused across UI passes rather than rebuilt per frame.
+
 Typed trigger intents from `PanelCtx` and `MenuCtx`, plus shell menu actions,
 are held in the `lunco_workbench_core::DeferredWorldTriggers` render queue and
 applied after the scoped layout is back in the `World`. This includes Rhai menu
