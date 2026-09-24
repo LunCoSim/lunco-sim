@@ -28,18 +28,25 @@ fast-tier hash of source bytes, source length, and asset identity. Asset identit
 is part of the key because it anchors relative imports. The key is local and
 ephemeral; it is never sent over the wire.
 
-On a hit, preparation returns the cached immutable artifact without dispatching
-worker work. On a miss, the owner captures the engine, prelude AST, source, and
-asset identity, then submits pure parsing/lowering through bounded
-`AsyncWorkAdmission`. Concurrent misses for the same key and runtime revision
-share one prepared program. Workers do not access the World or execute the
-scenario top-level body.
+On a no-import hit, preparation returns the cached immutable artifact without
+dispatching worker work. Root misses capture the engine, prelude AST, source, and
+asset identity, then submit pure parsing/lowering through bounded
+`AsyncWorkAdmission`. When the source has literal imports, the worker also takes
+one revisioned source snapshot, discovers the transitive source-backed closure,
+and compiles each module AST in canonical id order. A root-program cache hit
+still prepares imported module ASTs when that dependency closure is present.
+Concurrent requests for the same root and source-registry revision share one
+prepared artifact. Workers do not access the World or execute scenario or
+module top-level bodies.
 
 The owner accepts a result only if scene generation, document generation,
-parameter revision, and runtime preparation revision still match. It buffers
-the complete pending compile set and commits in stable actor order before
+parameter revision, runtime preparation revision, and every discovered import's
+source text or absence still match. It buffers the complete pending compile set and commits in stable actor order before
 `TimeSpineSet`. Both cache hits and misses hold simulation progress through
 dependency planning, per-instance initialization, and the first `on_start`.
+The scenario resolver consumes owner-committed module ASTs and fails visibly if
+one was not prepared for the current source. Import evaluation and top-level
+initialization remain at the serialized owner lifecycle boundary.
 `CompiledProgram` carries no per-instance state.
 
 `CompiledProgram` includes the full AST, the imports-only hook AST when needed,
@@ -47,9 +54,10 @@ the task AST, and the derived hook mask.
 
 ### Invalidation
 - **Source edit** bumps the document generation → the driver recompiles with new source → new key → a fresh entry. The old entry is *not* dropped (it's retained for reuse — a replay of the prior version hits it); it goes away only when the whole memo is cleared at the cap (below).
+- **Imported source edit** changes that canonical source's revision. Each scenario hashes only its committed literal dependency ids and their current per-id revisions, so a transitive import edit schedules that scenario for worker preparation while an unrelated asset edit leaves it cached. Missing imports are tracked too, so loading a previously absent dependency is observable.
 - **Tool-library generation** changes the runtime preparation revision and rebuilds the engine. It does not change the source AST; tool modules resolve through the current engine at execution time, so an existing compiled entry remains reusable. In-flight artifacts stamped with the old revision are rejected.
 - **Prelude generation** changes the AST itself because prelude functions are merged into scenario programs. Installing a new prelude invalidates the scenario cache and pending work before scenarios compile against it.
-- **Both outcomes cached.** A committed miss caches the compiled `Arc` or compile diagnostic. Concurrent identical misses share the same worker result, and a shared compile error is logged once while each affected document receives its diagnostic.
+- **Root outcomes cached.** A committed root-source miss caches its compiled `Arc` or root compile diagnostic. Imported-module failures retain their dependency revisions and are prepared again after one of those sources changes; they are not cached as a permanent root-source error.
 - **Eviction:** the memo is retained across entity despawns (for replay reuse), so it is **bounded, not GC'd** — a `COMPILED_CACHE_CAP` (512) triggers a full `clear()` when hit (a cold re-parse on the next compile; the distinct-source working set is far below the cap, so this is rare). A finer byte-budget/LRU is a deferral, same status as the precompute cache's eviction.
 
 ### Why no disk tier

@@ -540,6 +540,13 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
         0
     }
 
+    /// Revision of source inputs imported by this entity's last preparation.
+    /// A change schedules a new immutable compile even when the root document
+    /// is unchanged. Backends without source dependencies keep the default.
+    fn source_dependency_revision(&self, _entity: Entity) -> u64 {
+        0
+    }
+
     /// Run mutable top-level initialization after the program's dependency plan
     /// has been resolved and committed. This is the first executable world
     /// phase for a newly compiled program. Runtime errors are non-fatal
@@ -582,6 +589,13 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
     /// Drop all per-entity state for `entity` (after its `on_stop`).
     fn forget(&mut self, entity: Entity);
 
+    /// Drop executable instance state while retaining source dependency inputs
+    /// until a replacement compile commits. Backends without split state can
+    /// use the full teardown default.
+    fn forget_program(&mut self, entity: Entity) {
+        self.forget(entity);
+    }
+
     /// Read-only snapshot of `entity`'s running program — its live state object
     /// and the lifecycle hooks it defines — for the `ScriptInspect` query. The
     /// backend builds `state` into the caller's native value type via `builder`
@@ -619,6 +633,9 @@ struct Fsm {
     /// compile. A broken revision is terminal until the document changes; retrying
     /// it every fixed tick only floods the log and repeats work that cannot succeed.
     attempted_generation: Option<u64>,
+    /// Dependency revision most recently committed or failed. `None` forces a
+    /// new preparation after a stale result.
+    attempted_dependency_revision: Option<u64>,
     /// Parameter revision most recently sent to the compiler, including a
     /// failed compile. Parameters belong to the attached instance rather than
     /// the reusable source document.
@@ -663,6 +680,7 @@ struct PendingCompile {
     parameters_revision: u64,
     scene_generation: u64,
     runtime_revision: u64,
+    source_dependency_revision: u64,
     queued: bool,
     result_ready: bool,
     capacity_revision: u64,
@@ -677,6 +695,7 @@ struct CompileCompletion<P> {
     parameters_revision: u64,
     scene_generation: u64,
     runtime_revision: u64,
+    source_dependency_revision: u64,
     result: Result<P, Diagnostic>,
 }
 
@@ -902,6 +921,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         .get_resource::<ScenarioSceneGeneration>()
                         .is_some_and(|generation| generation.0 == completion.scene_generation)
                     && runtime_revision == completion.runtime_revision;
+                let input_is_current = input_is_current
+                    && driver.runtime.source_dependency_revision(completion.entity)
+                        == completion.source_dependency_revision;
                 if !input_is_current {
                     retire_pending_compile(world, &mut driver, completion.entity, true);
                     continue;
@@ -945,6 +967,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     continue;
                 }
                 let generation = document.generation;
+                let source_dependency_revision = driver.runtime.source_dependency_revision(*entity);
                 let prior = driver.fsm.get(entity);
                 let directives = prior
                     .filter(|state| state.directives_generation == Some(generation))
@@ -975,6 +998,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     state.attempted_generation != Some(generation)
                         || state.parameters_revision != *parameters_revision
                         || state.preparation_revision != Some(runtime_revision)
+                        || state.attempted_dependency_revision != Some(source_dependency_revision)
                         || scene_restart
                 });
                 let pending_same = prior.is_some_and(|state| {
@@ -983,6 +1007,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             && pending.parameters_revision == *parameters_revision
                             && pending.scene_generation == scene_generation
                             && pending.runtime_revision == runtime_revision
+                            && pending.source_dependency_revision == source_dependency_revision
                     })
                 });
                 let retry_queued = prior.is_some_and(|state| {
@@ -1013,7 +1038,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 bridge_core::set_script_client_local(is_client);
                 bridge_core::set_script_authority(*authority);
                 if scene_restart {
-                    driver.runtime.forget(*entity);
+                    driver.runtime.forget_program(*entity);
                 } else if started && compiled {
                     let _scope = bridge_core::WorldScope::enter(world, context);
                     let _phase = bridge_core::ExecutionContextScope::enter(
@@ -1021,7 +1046,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     );
                     stop_error = driver.runtime.call_hook(*entity, ScenarioHook::Stop, gid);
                 }
-                driver.runtime.forget(*entity);
+                driver.runtime.forget_program(*entity);
 
                 let state = driver.fsm.entry(*entity).or_default();
                 state.started = false;
@@ -1044,18 +1069,18 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 {
                     participants.mark_scenario_plan_pending(*entity);
                 }
+                let operation_id = driver.next_progress_operation;
+                driver.next_progress_operation = operation_id.wrapping_add(1);
                 let key = lunco_core_runtime::AsyncWorkKey::new(
                     work_kind,
                     scene_generation,
                     ((raw as u128) << 64) | u128::from(entity.to_bits()),
                     generation,
-                    *parameters_revision,
+                    operation_id,
                 );
                 let preparation = driver
                     .runtime
                     .prepare_compile(document.source, document.asset_id);
-                let operation_id = driver.next_progress_operation;
-                driver.next_progress_operation = operation_id.wrapping_add(1);
                 let progress_key = lunco_core_runtime::SimulationProgressKey {
                     owner: lunco_core_runtime::SimulationProgressOwner::ScriptPreparation,
                     operation_id,
@@ -1067,6 +1092,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     parameters_revision: *parameters_revision,
                     scene_generation,
                     runtime_revision,
+                    source_dependency_revision,
                     queued: false,
                     result_ready: false,
                     capacity_revision,
@@ -1093,6 +1119,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             parameters_revision: *parameters_revision,
                             scene_generation,
                             runtime_revision,
+                            source_dependency_revision,
                             result: Err(Diagnostic::error(
                                 "scenario compilation requires SimulationProgress",
                                 None,
@@ -1131,6 +1158,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 parameters_revision: *parameters_revision,
                                 scene_generation,
                                 runtime_revision,
+                                source_dependency_revision,
                                 result: Ok(prepared),
                             });
                     }
@@ -1145,6 +1173,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             *parameters_revision,
                             scene_generation,
                             runtime_revision,
+                            source_dependency_revision,
                             job,
                         );
                     }
@@ -1217,6 +1246,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             .get_resource::<ScenarioSceneGeneration>()
                             .is_some_and(|generation| generation.0 == completion.scene_generation)
                         && driver.runtime.preparation_revision() == completion.runtime_revision;
+                    let input_is_current = input_is_current
+                        && driver.runtime.source_dependency_revision(completion.entity)
+                            == completion.source_dependency_revision;
                     if !input_is_current {
                         retire_pending_compile(world, &mut driver, completion.entity, true);
                         continue;
@@ -1253,6 +1285,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         completion.parameters_revision,
                         completion.scene_generation,
                         completion.runtime_revision,
+                        completion.source_dependency_revision,
                         outcome,
                     );
                 }
@@ -1726,7 +1759,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     } else {
                         None
                     };
-                    runtime.forget(entity);
+                    runtime.forget_program(entity);
                     if let Some(mut participants) = world
                         .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
                     {
@@ -1798,7 +1831,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             st.initialized = true;
                         }
                         Err(diagnostic) => {
-                            runtime.forget(entity);
+                            runtime.forget_program(entity);
                             st.compiled = false;
                             if let Some(mut participants) = world.get_resource_mut::<
                                 lunco_core_runtime::SimulationBarrierParticipants,
@@ -2048,6 +2081,7 @@ fn retire_pending_compile<R: ScenarioRuntime>(
         if let Some(state) = driver.fsm.get_mut(&entity) {
             if !state.compiled {
                 state.attempted_generation = None;
+                state.attempted_dependency_revision = None;
                 state.preparation_revision = None;
             }
         }
@@ -2082,6 +2116,7 @@ fn submit_scenario_compile<R: ScenarioRuntime>(
     parameters_revision: u64,
     scene_generation: u64,
     runtime_revision: u64,
+    source_dependency_revision: u64,
     job: Box<dyn FnOnce() -> Result<R::PreparedCompile, Diagnostic> + Send + 'static>,
 ) {
     let Some(pending) = driver
@@ -2111,6 +2146,7 @@ fn submit_scenario_compile<R: ScenarioRuntime>(
             parameters_revision,
             scene_generation,
             runtime_revision,
+            source_dependency_revision,
             result,
         });
     };
@@ -2137,6 +2173,7 @@ fn submit_scenario_compile<R: ScenarioRuntime>(
                 parameters_revision,
                 scene_generation,
                 runtime_revision,
+                source_dependency_revision,
                 result: Err(Diagnostic::error(
                     "scenario compilation requires AsyncWorkAdmission",
                     None,
@@ -2197,6 +2234,7 @@ fn submit_scenario_compile<R: ScenarioRuntime>(
                     parameters_revision,
                     scene_generation,
                     runtime_revision,
+                    source_dependency_revision,
                     result: Err(Diagnostic::error(
                         "scenario compilation requires a host worker transport",
                         None,
@@ -2218,6 +2256,7 @@ fn finish_compile_completion<R: ScenarioRuntime>(
     parameters_revision: u64,
     scene_generation: u64,
     runtime_revision: u64,
+    _source_dependency_revision: u64,
     outcome: CompileOutcome,
 ) {
     let Some(pending) = driver
@@ -2250,6 +2289,8 @@ fn finish_compile_completion<R: ScenarioRuntime>(
         CompileOutcome::Ready => {
             state.generation = generation;
             state.attempted_generation = Some(generation);
+            state.attempted_dependency_revision =
+                Some(driver.runtime.source_dependency_revision(entity));
             state.parameters_revision = parameters_revision;
             state.preparation_revision = Some(runtime_revision);
             state.compiled = true;
@@ -2263,6 +2304,8 @@ fn finish_compile_completion<R: ScenarioRuntime>(
                 diagnostic.message
             );
             state.attempted_generation = Some(generation);
+            state.attempted_dependency_revision =
+                Some(driver.runtime.source_dependency_revision(entity));
             state.parameters_revision = parameters_revision;
             state.preparation_revision = Some(runtime_revision);
             state.compiled = false;
@@ -2283,6 +2326,7 @@ fn finish_compile_completion<R: ScenarioRuntime>(
         }
         CompileOutcome::Stale => {
             state.attempted_generation = None;
+            state.attempted_dependency_revision = None;
             state.preparation_revision = None;
             state.compiled = false;
             state.initialized = false;

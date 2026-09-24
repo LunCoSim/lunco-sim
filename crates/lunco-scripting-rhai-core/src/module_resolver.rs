@@ -4,8 +4,9 @@
 //! is [`ScriptSources::canonical_id`], which is the same canonicalization USD
 //! references go through — so a path means one thing everywhere, and a script
 //! reached as `twin://ep1/lib.rhai` by an asset load is reached identically by an
-//! import. Everything here is: ask `lunco-assets-core` for the id, look up the text,
-//! compile it.
+//! import. Preparation resolves each literal import through that registry and
+//! compiles source-backed modules off-thread; the scenario resolver looks up
+//! the committed AST and evaluates the module body.
 //!
 //! # Why this must exist
 //!
@@ -22,9 +23,11 @@
 //! inside script evaluation; asset loading is async and, on wasm, must not block.
 //! `RhaiSourceLoader` therefore declares each literal import as a normal Bevy asset
 //! dependency. Once the owning scenario is ready, the event-driven publisher has
-//! registered the complete dependency graph and `resolve` is a pure lookup.
+//! registered the complete dependency graph. Scenario `resolve` reads only the
+//! source registry and owner-committed AST cache; it does not compile module
+//! source on the lifecycle path.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use lunco_assets_runtime::script_source::ScriptSources;
@@ -249,21 +252,179 @@ pub fn top_level_hoist_source(source: &str) -> Option<String> {
 /// them Bevy dependencies keeps those later calls synchronous without loading
 /// unrelated scripts at startup.
 pub fn imported_paths(source: &str) -> Result<Vec<String>, String> {
+    let (paths, error) = discover_import_paths(source);
+    error.map_or(Ok(paths), Err)
+}
+
+fn discover_import_paths(source: &str) -> (Vec<String>, Option<String>) {
     let mut seen = HashSet::new();
     let mut paths = Vec::new();
+    let mut error = None;
     for result in scan_script(source).imports {
-        let path = result?;
-        if seen.insert(path.clone()) {
-            paths.push(path);
+        match result {
+            Ok(path) if seen.insert(path.clone()) => paths.push(path),
+            Ok(_) => {}
+            Err(message) => {
+                error.get_or_insert(message);
+            }
         }
     }
-    Ok(paths)
+    (paths, error)
+}
+
+/// One source-backed import observed while preparing a Rhai program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetModuleDependency {
+    /// Canonical source id used by the runtime resolver.
+    pub id: String,
+    /// Source text in the immutable preparation snapshot, or `None` when the
+    /// import belongs to another registered resolver or is currently missing.
+    pub source: Option<String>,
+}
+
+/// Transitive source-backed imports discovered from one immutable source set.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AssetImportClosure {
+    /// All canonical imports, including unresolved names handled by another
+    /// registered resolver. Ordered by canonical id for stable validation.
+    pub dependencies: Vec<AssetModuleDependency>,
+    /// Loaded source-backed module bodies, ordered by canonical id.
+    pub modules: Vec<(String, String)>,
+}
+
+/// Import-discovery failure with every dependency identified before the error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetImportClosureError {
+    pub message: String,
+    pub dependencies: Vec<AssetModuleDependency>,
+}
+
+/// Owner-thread cache of ASTs prepared away from the evaluation boundary.
+#[derive(Clone, Default)]
+pub struct PreparedModuleAsts {
+    modules: Arc<RwLock<HashMap<String, (String, rhai::AST)>>>,
+    require_prepared: bool,
+}
+
+impl PreparedModuleAsts {
+    /// Create a cache whose consumer must receive every source AST through
+    /// owner-thread commit from immutable background preparation.
+    pub fn required() -> Self {
+        Self {
+            modules: Arc::new(RwLock::new(HashMap::new())),
+            require_prepared: true,
+        }
+    }
+
+    /// Commit one source-matched immutable module AST.
+    pub fn insert(&self, id: String, source: String, ast: rhai::AST) {
+        self.modules
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id, (source, ast));
+    }
+
+    fn get(&self, id: &str, source: &str) -> Option<rhai::AST> {
+        self.modules
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .filter(|(prepared_source, _)| prepared_source == source)
+            .map(|(_, ast)| ast.clone())
+    }
+}
+
+/// Resolve the loaded source-backed portion of a program's literal import
+/// graph. The caller supplies an immutable source snapshot; this function does
+/// no asset I/O and never evaluates module bodies.
+pub fn asset_import_closure(
+    root_source: &str,
+    root_id: Option<&str>,
+    sources: &BTreeMap<String, String>,
+) -> Result<AssetImportClosure, AssetImportClosureError> {
+    fn visit(
+        source: &str,
+        importer: Option<&str>,
+        sources: &BTreeMap<String, String>,
+        visiting: &mut BTreeSet<String>,
+        visited: &mut BTreeSet<String>,
+        dependencies: &mut BTreeMap<String, Option<String>>,
+        modules: &mut BTreeMap<String, String>,
+        errors: &mut Vec<String>,
+    ) {
+        let (paths, discovery_error) = discover_import_paths(source);
+        if let Some(error) = discovery_error {
+            errors.push(error);
+        }
+        for path in paths {
+            let id = ScriptSources::canonical_id(&path, importer, SCRIPT_EXT);
+            let dependency_source = sources.get(&id).cloned();
+            dependencies
+                .entry(id.clone())
+                .or_insert_with(|| dependency_source.clone());
+            let Some(dependency_source) = dependency_source else {
+                continue;
+            };
+            if visited.contains(&id) {
+                continue;
+            }
+            if !visiting.insert(id.clone()) {
+                errors.push(format!("Rhai import cycle detected at {id}"));
+                continue;
+            }
+            visit(
+                &dependency_source,
+                Some(&id),
+                sources,
+                visiting,
+                visited,
+                dependencies,
+                modules,
+                errors,
+            );
+            visiting.remove(&id);
+            visited.insert(id.clone());
+            modules.insert(id, dependency_source);
+        }
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut dependencies = BTreeMap::new();
+    let mut modules = BTreeMap::new();
+    let mut errors = Vec::new();
+    visit(
+        root_source,
+        root_id,
+        sources,
+        &mut visiting,
+        &mut visited,
+        &mut dependencies,
+        &mut modules,
+        &mut errors,
+    );
+    let closure = AssetImportClosure {
+        dependencies: dependencies
+            .into_iter()
+            .map(|(id, source)| AssetModuleDependency { id, source })
+            .collect(),
+        modules: modules.into_iter().collect(),
+    };
+    if let Some(message) = errors.into_iter().next() {
+        Err(AssetImportClosureError {
+            message,
+            dependencies: closure.dependencies,
+        })
+    } else {
+        Ok(closure)
+    }
 }
 
 /// Resolves `import` against [`ScriptSources`], memoizing compiled modules.
 #[derive(Clone)]
 pub struct AssetModuleResolver {
     sources: ScriptSources,
+    prepared: PreparedModuleAsts,
     /// Compiled-module memo, keyed by canonical id. A module imported by twenty
     /// scenarios is evaluated once.
     ///
@@ -282,8 +443,14 @@ pub struct AssetModuleResolver {
 
 impl AssetModuleResolver {
     pub fn new(sources: ScriptSources) -> Self {
+        Self::with_prepared_modules(sources, PreparedModuleAsts::default())
+    }
+
+    /// Build a resolver that consumes owner-committed module AST preparation.
+    pub fn with_prepared_modules(sources: ScriptSources, prepared: PreparedModuleAsts) -> Self {
         Self {
             sources,
+            prepared,
             cache: Arc::new(RwLock::new(HashMap::new())),
             resolving: Arc::new(RwLock::new(HashSet::new())),
         }
@@ -347,24 +514,33 @@ impl ModuleResolver for AssetModuleResolver {
             }
         }
 
-        // Compile and evaluate the module body. `eval_ast_as_new` RUNS the module's
-        // top level, and resolution happens mid-tick inside another script — so a
-        // module whose top level calls world verbs fires them at import time. Module
-        // top levels are therefore expected to be definitions only; that is a rhai
-        // convention, not something we can enforce here.
-        let evaluated = engine
-            .compile(&text)
-            .map_err(|e| {
+        // Scenario engines provide a worker-prepared AST; generic one-shot
+        // engines may compile here. `eval_ast_as_new` RUNS the module's top level,
+        // and resolution happens inside another script, so module top-level world
+        // calls execute at import time. Module top levels are therefore expected
+        // to be definitions only; Rhai does not enforce that convention.
+        let ast = match self.prepared.get(&id, &text) {
+            Some(ast) => Ok(ast),
+            None if self.prepared.require_prepared => Err(Box::new(EvalAltResult::ErrorInModule(
+                id.clone(),
+                Box::new(EvalAltResult::ErrorRuntime(
+                    format!("asset module {id} was not prepared for this scenario revision").into(),
+                    pos,
+                )),
+                pos,
+            ))),
+            None => engine.compile(&text).map_err(|error| {
                 Box::new(EvalAltResult::ErrorInModule(
                     id.clone(),
-                    Box::new(e.into()),
+                    Box::new(error.into()),
                     pos,
                 ))
-            })
-            .and_then(|ast| {
-                Module::eval_ast_as_new(Scope::new(), &ast, engine)
-                    .map_err(|e| Box::new(EvalAltResult::ErrorInModule(id.clone(), e, pos)))
-            });
+            }),
+        };
+        let evaluated = ast.and_then(|ast| {
+            Module::eval_ast_as_new(Scope::new(), &ast, engine)
+                .map_err(|error| Box::new(EvalAltResult::ErrorInModule(id.clone(), error, pos)))
+        });
         if let Ok(mut resolving) = self.resolving.write() {
             resolving.remove(&id);
         }
@@ -417,6 +593,85 @@ mod tests {
         assert_eq!(imported_paths(source).unwrap(), ["root", "nested"]);
     }
 
+    #[test]
+    fn asset_import_closure_is_transitive_sorted_and_records_unresolved_modules() {
+        let sources = [
+            (
+                "twin://mission/z.rhai".to_owned(),
+                "import \"nested\" as nested; fn value() { nested::value() }".to_owned(),
+            ),
+            (
+                "twin://mission/nested.rhai".to_owned(),
+                "fn value() { 42 }".to_owned(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let closure = asset_import_closure(
+            r#"import "z" as z; import "registered_tool" as tool; fn main() { z::value() }"#,
+            Some("twin://mission/main.rhai"),
+            &sources,
+        )
+        .expect("literal imports should produce a source closure");
+
+        assert_eq!(
+            closure
+                .modules
+                .iter()
+                .map(|module| module.0.as_str())
+                .collect::<Vec<_>>(),
+            ["twin://mission/nested.rhai", "twin://mission/z.rhai"]
+        );
+        assert_eq!(
+            closure
+                .dependencies
+                .iter()
+                .map(|dependency| (dependency.id.as_str(), dependency.source.is_some()))
+                .collect::<Vec<_>>(),
+            [
+                ("twin://mission/nested.rhai", true),
+                ("twin://mission/registered_tool.rhai", false),
+                ("twin://mission/z.rhai", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn asset_import_closure_rejects_cycles_before_module_evaluation() {
+        let sources = [
+            (
+                "twin://mission/a.rhai".to_owned(),
+                "import \"b\" as b;".to_owned(),
+            ),
+            (
+                "twin://mission/b.rhai".to_owned(),
+                "import \"a\" as a;".to_owned(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let error = asset_import_closure(
+            r#"import "a" as a;"#,
+            Some("twin://mission/main.rhai"),
+            &sources,
+        )
+        .expect_err("cyclic imports must fail during immutable preparation");
+        assert!(
+            error.message.contains("import cycle"),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(
+            error
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.id.as_str())
+                .collect::<Vec<_>>(),
+            ["twin://mission/a.rhai", "twin://mission/b.rhai"]
+        );
+    }
+
     fn engine_with(sources: ScriptSources) -> Engine {
         let mut e = Engine::new();
         e.set_module_resolver(AssetModuleResolver::new(sources));
@@ -433,6 +688,27 @@ mod tests {
             .eval(r#"import "lunco://lib/math" as m; m::double(21)"#)
             .expect("import should resolve");
         assert_eq!(got, 42);
+    }
+
+    #[test]
+    fn prepared_only_resolver_rejects_an_unprepared_asset_module() {
+        let sources = ScriptSources::default();
+        sources.insert("lunco://lib/math.rhai", "fn double(x) { x * 2 }");
+        let mut engine = Engine::new();
+        engine.set_module_resolver(AssetModuleResolver::with_prepared_modules(
+            sources,
+            PreparedModuleAsts::required(),
+        ));
+
+        let error = engine
+            .eval::<i64>(r#"import "lunco://lib/math" as math; math::double(21)"#)
+            .expect_err("scenario imports must not compile inside evaluation");
+        assert!(
+            error
+                .to_string()
+                .contains("was not prepared for this scenario revision"),
+            "expected the missing-preparation diagnostic, got {error:?}"
+        );
     }
 
     /// The reason this resolver exists: rhai's default `FileModuleResolver` would

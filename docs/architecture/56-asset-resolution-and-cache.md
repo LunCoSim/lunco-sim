@@ -134,9 +134,10 @@ import "helpers" as helpers;                  // relative to this script
 ```
 
 There is no global Rhai preload. An unused scenario or library does no I/O, and a
-Twin mount does not trigger a project-wide script scan. The synchronous resolver
-reads only the sources published by those dependency handles. Non-literal imports
-are rejected while loading because an async asset graph cannot make an unknown
+Twin mount does not trigger a project-wide script scan. Scenario preparation
+captures the loaded transitive source closure and compiles its ASTs off-thread;
+the live resolver evaluates only an owner-committed AST. Non-literal imports are
+rejected while loading because an async asset graph cannot make an unknown
 runtime path safe or deterministic.
 
 A statically registered tool call such as `waypoint_editor::route_positions(...)`

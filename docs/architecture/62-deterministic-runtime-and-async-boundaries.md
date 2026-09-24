@@ -214,7 +214,7 @@ asynchronous completion never selects the visible simulation tick.
 | USD | Asset I/O, dependency discovery, immutable layer parsing/composition, and send-safe projection-plan preparation | Check source generation; mutate the live, thread-affine stage and publish ECS projection in stable scene order |
 | Modelica | Source I/O, declaration/interface extraction, parsing/lowering, solver construction, and requested numerical step | Check model generation/session/step; publish outputs and propagate ports at the fixed co-simulation boundary |
 | SysML | Source-set I/O, parse, resolve, typed analysis, and requirement report preparation | Publish only the current source revision; verification that reads live simulation values consumes the committed tick snapshot |
-| Rhai | Root-source parsing, AST lowering, and immutable compile-artifact construction | Resolve/import modules, evaluate top-level initialization and lifecycle hooks against the live world in stable actor order; apply commands at their declared boundary |
+| Rhai | Root and literal transitive module parsing, AST lowering, and immutable compile-artifact construction from one source snapshot | Validate and commit the dependency closure; evaluate imported module bodies, top-level initialization, and lifecycle hooks against the live world in stable actor order; apply commands at their declared boundary |
 | Physics | Preparation that does not read or mutate live solver state | Kinematics, contact solving, integration, and authoritative writes remain within the fixed physics schedule |
 | Rendering and UI | Mesh/shader preparation, presentation, editor analysis, and persistence I/O | Read committed simulation state; presentation completion cannot advance or release authoritative time |
 
@@ -246,18 +246,23 @@ source revision, and operation id. The resource bounds queued and admitted
 work, applies the three priorities with reserved interactive/background
 service, and exposes aggregate queue counters. It can withdraw queued work but
 does not preempt a running task. Owners still validate and commit their typed
-results at their own boundary. Modelica document parsing and Rhai root-source
-cache misses use this path. Identical Rhai source misses share one immutable
+results at their own boundary. Modelica document parsing and Rhai root plus
+imported-module parsing use this path. Identical Rhai source misses share one immutable
 compile result. Rhai drains worker results into a scene-wide preparation barrier
 and commits the complete ready set in stable actor order before `TimeSpineSet`
 releases simulation time. Its exact progress holds remain active through
 dependency planning, top-level initialization, and the first `on_start`; cache
 hits use the same activation boundary without a worker.
-Transitive Rhai imports still use the live synchronous module resolver and are
-not part of the immutable preparation snapshot. SysML, USD, Modelica library
-preparation, and visualization preparation still need to join shared admission.
-On wasm, native admission rejects CPU work until a Web Worker transport exists;
-it does not run the same parse synchronously on the browser main thread.
+Scenario compilation captures the transitive literal-import closure from one
+revisioned source snapshot and prepares its module ASTs on the worker. At commit,
+the owner validates every discovered source or missing-source input and publishes
+the ASTs to a prepared-only scenario resolver. A module absent from that prepared
+closure fails visibly instead of being compiled during a lifecycle call. Module
+body evaluation remains synchronous at the owner lifecycle boundary because it
+can execute authored world behavior. SysML, USD, Modelica library preparation,
+and visualization preparation still need to join shared admission. On wasm,
+native admission rejects CPU work until a Web Worker transport exists; it does
+not run the same parse synchronously on the browser main thread.
 
 Results are committed only by their owner at a named cycle boundary. Results
 for presentation may be adopted when current and useful. Results that change
@@ -283,9 +288,10 @@ consume a tick before activation. Scenario `this` state and live-world calls
 remain owned by the script activation/execution boundary. A paused Update
 activation still assigns dependency planning, initialization, and `on_start` the
 Simulation clock and current sequence; discrete events retain Lifecycle context.
-Imported module
-sources are still read and compiled by the synchronous live resolver; a
-revisioned transitive source snapshot and module preparation remain open. All
+Literal transitive module sources are captured from one revisioned snapshot and
+their ASTs are prepared on the worker; the scenario resolver accepts only those
+owner-committed ASTs. Imported module bodies still evaluate on the serialized
+lifecycle path because they can execute world behavior. All
 functions and hooks inherit the invocation context; the scenario owner assigns
 each callback to its Rust-owned cycle. Event handlers read both the event's
 origin stamp and the consumer's current cycle. Source metadata may validate an
@@ -445,9 +451,10 @@ The whole-simulation guarantee remains open because:
    completes, and their pending dependency closure is not fully represented by
    readiness.
 3. Dynamic Rhai port access is not represented in the Modelica causal graph.
-4. Some heavy preparation remains synchronous: transitive Rhai module
-   resolution/compilation/evaluation, SysML analysis/source-set discovery, and
-   initial USD document parse/overlay serialization. Native Modelica source interfaces are
+4. Some heavy preparation remains synchronous: SysML analysis/source-set
+   discovery and initial USD document parse/overlay serialization. Rhai module
+   body evaluation remains on the owner lifecycle path; it can execute world
+   behavior even though parsing and compilation are asynchronous. Native Modelica source interfaces are
    extracted once on Bevy's async-compute pool while the source asset loads;
    co-simulation, member discovery, and the web workbench reuse that
    revision-matched interface. Bevy's wasm task pool runs on the browser main
@@ -494,12 +501,11 @@ These findings and their owner-specific file evidence are maintained in
    Rhai. Give UI and visualization independent cadences while keeping both
    presentation-only.
 3. **Async work admission.** Use shared bounded priority admission over the
-   existing worker pools. Modelica document parsing and Rhai root-source
-   compilation now use native admission; capture Rhai's complete transitive
-   source/tool snapshot and prepare imported modules, then move SysML, USD,
-   remaining Modelica, and visualization preparation to workers while
-   preserving owner-specific typed results and commits. Keep Web Worker
-   admission explicit for wasm hosts.
+   existing worker pools. Modelica document parsing and Rhai root plus literal
+   transitive module parsing now use native admission; move SysML, USD, remaining
+   Modelica, and visualization preparation to workers while preserving
+   owner-specific typed results and commits. Keep Web Worker admission explicit
+   for wasm hosts.
 4. **Telemetry observation boundary.** Keep authoritative event delivery in
    stable simulation order; make continuous sampling due-driven and bounded,
    then move logging, fan-out, encoding, and persistence to the observation

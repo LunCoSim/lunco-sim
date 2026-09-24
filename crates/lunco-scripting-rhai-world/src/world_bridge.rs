@@ -63,7 +63,7 @@ fn script_runtime_error(message: String) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into(), rhai::Position::NONE).into()
 }
 
-use rhai::{AST, Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map, NativeCallContext};
+use rhai::{Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map, NativeCallContext, AST};
 
 use lunco_doc::Diagnostic;
 use lunco_hooks::HookValue;
@@ -1061,6 +1061,73 @@ fn prepare_compiled_program(
     }))
 }
 
+fn prepare_rhai_artifact(
+    engine: &Engine,
+    prelude_ast: &AST,
+    source: &str,
+    asset_id: Option<&str>,
+    cached_program: Option<Arc<CompiledProgram>>,
+    sources: &lunco_assets_runtime::script_source::ScriptSources,
+) -> PreparedRhaiWorkerResult {
+    let (source_revision, snapshot) = sources.snapshot();
+    let source_map = snapshot
+        .into_iter()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let closure = match lunco_scripting_rhai_core::module_resolver::asset_import_closure(
+        source,
+        asset_id,
+        &source_map,
+    ) {
+        Ok(closure) => closure,
+        Err(error) => {
+            return PreparedRhaiWorkerResult {
+                source_revision,
+                dependencies: error.dependencies,
+                result: Err(Diagnostic::error(error.message, None, None)),
+                cache_error: false,
+            };
+        }
+    };
+    let dependencies = closure.dependencies;
+    let program = match cached_program {
+        Some(program) => Ok(program),
+        None => prepare_compiled_program(engine, prelude_ast, source, asset_id),
+    };
+    let program = match program {
+        Ok(program) => program,
+        Err(diagnostic) => {
+            return PreparedRhaiWorkerResult {
+                source_revision,
+                dependencies,
+                result: Err(diagnostic),
+                cache_error: true,
+            };
+        }
+    };
+
+    let modules = closure
+        .modules
+        .into_iter()
+        .map(|(id, text)| {
+            let mut ast = compile_with_script_consts(engine, &text).map_err(|error| {
+                Diagnostic::error(
+                    format!("imported Rhai module {id} failed to compile: {error}"),
+                    None,
+                    None,
+                )
+            })?;
+            ast.set_source(&id);
+            Ok((id, text, ast))
+        })
+        .collect::<Result<Vec<_>, Diagnostic>>();
+    PreparedRhaiWorkerResult {
+        source_revision,
+        dependencies,
+        result: modules.map(|modules| Arc::new(PreparedRhaiArtifact { program, modules })),
+        cache_error: false,
+    }
+}
+
 fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<AST, String> {
     let mut acc: Option<AST> = None;
     for (name, src) in files {
@@ -1089,7 +1156,10 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 /// relative to the process working directory — a sandbox escape in a system that
 /// otherwise routes every asset through a scoped source. Installing ours closes it.
 ///
-fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptSources) -> Engine {
+fn build_world_engine_base(
+    sources: lunco_assets_runtime::script_source::ScriptSources,
+    prepared_modules: lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts,
+) -> Engine {
     let mut engine = Engine::new();
 
     lunco_hooks_rhai::register_json(&mut engine);
@@ -1104,7 +1174,12 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     // precomputed in a second dependency graph.
     let mut resolvers = rhai::module_resolvers::ModuleResolversCollection::new();
     resolvers.push(lunco_tools_rhai::ToolModuleResolver::new());
-    resolvers.push(lunco_scripting_rhai_core::module_resolver::AssetModuleResolver::new(sources));
+    resolvers.push(
+        lunco_scripting_rhai_core::module_resolver::AssetModuleResolver::with_prepared_modules(
+            sources,
+            prepared_modules,
+        ),
+    );
     engine.set_module_resolver(resolvers);
 
     lunco_hooks_rhai::rhai_limits::apply(&mut engine);
@@ -1139,8 +1214,8 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     // command_result(id) -> #{ id, ok, status, data, error }. A deferred
     // command is not successful merely because it was accepted; scripts can
     // check this shared result surface on a later pass.
-    engine.register_fn("command_result", |id: i64| -> Dynamic {
-        bridge_core::command_result(&RhaiBuilder, id as u64)
+    engine.register_fn("command_result", |id: u64| -> Dynamic {
+        bridge_core::command_result(&RhaiBuilder, id)
     });
 
     // open_context_menu(screen_position, items) is a typed script-to-UI bridge.
@@ -1299,8 +1374,8 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
             .unwrap_or(Dynamic::UNIT)
     });
 
-    // viewport_position(id) -> [x, y] in the active render viewport, or () on
-    // a projection miss. This is the generic presentation counterpart to
+    // viewport_position(id) -> [x, y] in the visible scene viewport, or ()
+    // while hidden or on a projection miss. This is the generic presentation counterpart to
     // world_pos: authored tools can address a rendered target with the same
     // coordinates accepted by the typed pointer-event bridge without knowing
     // about cameras, floating-origin grids, or Bevy internals.
@@ -2153,8 +2228,8 @@ fn build_world_engine_base(sources: lunco_assets_runtime::script_source::ScriptS
     // Read the authoritative USD document generation directly. Structural
     // scenario policy uses it as an invalidation clock; it must not pay for
     // the full InspectUsdDocument JSON snapshot on every fixed tick.
-    engine.register_fn("usd_document_generation", |doc_id: i64| -> Dynamic {
-        usd_bridge::usd_document_generation(doc_id as u64)
+    engine.register_fn("usd_document_generation", |doc_id: u64| -> Dynamic {
+        usd_bridge::usd_document_generation(doc_id)
             .map(Dynamic::from)
             .unwrap_or(Dynamic::UNIT)
     });
@@ -2529,7 +2604,10 @@ pub fn build_world_engine(
             prelude_files_from_sources(&sources)?
         }
     };
-    let mut engine = build_world_engine_base(sources);
+    let mut engine = build_world_engine_base(
+        sources,
+        lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::default(),
+    );
     install_prelude_on_engine(&mut engine, files)?;
     Ok(engine)
 }
@@ -2683,15 +2761,28 @@ enum CacheEntry {
     Err(Diagnostic),
 }
 
-type PreparedProgramResult = Result<Arc<CompiledProgram>, Diagnostic>;
-type SharedProgramPreparation = Arc<OnceLock<PreparedProgramResult>>;
+struct PreparedRhaiArtifact {
+    program: Arc<CompiledProgram>,
+    modules: Vec<(String, String, AST)>,
+}
+
+#[derive(Clone)]
+struct PreparedRhaiWorkerResult {
+    source_revision: u64,
+    dependencies: Vec<lunco_scripting_rhai_core::module_resolver::AssetModuleDependency>,
+    result: Result<Arc<PreparedRhaiArtifact>, Diagnostic>,
+    cache_error: bool,
+}
+
+type SharedProgramPreparation = Arc<OnceLock<PreparedRhaiWorkerResult>>;
 
 /// Worker-owned compilation output awaiting deterministic scenario-boundary
 /// adoption into the shared cache and per-entity runtime state.
 pub struct PreparedRhaiCompile {
     key: u64,
     runtime_revision: u64,
-    result: Result<Arc<CompiledProgram>, Diagnostic>,
+    request_source_revision: u64,
+    prepared: PreparedRhaiWorkerResult,
 }
 
 /// Soft cap on the compile memo (see [`RhaiScenarioRuntime::compiled`]). At the
@@ -2850,7 +2941,7 @@ pub struct RhaiScenarioRuntime {
     /// artifact, so a fleet attaching one controller does not parse it once per
     /// entity. Entries are retired on commit/invalidation and bounded like the
     /// owner cache if all consumers disappear before a result is committed.
-    preparing: Mutex<std::collections::HashMap<(u64, u64), SharedProgramPreparation>>,
+    preparing: Mutex<std::collections::HashMap<(u64, u64, u64), SharedProgramPreparation>>,
     /// The prelude compiled to an `AST`, merged into every scenario's AST so its
     /// helpers — including the engine-driven `__init_task` / `__run_mission`
     /// drivers — are resolvable by `call_fn` (which searches the AST, NOT the
@@ -2869,6 +2960,15 @@ pub struct RhaiScenarioRuntime {
     /// The script registry backing `import`. Shared (`Arc`) with the engine's
     /// module resolver and with the Bevy resource the asset side fills.
     sources: lunco_assets_runtime::script_source::ScriptSources,
+    /// Source-matched module ASTs prepared by scenario workers and consumed by
+    /// the asset resolver when it evaluates imported modules.
+    prepared_modules: lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts,
+    /// Literal source dependencies captured for each entity's latest compile.
+    /// These provide targeted invalidation when a transitive import changes.
+    dependency_inputs: std::collections::HashMap<
+        Entity,
+        Vec<lunco_scripting_rhai_core::module_resolver::AssetModuleDependency>,
+    >,
 }
 
 impl Default for RhaiScenarioRuntime {
@@ -2879,7 +2979,9 @@ impl Default for RhaiScenarioRuntime {
         // resolver are the same map — a script loaded later is importable without
         // rebuilding the engine.
         let sources = lunco_assets_runtime::script_source::ScriptSources::default();
-        let mut engine = build_world_engine_base(sources.clone());
+        let prepared_modules =
+            lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::required();
+        let mut engine = build_world_engine_base(sources.clone(), prepared_modules.clone());
         engine.on_print(|s| info!("[rhai] {s}"));
         Self {
             engine: std::sync::Arc::new(engine),
@@ -2894,6 +2996,8 @@ impl Default for RhaiScenarioRuntime {
             // asset generation refresh binds them into the complete engine.
             tool_gen: crate::tool_libs::generation(),
             sources,
+            prepared_modules,
+            dependency_inputs: std::collections::HashMap::new(),
         }
     }
 }
@@ -2917,7 +3021,8 @@ impl RhaiScenarioRuntime {
     /// Install the externally loaded prelude as the runtime's global module and
     /// merge source functions into future scenario ASTs.
     pub(crate) fn install_prelude(&mut self, files: Vec<(String, String)>) -> Result<(), String> {
-        let mut rebuilt = build_world_engine_base(self.sources.clone());
+        let mut rebuilt =
+            build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
         rebuilt.on_print(|s| info!("[rhai] {s}"));
         let prelude_ast = install_prelude_on_engine(&mut rebuilt, files.clone())?;
         self.engine = std::sync::Arc::new(rebuilt);
@@ -3189,6 +3294,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
     fn invalidate(&mut self) {
         self.states.clear();
         self.compiled.clear();
+        self.dependency_inputs.clear();
         self.preparing
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -3204,21 +3310,50 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
 
         let key = scenario_compile_key(&source, asset_id.as_deref());
         let runtime_revision = self.preparation_revision;
+        let request_source_revision = self.sources.revision();
         let cached = self.compiled.get(&key).cloned();
-        if let Some(cached) = cached {
-            let result = match cached {
-                CacheEntry::Ok(program) => Ok(program),
-                CacheEntry::Err(diagnostic) => Err(diagnostic),
-            };
+        if let Some(CacheEntry::Err(diagnostic)) = &cached {
             return CompilePreparation::Ready(PreparedRhaiCompile {
                 key,
                 runtime_revision,
-                result,
+                request_source_revision,
+                prepared: PreparedRhaiWorkerResult {
+                    source_revision: request_source_revision,
+                    dependencies: Vec::new(),
+                    result: Err(diagnostic.clone()),
+                    cache_error: true,
+                },
             });
+        }
+        if let Some(CacheEntry::Ok(program)) = &cached {
+            if matches!(
+                lunco_scripting_rhai_core::module_resolver::imported_paths(&source),
+                Ok(paths) if paths.is_empty()
+            ) {
+                return CompilePreparation::Ready(PreparedRhaiCompile {
+                    key,
+                    runtime_revision,
+                    request_source_revision,
+                    prepared: PreparedRhaiWorkerResult {
+                        source_revision: request_source_revision,
+                        dependencies: Vec::new(),
+                        result: Ok(Arc::new(PreparedRhaiArtifact {
+                            program: program.clone(),
+                            modules: Vec::new(),
+                        })),
+                        cache_error: false,
+                    },
+                });
+            }
         }
 
         let engine = self.engine.clone();
         let prelude_ast = self.prelude_ast.clone();
+        let sources = self.sources.clone();
+        let cached_program = match cached {
+            Some(CacheEntry::Ok(program)) => Some(program),
+            Some(CacheEntry::Err(_)) | None => None,
+        };
         let preparation = {
             let mut preparing = self
                 .preparing
@@ -3228,34 +3363,40 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 preparing.clear();
             }
             preparing
-                .entry((runtime_revision, key))
+                .entry((runtime_revision, key, request_source_revision))
                 .or_insert_with(|| Arc::new(OnceLock::new()))
                 .clone()
         };
         CompilePreparation::Worker(Box::new(move || {
-            let result = preparation
+            let prepared = preparation
                 .get_or_init(|| {
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        prepare_compiled_program(
+                        prepare_rhai_artifact(
                             &engine,
                             &prelude_ast,
                             &source,
                             asset_id.as_deref(),
+                            cached_program,
+                            &sources,
                         )
                     }))
-                    .unwrap_or_else(|_| {
-                        Err(Diagnostic::error(
+                    .unwrap_or_else(|_| PreparedRhaiWorkerResult {
+                        source_revision: request_source_revision,
+                        dependencies: Vec::new(),
+                        result: Err(Diagnostic::error(
                             "scenario compilation preparation panicked",
                             None,
                             None,
-                        ))
+                        )),
+                        cache_error: true,
                     })
                 })
                 .clone();
             Ok(PreparedRhaiCompile {
                 key,
                 runtime_revision,
-                result,
+                request_source_revision,
+                prepared,
             })
         }))
     }
@@ -3267,42 +3408,68 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         params: &lunco_scripting::doc::ScenarioParameters,
     ) -> lunco_scripting::scenario::CompileOutcome {
         use lunco_scripting::scenario::CompileOutcome;
+        let preparation_key = (
+            prepared.runtime_revision,
+            prepared.key,
+            prepared.request_source_revision,
+        );
         if prepared.runtime_revision != self.preparation_revision {
             self.preparing
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .remove(&(prepared.runtime_revision, prepared.key));
+                .remove(&preparation_key);
             return CompileOutcome::Stale;
+        }
+        let dependencies_are_current = prepared
+            .prepared
+            .dependencies
+            .iter()
+            .all(|dependency| self.sources.get(&dependency.id) == dependency.source);
+        if !dependencies_are_current {
+            self.preparing
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&preparation_key);
+            return CompileOutcome::Stale;
+        }
+        if prepared.prepared.source_revision != prepared.request_source_revision {
+            debug!(
+                "[rhai] source registry changed during compile preparation; committed only the validated import snapshot"
+            );
         }
         self.preparing
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .remove(&(prepared.runtime_revision, prepared.key));
-        let program = match prepared.result {
-            Ok(program) => {
-                if self.compiled.len() >= COMPILED_CACHE_CAP {
-                    self.compiled.clear();
-                }
-                self.compiled
-                    .insert(prepared.key, CacheEntry::Ok(program.clone()));
-                program
-            }
+            .remove(&preparation_key);
+        self.dependency_inputs
+            .insert(entity, prepared.prepared.dependencies.clone());
+        let artifact = match prepared.prepared.result {
+            Ok(artifact) => artifact,
             Err(diagnostic) => {
-                if let Some(CacheEntry::Err(cached)) = self.compiled.get(&prepared.key) {
-                    return CompileOutcome::Failed(cached.clone());
-                }
                 error!(
                     "[rhai] entity {entity:?} compile error: {}",
                     diagnostic.message
                 );
-                if self.compiled.len() >= COMPILED_CACHE_CAP {
-                    self.compiled.clear();
+                if prepared.prepared.cache_error {
+                    if self.compiled.len() >= COMPILED_CACHE_CAP {
+                        self.compiled.clear();
+                    }
+                    self.compiled
+                        .insert(prepared.key, CacheEntry::Err(diagnostic.clone()));
                 }
-                self.compiled
-                    .insert(prepared.key, CacheEntry::Err(diagnostic.clone()));
                 return CompileOutcome::Failed(diagnostic);
             }
         };
+        for (id, source, ast) in &artifact.modules {
+            self.prepared_modules
+                .insert(id.clone(), source.clone(), ast.clone());
+        }
+        let program = artifact.program.clone();
+        if self.compiled.len() >= COMPILED_CACHE_CAP {
+            self.compiled.clear();
+        }
+        self.compiled
+            .insert(prepared.key, CacheEntry::Ok(program.clone()));
 
         // ── State: seed a FRESH scope + `this` for THIS entity — never shared.
         // Parameters are instance state, so they stay out of the shared AST and
@@ -3326,6 +3493,23 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
 
     fn preparation_revision(&self) -> u64 {
         self.preparation_revision
+    }
+
+    fn source_dependency_revision(&self, entity: Entity) -> u64 {
+        let Some(dependencies) = self.dependency_inputs.get(&entity) else {
+            return 0;
+        };
+        if dependencies.is_empty() {
+            return 0;
+        }
+        let mut revision = Fnv1a::default();
+        for dependency in dependencies {
+            revision
+                .write_u64(dependency.id.len() as u64)
+                .write_bytes(dependency.id.as_bytes())
+                .write_u64(self.sources.source_revision(&dependency.id));
+        }
+        revision.finish()
     }
 
     fn initialize(&mut self, entity: Entity) -> Option<Diagnostic> {
@@ -3553,6 +3737,11 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
 
     fn forget(&mut self, entity: Entity) {
         self.states.remove(&entity);
+        self.dependency_inputs.remove(&entity);
+    }
+
+    fn forget_program(&mut self, entity: Entity) {
+        self.states.remove(&entity);
     }
 
     fn snapshot<B: ValueBuilder>(
@@ -3590,7 +3779,8 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // contended rebuild is deferred, never fatal.
         match std::sync::Arc::get_mut(&mut self.engine) {
             Some(engine) => {
-                let mut rebuilt = build_world_engine_base(self.sources.clone());
+                let mut rebuilt =
+                    build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
                 rebuilt.on_print(|s| info!("[rhai] {s}"));
                 // A runtime may receive tool changes before its asynchronous
                 // prelude asset has arrived. Rebuild the base engine in that
@@ -4351,6 +4541,178 @@ mod tests {
     }
 
     #[test]
+    fn scenario_worker_prepares_transitive_asset_modules_before_initialization() {
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        let sources = runtime.script_sources();
+        sources.insert(
+            "twin://mission/z.rhai",
+            "import \"nested\" as nested; fn value() { nested::value() }",
+        );
+        sources.insert("twin://mission/nested.rhai", "fn value() { 42 }");
+        let entity = bevy::prelude::World::new().spawn_empty().id();
+        let source = "import \"z\" as z; let initial = z::value();".to_owned();
+        let CompilePreparation::Worker(job) =
+            runtime.prepare_compile(source, Some("twin://mission/main.rhai".to_owned()))
+        else {
+            panic!("file-backed imports must be prepared on a worker");
+        };
+        let prepared = std::thread::spawn(job)
+            .join()
+            .expect("worker preparation must not panic")
+            .expect("worker must return prepared modules");
+        let artifact = prepared
+            .prepared
+            .result
+            .as_ref()
+            .expect("scenario and imports must compile");
+        assert_eq!(artifact.modules.len(), 2);
+        assert_eq!(prepared.prepared.dependencies.len(), 2);
+
+        assert!(matches!(
+            runtime.commit_compile(entity, prepared, &Default::default()),
+            CompileOutcome::Ready
+        ));
+        assert!(runtime.initialize(entity).is_none());
+        assert_eq!(
+            runtime.states[&entity].scope.get_value::<i64>("initial"),
+            Some(42),
+            "module evaluation must consume the worker-prepared nested ASTs"
+        );
+    }
+
+    #[test]
+    fn scenario_module_result_is_stale_when_an_import_changes_before_commit() {
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        let sources = runtime.script_sources();
+        sources.insert("twin://mission/helper.rhai", "fn value() { 1 }");
+        let CompilePreparation::Worker(job) = runtime.prepare_compile(
+            "import \"helper\" as helper; fn on_start(me, ctx) { helper::value() }".to_owned(),
+            Some("twin://mission/main.rhai".to_owned()),
+        ) else {
+            panic!("file-backed imports must be prepared on a worker");
+        };
+        let prepared = std::thread::spawn(job)
+            .join()
+            .expect("worker preparation must not panic")
+            .expect("worker must return prepared modules");
+        sources.insert("twin://mission/helper.rhai", "fn value() { 2 }");
+        let entity = bevy::prelude::World::new().spawn_empty().id();
+
+        assert!(matches!(
+            runtime.commit_compile(entity, prepared, &Default::default()),
+            CompileOutcome::Stale
+        ));
+        assert!(!runtime.states.contains_key(&entity));
+    }
+
+    #[test]
+    fn scenario_import_revision_reprepares_only_when_a_dependency_changes() {
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        let sources = runtime.script_sources();
+        sources.insert("twin://mission/helper.rhai", "fn value() { 1 }");
+        let entity = bevy::prelude::World::new().spawn_empty().id();
+        let source = "import \"helper\" as helper; fn on_start(me, ctx) { helper::value() }";
+
+        let CompilePreparation::Worker(job) = runtime.prepare_compile(
+            source.to_owned(),
+            Some("twin://mission/main.rhai".to_owned()),
+        ) else {
+            panic!("a new scenario source must be prepared");
+        };
+        let prepared = std::thread::spawn(job)
+            .join()
+            .expect("worker preparation must not panic")
+            .expect("worker must prepare the scenario and its imports");
+        assert!(matches!(
+            runtime.commit_compile(entity, prepared, &Default::default()),
+            CompileOutcome::Ready
+        ));
+        let initial_revision = runtime.source_dependency_revision(entity);
+
+        sources.insert("twin://mission/unrelated.rhai", "fn other() { 2 }");
+        assert_eq!(
+            runtime.source_dependency_revision(entity),
+            initial_revision,
+            "unreferenced source changes must not invalidate this scenario"
+        );
+
+        sources.insert("twin://mission/helper.rhai", "fn value() { 3 }");
+        assert_ne!(
+            runtime.source_dependency_revision(entity),
+            initial_revision,
+            "an imported source edit must invalidate the scenario"
+        );
+        let CompilePreparation::Worker(job) = runtime.prepare_compile(
+            source.to_owned(),
+            Some("twin://mission/main.rhai".to_owned()),
+        ) else {
+            panic!("an imported source edit must request a new worker preparation");
+        };
+        let prepared = std::thread::spawn(job)
+            .join()
+            .expect("worker preparation must not panic")
+            .expect("worker must return the updated dependency artifact");
+        assert!(matches!(
+            runtime.commit_compile(entity, prepared, &Default::default()),
+            CompileOutcome::Ready
+        ));
+    }
+
+    #[test]
+    fn scenario_import_cycle_failure_retries_after_a_dependency_is_fixed() {
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        let sources = runtime.script_sources();
+        sources.insert(
+            "twin://mission/a.rhai",
+            "import \"b\" as b; fn value() { b::value() }",
+        );
+        sources.insert("twin://mission/b.rhai", "import \"a\" as a;");
+        let entity = bevy::prelude::World::new().spawn_empty().id();
+        let source = "import \"a\" as a; let initial = a::value();";
+        let CompilePreparation::Worker(job) = runtime.prepare_compile(
+            source.to_owned(),
+            Some("twin://mission/main.rhai".to_owned()),
+        ) else {
+            panic!("the cyclic import graph must be inspected by a worker");
+        };
+        let prepared = std::thread::spawn(job)
+            .join()
+            .expect("worker preparation must not panic")
+            .expect("worker must return the cycle diagnostic");
+        assert!(matches!(
+            runtime.commit_compile(entity, prepared, &Default::default()),
+            CompileOutcome::Failed(_)
+        ));
+        let cycle_revision = runtime.source_dependency_revision(entity);
+
+        sources.insert("twin://mission/b.rhai", "fn value() { 42 }");
+        assert_ne!(
+            runtime.source_dependency_revision(entity),
+            cycle_revision,
+            "a module edit must invalidate a failed cyclic closure"
+        );
+        let CompilePreparation::Worker(job) = runtime.prepare_compile(
+            source.to_owned(),
+            Some("twin://mission/main.rhai".to_owned()),
+        ) else {
+            panic!("fixing a dependency must retry worker preparation");
+        };
+        let prepared = std::thread::spawn(job)
+            .join()
+            .expect("worker preparation must not panic")
+            .expect("worker must prepare the repaired module graph");
+        assert!(matches!(
+            runtime.commit_compile(entity, prepared, &Default::default()),
+            CompileOutcome::Ready
+        ));
+        assert!(runtime.initialize(entity).is_none());
+        assert_eq!(
+            runtime.states[&entity].scope.get_value::<i64>("initial"),
+            Some(42)
+        );
+    }
+
+    #[test]
     fn scenario_compile_concurrent_identical_misses_share_one_prepared_program() {
         let mut runtime = super::RhaiScenarioRuntime::default();
         let source = "fn value() { 42 }".to_owned();
@@ -4383,8 +4745,12 @@ mod tests {
             .expect("second compile worker must return a result");
         assert!(
             std::sync::Arc::ptr_eq(
-                first.result.as_ref().expect("source must compile"),
-                second.result.as_ref().expect("source must compile")
+                first.prepared.result.as_ref().expect("source must compile"),
+                second
+                    .prepared
+                    .result
+                    .as_ref()
+                    .expect("source must compile")
             ),
             "concurrent misses for one source revision must share the prepared AST"
         );
@@ -4408,7 +4774,10 @@ mod tests {
 
     #[test]
     fn rhai_clock_api_rejects_repl_calls_and_exposes_owner_context() {
-        let engine = super::build_world_engine_base(Default::default());
+        let engine = super::build_world_engine_base(
+            Default::default(),
+            lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::default(),
+        );
         let mut world = bevy::prelude::World::new();
         world.init_resource::<lunco_core::RuntimeFaults>();
         let context = RuntimeExecutionContext {
@@ -4779,7 +5148,10 @@ mod tests {
     fn engine_with_sibling(sibling_id: &str, sibling_src: &str) -> rhai::Engine {
         let sources = lunco_assets_runtime::script_source::ScriptSources::default();
         sources.insert(sibling_id, sibling_src);
-        super::build_world_engine_base(sources)
+        super::build_world_engine_base(
+            sources,
+            lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::default(),
+        )
     }
 
     /// TASK A: a BARE relative `import` resolves against the scenario's own asset
@@ -4924,7 +5296,10 @@ mod tests {
 
     #[test]
     fn native_task_callback_preserves_bound_this() {
-        let engine = super::build_world_engine_base(Default::default());
+        let engine = super::build_world_engine_base(
+            Default::default(),
+            lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::default(),
+        );
         let src = r#"
             fn make_action() { |me| { this.count += me; this.count } }
         "#;
@@ -4975,14 +5350,15 @@ mod tests {
     /// program with `eval_ast(false)`, i.e. today's behaviour and cost.
     #[test]
     fn a_script_without_imports_builds_no_imports_ast() {
-        let engine = super::build_world_engine_base(Default::default());
+        let engine = super::build_world_engine_base(
+            Default::default(),
+            lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::default(),
+        );
         let src = "fn on_tick(me, ctx) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
-        assert!(
-            super::build_hoisted_ast(&engine, src, &full, None)
-                .unwrap()
-                .is_none()
-        );
+        assert!(super::build_hoisted_ast(&engine, src, &full, None)
+            .unwrap()
+            .is_none());
     }
 
     /// Two closures over one outer local SHARE it when either mutates it.

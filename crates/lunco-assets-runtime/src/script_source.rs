@@ -28,7 +28,7 @@
 //! otherwise reimplement (and get subtly different).
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 use bevy::prelude::*;
 
@@ -38,9 +38,16 @@ use bevy::prelude::*;
 /// by Bevy systems on the main thread and read from a language resolver that must
 /// be `Send + Sync`. Cloning the resource clones the handle, not the contents, so
 /// a resolver can hold one for its lifetime and see later insertions.
+#[derive(Default)]
+struct ScriptSourceState {
+    revision: u64,
+    sources: HashMap<String, String>,
+    source_revisions: HashMap<String, u64>,
+}
+
 #[derive(Resource, Clone, Default)]
 pub struct ScriptSources {
-    sources: Arc<RwLock<HashMap<String, String>>>,
+    sources: Arc<RwLock<ScriptSourceState>>,
 }
 
 impl ScriptSources {
@@ -73,15 +80,27 @@ impl ScriptSources {
 
     /// Text previously registered under `id`, if any.
     pub fn get(&self, id: &str) -> Option<String> {
-        self.sources.read().ok()?.get(id).cloned()
+        self.sources
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .sources
+            .get(id)
+            .cloned()
     }
 
     /// Register (or replace) the text for `id`. Replacement is what makes a
     /// hot-reloaded script visible to the next resolution.
     pub fn insert(&self, id: impl Into<String>, text: impl Into<String>) {
-        if let Ok(mut map) = self.sources.write() {
-            map.insert(id.into(), text.into());
+        let id = id.into();
+        let text = text.into();
+        let mut state = self.sources.write().unwrap_or_else(PoisonError::into_inner);
+        if state.sources.get(&id) == Some(&text) {
+            return;
         }
+        state.sources.insert(id.clone(), text);
+        state.revision = state.revision.wrapping_add(1);
+        let revision = state.revision;
+        state.source_revisions.insert(id, revision);
     }
 
     /// Remove a source whose Bevy asset has reached the end of its lifecycle.
@@ -91,28 +110,66 @@ impl ScriptSources {
     /// boundary prevents an unloaded script from remaining importable after its
     /// last owning handle has gone away.
     pub fn remove(&self, id: &str) -> bool {
-        self.sources
-            .write()
-            .map(|mut map| map.remove(id).is_some())
-            .unwrap_or(false)
+        let mut state = self.sources.write().unwrap_or_else(PoisonError::into_inner);
+        if state.sources.remove(id).is_some() {
+            state.source_revisions.remove(id);
+            state.revision = state.revision.wrapping_add(1);
+            true
+        } else {
+            false
+        }
     }
 
     /// Every registered id. Used to report what WAS available when a lookup
     /// misses — a bare "module not found" is nearly useless for diagnosing a
     /// scheme or anchoring mistake.
     pub fn ids(&self) -> Vec<String> {
+        let state = self.sources.read().unwrap_or_else(PoisonError::into_inner);
+        let mut ids: Vec<String> = state.sources.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Monotonic revision of the registered source set.
+    pub fn revision(&self) -> u64 {
         self.sources
             .read()
-            .map(|m| {
-                let mut v: Vec<String> = m.keys().cloned().collect();
-                v.sort();
-                v
-            })
-            .unwrap_or_default()
+            .unwrap_or_else(PoisonError::into_inner)
+            .revision
+    }
+
+    /// Revision of one currently registered canonical source identity. A
+    /// missing id has revision zero; insertion, replacement, and removal all
+    /// change a prior live revision. This lets a consumer watch only its
+    /// imported sources without invalidating on an unrelated registry edit.
+    pub fn source_revision(&self, id: &str) -> u64 {
+        self.sources
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .source_revisions
+            .get(id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// One immutable, canonically ordered source-set snapshot and its revision.
+    pub fn snapshot(&self) -> (u64, Vec<(String, String)>) {
+        let state = self.sources.read().unwrap_or_else(PoisonError::into_inner);
+        let mut sources = state
+            .sources
+            .iter()
+            .map(|(id, text)| (id.clone(), text.clone()))
+            .collect::<Vec<_>>();
+        sources.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        (state.revision, sources)
     }
 
     pub fn len(&self) -> usize {
-        self.sources.read().map(|m| m.len()).unwrap_or(0)
+        self.sources
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .sources
+            .len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -164,5 +221,46 @@ mod tests {
         assert!(s.remove("twin://ep1/lib.rhai"));
         assert!(s.get("twin://ep1/lib.rhai").is_none());
         assert!(!s.remove("twin://ep1/lib.rhai"));
+    }
+
+    #[test]
+    fn source_snapshot_has_one_revision_and_only_changes_for_new_content() {
+        let sources = ScriptSources::default();
+        let initial = sources.revision();
+        assert_eq!(sources.source_revision("twin://ep1/lib.rhai"), 0);
+        sources.insert("twin://ep1/lib.rhai", "fn f() { 1 }");
+        let added = sources.revision();
+        assert_ne!(added, initial);
+        let added_source_revision = sources.source_revision("twin://ep1/lib.rhai");
+        assert_ne!(added_source_revision, 0);
+        sources.insert("twin://ep1/lib.rhai", "fn f() { 1 }");
+        assert_eq!(sources.revision(), added);
+        assert_eq!(
+            sources.source_revision("twin://ep1/lib.rhai"),
+            added_source_revision
+        );
+
+        let (snapshot_revision, snapshot) = sources.snapshot();
+        assert_eq!(snapshot_revision, added);
+        assert_eq!(
+            snapshot,
+            [("twin://ep1/lib.rhai".to_owned(), "fn f() { 1 }".to_owned())]
+        );
+
+        sources.insert("twin://ep1/lib.rhai", "fn f() { 2 }");
+        assert_ne!(sources.revision(), snapshot_revision);
+        let replaced_source_revision = sources.source_revision("twin://ep1/lib.rhai");
+        assert_ne!(replaced_source_revision, added_source_revision);
+        sources.insert("twin://unrelated/lib.rhai", "fn g() { 3 }");
+        assert_eq!(
+            sources.source_revision("twin://ep1/lib.rhai"),
+            replaced_source_revision
+        );
+        assert!(sources.remove("twin://ep1/lib.rhai"));
+        assert_ne!(
+            sources.source_revision("twin://ep1/lib.rhai"),
+            replaced_source_revision
+        );
+        assert_eq!(snapshot[0].1, "fn f() { 1 }");
     }
 }

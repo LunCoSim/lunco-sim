@@ -150,10 +150,11 @@ disjoint sibling paths rather than live inside that folder.
 New source classes get their own `Asset` + `AssetLoader` in the owning
 domain crate. Loaders are normally dumb (parse to bytes / utf-8 / domain AST);
 `RhaiSourceLoader` additionally declares the literal `import` paths it finds as
-Bevy dependencies. That is required because Rhai resolves imports synchronously
-while the scenario is running. The owning scenario handle is not published to
-the runtime until Bevy reports its recursive dependency graph ready, so a
-referenced scenario loads only itself and its imports. Application-owned Rhai
+Bevy dependencies. The owning scenario handle is not published to the runtime
+until Bevy reports its recursive dependency graph ready, so a referenced
+scenario loads only itself and its imports. Scenario workers compile that
+revisioned source closure before lifecycle activation, and the live resolver
+evaluates only owner-committed ASTs. Application-owned Rhai
 sources are discovered from the runtime manifest, then the authored
 `scripting.source.classify` startup policy admits only prelude and tool sources
 to the built-in runtime. Scenario, test, and other authored sources stay
