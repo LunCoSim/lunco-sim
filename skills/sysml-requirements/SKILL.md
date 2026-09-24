@@ -114,9 +114,37 @@ Before authoring or baselining a requirement, check:
   rationale, priority, and the qualified verification case. Keep design choices
   such as a particular class, algorithm, or shader implementation out unless
   they are themselves the required constraint.
+- **Normative content vs. implementation status:** Requirement text states
+  the required behavior or characteristic and how it will be accepted. Keep
+  current implementation status, nonconformance, incomplete assets, proxy
+  caveats, missing source data, historical milestones, and unresolved work in
+  the owning gap/status report. Keep source history and provenance in the
+  typed evidence/source catalog. Do not use requirement prose to say that the
+  current model fails, that a parameter is only a proxy, or that a value is
+  not publicly available. Write the positive desired outcome in the
+  requirement; report actual-vs-required status separately under that
+  requirement ID.
+- **Time-dependent acceptance:** Identify the applicable mission phase or
+  window, time scale, site/reference frame, and temporal envelope or sampling
+  needed to accept a time-dependent requirement. Use one authoritative scene
+  clock/epoch and derive environment state from its providers; keep a study
+  epoch distinct from a mission schedule. Put unavailable schedule inputs and
+  current verification coverage in the gap/status report.
 - **Failure behavior:** For safety, reliability, or resilience requirements,
   specify the trigger, detection deadline, required response, and recovery or
   safe state. “The system shall handle errors” is incomplete.
+
+Do not baseline an unmeasurable statement merely because its rationale is
+important. If a threshold, reference, or acceptance condition is missing,
+record the unresolved decision and required evidence in the gap/status report.
+Keep the requirement concise; put its sources in the evidence catalog and its
+verification evidence in the verification record.
+
+For example, a solar-layout requirement should state the required installation
+relationship and the mission Sun-envelope comparison used for acceptance.
+Whether the current Twin has the right panel count, whether its existing roots
+are only proxies, and which installation data are still missing belong in the
+gap/status report, not in the requirement definition.
 
 ### Ask the user when the requirement is underspecified
 
