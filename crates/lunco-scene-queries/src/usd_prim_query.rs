@@ -629,6 +629,8 @@ fn query_record_value(
     doc: Option<DocumentId>,
     generation: Option<u64>,
     live_document: Option<DocumentId>,
+    document_generation: Option<u64>,
+    stage_generation: Option<u64>,
     spawned: Option<Entity>,
     options: &UsdPrimQueryOptions,
     poses: &mut Option<lunco_physics::SimulationPoseReadState>,
@@ -673,6 +675,15 @@ fn query_record_value(
     } else if let Some(doc) = live_document {
         out.push(("doc_id".to_string(), api_value!(doc.raw())));
     }
+    if let Some(document_generation) = document_generation {
+        out.push((
+            "document_generation".to_string(),
+            api_value!(document_generation),
+        ));
+    }
+    if let Some(stage_generation) = stage_generation {
+        out.push(("stage_generation".to_string(), api_value!(stage_generation)));
+    }
     if options.requested_relationships.is_some() || options.include_relationships {
         out.push(("relationships".to_string(), ApiValue::Map(relationships)));
     }
@@ -716,8 +727,8 @@ fn query_record_value(
             api_value!({
                 "source": if doc.is_some() { "document" } else { "live_stage" },
                 "composed": true,
-                "document_generation": generation,
-                "projected_generation": generation,
+                "document_generation": document_generation,
+                "projected_generation": stage_generation,
             }),
         ));
         object.push((
@@ -798,6 +809,20 @@ fn execute_query_paths(
     } else {
         None
     };
+    let source_document = doc.or(live_document);
+    let source_document_generation = source_document.and_then(|document| {
+        world
+            .get_resource::<DocumentRegistry<UsdDocument>>()
+            .and_then(|registry| registry.host(document))
+            .map(|host| host.document().generation())
+    });
+    let stage_generation = world
+        .get_non_send::<CanonicalStages>()
+        .and_then(|stages| match doc {
+            Some(document) => canonical_stage_for_document(world, document),
+            None => live_stage.and_then(|asset| stages.get(asset)),
+        })
+        .map(|stage| stage.generation());
 
     let requested_paths = paths
         .iter()
@@ -853,6 +878,8 @@ fn execute_query_paths(
                     doc,
                     generation,
                     live_document,
+                    source_document_generation,
+                    stage_generation,
                     spawned.get(path).copied(),
                     &options,
                     &mut poses,
