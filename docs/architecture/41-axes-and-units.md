@@ -34,6 +34,14 @@ through these decoders:
 | the `axis` token of a `Cylinder`/`Cone`/`Capsule`/`Plane` | `ConventionTransform::orient` |
 | the animation sampler's translate/rotate/scale channels | `point` / `rotation` / `scale_vec` (conjugation is separable across the three, so per-channel agrees exactly with the whole-transform conversion) |
 
+Primitive collision geometry follows the same typed axis conversion as the
+visual projection. A finite `UsdGeomPlane` keeps its authored dimensions, has no
+invented thickness, and maps width/length onto the schema-defined perpendicular
+axes before rotating its XZ surface onto the authored normal. This matters for
+axis X, where width and length exchange local mesh directions. Mesh approximation
+tokens are read as the schema's typed enum; collider modes without a faithful
+Avian projection fail explicitly.
+
 **Why *conjugation*, not a left-multiply.** For a prim chain
 `W = L₁·L₂·…·Lₙ` acting on local geometry `p`, the canonical world position is
 `S·W·p`. Rewriting:
@@ -74,6 +82,11 @@ stating plainly:
 
 > **A `UsdOp`'s spatial values are always canonical. Stage frame exists only
 > inside the layer.**
+
+The document resolves that frame from its composed authoring stage. Runtime and
+view layers inherit the scene's pseudo-root metrics; reading an isolated overlay
+can substitute USD's centimetre default and move a transient presentation prim
+100× away from its authored points.
 
 That is what makes an op *portable*: the same journalled edit replays correctly
 against a centimetre stage and a metre one. It also means the conversion belongs

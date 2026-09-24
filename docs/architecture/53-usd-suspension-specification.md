@@ -250,7 +250,11 @@ mechanism.
 A raycast wheel has support geometry but no Avian collider. The mobility producer
 publishes the authored probe footprint as `lunco_physics::PhysicsSupportFootprint`;
 terrain consumes that shared contract and does not inspect wheel or drivetrain
-components. The contract is ordered by the shared `PhysicsSupportSet`: `Publish`
+components. `WheelBodyMount` resolves its carrier by stage, composed prim path,
+and instance-root identity, excluding `UsdPreviewOnly` descendants; an ambiguous
+owner is refused instead of selecting whichever same-path entity ECS returned
+first. This keeps a document preview from detaching a live wheel's ray and force
+from its chassis. The contract is ordered by the shared `PhysicsSupportSet`: `Publish`
 creates the footprint, `Apply` flushes its deferred ECS insertion, and `Consume`
 performs support-cache projection and one-time initial placement. This is a runtime
 transaction, not a per-frame reseat or an overturn recovery mechanism.

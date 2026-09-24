@@ -54,12 +54,12 @@ use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
 use lunco_usd_bevy_scene::{
-    UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected, UsdSceneRoot, instance_key,
-    is_preview_only,
+    instance_key, is_preview_only, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected,
+    UsdSceneRoot,
 };
 use lunco_usd_bevy_stage::{
-    Purpose, TransformReadError, UsdInstanceProjection, UsdInstanceRoot, UsdRead, UsdStageAsset,
-    effective_purpose, world_transform,
+    effective_purpose, world_transform, Purpose, TransformReadError, UsdInstanceProjection,
+    UsdInstanceRoot, UsdRead, UsdStageAsset,
 };
 use openusd::sdf::Path as SdfPath;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
@@ -72,7 +72,8 @@ use lunco_usd_avian_contracts::{
 };
 use lunco_usd_avian_reader::{
     collider::{
-        ColliderProjectionError, build_collider_from_usd, collect_child_colliders_from_usd,
+        build_collider_from_usd, collect_child_colliders_from_usd, ColliderBuildOutcome,
+        ColliderProjectionError,
     },
     joint::{has_rigid_body_ancestor, joint_targets_simulated_wheel, read_joint_spec},
     read_authored_bool_or_default, read_authored_quat, read_authored_real, read_authored_vec3,
@@ -655,7 +656,7 @@ fn add_collider_from_usd(
     sdf_path: &SdfPath,
 ) -> Result<(), ColliderProjectionError> {
     match build_collider_from_usd(reader, sdf_path)? {
-        Some(collider) => {
+        ColliderBuildOutcome::Built(collider) => {
             if !lunco_physics::avian_backend_collider_shape_is_valid(&collider) {
                 return Err(ColliderProjectionError::Backend {
                     prim: sdf_path.to_string(),
@@ -665,16 +666,26 @@ fn add_collider_from_usd(
             }
             commands.entity(entity).try_insert(collider);
         }
-        None if reader.has_api_schema(sdf_path, ptok::API_COLLISION) => {
+        ColliderBuildOutcome::UnsupportedGeometry { type_name }
+            if reader.has_api_schema(sdf_path, ptok::API_COLLISION) =>
+        {
             return Err(ColliderProjectionError::Backend {
                 prim: sdf_path.to_string(),
                 detail: format!(
-                    "{} has PhysicsCollisionAPI but no supported collider geometry",
-                    sdf_path
+                    "{} has PhysicsCollisionAPI but `{}` is not supported collision geometry",
+                    sdf_path,
+                    type_name.as_deref().unwrap_or("unknown prim")
                 ),
             });
         }
-        None => {}
+        ColliderBuildOutcome::UnsupportedGeometry { .. } => {}
+        ColliderBuildOutcome::DeferredMeshAsset => {
+            return Err(ColliderProjectionError::Backend {
+                prim: sdf_path.to_string(),
+                detail: "rigid-body collider cannot be deferred while an external mesh loads"
+                    .to_owned(),
+            });
+        }
     }
     Ok(())
 }
@@ -1238,7 +1249,7 @@ fn extract_avian_prim(
         // USD stage and must not be admitted without its collider.
         if terrain_uses_authored_collider(reader.text(sdf_path, "lunco:assetMode").as_deref()) {
             match build_collider_from_usd(reader, sdf_path) {
-                Ok(Some(collider)) => {
+                Ok(ColliderBuildOutcome::Built(collider)) => {
                     if lunco_physics::avian_backend_collider_shape_is_valid(&collider) {
                         commands.entity(entity).try_insert(collider);
                     } else {
@@ -1257,8 +1268,25 @@ fn extract_avian_prim(
                         return;
                     }
                 }
-                Ok(None) => {
+                Ok(ColliderBuildOutcome::DeferredMeshAsset) => {
                     commands.entity(entity).try_insert(PendingTerrainCollider);
+                }
+                Ok(ColliderBuildOutcome::UnsupportedGeometry { type_name }) => {
+                    reject_collider_projection(
+                        commands,
+                        entity,
+                        sdf_path,
+                        faults.as_deref_mut(),
+                        holds.as_deref_mut(),
+                        ColliderProjectionError::Backend {
+                            prim: sdf_path.to_string(),
+                            detail: format!(
+                                "terrain prim has no supported collider geometry (type: {})",
+                                type_name.as_deref().unwrap_or("unknown")
+                            ),
+                        },
+                    );
+                    return;
                 }
                 Err(error) => {
                     reject_collider_projection(
@@ -2239,7 +2267,7 @@ mod collider_parity_tests {
     //! live `StageView` over the canonical stage. Exercises the geometry read
     //! (the highest-risk physics read), including the mesh-approximation selector.
 
-    use super::build_collider_from_usd;
+    use super::{build_collider_from_usd, ColliderBuildOutcome};
     use bevy::math::DVec3;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
@@ -2283,29 +2311,31 @@ mod collider_parity_tests {
         let stage = stage_from_source(MESH_FIXTURE);
         let view = stage.view();
 
-        let trimesh = build_collider_from_usd(&view, &SdfPath::new("/Tri").unwrap())
-            .expect("valid transform")
-            .expect("default mesh → trimesh collider");
-        let hull = build_collider_from_usd(&view, &SdfPath::new("/Hull").unwrap())
-            .expect("valid transform")
-            .expect("convexHull approximation → collider");
+        let ColliderBuildOutcome::Built(trimesh) =
+            build_collider_from_usd(&view, &SdfPath::new("/Tri").unwrap())
+                .expect("valid transform")
+        else {
+            panic!("default mesh → trimesh collider");
+        };
+        let ColliderBuildOutcome::Built(hull) =
+            build_collider_from_usd(&view, &SdfPath::new("/Hull").unwrap())
+                .expect("valid transform")
+        else {
+            panic!("convexHull approximation → collider");
+        };
         assert_ne!(
             format!("{trimesh:?}"),
             format!("{hull:?}"),
             "`physics:approximation = convexHull` must build a DIFFERENT collider than the default trimesh"
         );
-        assert!(
-            build_collider_from_usd(&view, &SdfPath::new("/BadHull").unwrap())
-                .expect("valid transform")
-                .is_none(),
-            "a failed authored convex hull must not silently become a triangle mesh"
-        );
-        assert!(
-            build_collider_from_usd(&view, &SdfPath::new("/BoundingCube").unwrap())
-                .expect("valid transform")
-                .is_none(),
-            "an unsupported authored approximation must not silently become a triangle mesh"
-        );
+        assert!(build_collider_from_usd(&view, &SdfPath::new("/BadHull").unwrap()).is_err());
+        assert!(matches!(
+            build_collider_from_usd(&view, &SdfPath::new("/BoundingCube").unwrap()),
+            Err(lunco_usd_avian_reader::collider::ColliderProjectionError::UnsupportedApproximation {
+                approximation: openusd::schemas::physics::CollisionApprox::BoundingCube,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -2325,9 +2355,12 @@ def Cube "Malformed" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
         let stage = stage_from_source(SOURCE);
         let view = stage.view();
 
-        let scaled = build_collider_from_usd(&view, &SdfPath::new("/Scaled").unwrap())
-            .expect("named scale is a valid composed transform")
-            .expect("scaled cube collider");
+        let ColliderBuildOutcome::Built(scaled) =
+            build_collider_from_usd(&view, &SdfPath::new("/Scaled").unwrap())
+                .expect("named scale is a valid composed transform")
+        else {
+            panic!("scaled cube collider");
+        };
         assert_eq!(scaled.scale(), DVec3::new(2.0, 3.0, 4.0));
 
         let error = build_collider_from_usd(&view, &SdfPath::new("/Malformed").unwrap())
@@ -2348,8 +2381,8 @@ mod extract_parity_tests {
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
     use lunco_usd_avian_filters::collision_groups::CollisionGroupTable;
-    use lunco_usd_bevy_stage::StageView;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
+    use lunco_usd_bevy_stage::StageView;
     use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
@@ -3598,16 +3631,13 @@ def Xform "Rig"
         let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
         let lander = SdfPath::new("/Mission/BareLander").unwrap();
         let view = cs.view();
-        assert!(
-            collect_child_colliders_from_usd(&view, &lander)
-                .expect("valid transforms")
-                .is_empty()
-        );
-        assert!(
-            build_collider_from_usd(&view, &lander)
-                .expect("valid transform")
-                .is_some()
-        );
+        assert!(collect_child_colliders_from_usd(&view, &lander)
+            .expect("valid transforms")
+            .is_empty());
+        assert!(matches!(
+            build_collider_from_usd(&view, &lander),
+            Ok(ColliderBuildOutcome::Built(_))
+        ));
         let (has_collider, _) = extract(&view, "/Mission/BareLander");
         assert!(
             has_collider,
@@ -3697,8 +3727,8 @@ def Cube "Part" (
             2,
             "live composition must keep root and child shapes"
         );
-        assert_eq!(live_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(live_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(live_shapes[0].0 .0, DVec3::ZERO);
+        assert_eq!(live_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
 
         let child_recipe = StageRecipe::new(
             "child.usda",
@@ -3718,8 +3748,8 @@ def Cube "Part" (
             2,
             "prepared composition must keep root and child shapes"
         );
-        assert_eq!(prepared_shapes[0].0.0, DVec3::ZERO);
-        assert_eq!(prepared_shapes[1].0.0, DVec3::new(0.0, 2.0, 0.0));
+        assert_eq!(prepared_shapes[0].0 .0, DVec3::ZERO);
+        assert_eq!(prepared_shapes[1].0 .0, DVec3::new(0.0, 2.0, 0.0));
     }
 
     #[test]

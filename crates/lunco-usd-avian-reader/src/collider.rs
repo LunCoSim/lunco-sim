@@ -3,10 +3,12 @@ use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_usd_bevy_scene::{
-    ShapeDims, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed, usd_axis_to_quat,
+    read_mesh_collision_approximation, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
+    usd_axis_to_quat, usd_plane_surface_vertices, ShapeDims,
 };
-use lunco_usd_bevy_stage::{Purpose, TransformReadError, effective_purpose, local_transform_at};
+use lunco_usd_bevy_stage::{effective_purpose, local_transform_at, Purpose, TransformReadError};
 use openusd::schemas::physics::tokens as ptok;
+use openusd::schemas::physics::CollisionApprox;
 use openusd::sdf::Path as SdfPath;
 
 use crate::read_authored_bool_or_default;
@@ -19,7 +21,18 @@ use crate::read_authored_bool_or_default;
 #[derive(Debug)]
 pub enum ColliderProjectionError {
     Transform(TransformReadError),
-    Backend { prim: String, detail: String },
+    Backend {
+        prim: String,
+        detail: String,
+    },
+    InvalidApproximation {
+        prim: String,
+        value: String,
+    },
+    UnsupportedApproximation {
+        prim: String,
+        approximation: CollisionApprox,
+    },
 }
 
 impl std::fmt::Display for ColliderProjectionError {
@@ -27,11 +40,35 @@ impl std::fmt::Display for ColliderProjectionError {
         match self {
             Self::Transform(error) => error.fmt(f),
             Self::Backend { prim, detail } => write!(f, "{prim}: {detail}"),
+            Self::InvalidApproximation { prim, value } => write!(
+                f,
+                "{prim}: invalid authored {} token `{value}`",
+                ptok::A_APPROXIMATION
+            ),
+            Self::UnsupportedApproximation {
+                prim,
+                approximation,
+            } => write!(
+                f,
+                "{prim}: Avian cannot realize the authored {} mode `{}`",
+                ptok::A_APPROXIMATION,
+                approximation.as_token()
+            ),
         }
     }
 }
 
 impl std::error::Error for ColliderProjectionError {}
+
+/// The collider builder's complete non-error result. The caller decides
+/// whether an unsupported prim is irrelevant to physics or violates an
+/// authored collision contract, and whether an external mesh is still loading.
+#[derive(Debug)]
+pub enum ColliderBuildOutcome {
+    Built(Collider),
+    UnsupportedGeometry { type_name: Option<String> },
+    DeferredMeshAsset,
+}
 
 /// Project one explicitly authored USD collision prim into an Avian collider.
 ///
@@ -68,18 +105,26 @@ pub fn authored_collider_from_usd(
         });
     }
 
-    let collider = build_collider_from_usd(reader, sdf_path)?.ok_or_else(|| {
-        ColliderProjectionError::Backend {
-            prim: sdf_path.to_string(),
-            detail: format!(
-                "{} has PhysicsCollisionAPI but `{}` is not a supported geometric collider",
-                sdf_path,
-                reader
-                    .type_name(sdf_path)
-                    .unwrap_or_else(|| "unknown prim".to_owned())
-            ),
+    let collider = match build_collider_from_usd(reader, sdf_path)? {
+        ColliderBuildOutcome::Built(collider) => collider,
+        ColliderBuildOutcome::UnsupportedGeometry { type_name } => {
+            return Err(ColliderProjectionError::Backend {
+                prim: sdf_path.to_string(),
+                detail: format!(
+                    "{} has PhysicsCollisionAPI but `{}` is not a supported geometric collider",
+                    sdf_path,
+                    type_name.as_deref().unwrap_or("unknown prim")
+                ),
+            });
         }
-    })?;
+        ColliderBuildOutcome::DeferredMeshAsset => {
+            return Err(ColliderProjectionError::Backend {
+                prim: sdf_path.to_string(),
+                detail: "authored collider geometry is an external mesh that has not loaded"
+                    .to_owned(),
+            });
+        }
+    };
     if !lunco_physics::avian_backend_collider_shape_is_valid(&collider) {
         return Err(ColliderProjectionError::Backend {
             prim: sdf_path.to_string(),
@@ -186,8 +231,8 @@ pub fn collect_child_colliders_from_usd(
             continue;
         }
 
-        // For Cylinder children, fold UsdGeomCylinder.axis into the
-        // child's compound-local rotation so the Y-axis collider lines
+        // For axis-aligned primitive children, fold the authored axis into the
+        // child's compound-local rotation so the canonical collider lines
         // up with the authored axis (mirrors what lunco-usd-bevy does
         // for the entity Transform — same canonical `usd_axis_to_quat`).
         // The body root is different: its axis is already on the ECS body
@@ -208,19 +253,7 @@ pub fn collect_child_colliders_from_usd(
                     // axis of the STAGE's frame while the collider is built in the
                     // canonical one (identical to what usd-bevy does for the visual
                     // Transform, so mesh and collider can't disagree on a Z-up stage).
-                    let q_axis = match axis_tok.as_str() {
-                        // Avian's canonical round primitives are Y-axial.
-                        "Y" => Quat::IDENTITY,
-                        "X" | "Z" => convention.orient(
-                            usd_axis_to_quat(&axis_tok).expect("X and Z axes have rotations"),
-                        ),
-                        _ => {
-                            return Err(ColliderProjectionError::Backend {
-                                prim: child_path.to_string(),
-                                detail: format!("unsupported authored {ty} axis `{axis_tok}`"),
-                            });
-                        }
-                    };
+                    let q_axis = convention.orient(usd_axis_to_quat(axis_tok));
                     if !q_axis.abs_diff_eq(Quat::IDENTITY, 1e-6) {
                         child_tf.rotation *= q_axis;
                     }
@@ -243,17 +276,25 @@ pub fn collect_child_colliders_from_usd(
                 detail: "collider scale is not finite or f32-representable".to_owned(),
             });
         }
-        let Some(collider) = build_collider_from_usd_at_scale(reader, &child_path, scale)? else {
-            return Err(ColliderProjectionError::Backend {
-                prim: child_path.to_string(),
-                detail: format!(
-                    "{} has PhysicsCollisionAPI but `{}` has no supported collider projection",
-                    child_path,
-                    reader
-                        .type_name(&child_path)
-                        .unwrap_or_else(|| "unknown prim".to_owned())
-                ),
-            });
+        let collider = match build_collider_from_usd_at_scale(reader, &child_path, scale)? {
+            ColliderBuildOutcome::Built(collider) => collider,
+            ColliderBuildOutcome::UnsupportedGeometry { type_name } => {
+                return Err(ColliderProjectionError::Backend {
+                    prim: child_path.to_string(),
+                    detail: format!(
+                        "{} has PhysicsCollisionAPI but `{}` has no supported collider projection",
+                        child_path,
+                        type_name.as_deref().unwrap_or("unknown prim")
+                    ),
+                });
+            }
+            ColliderBuildOutcome::DeferredMeshAsset => {
+                return Err(ColliderProjectionError::Backend {
+                    prim: child_path.to_string(),
+                    detail: "compound body collider geometry cannot be deferred while an external mesh loads"
+                        .to_owned(),
+                });
+            }
         };
         let pos = Position(DVec3::new(
             child_tf.translation.x as f64,
@@ -354,16 +395,16 @@ fn gather_compound_candidates(
 /// - **Cube**: `double size` (default 2.0).
 /// - **Sphere**: `double radius` (default 1.0).
 /// - **Cylinder**: `double radius`, `double height` (defaults 1, 2). Avian's
-///   cylinder is Y-axial; the `UsdGeomCylinder.axis` token is honoured by the
-///   entity's Transform rotation (composed in `lunco-usd-bevy`; compound
-///   children get the axis rotation added in `collect_child_colliders_from_usd`).
+///   cylinder is Y-axial and its plane surface is +Y-normal; authored axes are
+///   honored by the entity transform or, for compound children, by
+///   `collect_child_colliders_from_usd`.
 ///
 /// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
 /// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.
 pub fn build_collider_from_usd(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
-) -> Result<Option<Collider>, ColliderProjectionError> {
+) -> Result<ColliderBuildOutcome, ColliderProjectionError> {
     let scale = local_transform_at(reader, sdf_path, 0.0)
         .map_err(ColliderProjectionError::Transform)?
         .map_or(Vec3::ONE, |transform| transform.scale);
@@ -384,9 +425,9 @@ pub fn build_collider_from_usd_at_scale(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
     scale: Vec3,
-) -> Result<Option<Collider>, ColliderProjectionError> {
+) -> Result<ColliderBuildOutcome, ColliderProjectionError> {
     let Some(ty) = reader.type_name(sdf_path) else {
-        return Ok(None);
+        return Ok(ColliderBuildOutcome::UnsupportedGeometry { type_name: None });
     };
 
     // Native UsdGeomMesh → static triangle-mesh collider, decoded from the
@@ -396,72 +437,60 @@ pub fn build_collider_from_usd_at_scale(
     // scale tail applies unchanged.
     if ty == "Mesh" {
         let Some((verts, tris)) = read_usd_mesh_indexed(reader, sdf_path) else {
-            // An asset-backed terrain mesh can be admitted after its async
-            // visual asset finishes loading. Compound bodies do not get this
-            // defer path: their caller rejects `None` below rather than
-            // silently omitting this member.
-            return Ok(None);
+            // Only an explicitly mesh-loaded asset may defer collider creation.
+            // Missing native USD points/topology is malformed geometry and
+            // must not be confused with an asynchronous asset load.
+            if reader.text(sdf_path, "lunco:assetMode").as_deref() == Some("mesh") {
+                return Ok(ColliderBuildOutcome::DeferredMeshAsset);
+            }
+            return Err(ColliderProjectionError::Backend {
+                prim: sdf_path.to_string(),
+                detail: "native UsdGeomMesh has no valid points and indexed face topology"
+                    .to_owned(),
+            });
         };
         let verts: Vec<DVec3> = verts
             .into_iter()
             .map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64))
             .collect();
-        // Standard `UsdPhysicsMeshCollisionAPI physics:approximation` selects how
-        // the render mesh becomes a collider. Default (unauthored / `none` /
-        // `meshSimplification`) = exact triangle mesh — correct for STATIC terrain.
-        // `convexHull`/`convexDecomposition` produce the solid volumes a DYNAMIC
-        // body needs (a trimesh can't be a moving rigid body in parry). Read via
-        // the standard token so it works through either composed reader;
-        // an authored approximation that this adapter cannot realize is rejected.
+        // Read the standard schema token into its upstream typed enum once.
+        // `None` means the source mesh is used directly. Avian realizes that
+        // exact geometry as a triangle mesh; it realizes the two convex modes
+        // directly. The remaining standard modes are rejected explicitly until
+        // a faithful Avian shape projection exists.
         // `physics:approximation` is a property OF `PhysicsMeshCollisionAPI`, so
         // it only means anything when that schema is applied.
-        let approximation = if reader.has_api_schema(sdf_path, ptok::API_MESH_COLLISION) {
-            match reader.text(sdf_path, ptok::A_APPROXIMATION) {
-                Some(value) => Some(value),
-                None if reader.has_authored_attribute(sdf_path, ptok::A_APPROXIMATION)
-                    || !reader
-                        .connections(sdf_path, ptok::A_APPROXIMATION)
-                        .is_empty() =>
-                {
-                    return Err(ColliderProjectionError::Backend {
-                        prim: sdf_path.to_string(),
-                        detail: format!("malformed authored {}", ptok::A_APPROXIMATION),
-                    });
+        let approximation =
+            read_mesh_collision_approximation(reader, sdf_path).map_err(|error| {
+                ColliderProjectionError::InvalidApproximation {
+                    prim: error.prim,
+                    value: error.value,
                 }
-                None => None,
-            }
-        } else {
-            None
-        };
-        let collider = match approximation.as_deref() {
-            Some("convexHull") => {
+            })?;
+        let collider = match approximation {
+            CollisionApprox::ConvexHull => {
                 Collider::convex_hull(verts).ok_or_else(|| ColliderProjectionError::Backend {
                     prim: sdf_path.to_string(),
                     detail: "authored convexHull approximation could not be built".to_owned(),
                 })?
             }
-            Some("convexDecomposition") => Collider::convex_decomposition(verts, tris),
-            None | Some("none") => Collider::try_trimesh(verts, tris).map_err(|error| {
+            CollisionApprox::ConvexDecomposition => Collider::convex_decomposition(verts, tris),
+            CollisionApprox::None => Collider::try_trimesh(verts, tris).map_err(|error| {
                 ColliderProjectionError::Backend {
                     prim: sdf_path.to_string(),
                     detail: format!("authored triangle mesh could not be built: {error}"),
                 }
             })?,
-            // The authored approximation is a physical contract. Do not
-            // silently replace an unsupported approximation with a different
-            // shape, and do not turn a failed convex hull into a dynamic
-            // triangle mesh that Avian cannot use as a moving body.
-            Some(value) => {
-                return Err(ColliderProjectionError::Backend {
+            approximation => {
+                return Err(ColliderProjectionError::UnsupportedApproximation {
                     prim: sdf_path.to_string(),
-                    detail: format!(
-                        "unsupported authored {} approximation `{value}`",
-                        ptok::A_APPROXIMATION
-                    ),
+                    approximation,
                 });
             }
         };
-        return Ok(Some(apply_collider_scale(collider, scale)));
+        return Ok(ColliderBuildOutcome::Built(apply_collider_scale(
+            collider, scale,
+        )));
     }
 
     // Dimensions (+ their magic defaults) come from the canonical
@@ -473,7 +502,9 @@ pub fn build_collider_from_usd_at_scale(
         "Cube" | "Sphere" | "Cylinder" | "Cone" | "Capsule" | "Plane"
     );
     if !recognized_geometry {
-        return Ok(None);
+        return Ok(ColliderBuildOutcome::UnsupportedGeometry {
+            type_name: Some(ty),
+        });
     }
     let shape_dims = read_shape_dims(reader, sdf_path, ty.as_str()).ok_or_else(|| {
         ColliderProjectionError::Backend {
@@ -484,15 +515,33 @@ pub fn build_collider_from_usd_at_scale(
     let collider = match shape_dims {
         ShapeDims::Cube { size } => Collider::cuboid(size, size, size),
         ShapeDims::Sphere { radius } => Collider::sphere(radius),
-        ShapeDims::Cylinder { radius, height } => Collider::cylinder(radius, height),
-        ShapeDims::Cone { radius, height } => Collider::cone(radius, height),
-        ShapeDims::Capsule { radius, height } => Collider::capsule(radius, height),
-        // Represent the plane as a thin cuboid so bounds and scaling
-        // behave predictably and match the visual mapping.
-        ShapeDims::Plane { width, length } => Collider::cuboid(width, 0.001, length),
+        ShapeDims::Cylinder { radius, height, .. } => Collider::cylinder(radius, height),
+        ShapeDims::Cone { radius, height, .. } => Collider::cone(radius, height),
+        ShapeDims::Capsule { radius, height, .. } => Collider::capsule(radius, height),
+        // Preserve the finite authored surface as two coplanar triangles. A
+        // synthetic box thickness would create collision volume absent from
+        // the USD geometry.
+        ShapeDims::Plane {
+            width,
+            length,
+            axis,
+        } => {
+            let vertices = usd_plane_surface_vertices(width, length, axis)
+                .into_iter()
+                .map(|[x, y, z]| DVec3::new(x, y, z))
+                .collect();
+            Collider::try_trimesh(vertices, vec![[0, 1, 2], [0, 2, 3]]).map_err(|error| {
+                ColliderProjectionError::Backend {
+                    prim: sdf_path.to_string(),
+                    detail: format!("authored finite UsdGeomPlane could not be built: {error}"),
+                }
+            })?
+        }
     };
 
-    Ok(Some(apply_collider_scale(collider, scale)))
+    Ok(ColliderBuildOutcome::Built(apply_collider_scale(
+        collider, scale,
+    )))
 }
 
 /// Pre-applies a prim's composed USD scale to a freshly-built intrinsic collider so

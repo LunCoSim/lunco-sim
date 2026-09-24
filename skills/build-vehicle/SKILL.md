@@ -423,7 +423,11 @@ drifting apart.
 ([`test-via-api`](../test-via-api/SKILL.md)): throttle ⇒ position delta; steer ⇒
 heading change; both `drivetrain` variants. `QueryEntity` a wheel prim ⇒
 canonical attrs resolved. Watch the log: wheel refusals and resyncs are loud by
-design.
+design. For a raycast wheel that rests on the chassis, inspect
+`QueryPhysicsState` on its `MobilityRoot`: the `wheel_contacts` entries report
+the actual hit, owner, ray origin, and distance. Carrier resolution uses the
+same stage path and instance root while excluding `UsdPreviewOnly` descendants;
+same-path preview entities must never own a mounted wheel's support ray.
 
 ## Anti-patterns
 

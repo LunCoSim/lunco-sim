@@ -1201,7 +1201,7 @@ impl Panel for TelemetryBrowserPanel {
     }
 
     fn menu_group(&self) -> PanelMenuGroup {
-        PanelMenuGroup::Design
+        PanelMenuGroup::Lunica
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

@@ -146,6 +146,12 @@ marker colors. `ApplyUsdOps` rejects this target; derived presentation uses the
 transient USD command, which updates the live stage but does not alter the
 runtime sidecar or undo history.
 
+The initial Twin scene asset contains `@root@` and `@runtime@` only. Its live
+projection tracks `@view@` operations separately and replays them onto the
+mounted canonical stage, including view operations authored before that stage
+was mounted. This keeps transient annotations visible in the live View without
+adding them to the Twin overlay.
+
 Omniverse makes the active authoring layer visible in its Layers panel, while its
 Session Layer is temporary working state. LunCoSim's persisted `@runtime@` is a
 different contract: it is Twin-owned authoring that can survive reopening, not

@@ -50,6 +50,7 @@ backing-component presence that changes the emitted rows.
 | **Avian observations** | Native rigid-body/contact facts plus a port adapter for physics-owned `RaycastObservation` → ray_distance, ray_hit_valid, hit point/normal, and sample time |
 | **Modelica sensor conversions** | IMU, altimeter, attitude, and touchdown semantics are ordinary Modelica inputs/outputs wired in USD |
 | **Hardware** (`Port`) | `value` (f64) |
+| **USD component** (`PortSurface`) | authored input/output names backed by scalar `Port` endpoints |
 
 Avian's foreign components are exposed declaratively via the `AVIAN` spec table
 (`ports.rs`). **Adding a port group:** declare the `AvianGroup` (present-predicate,

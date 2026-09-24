@@ -9,13 +9,15 @@
 //! supplies the cosim-owned backends and registers them via
 //! [`register_builtin_port_backends`].
 //!
-//! Three kinds of backend live here:
+//! Built-in backends live here:
 //! - **Modelica** [`SimComponent`] — `HashMap<String, f64>` inputs/outputs.
 //! - **Avian** rigid bodies + revolute/prismatic joints — foreign components
 //!   exposed by an external spec ([`AvianPort`]/[`AvianGroup`]) rather than
 //!   `#[derive]`. Adding an avian kind is one entry in [`AVIAN`] plus its group
 //!   predicate, identity key, and structural invalidation hook.
 //! - **SysML/hardware** single-value [`Port`]s — one bidirectional scalar each.
+//! - **USD component surfaces** [`PortSurface`] — explicitly directed names
+//!   backed by child [`Port`] endpoints.
 //!
 //! Registration order *is* resolution precedence (first match wins): Modelica,
 //! avian, then the single-value ports — see [`register_builtin_port_backends`].
@@ -534,8 +536,108 @@ fn output_ports_topology_key(outputs: &OutputPorts) -> u64 {
 }
 
 fn port_surface_topology_key(surface: &PortSurface) -> u64 {
-    port_entity_map_key(surface.ports.iter())
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut ports = surface.ports.iter().collect::<Vec<_>>();
+    ports.sort_by(|left, right| left.0.cmp(right.0));
+    for (name, port) in ports {
+        name.hash(&mut hasher);
+        port.direction.hash(&mut hasher);
+    }
+    hasher.finish()
 }
+
+/// USD-authored component ports backed by child scalar [`Port`] endpoints.
+const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, (With<PortSurface>, With<lunco_port_core::PortSurfaceReady>)>()
+                .iter(world),
+        );
+    },
+    topology_key: |world, entity| {
+        world
+            .get::<PortSurface>(entity)
+            .map(port_surface_topology_key)
+            .unwrap_or(0)
+    },
+    list: |world, entity, out| {
+        let Some(surface) = world.get::<PortSurface>(entity) else {
+            return;
+        };
+        let mut ports = surface.ports.iter().collect::<Vec<_>>();
+        ports.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, authored) in ports {
+            if let Some(endpoint) = world.get::<Port>(authored.endpoint) {
+                out.push(PortRef {
+                    name: name.clone(),
+                    direction: authored.direction,
+                    value: endpoint.value,
+                });
+            }
+        }
+    },
+    metadata: Some(|_world, _entity, _name, direction| {
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "USD component",
+            match direction {
+                PortDirection::In => "connected input",
+                PortDirection::Out => "component state",
+                PortDirection::InOut => "component / connection",
+            },
+            true,
+        )
+    }),
+    read_output: |world, entity, name| {
+        let authored = world.get::<PortSurface>(entity)?.ports.get(name)?;
+        if !matches!(
+            authored.direction,
+            PortDirection::Out | PortDirection::InOut
+        ) {
+            return None;
+        }
+        world
+            .get::<Port>(authored.endpoint)
+            .map(|endpoint| endpoint.value)
+    },
+    read_input: |world, entity, name| {
+        let authored = world.get::<PortSurface>(entity)?.ports.get(name)?;
+        if !matches!(authored.direction, PortDirection::In | PortDirection::InOut) {
+            return None;
+        }
+        world
+            .get::<Port>(authored.endpoint)
+            .map(|endpoint| endpoint.value)
+    },
+    write_input: |world, entity, name, value| {
+        let Some(authored) = world
+            .get::<PortSurface>(entity)
+            .and_then(|surface| surface.ports.get(name))
+            .copied()
+        else {
+            return false;
+        };
+        if !matches!(authored.direction, PortDirection::In | PortDirection::InOut) {
+            return false;
+        }
+        let Ok(mut endpoint) = world.get_entity_mut(authored.endpoint) else {
+            return false;
+        };
+        let Some(mut port) = endpoint.get_mut::<Port>() else {
+            return false;
+        };
+        port.value = value;
+        true
+    },
+    resolve_output: None,
+    resolve_input: None,
+    read_slot: None,
+    write_slot: None,
+};
 
 /// Return the identity of a connection's endpoints and port directions.
 ///
@@ -715,6 +817,7 @@ pub fn register_builtin_port_backends(registry: &mut PortRegistry) {
     registry.register(SIMCOMPONENT_BACKEND);
     registry.register(AVIAN_BACKEND);
     registry.register(PORT_BACKEND);
+    registry.register(PORT_SURFACE_BACKEND);
     registry.register(OUTPUT_PORTS_BACKEND);
     registry.register(PILOTED_BACKEND);
 }

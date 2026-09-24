@@ -27,7 +27,7 @@ use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::PbrLook;
 use lunco_scene_command_contracts::{DeleteEntity, MoveEntity};
 
-use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
+use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
 use lunco_physics::joint::JOINT_ANGLE_PORT;
 
 use lunco_scene_selection::SelectedEntities;
@@ -745,7 +745,7 @@ impl Panel for Inspector {
         PanelSlot::RightInspector
     }
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Scene
+        lunco_workbench_core::PanelMenuGroup::Builder
     }
     fn transparent_background(&self) -> bool {
         true
@@ -777,7 +777,7 @@ impl Panel for EnvironmentPanel {
         PanelSlot::RightInspector
     }
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Scene
+        lunco_workbench_core::PanelMenuGroup::Editor
     }
     fn transparent_background(&self) -> bool {
         true

@@ -127,6 +127,12 @@ menu actions, go through `DeferredWorldTriggers` and are applied after the
 egui pass restores the layout; do not call observer events directly from a
 render callback when a typed context can queue the intent.
 
+Panel entries in the View menu use `PanelMenuGroup` for their primary workflow:
+Builder owns live-Twin construction panels, Editor owns authored document
+editing panels, and Lunica owns Modelica workbench panels. Put shared panels in
+their primary home once; leave `Other` for integrations with no workflow home
+and `Hidden` for internal panels that should not be user-toggleable.
+
 For Twin-browser work, use `lunco_workbench_browser::BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by
 human-readable names/paths, retain matching ancestors, and emit the existing

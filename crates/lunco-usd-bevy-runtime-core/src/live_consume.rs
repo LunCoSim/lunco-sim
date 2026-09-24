@@ -179,7 +179,10 @@ fn mark_model_state_revision(world: &mut World, prim_path: &str) {
     let entity = world
         .query::<(Entity, &UsdPrimPath)>()
         .iter(world)
-        .find_map(|(entity, path)| (path.path == prim_path).then_some(entity));
+        .find_map(|(entity, path)| {
+            (path.path == prim_path && !lunco_usd_bevy_scene::is_preview_only_entity(world, entity))
+                .then_some(entity)
+        });
     if let Some(entity) = entity {
         let mut revision = world
             .get::<lunco_core::ModelStateRevision>(entity)
@@ -252,7 +255,11 @@ fn find_live_entity(
 ) -> Option<Entity> {
     let mut q = world.query::<(Entity, &UsdPrimPath)>();
     q.iter(world)
-        .find(|(_, upp)| upp.stage_handle.id() == stage_handle_id && upp.path == *path)
+        .find(|(entity, upp)| {
+            upp.stage_handle.id() == stage_handle_id
+                && upp.path == *path
+                && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
+        })
         .map(|(e, _)| e)
 }
 
@@ -264,7 +271,11 @@ fn find_program_owner(
     let mut query = world.query::<(Entity, &UsdPrimPath, &lunco_core::ScenarioProgramPrim)>();
     query
         .iter(world)
-        .find(|(_, prim, source)| prim.stage_handle.id() == stage_id && source.0 == source_path)
+        .find(|(entity, prim, source)| {
+            prim.stage_handle.id() == stage_id
+                && source.0 == source_path
+                && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
+        })
         .map(|(entity, _, _)| entity)
 }
 

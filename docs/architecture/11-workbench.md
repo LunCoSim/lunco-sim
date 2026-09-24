@@ -460,7 +460,9 @@ materializes that plan and uses the instance panel's authoritative
 revision rebuild, or explicit reset, switching back to a visited perspective
 restores its cached user layout and does not reopen a closed tab. Opening a
 panel from the View menu is an explicit user request and uses the same shell
-insertion path.
+insertion path. The menu keeps Reset Layout and Toggle Activity Bar directly
+available, then groups panel checkboxes into Builder, Editor, and Lunica
+submenus according to `PanelMenuGroup`; unclassified integrations use Other.
 
 ### 5a. Side-browser architecture — Twin panel + Files panel
 

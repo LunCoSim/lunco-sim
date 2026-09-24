@@ -644,15 +644,15 @@ fn expression(value: &SysmlExpression) -> H {
                 ("revision", H::UInt(value.source.revision)),
             ]),
         ),
-        ("kind_code", H::Int(expression_kind_code(value.kind))),
+        ("kind_code", H::Int(expression_kind_code(value.kind()))),
         (
             "feature",
-            value.feature.map(feature_handle).unwrap_or(H::Unit),
+            value.feature().map(feature_handle).unwrap_or(H::Unit),
         ),
         (
             "standard_constant_code",
             value
-                .standard_constant
+                .standard_constant()
                 .map(standard_constant_code)
                 .map(H::Int)
                 .unwrap_or(H::Unit),
@@ -660,16 +660,14 @@ fn expression(value: &SysmlExpression) -> H {
         (
             "function_element",
             value
-                .function
-                .as_ref()
+                .function()
                 .map(|function| element_handle(function.element))
                 .unwrap_or(H::Unit),
         ),
         (
             "standard_function_code",
             value
-                .function
-                .as_ref()
+                .function()
                 .and_then(|function| function.standard_function)
                 .map(standard_function_code)
                 .map(H::Int)
@@ -679,7 +677,7 @@ fn expression(value: &SysmlExpression) -> H {
             "argument_parameters",
             H::Array(
                 value
-                    .argument_parameters
+                    .argument_parameters()
                     .iter()
                     .map(|parameter| parameter.map(element_handle).unwrap_or(H::Unit))
                     .collect(),
@@ -688,45 +686,41 @@ fn expression(value: &SysmlExpression) -> H {
         (
             "operator_code",
             value
-                .operator
+                .operator()
                 .map(expression_operator_code)
                 .map(H::Int)
                 .unwrap_or(H::Unit),
         ),
         (
             "integer_value",
-            value.integer_value.map(H::Int).unwrap_or(H::Unit),
+            value.integer_value().map(H::Int).unwrap_or(H::Unit),
         ),
         (
             "real_value",
             value
-                .real_value
+                .real_value()
                 .map(|number| H::Float(number.as_f64()))
                 .unwrap_or(H::Unit),
         ),
         (
             "boolean_value",
-            value.boolean_value.map(H::Bool).unwrap_or(H::Unit),
+            value.boolean_value().map(H::Bool).unwrap_or(H::Unit),
         ),
         (
             "string_value",
-            value
-                .string_value
-                .as_ref()
-                .map(|string| H::str(string.clone()))
-                .unwrap_or(H::Unit),
+            value.string_value().map(H::str).unwrap_or(H::Unit),
         ),
         (
             "unsupported_code",
             value
-                .unsupported
+                .unsupported()
                 .map(unsupported_expression_code)
                 .map(H::Int)
                 .unwrap_or(H::Unit),
         ),
         (
             "children",
-            H::Array(value.children.iter().map(expression).collect()),
+            H::Array(value.children().into_iter().map(expression).collect()),
         ),
     ])
 }

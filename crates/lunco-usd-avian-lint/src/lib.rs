@@ -396,7 +396,10 @@ fn vehicle_part_facts(
             let shape_valid = if covered && collision_api {
                 matches!(
                     lunco_usd_avian_reader::collider::build_collider_from_usd(reader, path),
-                    Ok(Some(_))
+                    Ok(
+                        lunco_usd_avian_reader::collider::ColliderBuildOutcome::Built(_)
+                            | lunco_usd_avian_reader::collider::ColliderBuildOutcome::DeferredMeshAsset
+                    )
                 )
             } else {
                 true

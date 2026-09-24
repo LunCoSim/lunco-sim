@@ -324,7 +324,7 @@ impl Panel for ModelsPalette {
         PanelSlot::SideBrowser
     }
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Scene
+        lunco_workbench_core::PanelMenuGroup::Builder
     }
     fn transparent_background(&self) -> bool {
         true

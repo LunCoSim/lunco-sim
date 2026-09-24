@@ -808,27 +808,27 @@ pub fn register_sysml_types(engine: &mut Engine) {
         )
         .register_type_with_name::<SysmlExpression>("SysmlExpression")
         .register_get("source", |value: &mut SysmlExpression| value.source.clone())
-        .register_get("kind", |value: &mut SysmlExpression| value.kind)
+        .register_get("kind", |value: &mut SysmlExpression| value.kind())
         .register_get("feature", |value: &mut SysmlExpression| {
-            value.feature.map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+            value.feature().map(Dynamic::from).unwrap_or(Dynamic::UNIT)
         })
         .register_get("function", |value: &mut SysmlExpression| {
             value
-                .function
-                .clone()
+                .function()
+                .cloned()
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT)
         })
         .register_get("standard_constant", |value: &mut SysmlExpression| {
             value
-                .standard_constant
+                .standard_constant()
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT)
         })
         .register_get("argument_parameters", |value: &mut SysmlExpression| {
             Dynamic::from_array(
                 value
-                    .argument_parameters
+                    .argument_parameters()
                     .iter()
                     .map(|parameter| {
                         parameter
@@ -840,41 +840,48 @@ pub fn register_sysml_types(engine: &mut Engine) {
             )
         })
         .register_get("operator", |value: &mut SysmlExpression| {
-            value.operator.map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+            value.operator().map(Dynamic::from).unwrap_or(Dynamic::UNIT)
         })
         .register_get("integer_value", |value: &mut SysmlExpression| {
             value
-                .integer_value
+                .integer_value()
                 .map(Dynamic::from_int)
                 .unwrap_or(Dynamic::UNIT)
         })
         .register_get("real_value", |value: &mut SysmlExpression| {
             value
-                .real_value
+                .real_value()
                 .map(|number| Dynamic::from_float(number.as_f64()))
                 .unwrap_or(Dynamic::UNIT)
         })
         .register_get("boolean_value", |value: &mut SysmlExpression| {
             value
-                .boolean_value
+                .boolean_value()
                 .map(Dynamic::from_bool)
                 .unwrap_or(Dynamic::UNIT)
         })
         .register_get("string_value", |value: &mut SysmlExpression| {
             value
-                .string_value
-                .clone()
+                .string_value()
+                .map(str::to_owned)
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT)
         })
         .register_get("unsupported", |value: &mut SysmlExpression| {
             value
-                .unsupported
+                .unsupported()
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT)
         })
         .register_get("children", |value: &mut SysmlExpression| {
-            Dynamic::from_array(value.children.iter().cloned().map(Dynamic::from).collect())
+            Dynamic::from_array(
+                value
+                    .children()
+                    .into_iter()
+                    .cloned()
+                    .map(Dynamic::from)
+                    .collect(),
+            )
         })
         .register_type_with_name::<SysmlTypeCategory>("SysmlTypeCategory")
         .register_type_with_name::<SysmlPrimitiveType>("SysmlPrimitiveType")
@@ -1723,7 +1730,9 @@ fn ir_value_type_name(value: &IrValueType) -> &'static str {
     match value {
         IrValueType::Boolean => "Boolean",
         IrValueType::Integer => "Integer",
+        IrValueType::Rational => "Rational",
         IrValueType::Real => "Real",
+        IrValueType::Complex => "Complex",
         IrValueType::String => "String",
         IrValueType::Quantity { .. } => "Quantity",
         IrValueType::Enumeration { .. } => "Enumeration",

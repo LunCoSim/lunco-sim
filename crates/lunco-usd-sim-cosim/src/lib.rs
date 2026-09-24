@@ -44,7 +44,7 @@ use lunco_scripting::source_asset::PythonSource;
 use lunco_scripting::{doc::ScriptedModel, SceneOwnedScript, ScriptRegistry};
 use lunco_telemetry_core::{ChannelSource, Parameter};
 use lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight;
-use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath};
 use lunco_usd_bevy_stage::read::read_authored_bool_strict;
 use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::{
@@ -473,6 +473,8 @@ pub(crate) fn process_usd_cosim_prims(
     mut commands: Commands,
     query: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdSourcedCosim>>,
     mut pending: ResMut<PendingUsdCosimPrimWork>,
+    parents: Query<&ChildOf>,
+    preview_roots: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
     // Initial reads use the worker-produced plan; later authored generations
     // use the live canonical stage selected by the shared reader boundary.
@@ -498,6 +500,9 @@ pub(crate) fn process_usd_cosim_prims(
         let Ok((entity, prim_path, instance_projection)) = query.get(entity) else {
             continue;
         };
+        if lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots) {
+            continue;
+        }
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             pending.0.queue(entity);
             continue;

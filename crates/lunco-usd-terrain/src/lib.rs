@@ -28,7 +28,7 @@ use lunco_terrain_globe::TerrainTile;
 // Two read planes, two traits: `UsdRead` = the live COMPOSED stage (what the terrain
 // projects from); `UsdDataExt` = a raw authored `sdf::Data` layer, which is what the
 // document registry hands back for the authoring tier's child walks.
-use lunco_usd_bevy_scene::{read_primitive_axis, read_shape_dims, ShapeDims};
+use lunco_usd_bevy_scene::{read_shape_dims, ShapeDims, UsdGeomAxis};
 use lunco_usd_bevy_stage::{read_transform_from_usd, StageView, UsdRead};
 use lunco_usd_data::usd_data::UsdDataExt;
 
@@ -1636,6 +1636,8 @@ fn bridge_usd_dem_terrain(
             With<lunco_terrain_surface::DemHeightField>,
         )>,
     >,
+    parents: Query<&ChildOf>,
+    preview_roots: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     stages: Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>,
     twins: Res<lunco_assets_core::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
@@ -1646,6 +1648,16 @@ fn bridge_usd_dem_terrain(
     mut commands: Commands,
 ) {
     for (entity, prim_path) in &q {
+        // A document preview can compose the same authored paths as the live
+        // scene, but it is not a terrain realization. Keep it out of the DEM
+        // request, collider-ring, height-query, and global physics-readiness
+        // paths. A future preview terrain product needs its own spatial and
+        // render-only contract; a mission DEM request cannot serve both roles.
+        if lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots) {
+            commands.entity(entity).try_insert(DemBridged);
+            continue;
+        }
+
         // Read the LIVE canonical stage (built on demand from a layer recipe
         // when the asset carries one) — the source of truth. Wait until it is
         // available before reading attrs.
@@ -1673,6 +1685,7 @@ fn bridge_usd_dem_terrain(
                                                         // tiles, and scatter are reaped by their respective orphan reapers.
         for (prior, prior_path) in &q_prior_terrains {
             if prior != entity
+                && !lunco_usd_bevy_scene::is_preview_only(prior, &parents, &preview_roots)
                 && prior_path.path == prim_path.path
                 && prior_path.stage_handle.id() == prim_path.stage_handle.id()
             {
@@ -2117,8 +2130,8 @@ fn bridge_dem_prim_read(
 /// A flat site is a finite `UsdGeomPlane`, not a box. A box has vertical side
 /// faces, so using it as the render surface creates an authored wall at the
 /// globe handoff and makes the physical horizon look like a straight tile edge.
-/// `UsdGeomPlane` supplies exactly the one surface that is rendered and the
-/// terrain physics bridge gives it the corresponding thin support collider.
+/// `UsdGeomPlane` supplies exactly the finite surface that is rendered and the
+/// terrain physics bridge gives it the corresponding zero-thickness collider.
 fn project_flat_site_surface(
     reader: &StageView<'_>,
     entity: Entity,
@@ -2133,7 +2146,12 @@ fn project_flat_site_surface(
         );
         return;
     };
-    let Some(ShapeDims::Plane { width, length }) = read_shape_dims(reader, sdf, &type_name) else {
+    let Some(ShapeDims::Plane {
+        width,
+        length,
+        axis,
+    }) = read_shape_dims(reader, sdf, &type_name)
+    else {
         warn!(
             "[usd-dem] flat-site prim {} must be a valid UsdGeomPlane",
             prim_path.path
@@ -2155,7 +2173,7 @@ fn project_flat_site_surface(
         );
         return;
     }
-    if read_primitive_axis(reader, sdf, "Plane").as_deref() != Some("Y") {
+    if axis != UsdGeomAxis::Y {
         warn!(
             "[usd-dem] flat-site prim {} must author UsdGeomPlane axis=\"Y\"",
             prim_path.path

@@ -102,6 +102,14 @@ source-backed elements, typed attributes/literals, requirement records,
 verification records, resolved references, and syntax/name/collision
 diagnostics; the upstream model remains private to the AST boundary.
 
+Expression nodes use payload-carrying variants: each feature reference,
+invocation, literal, operator, index, collection, conditional, or unsupported
+syntax node carries only its own data and child topology. Fixed-arity operands
+are represented directly, so the IR compiler does not reconstruct arity from a
+generic child vector or diagnose missing operator/literal payloads that the AST
+type can make impossible. Unsupported syntax remains an explicit source-linked
+variant.
+
 The typed projection now also preserves the standard concepts needed by the
 Griffin component model:
 
@@ -191,9 +199,12 @@ angles and square roots of dimensioned quantities are rejected rather than
 silently interpreted. The evaluator does not yet implement string-to-numeric or
 string-to-Boolean parsing, and Modelica lowering does not advertise `ToString`
 until its output format can match evaluator semantics. Other standard-library
-gaps include exact Rational and Complex values, collection-object operations,
-sequence transforms, higher-order control functions with lambda bodies, and
-vector constructors/`norm`/`inner`.
+gaps include executable Rational and Complex values, collection-object
+operations, sequence transforms, higher-order control functions with lambda
+bodies, and vector constructors/`norm`/`inner`. Rational and Complex primitive
+identities are preserved through the type projection and neutral IR; scalar
+constraint execution emits an explicit unsupported-type diagnostic until exact
+values are supported end to end.
 The call catalog is an executable subset, not a claim of full KerML Function
 Library conformance.
 Unsupported syntax and unresolved references remain explicit with source

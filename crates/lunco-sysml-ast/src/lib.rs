@@ -286,6 +286,15 @@ pub struct SysmlFunctionReference {
     pub standard_function: Option<SysmlStandardFunction>,
 }
 
+/// One invocation argument with its independently resolved formal parameter.
+/// Keeping the binding beside its expression prevents parallel arrays from
+/// drifting out of alignment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlInvocationArgument {
+    pub parameter: Option<SysmlElementHandle>,
+    pub value: SysmlExpression,
+}
+
 /// The category of a semantic diagnostic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SysmlDiagnosticKind {
@@ -478,43 +487,170 @@ pub enum SysmlUnsupportedExpression {
     InvalidLiteral,
 }
 
+/// A valid expression payload. Each variant owns its data and child topology,
+/// so a literal cannot also carry a function/operator payload and fixed-arity
+/// expressions cannot have an invalid operand count.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlExpressionData {
+    FeatureReference(SysmlFeatureHandle),
+    StandardConstant {
+        feature: SysmlFeatureHandle,
+        constant: SysmlStandardConstant,
+    },
+    Invocation {
+        function: SysmlFunctionReference,
+        arguments: Vec<SysmlInvocationArgument>,
+    },
+    Index {
+        collection: Box<SysmlExpression>,
+        index: Box<SysmlExpression>,
+    },
+    Collection(Vec<SysmlExpression>),
+    IntegerLiteral(i64),
+    RealLiteral(SysmlNumber),
+    BooleanLiteral(bool),
+    StringLiteral(String),
+    NullLiteral,
+    Unary {
+        operator: SysmlExpressionOperator,
+        operand: Box<SysmlExpression>,
+    },
+    Binary {
+        operator: SysmlExpressionOperator,
+        left: Box<SysmlExpression>,
+        right: Box<SysmlExpression>,
+    },
+    Conditional {
+        condition: Box<SysmlExpression>,
+        when_true: Box<SysmlExpression>,
+        when_false: Box<SysmlExpression>,
+    },
+    Group(Box<SysmlExpression>),
+    Unsupported(SysmlUnsupportedExpression),
+}
+
 /// One typed, source-spanned expression node.
-///
-/// Values live in their native fields, reference leaves carry resolved
-/// feature handles, and compound expressions retain child topology. This is
-/// a projection for policy and model generation, not a general expression
-/// evaluator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlExpression {
     pub source: SysmlSourceRef,
-    pub kind: SysmlExpressionKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub feature: Option<SysmlFeatureHandle>,
-    /// Resolved target for a KerML function invocation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub function: Option<SysmlFunctionReference>,
-    /// Resolved standard constant for a `StandardConstant` expression.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub standard_constant: Option<SysmlStandardConstant>,
-    /// For invocations, the parameter handle bound to each argument. A
-    /// missing handle means the written argument could not be resolved to a
-    /// formal parameter and is rejected by the IR compiler.
-    #[serde(default)]
-    pub argument_parameters: Vec<Option<SysmlElementHandle>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operator: Option<SysmlExpressionOperator>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub integer_value: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub real_value: Option<SysmlNumber>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub boolean_value: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub string_value: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unsupported: Option<SysmlUnsupportedExpression>,
-    #[serde(default)]
-    pub children: Vec<SysmlExpression>,
+    pub data: SysmlExpressionData,
+}
+
+impl SysmlExpression {
+    pub fn kind(&self) -> SysmlExpressionKind {
+        match &self.data {
+            SysmlExpressionData::FeatureReference(_) => SysmlExpressionKind::FeatureReference,
+            SysmlExpressionData::StandardConstant { .. } => SysmlExpressionKind::StandardConstant,
+            SysmlExpressionData::Invocation { .. } => SysmlExpressionKind::Invocation,
+            SysmlExpressionData::Index { .. } => SysmlExpressionKind::Index,
+            SysmlExpressionData::Collection(_) => SysmlExpressionKind::Collection,
+            SysmlExpressionData::IntegerLiteral(_) => SysmlExpressionKind::IntegerLiteral,
+            SysmlExpressionData::RealLiteral(_) => SysmlExpressionKind::RealLiteral,
+            SysmlExpressionData::BooleanLiteral(_) => SysmlExpressionKind::BooleanLiteral,
+            SysmlExpressionData::StringLiteral(_) => SysmlExpressionKind::StringLiteral,
+            SysmlExpressionData::NullLiteral => SysmlExpressionKind::NullLiteral,
+            SysmlExpressionData::Unary { .. } => SysmlExpressionKind::Unary,
+            SysmlExpressionData::Binary { .. } => SysmlExpressionKind::Binary,
+            SysmlExpressionData::Conditional { .. } => SysmlExpressionKind::Conditional,
+            SysmlExpressionData::Group(_) => SysmlExpressionKind::Group,
+            SysmlExpressionData::Unsupported(_) => SysmlExpressionKind::Unsupported,
+        }
+    }
+
+    pub fn feature(&self) -> Option<SysmlFeatureHandle> {
+        match &self.data {
+            SysmlExpressionData::FeatureReference(feature)
+            | SysmlExpressionData::StandardConstant { feature, .. } => Some(*feature),
+            _ => None,
+        }
+    }
+
+    pub fn function(&self) -> Option<&SysmlFunctionReference> {
+        match &self.data {
+            SysmlExpressionData::Invocation { function, .. } => Some(function),
+            _ => None,
+        }
+    }
+
+    pub fn standard_constant(&self) -> Option<SysmlStandardConstant> {
+        match &self.data {
+            SysmlExpressionData::StandardConstant { constant, .. } => Some(*constant),
+            _ => None,
+        }
+    }
+
+    pub fn argument_parameters(&self) -> Vec<Option<SysmlElementHandle>> {
+        match &self.data {
+            SysmlExpressionData::Invocation { arguments, .. } => arguments
+                .iter()
+                .map(|argument| argument.parameter)
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn operator(&self) -> Option<SysmlExpressionOperator> {
+        match &self.data {
+            SysmlExpressionData::Unary { operator, .. }
+            | SysmlExpressionData::Binary { operator, .. } => Some(*operator),
+            _ => None,
+        }
+    }
+
+    pub fn integer_value(&self) -> Option<i64> {
+        match &self.data {
+            SysmlExpressionData::IntegerLiteral(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn real_value(&self) -> Option<SysmlNumber> {
+        match &self.data {
+            SysmlExpressionData::RealLiteral(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn boolean_value(&self) -> Option<bool> {
+        match &self.data {
+            SysmlExpressionData::BooleanLiteral(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn string_value(&self) -> Option<&str> {
+        match &self.data {
+            SysmlExpressionData::StringLiteral(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn unsupported(&self) -> Option<SysmlUnsupportedExpression> {
+        match &self.data {
+            SysmlExpressionData::Unsupported(reason) => Some(*reason),
+            _ => None,
+        }
+    }
+
+    pub fn children(&self) -> Vec<&SysmlExpression> {
+        match &self.data {
+            SysmlExpressionData::Invocation { arguments, .. } => {
+                arguments.iter().map(|argument| &argument.value).collect()
+            }
+            SysmlExpressionData::Collection(arguments) => arguments.iter().collect(),
+            SysmlExpressionData::Index { collection, index } => vec![collection, index],
+            SysmlExpressionData::Unary { operand, .. } | SysmlExpressionData::Group(operand) => {
+                vec![operand]
+            }
+            SysmlExpressionData::Binary { left, right, .. } => vec![left, right],
+            SysmlExpressionData::Conditional {
+                condition,
+                when_true,
+                when_false,
+            } => vec![condition, when_true, when_false],
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// A source-backed constraint/assertion with zero or more typed expression
@@ -1853,21 +1989,11 @@ fn lower_expression(
         end: u32::from(range.end()),
         revision: source_revision,
     };
-    let unsupported = |reason| SysmlExpression {
+    let make = |data| SysmlExpression {
         source: source.clone(),
-        kind: SysmlExpressionKind::Unsupported,
-        feature: None,
-        function: None,
-        standard_constant: None,
-        argument_parameters: Vec::new(),
-        operator: None,
-        integer_value: None,
-        real_value: None,
-        boolean_value: None,
-        string_value: None,
-        unsupported: Some(reason),
-        children: Vec::new(),
+        data,
     };
+    let unsupported = |reason| make(SysmlExpressionData::Unsupported(reason));
     if depth >= 128 {
         return unsupported(SysmlUnsupportedExpression::OtherSyntax);
     }
@@ -1886,22 +2012,6 @@ fn lower_expression(
             })
             .collect::<Vec<_>>()
     };
-    let base = |kind, children| SysmlExpression {
-        source: source.clone(),
-        kind,
-        feature: None,
-        function: None,
-        standard_constant: None,
-        argument_parameters: Vec::new(),
-        operator: None,
-        integer_value: None,
-        real_value: None,
-        boolean_value: None,
-        string_value: None,
-        unsupported: None,
-        children,
-    };
-
     match node.kind() {
         SyntaxKind::EXPR_STMT => node
             .children()
@@ -1960,24 +2070,10 @@ fn lower_expression(
             let standard_constant = SysmlStandardConstant::from_qualified_name(
                 &workspace.qualified_name_of(reference.target),
             );
-            SysmlExpression {
-                source,
-                kind: if standard_constant.is_some() {
-                    SysmlExpressionKind::StandardConstant
-                } else {
-                    SysmlExpressionKind::FeatureReference
-                },
-                feature: Some(SysmlFeatureHandle { element }),
-                function: None,
-                standard_constant,
-                argument_parameters: Vec::new(),
-                operator: None,
-                integer_value: None,
-                real_value: None,
-                boolean_value: None,
-                string_value: None,
-                unsupported: None,
-                children: Vec::new(),
+            let feature = SysmlFeatureHandle { element };
+            match standard_constant {
+                Some(constant) => make(SysmlExpressionData::StandardConstant { feature, constant }),
+                None => make(SysmlExpressionData::FeatureReference(feature)),
             }
         }
         SyntaxKind::LITERAL => {
@@ -1988,37 +2084,9 @@ fn lower_expression(
                 SyntaxKind::DECIMAL => {
                     let parsed = parse_literal(token.text().as_ref());
                     if let Some(value) = parsed.integer_value {
-                        SysmlExpression {
-                            source,
-                            kind: SysmlExpressionKind::IntegerLiteral,
-                            feature: None,
-                            function: None,
-                            standard_constant: None,
-                            argument_parameters: Vec::new(),
-                            operator: None,
-                            integer_value: Some(value),
-                            real_value: None,
-                            boolean_value: None,
-                            string_value: None,
-                            unsupported: None,
-                            children: Vec::new(),
-                        }
+                        make(SysmlExpressionData::IntegerLiteral(value))
                     } else if let Some(value) = parsed.number_value {
-                        SysmlExpression {
-                            source,
-                            kind: SysmlExpressionKind::RealLiteral,
-                            feature: None,
-                            function: None,
-                            standard_constant: None,
-                            argument_parameters: Vec::new(),
-                            operator: None,
-                            integer_value: None,
-                            real_value: Some(value),
-                            boolean_value: None,
-                            string_value: None,
-                            unsupported: None,
-                            children: Vec::new(),
-                        }
+                        make(SysmlExpressionData::RealLiteral(value))
                     } else {
                         unsupported(SysmlUnsupportedExpression::InvalidLiteral)
                     }
@@ -2026,86 +2094,33 @@ fn lower_expression(
                 SyntaxKind::REAL => {
                     let parsed = parse_literal(token.text().as_ref());
                     match parsed.number_value {
-                        Some(value) => SysmlExpression {
-                            source,
-                            kind: SysmlExpressionKind::RealLiteral,
-                            feature: None,
-                            function: None,
-                            standard_constant: None,
-                            argument_parameters: Vec::new(),
-                            operator: None,
-                            integer_value: None,
-                            real_value: Some(value),
-                            boolean_value: None,
-                            string_value: None,
-                            unsupported: None,
-                            children: Vec::new(),
-                        },
+                        Some(value) => make(SysmlExpressionData::RealLiteral(value)),
                         None => unsupported(SysmlUnsupportedExpression::InvalidLiteral),
                     }
                 }
-                SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW => SysmlExpression {
-                    source,
-                    kind: SysmlExpressionKind::BooleanLiteral,
-                    feature: None,
-                    function: None,
-                    standard_constant: None,
-                    argument_parameters: Vec::new(),
-                    operator: None,
-                    integer_value: None,
-                    real_value: None,
-                    boolean_value: Some(token.kind() == SyntaxKind::TRUE_KW),
-                    string_value: None,
-                    unsupported: None,
-                    children: Vec::new(),
-                },
+                SyntaxKind::TRUE_KW | SyntaxKind::FALSE_KW => make(
+                    SysmlExpressionData::BooleanLiteral(token.kind() == SyntaxKind::TRUE_KW),
+                ),
                 SyntaxKind::STRING => {
                     let parsed = parse_literal(token.text().as_ref());
                     match parsed.string_value {
-                        Some(value) => SysmlExpression {
-                            source,
-                            kind: SysmlExpressionKind::StringLiteral,
-                            feature: None,
-                            function: None,
-                            standard_constant: None,
-                            argument_parameters: Vec::new(),
-                            operator: None,
-                            integer_value: None,
-                            real_value: None,
-                            boolean_value: None,
-                            string_value: Some(value),
-                            unsupported: None,
-                            children: Vec::new(),
-                        },
+                        Some(value) => make(SysmlExpressionData::StringLiteral(value)),
                         None => unsupported(SysmlUnsupportedExpression::InvalidLiteral),
                     }
                 }
-                SyntaxKind::NULL_KW => SysmlExpression {
-                    source,
-                    kind: SysmlExpressionKind::NullLiteral,
-                    feature: None,
-                    function: None,
-                    standard_constant: None,
-                    argument_parameters: Vec::new(),
-                    operator: None,
-                    integer_value: None,
-                    real_value: None,
-                    boolean_value: None,
-                    string_value: None,
-                    unsupported: None,
-                    children: Vec::new(),
-                },
+                SyntaxKind::NULL_KW => make(SysmlExpressionData::NullLiteral),
                 _ => unsupported(SysmlUnsupportedExpression::InvalidLiteral),
             }
         }
         SyntaxKind::PAREN_EXPR => {
-            let children = lower_children();
-            if children.len() == 1 {
-                base(SysmlExpressionKind::Group, children)
-            } else if children.len() > 1 {
-                base(SysmlExpressionKind::Collection, children)
-            } else {
-                unsupported(SysmlUnsupportedExpression::Collection)
+            let mut children = lower_children();
+            match children.len() {
+                0 => unsupported(SysmlUnsupportedExpression::Collection),
+                1 => match children.pop() {
+                    Some(child) => make(SysmlExpressionData::Group(Box::new(child))),
+                    None => unsupported(SysmlUnsupportedExpression::Collection),
+                },
+                _ => make(SysmlExpressionData::Collection(children)),
             }
         }
         SyntaxKind::UNARY_EXPR => {
@@ -2114,17 +2129,13 @@ fn lower_expression(
                 .filter_map(|item| item.into_token())
                 .find(|token| !token.kind().is_trivia())
                 .and_then(|token| unary_expression_operator(token.kind()));
-            let children = lower_children();
-            if children.len() == 1 {
-                if let Some(operator) = operator {
-                    let mut expression = base(SysmlExpressionKind::Unary, children);
-                    expression.operator = Some(operator);
-                    expression
-                } else {
-                    unsupported(SysmlUnsupportedExpression::Operator)
-                }
-            } else {
-                unsupported(SysmlUnsupportedExpression::Operator)
+            let mut children = lower_children();
+            match (operator, children.pop(), children.is_empty()) {
+                (Some(operator), Some(operand), true) => make(SysmlExpressionData::Unary {
+                    operator,
+                    operand: Box::new(operand),
+                }),
+                _ => unsupported(SysmlUnsupportedExpression::Operator),
             }
         }
         SyntaxKind::BINARY_EXPR => {
@@ -2133,25 +2144,34 @@ fn lower_expression(
                 .filter_map(|item| item.into_token())
                 .find(|token| !token.kind().is_trivia())
                 .and_then(|token| binary_expression_operator(token.kind()));
-            let children = lower_children();
-            if children.len() == 2 {
-                if let Some(operator) = operator {
-                    let mut expression = base(SysmlExpressionKind::Binary, children);
-                    expression.operator = Some(operator);
-                    expression
-                } else {
-                    unsupported(SysmlUnsupportedExpression::Operator)
+            let mut children = lower_children();
+            let right = children.pop();
+            let left = children.pop();
+            match (operator, left, right, children.is_empty()) {
+                (Some(operator), Some(left), Some(right), true) => {
+                    make(SysmlExpressionData::Binary {
+                        operator,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    })
                 }
-            } else {
-                unsupported(SysmlUnsupportedExpression::Operator)
+                _ => unsupported(SysmlUnsupportedExpression::Operator),
             }
         }
         SyntaxKind::COND_EXPR => {
-            let children = lower_children();
-            if children.len() == 3 {
-                base(SysmlExpressionKind::Conditional, children)
-            } else {
-                unsupported(SysmlUnsupportedExpression::OtherSyntax)
+            let mut children = lower_children();
+            let when_false = children.pop();
+            let when_true = children.pop();
+            let condition = children.pop();
+            match (condition, when_true, when_false, children.is_empty()) {
+                (Some(condition), Some(when_true), Some(when_false), true) => {
+                    make(SysmlExpressionData::Conditional {
+                        condition: Box::new(condition),
+                        when_true: Box::new(when_true),
+                        when_false: Box::new(when_false),
+                    })
+                }
+                _ => unsupported(SysmlUnsupportedExpression::OtherSyntax),
             }
         }
         SyntaxKind::CALL_EXPR => {
@@ -2256,24 +2276,25 @@ fn lower_expression(
                 }
             }
 
-            let mut argument_expressions = Vec::with_capacity(arguments.len());
-            let mut argument_parameters = Vec::with_capacity(arguments.len());
+            let mut invocation_arguments = Vec::with_capacity(arguments.len());
             for (_, parameter, argument) in arguments {
-                argument_expressions.push(lower_expression(
-                    &argument,
-                    workspace,
-                    file_index,
-                    file_name,
-                    source_revision,
-                    source_fingerprint,
-                    depth + 1,
-                ));
-                argument_parameters.push(parameter);
+                invocation_arguments.push(SysmlInvocationArgument {
+                    parameter,
+                    value: lower_expression(
+                        &argument,
+                        workspace,
+                        file_index,
+                        file_name,
+                        source_revision,
+                        source_fingerprint,
+                        depth + 1,
+                    ),
+                });
             }
-            let mut invocation = base(SysmlExpressionKind::Invocation, argument_expressions);
-            invocation.function = Some(function);
-            invocation.argument_parameters = argument_parameters;
-            invocation
+            make(SysmlExpressionData::Invocation {
+                function,
+                arguments: invocation_arguments,
+            })
         }
         SyntaxKind::INDEX_EXPR => {
             let operands = node
@@ -2289,23 +2310,24 @@ fn lower_expression(
             if operands.len() != 2 {
                 return unsupported(SysmlUnsupportedExpression::Index);
             }
-            base(
-                SysmlExpressionKind::Index,
-                operands
-                    .iter()
-                    .map(|operand| {
-                        lower_expression(
-                            operand,
-                            workspace,
-                            file_index,
-                            file_name,
-                            source_revision,
-                            source_fingerprint,
-                            depth + 1,
-                        )
-                    })
-                    .collect(),
-            )
+            let mut operands = operands.iter().map(|operand| {
+                lower_expression(
+                    operand,
+                    workspace,
+                    file_index,
+                    file_name,
+                    source_revision,
+                    source_fingerprint,
+                    depth + 1,
+                )
+            });
+            match (operands.next(), operands.next(), operands.next()) {
+                (Some(collection), Some(index), None) => make(SysmlExpressionData::Index {
+                    collection: Box::new(collection),
+                    index: Box::new(index),
+                }),
+                _ => unsupported(SysmlUnsupportedExpression::Index),
+            }
         }
         SyntaxKind::METADATA_ACCESS_EXPR => unsupported(SysmlUnsupportedExpression::Metadata),
         SyntaxKind::ARROW_EXPR | SyntaxKind::BODY_EXPR => {

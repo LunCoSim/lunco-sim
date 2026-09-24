@@ -383,7 +383,7 @@ impl Panel for CinematicPanel {
         "Cinematic".into()
     }
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Scene
+        lunco_workbench_core::PanelMenuGroup::Builder
     }
 
     fn default_slot(&self) -> PanelSlot {
