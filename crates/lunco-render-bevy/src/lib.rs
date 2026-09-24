@@ -13,6 +13,7 @@
 //! See `docs/architecture/render-decoupling.md`.
 
 mod env_light;
+mod gpu_culling;
 pub mod horizon_shade;
 pub mod link_beams;
 pub mod look_cache;
@@ -21,6 +22,7 @@ mod scene_camera;
 mod sensor_beams;
 mod shader_look;
 pub mod shader_material;
+mod spotlight_shadow_relevance;
 
 mod world_label;
 
@@ -158,6 +160,8 @@ impl Plugin for LuncoRenderPlugin {
                 .add_systems(PostUpdate, apply_usd_prim_display_modes);
         }
         scene_camera::build(app);
+        gpu_culling::build(app);
+        spotlight_shadow_relevance::build(app);
         // Shadow filtering is a render policy, not a workbench concern. Attach it
         // when a camera enters the render graph so windowed and offscreen captures
         // use the same lunar terminator without either binary having a second

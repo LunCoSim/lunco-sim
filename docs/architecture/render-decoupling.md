@@ -76,6 +76,46 @@ request mechanics, and `lunco-rhai-repl` is only a terminal adapter that sends
 the reflected `RunRhai` command. No client may hand-format HTTP or instantiate
 another scripting runtime.
 
+## Visibility work follows adapter capability
+
+The render boundary opts `SceneCamera` entities into Bevy's camera-level
+`NoCpuCulling` path only when the active adapter reports GPU culling support.
+Bevy then sends camera mesh-frustum work through GPU preprocessing. Keep the
+marker on cameras, not `Mesh3d` entities: Bevy's per-light visibility systems
+exclude marked meshes from their CPU-built shadow lists. Camera-level opt-in
+therefore preserves the existing per-mesh light and shadow visibility path and
+does not change render layers, authored cameras, or quality settings. Adapter
+capability is published from `RenderStartup` to the main world through one
+shared atomic flag. One reconciliation pass handles scene cameras already
+present; a `SceneCamera` observer handles streamed cameras. Unsupported adapters
+stay on the default CPU-culling path, and a capability transition removes only
+markers owned by this adapter.
+
+Keep this optimization in `lunco-render-bevy`. Scene-camera reconciliation
+remains the sole owner of which authored window camera is active; Bevy's
+auxiliary shadow subviews are not extra scene cameras and remain intact.
+
+### Spotlight shadow relevance
+
+Bevy shares a spotlight's shadow map across all active 3D cameras, but its
+default view preparation can still schedule that map when the finite spotlight
+cone misses every output. `lunco-render-bevy` checks the extracted spotlight
+frustum against every extracted 3D camera frustum and its render layers before
+`prepare_lights`. A sphere enclosing the complete spotlight frustum is used as
+a conservative broad-phase bound: false positives retain extra maps; a map is
+skipped only when the bound is disjoint from every layer-compatible camera.
+Boundary tests include a floating-point error pad, and missing or malformed
+frusta keep the map.
+
+The adapter changes only `ExtractedPointLight.shadow_maps_enabled` in the render
+world for that frame. It does not mutate the authored `SpotLight`, suppress the
+spotlight's direct illumination, alter shadow resolution, or change quality
+settings. It considers all active extracted 3D cameras, including offscreen
+capture cameras, rather than assuming the primary window is the only output.
+This removes irrelevant spotlight shadow-view preparation and rendering; Bevy's
+main-world per-light caster visibility pass still runs before extraction and
+remains a separate profiling target.
+
 When adding a crate to the simulation core, check both sides before merging:
 
 ```sh
