@@ -226,6 +226,17 @@ package checks after changing skill metadata or packaging.
 
 ## Tests and runtime
 
+- **Disk-space recovery preserves source and shared caches.** Before cleanup,
+  inspect free space and this checkout's `target/` size. Never delete crates,
+  `Cargo.lock`, sibling worktrees, the Cargo registry, or the shared `sccache`
+  cache. Stop only this task's live app through its API before replacing or
+  removing its executable. Prefer `cargo clean -p <affected-package>` to remove
+  stale package outputs while retaining unrelated incremental artifacts. If
+  that cannot free enough space, `cargo clean` may remove this checkout's old
+  `target/` build outputs and executables; it leaves source crates and shared
+  caches intact but discards local incremental outputs. Rebuild in the normal
+  `target/` directory with `-j 4` and regular `sccache`; do not lower profile
+  settings or use a temporary build directory as the default space workaround.
 - Test scenes live under `assets/scenes/tests/`, scenarios under
   `assets/scenarios/tests/`. A green gate needs a negative fixture and a real
   verdict. Behavioral, policy, integration, acceptance, and regression tests
