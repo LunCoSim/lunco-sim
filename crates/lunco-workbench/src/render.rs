@@ -1176,8 +1176,6 @@ pub(crate) fn render_status_bar_inner(
     // selection, not a special diagnostics reader.
     let frame_time_signal = SignalRef::global("engine.frame_time");
     let signal_registry = world.get_resource::<lunco_viz::SignalRegistry>();
-    let frame_history =
-        signal_registry.and_then(|registry| registry.scalar_history(&frame_time_signal));
     let perf_enabled = world.resource::<PerfHudSettings>().enabled;
     // The networking chip only paints when not standalone; reserve room
     // for it on the right so the clickable status region doesn't overlap.
@@ -1329,16 +1327,16 @@ pub(crate) fn render_status_bar_inner(
                     |ui| {
                         ui.add_sized(
                             [right_widths.scene, 18.0],
-                            egui::Label::new(
-                                egui::RichText::new(format!("Scene: {}", scene_name)).small(),
-                            )
-                            .truncate()
-                            .sense(egui::Sense::click()),
+                            egui::Label::new(egui::RichText::new("Scene").small())
+                                .truncate()
+                                .sense(egui::Sense::click()),
                         )
                     },
                 )
                 .inner
-                .on_hover_text("Click to show the full path of the loaded USD file");
+                .on_hover_text(format!(
+                    "Loaded scene: {scene_name}\nClick to show the full path"
+                ));
             if scene_response.clicked() {
                 egui::Popup::toggle_id(ui.ctx(), scene_popup_id);
             }
@@ -1363,6 +1361,10 @@ pub(crate) fn render_status_bar_inner(
 
         render_net_chip(ui, world, theme, right_widths.net);
 
+        if !scene_name.is_empty() && perf_enabled {
+            ui.add_space(STATUS_BAR_SCENE_PERF_GAP);
+        }
+
         // Right-aligned perf segment. Hidden when the HUD is off so
         // we don't show stale zeroes; toggled via `TogglePerfHud` or
         // the Settings menu.
@@ -1385,12 +1387,8 @@ pub(crate) fn render_status_bar_inner(
                     |ui| {
                         let item_spacing = ui.spacing().item_spacing.x;
                         let required_width = perf_text_width(ui, &required_text);
-                        let sparkline_width = perf_hud_sparkline_width(
-                            perf_width,
-                            required_width,
-                            item_spacing,
-                            frame_history.is_some_and(|history| !history.is_empty()),
-                        );
+                        let sparkline_width =
+                            perf_hud_sparkline_width(perf_width, required_width, item_spacing);
                         let label_width =
                             (ui.available_width() - sparkline_width - item_spacing).max(1.0);
                         let displayed_perf_text =
@@ -1406,21 +1404,19 @@ pub(crate) fn render_status_bar_inner(
                             ),
                         )
                         .on_hover_text(&perf_text);
-                        if let Some(registry) = signal_registry {
-                            render_telemetry_sparkline(
-                                ui,
-                                registry,
-                                &frame_time_signal,
-                                theme,
-                                TelemetrySparklineOptions {
-                                    id: sparkline_id,
-                                    width: sparkline_width,
-                                    height: 18.0,
-                                    reference_y: Some(16.67),
-                                    line_color: None,
-                                },
-                            );
-                        }
+                        render_telemetry_sparkline(
+                            ui,
+                            signal_registry,
+                            &frame_time_signal,
+                            theme,
+                            TelemetrySparklineOptions {
+                                id: sparkline_id,
+                                width: sparkline_width,
+                                height: 18.0,
+                                reference_y: Some(16.67),
+                                line_color: None,
+                            },
+                        );
                     },
                 );
             }
@@ -1825,12 +1821,13 @@ const STATUS_BAR_NOTIFICATION_POPUP_RATIO: f32 = 0.30;
 const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 140.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
-const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 150.0;
+const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 64.0;
+const STATUS_BAR_SCENE_PERF_GAP: f32 = 16.0;
 const STATUS_BAR_NET_MAX_WIDTH: f32 = 220.0;
 const STATUS_BAR_PERF_MAX_WIDTH: f32 = 480.0;
-/// The normal compact-window budget reserved for the FPS/frame/physics fields.
-/// Optional p99 detail and the sparkline yield before these values are clipped.
-const STATUS_BAR_PERF_REQUIRED_WIDTH: f32 = 360.0;
+/// Minimum compact-window budget for the essential metrics and a useful sparkline.
+/// Optional p99 detail yields before either part of the live HUD is clipped.
+const STATUS_BAR_PERF_REQUIRED_WIDTH: f32 = 420.0;
 const STATUS_BAR_PERF_EDGE_INSET: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1879,15 +1876,7 @@ fn perf_hud_text(
     (required, full)
 }
 
-fn perf_hud_sparkline_width(
-    perf_width: f32,
-    required_width: f32,
-    item_spacing: f32,
-    has_history: bool,
-) -> f32 {
-    if !has_history {
-        return 0.0;
-    }
+fn perf_hud_sparkline_width(perf_width: f32, required_width: f32, item_spacing: f32) -> f32 {
     (perf_width - required_width - item_spacing)
         .max(0.0)
         .min(120.0)
@@ -1966,7 +1955,13 @@ fn status_bar_right_widths(
 ) -> StatusBarRightWidths {
     let separator_count =
         2.0 + if scene_visible { 1.0 } else { 0.0 } + if net_active { 1.0 } else { 0.0 };
-    let overhead = STATUS_BAR_BASE_OVERHEAD + separator_count * STATUS_BAR_SEPARATOR_RESERVE;
+    let scene_perf_gap = if scene_visible && perf_enabled {
+        STATUS_BAR_SCENE_PERF_GAP
+    } else {
+        0.0
+    };
+    let overhead =
+        STATUS_BAR_BASE_OVERHEAD + separator_count * STATUS_BAR_SEPARATOR_RESERVE + scene_perf_gap;
     let scene = if scene_visible {
         STATUS_BAR_SCENE_MAX_WIDTH
     } else {
@@ -3160,11 +3155,10 @@ mod tests {
     }
 
     #[test]
-    fn perf_hud_sparkline_yields_space_to_required_metrics() {
-        assert_eq!(perf_hud_sparkline_width(360.0, 220.0, 8.0, true), 120.0);
-        assert_eq!(perf_hud_sparkline_width(300.0, 220.0, 8.0, true), 72.0);
-        assert_eq!(perf_hud_sparkline_width(220.0, 220.0, 8.0, true), 0.0);
-        assert_eq!(perf_hud_sparkline_width(360.0, 220.0, 8.0, false), 0.0);
+    fn perf_hud_sparkline_reserves_space_before_history_arrives() {
+        assert_eq!(perf_hud_sparkline_width(360.0, 220.0, 8.0), 120.0);
+        assert_eq!(perf_hud_sparkline_width(300.0, 220.0, 8.0), 72.0);
+        assert_eq!(perf_hud_sparkline_width(220.0, 220.0, 8.0), 0.0);
     }
 
     #[test]

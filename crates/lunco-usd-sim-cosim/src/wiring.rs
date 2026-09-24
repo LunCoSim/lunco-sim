@@ -1,5 +1,5 @@
 use super::*;
-use lunco_usd_bevy_scene::UsdSceneAwaitingStage;
+use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdSceneAwaitingStage};
 use std::collections::HashSet;
 
 /// (as opposed to authored some other way). [`rewire_usd_connections`] reconciles
@@ -164,6 +164,8 @@ pub(super) struct WiringQueries<'w, 's> {
     >,
     defaults: Query<'w, 's, &'static UsdInputDefaults>,
     outputs: Query<'w, 's, &'static lunco_port_core::OutputPorts>,
+    child_of: Query<'w, 's, &'static ChildOf>,
+    preview_roots: Query<'w, 's, (), With<UsdPreviewOnly>>,
 }
 
 /// Run condition for the derived USD wiring cache.
@@ -517,6 +519,16 @@ pub(super) fn rewire_usd_connections(
     };
     let mut active_cache_keys = HashSet::new();
 
+    // Editor previews can project the same stage-relative paths as the mounted
+    // scene, but they do not own runtime connections or simulation endpoints.
+    let live_endpoints: Vec<_> = wiring
+        .endpoints
+        .iter()
+        .filter(|(entity, ..)| {
+            !lunco_usd_bevy_scene::is_preview_only(*entity, &wiring.child_of, &wiring.preview_roots)
+        })
+        .collect();
+
     // Index every prim entity by (stage, instance, path). The stage is part of
     // prim identity: two composed USD projections may carry the same path text
     // while belonging to different stage assets. Omitting it lets a later
@@ -542,7 +554,7 @@ pub(super) fn rewire_usd_connections(
     let mut earth_direction_already_required = HashSet::new();
     let mut port_surfaces = HashMap::new();
     for (e, p, _, generated, is_probe, has_earth_direction, surface, projection) in
-        wiring.endpoints.iter()
+        live_endpoints.iter().copied()
     {
         if is_probe {
             environment_probe_entities.insert(e);
@@ -602,7 +614,7 @@ pub(super) fn rewire_usd_connections(
     }
 
     for (entity, prim_path, has_modelica, _, _, _, wheel_endpoints, projection) in
-        wiring.endpoints.iter()
+        live_endpoints.iter().copied()
     {
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {

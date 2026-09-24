@@ -320,12 +320,7 @@ pub(crate) fn publish_workbench_snapshot(
     snapshot: &mut WorkbenchSnapshot,
 ) {
     let tabs: Vec<TabId> = layout.dock.iter_all_tabs().map(|(_, tab)| *tab).collect();
-    let focused_tab = layout.dock.main_surface().focused_leaf().and_then(|node| {
-        match &layout.dock.main_surface()[node] {
-            egui_dock::Node::Leaf(leaf) => leaf.tabs.get(leaf.active.0).copied(),
-            _ => None,
-        }
-    });
+    let focused_tab = layout.focused_tab().copied();
     let visible_panels = layout
         .dock
         .iter_all_nodes()

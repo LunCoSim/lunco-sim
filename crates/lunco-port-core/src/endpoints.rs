@@ -191,28 +191,48 @@ impl OutputPorts {
     }
 }
 
+/// One explicitly directed endpoint on a runtime component port surface.
+#[derive(Debug, Clone, Copy)]
+pub struct PortSurfacePort {
+    /// The scalar entity that stores this port's value.
+    pub endpoint: Entity,
+    /// Authored causality for this port.
+    pub direction: crate::ports::PortDirection,
+}
+
+impl PortSurfacePort {
+    /// Connect one runtime endpoint to its authored direction.
+    pub const fn new(endpoint: Entity, direction: crate::ports::PortDirection) -> Self {
+        Self {
+            endpoint,
+            direction,
+        }
+    }
+}
+
 /// A runtime surface for a USD-authored component's physical ports.
 ///
-/// The names and endpoint entities are published by the component projection
-/// from authored `inputs:*`/`outputs:*` declarations. Consumers resolve the
-/// authored connection through this surface; they do not discover a wheel,
-/// motor, hydraulic valve, or thermal boundary by Rust type or entity name.
+/// Names, directions, and endpoint entities are published by the component
+/// projection from authored `inputs:*`/`outputs:*` declarations. Consumers
+/// resolve the authored connection through this surface; they do not discover
+/// a wheel, motor, hydraulic valve, or thermal boundary by Rust type or entity
+/// name.
 #[derive(Component, Debug, Clone, Default)]
 pub struct PortSurface {
-    /// Authored port name to the runtime [`Port`] entity that carries it.
-    pub ports: std::collections::HashMap<String, Entity>,
+    /// Authored port name to its direction and runtime [`Port`] endpoint.
+    pub ports: std::collections::HashMap<String, PortSurfacePort>,
 }
 
 impl PortSurface {
     /// Build a surface from the endpoints projected for one authored component.
-    pub fn new(ports: std::collections::HashMap<String, Entity>) -> Self {
+    pub fn new(ports: std::collections::HashMap<String, PortSurfacePort>) -> Self {
         Self { ports }
     }
 
     /// Resolve one authored port name to its runtime endpoint.
     #[inline]
     pub fn get(&self, name: &str) -> Option<Entity> {
-        self.ports.get(name).copied()
+        self.ports.get(name).map(|port| port.endpoint)
     }
 }
 

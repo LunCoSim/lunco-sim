@@ -5,9 +5,9 @@
 //! re-attaches the scheme so co-located refs (terrain `.glb`) resolve on every
 //! platform the source supports. It is made doc-backed by serving the scene
 //! document's **persistent** (`base ⊕ runtime`) source as a *byte-overlay* on
-//! the twin source, so the live world composes from the editable document and
-//! runtime edits appear in the initial mount. Disposable `view` opinions are
-//! excluded from that source.
+//! the Twin source, so runtime edits appear in the initial mount. Disposable
+//! `view` opinions stay out of that overlay and are replayed to the canonical
+//! stage through their separate projection cursor.
 //!
 //! Flow (doc-first: the document exists and its persistent source is the overlay
 //! BEFORE the scene mounts, so the world is projected exactly once):
@@ -930,8 +930,14 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
 
     // Snapshot tracked scenes (owned) so no resource borrow is held across the
     // world mutations below.
-    let entries: Vec<(DocumentId, String, String, Option<u64>, Option<u64>)> =
-        world.resource::<DocBackedTwinScenes>().entries().collect();
+    let entries: Vec<(
+        DocumentId,
+        String,
+        String,
+        Option<u64>,
+        Option<u64>,
+        Option<u64>,
+    )> = world.resource::<DocBackedTwinScenes>().entries().collect();
 
     // A twin scene projects only when it is the scene currently mounted.
     // Keeping that admission check here makes projection ownership explicit:
@@ -956,7 +962,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     // live as one graph: the component's `twin://` bytes are patched into every
     // loaded dependent recipe and its canonical stage is rebuilt in place.  The
     // viewport state (including orbit camera) is deliberately not touched.
-    for (doc, name, rel, applied, overlay_synced) in entries {
+    for (doc, name, rel, applied, view_applied, overlay_synced) in entries {
         let preview_owned = world
             .resource::<DocBackedTwinScenes>()
             .has_preview_lease(doc);
@@ -978,7 +984,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 continue;
             }
         };
-        if Some(cur_gen) == applied {
+        if Some(cur_gen) == applied && Some(cur_gen) == view_applied {
             // The live stage is current. Durable runtime-layer persistence is
             // scheduled independently from DocumentChanged; there is no stage
             // projection or whole-source serialization to do here.
@@ -996,13 +1002,38 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .load::<UsdStageAsset>(twin_path.clone())
             .id();
 
-        // `None` = the op ring overflowed (more edits than capacity since the last
-        // sync) → we can't trust an incremental replay, so rebuild.
+        // The initial scene recipe contains base + runtime, but omits the
+        // disposable view layer. Keep a separate view cursor so presentation
+        // ops that predate the first live-stage mount are still replayed. A
+        // missing cursor starts at generation zero; an initial scene mount's
+        // persistent cursor already covers its base/runtime snapshot.
+        let persistent_cursor = applied.unwrap_or(cur_gen);
+        let view_cursor = view_applied.unwrap_or(0);
+        let history_cursor = persistent_cursor.min(view_cursor);
+        // `None` = the op ring overflowed (more edits than capacity since the
+        // oldest cursor) → the composed document is the rebuild source.
         let ops = world
             .resource::<DocumentRegistry<UsdDocument>>()
             .host(doc)
-            .and_then(|h| h.document().ops_since(applied.unwrap_or(0)));
-        let has_work = applied.is_none() || ops.as_ref().map(|o| !o.is_empty()).unwrap_or(true);
+            .and_then(|h| h.document().ops_since(history_cursor));
+        let pending_ops = ops.map(|ops| {
+            ops.into_iter()
+                .enumerate()
+                .filter_map(|(index, op)| {
+                    let generation = history_cursor + index as u64 + 1;
+                    let cursor = if op.edit_target().is_view() {
+                        view_applied.unwrap_or(0)
+                    } else {
+                        persistent_cursor
+                    };
+                    (generation > cursor).then_some(op)
+                })
+                .collect::<Vec<_>>()
+        });
+        let has_work = pending_ops
+            .as_ref()
+            .map(|ops| !ops.is_empty())
+            .unwrap_or(true);
 
         if applied.is_none() {
             // First mount MUST publish the overlay so the async stage load composes
@@ -1017,80 +1048,77 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             {
                 continue;
             }
-            // The prepared plan is the complete initial projection. Runtime
-            // edits are not replayed here: the document generation becomes the
-            // live-stage edit boundary below, where the canonical stage is
-            // created explicitly and the typed journal is applied once.
-        } else {
-            // Initial materialisation deliberately leaves the non-Send live
-            // stage closed. Once an authored generation exists, the edit
-            // projector owns the transition to the live canonical stage. The
-            // recipe is already resident in `UsdStageAsset`, so this is an
-            // explicit authoring operation rather than a second initial-load
-            // reader or a per-frame rebuild.
-            let stage_ready = world
-                .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-                .is_some_and(|stages| stages.get(scene_id).is_some());
-            if has_work && !stage_ready {
-                let recipe = world
-                    .resource::<Assets<UsdStageAsset>>()
-                    .get(scene_id)
-                    .and_then(|asset| asset.recipe.as_ref())
-                    .cloned();
-                let Some(recipe) = recipe else {
-                    // The asset loader has not published the recipe yet. Keep
-                    // the document generation pending until the asset boundary
-                    // makes the canonical stage available.
-                    continue;
-                };
-                let built = world
-                    .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-                    .is_some_and(|mut stages| stages.get_or_build(scene_id, &recipe).is_some());
-                if !built {
-                    continue;
-                }
-            }
+            // The prepared plan is the complete persistent projection. View
+            // operations remain pending until their separate cursor is consumed
+            // below; replaying a view op into the persistent Twin overlay would
+            // incorrectly make presentation durable.
+        }
 
-            match ops {
-                // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe
-                // removal / composition arc — no incremental stage-author yet,
-                // and whole-source undo may change surviving prims' values): rebuild the
-                // stage from composed_source + the already-loaded closure. The
-                // next mount rebuilds its in-memory Twin overlay from the
-                // document's persistent source.
-                None => {
-                    let cs = world
-                        .resource::<DocumentRegistry<UsdDocument>>()
-                        .host(doc)
-                        .map(|h| h.document().composed_source())
-                        .unwrap_or_default();
-                    rebuild_scene_from_composed(world, scene_id, &cs);
+        // A pending transient presentation edit may be the first post-mount
+        // change. Open the canonical stage only when there is an actual delta
+        // to consume; stable Twin scenes retain the prepared-stage path.
+        let stage_ready = world
+            .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+            .is_some_and(|stages| stages.get(scene_id).is_some());
+        if has_work && !stage_ready {
+            let recipe = world
+                .resource::<Assets<UsdStageAsset>>()
+                .get(scene_id)
+                .and_then(|asset| asset.recipe.as_ref())
+                .cloned();
+            let Some(recipe) = recipe else {
+                // The asset loader has not published the recipe yet. Keep the
+                // document generation pending until the asset boundary makes
+                // the canonical stage available.
+                continue;
+            };
+            let built = world
+                .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+                .is_some_and(|mut stages| stages.get_or_build(scene_id, &recipe).is_some());
+            if !built {
+                continue;
+            }
+        }
+
+        match pending_ops {
+            // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe
+            // removal / composition arc — no incremental stage-author yet,
+            // and whole-source undo may change surviving prims' values): rebuild the
+            // stage from composed_source + the already-loaded closure. The
+            // next mount rebuilds its in-memory Twin overlay from the
+            // document's persistent source.
+            None => {
+                let cs = world
+                    .resource::<DocumentRegistry<UsdDocument>>()
+                    .host(doc)
+                    .map(|h| h.document().composed_source())
+                    .unwrap_or_default();
+                rebuild_scene_from_composed(world, scene_id, &cs);
+            }
+            Some(ops) if ops.iter().any(op_needs_rebuild) => {
+                if !ensure_reference_layers_for_rebuild(world, scene_id, &ops) {
+                    // Keep the document generation pending until every new
+                    // reference closure is available to the live resolver.
+                    // Rebuilding first would permanently open a stage whose root
+                    // source contains the arc but whose resolver cannot resolve
+                    // it; a later variant/metadata edit would preserve the
+                    // incomplete composition.
+                    continue;
                 }
-                Some(ops) if ops.iter().any(op_needs_rebuild) => {
-                    if !ensure_reference_layers_for_rebuild(world, scene_id, &ops) {
-                        // Keep the document generation pending until every new
-                        // reference closure is available to the live resolver.
-                        // Rebuilding first would permanently open a stage whose
-                        // root source contains the arc but whose resolver cannot
-                        // resolve it; a later variant/metadata edit would then
-                        // preserve the incomplete composition.
-                        continue;
-                    }
-                    let cs = world
-                        .resource::<DocumentRegistry<UsdDocument>>()
-                        .host(doc)
-                        .map(|h| h.document().composed_source())
-                        .unwrap_or_default();
-                    rebuild_scene_from_composed(world, scene_id, &cs);
-                }
-                // Incremental: replay each op's typed delta onto the live stage.
-                // The runtime persistence owner snapshots authored edits
-                // asynchronously; the in-memory Twin overlay is rebuilt on the
-                // next mount rather than serializing the whole stage here.
-                Some(ops) => {
-                    for op in &ops {
-                        apply_incremental_op_to_stage(world, scene_id, op);
-                    }
+                let cs = world
+                    .resource::<DocumentRegistry<UsdDocument>>()
+                    .host(doc)
+                    .map(|h| h.document().composed_source())
+                    .unwrap_or_default();
+                rebuild_scene_from_composed(world, scene_id, &cs);
+            }
+            // Incremental: replay each op's typed delta onto the live stage.
+            // The runtime persistence owner snapshots authored edits
+            // asynchronously; the in-memory Twin overlay is rebuilt on the
+            // next mount rather than serializing the whole stage here.
+            Some(ops) => {
+                for op in &ops {
+                    apply_incremental_op_to_stage(world, scene_id, op);
                 }
             }
         }
@@ -1098,6 +1126,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         world
             .resource_mut::<DocBackedTwinScenes>()
             .mark_applied(doc, scene_id, cur_gen);
+        world
+            .resource_mut::<DocBackedTwinScenes>()
+            .mark_view_applied(doc, scene_id, cur_gen);
         // A standalone Editor preview has no `UsdSceneRoot`, so the live ECS
         // sink cannot publish its cursor through `live_consume`.  The preview
         // renders the canonical stage directly; mark that stage consumed here

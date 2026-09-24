@@ -5,6 +5,12 @@ failure modes observed while integrating the USD terrain projection with the
 isolated Editor preview, and the architecture required to fix them. It is
 generic: it applies to every DEM-backed scene, not to one vehicle or mission.
 
+The mounted-scene boundary now treats `UsdPreviewOnly` terrain as examined but
+does not create a `DemTerrainRequest`. This prevents an isolated document preview
+from adding collider work or holding mission physics. The preview still needs a
+separate render-only terrain realization and a valid preview-grid camera demand
+before it can show streamed relief.
+
 ## What is currently wrong
 
 The isolated USD Editor preview can show the authored terrain prim, `ShaderLook`

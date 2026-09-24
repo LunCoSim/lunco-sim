@@ -75,6 +75,11 @@ stating plainly:
 > **A `UsdOp`'s spatial values are always canonical. Stage frame exists only
 > inside the layer.**
 
+The document resolves that frame from its composed authoring stage. Runtime and
+view layers inherit the scene's pseudo-root metrics; reading an isolated overlay
+can substitute USD's centimetre default and move a transient presentation prim
+100× away from its authored points.
+
 That is what makes an op *portable*: the same journalled edit replays correctly
 against a centimetre stage and a metre one. It also means the conversion belongs
 at the boundary rather than at the dozen producers, each of which would otherwise

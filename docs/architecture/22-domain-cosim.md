@@ -58,6 +58,9 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   `OutputPorts` is never used as a vehicle marker.
   Generated Modelica outputs remain on `SimComponent` and are not copied into
   `OutputPorts`.
+- **`PortSurface`** — a USD component's authored input/output names, directions,
+  and scalar runtime endpoints. The component projector publishes the surface;
+  the generic port registry validates reads and writes against its direction.
 - **Avian as a cosim participant** — Avian physics is wired in through a typed-port
   spec table (`AvianGroup`/`AvianPort`) plus a `PendingForces` component, not a
   bespoke `AvianSim` struct.
@@ -82,6 +85,7 @@ available ports:
 | **Modelica sensor conversions** | IMU, altimeter, attitude estimator, and touchdown models with authored inputs/outputs wires |
 | **Modelica / hardware** | model `input`/`output` vars; `value` / `raw` |
 | **Imperative producer** | authored `inputs:*` commands and read-only `outputs:*` values through `InputPorts` / `OutputPorts` |
+| **USD physical component** | authored component `inputs:*` and `outputs:*` through its direction-aware `PortSurface` |
 
 Full closures plus the group key/invalidation contract live in
 [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md). USD
@@ -544,6 +548,12 @@ Wiring admission uses the existing `UsdWiringDirty` latch. Endpoint contract
 and identity observers, removals, live USD edits, and authority changes wake
 reconciliation; stable updates read the latch without scanning endpoint
 entities for `Added<T>` matches.
+
+Editor document previews compose the same stage-relative prim paths but own
+render state only. Cosim discovery skips preview-only hierarchies, wiring
+excludes preview descendants before indexing endpoints, and simulation owner
+lookups match the current runtime instance while rejecting preview entities.
+This keeps a preview copy from claiming a mounted scene connection or body.
 
 Cosim prim source discovery and the Python-availability completion check share
 one coalesced pending-prim set, implemented with the `PendingEntityWork`

@@ -854,7 +854,7 @@ pub fn spawn_scene_root_with_stage(
     let new_id = handle.id();
 
     {
-        let mut q = world.query::<&UsdPrimPath>();
+        let mut q = world.query_filtered::<&UsdPrimPath, With<UsdSceneRoot>>();
         if q.iter(world)
             .any(|upp| upp.stage_handle.id() == new_id && upp.path == root_prim)
         {

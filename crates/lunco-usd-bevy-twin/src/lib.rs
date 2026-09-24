@@ -38,6 +38,9 @@ struct TwinSceneRef {
     rel: String,
     preview_leases: usize,
     applied_generation: Option<u64>,
+    /// Last generation whose disposable view-layer ops reached the stage.
+    /// The initial scene asset contains base and runtime layers, never view.
+    applied_view_generation: Option<u64>,
     synced_generation: Option<u64>,
     stage_id: Option<AssetId<UsdStageAsset>>,
     overlay_synced_generation: Option<u64>,
@@ -85,13 +88,23 @@ impl DocBackedTwinScenes {
     /// Snapshot all tracked projection entries for the runtime owner.
     pub fn entries(
         &self,
-    ) -> impl Iterator<Item = (DocumentId, String, String, Option<u64>, Option<u64>)> + '_ {
+    ) -> impl Iterator<
+        Item = (
+            DocumentId,
+            String,
+            String,
+            Option<u64>,
+            Option<u64>,
+            Option<u64>,
+        ),
+    > + '_ {
         self.map.iter().map(|(doc, scene)| {
             (
                 *doc,
                 scene.name.clone(),
                 scene.rel.clone(),
                 scene.applied_generation,
+                scene.applied_view_generation,
                 scene.overlay_synced_generation,
             )
         })
@@ -141,6 +154,7 @@ impl DocBackedTwinScenes {
         if let Some(scene) = self.map.get_mut(&doc) {
             scene.applied_generation = Some(generation);
             scene.synced_generation = Some(generation);
+            scene.applied_view_generation = None;
             scene.overlay_synced_generation = Some(generation);
         }
     }
@@ -155,6 +169,21 @@ impl DocBackedTwinScenes {
         if let Some(scene) = self.map.get_mut(&doc) {
             scene.applied_generation = Some(generation);
             scene.stage_id = Some(stage_id);
+        }
+    }
+
+    /// Record that the disposable view-layer operations through `generation`
+    /// reached the same canonical stage as the persistent document projection.
+    pub fn mark_view_applied(
+        &mut self,
+        doc: DocumentId,
+        stage_id: AssetId<UsdStageAsset>,
+        generation: u64,
+    ) {
+        if let Some(scene) = self.map.get_mut(&doc) {
+            if scene.stage_id == Some(stage_id) {
+                scene.applied_view_generation = Some(generation);
+            }
         }
     }
 
@@ -202,6 +231,7 @@ impl DocBackedTwinScenes {
                 rel,
                 preview_leases: 0,
                 applied_generation: None,
+                applied_view_generation: None,
                 synced_generation: None,
                 stage_id: None,
                 overlay_synced_generation: None,
@@ -222,6 +252,7 @@ impl DocBackedTwinScenes {
                 rel,
                 preview_leases: 0,
                 applied_generation: None,
+                applied_view_generation: None,
                 synced_generation: None,
                 stage_id: None,
                 overlay_synced_generation: None,

@@ -329,14 +329,7 @@ impl WorkbenchLayout {
         instance: u64,
         restore: Option<TabId>,
     ) {
-        let previous = restore.or_else(|| {
-            self.dock.main_surface().focused_leaf().and_then(|node| {
-                match &self.dock.main_surface()[node] {
-                    egui_dock::Node::Leaf(leaf) => leaf.tabs.get(leaf.active.0).cloned(),
-                    _ => None,
-                }
-            })
-        });
+        let previous = restore.or_else(|| self.focused_tab().cloned());
         self.open_instance(kind, instance);
         if let Some(previous) = previous {
             if let Some(path) = self.dock.find_tab(&previous) {
@@ -622,6 +615,21 @@ impl WorkbenchLayout {
         self.activate_perspective(id);
     }
 
+    /// The tab selected in the focused leaf of the main dock surface.
+    ///
+    /// Perspective changes can briefly leave a focused node index pointing
+    /// outside the rebuilt tree. Resolve the index through the tree iterator
+    /// so that an empty or transitional dock has no focused tab instead of
+    /// panicking while the shell publishes its snapshot.
+    pub fn focused_tab(&self) -> Option<&TabId> {
+        let tree = self.dock.main_surface();
+        let focused = tree.focused_leaf()?;
+        match tree.iter().nth(focused.0)? {
+            egui_dock::Node::Leaf(leaf) => leaf.tabs.get(leaf.active.0),
+            _ => None,
+        }
+    }
+
     /// The `instance` discriminant of the currently *focused* tab, when
     /// it's a multi-instance tab. Document tabs open with their
     /// `DocumentId.raw()` as the instance (see `open_instance` callers),
@@ -633,12 +641,8 @@ impl WorkbenchLayout {
     /// *correct* active tab. Returns `None` when the focused tab is a
     /// singleton panel (not a document) or nothing is focused.
     pub fn active_tab_instance(&self) -> Option<u64> {
-        let tree = self.dock.main_surface();
-        let node = tree.focused_leaf()?;
-        if let egui_dock::Node::Leaf(leaf) = &tree[node] {
-            if let Some(TabId::Instance { instance, .. }) = leaf.tabs.get(leaf.active.0) {
-                return Some(*instance);
-            }
+        if let Some(TabId::Instance { instance, .. }) = self.focused_tab() {
+            return Some(*instance);
         }
         None
     }
@@ -1251,23 +1255,13 @@ impl WorkbenchLayout {
             }
             acc
         };
-        let active_instance: Option<(PanelId, u64)> = {
-            let tree = self.dock.main_surface();
-            tree.focused_leaf().and_then(|node| {
-                if let egui_dock::Node::Leaf(leaf) = &tree[node] {
-                    match leaf.tabs.get(leaf.active.0) {
-                        Some(TabId::Instance { kind, instance })
-                            if self.instance_panels.contains_key(kind) =>
-                        {
-                            Some((*kind, *instance))
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
+        let active_instance: Option<(PanelId, u64)> =
+            self.focused_tab().and_then(|tab| match tab {
+                TabId::Instance { kind, instance } if self.instance_panels.contains_key(kind) => {
+                    Some((*kind, *instance))
                 }
-            })
-        };
+                _ => None,
+            });
 
         // Viewport-only perspectives: no central singleton tabs → don't
         // build a side-panel dock tree. The renderer lays out side panels

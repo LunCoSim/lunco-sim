@@ -231,6 +231,8 @@ impl Plugin for CoSimPlugin {
         app.add_systems(FixedFirst, lunco_cosim_core::clear_control_write_fence);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_state);
         app.add_observer(binding::on_add_connection)
+            .add_observer(binding::on_port_surface_change)
+            .add_observer(binding::on_remove_port_surface)
             // Co-sim retains every `SimComponent` output itself, with source
             // metadata. Mark it at lifecycle time so generic port telemetry does
             // not create a second, ungrouped history for the same values.
