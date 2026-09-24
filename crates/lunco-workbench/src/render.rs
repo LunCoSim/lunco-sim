@@ -1359,6 +1359,10 @@ pub(crate) fn render_status_bar_inner(
 
         ui.separator();
 
+        if !scene_name.is_empty() && perf_enabled {
+            ui.add_space(STATUS_BAR_SCENE_PERF_GAP);
+        }
+
         render_net_chip(ui, world, theme, right_widths.net);
 
         // Right-aligned perf segment. Hidden when the HUD is off so
@@ -1818,6 +1822,7 @@ const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 140.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
 const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 64.0;
+const STATUS_BAR_SCENE_PERF_GAP: f32 = 32.0;
 const STATUS_BAR_NET_MAX_WIDTH: f32 = 220.0;
 const STATUS_BAR_PERF_MAX_WIDTH: f32 = 480.0;
 /// Minimum compact-window budget for the essential metrics and a useful sparkline.
@@ -1950,7 +1955,13 @@ fn status_bar_right_widths(
 ) -> StatusBarRightWidths {
     let separator_count =
         2.0 + if scene_visible { 1.0 } else { 0.0 } + if net_active { 1.0 } else { 0.0 };
-    let overhead = STATUS_BAR_BASE_OVERHEAD + separator_count * STATUS_BAR_SEPARATOR_RESERVE;
+    let scene_perf_gap = if scene_visible && perf_enabled {
+        STATUS_BAR_SCENE_PERF_GAP
+    } else {
+        0.0
+    };
+    let overhead =
+        STATUS_BAR_BASE_OVERHEAD + separator_count * STATUS_BAR_SEPARATOR_RESERVE + scene_perf_gap;
     let scene = if scene_visible {
         STATUS_BAR_SCENE_MAX_WIDTH
     } else {
