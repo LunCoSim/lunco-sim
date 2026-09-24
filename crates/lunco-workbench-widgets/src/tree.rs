@@ -100,10 +100,11 @@ pub fn label(
 ) -> egui::Response {
     ui.add_sized(
         row_size(ui, width),
-        egui::Label::new(text)
-            .halign(egui::Align::Min)
+        egui::Button::new(text)
+            .right_text(egui::Atom::grow())
             .truncate()
-            .sense(sense),
+            .sense(sense)
+            .frame(false),
     )
 }
 
