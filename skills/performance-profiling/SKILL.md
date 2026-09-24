@@ -11,8 +11,12 @@ before changing code. A status-bar FPS number is a symptom, not an attribution.
 
 ## Required separation
 
-- Run one clean production session for the product FPS number. Do not use
-  Tracy's instrumented number as acceptance evidence.
+- Run one production session that you own for the product FPS number, launched
+  from the task checkout on a verified free API port. Do this even if another
+  user's or agent's session is active; never control, stop, restart, or change
+  the scene in a pre-existing session. Report concurrent GPU/CPU workloads and
+  classify affected numbers as contention-affected, not clean acceptance. Do
+  not use Tracy's instrumented number as acceptance evidence.
 - Run a separate Tracy build/capture using the adjacent `../tracy` checkout;
   start `tracy-capture` before the production binary and inspect the settled
   window, not only startup.
