@@ -52,6 +52,9 @@ When a source is hot-swapped, the program emits the generic typed
 that lifecycle edge rather than relying on a timer. Sensor events may carry a
 nested collider; match the entrant through the generic `parent()` chain to the
 authored subject instead of adding a route-specific child relationship.
+If the mounted document is attached after `on_start`, defer document-backed
+route reads and task actions until the matching `usd.document.projected` event
+binds it; do not retry against an empty identity each task pass.
 Initial scenario admission waits for all world and entity readiness holds
 because a program may depend on entities outside its own hierarchy. After
 admission, an entity hold idles only scenarios attached within that subtree;

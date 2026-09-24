@@ -771,6 +771,10 @@ fn on_start(me, ctx) {
     this.route_view_key = ();
     this.route_error = "";
     this.start_requested = false;
+    // The mounted USD stage can be projected before it is associated with a
+    // document. The matching projection event binds the route and performs
+    // the initial occupancy and presentation reads.
+    if this.route_document == () { return this; }
     let occupancy = mark_initial_route_occupancy(me, this);
     if occupancy.ok == true {
         this = occupancy.state;
@@ -796,15 +800,51 @@ fn on_start(me, ctx) {
     // Hot-swapped programs expose their lifecycle boundary on the same typed
     // event bus consumed by the Twin. UI/tests can wait for this authored
     // readiness edge before sending a one-shot command or pointer gesture.
-    emit("program.ready", #{
-        path: program_path(me),
-        generation: this.route_revision,
-    });
+    if this.route_document != () {
+        emit("program.ready", #{
+            path: this.program_path,
+            generation: this.route_revision,
+        });
+    }
+}
+
+fn bind_projected_route(me, state, expected_doc) {
+    let route = route_path(me);
+    let program = program_path(me);
+    let doc = route_document(me);
+    if route == () || program == () || doc == () || doc != expected_doc {
+        return #{ ok: false, state: state };
+    }
+    state.route_path = route;
+    state.program_path = program;
+    state.route_document = doc;
+    state.route_points = ();
+    state.route_revision = ();
+    state.route_view_key = ();
+    state.enabled = route_enabled_from_usd(me);
+    state.selected = route_is_selected(me);
+    state.route_index = route_resume_index(me, state);
+    let occupancy = mark_initial_route_occupancy(me, state);
+    if occupancy.ok == true { state = occupancy.state; }
+    #{ ok: true, state: state }
 }
 
 fn on_event(me, evt, ctx) {
-    if evt.name == "usd.document.projected" && evt.value != ()
-        && evt.value["doc_id"] == this.route_document {
+    if evt.name == "usd.document.projected" && evt.value != () {
+        let projected_doc = evt.value["doc_id"];
+        if this.route_document == () {
+            // A scenario can start before its live stage is associated with
+            // the document. Bind at the projection event that makes that
+            // identity authoritative, then publish readiness for observers.
+            let bound = bind_projected_route(me, this, projected_doc);
+            if bound.ok != true { return; }
+            this = bound.state;
+            emit("program.ready", #{
+                path: this.program_path,
+                generation: route_revision_for(this),
+            });
+        }
+        if projected_doc != this.route_document { return; }
         // Projection is the authoritative invalidation boundary for route
         // presentation. Compare its composed point key here, after the stage
         // is current, rather than polling topology from the control task. The
@@ -917,6 +957,9 @@ fn on_event(me, evt, ctx) {
 // The task driver resolves this named callback against the scenario AST and
 // binds its persistent state map as `this`, exactly like an anonymous closure.
 fn route_task_tick(m) {
+    // A route without its mounted document is waiting for
+    // `usd.document.projected`; do not retry document reads on every task pass.
+    if this.route_document == () { return false; }
     // A start request is independent of the disposable ribbon view. Do
     // not let a concurrent ribbon rebuild consume the one-shot action;
     // retry the typed start transaction until its authored markers are

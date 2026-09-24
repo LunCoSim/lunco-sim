@@ -43,6 +43,9 @@ in Rhai. The curve's standard `normals` make `widths` a ribbon width, so this pa
 not become a cylindrical tube.
 The disposable view is rebuilt only after a route edit or when the route program
 starts; it is not a per-frame USD edit, a second route, or a screen-space gizmo.
+Unscoped `QueryUsdPrim` reads likewise select mounted scene roots by excluding
+`UsdPreviewOnly` hierarchies, so an Editor preview cannot make live scene queries
+ambiguous.
 
 The complete ordered route remains visible while the route program separately
 owns enablement and progression. Waypoint labels remain a separate generic

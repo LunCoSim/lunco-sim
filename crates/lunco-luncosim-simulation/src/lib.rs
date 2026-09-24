@@ -637,15 +637,19 @@ impl Plugin for LunCoSimSimulationPlugin {
 /// resource.
 fn track_ground_collider_pending(
     building: Query<
-        (),
+        Entity,
         Or<(
             With<lunco_terrain_surface::DemTerrainRequest>,
             With<lunco_usd_terrain::DemDatasetPending>,
         )>,
     >,
+    parents: Query<&ChildOf>,
+    preview_roots: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     mut pending: ResMut<lunco_usd_sim_core::GroundColliderPending>,
 ) {
-    pending.0 = !building.is_empty();
+    pending.0 = building
+        .iter()
+        .any(|entity| !lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots))
 }
 
 #[cfg(test)]
