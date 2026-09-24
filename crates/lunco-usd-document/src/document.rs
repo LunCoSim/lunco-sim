@@ -98,7 +98,7 @@ use lunco_usd_authoring::author::{
     self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
 };
 use lunco_usd_compose::recipe::StageRecipe;
-use lunco_usd_data::units::{ConventionTransform, StageMetrics, UpAxis};
+use lunco_usd_data::units::{ConventionTransform, StageMetadataReader, StageMetrics, UpAxis};
 use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecType};
 
@@ -1689,6 +1689,17 @@ impl UsdDocument {
         data
     }
 
+    /// Resolve the unit convention from the document's composed authoring
+    /// stage. Runtime and view layers are overlays, so opening either target
+    /// alone would apply USD's centimetre default when the scene metadata is
+    /// authored on the base layer.
+    fn composed_stage_convention(&self) -> Result<ConventionTransform, DocumentError> {
+        let data = self.composed_arc();
+        let reader = ComposedDocumentMetadata(data.as_ref());
+        let metrics = StageMetrics::from_reader(&reader).map_err(author_err)?;
+        Ok(ConventionTransform::from_stage_metrics(&metrics))
+    }
+
     /// The composed view serialized to USDA text — the source the viewport
     /// re-parses so runtime-layer state becomes visible. Falls back to the raw
     /// (base) source when the base is un-parseable.
@@ -2652,7 +2663,7 @@ impl Document for UsdDocument {
                 // so this changes nothing except for imported Omniverse/Isaac
                 // content, which is exactly where silent frame corruption would be
                 // hardest to spot.
-                let conv = authoring_stage_convention(&stage)?;
+                let conv = self.composed_stage_convention()?;
                 let authored = conv.stage_point_d(DVec3::from_array(value)).to_array();
                 stage
                     .create_attribute(format!("{path}.xformOp:translate"), "double3")
@@ -2848,7 +2859,7 @@ impl Document for UsdDocument {
                 };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
-                let conv = authoring_stage_convention(&stage)?;
+                let conv = self.composed_stage_convention()?;
                 let authored = match name.as_str() {
                     "xformOp:translate" => conv.stage_point_d(DVec3::from_array(value)).to_array(),
                     "xformOp:rotateXYZ" => conv.stage_euler_xyz_deg(value),
@@ -2903,7 +2914,7 @@ impl Document for UsdDocument {
                 // conversion is the identity — the canonical stages we author
                 // ourselves keep their authored digits exactly, and only genuinely
                 // non-canonical stages pay the precision of the remap they need.
-                let conv = authoring_stage_convention(&stage)?;
+                let conv = self.composed_stage_convention()?;
                 let authored = conv.stage_euler_xyz_deg(value);
                 stage
                     .create_attribute(format!("{path}.xformOp:rotateXYZ"), "double3")
@@ -2968,7 +2979,7 @@ impl Document for UsdDocument {
                 let old_scale = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:scale");
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
-                let conv = authoring_stage_convention(&stage)?;
+                let conv = self.composed_stage_convention()?;
                 let authored = conv.stage_scale_vec_d(DVec3::from_array(value)).to_array();
                 stage
                     .create_attribute(format!("{path}.xformOp:scale"), "double3")
@@ -3070,8 +3081,7 @@ impl Document for UsdDocument {
                 // Runs on the TYPED value, after parsing and before authoring, so no
                 // literal is ever re-formatted to convert it — a string round-trip
                 // here would risk changing values it was only meant to move.
-                let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                let conv = authoring_stage_convention(&conv_stage)?;
+                let conv = self.composed_stage_convention()?;
                 let val = conv.stage_physics_joint_value(&name, &type_name, val);
 
                 // SCALAR LENGTHS, which no USD type can announce. `radius` is a bare
@@ -3278,8 +3288,7 @@ impl Document for UsdDocument {
                 // rule), on the keyframe path. Without it an attribute's `default`
                 // and its `timeSamples` land in different unit frames inside one
                 // serialized file on any non-canonical stage.
-                let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                let conv = authoring_stage_convention(&conv_stage)?;
+                let conv = self.composed_stage_convention()?;
                 let val = conv.stage_physics_joint_value(&name, &type_name, val);
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let val = match linear {
@@ -3403,8 +3412,7 @@ impl Document for UsdDocument {
                             .map(|(_, old)| old),
                         _ => None,
                     });
-                let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                let conv = authoring_stage_convention(&conv_stage)?;
+                let conv = self.composed_stage_convention()?;
                 let linear = self.linear_unit_of(&prim_sdf, &name);
                 let recovered = prior_type.zip(prior_value).and_then(|(ty, old)| {
                     let old = conv.canonical_physics_joint_value(&name, &ty, old);
@@ -4201,15 +4209,14 @@ fn author_err<E: std::fmt::Display>(e: E) -> DocumentError {
     DocumentError::ValidationFailed(format!("authoring failed: {e}"))
 }
 
-/// Read the composed authoring stage's convention once at the document boundary.
-/// Invalid explicit USD metadata rejects the edit; it must never be rewritten as
-/// a canonical identity because that would serialize a value in the wrong frame.
-fn authoring_stage_convention(
-    stage: &openusd::usd::Stage,
-) -> Result<ConventionTransform, DocumentError> {
-    StageMetrics::from_stage(stage)
-        .map(|metrics| ConventionTransform::from_stage_metrics(&metrics))
-        .map_err(author_err)
+/// Stage metadata after the document's base, runtime, and view layers compose.
+/// The edit target itself is only an overlay and has no independent unit frame.
+struct ComposedDocumentMetadata<'a>(&'a sdf::Data);
+
+impl StageMetadataReader for ComposedDocumentMetadata<'_> {
+    fn stage_metadata_value(&self, name: &str) -> Option<sdf::Value> {
+        self.0.field(&SdfPath::abs_root(), name).cloned()
+    }
 }
 
 #[cfg(test)]

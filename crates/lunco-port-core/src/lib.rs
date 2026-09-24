@@ -9,5 +9,6 @@ pub mod ports;
 
 pub use endpoints::{
     CausalStateSink, InputPorts, OutputPorts, Port, PortSurface, PortSurfacePending,
-    PortSurfaceReady, owning_input_ports, register_endpoint_types, safe_stop_control_surface,
+    PortSurfacePort, PortSurfaceReady, owning_input_ports, register_endpoint_types,
+    safe_stop_control_surface,
 };

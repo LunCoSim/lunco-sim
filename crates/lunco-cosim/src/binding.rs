@@ -91,6 +91,24 @@ pub fn on_add_connection(
     revision.request();
 }
 
+/// Reconcile authored connections when a deferred backend installs or removes
+/// its generic named-port surface. The owning endpoint may already have
+/// published `PortSurfaceReady`, so that lifecycle marker alone cannot signal
+/// this later topology transition.
+pub fn on_port_surface_change(
+    _trigger: On<Add, lunco_port_core::PortSurface>,
+    mut revision: ResMut<BindingRevision>,
+) {
+    revision.request();
+}
+
+pub fn on_remove_port_surface(
+    _trigger: On<Remove, lunco_port_core::PortSurface>,
+    mut revision: ResMut<BindingRevision>,
+) {
+    revision.request();
+}
+
 /// Bind only after a lifecycle transition requested a new revision.  Missing
 /// endpoints remain pending while the epoch is open; after sealing, an exact
 /// named-port miss is terminal and recorded once here, never in propagation.

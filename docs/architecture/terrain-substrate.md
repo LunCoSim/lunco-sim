@@ -337,8 +337,18 @@ it is three planes over the *one* Stage:
 | Plane | Terrain content | Mechanism |
 |---|---|---|
 | **Authoring** (USD Stage) | terrain root + standard `UsdShade` material + `lunco:layer` child prims (dem / craters / carve / rocks) + georef / anchor | edits = `UsdOp` on an EditTarget; composition, reference-arc cascade, RBAC, journal, cross-peer sync all **free** from the canonical machinery |
-| **Projection membrane** (StageSink → ECS) | `TerrainLayerStack`, `TerrainGeoref`, `DemTerrainRequest` components | a terrain `UsdAttrProjection`; change-driven — only the prims that resynced re-project |
+| **Projection membrane** (StageSink → ECS) | `TerrainLayerStack`, `TerrainGeoref`, `DemTerrainRequest` components on mounted scene roots | a terrain `UsdAttrProjection`; change-driven — only the prims that resynced re-project; `UsdPreviewOnly` terrain prims are examined without creating mission DEM requests |
 | **Derived runtime** (oracle → geometry) | `HeightSource` stack → CDLOD tiles + collider ring | sampled on demand; content-addressed via `lunco-precompute`; regen = an atomic activation unit |
+
+The mission physics-admission mirror reports the exact mounted DEM request or
+dataset that holds activation; it excludes `UsdPreviewOnly` ancestry even if a
+preview request was already present when the hierarchy was tagged.
+
+An Editor preview shares composed USD paths with the mounted scene, but it is
+not a terrain simulation participant. Its DEM does not build collider rings,
+publish analytic query sources, or hold the mission physics transport. An
+isolated preview that needs relief requires a separate render-only terrain
+realization and preview-grid camera demand.
 
 **Why this matches USD's dynamic nature:** terrain geometry is never authored or
 stored — it is a **pure deterministic projection** of the composed Stage. So every

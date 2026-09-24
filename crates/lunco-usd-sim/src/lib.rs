@@ -74,7 +74,8 @@ use lunco_mobility::{
 };
 use lunco_physics::joint::JointTorqueActuator;
 use lunco_physics::raycast::RaycastObservation;
-use lunco_port_core::{Port, PortSurface};
+use lunco_port_core::ports::PortDirection;
+use lunco_port_core::{Port, PortSurface, PortSurfacePort};
 use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_usd_sim_authoring::{
@@ -489,7 +490,12 @@ fn process_usd_sim_prims(
         ),
     >,
     mut pending: ResMut<PendingUsdSimPrimWork>,
-    all_prims: Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
+    all_prims: Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&Transform>,
+        Option<&UsdInstanceProjection>,
+    )>,
     grid_components: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_child_of: Query<&ChildOf>,
@@ -604,6 +610,8 @@ fn process_usd_sim_prims(
             topology,
             &all_prims,
             &q_child_of,
+            &q_preview_only,
+            instance_projection,
             &grid_components,
             &q_spatial,
             &mut commands,
@@ -842,8 +850,15 @@ fn process_usd_sim_prim_read(
     mesh_pending: bool,
     shader_bound: bool,
     topology: &StageJointTopology,
-    all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
+    all_prims: &Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&Transform>,
+        Option<&UsdInstanceProjection>,
+    )>,
     q_child_of: &Query<&ChildOf>,
+    q_preview_only: &Query<(), With<UsdPreviewOnly>>,
+    instance_projection: Option<&UsdInstanceProjection>,
     grid_components: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     commands: &mut Commands,
@@ -884,6 +899,9 @@ fn process_usd_sim_prim_read(
         &sdf_path,
         prim_path.stage_handle.id(),
         all_prims,
+        instance_projection,
+        q_child_of,
+        q_preview_only,
     ) {
         Ok(Some(contribution)) => {
             commands.entity(entity).try_insert(contribution);
@@ -1604,9 +1622,18 @@ fn process_usd_sim_prim_read(
         };
         commands.entity(entity).try_insert((
             PortSurface::new(HashMap::from([
-                ("drive".to_owned(), p_drive),
-                ("heading".to_owned(), p_heading),
-                ("shaft_speed".to_owned(), p_speed),
+                (
+                    "drive".to_owned(),
+                    PortSurfacePort::new(p_drive, PortDirection::In),
+                ),
+                (
+                    "heading".to_owned(),
+                    PortSurfacePort::new(p_heading, PortDirection::In),
+                ),
+                (
+                    "shaft_speed".to_owned(),
+                    PortSurfacePort::new(p_speed, PortDirection::Out),
+                ),
             ])),
             lunco_port_core::PortSurfaceReady,
         ));
@@ -1633,6 +1660,9 @@ fn process_usd_sim_prim_read(
             physical_body_path,
             prim_path.stage_handle.id(),
             all_prims,
+            instance_projection,
+            q_child_of,
+            q_preview_only,
         ) else {
             error!(
                 "USD wheel {} has no resolved authored rigid-body owner — refusing to spawn",
@@ -1751,14 +1781,29 @@ fn net_override_markers(replicate: Option<bool>, authority: Option<&str>) -> (bo
 /// Entity identity is supplied by USD instantiation; ownership is never
 /// inferred from a prim name or from an incidental Bevy parent.
 fn usd_entity_for_path(
-    all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
+    all_prims: &Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&Transform>,
+        Option<&UsdInstanceProjection>,
+    )>,
     stage: bevy::asset::AssetId<UsdStageAsset>,
     path: &str,
+    instance_root: Option<Entity>,
+    q_child_of: &Query<&ChildOf>,
+    q_preview_only: &Query<(), With<UsdPreviewOnly>>,
 ) -> Option<Entity> {
-    all_prims
+    let mut matches = all_prims
         .iter()
-        .find(|(_, prim, _)| prim.stage_handle.id() == stage && prim.path == path)
-        .map(|(entity, _, _)| entity)
+        .filter(|(entity, prim, _, projection)| {
+            prim.stage_handle.id() == stage
+                && prim.path == path
+                && projection.and_then(|projection| projection.root) == instance_root
+                && !is_preview_only(*entity, q_child_of, q_preview_only)
+        })
+        .map(|(entity, _, _, _)| entity);
+    let entity = matches.next()?;
+    matches.next().is_none().then_some(entity)
 }
 
 /// Resolve the nearest authored rigid body above a raycast wheel. The wheel
@@ -1786,14 +1831,29 @@ fn wheel_body_mount(
     wheel_path: &SdfPath,
     physical_body_path: Option<&str>,
     stage: bevy::asset::AssetId<UsdStageAsset>,
-    all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
+    all_prims: &Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&Transform>,
+        Option<&UsdInstanceProjection>,
+    )>,
+    instance_projection: Option<&UsdInstanceProjection>,
+    q_child_of: &Query<&ChildOf>,
+    q_preview_only: &Query<(), With<UsdPreviewOnly>>,
 ) -> Option<lunco_mobility::WheelBodyMount> {
     let body_path = if let Some(path) = physical_body_path {
         SdfPath::new(path).ok()?
     } else {
         raycast_body_path(reader, wheel_path)?
     };
-    let body = usd_entity_for_path(all_prims, stage, body_path.as_str())?;
+    let body = usd_entity_for_path(
+        all_prims,
+        stage,
+        body_path.as_str(),
+        instance_projection.and_then(|projection| projection.root),
+        q_child_of,
+        q_preview_only,
+    )?;
     let local = lunco_usd_bevy_stage::transform_in_body_frame(reader, &body_path, wheel_path)?;
     Some(lunco_mobility::WheelBodyMount { body, local })
 }
@@ -1830,7 +1890,15 @@ fn raycast_mass_contribution_from_usd(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
+    all_prims: &Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&Transform>,
+        Option<&UsdInstanceProjection>,
+    )>,
+    instance_projection: Option<&UsdInstanceProjection>,
+    q_child_of: &Query<&ChildOf>,
+    q_preview_only: &Query<(), With<UsdPreviewOnly>>,
 ) -> Result<Option<lunco_mobility::RaycastMassContribution>, String> {
     if !reader.has_api_schema(prim, "LunCoMassContributionAPI")
         || reader.has_api_schema(prim, "PhysicsRigidBodyAPI")
@@ -1869,8 +1937,15 @@ fn raycast_mass_contribution_from_usd(
     if !reader.has_api_schema(&body_path, "PhysicsRigidBodyAPI") {
         return Err("no enclosing PhysicsRigidBodyAPI owner".into());
     }
-    let owner = usd_entity_for_path(all_prims, stage_id, body_path.as_str())
-        .ok_or_else(|| format!("owner entity {} is not projected", body_path.as_str()))?;
+    let owner = usd_entity_for_path(
+        all_prims,
+        stage_id,
+        body_path.as_str(),
+        instance_projection.and_then(|projection| projection.root),
+        q_child_of,
+        q_preview_only,
+    )
+    .ok_or_else(|| format!("owner entity {} is not projected", body_path.as_str()))?;
     let local = lunco_usd_bevy_stage::transform_in_body_frame(reader, &body_path, prim)
         .ok_or_else(|| "cannot resolve local transform".to_owned())?;
     let principal = convention.dir_d(DVec3::new(inertia[0], inertia[1], inertia[2]))
@@ -2082,11 +2157,16 @@ fn physical_suspension_visuals(
     wheel_path: &UsdPrimPath,
     wheel_entity: Entity,
     wheel_tf: Transform,
-    all_prims: &Query<(Entity, &UsdPrimPath, Option<&Transform>)>,
+    all_prims: &Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&Transform>,
+        Option<&UsdInstanceProjection>,
+    )>,
     q_child_of: &Query<&ChildOf>,
 ) -> Vec<(Entity, Transform)> {
     let mut visuals = Vec::new();
-    for (child, child_path, maybe_child_tf) in all_prims.iter() {
+    for (child, child_path, maybe_child_tf, _) in all_prims.iter() {
         if child == wheel_entity || child_path.stage_handle != wheel_path.stage_handle {
             continue;
         }

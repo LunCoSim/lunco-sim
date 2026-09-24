@@ -6,6 +6,7 @@
 
 // Module functions are used instead of top-level variables because imported
 // Rhai tool functions execute in their own module scope.
+// Keep the overview ribbon readable above the terrain renderer's LOD seams.
 fn route_ribbon_width() { 0.12 }
 fn route_ribbon_clearance() { 0.03 }
 // Keep the transient BasisCurves payload below the Rhai/USD operation limit
@@ -814,7 +815,7 @@ fn ribbon_ops(doc, route, points) {
 }
 
 // Route points are authored facts. The ribbon is a disposable tool view in
-// the @view@ layer, so a Twin remains portable and contains no editor-only
+// the @view@ layer, so a Twin remains portable and contains no persisted
 // presentation prim.
 fn ensure_ribbon(context) {
     if context == () || context.doc_id == () || context.route_path == () {

@@ -3,10 +3,11 @@
 > Status: Active · Audience: contributors authoring beams, plumes, ribbons, or any sim-driven visual
 
 A sensor beam or an exhaust plume may be authored USD geometry whose size tracks a live
-simulation value. A route ribbon is a different class: it is a derived editor annotation
+simulation value. A route ribbon is a different class: it is a derived scene annotation
 whose geometry is generated from USD mission topology. The reusable route tool writes its
-current `BasisCurves` view to the document's `@view@` layer on route changes; it never
-changes the authored Twin and never writes a document opinion every frame.
+current `BasisCurves` view to the document's `@view@` layer on route changes; the live
+scene projects those transient operations without changing the authored Twin or writing a
+document opinion every frame.
 
 Three rules, in order of how often they are broken:
 
@@ -38,11 +39,16 @@ The route-point prims and the Rhai task program are the authored facts. The
 single oriented standard `BasisCurves` prim from
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
 in `@view@`. This keeps the visual contract in USD, lets the existing USD
-renderer draw a cached flat strip with real depth, and keeps all route-specific policy
-in Rhai. The curve's standard `normals` make `widths` a ribbon width, so this path does
-not become a cylindrical tube.
+renderer draw a cached flat strip with real depth in the live scene and document
+preview, and keeps all route-specific policy in Rhai. The curve's standard
+`normals` make `widths` a ribbon width, so this path does not become a
+cylindrical tube.
 The disposable view is rebuilt only after a route edit or when the route program
 starts; it is not a per-frame USD edit, a second route, or a screen-space gizmo.
+When a document is shared by the mounted scene and an Editor preview, live
+structural edits resolve entities only in the mounted scene. A same-path preview
+entity cannot stand in for a missing scene entity. Procedural backgrounds also
+remain scene-owned because the renderer exposes one background owner per scene.
 Unscoped `QueryUsdPrim` reads likewise select mounted scene roots by excluding
 `UsdPreviewOnly` hierarchies, so an Editor preview cannot make live scene queries
 ambiguous.

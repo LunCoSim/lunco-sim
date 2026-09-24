@@ -89,18 +89,18 @@ points in the scene and the plan. The scene owns subject placement and its
 document-backed live edit still uses the composed canonical path and the
 existing USD journal boundary.
 
-The editor's route tool derives a ribbon from the same point children after the
-canonical USD projection has settled. Route-point topology and transforms are
-durable `@runtime@` edits; the ribbon and visited-marker colors are disposable
-`@view@` presentation. The view layer composes over the route while open, but
-does not enter Save, runtime-sidecar persistence, or the journal. It references the reusable
+The route tool derives a ribbon from the same point children after the canonical
+USD projection has settled. Route-point topology and transforms are durable
+`@runtime@` edits; the ribbon and visited-marker colors are disposable `@view@`
+presentation. The view layer projects into the live scene while open, but does
+not enter Save, runtime-sidecar persistence, or the journal. It references the reusable
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
 asset as a child of the route scope and writes only generated `BasisCurves`
 opinions to the document's `@view@` layer. Keeping the view
 under the route is a frame invariant: the ribbon anchor and every route point
 are expressed in the same USD parent space, so a transformed scene scope
 cannot put the overlay in a different frame. The Twin therefore contains no
-editor ribbon prim: removing the view layer leaves the authored route
+persisted ribbon prim: removing the view layer leaves the authored route
 unchanged, and another Twin can use the same tool without importing a
 Twin-specific presentation object.
 

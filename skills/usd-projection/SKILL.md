@@ -140,9 +140,19 @@ the presentation resources.
 The preview root carries `UsdPreviewOnly`, the USD projection ownership fence.
 Consumers that can create simulation side effects must use the shared bounded
 `is_preview_only` ancestry helper rather than names, stage handles, or missing
-physics components; live operator entities are admitted only through their
-`UsdSceneRoot` ownership.
-Unscoped `QueryUsdPrim` reads select the mounted scene by ignoring
+physics components. Cosim discovery must mark preview prims as examined without
+loading their programs, and wire derivation must exclude preview descendants so
+their duplicate USD paths cannot claim mounted-scene endpoints. Live operator
+entities are admitted only through their `UsdSceneRoot` ownership. The USD DEM
+bridge marks preview terrain prims examined without creating `DemTerrainRequest`;
+preview DEMs must not create collider rings, analytic query sources, or hold
+mission physics. Relief in an isolated Editor terrain preview still needs a
+separate render-only terrain realization and spatial demand.
+Mounted-scene live-edit reconciliation must also ignore preview copies when it
+looks up an entity by stage and USD path; a preview duplicate cannot satisfy the
+mounted scene's structural spawn or refresh. Procedural scene backgrounds are
+likewise excluded from previews because the skybox renderer has one scene-wide
+owner. Unscoped `QueryUsdPrim` reads select the mounted scene by ignoring
 `UsdPreviewOnly` roots; preview roots do not make live queries ambiguous.
 Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity

@@ -1636,6 +1636,8 @@ fn bridge_usd_dem_terrain(
             With<lunco_terrain_surface::DemHeightField>,
         )>,
     >,
+    parents: Query<&ChildOf>,
+    preview_roots: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     stages: Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>,
     twins: Res<lunco_assets_core::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
@@ -1646,6 +1648,16 @@ fn bridge_usd_dem_terrain(
     mut commands: Commands,
 ) {
     for (entity, prim_path) in &q {
+        // A document preview can compose the same authored paths as the live
+        // scene, but it is not a terrain realization. Keep it out of the DEM
+        // request, collider-ring, height-query, and global physics-readiness
+        // paths. A future preview terrain product needs its own spatial and
+        // render-only contract; a mission DEM request cannot serve both roles.
+        if lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots) {
+            commands.entity(entity).try_insert(DemBridged);
+            continue;
+        }
+
         // Read the LIVE canonical stage (built on demand from a layer recipe
         // when the asset carries one) — the source of truth. Wait until it is
         // available before reading attrs.
@@ -1673,6 +1685,7 @@ fn bridge_usd_dem_terrain(
                                                         // tiles, and scatter are reaped by their respective orphan reapers.
         for (prior, prior_path) in &q_prior_terrains {
             if prior != entity
+                && !lunco_usd_bevy_scene::is_preview_only(prior, &parents, &preview_roots)
                 && prior_path.path == prim_path.path
                 && prior_path.stage_handle.id() == prim_path.stage_handle.id()
             {

@@ -669,7 +669,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
             return;
         }
-        if procedural_skybox {
+        if procedural_skybox && !preview_only {
             commands.entity(entity).try_insert(ProceduralSkybox);
         } else {
             commands.entity(entity).try_remove::<ProceduralSkybox>();
