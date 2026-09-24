@@ -12,6 +12,7 @@ bevy = { workspace = true }
 lunco-physics = { path = "../lunco-physics" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-mesh = { path = "../lunco-usd-bevy-mesh" }
 openusd = { workspace = true }
 
 [lints]

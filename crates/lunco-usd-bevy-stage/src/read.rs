@@ -873,7 +873,7 @@ pub enum CurveAttributeError {
 /// Curve topology is structural USD data; callers must not replace an
 /// authored type mismatch with a guessed single-curve layout.
 pub fn read_curve_int_array(
-    reader: &impl UsdRead,
+    reader: &dyn UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<Vec<i32>>, CurveAttributeError> {
@@ -895,7 +895,7 @@ pub fn read_curve_int_array(
 /// Read a USD real array (`float[]` or `double[]`) without turning an authored
 /// type mismatch into an omitted optional value.
 pub fn read_curve_real_array(
-    reader: &impl UsdRead,
+    reader: &dyn UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<Vec<f64>>, CurveAttributeError> {
@@ -911,7 +911,7 @@ pub fn read_curve_real_array(
 /// Read a schema-declared textual array without treating an authored value of
 /// another type as an empty optional list.
 pub fn read_curve_token_array(
-    reader: &impl UsdRead,
+    reader: &dyn UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<Vec<String>>, CurveAttributeError> {
@@ -929,7 +929,7 @@ pub fn read_curve_token_array(
 /// outside the allowed set is malformed and is rejected rather than
 /// interpreted as a different curve basis or wrap mode.
 pub fn read_curve_token(
-    reader: &impl UsdRead,
+    reader: &dyn UsdReadObject,
     path: &SdfPath,
     attr: &str,
     schema_default: &str,
@@ -974,7 +974,7 @@ pub fn read_curve_token(
 /// knot values through `f32`. This is used for USD trim ranges, where preserving
 /// the authored knot precision determines whether a span is included.
 pub fn read_double2_array_strict(
-    reader: &impl UsdRead,
+    reader: &dyn UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<Vec<[f64; 2]>>, CurveAttributeError> {

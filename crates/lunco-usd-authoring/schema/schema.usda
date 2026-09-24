@@ -1418,6 +1418,42 @@ class "LunCoLatheAPI" (
     )
 }
 
+# A collision proxy generated from a standard UsdGeomNurbsPatch is an ordinary
+# UsdGeomMesh with the USD Physics schemas. This API records its source and the
+# exact cook inputs so the runtime can reject stale geometry instead of silently
+# simulating an out-of-date approximation.
+class "LunCoDerivedGeometryAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Provenance and reproducible cook settings for a collision mesh derived
+    from a USD NURBS surface. The source relationship is authoritative; the mesh
+    is a regenerated physics proxy. The geometry fingerprint covers the cooked
+    canonical vertices and topology and is checked against both source and proxy
+    at collider admission."""
+)
+{
+    rel lunco:derived:source (
+        doc = "The source UsdGeomNurbsPatch whose composed surface generated this proxy."
+    )
+    uniform uint64 lunco:derived:geometryFingerprint = 0 (
+        doc = "Stable fingerprint of the canonical cooked point and triangle arrays. A mismatch rejects the proxy as stale or modified."
+    )
+    uniform int lunco:derived:nurbsUSubdivisions = 0 (
+        doc = "Number of parameter subdivisions used in the NURBS U direction."
+    )
+    uniform int lunco:derived:nurbsVSubdivisions = 0 (
+        doc = "Number of parameter subdivisions used in the NURBS V direction."
+    )
+    uniform int lunco:derived:trimCurveSamples = 0 (
+        doc = "Samples used for each authored NURBS trim curve."
+    )
+    uniform int lunco:derived:trimGridSubdivisions = 0 (
+        doc = "Parameter-grid subdivisions used to triangulate an authored NURBS trim domain."
+    )
+}
+
 # --- Cinematics --------------------------------------------------------------
 
 class "LunCoCameraPathAPI" (

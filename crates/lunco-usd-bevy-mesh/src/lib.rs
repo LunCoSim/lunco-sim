@@ -18,6 +18,52 @@ use lunco_usd_bevy_stage::{
     UsdRead, UsdStageAsset, canonical::CanonicalStages, read, stage_convention,
 };
 
+/// Explicit, Graphics-independent tessellation inputs for an authored NURBS
+/// collision proxy. Counts are parameter-grid subdivisions, not render quality
+/// levels, and are persisted with the generated proxy so it can be reproduced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NurbsCollisionTessellation {
+    pub u_subdivisions: usize,
+    pub v_subdivisions: usize,
+    pub trim_curve_samples: usize,
+    pub trim_grid_subdivisions: usize,
+}
+
+impl NurbsCollisionTessellation {
+    /// Stable physical-cook defaults based only on the source control net.
+    pub fn for_surface(surface: &lathe::NurbsSurface) -> Self {
+        let u_count = surface.u_count as usize;
+        let v_count = surface.v_count as usize;
+        Self {
+            u_subdivisions: u_count.saturating_mul(8).clamp(16, 256),
+            v_subdivisions: v_count.saturating_mul(8).clamp(16, 256),
+            trim_curve_samples: 48,
+            trim_grid_subdivisions: u_count.max(v_count).saturating_mul(8).clamp(32, 256),
+        }
+    }
+
+    /// Reject unreasonable or empty authored cook settings before allocation.
+    pub fn is_valid(self) -> bool {
+        (1..=512).contains(&self.u_subdivisions)
+            && (1..=512).contains(&self.v_subdivisions)
+            && (2..=4096).contains(&self.trim_curve_samples)
+            && (2..=512).contains(&self.trim_grid_subdivisions)
+    }
+}
+
+/// The reproducible triangle geometry generated from a USD NURBS patch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NurbsCollisionMesh {
+    /// Canonical metres and Y-up, in the source prim's local frame.
+    pub points: Vec<[f32; 3]>,
+    /// Triangle topology in USD's standard `faceVertexCounts` representation.
+    pub face_vertex_counts: Vec<i32>,
+    /// Triangle indices in USD's standard `faceVertexIndices` representation.
+    pub face_vertex_indices: Vec<i32>,
+    /// Stable fingerprint of the generated canonical points and topology.
+    pub geometry_fingerprint: u64,
+}
+
 /// Dimensions are decoded by `lunco-usd-bevy-scene`, the shared owner used by
 /// both the visual mesh and physics collider paths.
 /// Rendering-only provenance for a USD built-in primitive mesh. The dimensions
@@ -683,7 +729,10 @@ pub fn build_usd_curve_mesh(
 /// face value while the code underneath was working, so a missing surface was
 /// blamed on trim support that in fact existed. A doc comment that describes a
 /// capability the code no longer lacks is worse than no comment.)
-pub fn has_authored_nurbs_trim(reader: &impl UsdRead, path: &SdfPath) -> bool {
+pub fn has_authored_nurbs_trim(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+) -> bool {
     [
         "trimCurve:counts",
         "trimCurve:orders",
@@ -706,7 +755,7 @@ pub fn has_authored_nurbs_trim(reader: &impl UsdRead, path: &SdfPath) -> bool {
 /// bell's drawn contour (effective exponent ≈1.3) drift away from the contour its
 /// own Modelica model declared (0.55) with nothing to catch it.
 pub fn read_nurbs_patch_surface(
-    reader: &impl UsdRead,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<(lathe::NurbsSurface, Option<lathe::UsdLathe>)> {
     // Applying the parametric API is the ownership decision: its profile is the
@@ -810,10 +859,99 @@ pub fn build_usd_nurbs_patch_mesh(
     path: &SdfPath,
     quality: lunco_render::RenderQualityProfile,
 ) -> Option<(Mesh, Option<(lathe::NurbsSurface, Option<lathe::UsdLathe>)>)> {
+    let (surface, lathe_params) = read_nurbs_patch_surface(reader, path)?;
+    let tessellation = NurbsCollisionTessellation {
+        u_subdivisions: quality.nurbs_surface_subdivisions(surface.u_count as usize),
+        v_subdivisions: quality.nurbs_surface_subdivisions(surface.v_count as usize),
+        trim_curve_samples: quality.nurbs_trim_curve_samples,
+        trim_grid_subdivisions: quality
+            .nurbs_trim_subdivisions(surface.u_count.max(surface.v_count) as usize),
+    };
+    build_usd_nurbs_patch_mesh_with_tessellation(reader, path, surface, lathe_params, tessellation)
+}
+
+/// Derive collision geometry from a standard USD NURBS patch or `LunCoLatheAPI`
+/// patch with explicit, non-render tessellation settings.
+pub fn build_nurbs_collision_mesh_from_usd(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+    tessellation: NurbsCollisionTessellation,
+) -> Option<NurbsCollisionMesh> {
+    if !tessellation.is_valid() {
+        return None;
+    }
+    let (surface, lathe_params) = read_nurbs_patch_surface(reader, path)?;
+    let (mesh, _) = build_usd_nurbs_patch_mesh_with_tessellation(
+        reader,
+        path,
+        surface,
+        lathe_params,
+        tessellation,
+    )?;
+    let bevy_mesh::VertexAttributeValues::Float32x3(points) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)?
+    else {
+        return None;
+    };
+    let indices: Vec<u32> = match mesh.indices()? {
+        bevy_mesh::Indices::U32(indices) => indices.clone(),
+        bevy_mesh::Indices::U16(indices) => indices.iter().map(|index| u32::from(*index)).collect(),
+    };
+    if points.is_empty()
+        || indices.is_empty()
+        || indices.len() % 3 != 0
+        || points.iter().flatten().any(|value| !value.is_finite())
+        || indices.iter().any(|index| *index as usize >= points.len())
+    {
+        return None;
+    }
+    let face_vertex_indices: Vec<i32> = indices
+        .into_iter()
+        .map(i32::try_from)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let face_vertex_counts = vec![3; face_vertex_indices.len() / 3];
+    let geometry_fingerprint = nurbs_collision_geometry_fingerprint(points, &face_vertex_indices);
+    Some(NurbsCollisionMesh {
+        points: points.clone(),
+        face_vertex_counts,
+        face_vertex_indices,
+        geometry_fingerprint,
+    })
+}
+
+/// Stable FNV-1a fingerprint for one canonical NURBS proxy mesh.
+pub fn nurbs_collision_geometry_fingerprint(points: &[[f32; 3]], indices: &[i32]) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    };
+    feed(&(points.len() as u64).to_le_bytes());
+    for point in points {
+        for coordinate in point {
+            feed(&coordinate.to_bits().to_le_bytes());
+        }
+    }
+    feed(&(indices.len() as u64).to_le_bytes());
+    for index in indices {
+        feed(&index.to_le_bytes());
+    }
+    hash & i64::MAX as u64
+}
+
+fn build_usd_nurbs_patch_mesh_with_tessellation(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+    surface: lathe::NurbsSurface,
+    lathe_params: Option<lathe::UsdLathe>,
+    tessellation: NurbsCollisionTessellation,
+) -> Option<(Mesh, Option<(lathe::NurbsSurface, Option<lathe::UsdLathe>)>)> {
     use bevy::asset::RenderAssetUsages;
     use bevy_mesh::PrimitiveTopology;
 
-    let (surface, lathe_params) = read_nurbs_patch_surface(reader, path)?;
     let points = surface.points.clone();
     let weights = surface.weights.clone();
     let u_count = surface.u_count as usize;
@@ -911,7 +1049,7 @@ pub fn build_usd_nurbs_patch_mesh(
             &tpoints,
             u_span,
             v_span,
-            quality.nurbs_trim_curve_samples,
+            tessellation.trim_curve_samples,
         );
         if loops.is_empty() {
             error!(
@@ -924,7 +1062,7 @@ pub fn build_usd_nurbs_patch_mesh(
     };
 
     if let Some(loops) = trim_loops {
-        let grid = quality.nurbs_trim_subdivisions(u_count.max(v_count));
+        let grid = tessellation.trim_grid_subdivisions;
         bevy::log::info!(
             "[usd-bevy-mesh] {} trimming: {} loop(s), grid {}",
             path.as_str(),
@@ -988,7 +1126,9 @@ pub fn build_usd_nurbs_patch_mesh(
     // EXACTLY the operation the regeneration system has to perform when a parameter
     // changes. Keeping a second copy here would be two tessellators that can
     // disagree — the same trap `lunco_usd_geometry::nurbs`' module doc describes for evaluators.
-    let Some(mesh) = surface.mesh(quality) else {
+    let Some(mesh) =
+        surface.mesh_with_subdivisions(tessellation.u_subdivisions, tessellation.v_subdivisions)
+    else {
         // `sample_nurbs_patch_at` has already warned WHICH guard fired; this
         // adds the prim path, which it has no way to know.
         bevy::log::warn!(
