@@ -186,10 +186,21 @@ the evaluator never invents a value or turns a missing predicate into a pass.
 This is deliberately a subset of SysML v2 verification semantics: requirement
 definitions/usages, subjects, attributes, and verification-case `verify`
 memberships, plus the bounded source-linked constraint IR and Modelica
-lowering path. It does not pretend to be a full KerML execution engine.
-Feature-chain navigation, reusable constraint invocation/default arguments,
-collection/index/aggregate semantics, full quantity conversion, behavioral
-execution, and automatic requirement-to-USD projection remain outside the
-subset. The supported boundary is sufficient for deterministic system-level
-acceptance while remaining portable to headless tests and interactive Twin
-review.
+lowering path. Resolved calls to the implemented standard numeric, trig,
+sequence-size, Boolean aggregate, and primitive `ToString` functions compile
+into typed IR and evaluate against provider observations. The
+`TrigFunctions::pi` constant, homogeneous scalar sequence literals, and
+one-based sequence indexing also compile through that IR;
+`sysml_standard_constants()` lists the constant.
+`sysml_standard_functions()` exposes
+the operation catalog and backend availability to Rhai policy, while
+`sysml_constraint_operators()` lists the typed operators accepted by the IR.
+The `constraint_ir`, `modelica_constraint`, and `evaluate_constraint` model
+tools provide the three corresponding constraint paths. Modelica capability
+reporting shares its lowering table with the backend, which reports an explicit
+error when a call is outside its subset. This is not a full KerML execution
+engine: user-defined function bodies/defaults, feature-chain navigation,
+feature-valued and multidimensional collections, aggregates beyond the listed
+standard subset, full quantity dimensional conversion, resolved
+operator-function overload dispatch, behavioral execution, and automatic
+requirement-to-USD projection remain outside the subset.

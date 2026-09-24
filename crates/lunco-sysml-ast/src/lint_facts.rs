@@ -9,7 +9,8 @@ use crate::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlDiagnostic, SysmlElement,
     SysmlElementHandle, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator,
     SysmlFeatureHandle, SysmlLiteral, SysmlReference, SysmlRelationship, SysmlRequirementRecord,
-    SysmlSubject, SysmlType, SysmlTypeRef, SysmlUnsupportedExpression, SysmlVerificationRecord,
+    SysmlStandardConstant, SysmlStandardFunction, SysmlSubject, SysmlType, SysmlTypeRef,
+    SysmlUnsupportedExpression, SysmlVerificationRecord,
 };
 use lunco_hooks::HookValue as H;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -649,6 +650,42 @@ fn expression(value: &SysmlExpression) -> H {
             value.feature.map(feature_handle).unwrap_or(H::Unit),
         ),
         (
+            "standard_constant_code",
+            value
+                .standard_constant
+                .map(standard_constant_code)
+                .map(H::Int)
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "function_element",
+            value
+                .function
+                .as_ref()
+                .map(|function| element_handle(function.element))
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "standard_function_code",
+            value
+                .function
+                .as_ref()
+                .and_then(|function| function.standard_function)
+                .map(standard_function_code)
+                .map(H::Int)
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "argument_parameters",
+            H::Array(
+                value
+                    .argument_parameters
+                    .iter()
+                    .map(|parameter| parameter.map(element_handle).unwrap_or(H::Unit))
+                    .collect(),
+            ),
+        ),
+        (
             "operator_code",
             value
                 .operator
@@ -699,6 +736,10 @@ fn expression(value: &SysmlExpression) -> H {
 fn expression_kind_code(kind: SysmlExpressionKind) -> i64 {
     match kind {
         SysmlExpressionKind::FeatureReference => 1,
+        SysmlExpressionKind::StandardConstant => 12,
+        SysmlExpressionKind::Invocation => 13,
+        SysmlExpressionKind::Index => 14,
+        SysmlExpressionKind::Collection => 15,
         SysmlExpressionKind::IntegerLiteral => 2,
         SysmlExpressionKind::RealLiteral => 3,
         SysmlExpressionKind::BooleanLiteral => 4,
@@ -709,6 +750,45 @@ fn expression_kind_code(kind: SysmlExpressionKind) -> i64 {
         SysmlExpressionKind::Conditional => 9,
         SysmlExpressionKind::Group => 10,
         SysmlExpressionKind::Unsupported => 11,
+    }
+}
+
+fn standard_constant_code(constant: SysmlStandardConstant) -> i64 {
+    match constant {
+        SysmlStandardConstant::Pi => 1,
+    }
+}
+
+fn standard_function_code(function: SysmlStandardFunction) -> i64 {
+    match function {
+        SysmlStandardFunction::Abs => 1,
+        SysmlStandardFunction::Min => 2,
+        SysmlStandardFunction::Max => 3,
+        SysmlStandardFunction::Sqrt => 4,
+        SysmlStandardFunction::Floor => 5,
+        SysmlStandardFunction::Round => 6,
+        SysmlStandardFunction::Sum => 7,
+        SysmlStandardFunction::Product => 8,
+        SysmlStandardFunction::IsZero => 9,
+        SysmlStandardFunction::IsUnit => 10,
+        SysmlStandardFunction::Sin => 11,
+        SysmlStandardFunction::Cos => 12,
+        SysmlStandardFunction::Tan => 13,
+        SysmlStandardFunction::Cot => 14,
+        SysmlStandardFunction::ArcSin => 15,
+        SysmlStandardFunction::ArcCos => 16,
+        SysmlStandardFunction::ArcTan => 17,
+        SysmlStandardFunction::Deg => 18,
+        SysmlStandardFunction::Rad => 19,
+        SysmlStandardFunction::Size => 20,
+        SysmlStandardFunction::IsEmpty => 21,
+        SysmlStandardFunction::NotEmpty => 22,
+        SysmlStandardFunction::AllTrue => 23,
+        SysmlStandardFunction::AnyTrue => 24,
+        SysmlStandardFunction::ToStringBoolean => 25,
+        SysmlStandardFunction::ToStringInteger => 26,
+        SysmlStandardFunction::ToStringReal => 27,
+        SysmlStandardFunction::ToStringString => 28,
     }
 }
 
@@ -741,6 +821,7 @@ fn unsupported_expression_code(reason: SysmlUnsupportedExpression) -> i64 {
         SysmlUnsupportedExpression::NonFeatureReference => 2,
         SysmlUnsupportedExpression::Operator => 3,
         SysmlUnsupportedExpression::Call => 4,
+        SysmlUnsupportedExpression::NonFunctionCall => 11,
         SysmlUnsupportedExpression::Collection => 5,
         SysmlUnsupportedExpression::Index => 6,
         SysmlUnsupportedExpression::Metadata => 7,

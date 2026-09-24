@@ -9,18 +9,19 @@ use lunco_core::DTransform;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlElementHandle,
     SysmlEnumValue, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator, SysmlFeature,
-    SysmlFeatureDirection, SysmlFeatureHandle, SysmlModelicaType, SysmlMultiplicity,
-    SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlSubject, SysmlType,
-    SysmlTypeCategory, SysmlTypeRef, SysmlUnsupportedExpression,
+    SysmlFeatureDirection, SysmlFeatureHandle, SysmlFunctionReference, SysmlModelicaType,
+    SysmlMultiplicity, SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord, SysmlSourceRef,
+    SysmlStandardConstant, SysmlSubject, SysmlType, SysmlTypeCategory, SysmlTypeRef,
+    SysmlUnsupportedExpression,
 };
 use lunco_sysml_ir::{
-    BindingContract, BindingProvider, CompiledConstraint,
-    CompiledConstraint as IrCompiledConstraint, ConstraintIr, DiagnosticSeverity,
-    EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
-    IrExpression, IrExpressionKind, IrFeatureDirection, IrParameter, IrType, IrValue, IrValueType,
-    ObservationState, VerificationVerdict, compile_constraint_by_name, evaluate_constraint,
+    compile_constraint_by_name, evaluate_constraint, BindingContract, BindingProvider,
+    CompiledConstraint, CompiledConstraint as IrCompiledConstraint, ConstraintIr,
+    DiagnosticSeverity, EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation,
+    IrDiagnostic, IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
+    IrStandardFunction, IrType, IrValue, IrValueType, ObservationState, VerificationVerdict,
 };
-use lunco_sysml_modelica::lower_constraint;
+use lunco_sysml_modelica::{lower_constraint, supports_standard_function_lowering};
 use rhai::{Dynamic, Engine, Map};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -164,6 +165,64 @@ fn model_verifications(model: &mut SysmlModelValue) -> Dynamic {
 
 pub fn constraint_ir_value(model: &mut SysmlModelValue, name: &str) -> Dynamic {
     compiled_constraint_dynamic(&compile_constraint_by_name(&model.analysis, name))
+}
+
+fn standard_functions_dynamic() -> Dynamic {
+    Dynamic::from_array(
+        IrStandardFunction::SUPPORTED
+            .iter()
+            .copied()
+            .map(|function| {
+                let mut value = Map::new();
+                value.insert("function".into(), Dynamic::from(function));
+                value.insert(
+                    "name".into(),
+                    Dynamic::from(function.standard_name().to_owned()),
+                );
+                if let Some(qualified_name) = function.qualified_name() {
+                    value.insert(
+                        "qualified_name".into(),
+                        Dynamic::from(qualified_name.to_owned()),
+                    );
+                }
+                value.insert("arity".into(), Dynamic::from_int(function.arity() as i64));
+                value.insert("evaluator".into(), Dynamic::from_bool(true));
+                value.insert(
+                    "modelica_lowering".into(),
+                    Dynamic::from_bool(supports_standard_function_lowering(function)),
+                );
+                Dynamic::from_map(value)
+            })
+            .collect(),
+    )
+}
+
+fn standard_constants_dynamic() -> Dynamic {
+    Dynamic::from_array(
+        SysmlStandardConstant::SUPPORTED
+            .iter()
+            .copied()
+            .map(|constant| {
+                let mut value = Map::new();
+                value.insert("constant".into(), Dynamic::from(constant));
+                value.insert(
+                    "name".into(),
+                    Dynamic::from(constant.standard_name().to_owned()),
+                );
+                Dynamic::from_map(value)
+            })
+            .collect(),
+    )
+}
+
+fn standard_operators_dynamic() -> Dynamic {
+    Dynamic::from_array(
+        IrOperator::SUPPORTED
+            .iter()
+            .copied()
+            .map(Dynamic::from)
+            .collect(),
+    )
 }
 
 pub fn modelica_constraint_value(model: &mut SysmlModelValue, name: &str) -> Dynamic {
@@ -667,6 +726,28 @@ pub fn register_sysml_types(engine: &mut Engine) {
             "!=",
             |left: SysmlFeatureHandle, right: SysmlFeatureHandle| left != right,
         )
+        .register_type_with_name::<IrStandardFunction>("SysmlStandardFunction")
+        .register_get("name", |function: &mut IrStandardFunction| {
+            function.standard_name().to_owned()
+        })
+        .register_get("arity", |function: &mut IrStandardFunction| {
+            function.arity() as i64
+        })
+        .register_fn(
+            "==",
+            |left: IrStandardFunction, right: IrStandardFunction| left == right,
+        )
+        .register_fn(
+            "!=",
+            |left: IrStandardFunction, right: IrStandardFunction| left != right,
+        )
+        .register_type_with_name::<IrOperator>("SysmlConstraintOperator")
+        .register_get("name", |operator: &mut IrOperator| {
+            operator.standard_name().to_owned()
+        })
+        .register_get("arity", |operator: &mut IrOperator| operator.arity() as i64)
+        .register_fn("==", |left: IrOperator, right: IrOperator| left == right)
+        .register_fn("!=", |left: IrOperator, right: IrOperator| left != right)
         .register_type_with_name::<SysmlFeature>("SysmlFeature")
         .register_get("handle", |value: &mut SysmlFeature| value.handle)
         .register_get("owner", |value: &mut SysmlFeature| value.owner.clone())
@@ -703,11 +784,60 @@ pub fn register_sysml_types(engine: &mut Engine) {
                 .unwrap_or(Dynamic::UNIT)
         })
         .register_type_with_name::<SysmlUnsupportedExpression>("SysmlUnsupportedExpression")
+        .register_type_with_name::<SysmlFunctionReference>("SysmlFunctionReference")
+        .register_get("element", |value: &mut SysmlFunctionReference| {
+            value.element
+        })
+        .register_get("standard_function", |value: &mut SysmlFunctionReference| {
+            value
+                .standard_function
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_type_with_name::<SysmlStandardConstant>("SysmlStandardConstant")
+        .register_get("name", |constant: &mut SysmlStandardConstant| {
+            constant.standard_name().to_owned()
+        })
+        .register_fn(
+            "==",
+            |left: SysmlStandardConstant, right: SysmlStandardConstant| left == right,
+        )
+        .register_fn(
+            "!=",
+            |left: SysmlStandardConstant, right: SysmlStandardConstant| left != right,
+        )
         .register_type_with_name::<SysmlExpression>("SysmlExpression")
         .register_get("source", |value: &mut SysmlExpression| value.source.clone())
         .register_get("kind", |value: &mut SysmlExpression| value.kind)
         .register_get("feature", |value: &mut SysmlExpression| {
             value.feature.map(Dynamic::from).unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("function", |value: &mut SysmlExpression| {
+            value
+                .function
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("standard_constant", |value: &mut SysmlExpression| {
+            value
+                .standard_constant
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get("argument_parameters", |value: &mut SysmlExpression| {
+            Dynamic::from_array(
+                value
+                    .argument_parameters
+                    .iter()
+                    .map(|parameter| {
+                        parameter
+                            .as_ref()
+                            .map(|parameter| Dynamic::from(*parameter))
+                            .unwrap_or(Dynamic::UNIT)
+                    })
+                    .collect(),
+            )
         })
         .register_get("operator", |value: &mut SysmlExpression| {
             value.operator.map(Dynamic::from).unwrap_or(Dynamic::UNIT)
@@ -903,6 +1033,9 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_fn("constraint_ir", constraint_ir_value)
         .register_fn("modelica_constraint", modelica_constraint_value)
         .register_fn("evaluate_constraint", evaluate_constraint_value)
+        .register_fn("sysml_standard_functions", standard_functions_dynamic)
+        .register_fn("sysml_standard_constants", standard_constants_dynamic)
+        .register_fn("sysml_constraint_operators", standard_operators_dynamic)
         .register_type_with_name::<SysmlRequirementValue>("SysmlRequirement")
         .register_get(
             "qualified_name",
@@ -1479,6 +1612,14 @@ fn ir_expression_dynamic(expression: &IrExpression) -> Dynamic {
                 Dynamic::from(qualified_name.clone()),
             );
         }
+        IrExpressionKind::StandardConstant {
+            constant,
+            feature_element,
+        } => {
+            value.insert("kind".into(), Dynamic::from("standard_constant"));
+            value.insert("constant".into(), Dynamic::from(*constant));
+            value.insert("feature_element".into(), Dynamic::from(*feature_element));
+        }
         IrExpressionKind::Literal(literal) => {
             value.insert("kind".into(), Dynamic::from("literal"));
             value.insert("literal".into(), Dynamic::from(format!("{literal:?}")));
@@ -1507,6 +1648,42 @@ fn ir_expression_dynamic(expression: &IrExpression) -> Dynamic {
             value.insert("condition".into(), ir_expression_dynamic(condition));
             value.insert("when_true".into(), ir_expression_dynamic(when_true));
             value.insert("when_false".into(), ir_expression_dynamic(when_false));
+        }
+        IrExpressionKind::Invocation {
+            function,
+            function_element,
+            argument_parameters,
+            arguments,
+        } => {
+            value.insert("kind".into(), Dynamic::from("invocation"));
+            value.insert("function".into(), Dynamic::from(*function));
+            value.insert("function_element".into(), Dynamic::from(*function_element));
+            value.insert(
+                "argument_parameters".into(),
+                Dynamic::from_array(
+                    argument_parameters
+                        .iter()
+                        .copied()
+                        .map(Dynamic::from)
+                        .collect(),
+                ),
+            );
+            value.insert(
+                "arguments".into(),
+                Dynamic::from_array(arguments.iter().map(ir_expression_dynamic).collect()),
+            );
+        }
+        IrExpressionKind::Index { collection, index } => {
+            value.insert("kind".into(), Dynamic::from("index"));
+            value.insert("collection".into(), ir_expression_dynamic(collection));
+            value.insert("index".into(), ir_expression_dynamic(index));
+        }
+        IrExpressionKind::Collection(elements) => {
+            value.insert("kind".into(), Dynamic::from("collection"));
+            value.insert(
+                "elements".into(),
+                Dynamic::from_array(elements.iter().map(ir_expression_dynamic).collect()),
+            );
         }
         IrExpressionKind::Group(child) => {
             value.insert("kind".into(), Dynamic::from("group"));
