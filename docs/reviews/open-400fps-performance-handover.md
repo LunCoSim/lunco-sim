@@ -77,11 +77,20 @@ them for the admission verdict and published interface; the communication
 period is read through a direct authored-property query. Orphan acausal
 admission uses a non-allocating prefix probe to skip connectorless programs,
 then derives declaration and connection presence from one attribute-name pass
-when connectors exist. The authoring-review view model now reacts to
-selection/control/camera/mount and identity-lifecycle changes, compares
-diagnostic/fault contents to ignore no-op mutable publishes, and passes its
-focused scheduling test. Its reduction remains source-level and unmeasured. A
-clean settled Apollo run remains necessary before claiming an FPS improvement.
+when connectors exist. The authoring-review view model now compares the
+selection, controlled target, and displayed camera target/mode it actually
+consumes. This avoids reopening the full view projection when camera
+reconciliation merely mutably borrows `SceneViewport` or changes camera pose
+without changing the followed target; in-place target changes still wake the
+view. The regression covers both paths. In the pre-change 60.35 s Tracy
+capture, the producer ran 1,756 times (1,713 after the first 10 s); in the
+post-change 55.33 s capture it ran 48 times (11 after the first 10 s), reducing
+the observed call rate from 29.1/s to 0.87/s. This is profiler attribution,
+not clean FPS acceptance; a settled unprofiled Apollo run remains necessary
+before claiming an overall FPS improvement. The before/after captures are
+`summer-space-school-optimization-ccbfe504-settled-20260924.tracy` and
+`summer-space-school-optimization-ba7550-authoring-view-gate-20260924.tracy`
+in the ignored `scripts/perf/captures/` directory.
 The shader-look binder also reuses loaded WGSL stage verdicts by asset ID and
 stage, invalidating them on shader asset events so shared terrain looks do not
 revalidate identical source; see the dated note in the [200 FPS

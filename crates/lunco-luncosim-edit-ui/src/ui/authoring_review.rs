@@ -85,6 +85,9 @@ impl Default for AuthoringReviewViewDirty {
 
 #[derive(Default)]
 pub(crate) struct AuthoringReviewResourceSnapshot {
+    selected: Option<Option<Entity>>,
+    controlled: Option<Option<Entity>>,
+    camera: Option<(Option<Entity>, &'static str)>,
     diagnostics: Option<Vec<RuntimeDiagnostic>>,
     fault: Option<Option<(&'static str, String, String)>>,
 }
@@ -108,10 +111,11 @@ pub(crate) fn mark_target_index_dirty_on_remove<T: Component>(
 }
 
 #[derive(SystemParam)]
-struct ReviewTargetQueries<'w, 's> {
+pub(crate) struct ReviewTargetQueries<'w, 's> {
     links: Query<'w, 's, &'static ControlLink>,
     spring: Query<'w, 's, &'static SpringArmCamera>,
     orbit: Query<'w, 's, &'static OrbitCamera>,
+    scene_cameras: Query<'w, 's, (), With<SceneCamera>>,
 }
 
 fn is_review_target(
@@ -187,9 +191,9 @@ pub(crate) fn authoring_review_view_due(
     selected: Res<SelectedEntities>,
     local_avatar: Res<TheLocalEmbodiment>,
     viewport: Option<Res<SceneViewport>>,
+    targets: ReviewTargetQueries,
     diagnostics: Res<RuntimeDiagnostics>,
     faults: Res<RuntimeFaults>,
-    mount: Option<Res<SceneMountState>>,
     mut observed: Local<AuthoringReviewResourceSnapshot>,
 ) -> bool {
     // Several diagnostic producers hold `ResMut` and may republish identical
@@ -217,14 +221,41 @@ pub(crate) fn authoring_review_view_due(
         );
     }
 
+    let selected_entity = selected.primary();
+    let selected_changed = observed.selected != Some(selected_entity);
+    if selected_changed {
+        observed.selected = Some(selected_entity);
+    }
+
+    let controlled = local_avatar
+        .0
+        .and_then(|avatar| targets.links.get(avatar).ok().map(|link| link.target));
+    let controlled_changed = observed.controlled != Some(controlled);
+    if controlled_changed {
+        observed.controlled = Some(controlled);
+    }
+
+    // SceneViewport is mutably borrowed by camera reconciliation every frame.
+    // Compare only the camera facts this view displays, including a followed
+    // target that may change in place on the camera component.
+    let camera = viewport
+        .as_deref()
+        .and_then(|viewport| viewport.active_camera)
+        .filter(|camera| targets.scene_cameras.get(*camera).is_ok())
+        .map(|camera| target_for_camera(camera, &targets.spring, &targets.orbit))
+        .unwrap_or((None, "not bound"));
+    let camera_changed = observed.camera != Some(camera);
+    if camera_changed {
+        observed.camera = Some(camera);
+    }
+
     dirty.0
         || target_index_dirty.0
-        || selected.is_changed()
-        || local_avatar.is_changed()
-        || viewport.is_some_and(|viewport| viewport.is_changed())
+        || selected_changed
+        || controlled_changed
+        || camera_changed
         || diagnostics_changed
         || fault_changed
-        || mount.is_some_and(|mount| mount.is_changed())
 }
 
 pub(crate) fn install_view_model_tracking(app: &mut App) {
@@ -336,7 +367,6 @@ pub(crate) fn populate_authoring_review_view(
     viewport: Option<Res<SceneViewport>>,
     diagnostics: Res<RuntimeDiagnostics>,
     faults: Res<RuntimeFaults>,
-    mount: Option<Res<SceneMountState>>,
     mut target_index_dirty: ResMut<AuthoringReviewTargetIndexDirty>,
     mut view_dirty: ResMut<AuthoringReviewViewDirty>,
     q: AuthoringReviewQueries,
@@ -409,11 +439,6 @@ pub(crate) fn populate_authoring_review_view(
             fault.detail.clone(),
         )
     });
-
-    // Keep the optional resource in the signature so the read model remains
-    // explicitly scoped to the active Twin mount. It also makes the no-scene
-    // state visible to future consumers without inventing a global target.
-    let _ = mount;
 }
 
 #[cfg(test)]
@@ -425,6 +450,11 @@ mod tests {
 
     fn republish_empty_diagnostics(mut diagnostics: ResMut<RuntimeDiagnostics>) {
         diagnostics.replace_producer("stable", std::iter::empty());
+    }
+
+    fn touch_scene_viewport(mut viewport: ResMut<SceneViewport>) {
+        let active_camera = viewport.active_camera;
+        viewport.active_camera = active_camera;
     }
 
     fn record_view_model_run(
@@ -447,10 +477,14 @@ mod tests {
             .init_resource::<RuntimeFaults>()
             .init_resource::<ViewModelRuns>();
         install_view_model_tracking(&mut app);
-        app.add_systems(Update, republish_empty_diagnostics);
         app.add_systems(
             Update,
-            record_view_model_run.run_if(authoring_review_view_due),
+            (
+                republish_empty_diagnostics,
+                touch_scene_viewport,
+                record_view_model_run.run_if(authoring_review_view_due),
+            )
+                .chain(),
         );
 
         app.update();
@@ -502,6 +536,67 @@ mod tests {
         );
         app.update();
         assert_eq!(app.world().resource::<ViewModelRuns>().0, 5);
+    }
+
+    #[test]
+    fn authoring_review_view_gate_tracks_camera_target_not_camera_or_viewport_writes() {
+        let mut app = App::new();
+        app.init_resource::<SelectedEntities>()
+            .init_resource::<TheLocalEmbodiment>()
+            .init_resource::<SceneViewport>()
+            .init_resource::<RuntimeDiagnostics>()
+            .init_resource::<RuntimeFaults>()
+            .init_resource::<ViewModelRuns>();
+        install_view_model_tracking(&mut app);
+        app.add_systems(
+            Update,
+            (
+                touch_scene_viewport,
+                record_view_model_run.run_if(authoring_review_view_due),
+            )
+                .chain(),
+        );
+
+        let first_target = app.world_mut().spawn_empty().id();
+        let next_target = app.world_mut().spawn_empty().id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                SceneCamera::default(),
+                SpringArmCamera {
+                    target: first_target,
+                    distance: 20.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    damping: None,
+                    vertical_offset: 0.0,
+                    track_heading: false,
+                    attitude: Default::default(),
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = Some(camera);
+
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 1);
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 1);
+
+        app.world_mut()
+            .get_mut::<SpringArmCamera>(camera)
+            .unwrap()
+            .yaw = 0.5;
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 1);
+
+        app.world_mut()
+            .get_mut::<SpringArmCamera>(camera)
+            .unwrap()
+            .target = next_target;
+        app.update();
+        assert_eq!(app.world().resource::<ViewModelRuns>().0, 2);
     }
 
     #[test]
