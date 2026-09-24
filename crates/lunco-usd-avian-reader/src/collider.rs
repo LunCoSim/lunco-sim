@@ -2,14 +2,15 @@ use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use lunco_usd_bevy_mesh::{NurbsCollisionTessellation, build_nurbs_collision_mesh_from_usd};
 use lunco_usd_bevy_scene::{
     ShapeDims, read_mesh_collision_approximation, read_primitive_axis, read_shape_dims,
-    read_usd_mesh_indexed, usd_axis_to_quat, usd_plane_surface_vertices,
+    read_usd_mesh_indexed, read_usd_mesh_topology, usd_axis_to_quat, usd_plane_surface_vertices,
 };
 use lunco_usd_bevy_stage::{Purpose, TransformReadError, effective_purpose, local_transform_at};
 use openusd::schemas::physics::CollisionApprox;
 use openusd::schemas::physics::tokens as ptok;
-use openusd::sdf::Path as SdfPath;
+use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
 use crate::read_authored_bool_or_default;
 
@@ -449,6 +450,9 @@ pub fn build_collider_from_usd_at_scale(
                     .to_owned(),
             });
         };
+        if reader.has_api_schema(sdf_path, "LunCoDerivedGeometryAPI") {
+            validate_derived_nurbs_proxy(reader, sdf_path, &verts, &tris)?;
+        }
         let verts: Vec<DVec3> = verts
             .into_iter()
             .map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64))
@@ -467,6 +471,16 @@ pub fn build_collider_from_usd_at_scale(
                     value: error.value,
                 }
             })?;
+        if approximation == CollisionApprox::None {
+            if let Some(body) = dynamic_rigid_body_ancestor(reader, sdf_path)? {
+                return Err(ColliderProjectionError::Backend {
+                    prim: sdf_path.to_string(),
+                    detail: format!(
+                        "triangle-mesh approximation `none` is invalid on dynamic body `{body}`; author a convex mesh approximation"
+                    ),
+                });
+            }
+        }
         let collider = match approximation {
             CollisionApprox::ConvexHull => {
                 Collider::convex_hull(verts).ok_or_else(|| ColliderProjectionError::Backend {
@@ -481,6 +495,38 @@ pub fn build_collider_from_usd_at_scale(
                     detail: format!("authored triangle mesh could not be built: {error}"),
                 }
             })?,
+            CollisionApprox::BoundingCube => {
+                let mut min = DVec3::splat(f64::INFINITY);
+                let mut max = DVec3::splat(f64::NEG_INFINITY);
+                for vertex in &verts {
+                    min = min.min(*vertex);
+                    max = max.max(*vertex);
+                }
+                if !min.is_finite()
+                    || !max.is_finite()
+                    || (max.x - min.x) <= f64::EPSILON
+                    || (max.y - min.y) <= f64::EPSILON
+                    || (max.z - min.z) <= f64::EPSILON
+                {
+                    return Err(ColliderProjectionError::Backend {
+                        prim: sdf_path.to_string(),
+                        detail: "authored boundingCube approximation needs nonzero extent on all three local axes".to_owned(),
+                    });
+                }
+                let corners = (0..8)
+                    .map(|bits| {
+                        DVec3::new(
+                            if bits & 1 == 0 { min.x } else { max.x },
+                            if bits & 2 == 0 { min.y } else { max.y },
+                            if bits & 4 == 0 { min.z } else { max.z },
+                        )
+                    })
+                    .collect();
+                Collider::convex_hull(corners).ok_or_else(|| ColliderProjectionError::Backend {
+                    prim: sdf_path.to_string(),
+                    detail: "authored boundingCube approximation could not be built".to_owned(),
+                })?
+            }
             approximation => {
                 return Err(ColliderProjectionError::UnsupportedApproximation {
                     prim: sdf_path.to_string(),
@@ -542,6 +588,149 @@ pub fn build_collider_from_usd_at_scale(
     Ok(ColliderBuildOutcome::Built(apply_collider_scale(
         collider, scale,
     )))
+}
+
+fn dynamic_rigid_body_ancestor(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    prim: &SdfPath,
+) -> Result<Option<SdfPath>, ColliderProjectionError> {
+    let mut ancestor = Some(prim.clone());
+    while let Some(path) = ancestor {
+        if reader.has_api_schema(&path, ptok::API_RIGID_BODY) {
+            let enabled = match reader.boolean(&path, ptok::A_RIGID_BODY_ENABLED) {
+                Some(value) => value,
+                None if reader.has_authored_attribute(&path, ptok::A_RIGID_BODY_ENABLED) => {
+                    return Err(ColliderProjectionError::Backend {
+                        prim: path.to_string(),
+                        detail: format!("malformed {}", ptok::A_RIGID_BODY_ENABLED),
+                    });
+                }
+                None => true,
+            };
+            let kinematic = match reader.boolean(&path, ptok::A_KINEMATIC_ENABLED) {
+                Some(value) => value,
+                None if reader.has_authored_attribute(&path, ptok::A_KINEMATIC_ENABLED) => {
+                    return Err(ColliderProjectionError::Backend {
+                        prim: path.to_string(),
+                        detail: format!("malformed {}", ptok::A_KINEMATIC_ENABLED),
+                    });
+                }
+                None => false,
+            };
+            if enabled && !kinematic {
+                return Ok(Some(path));
+            }
+        }
+        ancestor = path.parent();
+    }
+    Ok(None)
+}
+
+/// Re-cook a derived NURBS mesh from its composed source and compare both the
+/// stored fingerprint and authored proxy geometry. A proxy that was edited or
+/// whose source changed is rejected before physics can consume stale data.
+fn validate_derived_nurbs_proxy(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    proxy: &SdfPath,
+    actual_points: &[[f32; 3]],
+    actual_triangles: &[[u32; 3]],
+) -> Result<(), ColliderProjectionError> {
+    let fail = |detail: String| ColliderProjectionError::Backend {
+        prim: proxy.to_string(),
+        detail,
+    };
+    let sources = reader.rel_targets(proxy, "lunco:derived:source");
+    let [source] = sources.as_slice() else {
+        return Err(fail(
+            "LunCoDerivedGeometryAPI needs exactly one lunco:derived:source relationship"
+                .to_owned(),
+        ));
+    };
+    if reader.type_name(source).as_deref() != Some("NurbsPatch") {
+        return Err(fail(format!(
+            "derived collision source `{source}` is missing or is not a UsdGeomNurbsPatch"
+        )));
+    }
+    let read_setting = |name: &str| {
+        reader
+            .integer(proxy, name)
+            .and_then(|value| usize::try_from(value).ok())
+    };
+    let tessellation = NurbsCollisionTessellation {
+        u_subdivisions: read_setting("lunco:derived:nurbsUSubdivisions").ok_or_else(|| {
+            fail("derived NURBS U subdivisions are missing or invalid".to_owned())
+        })?,
+        v_subdivisions: read_setting("lunco:derived:nurbsVSubdivisions").ok_or_else(|| {
+            fail("derived NURBS V subdivisions are missing or invalid".to_owned())
+        })?,
+        trim_curve_samples: read_setting("lunco:derived:trimCurveSamples")
+            .ok_or_else(|| fail("derived trim-curve samples are missing or invalid".to_owned()))?,
+        trim_grid_subdivisions: read_setting("lunco:derived:trimGridSubdivisions").ok_or_else(
+            || fail("derived trim-grid subdivisions are missing or invalid".to_owned()),
+        )?,
+    };
+    if !tessellation.is_valid() {
+        return Err(fail(
+            "derived NURBS tessellation settings are outside supported ranges".to_owned(),
+        ));
+    }
+    let expected_fingerprint = match reader.attr_value(proxy, "lunco:derived:geometryFingerprint") {
+        Some(SdfValue::Uint64(value)) => value,
+        _ => {
+            return Err(fail(
+                "derived geometry fingerprint is missing or is not authored as uint64".to_owned(),
+            ));
+        }
+    };
+    let expected =
+        build_nurbs_collision_mesh_from_usd(reader, source, tessellation).ok_or_else(|| {
+            fail(format!(
+                "derived NURBS source `{source}` can no longer be cooked"
+            ))
+        })?;
+    if expected.geometry_fingerprint != expected_fingerprint {
+        return Err(fail(format!(
+            "derived collision proxy is stale: source `{source}` no longer produces fingerprint {expected_fingerprint}; regenerate it"
+        )));
+    }
+    let expected_triangles: Vec<[u32; 3]> = expected
+        .face_vertex_indices
+        .chunks_exact(3)
+        .map(|indices| [indices[0] as u32, indices[1] as u32, indices[2] as u32])
+        .collect();
+    let topology = read_usd_mesh_topology(reader, proxy).ok_or_else(|| {
+        fail("derived collision proxy has malformed USD mesh topology".to_owned())
+    })?;
+    let indices_match = topology.face_vertex_counts.len() == expected.face_vertex_counts.len()
+        && topology.face_vertex_counts.iter().all(|&count| count == 3)
+        && topology.face_vertex_indices == expected.face_vertex_indices;
+    let scale = expected
+        .points
+        .iter()
+        .flatten()
+        .fold(1.0_f32, |scale, value| scale.max(value.abs()));
+    let tolerance = 2.0e-6 * scale;
+    let points_match = topology.points.len() == expected.points.len()
+        && topology
+            .points
+            .iter()
+            .zip(&expected.points)
+            .all(|(actual, expected)| {
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(actual, expected)| (actual - expected).abs() <= tolerance)
+            });
+    if !indices_match
+        || !points_match
+        || actual_points.len() != expected.points.len()
+        || actual_triangles != expected_triangles
+    {
+        return Err(fail(format!(
+            "derived collision mesh geometry does not match its NURBS source cook `{source}`; regenerate it"
+        )));
+    }
+    Ok(())
 }
 
 /// Pre-applies a prim's composed USD scale to a freshly-built intrinsic collider so

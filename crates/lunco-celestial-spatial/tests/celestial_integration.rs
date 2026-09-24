@@ -1,9 +1,13 @@
 use bevy::prelude::*;
+use big_space::plugin::BigSpaceMinimalPlugins;
 use big_space::prelude::*;
 use lunco_celestial::{EphemerisProvider, EphemerisResource};
 use lunco_celestial_spatial::CelestialPlugin;
-use lunco_time::WorldTime;
+use lunco_time::{CelestialTime, TimeTransport, TransportMode, WorldTime};
 use std::sync::Arc;
+
+const METRES_PER_AU: f64 = 149_597_870_700.0;
+const PRESENTATION_TEST_EPOCH_JD: f64 = 2_451_545.0;
 
 /// Test ephemeris that returns an **epoch-dependent** position, so advancing the
 /// clock provably moves a body. The test installs a real provider explicitly;
@@ -28,6 +32,60 @@ impl EphemerisProvider for StubEphemeris {
     }
 }
 
+/// A deterministic Earth-Moon ephemeris for the detached presentation path.
+/// The Earth and Moon positions are relative to their declared EMB parent, as
+/// required by `EphemerisProvider::position`.
+#[derive(Debug)]
+struct PresentationEphemeris;
+
+impl EphemerisProvider for PresentationEphemeris {
+    fn position(&self, body_id: i32, epoch_jd: f64) -> Option<lunco_celestial::frames::EclipticAu> {
+        let phase = std::f64::consts::TAU * (epoch_jd - PRESENTATION_TEST_EPOCH_JD) / 27.321_661;
+        let (radius_m, direction) = match body_id {
+            lunco_celestial::ephemeris_id::SUN
+            | lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER => {
+                return Some(lunco_celestial::frames::EclipticAu::ZERO);
+            }
+            lunco_celestial::ephemeris_id::EARTH => (4_670_000.0, 1.0),
+            lunco_celestial::ephemeris_id::MOON => (379_730_000.0, -1.0),
+            _ => return None,
+        };
+        let position = bevy::math::DVec3::new(
+            direction * radius_m * phase.cos(),
+            0.0,
+            direction * radius_m * phase.sin(),
+        ) / METRES_PER_AU;
+        Some(lunco_celestial::frames::EclipticAu::new(position))
+    }
+
+    fn maximum_angular_rate_rad_per_day(&self) -> f64 {
+        std::f64::consts::TAU / 27.321_661
+    }
+
+    fn parent_id(&self, body_id: i32) -> Option<i32> {
+        match body_id {
+            lunco_celestial::ephemeris_id::EARTH | lunco_celestial::ephemeris_id::MOON => {
+                Some(lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER)
+            }
+            lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER => {
+                Some(lunco_celestial::ephemeris_id::SUN)
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct PresentationEpochOverride(f64);
+
+fn force_presentation_epoch(
+    epoch: Res<PresentationEpochOverride>,
+    mut celestial: ResMut<CelestialTime>,
+) {
+    celestial.epoch_jd = epoch.0;
+    celestial.delta_secs = 0.0;
+}
+
 /// Build the headless celestial app the integration tests share. These tests
 /// exercise the ECS/spatial mechanisms without loading visual assets or a GPU.
 ///
@@ -40,7 +98,7 @@ fn celestial_test_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::input::InputPlugin);
-    app.add_plugins(bevy::transform::TransformPlugin);
+    app.add_plugins(BigSpaceMinimalPlugins);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.init_resource::<Assets<Mesh>>();
     app.init_asset::<Image>();
@@ -55,6 +113,120 @@ fn celestial_test_app() -> App {
     // The scene asks for a sky: Sun, Earth, Moon.
     declare_test_bodies(app.world_mut());
     app
+}
+
+/// Detached celestial time must update the render-only Earth's pose and spin,
+/// then BigSpace must propagate those local changes to its GlobalTransform.
+#[test]
+fn detached_celestial_time_advances_earth_presentation_through_big_space() {
+    let mut app = celestial_test_app();
+    app.insert_resource(EphemerisResource {
+        provider: Arc::new(PresentationEphemeris),
+    });
+    app.insert_resource(PresentationEpochOverride(PRESENTATION_TEST_EPOCH_JD));
+    app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Paused;
+    app.add_systems(
+        PreUpdate,
+        force_presentation_epoch.after(lunco_time::CelestialTimeSet),
+    );
+
+    // Let clock publication and deferred celestial hierarchy creation settle.
+    app.update();
+    app.update();
+    let world_epoch_before = app.world().resource::<WorldTime>().epoch_jd;
+    let celestial_epoch_before = app.world().resource::<CelestialTime>().epoch_jd;
+    assert_eq!(celestial_epoch_before, PRESENTATION_TEST_EPOCH_JD);
+
+    let earth_grid = {
+        let world = app.world_mut();
+        let mut query =
+            world.query::<(Entity, &lunco_celestial_spatial::CelestialPresentationGrid)>();
+        let matches: Vec<Entity> = query
+            .iter(world)
+            .filter_map(|(entity, frame)| {
+                (frame.body == lunco_celestial::ephemeris_id::EARTH && frame.body_fixed)
+                    .then_some(entity)
+            })
+            .collect();
+        assert_eq!(matches.len(), 1, "one rotating Earth presentation grid");
+        matches[0]
+    };
+    let earth_pose = |app: &mut App| {
+        let world = app.world();
+        let cell = *world.get::<CellCoord>(earth_grid).expect("Earth cell");
+        let transform = *world.get::<Transform>(earth_grid).expect("Earth transform");
+        let global = *world
+            .get::<GlobalTransform>(earth_grid)
+            .expect("propagated Earth transform");
+        let parent = world
+            .get::<ChildOf>(earth_grid)
+            .expect("Earth parent")
+            .parent();
+        let local_position = world
+            .get::<Grid>(parent)
+            .expect("Earth parent grid")
+            .grid_position_double(&cell, &transform);
+        (cell, transform, global, local_position)
+    };
+    let (cell_before, transform_before, global_before, local_position_before) =
+        earth_pose(&mut app);
+
+    app.world_mut()
+        .resource_mut::<PresentationEpochOverride>()
+        .0 += 0.25;
+    app.update();
+
+    let celestial_epoch_after = app.world().resource::<CelestialTime>().epoch_jd;
+    assert_eq!(celestial_epoch_after, PRESENTATION_TEST_EPOCH_JD + 0.25);
+    assert_eq!(
+        app.world().resource::<WorldTime>().epoch_jd,
+        world_epoch_before,
+        "the detached presentation clock must leave physical WorldTime paused"
+    );
+    let (cell_after, transform_after, global_after, local_position_after) = earth_pose(&mut app);
+    assert!(
+        cell_after != cell_before || transform_after.translation != transform_before.translation,
+        "the Earth ephemeris pose must advance on CelestialTime"
+    );
+    assert!(
+        (local_position_after - local_position_before).length() > 100_000.0,
+        "the Earth parent-relative BigSpace pose must move; delta was {:.1} m",
+        (local_position_after - local_position_before).length()
+    );
+    assert!(
+        transform_after
+            .rotation
+            .angle_between(transform_before.rotation)
+            > 1.0,
+        "Earth must rotate visibly over 0.25 celestial day"
+    );
+    assert!(
+        global_after
+            .rotation()
+            .angle_between(global_before.rotation())
+            > 1.0,
+        "BigSpace must propagate Earth's celestial-time rotation into GlobalTransform"
+    );
+    assert!(
+        (global_after.translation() - global_before.translation()).length() > 100_000.0,
+        "BigSpace must propagate Earth's celestial-time position into GlobalTransform"
+    );
+
+    let earth = app
+        .world()
+        .resource::<lunco_celestial::CelestialBodyRegistry>()
+        .get(lunco_celestial::ephemeris_id::EARTH)
+        .expect("Earth rotation model");
+    let expected_rotation =
+        lunco_celestial::geo::body_rotation(earth, PRESENTATION_TEST_EPOCH_JD + 0.25).as_quat();
+    assert!(
+        transform_after.rotation.dot(expected_rotation).abs() > 1.0 - 1.0e-6,
+        "the presentation globe must use the authoritative IAU body rotation: \
+         actual={:?}, expected={:?}, delta={}",
+        transform_after.rotation,
+        expected_rotation,
+        transform_after.rotation.angle_between(expected_rotation)
+    );
 }
 
 fn celestial_test_quality_profile() -> lunco_render::RenderQualityProfile {
@@ -318,12 +490,15 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
     app.update();
     let earth_rot_before = earth_rot_of(&mut app);
 
-    // Advance a third of a sidereal day — a ~119° spin.
+    // Advance a third of a sidereal day — a ~119° spin. MissionClock publishes
+    // the new WorldTime in PostUpdate, so the causal body-rotation consumer
+    // sees that sample on the following PreUpdate.
     {
         let mut mission = app.world_mut().resource_mut::<lunco_time::MissionClock>();
         mission.anchor.epoch0_jd += 0.33;
         mission.mission_epoch0_jd += 0.33;
     }
+    app.update();
     app.update();
 
     // The body grid spun… (compare against ITS OWN prior rotation — the absolute
@@ -593,6 +768,7 @@ fn test_celestial_startup_and_movement() {
 
     // Ensure startup systems run
     app.update();
+    app.update();
 
     let epoch_before = app.world().resource::<WorldTime>().epoch_jd;
 
@@ -607,16 +783,16 @@ fn test_celestial_startup_and_movement() {
     let earth = query.iter(app.world()).next().expect("No EarthRoot found");
     let earth_pose_1 = (*earth.1, *earth.2);
 
-    // 2. Advance the clock by 10 days. The epoch is a *derived* view
-    //    (`WorldTime.epoch_jd`, published after the fixed loop), so seek via the
-    //    authority — re-anchor the `MissionClock` epoch. The next time projection
-    //    updates `WorldTime.epoch_jd` and the ephemeris follows.
+    // 2. Advance the clock by 10 days. `WorldTime.epoch_jd` is published after
+    //    the fixed loop; celestial consumers process that completed sample on
+    //    the following frame.
     {
         let mut mission = app.world_mut().resource_mut::<lunco_time::MissionClock>();
         mission.anchor.epoch0_jd += 10.0;
         mission.mission_epoch0_jd += 10.0;
     }
 
+    app.update();
     app.update();
 
     // Sanity: the seek propagated through the spine to the derived epoch.

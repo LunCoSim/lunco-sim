@@ -128,12 +128,27 @@ impl NurbsSurface {
     /// a different problem than this one. Better to not offer the capability than to
     /// offer it wrong.
     pub fn mesh(&self, quality: lunco_render::RenderQualityProfile) -> Option<Mesh> {
+        let (u_count, v_count) = (self.u_count as usize, self.v_count as usize);
+        self.mesh_with_subdivisions(
+            quality.nurbs_surface_subdivisions(u_count),
+            quality.nurbs_surface_subdivisions(v_count),
+        )
+    }
+
+    /// Tessellate the untrimmed surface at explicit parameter-grid resolutions.
+    ///
+    /// This is the shared geometry operation used by both viewer-quality
+    /// projection and authored collision derivation. Keeping the actual surface
+    /// evaluator and topology here means those paths can choose independent
+    /// policies without drifting in NURBS semantics.
+    pub fn mesh_with_subdivisions(&self, u_steps: usize, v_steps: usize) -> Option<Mesh> {
         use bevy::asset::RenderAssetUsages;
         use bevy_mesh::PrimitiveTopology;
 
+        if u_steps == 0 || v_steps == 0 {
+            return None;
+        }
         let (u_count, v_count) = (self.u_count as usize, self.v_count as usize);
-        let u_steps = quality.nurbs_surface_subdivisions(u_count);
-        let v_steps = quality.nurbs_surface_subdivisions(v_count);
 
         let grid = lunco_usd_geometry::nurbs::sample_nurbs_patch(
             &self.points,
@@ -425,7 +440,7 @@ impl UsdLathe {
 /// the natural authoring and a strict `double` read of it is indistinguishable from
 /// "unauthored", which would silently substitute a default.
 pub fn read_lathe(
-    reader: &impl lunco_usd_bevy_stage::UsdRead,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &openusd::sdf::Path,
 ) -> Option<UsdLathe> {
     let kind = reader.text(path, "lunco:lathe:profile")?;
@@ -502,11 +517,11 @@ pub fn read_lathe(
 /// Read a required standard `NurbsPatch` integer without inventing a sampling
 /// profile when an author omitted or mistyped it.
 pub fn read_required_nurbs_int(
-    reader: &impl lunco_usd_bevy_stage::UsdRead,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &openusd::sdf::Path,
     name: &str,
 ) -> Option<usize> {
-    match reader.scalar::<i32>(path, name) {
+    match reader.integer(path, name) {
         Some(value) if value >= 2 => Some(value as usize),
         Some(value) => {
             error!(

@@ -7,6 +7,7 @@ description = "UI-free public query providers for USD documents and edit session
 
 [dependencies]
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
+lunco-usd-bevy-mesh = { path = "../lunco-usd-bevy-mesh" }
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-api-core = { path = "../lunco-api-core" }

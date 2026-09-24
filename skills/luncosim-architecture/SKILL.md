@@ -165,7 +165,11 @@ moving scene objects use standard USD `timeSamples` through
 or clock when composed USD animation expresses the motion.
 Celestial ephemeris presentation uses the shared `lunco-time::CelestialTime`
 domain, which may be rate-scaled up to 100,000× without advancing causal world
-state.
+state. From lunar ground, Earth stays near one sky position because the Moon is
+tidally locked; its axial spin still advances the day/night pattern. BigSpace
+must propagate both the changed Earth grid pose and rotation to
+`GlobalTransform`. Causal cadence commits the frame-start `WorldTime` sample,
+since the completed fixed tick is published later in `PostUpdate`.
 
 ### Runtime scopes, cycles, and publication boundaries
 

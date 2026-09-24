@@ -5,14 +5,16 @@
 //! projection. It does not maintain a second asset graph or infer an active
 //! document from UI state.
 
-use bevy::prelude::{App, Plugin, World};
+use bevy::prelude::{App, Plugin, Vec3, World};
 use lunco_api::queries::{
-    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_u64,
+    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_str, api_param_u64,
 };
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value, api_value_from_serializable};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
-use lunco_usd_bevy_stage::UsdRead;
+use lunco_usd_bevy_mesh::{NurbsCollisionTessellation, build_nurbs_collision_mesh_from_usd};
+use lunco_usd_bevy_stage::{UsdRead, stage_convention};
+use lunco_usd_bevy_twin::{DocBackedTwinScenes, canonical_stage_for_document};
 use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
@@ -42,6 +44,262 @@ impl Plugin for UsdQueriesPlugin {
         registry.register(InspectUsdEditSessionProvider);
         registry.register(ResolveUsdTargetProvider);
         registry.register(SyncUsdDocumentProvider);
+        registry.register(PlanNurbsCollisionProxyProvider);
+    }
+}
+
+/// Plan a source-derived collision mesh for an explicit NURBS prim. This is a
+/// read-only geometry cook: its output is intended for a normal USD edit
+/// proposal, so it does not write around the document journal.
+pub struct PlanNurbsCollisionProxyProvider;
+
+impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
+    fn name(&self) -> &'static str {
+        "PlanNurbsCollisionProxy"
+    }
+
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(raw_doc) = api_param_u64(params, "doc_id") else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "PlanNurbsCollisionProxy: explicit numeric doc_id is required",
+            ));
+        };
+        let doc = DocumentId::new(raw_doc);
+        let Some(host) = world
+            .get_resource::<DocumentRegistry<UsdDocument>>()
+            .and_then(|registry| registry.host(doc))
+        else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
+                format!("PlanNurbsCollisionProxy: USD document {doc} is not open"),
+            ));
+        };
+        let generation = host.document().generation();
+        if world
+            .get_resource::<DocBackedTwinScenes>()
+            .and_then(|scenes| scenes.synced_generation(doc))
+            .is_some_and(|synced| synced != generation)
+        {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                format!("PlanNurbsCollisionProxy: document {doc} projection is not current"),
+            ));
+        }
+
+        let Some(source_path) = api_param_str(params, "path") else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "PlanNurbsCollisionProxy: USD source `path` is required",
+            ));
+        };
+        let Ok(source) = SdfPath::new(source_path) else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("PlanNurbsCollisionProxy: `{source_path}` is not a valid USD path"),
+            ));
+        };
+        let Some(proxy_name) = api_param_str(params, "proxy_name") else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "PlanNurbsCollisionProxy: one child `proxy_name` is required",
+            ));
+        };
+        if !SdfPath::is_valid_identifier(proxy_name) {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("PlanNurbsCollisionProxy: `{proxy_name}` is not a valid prim identifier"),
+            ));
+        }
+        let proxy_path = format!("{source}/{proxy_name}");
+        let proxy = SdfPath::new(&proxy_path).map_err(|_| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "PlanNurbsCollisionProxy: generated proxy path is invalid",
+            )
+        })?;
+        let approximation = api_param_str(params, "approximation").unwrap_or("convexHull");
+        if !matches!(
+            approximation,
+            "none" | "convexHull" | "convexDecomposition" | "boundingCube"
+        ) {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!(
+                    "PlanNurbsCollisionProxy: Avian currently supports none, convexHull, convexDecomposition, and boundingCube; got `{approximation}`"
+                ),
+            ));
+        }
+
+        let Some(stage) = canonical_stage_for_document(world, doc) else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                format!("PlanNurbsCollisionProxy: document {doc} has no composed USD stage"),
+            ));
+        };
+        let view = stage.view();
+        if !view.has_prim(&source) {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
+                format!("PlanNurbsCollisionProxy: source prim `{source}` is not composed"),
+            ));
+        }
+        if view.type_name(&source).as_deref() != Some("NurbsPatch") {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("PlanNurbsCollisionProxy: `{source}` must be a UsdGeomNurbsPatch"),
+            ));
+        }
+        if approximation == "none" {
+            let mut ancestor = Some(source.clone());
+            while let Some(path) = ancestor {
+                if view.has_api_schema(&path, "PhysicsRigidBodyAPI") {
+                    let enabled = match view.boolean(&path, "physics:rigidBodyEnabled") {
+                        Some(value) => value,
+                        None if view.has_authored_attribute(&path, "physics:rigidBodyEnabled") => {
+                            return Err(ApiQueryError::new(
+                                ApiErrorCode::DeserializationError,
+                                format!(
+                                    "PlanNurbsCollisionProxy: `{path}` has malformed physics:rigidBodyEnabled"
+                                ),
+                            ));
+                        }
+                        None => true,
+                    };
+                    let kinematic = match view.boolean(&path, "physics:kinematicEnabled") {
+                        Some(value) => value,
+                        None if view.has_authored_attribute(&path, "physics:kinematicEnabled") => {
+                            return Err(ApiQueryError::new(
+                                ApiErrorCode::DeserializationError,
+                                format!(
+                                    "PlanNurbsCollisionProxy: `{path}` has malformed physics:kinematicEnabled"
+                                ),
+                            ));
+                        }
+                        None => false,
+                    };
+                    if enabled && !kinematic {
+                        return Err(ApiQueryError::new(
+                            ApiErrorCode::CommandRejected,
+                            format!(
+                                "PlanNurbsCollisionProxy: `none` creates a triangle mesh and cannot be used on dynamic body `{path}`; choose convexHull, convexDecomposition, or boundingCube"
+                            ),
+                        ));
+                    }
+                }
+                ancestor = path.parent();
+            }
+        }
+        let create_prim = if view.has_prim(&proxy) {
+            let owned = view.type_name(&proxy).as_deref() == Some("Mesh")
+                && view.has_api_schema(&proxy, "LunCoDerivedGeometryAPI")
+                && view.rel_targets(&proxy, "lunco:derived:source").as_slice() == [source.clone()];
+            if !owned {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::CommandRejected,
+                    format!(
+                        "PlanNurbsCollisionProxy: `{proxy}` already exists and is not this source's derived proxy"
+                    ),
+                ));
+            }
+            false
+        } else {
+            true
+        };
+        let mut schemas = if create_prim {
+            Vec::new()
+        } else {
+            view.api_schemas(&proxy)
+        };
+        for required in [
+            "PhysicsCollisionAPI",
+            "PhysicsMeshCollisionAPI",
+            "LunCoDerivedGeometryAPI",
+        ] {
+            if !schemas.iter().any(|schema| schema == required) {
+                schemas.push(required.to_owned());
+            }
+        }
+
+        let (surface, _) = lunco_usd_bevy_mesh::read_nurbs_patch_surface(&view, &source)
+            .ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!("PlanNurbsCollisionProxy: `{source}` has an invalid or unsupported NURBS surface"),
+                )
+            })?;
+        let mut tessellation = NurbsCollisionTessellation::for_surface(&surface);
+        for (field, value) in [
+            ("u_subdivisions", &mut tessellation.u_subdivisions),
+            ("v_subdivisions", &mut tessellation.v_subdivisions),
+            ("trim_curve_samples", &mut tessellation.trim_curve_samples),
+            (
+                "trim_grid_subdivisions",
+                &mut tessellation.trim_grid_subdivisions,
+            ),
+        ] {
+            if let Some(authored) = params.get(field) {
+                *value = match authored {
+                    ApiValue::Int(value) => usize::try_from(*value).ok(),
+                    ApiValue::UInt(value) => usize::try_from(*value).ok(),
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    ApiQueryError::new(
+                        ApiErrorCode::DeserializationError,
+                        format!("PlanNurbsCollisionProxy: `{field}` must be an integer"),
+                    )
+                })?;
+            }
+        }
+        if !tessellation.is_valid() {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "PlanNurbsCollisionProxy: subdivision settings are outside supported ranges",
+            ));
+        }
+        let cooked =
+            build_nurbs_collision_mesh_from_usd(&view, &source, tessellation).ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    format!(
+                        "PlanNurbsCollisionProxy: NURBS surface `{source}` could not be tessellated"
+                    ),
+                )
+            })?;
+        let convention = stage_convention(&view).map_err(|error| {
+            ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!("PlanNurbsCollisionProxy: invalid USD stage convention: {error}"),
+            )
+        })?;
+        let points = cooked
+            .points
+            .iter()
+            .map(|point| {
+                let p = convention.stage_point(Vec3::from_array(*point));
+                api_value!([p.x, p.y, p.z])
+            })
+            .collect::<Vec<_>>();
+
+        Ok(Some(api_value!({
+            "doc_id": raw_doc,
+            "generation": generation,
+            "source_path": source.to_string(),
+            "proxy_name": proxy_name,
+            "proxy_path": proxy.to_string(),
+            "create_prim": create_prim,
+            "approximation": approximation,
+            "schemas": schemas,
+            "u_subdivisions": tessellation.u_subdivisions as i64,
+            "v_subdivisions": tessellation.v_subdivisions as i64,
+            "trim_curve_samples": tessellation.trim_curve_samples as i64,
+            "trim_grid_subdivisions": tessellation.trim_grid_subdivisions as i64,
+            "geometry_fingerprint": cooked.geometry_fingerprint,
+            "points": points,
+            "face_vertex_counts": cooked.face_vertex_counts,
+            "face_vertex_indices": cooked.face_vertex_indices,
+        })))
     }
 }
 
