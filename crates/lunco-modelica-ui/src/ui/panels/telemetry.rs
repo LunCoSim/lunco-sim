@@ -89,7 +89,7 @@ impl Panel for TelemetryPanel {
         PanelSlot::RightInspector
     }
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Design
+        lunco_workbench_core::PanelMenuGroup::Lunica
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

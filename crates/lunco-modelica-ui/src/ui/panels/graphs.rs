@@ -65,7 +65,7 @@ impl InstancePanel for ModelicaPlotPanel {
 
     fn menu_entry(&self) -> Option<lunco_workbench_core::InstancePanelMenuEntry> {
         Some(lunco_workbench_core::InstancePanelMenuEntry {
-            group: lunco_workbench_core::PanelMenuGroup::Design,
+            group: lunco_workbench_core::PanelMenuGroup::Lunica,
             title: "Graphs",
             instance: DEFAULT_MODELICA_GRAPH.0,
         })

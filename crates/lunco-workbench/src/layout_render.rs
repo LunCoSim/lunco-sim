@@ -549,12 +549,12 @@ pub(super) fn render_layout(
                     ui.close();
                 }
                 ui.separator();
-                // Panels, grouped by the workflow each one declares
-                // (`Panel::menu_group`) instead of one flat alphabetical dump.
-                // Each row is a checkbox showing whether the panel is currently
-                // in the dock; clicking a closed one re-docks it in its default
-                // slot. `Hidden` panels never appear (fixtures like the
-                // viewport, layout-only entries, instance-tab facets).
+                // Panels are grouped into workflow submenus using the category
+                // each one declares (`Panel::menu_group`). Each row is a
+                // checkbox showing whether the panel is currently in the dock;
+                // clicking a closed one re-docks it in its default slot.
+                // `Hidden` panels never appear (fixtures like the viewport,
+                // layout-only entries, instance-tab facets).
                 struct ViewPanelEntry {
                     group: PanelMenuGroup,
                     title: String,
@@ -627,83 +627,90 @@ pub(super) fn render_layout(
                     });
                     sorted
                 };
-                let mut last_group: Option<PanelMenuGroup> = None;
+                let mut panels_by_group: Vec<(PanelMenuGroup, Vec<ViewPanelEntry>)> = Vec::new();
                 for entry in panels_meta {
-                    let ViewPanelEntry {
-                        group,
-                        title,
-                        slot,
-                        open: is_open,
-                        singleton,
-                        instance,
-                    } = entry;
-                    if last_group != Some(group) {
-                        if last_group.is_some() {
-                            ui.separator();
+                    if let Some((group, entries)) = panels_by_group.last_mut() {
+                        if *group == entry.group {
+                            entries.push(entry);
+                            continue;
                         }
-                        let heading = match group {
-                            PanelMenuGroup::Scene => "Scene",
-                            PanelMenuGroup::Design => "Design",
-                            PanelMenuGroup::Tools => "Tools",
-                            PanelMenuGroup::Other => "Other",
-                            PanelMenuGroup::Hidden => unreachable!("filtered above"),
-                        };
-                        ui.label(egui::RichText::new(heading).weak().small());
-                        last_group = Some(group);
                     }
-                    let mut checked = is_open;
-                    if ui.checkbox(&mut checked, title).clicked() {
-                        if checked && !is_open {
-                            if let Some((kind, instance)) = instance {
-                                world
-                                    .resource_mut::<PendingTabRequests>()
-                                    .0
-                                    .push(TabRequest::Open(OpenTab { kind, instance }));
+                    panels_by_group.push((entry.group, vec![entry]));
+                }
+
+                for (group, entries) in panels_by_group {
+                    let heading = match group {
+                        PanelMenuGroup::Builder => "Builder",
+                        PanelMenuGroup::Editor => "Editor",
+                        PanelMenuGroup::Lunica => "Lunica",
+                        PanelMenuGroup::Other => "Other",
+                        PanelMenuGroup::Hidden => unreachable!("filtered above"),
+                    };
+                    ui.menu_button(heading, |ui| {
+                        for entry in entries {
+                            let ViewPanelEntry {
+                                title,
+                                slot,
+                                open: is_open,
+                                singleton,
+                                instance,
+                                ..
+                            } = entry;
+                            let mut checked = is_open;
+                            if ui.checkbox(&mut checked, title).clicked() {
+                                if checked && !is_open {
+                                    if let Some((kind, instance)) = instance {
+                                        world
+                                            .resource_mut::<PendingTabRequests>()
+                                            .0
+                                            .push(TabRequest::Open(OpenTab { kind, instance }));
+                                        ui.close();
+                                        continue;
+                                    }
+                                    let Some(id) = singleton else {
+                                        ui.close();
+                                        continue;
+                                    };
+                                    // Track in the slot list so persistence /
+                                    // perspective queries see it. Insert into
+                                    // the *live* dock without a full rebuild
+                                    // — rebuild_dock would wipe instance tabs
+                                    // (model views) the user has open.
+                                    //
+                                    // A hidden default slot has no preset dock region;
+                                    // opening it explicitly gives it a stable side-browser
+                                    // home until Reset Layout.
+                                    let slot = match slot {
+                                        PanelSlot::Hidden => PanelSlot::SideBrowser,
+                                        other => other,
+                                    };
+                                    world
+                                        .resource_mut::<PendingLayoutRequests>()
+                                        .0
+                                        .push(LayoutRequest::AddSingleton { id, slot });
+                                } else if !checked && is_open {
+                                    if let Some((kind, instance)) = instance {
+                                        world
+                                            .resource_mut::<PendingTabRequests>()
+                                            .0
+                                            .push(TabRequest::Close(CloseTab { kind, instance }));
+                                        ui.close();
+                                        continue;
+                                    }
+                                    let Some(id) = singleton else {
+                                        ui.close();
+                                        continue;
+                                    };
+                                    // Untrack from slot lists.
+                                    world
+                                        .resource_mut::<PendingLayoutRequests>()
+                                        .0
+                                        .push(LayoutRequest::RemoveSingleton(id));
+                                }
                                 ui.close();
-                                continue;
                             }
-                            let Some(id) = singleton else {
-                                ui.close();
-                                continue;
-                            };
-                            // Track in the slot list so persistence /
-                            // perspective queries see it. Insert into
-                            // the *live* dock without a full rebuild
-                            // — rebuild_dock would wipe instance tabs
-                            // (model views) the user has open.
-                            //
-                            // A hidden default slot has no preset dock region;
-                            // opening it explicitly gives it a stable side-browser
-                            // home until Reset Layout.
-                            let slot = match slot {
-                                PanelSlot::Hidden => PanelSlot::SideBrowser,
-                                other => other,
-                            };
-                            world
-                                .resource_mut::<PendingLayoutRequests>()
-                                .0
-                                .push(LayoutRequest::AddSingleton { id, slot });
-                        } else if !checked && is_open {
-                            if let Some((kind, instance)) = instance {
-                                world
-                                    .resource_mut::<PendingTabRequests>()
-                                    .0
-                                    .push(TabRequest::Close(CloseTab { kind, instance }));
-                                ui.close();
-                                continue;
-                            }
-                            let Some(id) = singleton else {
-                                ui.close();
-                                continue;
-                            };
-                            // Untrack from slot lists.
-                            world
-                                .resource_mut::<PendingLayoutRequests>()
-                                .0
-                                .push(LayoutRequest::RemoveSingleton(id));
                         }
-                        ui.close();
-                    }
+                    });
                 }
             });
             anchor_rects.push(("menu.view".to_owned(), r_view.response.rect));

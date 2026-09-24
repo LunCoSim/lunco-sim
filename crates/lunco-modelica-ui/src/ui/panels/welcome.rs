@@ -319,7 +319,7 @@ impl Panel for WelcomePanel {
     }
 
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Design
+        lunco_workbench_core::PanelMenuGroup::Lunica
     }
 
     fn default_slot(&self) -> PanelSlot {

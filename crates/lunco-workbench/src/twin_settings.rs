@@ -83,7 +83,7 @@ impl Panel for TwinSettingsPanel {
     }
 
     fn menu_group(&self) -> PanelMenuGroup {
-        PanelMenuGroup::Tools
+        PanelMenuGroup::Lunica
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

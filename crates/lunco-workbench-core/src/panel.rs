@@ -213,15 +213,15 @@ impl<'w> PanelCtx<'w> {
     }
 }
 
-/// Where a panel appears in the View menu.
+/// Which application workflow owns a panel entry in the View menu.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub enum PanelMenuGroup {
-    /// Scene workflow.
-    Scene,
-    /// Model authoring and analysis workflow.
-    Design,
-    /// Cross-cutting tools.
-    Tools,
+    /// Live Twin building workflow.
+    Builder,
+    /// Authored document editing workflow.
+    Editor,
+    /// Modelica engineering workbench workflow.
+    Lunica,
     /// Unclassified panels.
     #[default]
     Other,

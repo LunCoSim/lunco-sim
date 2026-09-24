@@ -123,7 +123,7 @@ impl Panel for RhaiEditorPanel {
         "Behaviour".into()
     }
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Scene
+        lunco_workbench_core::PanelMenuGroup::Editor
     }
 
     fn default_slot(&self) -> PanelSlot {

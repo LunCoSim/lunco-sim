@@ -214,7 +214,7 @@ impl Panel for AvatarStatusPanel {
         PanelSlot::RightInspector
     }
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Scene
+        lunco_workbench_core::PanelMenuGroup::Builder
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

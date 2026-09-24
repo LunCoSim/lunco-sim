@@ -560,7 +560,7 @@ impl Panel for AuthoringReviewPanel {
     }
 
     fn menu_group(&self) -> PanelMenuGroup {
-        PanelMenuGroup::Design
+        PanelMenuGroup::Editor
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

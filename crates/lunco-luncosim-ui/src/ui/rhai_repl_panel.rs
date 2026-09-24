@@ -47,7 +47,7 @@ impl Panel for RhaiReplPanel {
         "Rhai".into()
     }
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
-        lunco_workbench_core::PanelMenuGroup::Tools
+        lunco_workbench_core::PanelMenuGroup::Builder
     }
 
     fn default_slot(&self) -> PanelSlot {
