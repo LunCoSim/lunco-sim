@@ -12,6 +12,10 @@ use lunco_time::WorldTime;
 
 use crate::big_space_setup::CelestialPresentationGrid;
 
+/// Pose render-only body frames with the same `WorldTime` sample as the
+/// physical celestial hierarchy. This runs inside `CelestialEpochSet` before
+/// the PostUpdate clock publication, so marker copies cannot lead their globe
+/// by one accelerated simulation tick.
 pub fn presentation_celestial_frame_system(
     world: Res<WorldTime>,
     ephemeris: Option<Res<EphemerisResource>>,

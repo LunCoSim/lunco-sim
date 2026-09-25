@@ -121,20 +121,60 @@ fn world_time_advances_earth_pose_through_big_space() {
     let world_epoch_before = app.world().resource::<WorldTime>().epoch_jd;
     assert_eq!(world_epoch_before, TEST_EPOCH_JD);
 
-    let earth_grid = {
+    let (physical_earth_grid, earth_grid) = {
         let world = app.world_mut();
         let mut query =
             world.query::<(Entity, &lunco_celestial_spatial::CelestialPresentationGrid)>();
-        let matches: Vec<Entity> = query
+        let presentation_matches: Vec<Entity> = query
             .iter(world)
             .filter_map(|(entity, frame)| {
                 (frame.body == lunco_celestial::ephemeris_id::EARTH && frame.body_fixed)
                     .then_some(entity)
             })
             .collect();
-        assert_eq!(matches.len(), 1, "one rotating Earth presentation grid");
-        matches[0]
+        assert_eq!(
+            presentation_matches.len(),
+            1,
+            "one rotating Earth presentation grid"
+        );
+        let physical_matches: Vec<Entity> = world
+            .query_filtered::<Entity, With<lunco_celestial_spatial::EarthRoot>>()
+            .iter(world)
+            .collect();
+        assert_eq!(physical_matches.len(), 1, "one physical Earth grid");
+        (physical_matches[0], presentation_matches[0])
     };
+    let frame_offset = app.world_mut().register_system(
+        move |parents: Query<&ChildOf>,
+              grids: Query<&Grid>,
+              spatial: Query<(Option<&CellCoord>, &Transform)>| {
+            lunco_spatial::coords::pose_in_grid(
+                earth_grid,
+                physical_earth_grid,
+                &parents,
+                &grids,
+                &spatial,
+            )
+            .expect("Earth presentation grid shares the physical Earth frame")
+        },
+    );
+    let assert_earth_frames_aligned = |app: &mut App| {
+        let (position, rotation) = app
+            .world_mut()
+            .run_system(frame_offset)
+            .expect("read Earth frame offset");
+        assert!(
+            position.length() < 1e-3,
+            "Earth marker frame is displaced from the physical globe by {:.1} m",
+            position.length()
+        );
+        assert!(
+            rotation.angle_between(bevy::math::DQuat::IDENTITY) < 1e-6,
+            "Earth marker frame must share the physical globe orientation"
+        );
+    };
+    assert_earth_frames_aligned(&mut app);
+
     let earth_pose = |app: &mut App| {
         let world = app.world();
         let cell = *world.get::<CellCoord>(earth_grid).expect("Earth cell");
@@ -156,13 +196,16 @@ fn world_time_advances_earth_pose_through_big_space() {
         earth_pose(&mut app);
 
     app.insert_resource(MissionClock::anchored(TEST_EPOCH_JD + 0.25, 0));
-    // WorldTime publishes the new epoch in PostUpdate. The next frame's
-    // celestial solve consumes it, and BigSpace then propagates that pose.
+    // WorldTime publishes the new epoch in PostUpdate. The physical and
+    // presentation grids must remain aligned through that publication; the
+    // next frame's shared celestial solve consumes the new sample.
     app.update();
+    assert_earth_frames_aligned(&mut app);
     app.update();
 
     let world_epoch_after = app.world().resource::<WorldTime>().epoch_jd;
     assert_eq!(world_epoch_after, TEST_EPOCH_JD + 0.25);
+    assert_earth_frames_aligned(&mut app);
     let (cell_after, transform_after, global_after, local_position_after) = earth_pose(&mut app);
     assert!(
         cell_after != cell_before || transform_after.translation != transform_before.translation,

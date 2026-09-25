@@ -298,9 +298,11 @@ surface and globe therefore meet on one body-fixed geometry source and frame;
 neither needs a camera-specific grid or a per-frame correction.
 
 Render-only station marker copies remain under their presentation grids for
-views that cannot see the physical station hierarchy. Those copies use the
-same `WorldTime` epoch as physical bodies. The physical marker remains the
-source of truth, and surface views use that marker without a duplicate.
+views that cannot see the physical station hierarchy. The presentation grids
+update in the same gated `PreUpdate` solve as the physical body grids, before
+`WorldTimeSet` publishes the next completed tick. This keeps the marker spheres
+on the rendered globe during accelerated playback. The physical marker remains
+the source of truth, and surface views use that marker without a duplicate.
 Celestial body shader looks retain installed dataset albedo unless USD authors
 an explicit albedo map.
 

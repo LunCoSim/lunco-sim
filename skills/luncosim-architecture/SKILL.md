@@ -436,8 +436,10 @@ body poses, terrain, stations, links, semantic solar direction, and co-simulatio
 use causal `WorldTime` at completed ticks. Bevy renders the sun from the
 finalized `DirectionalLight` direction. A body-fixed station that needs a
 render marker on a globe uses a render-only copy beneath the matching
-same-epoch presentation grid; never reparent the station or use presentation
-coordinates for physics or link calculations.
+presentation grid. Update that grid in the same gated `PreUpdate` solve as the
+physical body grid, before `WorldTimeSet` publishes its next tick; never
+reparent the station or use presentation coordinates for physics or link
+calculations.
 
 Scenario telemetry is collected only while `ScenarioExecutionGate` is open.
 That gate waits for all initial scene readiness holds because scenarios may

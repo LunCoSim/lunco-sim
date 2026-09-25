@@ -73,10 +73,10 @@ impl Default for CelestialConfig {
 }
 
 /// `PreUpdate` set containing the celestial epoch chain (ephemeris → body
-/// rotation → site anchor → bound placement). Systems that READ celestial
-/// `Transform`/`CellCoord` state in `PreUpdate` (e.g. the gravity field)
-/// must order `.after(CelestialEpochSet)` or they can interleave mid-chain
-/// and observe half-updated grids.
+/// rotation → site anchor → bound placement → render-only presentation frames).
+/// Systems that READ celestial `Transform`/`CellCoord` state in `PreUpdate`
+/// (e.g. the gravity field) must order `.after(CelestialEpochSet)` or they can
+/// interleave mid-chain and observe half-updated grids.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct CelestialEpochSet;
 
@@ -363,6 +363,10 @@ impl Plugin for CelestialPlugin {
             (
                 ephemeris_update_system.run_if(cadence::tracked_needs_solve()),
                 body_rotation_system.run_if(cadence::tracked_needs_solve()),
+                // Marker grids consume the same WorldTime sample as the
+                // physical body grids. Updating after WorldTimeSet would
+                // attach render-only markers to Earth's next tick.
+                presentation_celestial_frame_system.run_if(cadence::tracked_needs_solve()),
                 // The solar hierarchy stays inertial. Site content is mounted
                 // once beneath its body's rotating surface grid; no ancestor is
                 // re-posed to make a site coincide with the world origin.
@@ -374,16 +378,6 @@ impl Plugin for CelestialPlugin {
                 .in_set(CelestialEpochSet)
                 .run_if(lunco_time::scene_time_ready)
                 .after(lunco_time::TimeSpineSet),
-        );
-
-        app.add_systems(
-            PostUpdate,
-            presentation_celestial_frame_system
-                .run_if(cadence::tracked_needs_solve())
-                .run_if(lunco_time::scene_time_ready)
-                .after(lunco_time::WorldTimeSet)
-                .after(lunco_time::InteractionRenderSet)
-                .before(TransformSystems::Propagate),
         );
 
         app.add_systems(
