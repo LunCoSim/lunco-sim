@@ -724,7 +724,11 @@ fn default_plugins_with_profile(
         (title, present)
     };
 
+    let mut task_pool_options = bevy::app::TaskPoolOptions::default();
+    task_pool_options.max_total_threads = num_cpus::get_physical().max(1);
+
     let group = DefaultPlugins
+        .set(bevy::app::TaskPoolPlugin { task_pool_options })
         .set(AssetPlugin {
             file_path: lunco_assets_core::assets_dir_abs().to_string_lossy().to_string(),
             // File watching is an interactive authoring capability. Offscreen

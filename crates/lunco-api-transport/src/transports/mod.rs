@@ -52,6 +52,13 @@ pub struct HttpServerStartupError {
     pub message: String,
 }
 
+#[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
+fn build_transport_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 pub struct BridgeMessage {
     pub request: lunco_api_core::ApiRequest,
@@ -172,9 +179,10 @@ mod tests {
     }
 }
 
-// A long-lived OS thread hosting a blocking tokio HTTP-server runtime is
-// the correct shape here — not an `AsyncComputeTaskPool` task (which is
-// for short compute jobs and would occupy a pool slot forever). The
+// A long-lived OS thread hosting a single-thread Tokio runtime is the correct
+// shape here — not an `AsyncComputeTaskPool` task (which is for short compute
+// jobs and would occupy a pool slot forever). Async socket handling remains
+// concurrent without creating a second per-CPU scheduler beside Bevy's pools. The
 // `disallowed_methods` ban targets wasm + short tasks, neither of which
 // applies to this native, `transport-http`-gated server, so it's locally
 // allowed. Bind the listener before spawning the thread: the composition
@@ -186,7 +194,7 @@ mod tests {
 pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) -> std::io::Result<()> {
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, config.port))?;
     listener.set_nonblocking(true)?;
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = build_transport_runtime()?;
     let listener = {
         let _guard = runtime.enter();
         tokio::net::TcpListener::from_std(listener)?
@@ -235,8 +243,15 @@ pub fn spawn_server(config: HttpServerConfig, bridge: HttpBridge) -> std::io::Re
 
 #[cfg(all(test, feature = "transport-http", not(target_arch = "wasm32")))]
 mod http_server_tests {
-    use super::{HttpBridge, HttpServerConfig, spawn_server};
+    use super::{HttpBridge, HttpServerConfig, build_transport_runtime, spawn_server};
     use std::net::TcpListener;
+
+    #[test]
+    fn transport_runtime_uses_one_async_worker() {
+        let runtime = build_transport_runtime().expect("transport runtime must start");
+
+        assert_eq!(runtime.metrics().num_workers(), 1);
+    }
 
     #[test]
     fn refuses_an_api_port_that_is_already_bound() {

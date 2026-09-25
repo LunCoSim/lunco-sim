@@ -28,6 +28,12 @@ The requested loopback port is claimed before the application starts its
 window or simulation loop. If another process already owns that port, startup
 fails with a non-zero exit and reports the bind error.
 
+Each native API or asset listener runs on its own OS thread with a
+current-thread Tokio runtime. Async requests are still multiplexed while
+handlers await the ECS command bridge; each listener avoids creating a second
+async worker pool sized to the machine's logical CPUs alongside Bevy's task
+pools.
+
 ### 2. Test the API
 
 ```bash

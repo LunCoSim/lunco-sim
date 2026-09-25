@@ -55,6 +55,12 @@ cases keep the map. This saves only maps provably irrelevant to all outputs;
 Bevy's main-world per-light caster visibility pass is still a separate cost to
 measure.
 
+Bevy's camera driver also executes `Core3d` for point/spot shadow roots. Admit
+camera-only Core3d stage sets only for camera roots; keep the shared shadow
+passes and the GPU preprocessing needed by the depth maps active on light
+roots. Verify the same spotlight pass inventory before and after so this
+scheduling optimization cannot silently remove shadows.
+
 Treat Bevy `Changed<T>`/`Added<T>` filters as population filters, not free
 events: a no-match query can still inspect candidate entities, and separate
 `is_empty()` queries can repeat that work. Combine compatible invalidation
@@ -127,3 +133,14 @@ scene/settings, and whether the result is startup or settled. Rebuild the
 production binary after a code change and repeat one clean A/B plus one Tracy
 diagnostic capture. Link the changed owner and state any platform/GPU evidence
 that was not available.
+
+For CPU outliers, report p50/p95/p99/max for the app-thread frame and the
+authoritative fixed-tick transaction, plus fixed steps per app update and
+simulation deadline/backlog. Do not infer these from mean Avian time alone or
+add overlapping Bevy schedule spans. Bevy drains accumulated fixed schedules
+synchronously before `Update`: a fixed `Time<Fixed>` delta is not proof of a
+constant wall-clock physics rate, and a catch-up burst delays UI/input. Never
+improve UI timing by silently discarding authoritative overstep. If both
+wall-clock physics cadence and UI isolation are required, measure the whole
+simulation-owner boundary and consume immutable snapshots from the UI/render
+side; separate cycle labels alone do not provide thread isolation.

@@ -82,6 +82,7 @@ big_space = { workspace = true }
 bevy_egui = { workspace = true, features = ["render"] }
 bevy_winit = { version = "0.19" }
 winit = { version = "0.30.13" }
+num_cpus = { workspace = true }
 
 lunco-api-contracts = { path = "../lunco-api-contracts" }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }

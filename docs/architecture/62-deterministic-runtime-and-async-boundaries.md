@@ -52,6 +52,37 @@ explicit driver/clock boundary; expensive LOD selection and baking must leave
 the UI-critical path, while its bounded result application stays on the owning
 visualization boundary.
 
+Fixed-step time is not a wall-clock service guarantee. In the production GUI,
+Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled
+delta guard permits up to 64 fixed steps in one app update at the highest
+transport rate. Every step still receives the same `Time<Fixed>` delta, but a
+long tick or catch-up burst delays UI/input work, and the raw-delta cap means
+simulation time can fall behind wall time under sustained overload. Reducing
+the step cap by discarding accumulated time would hide that lag by dropping
+authoritative ticks, not fix it. Until ownership is split, report tick backlog
+and deadline misses and describe this as bounded catch-up, not guaranteed
+real-time cadence.
+
+Hard UI responsiveness and wall-clock physics cadence require one dedicated
+simulation owner that runs the **whole causal tick** in its own `App`/`World`:
+co-simulation, Rhai hooks, event barriers, physics, and derived authoritative
+state. The window app sends typed, sequence-stamped commands for a target
+`SimTick` and reads immutable, tick-stamped snapshots without waiting on the
+simulation owner. Rendering consumes the newest snapshots and interpolates
+presentation; command acknowledgements and telemetry return through bounded,
+nonblocking channels. Do not move only Avian to another thread while the
+remaining authoritative systems mutate or query the same `World`. This is a
+cross-crate ownership migration, not a new `RuntimeCycleSet` or a second
+per-feature scheduler.
+
+In that model, `Time<Fixed>` remains the constant integration delta. A
+real-time pacing policy schedules ticks against a monotonic deadline; transport
+rate changes the wall interval between fixed ticks, not their delta. If a
+deadline is missed, keep the tick and report lag rather than silently skipping
+it. Offline recording and deterministic tests use an explicit unpaced driver
+that advances the same fixed ticks on demand. Neither policy blocks the UI
+thread while waiting for simulation or visualization work.
+
 Application composition also selects which cycles exist. Do not install every
 system in every host and rely on `run_if` checks to make unused capabilities
 cheap. The GUI installs visual projections; the headless server and scene-test
@@ -462,9 +493,10 @@ The whole-simulation guarantee remains open because:
    fully non-blocking parse.
 5. The simulation composition records the effective Bevy compute-pool width in
    `PhysicsDeterminism`, and the production scripting task scene checks that
-   observation. The GUI still leaves Avian's compute pool unconstrained, so its
-   live physics remains nondeterministic until a production profile is measured
-   and selected.
+   observation. The GUI's physical-core cap bounds total Bevy workers but does
+   not select or enforce a deterministic Avian profile; the current live solver
+   may still use multiple workers. Measure and select a deterministic solver
+   profile or prove deterministic reductions before claiming that guarantee.
 6. The command journal does not yet provide a whole-simulation authoritative
    input log and replay verdict, and adaptive Modelica is not a cross-machine
    bitwise deterministic solver.
@@ -486,6 +518,23 @@ The whole-simulation guarantee remains open because:
 11. Cycle duration, queue pressure, and overload counters are not yet exposed
     together at the diagnostics boundary, so optimization cannot target an
     owner using comparable cycle evidence.
+12. Bevy's fixed loop executes synchronously on the GUI app thread before
+    `Update`. The transport policy allows a 64-step catch-up burst at its
+    highest rate; a fixed delta preserves numerical step size but does not
+    promise 60 wall-clock physics ticks per second or responsive UI during a
+    long tick/burst. No integration-level tick-deadline or backlog result is
+    published to distinguish a slow solver from lost wall-time admission.
+13. World-bound REPL requests are drained and evaluated serially by one
+    exclusive `Update` system, with a shared limit of one million Rhai
+    operations; a queued burst or one expensive live-world call can consume an
+    unbounded frame slice. Scenario hooks are likewise serialized and may run
+    in fixed time. Terrain lockstep mode waits for all in-flight bakes inside
+    `Update`, and ordinary mode commits every completed bake in one pass, so
+    worker completion bursts can still produce a main-thread hitch.
+14. The async admission queue limits its own in-flight requests to four and
+    priority selects queued work only. It cannot preempt running jobs, and many
+    visualization/preparation producers still submit directly to Bevy pools;
+    there is no measured cross-owner CPU reservation for UI and simulation.
 
 These findings and their owner-specific file evidence are maintained in
 [`../reviews/open-deterministic-simulation-contract.md`](../reviews/open-deterministic-simulation-contract.md).
@@ -516,15 +565,22 @@ These findings and their owner-specific file evidence are maintained in
 6. **Parallel actor execution.** Buffer Rhai actor effects and co-simulation
    participant results, then merge by stable identity at explicit boundaries.
    Keep any actor serial while it has immediate live-world dependencies.
-7. **Complete admission and physics profile.** Hold the first simulation
+7. **Real-time owner isolation.** Route main-world command reads/writes through
+   typed tick-stamped requests and immutable snapshots, then move the whole
+   authoritative tick to one paced simulation owner. Keep fixed `dt`, report
+   deadline misses/backlog, and let realtime, unpaced capture, and test drivers
+   choose wall pacing without changing tick order or discarding ticks. Retain
+   the current same-world path until every authoritative consumer crosses this
+   boundary; do not run only the solver concurrently.
+8. **Complete admission and physics profile.** Hold the first simulation
    boundary through scene references, required Modelica preparation, and physics
    readiness. Measure the serial and any deterministic parallel solver profile
    before selecting the production default.
-8. **Replay evidence.** Record admitted inputs and deterministic result keys;
+9. **Replay evidence.** Record admitted inputs and deterministic result keys;
    add a production scene suite spanning USD projection, Modelica coupling,
    Rhai events, SysML revisioned verification, and Avian state. Compare state at
    tick boundaries, not wall-clock completion times.
-9. **Performance validation.** Profile one settled production scene and one
+10. **Performance validation.** Profile one settled production scene and one
    cold-start scene. Verify worker priority, UI frame cost, and simulation
    throughput together; async work must improve responsiveness without hiding
    solver cost.

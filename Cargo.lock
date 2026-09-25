@@ -8315,6 +8315,7 @@ dependencies = [
  "lunco-workbench-widgets",
  "lunco-workbench-window",
  "lunco-workspace",
+ "num_cpus",
  "resvg",
  "serde",
  "serde_json",
