@@ -133,3 +133,14 @@ scene/settings, and whether the result is startup or settled. Rebuild the
 production binary after a code change and repeat one clean A/B plus one Tracy
 diagnostic capture. Link the changed owner and state any platform/GPU evidence
 that was not available.
+
+For CPU outliers, report p50/p95/p99/max for the app-thread frame and the
+authoritative fixed-tick transaction, plus fixed steps per app update and
+simulation deadline/backlog. Do not infer these from mean Avian time alone or
+add overlapping Bevy schedule spans. Bevy drains accumulated fixed schedules
+synchronously before `Update`: a fixed `Time<Fixed>` delta is not proof of a
+constant wall-clock physics rate, and a catch-up burst delays UI/input. Never
+improve UI timing by silently discarding authoritative overstep. If both
+wall-clock physics cadence and UI isolation are required, measure the whole
+simulation-owner boundary and consume immutable snapshots from the UI/render
+side; separate cycle labels alone do not provide thread isolation.

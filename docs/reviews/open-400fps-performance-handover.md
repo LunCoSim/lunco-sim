@@ -433,6 +433,56 @@ in `prepare_clusters_for_gpu_clustering`. Merely moving to a newer Bevy release
 is therefore not yet an evidence-backed fix; the upstream owner needs a focused
 reuse change and before/after measurements.
 
+### 2026-09-25 — UI/physics CPU-tail architecture audit
+
+Source review identifies real main-thread blockers, but does not yet attribute
+the measured steady-state frame tail to one of them. The production 60 Hz
+`Time<Fixed>` keeps integration delta constant; Bevy drains accumulated fixed
+steps synchronously before `Update`. At the highest transport rate the current
+raw-delta budget permits a burst of up to 64 ticks before UI/input runs. The
+raw-delta cap bounds catch-up work by excluding excess wall time, so this is
+neither a wall-clock 60-tick/s guarantee nor tick loss inside an admitted burst.
+A one-tick-per-Update cap would protect the main loop only by retaining lag or
+discarding causal time; it cannot by itself satisfy both constant-rate physics
+and UI responsiveness.
+
+Other verified tail-risk paths are:
+
+- `drain_world_scripts` is an exclusive `Update` system that takes and evaluates
+  the entire queued REPL batch against the live `World`. Rhai allows up to one
+  million operations per invocation. The earlier Tracy capture attributed
+  about 0.63 ms/call to this system, but did not publish p99/max time or separate
+  the empty-queue call from actual evaluations.
+- Scenario hooks run serially in the fixed simulation path and may invoke
+  substantial live-world Rhai work. Their per-tick maximum and p99 costs are
+  not currently available beside the Avian solver timing.
+- Terrain visualization's lockstep capture mode waits on every pending bake in
+  `Update`; normal mode polls without waiting but applies every completed mesh
+  in the same pass. Launch count is bounded, completion application is not.
+- Shared async admission allows four running jobs and prioritizes only queued
+  jobs. It cannot preempt a running CPU task, and visualization owners still
+  have direct submissions to Bevy's pools. Pool contention remains a source
+  hypothesis, not a measured explanation of the clean 116.9 FPS result.
+
+This rules out schedule labels or a lower catch-up cap as complete solutions.
+The required architecture is one paced owner for the full causal simulation
+world (Modelica, Rhai, event/coupling barriers, Avian, and authoritative state),
+with the window/UI process exchanging typed tick-stamped commands and
+nonblocking immutable snapshots. A monotonic real-time driver keeps fixed `dt`
+and reports missed deadlines/backlog; unpaced tests and offline recording drive
+those same ticks on demand. Renderer interpolation and visualization work
+consume snapshots without waiting for that owner. Splitting Avian alone would
+leave live-world causal reads/writes racing across threads.
+
+This is a design finding, not an implemented worker split. Before claiming the
+tail is fixed, add per-cycle p50/p95/p99/max and tick deadline/backlog evidence,
+then separately remove unbounded one-shot evaluation batches, make capture
+readiness asynchronous, and budget result application. A same-world
+per-application-frame step limit is an interim overload policy only; it must
+retain ticks and expose lag, and cannot guarantee UI progress through one
+overlong synchronous tick. No FPS acceptance run was started for this audit;
+the existing simulator sessions were left untouched.
+
 ## Remaining blocker
 
 The 400 FPS acceptance target is not met. The maintained BigSpace dependency
