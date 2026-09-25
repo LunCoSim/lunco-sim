@@ -59,7 +59,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use bevy::log::warn_once;
-use bevy::math::{DQuat, DVec3, EulerRot, Quat, Vec3};
+use bevy::math::{DMat4, DQuat, DVec3, EulerRot, Quat, Vec3};
 use bevy::prelude::Transform;
 use bevy::reflect::Reflect;
 use lunco_engineering_values::{Quantity, Unit, UnitError};
@@ -315,6 +315,8 @@ pub struct ConventionTransform {
     /// Up-axis rotation: identity for Y-up, `Rx(-90°)` for Z-up (`(x,y,z) →
     /// (x, z, −y)`, the standard Z-up→Y-up remap).
     rot: Quat,
+    /// The same exact axis remap in the precision used by physical geometry.
+    rot_d: DQuat,
     /// `metersPerUnit`.
     scale: f64,
 }
@@ -329,19 +331,24 @@ impl ConventionTransform {
     /// A canonical stage (Y-up, metres) needs no conversion.
     pub const IDENTITY: Self = Self {
         rot: Quat::IDENTITY,
+        rot_d: DQuat::IDENTITY,
         scale: 1.0,
     };
 
     /// The one construction point (doc 41: `from_stage_metrics`).
     pub fn from_stage_metrics(m: &StageMetrics) -> Self {
-        let rot = match m.up_axis {
-            UpAxis::Y => Quat::IDENTITY,
+        let (rot, rot_d) = match m.up_axis {
+            UpAxis::Y => (Quat::IDENTITY, DQuat::IDENTITY),
             // Z-up → Y-up: rotate −90° about X, i.e. (x, y, z) ↦ (x, z, −y).
             // The stage's +Z (its up) lands on canonical +Y (our up).
-            UpAxis::Z => Quat::from_rotation_x(-FRAC_PI_2),
+            UpAxis::Z => (
+                Quat::from_rotation_x(-FRAC_PI_2),
+                DQuat::from_rotation_x(-std::f64::consts::FRAC_PI_2),
+            ),
         };
         Self {
             rot,
+            rot_d,
             scale: m.meters_per_unit,
         }
     }
@@ -448,6 +455,13 @@ impl ConventionTransform {
                 self.orient(q)
             }
         };
+        let fdq = move |q: DQuat| {
+            if to_stage {
+                self.stage_rotation_d(q)
+            } else {
+                self.rotation_d(q)
+            }
+        };
 
         match (role, v) {
             (Role::None, v) => v,
@@ -501,14 +515,12 @@ impl ConventionTransform {
                 })
             }
             (Role::Orientation, V::Quatd(q)) => {
-                let r = fq(Quat::from_xyzw(
-                    q.x as f32, q.y as f32, q.z as f32, q.w as f32,
-                ));
+                let r = fdq(DQuat::from_xyzw(q.x, q.y, q.z, q.w));
                 V::Quatd(gf::Quatd {
-                    w: r.w as f64,
-                    x: r.x as f64,
-                    y: r.y as f64,
-                    z: r.z as f64,
+                    w: r.w,
+                    x: r.x,
+                    y: r.y,
+                    z: r.z,
                 })
             }
             (_, other) => other,
@@ -533,35 +545,38 @@ impl ConventionTransform {
         self.rot * v
     }
 
-    /// [`point`](Self::point) in `f64`, for the values the physics bridge keeps
-    /// in [`DVec3`] — joint anchors (`physics:localPos0/1`). Routing those
-    /// through the `f32` [`point`](Self::point) would discard exactly the
-    /// precision `DVec3` exists to preserve, so the physics path gets its own
-    /// arm rather than a round-trip.
-    ///
-    /// What this does and does not buy: the INPUT and the `metersPerUnit`
-    /// multiply stay in `f64`, but [`rot`](Self::rot) is an `f32` [`Quat`], so
-    /// the rotation itself still carries ~3e-8 of `f32` error — identical to
-    /// every other consumer. Full `f64` would mean storing the up-axis rotation
-    /// in `f64` too, which is not worth it for a value USD restricts to the
-    /// identity or one ±90° axis swap.
+    /// [`point`](Self::point) in `f64`, for values consumed by the physical
+    /// geometry and frame APIs.
     pub fn point_d(&self, p: DVec3) -> DVec3 {
-        (self.rot.as_dquat() * p) * self.scale
+        (self.rot_d * p) * self.scale
     }
 
-    /// [`dir`](Self::dir) in `f64` — a joint's rotation axis. Rotated, never
-    /// scaled. Same `f32`-rotation caveat as [`point_d`](Self::point_d).
+    /// [`dir`](Self::dir) in `f64` — a physical direction, rotated but not
+    /// scaled.
     pub fn dir_d(&self, v: DVec3) -> DVec3 {
-        self.rot.as_dquat() * v
+        self.rot_d * v
     }
 
     /// [`rotation`](Self::rotation) in `f64` — a joint frame's basis
     /// (`physics:localRot0/1`), which the physics bridge keeps in [`DQuat`]
-    /// alongside its [`DVec3`] anchor. Same `f32`-rotation caveat as
-    /// [`point_d`](Self::point_d).
+    /// alongside its [`DVec3`] anchor.
     pub fn rotation_d(&self, q: DQuat) -> DQuat {
-        let r = self.rot.as_dquat();
+        let r = self.rot_d;
         r * q * r.inverse()
+    }
+
+    /// Re-express one authored USD local matrix in canonical coordinates while
+    /// preserving the matrix's native double precision.
+    pub fn canonical_local_matrix_d(&self, matrix: DMat4) -> DMat4 {
+        if self.is_identity() {
+            return matrix;
+        }
+        let basis = DMat4::from_scale_rotation_translation(
+            DVec3::splat(self.scale),
+            self.rot_d,
+            DVec3::ZERO,
+        );
+        basis * matrix * basis.inverse()
     }
 
     /// A **geometry orientation** authored in stage-local coordinates (e.g. the
@@ -570,6 +585,12 @@ impl ConventionTransform {
     /// token names an axis of the *stage's* frame.
     pub fn orient(&self, q: Quat) -> Quat {
         self.rot * q
+    }
+
+    /// Convert one primitive-local orientation into the canonical basis while
+    /// retaining double precision for measurement and collision bounds.
+    pub fn orient_d(&self, q: DQuat) -> DQuat {
+        self.rot_d * q
     }
 
     /// A **length** (radius, height, size, extent) → metres: `k·x`.
@@ -644,16 +665,14 @@ impl ConventionTransform {
         self.rot.inverse() * v
     }
 
-    /// [`stage_point`](Self::stage_point) in `f64`, for the joint anchors the
-    /// physics bridge keeps in [`DVec3`]. Same `f32`-rotation caveat as
-    /// [`point_d`](Self::point_d).
+    /// [`stage_point`](Self::stage_point) in `f64`, for physical positions.
     pub fn stage_point_d(&self, p: DVec3) -> DVec3 {
-        self.rot.as_dquat().inverse() * (p / self.scale)
+        self.rot_d.inverse() * (p / self.scale)
     }
 
-    /// [`stage_dir`](Self::stage_dir) in `f64` — a joint's rotation axis.
+    /// [`stage_dir`](Self::stage_dir) in `f64` — a physical direction.
     pub fn stage_dir_d(&self, v: DVec3) -> DVec3 {
-        self.rot.as_dquat().inverse() * v
+        self.rot_d.inverse() * v
     }
 
     /// A canonical **geometry orientation** → the stage's frame: `Q⁻¹·q`.
@@ -674,6 +693,11 @@ impl ConventionTransform {
     /// reason.
     pub fn stage_rotation(&self, q: Quat) -> Quat {
         self.rot.inverse() * q * self.rot
+    }
+
+    /// A canonical local rotation → the USD stage basis in `f64`.
+    pub fn stage_rotation_d(&self, q: DQuat) -> DQuat {
+        self.rot_d.inverse() * q * self.rot_d
     }
 
     /// A canonical **local scale** → the stage's axis order. Inverse of

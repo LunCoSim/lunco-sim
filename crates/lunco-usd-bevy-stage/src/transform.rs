@@ -1,4 +1,4 @@
-use bevy::math::DVec3;
+use bevy::math::{DMat4, DVec3};
 use bevy::prelude::{EulerRot, Mat4, Quat, Transform, Vec3};
 use openusd::sdf::{Path as SdfPath, Value};
 
@@ -107,26 +107,52 @@ pub(crate) fn compose_live_xform_order_at(
     path: &SdfPath,
     time: f64,
 ) -> Result<Option<Transform>, TransformReadError> {
-    use openusd::schemas::geom::Xformable as _;
+    if validated_live_xform_op_order(reader, path)?.is_none() {
+        return Ok(None);
+    }
+    let matrix = local_to_parent_matrix_d_at(reader, path, time)?;
+    let cols: [f32; 16] = matrix.to_cols_array().map(|value| value as f32);
+    let raw = Transform::from_matrix(Mat4::from_cols_array(&cols));
+    let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
+    Ok(Some(convention.local_transform(raw)))
+}
+
+fn validated_live_xform_op_order(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+) -> Result<Option<Vec<String>>, TransformReadError> {
     let Some(order) = read_xform_op_order(reader, path) else {
-        return if UsdReadObject::has_authored_attribute(reader, path, "xformOpOrder")
-            && !authored_empty_xform_op_order(reader, path)
+        if !UsdReadObject::has_authored_attribute(reader, path, "xformOpOrder")
+            || authored_empty_xform_op_order(reader, path)
         {
-            Err(malformed_transform(path))
-        } else {
-            Ok(None)
-        };
+            return Ok(None);
+        }
+        return Err(malformed_transform(path));
     };
     if !valid_xform_op_order(reader, path, &order) {
         return Err(malformed_transform(path));
     }
+    Ok(Some(order))
+}
+
+fn local_to_parent_matrix_d_at(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    time: f64,
+) -> Result<DMat4, TransformReadError> {
+    use openusd::schemas::geom::Xformable as _;
+
     let matrix = XformablePrim(reader.stage().prim(path.clone()))
         .local_to_parent_transform(time)
         .map_err(|_| malformed_transform(path))?;
-    let cols: [f32; 16] = std::array::from_fn(|i| matrix.0[i] as f32);
-    let raw = Transform::from_matrix(Mat4::from_cols_array(&cols));
-    let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
-    Ok(Some(convention.local_transform(raw)))
+    // Gf matrices are row-major for row-vector transforms. Interpreting that
+    // storage as Bevy columns transposes into the equivalent column-vector
+    // matrix, including moving translation into the final column.
+    let matrix = DMat4::from_cols_array(&matrix.0);
+    if !matrix.is_finite() {
+        return Err(malformed_transform(path));
+    }
+    Ok(matrix)
 }
 
 /// The canonical local transform from the composed reader.
@@ -136,6 +162,21 @@ pub fn local_transform_at(
     time: f64,
 ) -> Result<Option<Transform>, TransformReadError> {
     reader.local_transform_at(path, time)
+}
+
+/// The canonical local transform matrix at one sample time, without reducing
+/// the authored OpenUSD `Matrix4d` to Bevy's render-oriented `Transform`.
+pub fn local_transform_matrix_d_at(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+    time: f64,
+) -> Result<Option<DMat4>, TransformReadError> {
+    if validated_live_xform_op_order(reader, path)?.is_none() {
+        return Ok(None);
+    }
+    let matrix = local_to_parent_matrix_d_at(reader, path, time)?;
+    let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
+    Ok(Some(convention.canonical_local_matrix_d(matrix)))
 }
 
 /// Read a prim's canonical local transform at its default time.

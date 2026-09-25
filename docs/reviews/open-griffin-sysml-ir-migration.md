@@ -109,7 +109,7 @@ optional verification-case handle must resolve a `verify` relationship to the
 same requirement. Rhai exposes this as `SysmlModel.evaluate_requirement`.
 The generic IR also exposes an opt-in `SysmlModel.audit_requirements(policy)`
 operation for duplicate short names, project-required identifiers and typed
-subjects, verification coverage, text-only requirement classification, and
+subjects, verification coverage, missing-formal-constraint classification, and
 unresolved names/verification targets. The Griffin requirements tool exposes
 that audit as an explicit review operation; normal Twin startup does not run
 it. A generic `sysml-audit` CLI now runs the same policy over one or more
@@ -136,11 +136,11 @@ be formal constraints when they bind typed source values to composed USD
 measurements; other measurable requirements can be accepted by a mapped,
 executable verification procedure. Visual, mission-flow, runtime, provenance,
 and evidence requirements need suitable verifier/evidence procedures instead.
-The Twin's explicit quality-audit function currently sets
-`require_formal_constraint = true`, which would reject all 154 definitions as
-one blanket rule. That policy still needs to distinguish a missing applicable
-verification method from the valid choice to keep prose or use an external
-verifier. Unknown supplier data must remain explicitly provisional rather than
+The Twin's explicit quality audit uses the engineering-review policy without a
+blanket formal-predicate requirement. It accepts a missing formal constraint as
+informational and checks resolved verification links, but cannot distinguish a
+link to an executable verifier from a procedure that has not run or produced
+evidence. Unknown supplier data must remain explicitly provisional rather than
 being turned into invented numeric predicates.
 
 This closes generic membership selection and aggregate evaluation, not the
@@ -158,8 +158,9 @@ Defaults, output binding, general binding relationships, and
 specialization/redefinition traversal remain unsupported. The explicit CLI
 engineering-review audit was run over the Twin's 21 SysML/KerML source files:
 it found no parser/name diagnostics and no policy errors. It reported 154
-informational text-only requirement definitions; this policy does not require
-every qualitative requirement definition to carry a formal predicate. The
+informational findings for definitions without formal SysML `require`
+constraints; this policy does not require every qualitative requirement
+definition to carry a formal predicate. The
 grouped evaluator and bound-argument path remain compile-checked only: no tests,
 authored scenario, actual-bound Griffin usage, authored `lint.sysml` policy
 execution, or Editor/runtime verification were run in this batch.
