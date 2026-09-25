@@ -296,9 +296,11 @@ The USD projection reads the registered `LunCoProceduralSkyAPI` on its `Xform`
 owner, stamps this intent, and projects no `UsdGeomGprim` for that background.
 The sky shader remains an ordinary bound `UsdShade.Material`; it opts into
 celestial Sun uniforms by declaring `sun_dir_view` and `sun_tan_radius` as
-`//!@engine` inputs. The engine writes those uniforms from the physical-time
-presentation sample and
-the active camera's BigSpace pose, only when their reflected values change.
+`//!@engine` inputs. The engine writes those uniforms from the causal
+`WorldTime` Sun light direction and the active camera's BigSpace pose, only
+when their reflected values change. Shader schema reflection can finish after
+the sky material is first bound, so a change to the sky's `ShaderMaterial`
+also refreshes the uniforms once the fields become available.
 This is continuous render data, so the Rust render adapter owns the update;
 Rhai remains available for authored scene and lesson policy. There is no
 shader-filename switch. The `lunco-render-bevy` binder keeps the same reflected

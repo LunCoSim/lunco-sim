@@ -162,15 +162,25 @@ pub fn sun_emit_direction(
     p_sun: lunco_celestial::frames::EclipticAu,
     p_moon: lunco_celestial::frames::EclipticAu,
 ) -> Option<Vec3> {
-    // `to_sun` = Moon→Sun in Bevy world space; the light emits the other way.
-    let to_sun = lunco_celestial::coords::ecliptic_to_bevy(p_sun - p_moon)
-        .raw()
-        .as_vec3()
-        .normalize_or_zero();
-    if to_sun.length_squared() < 0.5 {
+    // Normalize the AU delta in f64 before converting axes or narrowing to the
+    // render-facing f32 direction. A light needs orientation only; converting
+    // this vector to astronomical meters would carry scale the light cannot use.
+    let delta = (p_sun - p_moon).raw();
+    if !delta.is_finite() {
         return None;
     }
-    Some(-to_sun)
+    let scale = delta.abs().max_element();
+    if scale == 0.0 {
+        return None;
+    }
+    let to_sun_ecliptic = (delta / scale).normalize();
+    // Ecliptic (x, y, z) maps to the Y-up scene frame (x, z, -y).
+    let to_sun = Vec3::new(
+        to_sun_ecliptic.x as f32,
+        to_sun_ecliptic.z as f32,
+        -to_sun_ecliptic.y as f32,
+    );
+    (to_sun.is_finite() && to_sun.length_squared() > 0.0).then(|| -to_sun.normalize())
 }
 
 /// Point the scene's primary `DirectionalLight` along the **causal ephemeris**
@@ -298,7 +308,10 @@ pub fn update_sun_light_system(
     let site_frame = solar_tangent_frame(
         observer_desc,
         &anchor.geodetic,
-        ecliptic_to_bevy(p_observer).raw(),
+        // Only the frame orientation is used below. Its translation is
+        // irrelevant to the Sun direction, so keep the astronomical observer
+        // position out of the local-frame calculation.
+        bevy::math::DVec3::ZERO,
         world.epoch_jd,
     );
     // The site grid's local axes are ENU (+X east, +Y up, -Z north). The
@@ -589,5 +602,17 @@ mod sun_dir_tests {
             (a - b).length() > 1e-3,
             "different Moon positions → different sun aim"
         );
+    }
+
+    #[test]
+    fn direction_is_normalized_before_render_precision_narrowing() {
+        let d = sun_emit_direction(
+            EclipticAu::new(DVec3::new(1.0e30, 0.0, 0.0)),
+            EclipticAu::ZERO,
+        )
+        .expect("finite direction at large AU magnitude");
+
+        assert!(d.abs_diff_eq(Vec3::NEG_X, 1.0e-6));
+        assert!((d.length() - 1.0).abs() < 1.0e-6);
     }
 }

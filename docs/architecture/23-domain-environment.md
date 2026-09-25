@@ -48,6 +48,11 @@ environmental state that varies by body and location, not a render setting. The 
 Moon's surface is lit by exactly two things — the Sun (hard key) and earthshine (faint
 cool-blue, shadowless fill).
 
+The ephemeris provider normalizes the Sun-to-observer AU delta in f64, converts
+its axes, and publishes a unit direction. The scene's `DirectionalLight` and
+sky disc consume that direction; astronomical positions and distances do not
+cross into the render path.
+
 ### Exposure is a RATIO — `illuminance / 2^EV100`
 
 Bevy renders physically: final pixel ≈ luminance ÷ 2^`ev100`. **Neither the light's

@@ -9,6 +9,7 @@
 //! appearance in WGSL/USD while removing finite-sphere culling and far-plane
 //! coupling from the scene.
 
+use bevy::asset::{AssetEvent, AssetId};
 use bevy::camera::Camera3d;
 use bevy::core_pipeline::{
     FullscreenShader,
@@ -194,6 +195,7 @@ fn sun_direction_in_view(world_direction: Vec3, camera_rotation: Quat) -> Option
 
 fn directional_sun_inputs_changed(
     sun: Option<Res<SunRenderState>>,
+    mut material_events: MessageReader<AssetEvent<super::ShaderMaterial>>,
     cameras: Query<
         (),
         (
@@ -202,7 +204,8 @@ fn directional_sun_inputs_changed(
             Or<(Added<Camera>, Changed<Camera>, Changed<GlobalTransform>)>,
         ),
     >,
-    skyboxes: Query<
+    skyboxes: Query<&ProceduralSkyboxMaterial>,
+    changed_skyboxes: Query<
         (),
         Or<(
             Added<ProceduralSkyboxMaterial>,
@@ -210,7 +213,26 @@ fn directional_sun_inputs_changed(
         )>,
     >,
 ) -> bool {
-    sun.is_some_and(|state| state.is_changed()) || !cameras.is_empty() || !skyboxes.is_empty()
+    let mut skybox_material_changed = false;
+    for event in material_events.read() {
+        skybox_material_changed |= skyboxes
+            .iter()
+            .any(|skybox| skybox_material_event_matches(event, skybox.material.id()));
+    }
+    sun.is_some_and(|state| state.is_changed())
+        || !cameras.is_empty()
+        || !changed_skyboxes.is_empty()
+        || skybox_material_changed
+}
+
+fn skybox_material_event_matches(
+    event: &AssetEvent<super::ShaderMaterial>,
+    material_id: AssetId<super::ShaderMaterial>,
+) -> bool {
+    matches!(
+        event,
+        AssetEvent::Added { id } | AssetEvent::Modified { id } if *id == material_id
+    )
 }
 
 /// Project Bevy's finalized scene-light direction into the active camera for
@@ -483,6 +505,7 @@ fn remove_skybox_material(remove: On<Remove, ProceduralSkybox>, mut commands: Co
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ShaderMaterial;
 
     #[test]
     fn sky_disk_uses_the_directional_light_in_camera_space() {
@@ -499,6 +522,29 @@ mod tests {
     fn sky_disk_rejects_an_invalid_direction() {
         assert!(sun_direction_in_view(Vec3::ZERO, Quat::IDENTITY).is_none());
         assert!(sun_direction_in_view(Vec3::splat(f32::NAN), Quat::IDENTITY).is_none());
+    }
+
+    #[test]
+    fn sky_material_schema_events_revisit_the_sun_uniforms() {
+        let material_id = AssetId::<ShaderMaterial>::Uuid {
+            uuid: bevy::asset::uuid::Uuid::from_u128(1),
+        };
+        let unrelated_id = AssetId::<ShaderMaterial>::Uuid {
+            uuid: bevy::asset::uuid::Uuid::from_u128(2),
+        };
+
+        assert!(skybox_material_event_matches(
+            &AssetEvent::Modified { id: material_id },
+            material_id,
+        ));
+        assert!(!skybox_material_event_matches(
+            &AssetEvent::Added { id: unrelated_id },
+            material_id,
+        ));
+        assert!(!skybox_material_event_matches(
+            &AssetEvent::Removed { id: material_id },
+            material_id,
+        ));
     }
 
     fn key(target_format: TextureFormat) -> ProceduralSkyboxPipelineKey {

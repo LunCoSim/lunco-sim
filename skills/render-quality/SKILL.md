@@ -73,8 +73,10 @@ same-epoch body-fixed grid, but that copy is render-only. Show the causal marker
 on its own body's surface and the copy in orbit or other-body views.
 Procedural sky materials opt into the live Sun disc by declaring both
 `sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
-the behavior. The direction is in the active camera's view coordinates, the
-same frame as the shader's view rays. Its provider composes the camera's
+the behavior. Schema reflection can finish after the sky material is first
+bound, so material asset changes must refresh these engine inputs. The
+direction is in the active camera's view coordinates, the same frame as the
+shader's view rays. Its provider composes the camera's
 `CellCoord` and `Transform` through `lunco_spatial::pose_in_grid`, while
 BigSpace owns `GlobalTransform` propagation. Camera pose changes refresh the
 direction while physical time is paused. Continuous renderer data stays in
