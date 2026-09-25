@@ -16,8 +16,10 @@
 //!
 //! [`produce_usd_prim_tree`] is the view-model producer: it runs on the main
 //! thread (the stage is `!Send`), reads the composed stage for each prim's type,
-//! and rebuilds the [`UsdPrimTreeView`] only when the set of prim
-//! paths changes (hash-gated). The panel is pure paint over that resource.
+//! and builds only while the prim-tree panel is visible and the preview is fully
+//! projected. Stage identity and change batches keep unrelated viewport and
+//! Twin changes from rebuilding the tree. The panel is pure paint over that
+//! resource.
 
 #![forbid(unsafe_code)]
 
@@ -26,15 +28,20 @@ use std::collections::{BTreeSet, HashMap};
 use bevy::prelude::*;
 use egui;
 use lunco_camera_core::camera_display_labels;
+use lunco_doc::DocumentId;
 use lunco_render::SceneCamera;
 use lunco_scene_selection::{SelectEntityTarget, SelectionIntent};
-use lunco_usd_bevy_scene::{UsdPrimDisplayMode, UsdPrimPath, is_preview_entity};
+use lunco_usd_bevy_scene::{
+    UsdPrimDisplayMode, UsdPrimPath, UsdSceneChangeBatch, is_preview_entity,
+};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_viewport_core::{
     SetUsdPrimDisplayMode, UsdPreviewId, UsdPrimDisplayModes, UsdViewportState,
 };
 use lunco_workbench_core::view_model::ViewModelAppExt;
-use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt};
+use lunco_workbench_core::{
+    Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt, WorkbenchSnapshot,
+};
 use openusd::sdf::Path as SdfPath;
 
 /// Installs the reusable composed-USD prim hierarchy panel.
@@ -72,6 +79,13 @@ struct PrimTreeNode {
 /// Render-ready USD prim hierarchy. Derived, never authoritative.
 #[derive(Default)]
 pub struct UsdPrimTreeSessionView {
+    /// Document and stage represented by this cached view.
+    doc: Option<DocumentId>,
+    stage_id: Option<AssetId<UsdStageAsset>>,
+    /// Projected document generation represented by this view.
+    generation: u64,
+    /// Canonical stage generation represented by this view.
+    canonical_generation: Option<u64>,
     nodes: HashMap<NodeKey, PrimTreeNode>,
     /// Top-level node keys, sorted by name.
     roots: Vec<NodeKey>,
@@ -95,14 +109,20 @@ impl UsdPrimTreeView {
     }
 }
 
-/// Wake the Editor tree only when its explicit document projection or the
-/// composed USD stage changes. There is no meaningful tree when the preview
-/// has no selected document.
+/// Wake the Editor tree for visible-panel changes and explicit preview
+/// lifecycle changes. Hidden trees do not traverse the composed stage.
 pub fn editor_prim_tree_changed(
     viewport: Option<Res<UsdViewportState>>,
     revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
+    workbench: Option<Res<WorkbenchSnapshot>>,
 ) -> bool {
-    viewport.is_some_and(|state| state.is_changed()) || revision.is_changed()
+    let viewport_changed = viewport.is_some_and(|state| state.is_changed());
+    let visible = workbench
+        .as_deref()
+        .is_some_and(|snapshot| snapshot.is_panel_visible(USD_PRIM_TREE_PANEL_ID));
+    viewport_changed
+        || (visible
+            && (revision.is_changed() || workbench.is_some_and(|snapshot| snapshot.is_changed())))
 }
 
 /// View-model producer: rebuild [`UsdPrimTreeView`] from the composed stage when
@@ -116,6 +136,8 @@ pub fn produce_usd_prim_tree(
     mut canonical: NonSendMut<CanonicalStages>,
     mut view: ResMut<UsdPrimTreeView>,
     viewport: Option<Res<UsdViewportState>>,
+    workbench: Option<Res<WorkbenchSnapshot>>,
+    mut scene_changes: MessageReader<UsdSceneChangeBatch>,
 ) {
     let Some(viewport) = viewport else {
         view.sessions.clear();
@@ -123,38 +145,78 @@ pub fn produce_usd_prim_tree(
     };
     let open: std::collections::HashSet<_> = viewport.sessions().map(|s| s.id()).collect();
     view.sessions.retain(|preview, _| open.contains(preview));
+    if !workbench
+        .as_deref()
+        .is_some_and(|snapshot| snapshot.is_panel_visible(USD_PRIM_TREE_PANEL_ID))
+    {
+        return;
+    }
+    let scene_changes: Vec<_> = scene_changes.read().collect();
 
     for session in viewport.sessions() {
         let session_view = view.sessions.entry(session.id()).or_default();
         let preview_root = session.scene_root();
         let handle = session.stage_handle().clone();
         let stage_id = handle.id();
+        let doc = session.doc();
+        let identity_changed =
+            session_view.doc != Some(doc) || session_view.stage_id != Some(stage_id);
+        if identity_changed {
+            *session_view = UsdPrimTreeSessionView {
+                doc: Some(doc),
+                stage_id: Some(stage_id),
+                generation: session.projected_generation(),
+                canonical_generation: None,
+                ..Default::default()
+            };
+        }
+
+        let canonical_generation = canonical.get(stage_id).map(|stage| stage.generation());
+        let matching_scene_change = scene_changes.iter().any(|change| {
+            change.stage_id == stage_id
+                && Some(change.stage_generation) == canonical_generation
+                && (!change.resynced_prim_paths.is_empty() || !change.info_prim_paths.is_empty())
+        });
+        let resynced = scene_changes.iter().any(|change| {
+            change.stage_id == stage_id
+                && Some(change.stage_generation) == canonical_generation
+                && !change.resynced_prim_paths.is_empty()
+        });
+        let force_tree_rebuild = identity_changed
+            || !session_view.built
+            || session_view.canonical_generation != canonical_generation
+            || resynced
+            || session_view.generation != session.projected_generation();
+        if !force_tree_rebuild && !matching_scene_change {
+            continue;
+        }
+        // A new preview is projected in bounded lifecycle batches. Do not
+        // repeatedly rebuild the complete hierarchy while that admission is
+        // still in progress; projection readiness wakes this view once the
+        // final batch has committed. An already-visible tree stays available
+        // while a later live edit settles.
+        if !session.projection_ready() {
+            continue;
+        }
 
         // The set of explicit document paths drives the change gate. The
         // preview root is the document scope; the live simulation is absent.
         let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
-        for (e, p, _) in q.iter() {
+        let mut camera_names = Vec::new();
+        let mut camera_entities = Vec::new();
+        for (e, p, is_camera) in q.iter() {
             if p.stage_handle.id() == stage_id && is_preview_entity(e, preview_root, &q_parents) {
                 entity_of.insert(p.path.clone(), e);
+                if is_camera {
+                    camera_names.push(p.path.clone());
+                    camera_entities.push((e, p.path.clone()));
+                }
             }
         }
 
-        let camera_identities: Vec<(Entity, String)> = q
-            .iter()
-            .filter(|(entity, path, is_camera)| {
-                *is_camera
-                    && path.stage_handle.id() == stage_id
-                    && is_preview_entity(*entity, preview_root, &q_parents)
-            })
-            .map(|(entity, path, _)| (entity, path.path.clone()))
-            .collect();
-        let camera_names: Vec<String> = camera_identities
-            .iter()
-            .map(|(_, identity)| identity.clone())
-            .collect();
         let camera_identity_by_entity: HashMap<Entity, String> =
-            camera_identities.iter().cloned().collect();
-        let camera_labels: HashMap<Entity, String> = camera_identities
+            camera_entities.iter().cloned().collect();
+        let camera_labels: HashMap<Entity, String> = camera_entities
             .into_iter()
             .zip(camera_display_labels(&camera_names))
             .map(|((entity, _), label)| (entity, label))
@@ -195,7 +257,8 @@ pub fn produce_usd_prim_tree(
             }
             h.finish()
         };
-        if session_view.built && session_view.hash == hash {
+        if session_view.built && session_view.hash == hash && !force_tree_rebuild {
+            session_view.generation = session.projected_generation();
             continue;
         }
 
@@ -281,6 +344,10 @@ pub fn produce_usd_prim_tree(
         session_view.roots = roots;
         session_view.hash = hash;
         session_view.built = true;
+        session_view.doc = Some(doc);
+        session_view.stage_id = Some(stage_id);
+        session_view.generation = session.projected_generation();
+        session_view.canonical_generation = canonical.get(stage_id).map(|stage| stage.generation());
     }
 }
 
