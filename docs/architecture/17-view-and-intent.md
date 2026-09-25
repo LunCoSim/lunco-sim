@@ -434,6 +434,13 @@ are the current projection of `lunco-input-core::InputBindingsSettings`; UI help
 must resolve labels from that resource so remapping updates presentation while
 the semantic profile and physical actuator ownership remain unchanged.
 
+An omitted look-button override uses the authored input default, with `Right`
+as the valid schema default before that asset loads. An explicit invalid value
+is rejected; the input owner clears live semantic maps and the Workbench reports
+that controls are disabled until the setting is corrected. Persisted invalid
+sections are removed with a warning by `lunco-settings` before authored defaults
+are applied.
+
 If another session owns the target, the first active intent in its authored
 `ControlBinding` requests the generic `ClaimControl` transition once for that
 held input. The existing `control.authority.take` Rhai policy decides whether

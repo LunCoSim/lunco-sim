@@ -470,10 +470,15 @@ owns one app-level local intent surface for editor actions when an isolated
 preview has no avatar. Shared actions such as `CancelIntent` read that surface
 through the same `InputBindingsSettings` map, while avatar control continues to
 use its own surface; neither path may introduce a raw-key or duplicate binding.
-The Workbench may use `InputBindingsSettings::input_map_or_empty` only while the
-application-owned authored defaults are loading: it must publish the rejected
-settings as a status-bar warning, keep the UI host alive with no active
-bindings, and replace the empty map when the authored projection becomes valid.
+`InputBindingsSettings::default()` is a valid neutral override: it has no key or
+pointer overrides and uses the schema-defined `Right` look button until the
+application overlays its authored defaults. The authored document remains the
+source of product bindings, and persisted explicit values take precedence. An
+explicit invalid runtime value must be rejected, diagnosed in the status bar, and
+clear every live semantic input map so a stale map cannot continue controlling the
+simulation. The Workbench host remains alive with input disabled until settings are
+corrected. Invalid persisted sections are removed with a settings warning before
+the authored defaults are installed.
 
 ## Source-backed program attachment
 

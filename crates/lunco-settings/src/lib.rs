@@ -88,6 +88,23 @@ pub trait SettingsSection:
     fn migrate_persisted(&mut self) {}
 }
 
+fn decode_persisted_section<S: SettingsSection>(
+    value: serde_json::Value,
+) -> Result<(S, bool), String> {
+    let mut section = serde_json::from_value::<S>(value)
+        .map_err(|error| format!("could not deserialize persisted section: {error}"))?;
+    section
+        .validate_section()
+        .map_err(|reason| format!("invalid persisted section: {reason}"))?;
+    let before = section.clone();
+    section.migrate_persisted();
+    section
+        .validate_section()
+        .map_err(|reason| format!("invalid section after migration: {reason}"))?;
+    let migrated = section != before;
+    Ok((section, migrated))
+}
+
 /// Resolves the user-level configuration directory for LunCoSim.
 ///
 /// This is the single owner of the configuration path used by settings,
@@ -161,20 +178,16 @@ pub fn load_section_from_disk<S: SettingsSection>() -> S {
         Ok(v) => v,
         Err(_) => return S::default(),
     };
-    let Some(mut section) = raw
-        .get(S::KEY)
-        .and_then(|v| serde_json::from_value::<S>(v.clone()).ok())
-    else {
+    let Some(value) = raw.get(S::KEY) else {
         return S::default();
     };
-    if section.validate_section().is_err() {
-        return S::default();
+    match decode_persisted_section::<S>(value.clone()) {
+        Ok((section, _)) => section,
+        Err(reason) => {
+            warn!("[Settings:{}] {reason}; using defaults", S::KEY);
+            S::default()
+        }
     }
-    section.migrate_persisted();
-    if section.validate_section().is_err() {
-        return S::default();
-    }
-    section
 }
 
 /// In-memory mirror of `settings.json`. Sections deserialize out of
@@ -304,10 +317,10 @@ fn flush_settings(mut settings: ResMut<Settings>) {
 pub trait AppSettingsExt {
     /// Register a typed section.
     ///
-    /// On registration, deserialises the section's slice out of the
-    /// loaded `Settings` (or uses the current `Default` if absent or
-    /// invalid), removes an invalid stored value, and adds a system
-    /// that writes the current section back when the resource changes.
+    /// On registration, deserialises and validates the section's slice out of
+    /// the loaded `Settings`. An absent value uses `Default`; an invalid value
+    /// is warned about, removed, and replaced with `Default`. A system writes
+    /// the current section back when the resource changes.
     fn register_settings_section<S: SettingsSection>(&mut self) -> &mut Self;
 }
 
@@ -320,41 +333,33 @@ impl AppSettingsExt for App {
             let mut settings = self.world_mut().resource_mut::<Settings>();
             match settings.raw.get(S::KEY).cloned() {
                 None => S::default(),
-                Some(v) => match serde_json::from_value::<S>(v) {
-                    Ok(mut s) if s.validate_section().is_ok() => {
-                        let before = s.clone();
-                        s.migrate_persisted();
-                        if s.validate_section().is_err() {
+                Some(value) => match decode_persisted_section::<S>(value) {
+                    Err(reason) => {
+                        warn!(
+                            "[Settings:{}] {reason}; removing it and using defaults",
+                            S::KEY
+                        );
+                        settings.raw.remove(S::KEY);
+                        settings.dirty = true;
+                        S::default()
+                    }
+                    Ok((section, true)) => match serde_json::to_value(&section) {
+                        Ok(value) => {
+                            settings.raw.insert(S::KEY.to_string(), value);
+                            settings.dirty = true;
+                            section
+                        }
+                        Err(error) => {
+                            warn!(
+                                "[Settings:{}] could not persist migrated section: {error}; removing it and using defaults",
+                                S::KEY
+                            );
                             settings.raw.remove(S::KEY);
                             settings.dirty = true;
                             S::default()
-                        } else {
-                            if s != before {
-                                match serde_json::to_value(&s) {
-                                    Ok(value) => {
-                                        settings.raw.insert(S::KEY.to_string(), value);
-                                        settings.dirty = true;
-                                    }
-                                    Err(_) => {
-                                        settings.raw.remove(S::KEY);
-                                        settings.dirty = true;
-                                        s = S::default();
-                                    }
-                                }
-                            }
-                            s
                         }
-                    }
-                    Err(_) => {
-                        settings.raw.remove(S::KEY);
-                        settings.dirty = true;
-                        S::default()
-                    }
-                    Ok(_) => {
-                        settings.raw.remove(S::KEY);
-                        settings.dirty = true;
-                        S::default()
-                    }
+                    },
+                    Ok((section, false)) => section,
                 },
             }
         };

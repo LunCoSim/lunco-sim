@@ -290,7 +290,7 @@ fn celestial_test_quality_profile() -> lunco_render::RenderQualityProfile {
 fn install_test_input_bindings(app: &mut App) {
     app.add_plugins(lunco_input_core::InputBindingsPlugin);
     app.insert_resource(lunco_input_core::InputBindingsSettings {
-        look_button: "Right".to_string(),
+        look_button: Some("Right".to_string()),
         ..Default::default()
     });
 }

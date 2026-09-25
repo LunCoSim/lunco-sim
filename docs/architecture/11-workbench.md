@@ -915,11 +915,12 @@ surfaces, and user-global preferences remain in `settings.json`.
   `lunco.input-bindings.v1` kind through the runtime asset manifest; it is not
   compiled into the input contract. The same resolved resource feeds the live
   input map, help surfaces, input injection, and Rhai tutorial labels. There is
-  no separate `keybinds.toml` registry. During startup, before the authored
-  document is available, the Workbench uses the input contract's empty map and
-  publishes a warning through the status bar for the rejected settings; the
-  authored map replaces it when the runtime asset load completes. An invalid
-  settings section must never panic the UI host.
+  no separate `keybinds.toml` registry. The settings default is a valid neutral
+  override with no key bindings and the schema-defined `Right` look button. An
+  omitted look-button override inherits the authored value when the runtime
+  asset loads. Explicit invalid persisted sections are removed with a settings
+  warning; invalid runtime values disable the live input maps and are reported
+  in the status bar. The UI host remains available in either case.
 
 Both are simple pass-throughs to egui and `bevy_workbench`-style registries;
 no novel design.

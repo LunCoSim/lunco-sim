@@ -276,9 +276,8 @@ fn egui_host_camera() -> Camera {
 ///
 /// Always disables `EguiGlobalSettings::auto_create_primary_context` so
 /// bevy_egui cannot choose a different camera as primary. Idempotent: re-running
-/// will not spawn duplicates. Before the application-owned authored input
-/// defaults arrive, the input contract supplies an empty map and this owner
-/// reports the rejected settings instead of panicking.
+/// will not spawn duplicates. Invalid input settings disable the host's input
+/// map and are reported through the status bar instead of panicking.
 fn ensure_egui_host(
     mut commands: Commands,
     mut egui_global: ResMut<EguiGlobalSettings>,
@@ -292,15 +291,13 @@ fn ensure_egui_host(
         let (input_map, fallback_reason) = bindings.input_map_or_empty();
         if let Some(reason) = fallback_reason {
             warn!(
-                "Workbench input bindings are not ready ({reason}); using an empty \
-                 input map until authored defaults are installed"
+                "Workbench input bindings are invalid ({reason}); input is disabled until settings are corrected"
             );
             status.push(
                 INPUT_SOURCE,
                 StatusLevel::Warn,
                 format!(
-                    "Input bindings are unavailable ({reason}); controls are disabled until \
-                     authored defaults load"
+                    "Input bindings are invalid ({reason}); controls are disabled until settings are corrected"
                 ),
             );
             bindings_status.unavailable = true;
@@ -352,8 +349,7 @@ fn report_input_bindings_status(
             INPUT_SOURCE,
             StatusLevel::Warn,
             format!(
-                "Input bindings are unavailable ({reason}); controls are disabled until \
-                 authored defaults load"
+                "Input bindings are invalid ({reason}); controls are disabled until settings are corrected"
             ),
         );
         bindings_status.unavailable = true;
@@ -798,7 +794,10 @@ mod tests {
     fn invalid_input_settings_do_not_panic_egui_host_startup() {
         let mut app = App::new();
         app.init_resource::<EguiGlobalSettings>()
-            .insert_resource(InputBindingsSettings::default())
+            .insert_resource(InputBindingsSettings {
+                look_button: Some(String::new()),
+                ..Default::default()
+            })
             .add_plugins(lunco_status_core::status_bus::StatusBusPlugin)
             .init_resource::<InputBindingsStatus>()
             .add_systems(Startup, ensure_egui_host);
@@ -813,15 +812,18 @@ mod tests {
         assert!(bus.history().any(|event| {
             event.source == INPUT_SOURCE
                 && event.level == StatusLevel::Warn
-                && event.message.contains("controls are disabled")
+                && event.message.contains("settings are corrected")
         }));
     }
 
     #[test]
-    fn input_status_warning_clears_after_authored_defaults_load() {
+    fn input_status_warning_clears_after_settings_are_corrected() {
         let mut app = App::new();
         app.add_plugins(lunco_status_core::status_bus::StatusBusPlugin)
-            .insert_resource(InputBindingsSettings::default())
+            .insert_resource(InputBindingsSettings {
+                look_button: Some(String::new()),
+                ..Default::default()
+            })
             .init_resource::<InputBindingsStatus>()
             .add_systems(Update, report_input_bindings_status);
 
@@ -830,14 +832,7 @@ mod tests {
 
         app.world_mut()
             .resource_mut::<InputBindingsSettings>()
-            .apply_defaults_json(
-                r#"{
-                    "kind": "lunco.input-bindings.v1",
-                    "look_button": "Right",
-                    "forward": ["KeyW"]
-                }"#,
-            )
-            .expect("authored defaults are valid");
+            .look_button = Some("Right".to_string());
         app.update();
 
         assert!(!app.world().resource::<InputBindingsStatus>().unavailable);

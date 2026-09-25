@@ -14,8 +14,10 @@ use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+const DEFAULT_LOOK_BUTTON: &str = "Right";
+
 fn default_look_button() -> String {
-    "Right".into()
+    DEFAULT_LOOK_BUTTON.into()
 }
 
 /// One exact pointer chord in the shared input configuration.
@@ -72,19 +74,20 @@ struct InputBindingsDocument {
 /// input injection, and authored pointer tools.
 ///
 /// The application supplies defaults from its authored input document through
-/// [`Self::apply_defaults_json`]. This contract crate deliberately contains no
-/// asset path or compiled product keymap; until the application installs those
-/// defaults, the settings remain invalid and input projection reports that
-/// state.
+/// [`Self::apply_defaults_json`]. An omitted look button uses the documented
+/// schema default, while an explicit value overrides the authored default. This
+/// contract crate deliberately contains no asset path or compiled product keymap.
 #[derive(Resource, Reflect, Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[reflect(Resource)]
 pub struct InputBindingsSettings {
     /// Semantic intent name to Bevy key names.
     #[serde(flatten)]
     pub bindings: BTreeMap<String, Vec<KeyCode>>,
-    /// Pointer button activating the semantic look intent.
-    #[serde(default = "default_look_button")]
-    pub look_button: String,
+    /// Pointer button override activating the semantic look intent. When
+    /// omitted, the authored default is used; before it loads, the schema
+    /// default is `Right`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look_button: Option<String>,
     /// Physical pointer chords mapped to authored semantic intent names.
     #[serde(default)]
     pub pointer_bindings: BTreeMap<String, Vec<PointerBinding>>,
@@ -94,7 +97,7 @@ impl Default for InputBindingsSettings {
     fn default() -> Self {
         Self {
             bindings: BTreeMap::new(),
-            look_button: String::new(),
+            look_button: None,
             pointer_bindings: BTreeMap::new(),
         }
     }
@@ -104,8 +107,10 @@ impl SettingsSection for InputBindingsSettings {
     const KEY: &'static str = "input_bindings";
 
     fn validate_section(&self) -> Result<(), String> {
-        if self.look_button_value().is_none() {
-            return Err(format!("invalid look_button '{}'", self.look_button));
+        if let Some(button) = &self.look_button
+            && parse_look_button(button).is_none()
+        {
+            return Err(format!("invalid look_button '{button}'"));
         }
         for intent in self.bindings.keys() {
             if lunco_control_core::parse_user_intent(intent).is_none() {
@@ -137,7 +142,7 @@ impl InputBindingsSettings {
             .map_err(|error| format!("invalid input bindings: {error}"))?;
         let settings = Self {
             bindings: document.bindings,
-            look_button: document.look_button,
+            look_button: Some(document.look_button),
             pointer_bindings: document.pointer_bindings,
         };
         settings.validate_section()?;
@@ -151,36 +156,29 @@ impl InputBindingsSettings {
     /// the application owns which asset is the default and can reload it without
     /// recompiling this input contract crate.
     pub fn apply_defaults_json(&mut self, json: &str) -> Result<(), String> {
-        let defaults = Self::from_json(json)?;
-
-        let stored_bindings = std::mem::take(&mut self.bindings);
-        let stored_pointer_bindings = std::mem::take(&mut self.pointer_bindings);
-        let stored_look_button = std::mem::take(&mut self.look_button);
-
-        self.bindings = defaults.bindings;
-        self.bindings.extend(stored_bindings);
-        self.pointer_bindings = defaults.pointer_bindings;
-        self.pointer_bindings.extend(stored_pointer_bindings);
-        self.look_button = if stored_look_button.trim().is_empty() {
-            defaults.look_button
-        } else {
-            stored_look_button
-        };
-        self.validate_section()
+        let mut resolved = Self::from_json(json)?;
+        resolved.bindings.extend(self.bindings.clone());
+        resolved
+            .pointer_bindings
+            .extend(self.pointer_bindings.clone());
+        resolved.look_button = self.look_button.clone().or(resolved.look_button);
+        resolved.validate_section()?;
+        *self = resolved;
+        Ok(())
     }
 
     /// Build the live leafwing map from the resolved settings section.
     pub fn input_map(&self) -> Result<InputMap<UserIntent>, String> {
         let bindings = self.key_bindings()?;
         let Some(button) = self.look_button_value() else {
-            return Err(format!("invalid look_button '{}'", self.look_button));
+            return Err(format!("invalid look_button '{}'", self.look_button_name()));
         };
         Ok(build_input_map(bindings, button))
     }
 
-    /// Build an empty map while the application-owned authored defaults are
-    /// still loading. The caller must report the returned error; the empty map
-    /// does not replace validation or the later authored projection.
+    /// Build an empty map when settings are invalid. The caller must report the
+    /// returned error; the empty map does not replace validation or repair the
+    /// settings resource.
     pub fn input_map_or_empty(&self) -> (InputMap<UserIntent>, Option<String>) {
         match self.input_map() {
             Ok(map) => (map, None),
@@ -231,7 +229,10 @@ impl InputBindingsSettings {
     pub fn label(&self, binding: &str) -> Option<String> {
         if binding == "look_button" {
             self.look_button_value()?;
-            return Some(format!("{} mouse button", self.look_button.to_lowercase()));
+            return Some(format!(
+                "{} mouse button",
+                self.look_button_name().to_lowercase()
+            ));
         }
         let keys = self.bindings.get(binding)?;
         (!keys.is_empty()).then(|| key_label(keys))
@@ -249,7 +250,11 @@ impl InputBindingsSettings {
     }
 
     fn look_button_value(&self) -> Option<MouseButton> {
-        parse_look_button(&self.look_button)
+        parse_look_button(self.look_button_name())
+    }
+
+    fn look_button_name(&self) -> &str {
+        self.look_button.as_deref().unwrap_or(DEFAULT_LOOK_BUTTON)
     }
 }
 
@@ -327,12 +332,18 @@ fn refresh_live_input_maps(
     if !settings.is_changed() {
         return;
     }
-    let Ok(map) = settings.input_map() else {
-        error!("[input] refusing to project invalid input bindings settings");
-        return;
-    };
-    for mut live in &mut maps {
-        *live = map.clone();
+    match settings.input_map() {
+        Ok(map) => {
+            for mut live in &mut maps {
+                *live = map.clone();
+            }
+        }
+        Err(reason) => {
+            error!("[input] refusing invalid input bindings: {reason}; clearing live input maps");
+            for mut live in &mut maps {
+                *live = InputMap::default();
+            }
+        }
     }
 }
 
@@ -473,6 +484,7 @@ mod tests {
         let rebound: InputBindingsSettings =
             serde_json::from_str(r#"{"forward":["KeyI"],"yaw_left":[]}"#)
                 .expect("valid input override");
+        assert!(rebound.input_map().is_ok());
         assert_eq!(rebound.key_code("KeyI").unwrap(), Some(KeyCode::KeyI));
         assert_eq!(rebound.key_code("KeyW").unwrap(), None);
         assert_eq!(resolved_input_label(&rebound, UserIntent::MoveForward), "I");
@@ -488,32 +500,90 @@ mod tests {
         settings
             .validate_section()
             .expect("bundled keybindings must be valid");
-        assert_eq!(settings.look_button, "Right");
+        assert_eq!(settings.look_button.as_deref(), Some("Right"));
         assert!(settings.key_bindings().unwrap().len() >= 8);
         settings.input_map().expect("bundled map must build");
     }
 
     #[test]
-    fn authored_defaults_replace_the_startup_empty_map() {
+    fn neutral_settings_accept_authored_defaults_without_masking_them() {
         let mut settings = InputBindingsSettings::default();
-        let (empty, reason) = settings.input_map_or_empty();
-
-        assert_eq!(reason.as_deref(), Some("invalid look_button ''"));
-        assert!(empty.get_dual_axislike(&UserIntent::Look).is_none());
-        assert!(empty.get_axislike(&UserIntent::Zoom).is_none());
+        assert!(settings.input_map().is_ok());
+        assert_eq!(settings.look_button_value(), Some(MouseButton::Right));
+        assert!(settings.key_bindings().unwrap().is_empty());
 
         settings
             .apply_defaults_json(
                 r#"{
                     "kind": "lunco.input-bindings.v1",
-                    "look_button": "Right",
+                    "look_button": "Middle",
                     "forward": ["KeyW"]
                 }"#,
             )
             .expect("authored defaults are valid");
 
-        let (resolved, reason) = settings.input_map_or_empty();
-        assert!(reason.is_none());
+        let resolved = settings.input_map().expect("resolved map is valid");
+        assert_eq!(settings.look_button_value(), Some(MouseButton::Middle));
         assert!(resolved.get_buttonlike(&UserIntent::MoveForward).is_some());
+    }
+
+    #[test]
+    fn invalid_override_does_not_partially_apply_authored_defaults() {
+        let mut settings = InputBindingsSettings {
+            look_button: Some(String::new()),
+            ..Default::default()
+        };
+        let before = settings.clone();
+        assert!(
+            settings
+                .apply_defaults_json(r#"{"look_button":"Middle","forward":["KeyW"]}"#)
+                .is_err()
+        );
+        assert_eq!(settings, before);
+    }
+
+    #[test]
+    fn explicit_invalid_settings_are_rejected_and_clear_live_maps() {
+        let mut app = App::new();
+        app.add_plugins(InputBindingsPlugin);
+        let entity = app
+            .world_mut()
+            .spawn(input_map_from_json(r#"{"forward":["KeyW"]}"#).expect("valid map"))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputBindingsSettings>()
+            .look_button = Some(String::new());
+
+        app.update();
+
+        let live = app
+            .world()
+            .entity(entity)
+            .get::<InputMap<UserIntent>>()
+            .expect("live input map");
+        assert!(live.get_buttonlike(&UserIntent::MoveForward).is_none());
+        assert!(live.get_dual_axislike(&UserIntent::Look).is_none());
+        assert!(
+            app.world()
+                .resource::<InputBindingsSettings>()
+                .input_map()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn explicit_invalid_look_button_is_rejected() {
+        let settings = InputBindingsSettings {
+            look_button: Some(String::new()),
+            ..Default::default()
+        };
+        assert_eq!(
+            settings.validate_section().unwrap_err(),
+            "invalid look_button ''"
+        );
+        assert_eq!(
+            settings.input_map_or_empty().1.as_deref(),
+            Some("invalid look_button ''")
+        );
     }
 }
