@@ -439,6 +439,132 @@ fn optional_limit(
     }
 }
 
+/// Current bounded profile for authoritative fixed-tick service and the
+/// synchronous fixed-loop portion of each app update.
+pub(crate) struct SimulationTimingProfileProvider;
+
+impl ApiQueryProvider for SimulationTimingProfileProvider {
+    fn name(&self) -> &'static str {
+        "SimulationTimingProfile"
+    }
+
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        match params {
+            ApiValue::Unit => {}
+            ApiValue::Map(options) if options.is_empty() => {}
+            ApiValue::Map(_) => {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "SimulationTimingProfile: this query accepts no options",
+                ));
+            }
+            _ => {
+                return Err(ApiQueryError::new(
+                    ApiErrorCode::DeserializationError,
+                    "SimulationTimingProfile: parameters must be an empty map",
+                ));
+            }
+        }
+
+        let Some(profile) = world.get_resource::<lunco_time::SimulationTimingProfile>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "SimulationTimingProfile: timing profile is unavailable",
+            ));
+        };
+
+        let tick_samples = profile.recent_ticks().count();
+        let loop_samples = profile.recent_loops().count();
+        let tick_service =
+            percentile_milliseconds(profile.recent_ticks().map(|sample| sample.service_secs))?;
+        let tick_service_budget = percentile_milliseconds(
+            profile
+                .recent_ticks()
+                .map(|sample| sample.service_budget_secs),
+        )?;
+        let loop_service =
+            percentile_milliseconds(profile.recent_loops().map(|sample| sample.service_secs))?;
+        let latest_tick = profile.latest_tick();
+        let latest_loop = profile.latest_loop();
+
+        Ok(Some(api_value!({
+            "fixed_tick": {
+                "window_samples": tick_samples as u64,
+                "service_ms_p50": optional_float(tick_service[0]),
+                "service_ms_p95": optional_float(tick_service[1]),
+                "service_ms_p99": optional_float(tick_service[2]),
+                "service_ms_max": optional_float(tick_service[3]),
+                "service_budget_ms_p50": optional_float(tick_service_budget[0]),
+                "service_budget_ms_p95": optional_float(tick_service_budget[1]),
+                "service_budget_ms_p99": optional_float(tick_service_budget[2]),
+                "service_budget_ms_max": optional_float(tick_service_budget[3]),
+                "service_budget_exceedances_total": profile.total_service_budget_exceedances(),
+                "ticks_total": profile.total_fixed_ticks(),
+                "latest_service_ms": latest_tick.map_or(ApiValue::Unit, |sample| {
+                    ApiValue::Float(sample.service_secs * 1_000.0)
+                }),
+                "latest_service_budget_ms": latest_tick.map_or(ApiValue::Unit, |sample| {
+                    ApiValue::Float(sample.service_budget_secs * 1_000.0)
+                }),
+            },
+            "fixed_loop": {
+                "window_samples": loop_samples as u64,
+                "service_ms_p50": optional_float(loop_service[0]),
+                "service_ms_p95": optional_float(loop_service[1]),
+                "service_ms_p99": optional_float(loop_service[2]),
+                "service_ms_max": optional_float(loop_service[3]),
+                "latest_service_ms": latest_loop.map_or(ApiValue::Unit, |sample| {
+                    ApiValue::Float(sample.service_secs * 1_000.0)
+                }),
+                "latest_steps": latest_loop.map_or(ApiValue::Unit, |sample| {
+                    ApiValue::UInt(sample.fixed_steps)
+                }),
+                "latest_max_delta_limited_simulation_secs": latest_loop
+                    .and_then(|sample| sample.max_delta_limited_simulation_secs)
+                    .map_or(ApiValue::Unit, ApiValue::Float),
+                "max_delta_limited_simulation_secs_total": profile
+                    .total_max_delta_limited_simulation_secs()
+                    .map_or(ApiValue::Unit, ApiValue::Float),
+                "latest_fractional_overstep_secs": latest_loop.map_or(ApiValue::Unit, |sample| {
+                    ApiValue::Float(sample.fractional_overstep_secs)
+                }),
+            },
+        })))
+    }
+}
+
+fn optional_float(value: Option<f64>) -> ApiValue {
+    value.map_or(ApiValue::Unit, ApiValue::Float)
+}
+
+fn percentile_milliseconds(
+    values: impl Iterator<Item = f64>,
+) -> Result<[Option<f64>; 4], ApiQueryError> {
+    let mut values: Vec<f64> = values.collect();
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::InternalError,
+            "SimulationTimingProfile: a timing sample is non-finite",
+        ));
+    }
+    if values.is_empty() {
+        return Ok([None; 4]);
+    }
+    values.sort_by(f64::total_cmp);
+    let nearest_rank = |fraction: f64| {
+        let index = ((values.len() as f64 * fraction).ceil() as usize)
+            .saturating_sub(1)
+            .min(values.len() - 1);
+        Some(values[index] * 1_000.0)
+    };
+    Ok([
+        nearest_rank(0.50),
+        nearest_rank(0.95),
+        nearest_rank(0.99),
+        values.last().map(|value| value * 1_000.0),
+    ])
+}
+
 pub(crate) fn build(app: &mut App) {
     // `init_resource` first: plugin order is not ours to control, and `resource_mut` on a
     // registry lunco-api hasn't installed yet would panic.
@@ -449,6 +575,7 @@ pub(crate) fn build(app: &mut App) {
     registry.register(ListTelemetryChannelsProvider);
     registry.register(QueryTelemetryHistoryProvider);
     registry.register(ExportTelemetryRecordingProvider);
+    registry.register(SimulationTimingProfileProvider);
 }
 
 #[cfg(test)]

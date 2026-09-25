@@ -139,6 +139,16 @@ production binary after a code change and repeat one clean A/B plus one Tracy
 diagnostic capture. Link the changed owner and state any platform/GPU evidence
 that was not available.
 
+For fixed-step versus UI diagnosis, query `SimulationTimingProfile` during the
+settled owned run. It summarizes the latest 240 fixed ticks and 240 app-update
+fixed-loop bursts: p50/p95/p99/max service time, per-tick realtime service-budget
+exceedances, fixed steps per app update, fractional overstep, and simulation-time
+demand clipped by `Time<Virtual>::max_delta`. Pair this with
+`QueryTelemetryHistory` for `engine.frame_time`, which covers the full app frame.
+The profile is read on demand and is not a replay or UI-isolation verdict; a
+nonzero clipped-time total means wall-clock demand was already excluded by the
+current policy, not that recoverable ticks remain queued.
+
 For CPU outliers, report p50/p95/p99/max for the app-thread frame and the
 authoritative fixed-tick transaction, plus fixed steps per app update and
 simulation deadline/backlog. Do not infer these from mean Avian time alone or

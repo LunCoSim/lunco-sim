@@ -465,6 +465,8 @@ fn on_tick(me, ctx) {
         let system_acceptance = physics_acceptance::system_acceptance(systems);
         let step_report = modelica_worker_step_diagnostics();
         let step_diagnostics = if step_report == () { () } else { step_report.diagnostics };
+        let timing_profile = query("SimulationTimingProfile");
+        let invalid_timing_options = query("SimulationTimingProfile", #{ unexpected: true });
         verdict(#{
             fx: get(this.imu, "specific_force_x"),
             fy: get(this.imu, "specific_force_y"),
@@ -502,6 +504,9 @@ fn on_tick(me, ctx) {
             cosim_status_values_omitted: if step_report == () { false } else { step_report.compact_values_omitted },
             cosim_status_default_values_present: if step_report == () { false } else { step_report.default_values_present },
             cosim_status_compact_fields_retained: if step_report == () { false } else { step_report.compact_status_retained },
+            simulation_timing_profile: timing_profile,
+            simulation_timing_profile_invalid_options_rejected: invalid_timing_options != ()
+                && invalid_timing_options.ok == false,
         }, this.dependency_port_read_rejected, this.dependency_mutation_rejected,
             this.first_tick, step_diagnostics);
     }
@@ -567,6 +572,55 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
         "CosimStatus did not retain full input/output maps by default"));
     f.push(t_true(s.cosim_status_compact_fields_retained == true,
         "compact CosimStatus omitted its status, Modelica count, or current time"));
+    f.push(t_present(s.simulation_timing_profile, "fixed simulation timing profile"));
+    f.push(t_true(s.simulation_timing_profile_invalid_options_rejected == true,
+        "SimulationTimingProfile accepted unknown query options"));
+    if s.simulation_timing_profile != () {
+        let tick = s.simulation_timing_profile.fixed_tick;
+        let fixed_loop = s.simulation_timing_profile.fixed_loop;
+        f.push(t_true(tick.window_samples.to_float() > 0.0
+            && tick.window_samples.to_float() <= 240.0
+            && tick.ticks_total.to_float() > 0.0
+            && tick.service_ms_p50 != () && tick.service_ms_p95 != ()
+            && tick.service_ms_p99 != () && tick.service_ms_max != ()
+            && tick.service_budget_ms_p50 != ()
+            && tick.service_budget_ms_p95 != ()
+            && tick.service_budget_ms_p99 != ()
+            && tick.service_budget_ms_max != ()
+            && tick.service_budget_ms_p95.to_float() > 0.0
+            && tick.service_ms_p50 <= tick.service_ms_p95
+            && tick.service_ms_p95 <= tick.service_ms_p99
+            && tick.service_ms_p99 <= tick.service_ms_max
+            && tick.service_budget_ms_p50 <= tick.service_budget_ms_p95
+            && tick.service_budget_ms_p95 <= tick.service_budget_ms_p99
+            && tick.service_budget_ms_p99 <= tick.service_budget_ms_max
+            && tick.service_budget_exceedances_total != (),
+            "fixed-tick timing did not expose bounded service percentiles"));
+        f.push(t_true(fixed_loop.window_samples.to_float() > 0.0
+            && fixed_loop.window_samples.to_float() <= 240.0
+            && fixed_loop.latest_steps != () && fixed_loop.latest_steps.to_float() > 0.0
+            && fixed_loop.latest_service_ms != ()
+            && fixed_loop.latest_max_delta_limited_simulation_secs != ()
+            && fixed_loop.latest_max_delta_limited_simulation_secs.to_float() >= 0.0
+            && fixed_loop.max_delta_limited_simulation_secs_total != ()
+            && fixed_loop.max_delta_limited_simulation_secs_total.to_float() >= 0.0
+            && fixed_loop.service_ms_p50 <= fixed_loop.service_ms_p95
+            && fixed_loop.service_ms_p95 <= fixed_loop.service_ms_p99
+            && fixed_loop.service_ms_p99 <= fixed_loop.service_ms_max
+            && fixed_loop.latest_fractional_overstep_secs != (),
+            "fixed-loop profile did not expose service, steps, and remaining overstep"));
+        print("SENSOR_TIMING_PROFILE|tick_ms_p50=" + tick.service_ms_p50.to_string()
+            + "|tick_ms_p95=" + tick.service_ms_p95.to_string()
+            + "|tick_ms_p99=" + tick.service_ms_p99.to_string()
+            + "|tick_ms_max=" + tick.service_ms_max.to_string()
+            + "|tick_budget_ms_p95=" + tick.service_budget_ms_p95.to_string()
+            + "|tick_service_budget_exceedances="
+            + tick.service_budget_exceedances_total.to_string()
+            + "|fixed_loop_ms_p95=" + fixed_loop.service_ms_p95.to_string()
+            + "|fixed_loop_steps=" + fixed_loop.latest_steps.to_string()
+            + "|max_delta_limited_sim_s="
+            + fixed_loop.latest_max_delta_limited_simulation_secs.to_string());
+    }
     if modelica_step_diagnostics != () {
         f.push(t_true(modelica_step_diagnostics.samples.to_float() > 0.0
             && modelica_step_diagnostics.worker_step_last_ns.to_float() > 0.0

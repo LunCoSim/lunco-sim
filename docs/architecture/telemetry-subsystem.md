@@ -29,6 +29,19 @@ The one-line thesis: telemetry history is shared, bounded, and policy-driven. Mo
 state is retained by the render-free Modelica projection; authored channels use the same
 registry, so inspectors, APIs, recorders, and plots never depend on one another's UI state.
 
+The `SimulationTimingProfile` query is an on-demand, bounded runtime diagnostic
+alongside the channel catalog and history API. `lunco-time` records the complete
+synchronous `FixedMain` tick and fixed-loop service at monotonic clock boundaries
+into preallocated 240-sample rings; it exposes tick service and rate-derived
+service-budget percentiles, fixed steps per app update, fractional overstep, and
+simulation-time demand clipped by the virtual-clock delta cap. The query computes
+percentiles only when a client asks, emits no per-tick events, and does not feed
+these wall-clock observations back into causal state. Use it with the
+`engine.frame_time` channel: the profile explains fixed-loop service, while frame
+history includes the rest of the app update. Clipped simulation-time demand is
+wall time already excluded by the current clock policy, not a queue of ticks
+that can be recovered.
+
 ### Identity, ownership, and labels
 
 `SignalRef { entity, path }` is the identity used by the registry, history, APIs, and saved

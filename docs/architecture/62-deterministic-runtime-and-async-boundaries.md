@@ -83,9 +83,17 @@ transport rate. Every step still receives the same `Time<Fixed>` delta, but a
 long tick or catch-up burst delays UI/input work, and the raw-delta cap means
 simulation time can fall behind wall time under sustained overload. Reducing
 the step cap by discarding accumulated time would hide that lag by dropping
-authoritative ticks, not fix it. Until ownership is split, report tick backlog
-and deadline misses and describe this as bounded catch-up, not guaranteed
-real-time cadence.
+authoritative ticks, not fix it. `SimulationTimingProfile` is the shared,
+bounded observation path until ownership is split: it reports the most recent
+240 completed `FixedMain` tick service times and rate-derived service budgets,
+plus per-app-update fixed-loop duration, completed-step count, remaining
+fractional overstep, and simulation-time demand omitted by the `Time<Virtual>`
+delta cap.
+The profile is read through telemetry's query registry, does not emit per-tick
+events, and never feeds simulation decisions. Its capped-time total describes
+wall-time demand already clipped by the current Bevy admission policy; it is
+not a recoverable simulation backlog. The profile still does not move fixed
+work off the GUI thread or guarantee real-time cadence.
 
 Hard UI responsiveness and wall-clock physics cadence require one dedicated
 simulation owner that runs the **whole causal tick** in its own `App`/`World`:
@@ -878,8 +886,11 @@ The whole-simulation guarantee remains open because:
     `Update`. The transport policy allows a 64-step catch-up burst at its
     highest rate; a fixed delta preserves numerical step size but does not
     promise 60 wall-clock physics ticks per second or responsive UI during a
-    long tick/burst. No integration-level tick-deadline or backlog result is
-    published to distinguish a slow solver from lost wall-time admission.
+    long tick/burst. `SimulationTimingProfile` now reports bounded tick and
+    fixed-loop service/budget samples plus simulation-time demand already
+    clipped by the virtual-clock delta cap. It cannot report wall-paced
+    deadline misses or recoverable backlog, and does not move fixed work off
+    the GUI thread.
 13. World-bound REPL requests use a bounded 64-entry FIFO, reject excess
     commands visibly, drain one request per `Update`, and cap each live-world
     invocation at 100,000 Rhai operations. This bounds interpreter work per
@@ -950,7 +961,11 @@ These findings and their owner-specific file evidence are maintained in
    deadline misses/backlog, and let realtime, unpaced capture, and test drivers
    choose wall pacing without changing tick order or discarding ticks. Retain
    the current same-world path until every authoritative consumer crosses this
-   boundary; do not run only the solver concurrently.
+   boundary; do not run only the solver concurrently. The current
+   `SimulationTimingProfile` provides a bounded same-world measurement of tick
+   service, rate-derived service budgets, fixed steps per app update, and
+   simulation time clipped by the raw-delta cap. A clipped-time measurement is
+   not a backlog or a substitute for the command/snapshot ownership boundary.
 9. **Replay evidence.** Record admitted inputs and deterministic result keys;
    add a production scene suite spanning USD projection, Modelica coupling,
    Rhai events, SysML revisioned verification, and Avian state. Compare state at

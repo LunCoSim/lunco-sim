@@ -21,7 +21,10 @@
 //! transport before the fixed loop; [`advance_world_clock`] publishes the final
 //! completed tick after that loop.
 
+use bevy::app::RunFixedMainLoopSystems;
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
+use bevy::time::TimeSystems;
 use lunco_hooks::HookValue as H;
 use std::time::Duration;
 
@@ -58,6 +61,162 @@ pub const MAX_CELESTIAL_TIME_RATE: f64 = 100_000.0;
 /// The slowest selectable live transport rate. Pause is represented by
 /// [`TransportMode::Paused`], so an accepted rate is always positive.
 pub const MIN_REALTIME_RATE: f64 = 0.1;
+
+/// Number of recent fixed ticks and app-frame fixed loops retained by the
+/// non-authoritative timing profile. The fixed-size rings keep recording
+/// allocation-free and bound inspection work.
+pub const SIMULATION_TIMING_WINDOW: usize = 240;
+
+/// Wall-clock service time and realtime service budget for one completed
+/// causal fixed tick. These observations never feed back into simulation state.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FixedTickTimingSample {
+    /// Monotonic wall-clock time spent in the complete Bevy `FixedMain` tick.
+    pub service_secs: f64,
+    /// Service-time budget implied by the fixed timestep and active transport rate.
+    pub service_budget_secs: f64,
+}
+
+/// Work and time-clamp observations for one rendered app update's fixed loop.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FixedLoopTimingSample {
+    /// Monotonic wall-clock time spent draining Bevy's `FixedMain` loop.
+    pub service_secs: f64,
+    /// Number of causal fixed ticks completed by this app update.
+    pub fixed_steps: u64,
+    /// Simulation-time demand omitted by `Time<Virtual>::max_delta` this update.
+    pub max_delta_limited_simulation_secs: Option<f64>,
+    /// Fractional fixed overstep remaining after this update's loop.
+    pub fractional_overstep_secs: f64,
+}
+
+/// Bounded wall-clock observations for fixed simulation service.
+///
+/// This resource is diagnostic-only. It records the full `FixedMain` tick and
+/// loop boundary without publishing telemetry events or allocating in either
+/// hot path. A consumer can inspect recent data through the shared telemetry
+/// query surface.
+#[derive(Resource, Debug, Clone)]
+pub struct SimulationTimingProfile {
+    tick_samples: [FixedTickTimingSample; SIMULATION_TIMING_WINDOW],
+    tick_cursor: usize,
+    tick_len: usize,
+    loop_samples: [FixedLoopTimingSample; SIMULATION_TIMING_WINDOW],
+    loop_cursor: usize,
+    loop_len: usize,
+    total_fixed_ticks: u64,
+    total_service_budget_exceedances: u64,
+    total_max_delta_limited_simulation_secs: Option<f64>,
+    latest_tick: Option<FixedTickTimingSample>,
+    latest_loop: Option<FixedLoopTimingSample>,
+}
+
+impl Default for SimulationTimingProfile {
+    fn default() -> Self {
+        Self {
+            tick_samples: [FixedTickTimingSample::default(); SIMULATION_TIMING_WINDOW],
+            tick_cursor: 0,
+            tick_len: 0,
+            loop_samples: [FixedLoopTimingSample::default(); SIMULATION_TIMING_WINDOW],
+            loop_cursor: 0,
+            loop_len: 0,
+            total_fixed_ticks: 0,
+            total_service_budget_exceedances: 0,
+            total_max_delta_limited_simulation_secs: None,
+            latest_tick: None,
+            latest_loop: None,
+        }
+    }
+}
+
+impl SimulationTimingProfile {
+    /// Recent fixed-tick samples in oldest-to-newest order.
+    pub fn recent_ticks(&self) -> impl Iterator<Item = FixedTickTimingSample> + '_ {
+        (0..self.tick_len).map(|offset| {
+            let oldest = (self.tick_cursor + SIMULATION_TIMING_WINDOW - self.tick_len)
+                % SIMULATION_TIMING_WINDOW;
+            self.tick_samples[(oldest + offset) % SIMULATION_TIMING_WINDOW]
+        })
+    }
+
+    /// Recent per-app-update fixed-loop samples in oldest-to-newest order.
+    pub fn recent_loops(&self) -> impl Iterator<Item = FixedLoopTimingSample> + '_ {
+        (0..self.loop_len).map(|offset| {
+            let oldest = (self.loop_cursor + SIMULATION_TIMING_WINDOW - self.loop_len)
+                % SIMULATION_TIMING_WINDOW;
+            self.loop_samples[(oldest + offset) % SIMULATION_TIMING_WINDOW]
+        })
+    }
+
+    /// Number of causal fixed ticks measured since startup.
+    pub fn total_fixed_ticks(&self) -> u64 {
+        self.total_fixed_ticks
+    }
+
+    /// Number of measured ticks whose service time exceeded the per-tick
+    /// realtime budget implied by the rate active for their admitted delta.
+    pub fn total_service_budget_exceedances(&self) -> u64 {
+        self.total_service_budget_exceedances
+    }
+
+    /// Simulation-time demand omitted by the virtual-clock delta limit since
+    /// startup. This exposes realtime pacing loss; it is not an authoritative
+    /// backlog because Bevy has already clipped that wall-clock demand.
+    pub fn total_max_delta_limited_simulation_secs(&self) -> Option<f64> {
+        self.total_max_delta_limited_simulation_secs
+    }
+
+    /// Most recent completed causal fixed tick, if a tick has run.
+    pub fn latest_tick(&self) -> Option<FixedTickTimingSample> {
+        self.latest_tick
+    }
+
+    /// Most recent app update's fixed loop, if one has run.
+    pub fn latest_loop(&self) -> Option<FixedLoopTimingSample> {
+        self.latest_loop
+    }
+
+    fn record_tick(&mut self, sample: FixedTickTimingSample) {
+        self.tick_samples[self.tick_cursor] = sample;
+        self.tick_cursor = (self.tick_cursor + 1) % SIMULATION_TIMING_WINDOW;
+        self.tick_len = (self.tick_len + 1).min(SIMULATION_TIMING_WINDOW);
+        self.total_fixed_ticks = self.total_fixed_ticks.saturating_add(1);
+        if sample.service_secs > sample.service_budget_secs {
+            self.total_service_budget_exceedances =
+                self.total_service_budget_exceedances.saturating_add(1);
+        }
+        self.latest_tick = Some(sample);
+    }
+
+    fn record_loop(&mut self, sample: FixedLoopTimingSample) {
+        self.loop_samples[self.loop_cursor] = sample;
+        self.loop_cursor = (self.loop_cursor + 1) % SIMULATION_TIMING_WINDOW;
+        self.loop_len = (self.loop_len + 1).min(SIMULATION_TIMING_WINDOW);
+        if let Some(limited_secs) = sample.max_delta_limited_simulation_secs {
+            *self
+                .total_max_delta_limited_simulation_secs
+                .get_or_insert(0.0) += limited_secs;
+        }
+        self.latest_loop = Some(sample);
+    }
+}
+
+#[derive(Resource, Default)]
+struct TimeUpdateTimingInput {
+    raw_real_delta_secs: Option<f64>,
+    virtual_max_delta_secs: f64,
+    effective_rate: f64,
+    running: bool,
+}
+
+#[derive(Resource, Default)]
+struct SimulationTimingStart {
+    tick_started_at: Option<Instant>,
+    tick_started: u64,
+    tick_service_budget_secs: f64,
+    loop_started_at: Option<Instant>,
+    loop_started: u64,
+}
 
 /// Authored policy that chooses the mission-calendar epoch for a scene.
 pub const SCENE_TIME_SELECTION_HOOK: &str = "scene.time.select";
@@ -356,6 +515,91 @@ pub fn project_transport_state(
 /// of allowing a subsystem to advance outside the shared time spine.
 pub fn simulation_is_running(time: Option<Res<Time<Virtual>>>) -> bool {
     time.is_some_and(|time| !time.is_paused() && time.relative_speed_f64() > 0.0)
+}
+
+fn capture_time_update_timing(
+    real_time: Option<Res<Time<Real>>>,
+    virtual_time: Res<Time<Virtual>>,
+    mut input: ResMut<TimeUpdateTimingInput>,
+) {
+    // `Time<Virtual>::delta` has just been derived by `TimeSystems` in `First`.
+    // Capture the matching real delta, rate, and cap before `PreUpdate` projects
+    // transport changes that will affect the next time update.
+    input.raw_real_delta_secs = real_time.map(|time| time.delta().as_secs_f64());
+    input.virtual_max_delta_secs = virtual_time.max_delta().as_secs_f64();
+    input.effective_rate = virtual_time.relative_speed_f64();
+    input.running =
+        !virtual_time.is_paused() && input.effective_rate.is_finite() && input.effective_rate > 0.0;
+}
+
+fn begin_fixed_tick_timing(
+    tick: Res<SimTick>,
+    fixed_time: Res<Time<Fixed>>,
+    input: Res<TimeUpdateTimingInput>,
+    mut start: ResMut<SimulationTimingStart>,
+) {
+    start.tick_started_at = Some(Instant::now());
+    start.tick_started = tick.0;
+    start.tick_service_budget_secs = if input.running {
+        fixed_time.timestep().as_secs_f64() / input.effective_rate
+    } else {
+        0.0
+    };
+}
+
+fn finish_fixed_tick_timing(
+    tick: Res<SimTick>,
+    mut start: ResMut<SimulationTimingStart>,
+    mut profile: ResMut<SimulationTimingProfile>,
+) {
+    let Some(started_at) = start.tick_started_at.take() else {
+        return;
+    };
+    let completed_ticks = tick.0.wrapping_sub(start.tick_started);
+    if completed_ticks != 1
+        || !start.tick_service_budget_secs.is_finite()
+        || start.tick_service_budget_secs <= 0.0
+    {
+        return;
+    }
+    let service_secs = started_at.elapsed().as_secs_f64();
+    if service_secs.is_finite() {
+        profile.record_tick(FixedTickTimingSample {
+            service_secs,
+            service_budget_secs: start.tick_service_budget_secs,
+        });
+    }
+}
+
+fn begin_fixed_loop_timing(tick: Res<SimTick>, mut start: ResMut<SimulationTimingStart>) {
+    start.loop_started_at = Some(Instant::now());
+    start.loop_started = tick.0;
+}
+
+fn finish_fixed_loop_timing(
+    tick: Res<SimTick>,
+    fixed_time: Res<Time<Fixed>>,
+    input: Res<TimeUpdateTimingInput>,
+    mut start: ResMut<SimulationTimingStart>,
+    mut profile: ResMut<SimulationTimingProfile>,
+) {
+    let Some(started_at) = start.loop_started_at.take() else {
+        return;
+    };
+    let service_secs = started_at.elapsed().as_secs_f64();
+    let max_delta_limited_simulation_secs = if input.running {
+        input.raw_real_delta_secs.map(|raw_delta_secs| {
+            (raw_delta_secs - input.virtual_max_delta_secs).max(0.0) * input.effective_rate
+        })
+    } else {
+        input.raw_real_delta_secs.map(|_| 0.0)
+    };
+    profile.record_loop(FixedLoopTimingSample {
+        service_secs,
+        fixed_steps: tick.0.wrapping_sub(start.loop_started),
+        max_delta_limited_simulation_secs,
+        fractional_overstep_secs: fixed_time.overstep().as_secs_f64(),
+    });
 }
 
 /// Keep Bevy's fixed-loop catch-up bounded for the current transport rate.
@@ -762,6 +1006,9 @@ impl Plugin for TimePlugin {
             .set_max_delta(BASE_VIRTUAL_MAX_DELTA);
 
         app.init_resource::<SimTick>()
+            .init_resource::<SimulationTimingProfile>()
+            .init_resource::<TimeUpdateTimingInput>()
+            .init_resource::<SimulationTimingStart>()
             .init_resource::<lunco_core_runtime::SimulationExecutionMode>()
             .init_resource::<MissionClock>()
             .init_resource::<TimeTransport>()
@@ -784,6 +1031,17 @@ impl Plugin for TimePlugin {
             .add_observer(domain::on_scene_transition_started)
             .add_observer(domain::on_scene_transition_failed)
             .add_observer(domain::on_scene_transition_completed)
+            .add_systems(First, capture_time_update_timing.after(TimeSystems))
+            .add_systems(
+                RunFixedMainLoop,
+                begin_fixed_loop_timing.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
+            )
+            .add_systems(
+                RunFixedMainLoop,
+                finish_fixed_loop_timing.in_set(RunFixedMainLoopSystems::AfterFixedMainLoop),
+            )
+            .add_systems(FixedFirst, begin_fixed_tick_timing)
+            .add_systems(FixedLast, finish_fixed_tick_timing)
             .add_systems(
                 PreUpdate,
                 (
