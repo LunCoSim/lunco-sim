@@ -36,7 +36,9 @@ ports or events declares the participating entity ids in
 `simulation_dependencies(me, ctx)`, where `ctx` is the validated scenario
 parameter map. The hook returns a map with `modelica_entities: [ids]` and
 `required_inputs: [#{ owner, identity }]`. The owner resolves Modelica ids once
-per source/parameter revision and adds them to the shared causal barrier.
+per source/parameter revision, requires each id to identify a live Modelica
+participant, and adds them to the shared causal barrier. An unresolved id or a
+live non-Modelica entity fails that source revision with a visible diagnostic.
 Required input keys refer to producer namespaces registered in the generic
 `SimulationDependencyStates` resource. The scenario holds its existing
 `ScriptPreparation` key until every required input is Ready; it retries only
@@ -47,7 +49,7 @@ runs before mutable top-level initialization, so derive it from `me`, scenario
 parameters, and read-only world queries. Top-level initialization runs in its
 own `Initialization` phase after the plan commits. Dependency planning may
 resolve identities but cannot access live ports, issue commands, mutate the
-world, or emit events. Invalid or unresolved Modelica ids fail that source
+world, or emit events. Invalid, unresolved, or non-Modelica ids fail that source
 revision with a diagnostic. Unbarriered port access and Modelica event delivery
 fail visibly. Physics operations that can accumulate into shared bodies use
 `PhysicsOrderKey` from the instance root and authored prim path. Joint solving,

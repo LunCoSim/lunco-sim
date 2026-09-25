@@ -45,6 +45,43 @@ fn scenario_command_succeeded(result) {
     succeeded
 }
 
+fn invalid_modelica_dependency_source() {
+    let source = "fn simulation_dependencies(me, ctx) {\n";
+    source += "  #{ modelica_entities: [ctx.declared_entity], required_inputs: [] }\n";
+    source += "}\n";
+    source += "fn on_start(me, ctx) { emit(\"sensor_invalid_dependency_started\", true); }\n";
+    source
+}
+
+fn start_invalid_modelica_dependency_probe() {
+    let target = find("/SandboxScene/Avatar");
+    let unrelated = find("/SandboxScene/Box50");
+    if target < 0 || unrelated < 0 {
+        return #{ accepted: false, target: target };
+    }
+    let result = cmd("RunScenario", #{
+        target: target,
+        source: invalid_modelica_dependency_source(),
+        params: #{ declared_entity: unrelated },
+    });
+    #{ accepted: scenario_command_succeeded(result), target: target }
+}
+
+fn poll_invalid_modelica_dependency(target) {
+    let rejected = false;
+    if target < 0 { return rejected; }
+    let status = query("ScriptStatus", #{ target: target });
+    if status == () || status.state != "error" || status.diagnostics == () {
+        return rejected;
+    }
+    for diagnostic in status.diagnostics {
+        if diagnostic.message.contains("not a live Modelica participant") {
+            rejected = true;
+        }
+    }
+    rejected
+}
+
 fn telemetry_history_count(name) {
     let catalog = query("ListTelemetryChannels", #{});
     if catalog == () || catalog.channels == () { return -1; }
@@ -174,6 +211,11 @@ fn on_start(me, ctx) {
     this.actor_order_setup_ok = start_scenario_actor_order_probe(me);
     this.actor_order_result_received = false;
     this.actor_order_passed = false;
+    let invalid_dependency_probe = start_invalid_modelica_dependency_probe();
+    this.invalid_dependency_setup_ok = invalid_dependency_probe.accepted;
+    this.invalid_dependency_target = invalid_dependency_probe.target;
+    this.invalid_dependency_plan_rejected = false;
+    this.invalid_dependency_started = false;
     this.phase = "settle";
     print("[sensors] ── raw Avian + Modelica ─────────────────────────");
 }
@@ -182,6 +224,9 @@ fn on_event(me, evt, ctx) {
     if evt.name == "scenario_actor_order_observation" {
         this.actor_order_result_received = true;
         this.actor_order_passed = evt.value == true;
+    }
+    if evt.name == "sensor_invalid_dependency_started" {
+        this.invalid_dependency_started = evt.value == true;
     }
 }
 
@@ -193,6 +238,11 @@ fn on_tick(me, ctx) {
     }
 
     this.telemetry_probe_count = telemetry_history_count(this.telemetry_probe_name);
+    if !this.invalid_dependency_plan_rejected {
+        this.invalid_dependency_plan_rejected = poll_invalid_modelica_dependency(
+            this.invalid_dependency_target,
+        );
+    }
 
     if this.box == () || this.box < 0 || this.imu == () || this.imu < 0
         || this.altimeter == () || this.altimeter < 0 {
@@ -263,6 +313,9 @@ fn on_tick(me, ctx) {
             actor_order_setup_ok: this.actor_order_setup_ok,
             actor_order_result_received: this.actor_order_result_received,
             actor_order_passed: this.actor_order_passed,
+            invalid_dependency_setup_ok: this.invalid_dependency_setup_ok,
+            invalid_dependency_plan_rejected: this.invalid_dependency_plan_rejected,
+            invalid_dependency_started: this.invalid_dependency_started,
             telemetry_probe_setup_ok: this.telemetry_probe_setup_ok,
             telemetry_probe_count: this.telemetry_probe_count,
         }, this.dependency_port_read_rejected, this.dependency_mutation_rejected,
@@ -299,6 +352,12 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
         "the Rhai actor order acceptance programs were not attached"));
     f.push(t_true(s.actor_order_result_received == true && s.actor_order_passed == true,
         "stable GlobalEntityId actor order was not observed through the production event path"));
+    f.push(t_true(s.invalid_dependency_setup_ok == true,
+        "the malformed Modelica dependency probe did not attach"));
+    f.push(t_true(s.invalid_dependency_plan_rejected == true,
+        "simulation_dependencies accepted a live non-Modelica entity"));
+    f.push(t_true(s.invalid_dependency_started == false,
+        "scenario on_start ran after its Modelica dependency plan was rejected"));
     f.push(t_true(s.telemetry_probe_setup_ok == true && s.telemetry_probe_count.to_float() >= 2.0,
         "the production telemetry query did not observe fixed-clock samples from the authored channel"));
     f.push(t_present(first_tick, "first authoritative behavior tick snapshot"));

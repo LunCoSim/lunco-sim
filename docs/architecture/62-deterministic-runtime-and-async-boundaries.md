@@ -511,8 +511,10 @@ scenario-scoped `simulation_dependencies(me, ctx)` hook. The second argument is
 the validated scenario parameter map. It returns a map with
 `modelica_entities: [global_entity_id, ...]` and
 `required_inputs: [#{ owner: "domain.owner", identity: "stable-key" }, ...]`.
-The owner resolves the entity ids against the live registry and adds those
-Modelica participants to the shared simulation barrier. Each required input
+The owner resolves the entity ids against the live registry, requires each to
+identify a live Modelica participant, and adds them to the shared simulation
+barrier. An unresolved id or a live non-Modelica entity is a terminal source
+diagnostic, not a successful barrier contribution. Each required input
 names an owner registered in `SimulationDependencyStates`. A missing owner is
 a terminal diagnostic; an absent or Pending key from a registered owner keeps
 the scenario's existing activation hold until the next owner-state revision;
@@ -524,7 +526,8 @@ identities from the composed world and parameters; commands, direct mutations,
 emitted events, and live port access are rejected in this phase. While a plan is
 pending, all Modelica participants remain synchronized and simulation time
 stays held by the scenario's exact preparation key. The production sensor scene
-verifies declared Modelica reads and rejects a live port read during planning.
+verifies declared Modelica reads, rejects a live port read during planning, and
+rejects a live non-Modelica id before the scenario can enter `on_start`.
 This hook runs before mutable top-level initialization, so derive its result
 from `me`, scenario parameters, and read-only world queries rather than
 top-level initialization effects. Once all declared inputs are Ready, the owner
@@ -554,8 +557,10 @@ Rhai scenario dependencies both contribute to the same barrier projection. A
 scenario that reads or writes a Modelica port, or consumes a Modelica-produced
 event that can affect its behavior, lists that producer in the
 `modelica_entities` field of `simulation_dependencies(me, ctx)`. Rhai keeps the
-selection policy; Rust resolves and validates the returned ids and adds that
-scenario's contribution to the shared barrier. Required owner inputs occupy
+selection policy; Rust resolves the returned ids, requires each to be a live
+Modelica participant, and adds that scenario's contribution to the shared
+barrier. A live non-Modelica target is a source diagnostic, not an empty
+dependency. Required owner inputs occupy
 the same plan but do not add Modelica barrier participants. While a dependency
 plan is pending, all Modelica
 participants are synchronized. After admission, direct simulation-clock access

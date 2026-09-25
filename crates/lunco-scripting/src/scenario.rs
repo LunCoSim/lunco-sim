@@ -71,9 +71,10 @@ impl Default for ScenarioExecutionGate {
 pub struct ScenarioReadinessArm(pub bool);
 
 /// Language-neutral causal and data-readiness requirements declared by one
-/// prepared scenario. Entity ids identify Modelica participants that join the
-/// fixed-step barrier; owner keys identify immutable inputs that must commit
-/// before initialization and `on_start` may run.
+/// prepared scenario. Entity ids identify live Modelica participants that join
+/// the fixed-step barrier; an unrelated or unresolved entity makes the plan
+/// invalid. Owner keys identify immutable inputs that must commit before
+/// initialization and `on_start` may run.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScenarioDependencyPlan {
     /// Modelica entities whose ports or events the scenario consumes or writes.
@@ -2437,6 +2438,8 @@ fn resolve_simulation_dependencies(
     let mut ids = ids;
     ids.sort_unstable();
     ids.dedup();
+    let participants = world
+        .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
     let mut entities = Vec::with_capacity(ids.len());
     for id in ids {
         let raw = u64::try_from(id).map_err(|_| {
@@ -2453,6 +2456,17 @@ fn resolve_simulation_dependencies(
                 None,
             )
         })?;
+        if !participants
+            .is_some_and(|participants| participants.is_modelica_participant(entity))
+        {
+            return Err(Diagnostic::error(
+                format!(
+                    "simulation_dependencies declared entity {id}, but it is not a live Modelica participant"
+                ),
+                None,
+                None,
+            ));
+        }
         entities.push(entity);
     }
     entities.sort_unstable_by_key(|entity| entity.to_bits());

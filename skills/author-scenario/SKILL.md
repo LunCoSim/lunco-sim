@@ -93,7 +93,9 @@ and `on_start`. A pending scenario keeps its existing activation hold and
 resumes after the owner publishes a new state revision, so scripts should not
 poll analysis from `on_tick`. A missing owner or failed input produces a
 diagnostic. Keep the selection policy in Rhai and use the key contract exposed
-by the domain owner.
+by the domain owner. Every `modelica_entities` id must resolve to a live
+Modelica participant; a live but unrelated entity fails the source revision
+before initialization.
 
 The reusable route marker is a translucent, unlit, shadowless annotation. Its
 unvisited colour is bright green and its visited colour is gray in standard
