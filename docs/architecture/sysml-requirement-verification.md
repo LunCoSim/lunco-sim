@@ -21,7 +21,8 @@ policies decide what the facts mean and join Twin bindings to SysML identities.
 The current policy layers are deliberately independent:
 
 - `lint.sysml` checks structural quality of requirements and verification
-  relationships;
+  relationships, including source-evidence coverage, formal acceptance
+  constraints, and identifier-like values encoded as strings;
 - `sysml_requirements.rhai` applies requirement, source-provenance, and
   verification policy; and
 - `sysml_modelica_constraints.rhai` selects geometry constraints and assembles
@@ -89,6 +90,29 @@ Every selected table reports `offset`, `limit`, `total`, `returned`, and
 `has_more` under `analysis.page.tables`. The top-level page also carries the
 source revision. A Rhai assembler must check that revision on each page and
 fail if it changes; do not concatenate pages from different source snapshots.
+
+`ValidateSysml` applies the reloadable `lint.sysml` policy to the same resolved
+source snapshot. In addition to documentation, subject, and `verify`-link
+checks, it reports requirement usages without a typed source-catalog link to a
+populated source locator, usages without an inherited or owned `require`
+acceptance predicate (`assume` memberships provide context but do not count as
+pass criteria), and identifier-like `String` values that appear to encode
+enumerators or member identities. Findings identify the qualified element and
+source file/byte offset. These are authoring warnings: they surface migration
+work without preventing an incomplete source set from opening. A bounded
+choice belongs in an enum; a named system member belongs in typed part usages
+or references. Neither should be stored as a delimited `String` list.
+The API returns the same findings as structured records with `domain`, `rule`,
+`severity`, `subject`, and `message`; `warnings` remains the concise display
+form for existing callers.
+
+The source-evidence check follows typed references in the analyzed model: a
+requirement-evidence usage references its requirement and one or more source
+records, and each source record supplies a non-empty typed locator. The
+`verify` relationship establishes SysML verification coverage. The Twin
+verification registry and `luncosim test --verification` separately establish
+that a concrete observer is bound to a fixture; source lint does not claim
+that a verification case has been executed.
 
 These functions are policy-neutral fact queries. The Twin-aware report shape,
 source/verification joins, and any selected requirement set are authored in

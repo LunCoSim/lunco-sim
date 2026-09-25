@@ -74,6 +74,29 @@ component selection in Rhai; keep supported acceptance predicates in SysML;
 Rust supplies generic typed mechanisms, not mission- or component-specific
 assertions.
 
+Use `ValidateSysml` with the mounted Twin URI to review the full indexed source
+set and its structural lint findings. The `lint.sysml` policy flags requirement
+usages without typed source evidence, usages without an inherited or owned
+`require` acceptance predicate (`assume` memberships provide context but do
+not count as pass criteria), and identifier-like `String` values that appear
+to encode enumerators or member identities. Treat those findings as migration
+work, not as permission to preserve the encoding. Use an enum for a closed
+choice set; use typed part usages or references for named system members. A
+`verify` membership is required for each usage, and the Twin's verification
+registry must bind that case to its scene and observer.
+
+For example, from an in-app Rhai tool with the Twin mounted:
+
+```rhai
+let report = query("ValidateSysml", #{path: "twin://astrobotic-griffin-1"});
+```
+
+Review `report.errors`, `report.warnings`, and the structured
+`report.findings`. Use its stable `rule`, `severity`, `subject`, and `message`
+fields instead of parsing warning prose; SysML subjects include the qualified
+identity and source file/byte offset. Pay particular attention to
+`sysml-requirement-*` and `sysml-string-encoded-identities`.
+
 Relevant implementation and design references:
 
 - [`24-domain-sysml.md`](../../docs/architecture/24-domain-sysml.md) — domain

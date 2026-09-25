@@ -296,7 +296,9 @@ manifest-declared, indexed Twin source set.
 
 `ReadActiveTwinContract` exposes the active Twin's component and verification
 records. The policies join these generic inputs at the Rhai boundary:
-`lint.sysml` checks structural source quality,
+`lint.sysml` checks documentation, subjects, verification coverage, typed
+source-evidence links, formal acceptance constraints, and identifier-like
+strings that encode enumerators or member identities,
 `sysml_requirements.rhai` handles source provenance and requirement
 verification, and `sysml_modelica_constraints.rhai` selects geometry
 constraints and assembles Modelica source. These policies keep their own
