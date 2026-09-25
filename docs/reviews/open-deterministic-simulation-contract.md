@@ -50,7 +50,9 @@ ticks, including a terminal rejection for an unknown input port. The
 `celestial_dataset_contract` Rhai scene passed all 11 assertions and confirmed
 that `CelestialTime` accepts 100,000× while `WorldTime` and physics rates stay
 unchanged; a request above the limit is rejected without changing the child
-clock. The
+clock. The `solar_rover_energy_cycle` Rhai replay also passed all 49 assertions
+in 3,247 fixed ticks with the 100,000× celestial rate, covering the solar
+tracker and Modelica-driven energy path in the same production run. The
 `sun_tracker` Rhai scene passed all 29 assertions in 1,561 fixed ticks; its
 hinge angle followed the controller yaw from -2.4434 rad to -2.1416 rad. These
 results verify that changed angular and linear motor targets wake sleeping
