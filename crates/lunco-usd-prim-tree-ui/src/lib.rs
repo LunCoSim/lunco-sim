@@ -15,8 +15,8 @@
 //! # Reactive shape (WP-8)
 //!
 //! [`produce_usd_prim_tree`] is the view-model producer: it runs on the main
-//! thread (the stage is `!Send`), reads the composed stage for each prim's type
-//! and body flag, and rebuilds the [`UsdPrimTreeView`] only when the set of prim
+//! thread (the stage is `!Send`), reads the composed stage for each prim's type,
+//! and rebuilds the [`UsdPrimTreeView`] only when the set of prim
 //! paths changes (hash-gated). The panel is pure paint over that resource.
 
 #![forbid(unsafe_code)]
@@ -65,8 +65,6 @@ struct PrimTreeNode {
     type_name: String,
     /// The ECS entity for this prim, if one was spawned (selectable).
     entity: Option<Entity>,
-    /// Applies `PhysicsRigidBodyAPI`.
-    is_body: bool,
     /// Child node keys, sorted by name.
     children: Vec<NodeKey>,
 }
@@ -201,7 +199,7 @@ pub fn produce_usd_prim_tree(
             continue;
         }
 
-        // Ensure the canonical stage is built so we can read type/body per prim.
+        // Ensure the canonical stage is built so we can read the type per prim.
         if canonical.get(stage_id).is_none() {
             if let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) {
                 canonical.get_or_build(stage_id, &recipe);
@@ -227,15 +225,12 @@ pub fn produce_usd_prim_tree(
                 })
                 .filter(|label| !label.is_empty())
                 .unwrap_or_else(|| lunco_core::humanize_identifier(name));
-            let (type_name, is_body) = match &stage_view {
+            let type_name = match &stage_view {
                 Some(v) => match SdfPath::new(path) {
-                    Ok(sdf) => (
-                        v.type_name(&sdf).unwrap_or_default(),
-                        v.has_api_schema(&sdf, "PhysicsRigidBodyAPI"),
-                    ),
-                    Err(_) => (String::new(), false),
+                    Ok(sdf) => v.type_name(&sdf).unwrap_or_default(),
+                    Err(_) => String::new(),
                 },
-                None => (String::new(), false),
+                None => String::new(),
             };
             let display_name = entity_of
                 .get(key)
@@ -252,7 +247,6 @@ pub fn produce_usd_prim_tree(
                         .cloned(),
                     type_name,
                     entity: entity_of.get(key).copied(),
-                    is_body,
                     children: Vec::new(),
                 },
             );
@@ -421,7 +415,7 @@ fn render_prim_node(
     let Some(node) = view.nodes.get(key) else {
         return;
     };
-    let label = prim_label(node);
+    let label = &node.display_name;
 
     if node.children.is_empty() {
         let _ = lunco_workbench_widgets::tree::leaf(ui, |ui| {
@@ -581,16 +575,4 @@ fn is_path_or_descendant(path: &str, node: &str) -> bool {
         || path
             .strip_prefix(node)
             .is_some_and(|suffix| suffix.starts_with('/'))
-}
-
-/// `<marker> <name>` — a body marker for a rigid body, else a folder/dot.
-fn prim_label(node: &PrimTreeNode) -> String {
-    let glyph = if node.is_body {
-        "[body]"
-    } else if node.children.is_empty() {
-        "·"
-    } else {
-        "▪"
-    };
-    format!("{glyph} {}", node.display_name)
 }
