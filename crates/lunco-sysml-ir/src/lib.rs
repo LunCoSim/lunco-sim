@@ -1317,6 +1317,8 @@ fn compile_predicate_invocation(
         .map(|formal| (formal.handle.element, *formal))
         .collect::<HashMap<_, _>>();
     let mut bound_arguments = HashMap::with_capacity(invocation_arguments.len());
+    let mut argument_paths = HashMap::with_capacity(invocation_arguments.len());
+    let mut argument_dependencies = HashMap::with_capacity(invocation_arguments.len());
     for argument in invocation_arguments {
         let Some(parameter) = argument.parameter else {
             diagnostics.push(error(
@@ -1353,13 +1355,14 @@ fn compile_predicate_invocation(
     let mut arguments = Vec::with_capacity(formal_inputs.len());
     for formal in &formal_inputs {
         let actual = bound_arguments[&formal.handle.element];
+        let mut actual_dependencies = Vec::new();
         let Some(argument) = compile_expression(
             &actual.value,
             analysis,
             attributes,
             caller_parameters,
             diagnostics,
-            dependencies,
+            &mut actual_dependencies,
             depth + 1,
             active_predicates,
         ) else {
@@ -1381,6 +1384,8 @@ fn compile_predicate_invocation(
             ));
             return None;
         }
+        argument_paths.insert(formal.handle, sysml_feature_path(&actual.value));
+        argument_dependencies.insert(formal.handle, actual_dependencies);
         argument_parameters.push(formal.handle.element);
         arguments.push(argument);
     }
@@ -1438,25 +1443,74 @@ fn compile_predicate_invocation(
         .iter()
         .map(|formal| formal.handle)
         .collect::<HashSet<_>>();
-    for dependency in &body_dependencies {
-        if dependency
-            .features()
-            .first()
-            .is_some_and(|feature| formal_handles.contains(feature))
-            && dependency.features().len() > 1
-        {
+    for dependency in body_dependencies {
+        let Some(formal) = dependency.features().first() else {
+            continue;
+        };
+        if !formal_handles.contains(formal) {
+            dependencies.push(dependency);
+            continue;
+        }
+
+        let formal_type = formal_inputs
+            .iter()
+            .find(|parameter| parameter.handle == *formal)
+            .and_then(|parameter| parameter.declared_type.as_ref())
+            .map(ir_type_from_sysml);
+        let suffix = &dependency.features()[1..];
+        if suffix.is_empty() {
+            if formal_type
+                .as_ref()
+                .is_some_and(|ty| matches!(&ty.value, IrValueType::Structured { .. }))
+            {
+                diagnostics.push(error(
+                    IrDiagnosticCode::PredicateFormalPathUnsupported,
+                    source,
+                    "whole structured predicate values are not executable; navigate to a typed member",
+                ));
+                return None;
+            }
+            // A scalar reference to the formal is supplied by the call's
+            // argument expression. Add only that input's dependencies here.
+            if let Some(actual_dependencies) = argument_dependencies.get(formal) {
+                dependencies.extend(actual_dependencies.iter().cloned());
+            }
+            continue;
+        }
+
+        if formal_type.as_ref().is_none_or(|ty| {
+            !matches!(&ty.value, IrValueType::Structured { .. }) || ty.multiplicity.is_collection()
+        }) {
             diagnostics.push(error(
                 IrDiagnosticCode::PredicateFormalPathUnsupported,
                 source,
-                "feature navigation through a bound predicate parameter requires structured-value evaluation",
+                "member navigation requires a scalar structured predicate input",
             ));
             return None;
         }
+
+        let Some(actual_path) = argument_paths.get(formal).and_then(Option::as_ref) else {
+            diagnostics.push(error(
+                IrDiagnosticCode::PredicateFormalPathUnsupported,
+                source,
+                "navigation through a structured predicate input requires its call argument to be a resolved SysML feature path",
+            ));
+            return None;
+        };
+        let mut resolved = actual_path.clone();
+        for feature in suffix {
+            let Some(next) = resolved.followed_by(*feature) else {
+                diagnostics.push(error(
+                    IrDiagnosticCode::PredicateFormalPathUnsupported,
+                    source,
+                    "structured predicate input path crosses SysML source snapshots",
+                ));
+                return None;
+            };
+            resolved = next;
+        }
+        dependencies.push(resolved);
     }
-    body_dependencies.retain(|dependency| {
-        !(dependency.features().len() == 1 && formal_handles.contains(&dependency.target()))
-    });
-    dependencies.extend(body_dependencies);
 
     Some(IrExpression {
         source: source.clone(),
@@ -2942,6 +2996,12 @@ enum EvaluationValue {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+enum PredicateArgumentBinding {
+    Value(EvaluationValue),
+    FeaturePath(SysmlFeaturePath),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 enum EvaluationFailure {
     Inconclusive(String),
     Error(String),
@@ -2959,75 +3019,49 @@ fn evaluate_expression_with_bindings(
     expression: &IrExpression,
     context: &EvaluationContext,
     options: EvaluationOptions,
-    bindings: &HashMap<SysmlFeatureHandle, EvaluationValue>,
+    bindings: &HashMap<SysmlFeatureHandle, PredicateArgumentBinding>,
 ) -> Result<EvaluationValue, EvaluationFailure> {
     match &expression.kind {
         IrExpressionKind::FeatureReference { path, .. } => {
             if let Some(root) = path.features().first() {
-                if let Some(value) = bindings.get(root) {
-                    if path.features().len() != 1 {
-                        return Err(EvaluationFailure::Error(
-                            "feature navigation through a bound predicate parameter is unsupported for structured values".to_owned(),
-                        ));
-                    }
-                    return if runtime_value_matches_type(value, &expression.result_type) {
-                        Ok(value.clone())
-                    } else {
-                        Err(EvaluationFailure::Error(
-                            "bound predicate argument does not match its declared type".to_owned(),
-                        ))
-                    };
-                }
-            }
-            let Some(observation) = context.observation(path) else {
-                return Err(EvaluationFailure::Inconclusive(
-                    "no provider observation exists for a referenced feature".to_owned(),
-                ));
-            };
-            validate_observation_contract(observation, path)?;
-            match observation.state {
-                ObservationState::Value => observation
-                    .value
-                    .as_ref()
-                    .map(runtime_value)
-                    .ok_or_else(|| {
-                        EvaluationFailure::Error(
-                            "provider marked observation as Value without a value".to_owned(),
-                        )
-                    })
-                .and_then(|value| {
-                    if runtime_value_matches_type(&value, &expression.result_type) {
-                            if runtime_references_match_snapshot(&value, path) {
-                                Ok(value)
+                if let Some(binding) = bindings.get(root) {
+                    match binding {
+                        PredicateArgumentBinding::Value(value) => {
+                            if path.features().len() != 1 {
+                                return Err(EvaluationFailure::Error(
+                                    "a computed predicate argument has no navigable feature members"
+                                        .to_owned(),
+                                ));
+                            }
+                            return if runtime_value_matches_type(value, &expression.result_type) {
+                                Ok(value.clone())
                             } else {
                                 Err(EvaluationFailure::Error(
-                                    "reference observation belongs to a different SysML source snapshot".to_owned(),
+                                    "bound predicate argument does not match its declared type"
+                                        .to_owned(),
                                 ))
-                            }
-                        } else {
-                            Err(EvaluationFailure::Error(format!(
-                                "provider value does not match referenced SysML type {:?}",
-                                expression.result_type.value
-                            )))
+                            };
                         }
-                    }),
-                ObservationState::Unavailable | ObservationState::Stale => {
-                    Err(EvaluationFailure::Inconclusive(
-                        observation
-                            .detail
-                            .clone()
-                            .unwrap_or_else(|| "provider value is unavailable or stale".to_owned()),
-                    ))
-                }
-                ObservationState::Invalid | ObservationState::ProviderError => {
-                    Err(EvaluationFailure::Error(
-                        observation
-                            .detail
-                            .clone()
-                            .unwrap_or_else(|| "provider returned an invalid value".to_owned()),
-                    ))
+                        PredicateArgumentBinding::FeaturePath(actual_path) => {
+                            let mut resolved = actual_path.clone();
+                            for feature in &path.features()[1..] {
+                                resolved = resolved.followed_by(*feature).ok_or_else(|| {
+                                    EvaluationFailure::Error(
+                                        "bound predicate feature path crosses SysML source snapshots"
+                                            .to_owned(),
+                                    )
+                                })?;
+                            }
+                            return evaluate_feature_observation(
+                                &resolved,
+                                &expression.result_type,
+                                context,
+                            );
+                        }
+                    }
                 }
             }
+            evaluate_feature_observation(path, &expression.result_type, context)
         }
         IrExpressionKind::StandardConstant { constant, .. } => match constant {
             IrStandardConstant::Pi => Ok(EvaluationValue::Real(std::f64::consts::PI)),
@@ -3088,9 +3122,7 @@ fn evaluate_expression_with_bindings(
         } => {
             let values = arguments
                 .iter()
-                .map(|argument| {
-                    evaluate_expression_with_bindings(argument, context, options, bindings)
-                })
+                .map(|argument| evaluate_predicate_argument(argument, context, options, bindings))
                 .collect::<Result<Vec<_>, _>>()?;
             if argument_parameters.len() != values.len() {
                 return Err(EvaluationFailure::Error(
@@ -3148,11 +3180,103 @@ fn evaluate_expression_with_bindings(
     }
 }
 
+fn evaluate_predicate_argument(
+    expression: &IrExpression,
+    context: &EvaluationContext,
+    options: EvaluationOptions,
+    bindings: &HashMap<SysmlFeatureHandle, PredicateArgumentBinding>,
+) -> Result<PredicateArgumentBinding, EvaluationFailure> {
+    if let IrExpressionKind::FeatureReference { path } = &expression.kind {
+        if let Some(root) = path.features().first() {
+            return match bindings.get(root) {
+                Some(PredicateArgumentBinding::FeaturePath(actual_path)) => {
+                    let mut resolved = actual_path.clone();
+                    for feature in &path.features()[1..] {
+                        resolved = resolved.followed_by(*feature).ok_or_else(|| {
+                            EvaluationFailure::Error(
+                                "nested predicate argument path crosses SysML source snapshots"
+                                    .to_owned(),
+                            )
+                        })?;
+                    }
+                    Ok(PredicateArgumentBinding::FeaturePath(resolved))
+                }
+                Some(PredicateArgumentBinding::Value(value))
+                    if path.features().len() == 1
+                        && runtime_value_matches_type(value, &expression.result_type) =>
+                {
+                    Ok(PredicateArgumentBinding::Value(value.clone()))
+                }
+                Some(PredicateArgumentBinding::Value(_)) => Err(EvaluationFailure::Error(
+                    "a computed predicate argument has no navigable feature members".to_owned(),
+                )),
+                None => Ok(PredicateArgumentBinding::FeaturePath(path.clone())),
+            };
+        }
+    }
+    evaluate_expression_with_bindings(expression, context, options, bindings)
+        .map(PredicateArgumentBinding::Value)
+}
+
+fn evaluate_feature_observation(
+    path: &SysmlFeaturePath,
+    expected_type: &IrType,
+    context: &EvaluationContext,
+) -> Result<EvaluationValue, EvaluationFailure> {
+    let Some(observation) = context.observation(path) else {
+        return Err(EvaluationFailure::Inconclusive(
+            "no provider observation exists for a referenced feature".to_owned(),
+        ));
+    };
+    validate_observation_contract(observation, path)?;
+    match observation.state {
+        ObservationState::Value => {
+            let value = observation
+                .value
+                .as_ref()
+                .map(runtime_value)
+                .ok_or_else(|| {
+                    EvaluationFailure::Error(
+                        "provider marked observation as Value without a value".to_owned(),
+                    )
+                })?;
+            if !runtime_value_matches_type(&value, expected_type) {
+                return Err(EvaluationFailure::Error(format!(
+                    "provider value does not match referenced SysML type {:?}",
+                    expected_type.value
+                )));
+            }
+            if !runtime_references_match_snapshot(&value, path) {
+                return Err(EvaluationFailure::Error(
+                    "reference observation belongs to a different SysML source snapshot".to_owned(),
+                ));
+            }
+            Ok(value)
+        }
+        ObservationState::Unavailable | ObservationState::Stale => {
+            Err(EvaluationFailure::Inconclusive(
+                observation
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| "provider value is unavailable or stale".to_owned()),
+            ))
+        }
+        ObservationState::Invalid | ObservationState::ProviderError => {
+            Err(EvaluationFailure::Error(
+                observation
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| "provider returned an invalid value".to_owned()),
+            ))
+        }
+    }
+}
+
 fn evaluate_predicate_body(
     body: &[IrExpression],
     context: &EvaluationContext,
     options: EvaluationOptions,
-    bindings: &HashMap<SysmlFeatureHandle, EvaluationValue>,
+    bindings: &HashMap<SysmlFeatureHandle, PredicateArgumentBinding>,
 ) -> Result<EvaluationValue, EvaluationFailure> {
     let mut has_false = false;
     let mut inconclusive = None;

@@ -68,6 +68,12 @@ a general-purpose sketch solver.
   them to the shared f64 Bevy/Rhai `Vec3`, and assembles a Modelica source
   wrapper. It can submit that source through the explicit Modelica Editor
   document API. Endpoint names are not repeated in the Rhai caller.
+- User-defined constraint calls preserve resolved feature-path arguments.
+  Navigation through a member of a scalar structured formal is rebased onto
+  the call-site path, so evaluation requests the provider observation at the
+  actual source feature. Whole structured values and collection-valued
+  navigation remain unsupported. This compiles but has not yet been exercised
+  by a production Rhai invocation.
 - `LunCo.Geometry.Segment3D` derives a directed segment's length, midpoint,
   and unit axis from its endpoints. Re-running the current source with
   `cargo run -p lunco-modelica-execution --bin modelica_run --
@@ -130,7 +136,7 @@ is claimed here.
 | Priority | Gap | Needed capability / owner |
 |---|---|---|
 | P0 | The nonzero generated-wrapper solve/readback path and deferred run-identity acknowledgement are implemented, but not production-verified in this session; general rotational placement remains unsolved. | Run `assembly_editor_proposal` in a fresh current production host and confirm its positive numerical and proposal assertions. Add fixed-distance, symmetry, and axis-alignment relations only as actual Griffin source inputs require. |
-| P0 | Binding-based endpoint resolution and the typed `RunExperiment` acknowledgement are authored but the end-to-end acceptance gate has not run against a fresh production process. | Confirm each binding resolves exactly one vector feature, the returned experiment id addresses the same result, and the proposal preserves both source and USD generations. Extend generic AST projection only if the live typed graph is insufficient. |
+| P0 | Binding-based endpoint resolution, structured predicate-path rebasing, and the typed `RunExperiment` acknowledgement are authored but the end-to-end acceptance gate has not run against a fresh production process. | Confirm each binding resolves the intended feature, the returned experiment id addresses the same result, and the proposal preserves both source and USD generations. Extend generic AST projection only if the live typed graph is insufficient. |
 | P1 | The only local Editor/API process is a stale deleted executable that must remain untouched, so current production Rhai tests cannot run. | Start/use a fresh current production session when available; do not kill or trust the stale process. Keep the portable `modelica_run` checks separate from Editor/Twin acceptance. |
 | P1 | The current parser rejects the standard dotted endpoint form when a binding is declared in the containing part, although the nested usage form parses. | Verify the pinned parser's intended subset; if this is a supported SysML form, add generic chained-end resolution and a positive Rhai fixture. Keep source expressions and metamodel relationships authoritative. |
 | P1 | A Rhai-generated static solve currently goes through a scratch Editor document, source replacement, compile polling, `RunExperiment`, and result readback; there is no standalone typed in-memory source-to-solve entry point. | First run the authored Editor integration gate on a fresh production process. If the document/tab lifecycle is too stateful for repeated design solves, add a generic typed one-shot compile/solve/readback service in Modelica core and call it from Rhai; keep constraint interpretation and model assembly in Rhai. |

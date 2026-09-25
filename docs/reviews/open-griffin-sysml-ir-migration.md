@@ -165,6 +165,17 @@ grouped evaluator and bound-argument path remain compile-checked only: no tests,
 authored scenario, actual-bound Griffin usage, authored `lint.sysml` policy
 execution, or Editor/runtime verification were run in this batch.
 
+### 2026-09-25 structured predicate-argument path update
+
+The IR now preserves a resolved feature path when a constraint-definition call
+passes a scalar structured feature to a formal parameter. Navigation through a
+member is rebased onto the call-site path, and dependency validation/evidence
+therefore uses the actual source feature path rather than a structured value
+encoded by name. Whole structured-value evaluation, computed-argument member
+navigation, and collection-valued navigation remain unsupported. The change
+compiles, but no authored invocation or production verification was run;
+Griffin still has no usage-site actual bindings for its solar predicates.
+
 ## Audit of the current Griffin model
 
 The primary Griffin requirement/configuration sources contain many useful
@@ -192,7 +203,7 @@ permanent semantic layer.
 | Part usages, feature membership, roles, and multiplicity | Many `part def` and attribute declarations, but no complete lander usage graph with typed component roles and bounds | Arrays and parallel IDs can drift; policy cannot navigate an authored assembly | Resolved feature membership, usage identity, redefinition/subsetting, and multiplicity-preserving handles |
 | Ports, interfaces, connections, and bindings | Values such as `sourceComponent`, `usdPath`, and frame/unit strings | Rhai manually joins endpoints and providers; no typed contract says which observation supplies a feature | Typed endpoint/feature chains and standard binding/connectors with source spans and target identity |
 | Constraint definitions/usages | Reusable parameterized definitions exist; source projection distinguishes `require`/`assume`; the IR executes grouped `require` memberships by handle and applies projected feature-value bindings; Griffin's solar scenario calls the grouped path | Current Griffin usage members have no actual argument bindings, so providers still select values by qualified predicate and parameter display name. Defaults, output binding, and full specialization traversal remain | Complete default/output/general bindings and specialization traversal; derive provider observations from source-owned feature bindings where the model defines them |
-| Feature navigation | Dotted `PATH_EXPR` now projects to typed feature chains and exact dependency paths; compile-checked, not runtime-verified | Griffin source and providers have not yet been migrated to consume full typed paths; optional navigation and collection-valued traversal remain unsupported | Runtime-verified standard feature navigation, collection-aware path typing, and explicit unavailable/invalid propagation |
+| Feature navigation | Dotted `PATH_EXPR` projects to typed feature chains; feature-path arguments to predicate definitions rebase formal-member navigation onto the call-site path and its provider dependencies | The generic path behavior compiles, but has no authored invocation or production runtime evidence; Griffin providers still use parameter display names, optional navigation and collection-valued traversal remain unsupported | Author a Griffin source usage with resolved actual feature bindings, verify the exact path dependencies and stale/missing-value outcomes in the production observer, then extend collection navigation only for an authored need |
 | Collections and aggregates | Parallel arrays and index assumptions | Index drift and hand-coded reductions for mass, COM, inertia, envelopes | Homogeneous scalar sequence literals, one-based indexing, scalar indexing, `size`/emptiness, `sum`/`product`, Boolean aggregates, and scalar `min`/`max` now compile/evaluate. Feature-valued and structured collections, collection navigation, filtering/selection, and reusable reductions remain open |
 | Quantities and units | Many anonymous `Real` values and naming conventions such as `...M`, `...Kg`, `...Deg`, plus string `frameUnits` | Unit correctness is policy convention rather than a source-checked contract | Standard quantity kinds, unit literals/conversion contracts, dimensional checking, and frame/time metadata |
 | Frames and realization | USD paths, component names, and frame information are strings | A value can be numerically valid but attached to the wrong prim/frame | Provider binding contract: source feature, provider (`usd`, `modelica`, telemetry, derived), target, frame, unit, and time validity |
