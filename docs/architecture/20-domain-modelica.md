@@ -144,8 +144,12 @@ other domain.
 The shipped source and visual Modelica schema is the Rhai policy
 `assets/scripting/policy/synth_acausal_network.rhai`, registered as
 `synth.acausal-network`. `LunCoDomainSynthesisAPI`/`LunCoPolicy` can select or
-replace that seam without a Rust rebuild. The policy must return the complete
-synthesis result: `source`, `units`, `layout.units`, `layout.members`,
+replace that seam without a Rust rebuild. Policy installation binds the hook
+to its name without replacing an already-registered typed domain owner. For
+`actuator-wrench`, Rust owns composed actuator geometry, the wrench matrix, and
+result validation; the `synth.actuator-wrench` policy owns emitted Modelica
+source. The policy must return the complete synthesis result:
+`source`, `units`, `layout.units`, `layout.members`,
 `source_roots`, and `member_output_aliases`. The Rust projector only validates
 that those outputs cover the composed USD graph, then publishes the generated
 source and its parsed interface. The generated-source owner links that source

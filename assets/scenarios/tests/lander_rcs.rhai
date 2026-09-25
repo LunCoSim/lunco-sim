@@ -20,9 +20,18 @@ fn close_vec(actual, expected, tolerance) {
     true
 }
 
-fn mount_ok(path, position, rotation, direction) {
+fn has_schema(record, schema) {
+    if record == () || record.ok == false || record.api_schemas == () { return false; }
+    for value in record.api_schemas {
+        if value == schema { return true; }
+    }
+    false
+}
+
+fn mount_checks(path, position, rotation, direction) {
     let record = query("QueryUsdPrim", #{
         path: path,
+        schemas: true,
         attrs: [
             "xformOp:translate",
             "xformOp:rotateXYZ",
@@ -30,11 +39,14 @@ fn mount_ok(path, position, rotation, direction) {
         ],
     });
     if record == () || record.ok == false || record.attrs == () {
-        return false;
+        return #{ force_schema: false, geometry: false };
     }
-    close_vec(record.attrs["xformOp:translate"], position, EPS)
-        && close_vec(record.attrs["xformOp:rotateXYZ"], rotation, EPS)
-        && close_vec(record.attrs["lunco:forceActuator:direction"], direction, EPS)
+    #{
+        force_schema: has_schema(record, "LunCoForceActuatorAPI"),
+        geometry: close_vec(record.attrs["xformOp:translate"], position, EPS)
+            && close_vec(record.attrs["xformOp:rotateXYZ"], rotation, EPS)
+            && close_vec(record.attrs["lunco:forceActuator:direction"], direction, EPS),
+    }
 }
 
 fn on_start(me, ctx) {
@@ -81,13 +93,15 @@ fn on_tick(me, ctx) {
     }
 
     let failures = [];
-    failures.push(t_true(this.actuation_root_is_collection,
+    let actuation_record = query("QueryUsdPrim", #{ path: ACTUATION, schemas: true });
+    failures.push(t_true(has_schema(actuation_record, "CollectionAPI:components"),
         "the composed RCS root lost its standard component collection schema"));
-    failures.push(t_true(this.force_member_schema_is_composed,
-        "the composed RCS member lost its LunCoForceActuatorAPI role"));
     for spec in this.mounts {
         let path = ROOT + "/" + spec[0];
-        failures.push(t_true(mount_ok(path, spec[1], spec[2], spec[3]),
+        let checks = mount_checks(path, spec[1], spec[2], spec[3]);
+        failures.push(t_true(checks.force_schema,
+                             path + " lost its composed LunCoForceActuatorAPI role"));
+        failures.push(t_true(checks.geometry,
                              path + " has an unexpected authored mount or force direction"));
     }
     for spec in this.quads {

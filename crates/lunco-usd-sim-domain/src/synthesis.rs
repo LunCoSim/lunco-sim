@@ -412,16 +412,20 @@ impl DomainSynthesizer for HookSynthesizer {
     }
 }
 
-/// Register an authored synthesizer under `name`, backed by hook `synth.<name>`.
+/// Register an authored hook adapter under `name` when no domain owner has
+/// already claimed it. A typed domain owner can invoke the same `synth.<name>`
+/// hook without surrendering its composed-fact extraction and validation path.
 ///
 /// The hook itself is registered by whatever compiled it — `lunco_hooks_rhai::register_rhai_hook`
 /// for a rhai policy — so this crate needs no scripting dependency and any
 /// language that implements [`lunco_hooks::ScriptHook`] can author one.
 pub fn register_hook_synthesizer(registry: &mut SynthesizerRegistry, name: impl Into<String>) {
     let name = name.into();
-    registry.register(HookSynthesizer {
-        hook_id: format!("synth.{name}"),
-        name,
+    registry.0.entry(name.clone()).or_insert_with(|| {
+        std::sync::Arc::new(HookSynthesizer {
+            hook_id: format!("synth.{name}"),
+            name,
+        })
     });
 }
 

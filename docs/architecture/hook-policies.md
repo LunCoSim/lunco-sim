@@ -288,6 +288,12 @@ call and verify source publication through the generated-source query. Async
 results also carry the same Twin generation and are discarded when it changes,
 even if their USD stage revision still matches.
 
+The domain synthesizer registry owns the typed adapter selected for a composed
+network. Installing or reloading a `synth.<name>` hook updates the policy behind
+that adapter and does not replace an existing typed owner. The actuator-wrench
+adapter must keep its USD geometry and wrench-matrix path while the Rhai hook
+emits the Modelica source.
+
 ## Native providers
 
 An approved Twin may implement an existing installable hook with a native

@@ -722,6 +722,7 @@ fn resolve_domain_synthesizer(
             return None;
         }
     };
+    debug!("[domain-projection] `{prim_path}` selected synthesizer `{requested}`");
     let Some(synthesizer) = registry.get(&requested).cloned() else {
         let known = registry.names().join(", ");
         error!(
@@ -3257,6 +3258,22 @@ def Scope "Rig"
         let registry = SynthesizerRegistry::default();
         assert!(registry.get(DEFAULT_DOMAIN_SYNTHESIZER).is_some());
         assert!(registry.get(ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER).is_some());
+    }
+
+    #[test]
+    fn policy_hook_registration_preserves_an_existing_domain_owner() {
+        let mut registry = SynthesizerRegistry::default();
+        let owner = registry
+            .get(ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER)
+            .expect("actuator-wrench domain owner")
+            .clone();
+
+        synthesis::register_hook_synthesizer(&mut registry, ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER);
+
+        let registered = registry
+            .get(ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER)
+            .expect("actuator-wrench domain owner remains registered");
+        assert!(Arc::ptr_eq(&owner, registered));
     }
 
     #[test]
