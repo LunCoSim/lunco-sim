@@ -1184,6 +1184,7 @@ fn build_world_engine_base(
     engine.on_print(route_world_rhai_print);
 
     lunco_hooks_rhai::register_json(&mut engine);
+    lunco_hooks_rhai::register_string_functions(&mut engine);
 
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
 

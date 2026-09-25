@@ -95,9 +95,9 @@ pub const ENVIRONMENT_PROBE_BASE_OUTPUTS: &[&str] = &[
 /// writes on every link node, one set per authored peer `class`:
 ///
 /// ```text
-/// link_<class>_range_m        metres to the best peer of that class
-/// link_<class>_connected      1.0 = geometry closes, 0.0 = severed
-/// link_<class>_elevation_deg  that peer's elevation above the local horizon
+/// link_<class-segment>_range_m        metres to the best peer of that class
+/// link_<class-segment>_connected      1.0 = geometry closes, 0.0 = severed
+/// link_<class-segment>_elevation_deg  that peer's elevation above the local horizon
 /// ```
 ///
 /// Cosim stays domain-agnostic and a domain system writes the real value each
@@ -109,6 +109,9 @@ pub const ENVIRONMENT_PROBE_BASE_OUTPUTS: &[&str] = &[
 /// fixed scalar — so N peers must reduce. `class` is the authored routing group that
 /// exists for exactly this (three DSN complexes all author `class = "earth"`), which
 /// keeps the choice of link with the AUTHOR:
+///
+/// The Celestial USD/Modelica adapter performs the exact, injective class-to-port
+/// conversion defined by `LunCoLinkAPI`; it does not compare case-folded labels.
 ///
 /// ```usda
 /// float inputs:link_range_m.connect = </…/Comms.outputs:link_relay_range_m>

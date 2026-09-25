@@ -142,9 +142,19 @@ fn resolve(reference: &str) -> Result<PathBuf, String> {
 }
 
 /// Validate one asset file, dispatching on its extension. Pure: reads the
-/// file (and, for `.usda`, its referenced layers) and nothing else.
+/// file (and, for `.usda`, its referenced layers) and applies the authored lint
+/// policy. This is an explicit validation entry point for the CLI and API; a
+/// startup subsystem that only needs loader acceptance should use
+/// [`validate_asset_loadability`].
 pub fn validate_asset(reference: &str) -> ValidationReport {
     validate_asset_with_policy(reference, true)
+}
+
+/// Check whether the runtime loader accepts one asset, without running authored
+/// lint policies. Use this from automatic discovery/startup paths that need to
+/// hide assets which cannot load; policy lint remains an explicit user action.
+pub fn validate_asset_loadability(reference: &str) -> ValidationReport {
+    validate_asset_with_policy(reference, false)
 }
 
 fn validate_asset_with_policy(reference: &str, apply_authored_policy: bool) -> ValidationReport {

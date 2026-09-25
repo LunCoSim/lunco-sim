@@ -51,6 +51,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -130,6 +131,42 @@ pub struct LinkClassCatalog {
     initialized: bool,
 }
 
+/// The exact encoded name segment used only at the USD/Modelica scalar-port
+/// boundary. It is not a routing class: source labels remain exact in
+/// [`LinkClassCatalog`] and [`LinkPeer`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LinkClassPortSegment(String);
+
+impl LinkClassPortSegment {
+    /// Encode one exact, case-sensitive authored class for a Modelica-safe
+    /// scalar identifier. Lowercase ASCII and digits stay readable; underscores
+    /// and all other Unicode scalars use a delimited code-point escape, making
+    /// the conversion injective.
+    fn from_class_label(class: &str) -> Self {
+        use std::fmt::Write as _;
+
+        let mut segment = String::new();
+        for character in class.chars() {
+            if character.is_ascii_lowercase() || character.is_ascii_digit() {
+                segment.push(character);
+            } else {
+                let _ = write!(segment, "_u{:04X}_", u32::from(character));
+            }
+        }
+        Self(segment)
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for LinkClassPortSegment {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
 /// Refresh the authored class index at the start of the frame so the link port
 /// backend can answer class discovery without an entity-by-entity world scan.
 pub(crate) fn refresh_link_class_catalog(
@@ -151,9 +188,8 @@ pub(crate) fn refresh_link_class_catalog(
         let Some(class) = node.class.as_deref().filter(|class| !class.is_empty()) else {
             continue;
         };
-        let class = sanitize_class(class);
-        *counts.entry(class.clone()).or_default() += 1;
-        members.insert(entity, class);
+        *counts.entry(class.to_owned()).or_default() += 1;
+        members.insert(entity, class.to_owned());
     }
     if counts != catalog.counts || members != catalog.members {
         catalog.counts = counts;
@@ -740,10 +776,10 @@ fn link_runtime_context(
 /// The identity portion of a link endpoint's public port surface. Range and
 /// connectivity are live samples; only the published class set and the
 /// presence of an elevation value can add or remove a port name.
-fn link_port_shape(peers: &[LinkPeer]) -> HashSet<(String, bool)> {
+fn link_port_shape(peers: &[LinkPeer]) -> HashSet<(LinkClassPortSegment, bool)> {
     best_per_class_peers(peers)
         .into_iter()
-        .map(|(class, peer)| (sanitize_class(&class), peer.elevation_deg.is_some()))
+        .map(|(class, peer)| (class, peer.elevation_deg.is_some()))
         .collect()
 }
 
@@ -907,19 +943,23 @@ fn link_event(name: &str, (a, b): (u64, u64), jd: f64) -> TelemetryEvent {
 ///
 /// Writes every solve (not change-driven) because a model's own output sync rewrites its
 /// outputs map — same reasoning as the gravity and solar bridges.
-fn best_per_class(state: &LinkState) -> std::collections::HashMap<String, &LinkPeer> {
+fn best_per_class(state: &LinkState) -> std::collections::HashMap<LinkClassPortSegment, &LinkPeer> {
     best_per_class_peers(&state.peers)
 }
 
-fn best_per_class_peers(peers: &[LinkPeer]) -> std::collections::HashMap<String, &LinkPeer> {
-    let mut best: std::collections::HashMap<String, &LinkPeer> = Default::default();
+fn best_per_class_peers(
+    peers: &[LinkPeer],
+) -> std::collections::HashMap<LinkClassPortSegment, &LinkPeer> {
+    let mut best: std::collections::HashMap<LinkClassPortSegment, &LinkPeer> = Default::default();
     for p in peers {
         // A peer with no class is unreachable by an authored wire (there is no port
         // name for it) — `LinkState` still carries it for script/UI.
-        let Some(class) = p.class.as_deref() else {
+        let Some(class) = p.class.as_deref().filter(|class| !class.is_empty()) else {
             continue;
         };
-        best.entry(sanitize_class(class))
+        // This encoded key is injective, so exact class grouping is preserved
+        // while this simulator boundary uses its own typed port-name identity.
+        best.entry(LinkClassPortSegment::from_class_label(class))
             .and_modify(|cur| {
                 let better = match (cur.connected, p.connected) {
                     (false, true) => true,
@@ -962,27 +1002,26 @@ fn class_ports(p: &LinkPeer) -> impl Iterator<Item = (&'static str, f64)> + '_ {
 /// the port identity is already known from the authored `LinkNode`s; the first
 /// sweep only supplies its value. Keeping declaration and sample availability
 /// separate prevents a valid first-load wire from being sealed as dangling.
-fn authored_peer_classes(world: &World, entity: Entity) -> HashSet<String> {
+fn authored_peer_classes(world: &World, entity: Entity) -> HashSet<LinkClassPortSegment> {
     let Some(catalog) = world.get_resource::<LinkClassCatalog>() else {
         return HashSet::new();
     };
     let own_class = world
         .get::<LinkNode>(entity)
         .and_then(|node| node.class.as_deref())
-        .filter(|class| !class.is_empty())
-        .map(sanitize_class);
-    authored_peer_classes_from_catalog(catalog, own_class.as_deref())
+        .filter(|class| !class.is_empty());
+    authored_peer_classes_from_catalog(catalog, own_class)
 }
 
 fn authored_peer_classes_from_catalog(
     catalog: &LinkClassCatalog,
     own_class: Option<&str>,
-) -> HashSet<String> {
+) -> HashSet<LinkClassPortSegment> {
     catalog
         .counts
         .iter()
         .filter(|(class, count)| own_class != Some(class.as_str()) || **count > 1)
-        .map(|(class, _)| class.clone())
+        .map(|(class, _)| LinkClassPortSegment::from_class_label(class))
         .collect()
 }
 
@@ -994,7 +1033,7 @@ fn authored_peer_classes_from_catalog(
 /// iteration order of the temporary `HashMap` returned by `best_per_class`.
 fn link_state_topology_key_with_authored_classes(
     state: &LinkState,
-    authored_classes: &HashSet<String>,
+    authored_classes: &HashSet<LinkClassPortSegment>,
 ) -> u64 {
     let rows = link_port_rows_from_state(Some(state), authored_classes);
     lunco_port_core::ports::port_name_set_key(rows.iter().map(|(name, _)| name))
@@ -1023,7 +1062,7 @@ fn link_port_rows(world: &World, entity: Entity) -> Vec<(String, f64)> {
 
 fn link_port_rows_from_state(
     state: Option<&LinkState>,
-    authored_classes: &HashSet<String>,
+    authored_classes: &HashSet<LinkClassPortSegment>,
 ) -> Vec<(String, f64)> {
     let live = state.map(best_per_class);
     let mut classes = authored_classes.clone();
@@ -1035,11 +1074,11 @@ fn link_port_rows_from_state(
     for class in classes {
         if let Some(peer) = live.as_ref().and_then(|peers| peers.get(&class)) {
             for (suffix, value) in class_ports(peer) {
-                rows.push((format!("link_{class}_{suffix}"), value));
+                rows.push((link_class_port_name(&class, suffix), value));
             }
         } else {
-            rows.push((format!("link_{class}_range_m"), 0.0));
-            rows.push((format!("link_{class}_connected"), 0.0));
+            rows.push((link_class_port_name(&class, "range_m"), 0.0));
+            rows.push((link_class_port_name(&class, "connected"), 0.0));
         }
     }
     rows
@@ -1072,9 +1111,8 @@ pub(crate) fn check_link_state_structure(
             .map(|catalog| {
                 let own_class = node
                     .and_then(|node| node.class.as_deref())
-                    .filter(|class| !class.is_empty())
-                    .map(sanitize_class);
-                authored_peer_classes_from_catalog(catalog, own_class.as_deref())
+                    .filter(|class| !class.is_empty());
+                authored_peer_classes_from_catalog(catalog, own_class)
             })
             .unwrap_or_default();
         if state.changed::<LinkState>(
@@ -1148,13 +1186,10 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
         }),
         read_output: |world, entity, name| {
             let state = world.get::<LinkState>(entity)?;
-            let rest = name.strip_prefix("link_")?;
-            best_per_class(state).into_iter().find_map(|(class, p)| {
-                let suffix = rest.strip_prefix(&class)?.strip_prefix('_')?;
-                class_ports(p)
-                    .into_iter()
-                    .find_map(|(s, v)| (s == suffix).then_some(v))
-            })
+            let (class_segment, suffix) = split_link_class_port_name(name)?;
+            let peers = best_per_class(state);
+            let peer = peers.get(class_segment)?;
+            class_ports(peer).find_map(|(candidate, value)| (candidate == suffix).then_some(value))
         },
         // Link geometry is solver-derived: there is no input to read and nothing to
         // write. Returning `None`/`false` is what lets the registry fall through to a
@@ -1167,21 +1202,25 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
         write_slot: None,
     };
 
-/// A `class` is authored free text but a port name is an identifier, so fold anything
-/// that is not `[a-z0-9_]` to `_`. `"earth"` → `link_earth_range_m`; `"Deep Space"` →
-/// `link_deep_space_range_m`. Lossy by design and stable: the author reads the port name
-/// off the class they wrote.
-fn sanitize_class(class: &str) -> String {
-    class
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect()
+/// Compose the typed simulator-facing class segment with its scalar quantity.
+fn link_class_port_name(class: &LinkClassPortSegment, suffix: &str) -> String {
+    format!("link_{}_{}", class.as_str(), suffix)
+}
+
+/// Parse the simulator-facing port name without allocating or comparing it to
+/// every class name. Only this boundary representation is decoded; authored
+/// class identity stays untouched.
+fn split_link_class_port_name(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix("link_")?;
+    for suffix in ["range_m", "connected", "elevation_deg"] {
+        if let Some(class_segment) = rest
+            .strip_suffix(suffix)
+            .and_then(|prefix| prefix.strip_suffix('_'))
+        {
+            return Some((class_segment, suffix));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1243,6 +1282,32 @@ mod tests {
             "the relay link is its own signal — a nearer EARTH peer must not shadow it"
         );
         assert_eq!(port(&world, e, "link_relay_connected"), Some(1.0));
+    }
+
+    #[test]
+    fn distinct_authored_classes_never_merge_at_the_scalar_port_boundary() {
+        let mut world = World::new();
+        let entity = world
+            .spawn(LinkState {
+                peers: vec![
+                    peer(1, "earth", false, 10.0, 1.0),
+                    peer(2, "Earth", true, 20.0, 2.0),
+                    peer(3, "deep space", true, 30.0, 3.0),
+                    peer(4, "deep_space", true, 40.0, 4.0),
+                ],
+            })
+            .id();
+
+        assert_eq!(port(&world, entity, "link_earth_range_m"), Some(10.0));
+        assert_eq!(port(&world, entity, "link__u0045_arth_range_m"), Some(20.0));
+        assert_eq!(
+            port(&world, entity, "link_deep_u0020_space_range_m"),
+            Some(30.0)
+        );
+        assert_eq!(
+            port(&world, entity, "link_deep_u005F_space_range_m"),
+            Some(40.0)
+        );
     }
 
     /// The capability the old push-bridge did NOT have: its query was
@@ -1550,12 +1615,45 @@ mod tests {
         );
     }
 
-    /// A class is authored free text; a port name is an identifier.
+    /// Port names are a USD/Modelica boundary representation of exact role labels.
     #[test]
-    fn class_names_fold_to_port_identifiers() {
-        assert_eq!(sanitize_class("earth"), "earth");
-        assert_eq!(sanitize_class("Deep Space"), "deep_space");
-        assert_eq!(sanitize_class("X-Band/2"), "x_band_2");
+    fn class_to_port_conversion_preserves_identity_and_identifier_uniqueness() {
+        let earth = LinkClassPortSegment::from_class_label("earth");
+        assert_eq!(
+            link_class_port_name(&earth, "range_m"),
+            "link_earth_range_m"
+        );
+
+        let classes = [
+            "earth",
+            "Earth",
+            "deep space",
+            "deep_space",
+            "x-band",
+            "x/band",
+        ];
+        let segments: Vec<_> = classes
+            .iter()
+            .map(|class| LinkClassPortSegment::from_class_label(class))
+            .collect();
+        let names: HashSet<_> = segments
+            .iter()
+            .map(|class| link_class_port_name(class, "range_m"))
+            .collect();
+        assert_eq!(names.len(), classes.len());
+
+        assert_ne!(
+            LinkClassPortSegment::from_class_label("Earth"),
+            LinkClassPortSegment::from_class_label("earth")
+        );
+        assert_ne!(
+            LinkClassPortSegment::from_class_label("deep space"),
+            LinkClassPortSegment::from_class_label("deep_space")
+        );
+        assert_ne!(
+            LinkClassPortSegment::from_class_label("x-band"),
+            LinkClassPortSegment::from_class_label("x/band")
+        );
     }
 
     /// A link node with an explicit GID. Real nodes get theirs from `Provenance`

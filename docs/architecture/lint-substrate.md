@@ -70,8 +70,9 @@ fn lint_usd(facts) -> [ #{ rule, severity, subject, message }, … ]
 
 `severity` is `"error" | "warn" | "info"`; anything else reads as `warn` — a typo
 in a rule must not silently delete the finding it was written to raise. A policy
-that faults or returns a non-array yields nothing and logs why: **a linter may
-never break the thing it is diagnosing.**
+fault or invalid result shape produces an explicit error finding, so validation
+cannot report a clean result when linting did not run. The finding is
+diagnostic: it does not prevent the scene from loading.
 
 ### What the USD rules see
 
@@ -249,8 +250,12 @@ After an authored change, the editor or launcher may issue the command again for
 that selected stage; it is still an explicit lint run. There is no cadence,
 background watcher, per-tick physics monitor, or emergency clamp. `ValidateAsset`
 applies the file-derived rules to one composed file; it cannot observe projected
-runtime port owners. `RunLint` reports `pending:true` until its composed and
-live evidence pass completes; only `ok:true` is a clean acceptance result.
+runtime port owners. Automatic discovery may call loader-only preflight to hide
+assets that cannot load, but it must not invoke authored lint policies. Policies
+run only when a user explicitly invokes `RunLint`, `ValidateAsset`,
+`ValidateSysml`, `ValidateTwin`, or the CLI validation command. `RunLint`
+reports `pending:true` until its composed and live evidence pass completes;
+only `ok:true` is a clean acceptance result.
 The runtime connection facts are produced in Rust, while direction, pending
 versus missing severity, and message text remain in the Rhai policy. Emergent contact/topology failures still require
 the relevant behavioral test; a static lint must report "conditionally stable"

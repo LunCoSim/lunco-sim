@@ -491,12 +491,16 @@ class "LunCoLinkAPI" (
     string lunco:link:class = "" (
         doc = """The node's authored ROLE — `"relay"`, `"earth"`, `"rover"`, `"base"`.
 
-        **The core never interprets it.** It is passed to the verdict/routing policy
-        and used to GROUP nodes (`query("Links").groups`), so a script can ask "can
-        this rover reach any Earth station?" without naming one. The moment the core
-        branches on `class == "relay"`, the domain is back in Rust.
+        The exact, case-sensitive label is passed to verdict/routing policy and used
+        to GROUP nodes (`query("Links").groups`), so a script can ask "can this rover
+        reach any Earth station?" without naming one. It is not a node identity and
+        repeated labels intentionally denote the same routing group.
 
-        Not unique and not an identity: see the class note above."""
+        Scalar USD/Modelica ports use `link_<class>_<quantity>`. The port adapter
+        preserves lowercase ASCII letters and digits and encodes every other Unicode
+        character as `_uXXXX_`; it does not lowercase or collapse distinct labels.
+        Thus `earth` stays `link_earth_range_m`, while `Earth` and `deep space` keep
+        distinct public port names."""
     )
     double lunco:link:maxRangeM = 1e12 (
         doc = """Hard geometric range cutoff, metres. Beyond it the builtin verdict

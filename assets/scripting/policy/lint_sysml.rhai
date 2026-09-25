@@ -222,14 +222,13 @@ fn requirement_formal_acceptance(facts) {
 }
 
 fn looks_like_identifier(value) {
-    if value == "" { return false; }
+    if value == "" || !value.contains_alphabetic() { return false; }
     let forbidden = [" ", "\t", "\n", "/", "\\", ".", ":", "-", ";",
         "=", "(", ")", ",", "\"", "'", "?", "!", "&", "|", "+", "[", "]",
         "@", "#", "$", "%", "^", "*", "{", "}", "<", ">", "~", "`"];
     for character in forbidden {
         if value.contains(character) { return false; }
     }
-    if value.to_lowercase() == value.to_uppercase() { return false; }
     for segment in value.split("_") {
         if segment == "" { return false; }
     }
@@ -265,7 +264,7 @@ fn scalar_string_identity(attribute) {
         let values = value.split(",");
         if values.len() < 2 { return false; }
         for item in values {
-            if !looks_like_identifier(item.trim()) { return false; }
+            if !looks_like_identifier(item.trimmed()) { return false; }
         }
         return true;
     }

@@ -21,6 +21,10 @@ use lunco_hooks::{
 };
 use rhai::{AST, Dynamic, Engine, Scope};
 
+mod strings;
+
+pub use strings::register_string_functions;
+
 /// Register the shared JSON-to-Rhai value bridge on an engine.
 ///
 /// JSON parsing is available to both ordinary script engines and Rhai hooks;
@@ -119,6 +123,7 @@ impl RhaiHook {
     ) -> Result<Self, String> {
         let mut engine = Engine::new();
         register_json(&mut engine);
+        register_string_functions(&mut engine);
 
         // Close the file-import hole BEFORE compiling anything. `Engine::new()`
         // installs rhai's `FileModuleResolver`, which reads arbitrary files
