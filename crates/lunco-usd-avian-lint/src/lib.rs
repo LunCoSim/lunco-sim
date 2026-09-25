@@ -573,6 +573,12 @@ fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
 pub fn physics_facts(reader: &StageView<'_>) -> H {
     let paths: Vec<SdfPath> = reader.prim_paths();
     let telemetry_declarations = telemetry_declaration_facts(reader, &paths);
+    let root_spawnable = reader
+        .default_prim()
+        .and_then(|name| SdfPath::new(&format!("/{name}")).ok())
+        .and_then(|root| reader.value::<bool>(&root, "lunco:spawnable"))
+        .map(H::Bool)
+        .unwrap_or(H::Unit);
 
     // `physics:collisionEnabled = true` is only meaningful on a prim that
     // applies PhysicsCollisionAPI. Terrain is the deliberate projector
@@ -1268,6 +1274,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                     "default_prim",
                     reader.default_prim().map(H::str).unwrap_or(H::Unit),
                 ),
+                ("root_spawnable", root_spawnable),
                 (
                     "meters_per_unit_authored",
                     H::Bool(

@@ -55,8 +55,8 @@ const EARTH_DIRECTION_WARN_AFTER_FRAMES: u8 = 10;
 /// heading the moment it turns. `EarthTracker.mo` says so in its own port doc
 /// ("direction to Earth, vessel frame"); this is the frame that makes that true.
 ///
-/// This uses the same mount-frame convention as [`LocalSolar`](crate::LocalSolar),
-/// so Earth and Sun trackers remain correct as their vehicle turns.
+/// This uses the same mount-frame convention as the solar cosim projection, so
+/// Earth and Sun trackers remain correct as their vehicle turns.
 ///
 /// Cached per-entity, which is now load-bearing rather than forward-looking: two
 /// models on differently-oriented mounts get genuinely different directions.
@@ -77,7 +77,7 @@ pub struct LocalEarth {
 /// Earth-vector consumer from [`EarthDirectionWorld`].
 ///
 /// Change-guarded (writes only when the direction actually moves) — mirrors
-/// `compute_local_solar` and `compute_local_gravity`. Earth barely moves, so
+/// `compute_local_gravity`. Earth barely moves, so
 /// without the guard this would dirty every model entity every tick to write the
 /// same two numbers.
 pub fn compute_local_earth(

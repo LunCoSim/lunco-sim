@@ -322,6 +322,17 @@ mod authored_sun_tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin));
         app.init_resource::<lunco_environment::SunState>();
+        let root = app
+            .world_mut()
+            .spawn((
+                lunco_usd_bevy_scene::UsdSceneRoot,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let mut mounts = lunco_core::SceneMountState::default();
+        mounts.register_root(root, true);
+        app.insert_resource(mounts);
 
         let frame = app
             .world_mut()
@@ -340,7 +351,7 @@ mod authored_sun_tests {
             GlobalTransform::default(),
             bevy::light::DirectionalLight::default(),
             lunco_usd_bevy_light::light::UsdAuthoredLight,
-            ChildOf(frame),
+            ChildOf(root),
         ));
 
         install_authored_sun_state_seed(&mut app);
@@ -356,6 +367,48 @@ mod authored_sun_tests {
         assert!(
             actual.y > 0.25,
             "the authored sun must be above the ground: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn celestial_scene_never_seeds_static_authored_sun_state() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin));
+        app.init_resource::<lunco_environment::SunState>();
+        let root = app
+            .world_mut()
+            .spawn((
+                lunco_usd_bevy_scene::UsdSceneRoot,
+                lunco_celestial_spatial_core::CelestialSourcePresent,
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let mut mounts = lunco_core::SceneMountState::default();
+        mounts.register_root(root, true);
+        app.insert_resource(mounts);
+        let frame = app
+            .world_mut()
+            .spawn((Transform::default(), GlobalTransform::default()))
+            .id();
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        app.world_mut().spawn((
+            Transform::default(),
+            GlobalTransform::default(),
+            bevy::light::DirectionalLight::default(),
+            lunco_usd_bevy_light::light::UsdAuthoredLight,
+            ChildOf(root),
+        ));
+
+        install_authored_sun_state_seed(&mut app);
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<lunco_environment::SunState>()
+                .direction_to_sun,
+            None,
+            "a celestial source declaration must not fall back to the authored light"
         );
     }
 }
@@ -2748,20 +2801,32 @@ fn install_authored_sun_state_seed(app: &mut App) {
     );
 }
 
-/// Seed the semantic sun provider from an authored USD `DistantLight` in
-/// scenes that do not declare a celestial site. The light's composed world
-/// rotation is the USD fact; `DirectionalLight` is used only for the authored
-/// illuminance carried by the same light. The direction is projected from the
-/// light's composed world rotation into the explicitly bound physics frame,
-/// so a parent transform cannot silently change the semantic axes. Ephemeris
-/// owns SunState once a site exists, and this system never overwrites a
-/// semantic sample already published by a provider or command.
+/// Select the static authored-light source only for a scene with no celestial
+/// source declaration. A celestial source is authoritative even when its
+/// declaration or ephemeris is invalid; in that case SunState stays empty and
+/// the cosim projection reports missing solar data instead of restoring a
+/// stale authored direction.
+///
+/// The static scene contract is one unscoped authored DistantLight below the
+/// active USD scene root. Its composed rotation and illuminance define the
+/// constant solar direction for manual/static scenes such as the sun tracker.
 fn seed_authored_sun_state(
     sun_state: Option<ResMut<lunco_environment::SunState>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    scene_mount: Option<Res<lunco_core::SceneMountState>>,
     q_frames: Query<&GlobalTransform>,
+    q_scene_roots: Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+    q_celestial_roots: Query<
+        (),
+        (
+            With<lunco_usd_bevy_scene::UsdSceneRoot>,
+            With<lunco_celestial_spatial_core::CelestialSourcePresent>,
+        ),
+    >,
+    q_parents: Query<&ChildOf>,
+    q_entities: Query<Entity>,
     q_suns: Query<
-        (&GlobalTransform, &bevy::light::DirectionalLight),
+        (Entity, &GlobalTransform, &bevy::light::DirectionalLight),
         (
             With<lunco_usd_bevy_light::light::UsdAuthoredLight>,
             Without<lunco_environment::Earthshine>,
@@ -2772,7 +2837,31 @@ fn seed_authored_sun_state(
     let Some(mut sun_state) = sun_state else {
         return;
     };
-    if sun_state.direction_to_sun.is_some() || q_suns.iter().count() != 1 {
+    if sun_state.direction_to_sun.is_some() {
+        return;
+    }
+    let Some(active_root) = scene_mount.as_deref().and_then(|mount| mount.active_root()) else {
+        return;
+    };
+    if q_scene_roots.get(active_root).is_err() || q_celestial_roots.contains(active_root) {
+        return;
+    }
+
+    let mut authored_sun_entity = None;
+    let mut authored_sun_count = 0;
+    for (entity, _, _) in &q_suns {
+        if lunco_usd_bevy_scene::scene_root_ancestor(
+            entity,
+            &q_scene_roots,
+            &q_parents,
+            &q_entities,
+        ) == Ok(Some(active_root))
+        {
+            authored_sun_count += 1;
+            authored_sun_entity = Some(entity);
+        }
+    }
+    if authored_sun_count != 1 {
         return;
     }
     let Some(active_frame) = active_frame else {
@@ -2781,7 +2870,10 @@ fn seed_authored_sun_state(
     let Ok(frame_gt) = q_frames.get(active_frame.0) else {
         return;
     };
-    let Ok((global_transform, light)) = q_suns.single() else {
+    let Some(authored_sun_entity) = authored_sun_entity else {
+        return;
+    };
+    let Ok((_, global_transform, light)) = q_suns.get(authored_sun_entity) else {
         return;
     };
     let emit_direction_world = global_transform.rotation() * Vec3::NEG_Z;

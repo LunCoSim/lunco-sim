@@ -5,7 +5,7 @@ magnetic field, etc. — computed from celestial body providers and consumed by
 physics, co-simulation, and UI.
 
 **Currently implements:** gravity (`LocalGravity`), solar direction
-(`LocalSolar` + sun→cosim bridge), lunar-sky lighting parameters (`LunarSun`,
+(direct SunState→cosim projection), lunar-sky lighting parameters (`LunarSun`,
 `FULL_EARTH_EARTHSHINE_LUX`, the `SetEnvironmentLight` tuner command), and baked horizon
 terrain self-shadowing (`HorizonShadowPlugin`). The gravity and solar values are
 already wired into the co-sim graph each tick.
@@ -13,9 +13,9 @@ already wired into the co-sim graph each tick.
 magnetic field, ambient temperature — anything else that varies with position
 and body.
 
-> Lighting / solar / horizon live behind the `render` feature (they read the
-> scene `DirectionalLight` / reach into the bevy light + post-process stack), so
-> a headless sim core builds with gravity alone.
+> Solar, lighting, and horizon projection use render-free Bevy light/camera
+> types; none reads a render transform as a physical solar input or depends on
+> `bevy_render`. A headless host can run the same semantic solar-to-cosim path.
 
 ## Why this crate exists
 
@@ -80,8 +80,9 @@ Our ECS analog:
 Same scoping concept, ECS implementation. The injection from `LocalGravity`
 into a Modelica model happens in this crate's `inject_local_gravity_into_cosim`
 system (implemented — runs in `EnvironmentSet::Apply`, before the cosim
-propagate step). Solar direction follows the same path via
-`inject_local_solar_into_cosim`.
+propagate step). Solar direction uses the same cosim boundary but converts the
+shared `SunState` sample and publishes it directly to probe outputs in one
+FixedUpdate system.
 
 ## What's implemented
 
@@ -106,20 +107,30 @@ fn read_gravity(q: Query<&LocalGravity>) {
 }
 ```
 
-### `LocalSolar` + the solar→cosim bridge
+### Solar direction → Modelica
 
 `SunState` is the semantic provider. Celestial ephemeris publishes the
 direction and irradiance from the shared `CelestialTime` sample; the render
-`DirectionalLight` is only a projection. During ordinary `FixedUpdate`,
-`compute_local_solar` converts that latest semantic direction into per-entity
-mount-frame `LocalSolar` values, and `inject_local_solar_into_cosim` publishes
-them through authored `EnvironmentProbe` outputs before co-simulation
-propagates. A sun-tracking or panel model consumes those outputs through
-ordinary USD wires. The panel's local up component changes sign below the site
-horizon, so its incidence and generated power reach zero at night. The
-celestial rate can advance this input while Modelica and physics keep their
-existing cadence. No render transform is read back as an environment input,
-and no Modelica model drives the physical scene sun.
+`DirectionalLight` is only a projection. In ordinary `FixedUpdate`,
+`publish_solar_inputs_to_cosim` converts the latest semantic direction through
+the active physics frame and each probe mount, then writes the three
+`sun_mount_*` outputs before cosim propagation. It writes directly to the
+existing `SimComponent`; no intermediate per-probe cache or second solar clock
+exists. Sun-tracking and panel models consume those outputs through ordinary
+USD wires. The panel's local up component changes sign below the site horizon,
+so its incidence and generated power reach zero at night. The celestial rate
+can advance this input while Modelica and physics keep their existing cadence.
+No render transform is read back as an environment input, and no Modelica
+model drives the physical scene sun.
+
+Solar source selection is explicit. A scene with no composed
+`LunCoCelestialBodyAPI` uses exactly one unscoped authored `DistantLight` under
+the active scene root as its static direction source. A scene that declares a
+celestial body uses the ephemeris plus a root site anchor; authored light pose
+remains render-only. Missing celestial solar state clears the three Modelica
+outputs and raises `solar-source-missing` in Runtime Diagnostics. `RunLint`
+reports a connected solar model whose selected source cannot provide a valid
+direction.
 
 ### Lighting parameters: `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX` (`render` feature)
 
@@ -127,7 +138,7 @@ Physical lighting state of the lunar sky — the lighting analog of gravity. The
 `SetEnvironmentLight` command live-tunes the sun, the earthshine fill light
 (spawned once at startup, native render only — WebGL2 allows a single
 `DirectionalLight`), and bloom. `EnvironmentPlugin` also registers
-`Earthshine`/`LocalSolar` reflect types on the render path.
+`Earthshine` on the render path.
 
 ### `HorizonShadowPlugin` + `HorizonMap` (`render` feature)
 
@@ -139,8 +150,8 @@ shadow design. Inert until a terrain carries the (USD-stamped)
 
 Adds `compute_local_gravity` to `FixedUpdate` in the `EnvironmentSet::Compute`
 set, `sync_local_gravity_to_avian` + `inject_local_gravity_into_cosim` in
-`EnvironmentSet::Apply`, and (behind `render`) the solar/lighting/horizon
-presentation half. Add it once during app setup:
+`EnvironmentSet::Apply`, including direct solar cosim publication, plus the
+render-free lighting and horizon state. Add it once during app setup:
 
 ```rust
 app.add_plugins(lunco_celestial_spatial::GravityPlugin);
@@ -247,7 +258,7 @@ That's the entire pattern. Three components, one system. Done.
 Once `Local*` components exist, Modelica models get the values via injection
 systems that run in `EnvironmentSet::Apply` before the cosim propagate step.
 Gravity (`inject_local_gravity_into_cosim`) and solar direction
-(`inject_local_solar_into_cosim`) are implemented; the sketch below shows the
+(`publish_solar_inputs_to_cosim`) are implemented; the sketch below shows the
 general pattern a future atmosphere injector would follow:
 
 ```rust
@@ -291,7 +302,7 @@ injected — opt-in by name.
 ## Roadmap
 
 - [x] **Gravity** — `LocalGravity`, `compute_local_gravity`, `sync_local_gravity_to_avian`, `inject_local_gravity_into_cosim`
-- [x] **Solar direction** — `LocalSolar`, `compute_local_solar`, `inject_local_solar_into_cosim` (sun direction as a cosim output)
+- [x] **Solar direction** — `SunState` projected directly to `EnvironmentProbe` cosim outputs before propagation
 - [x] **Lunar lighting** — `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`, `SetEnvironmentLight` tuner, earthshine fill
 - [x] **Horizon self-shadowing** — `HorizonShadowPlugin`, `HorizonMap`
 - [ ] **Atmosphere** — `LocalAtmosphere`, `AtmosphereProvider`, `StandardAtmosphere` model

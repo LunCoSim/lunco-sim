@@ -305,11 +305,12 @@ center to sweep across a lunar sky to show its day/night cycle.
 replay propagate through the one clock tree. Its rate scales the shared
 celestial sample used by body placement and rotation, the semantic SunState,
 lighting and shadows, and celestial queries. Avian keeps its existing fixed
-physics schedule; it does not run 100,000 catch-up steps. The environment
-projects the current SunState into mount-frame `LocalSolar` values during
-ordinary `FixedUpdate`, and Modelica consumes those inputs at its usual
-communication points. Thus a lunar night changes panel incidence and power
-without a second model clock or a faster physics loop.
+physics schedule; it does not run 100,000 catch-up steps. During ordinary
+`FixedUpdate`, the environment converts SunState into probe mount frames and
+writes `sun_mount_x/y/z` directly to `SimComponent` before cosim propagation.
+Modelica consumes those outputs at its usual communication points. Thus a
+lunar night changes panel incidence and power without an intermediate solar
+cache, a second model clock, or a faster physics loop.
 
 The shared celestial cadence commits the `CelestialTime` sample captured in
 `PreUpdate`. One epoch/revision cursor gates body placement, rotation, solar

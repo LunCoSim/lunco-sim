@@ -148,9 +148,9 @@ pub fn sun_emit_direction(
 /// by excluding Earthshine and scoped preview lights; ambiguity is an authored
 /// contract error, never a brightness-based choice.
 ///
-/// This semantic state feeds render lighting and the fixed-step environment
-/// model inputs from the same celestial epoch. Without an explicit ephemeris
-/// provider, authored lighting remains untouched.
+/// This semantic state feeds render lighting and fixed-step Modelica inputs
+/// from the same celestial epoch. Its calculation does not depend on a
+/// rendered light; that light is an independent projection of SunState.
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
     celestial_time: Res<CelestialTime>,
@@ -161,18 +161,6 @@ pub fn update_sun_light_system(
     // filled here — the same shape as `LunarSun` below. `Option` because a build
     // without `EnvironmentPlugin` has no such resource and must still get a sun.
     mut earth_dir_out: Option<ResMut<lunco_environment::EarthDirectionWorld>>,
-    // The scene's sun, identified STRUCTURALLY. A body's reflected fill
-    // (earthshine and its analogues) is authored under that body's prim and
-    // carries `Earthshine`; the scene's key light is not. See
-    // `lunco_environment::horizon::SunQuery` for the same filter render-side.
-    q_light: Query<
-        Entity,
-        (
-            With<bevy::light::DirectionalLight>,
-            Without<lunco_environment::Earthshine>,
-            Without<bevy::camera::visibility::RenderLayers>,
-        ),
-    >,
     // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
     q_site: Query<&lunco_celestial::geo::GeodeticAnchor, With<lunco_celestial::geo::SiteAnchor>>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
@@ -181,6 +169,7 @@ pub fn update_sun_light_system(
     mut last_logged_elevation: Local<f32>,
 ) {
     let Some(ephemeris) = ephemeris else {
+        sun_state.clear();
         return;
     };
 
@@ -194,18 +183,6 @@ pub fn update_sun_light_system(
             subject: "SiteAnchor".to_string(),
             message: format!(
                 "expected at most one active SiteAnchor, found {site_count}; celestial observation is ambiguous"
-            ),
-        });
-    }
-    let light_count = q_light.iter().count();
-    if light_count != 1 {
-        contract_findings.push(lunco_core::RuntimeDiagnostic {
-            code: "sun-light-cardinality".to_string(),
-            severity: lunco_core::DiagnosticSeverity::Error,
-            producer: "celestial-sun".to_string(),
-            subject: "DirectionalLight".to_string(),
-            message: format!(
-                "expected exactly one unscoped DirectionalLight for the ephemeris sun, found {light_count}"
             ),
         });
     }
@@ -225,6 +202,7 @@ pub fn update_sun_light_system(
         .map(|anchor| anchor.body)
         .or_else(|| orbital_pin.as_ref().filter(|p| p.active).map(|p| p.body))
     else {
+        sun_state.clear();
         return;
     };
     let Some(observer_desc) = registry.get(observer_body) else {
@@ -244,16 +222,16 @@ pub fn update_sun_light_system(
         return;
     };
     let Some(ecliptic_dir) = sun_emit_direction(p_sun, p_observer) else {
-        // Degenerate ephemeris — leave the authored light untouched.
         sun_state.clear();
         return;
     };
 
     let Some(anchor) = site_anchor else {
         // Orbital views without a site do not own a local ENU light frame.
-        // Their authored/manual lighting remains authoritative until a site
-        // scene is mounted; guessing a root-frame rotation would reintroduce
-        // the old implicit-frame bug. Preserve that authored semantic state.
+        // Their authored DistantLight remains render-only; it is not a
+        // substitute Modelica input. Clear the semantic direction so probes do
+        // not retain or publish an earlier site sample.
+        sun_state.clear();
         return;
     };
     let site_frame = solar_tangent_frame(

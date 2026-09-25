@@ -311,6 +311,7 @@ fn lint_usd(facts) {
     for f in control_binding_contract(facts) { out.push(f); }
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
+    for f in solar_source_contract(facts) { out.push(f); }
     for f in connection_contract(facts) { out.push(f); }
     for f in runtime_connection_contract(facts) { out.push(f); }
     for f in runtime_joint_contract(facts) { out.push(f); }
@@ -804,6 +805,94 @@ fn epoch_api_requires_authored_time(facts) {
         ));
     }
     out
+}
+
+/// Solar Modelica inputs need a real semantic source. A celestial scene gets
+/// its direction from ephemeris in the root site frame; a static scene gets it
+/// from one authored root DistantLight. Check only connected consumers so
+/// unused probe capabilities do not create scene errors. A spawnable root is a
+/// reusable asset whose scene-level environment source is selected by its parent.
+fn solar_source_contract(facts) {
+    let out = [];
+    if !has_connected_solar_probe_consumer(facts) { return out; }
+    if facts.stage.root_spawnable == true { return out; }
+
+    let root_path = if facts.stage.default_prim == () {
+        "<stage>"
+    } else {
+        "/" + facts.stage.default_prim
+    };
+    let has_celestial_source = false;
+    for prim in facts.prims {
+        if prim.schemas.contains("LunCoCelestialBodyAPI") {
+            has_celestial_source = true;
+            break;
+        }
+    }
+
+    if has_celestial_source {
+        let has_root_anchor = false;
+        for prim in facts.prims {
+            if prim.path != root_path { continue; }
+            has_root_anchor = prim.attributes.contains("lunco:anchor:lat")
+                && prim.attributes.contains("lunco:anchor:lon");
+            break;
+        }
+        if !has_root_anchor {
+            out.push(finding(
+                "celestial-solar-site-required",
+                "error",
+                root_path,
+                "A connected solar Modelica input uses a celestial scene, but the selected root has no geodetic site anchor. Author root lunco:anchor:lat and lunco:anchor:lon so the ephemeris can publish a local SunState; the authored DistantLight remains render-only in celestial mode.",
+            ));
+        }
+        return out;
+    }
+
+    let static_sun_count = 0;
+    for prim in facts.prims {
+        if prim.type == "DistantLight" && prim.parent == root_path {
+            static_sun_count += 1;
+        }
+    }
+    if static_sun_count != 1 {
+        out.push(finding(
+            "static-solar-light-cardinality",
+            "error",
+            root_path,
+            "A connected solar Modelica input in a scene without celestial bodies requires exactly one authored root DistantLight as its static direction source; author one light or add celestial bodies and a root site anchor.",
+        ));
+    }
+    out
+}
+
+fn has_connected_solar_probe_consumer(facts) {
+    let solar_outputs = [];
+    for provider in facts.prims {
+        if !provider.schemas.contains("LunCoEnvironmentProbeAPI") { continue; }
+        solar_outputs.push(provider.path + ".outputs:sun_mount_x");
+        solar_outputs.push(provider.path + ".outputs:sun_mount_y");
+        solar_outputs.push(provider.path + ".outputs:sun_mount_z");
+    }
+
+    for sink in facts.prims {
+        for connection in sink.connections {
+            if connection.name != "inputs:sun_mount_x"
+                && connection.name != "inputs:sun_mount_y"
+                && connection.name != "inputs:sun_mount_z" {
+                continue;
+            }
+            if connection_uses_solar_probe(connection, solar_outputs) { return true; }
+        }
+    }
+    false
+}
+
+fn connection_uses_solar_probe(connection, solar_outputs) {
+    for source in connection.sources {
+        if solar_outputs.contains(source.path) { return true; }
+    }
+    false
 }
 
 /// A connector WIRE only has meaning inside the one generated Modelica island

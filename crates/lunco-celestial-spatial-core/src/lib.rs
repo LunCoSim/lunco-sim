@@ -14,8 +14,8 @@ mod surface_pose;
 mod tracking;
 
 pub use components::{
-    AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField, OrbitalViewPin, SolarSystemRoot,
-    celestial_declared,
+    AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSourcePresent, LocalGravityField,
+    OrbitalViewPin, SolarSystemRoot, celestial_declared,
 };
 pub use connectivity::{
     LinkGeometryPeer, LinkGeometryState, LinkNode, LinkOccluder, LinkPeer, LinkState, WifiNode,

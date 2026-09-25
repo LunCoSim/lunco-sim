@@ -179,7 +179,7 @@ runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 renderer; do not overwrite `Name` or add a waypoint-specific overlay.
 
 For physics and co-simulation, derive `SunState` from `CelestialTime`. The
-render light and per-probe `LocalSolar` bridge project that semantic source;
+render light and direct probe-to-cosim projection consume that semantic source;
 do not create a separate render-time sun source or local solar clock.
 Publish `SunRenderState` from the finalized scene-sun `GlobalTransform` after
 `BigSpaceSystems::PropagateLowPrecision`. Any conversion of that direction

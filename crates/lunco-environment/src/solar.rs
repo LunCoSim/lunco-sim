@@ -2,10 +2,10 @@
 //!
 //! The lighting analog of the gravity bridge. Semantic [`SunState`] is the
 //! provider contract; the render `DirectionalLight` is only its projection.
-//! This module caches the semantic direction per-entity as [`LocalSolar`] and
-//! publishes it into the co-sim graph as ordinary `SimComponent` **outputs**,
-//! so a sun-tracking model receives it through a plain output→input wire — the
-//! ontology's `RadiationProvider → LocalRadiation → solar models` pipeline.
+//! This module projects the semantic direction directly into the co-sim graph
+//! as ordinary `SimComponent` **outputs**, so a sun-tracking model receives it
+//! through a plain output→input wire — the ontology's
+//! `RadiationProvider → solar model` pipeline.
 //!
 //! Values are published on explicit [`crate::EnvironmentProbe`] source prims.
 //! Models consume them through ordinary USD connections, so provider and
@@ -13,12 +13,11 @@
 //!
 //! ## Provider note
 //!
-//! There is no separate `SolarProvider` component yet: [`SunState`] is the
-//! provider contract (its direction is published by ephemeris or an explicit
-//! command). A richer provider (irradiance
-//! model, eclipse occlusion, per-site horizon visibility) would attach here
-//! later, exactly as `GravityProvider` carries the gravity model — the
-//! [`LocalSolar`] cache already gives each entity its own slot for that.
+//! There is no separate `SolarProvider` component: [`SunState`] is the provider
+//! contract (its direction is published by ephemeris or an explicit command).
+//! Modelica reads the latest celestial sample at ordinary fixed-step
+//! communication points; the frame conversion and output write happen together
+//! before cosim propagation so there is no intermediate cache to go stale.
 
 use bevy::{math::DQuat, prelude::*};
 
@@ -124,42 +123,40 @@ impl SunRenderState {
     }
 }
 
-/// Unit direction toward the Sun in an entity's authored mount frame.
-///
-/// The lighting analog of `LocalGravity`. Today the value is global (one sun,
-/// no occlusion) so every entity gets the same direction, but it is cached
-/// per-entity so a future per-site horizon/eclipse model can vary it without
-/// touching consumers.
-///
-/// The convention is explicit and shared with antenna tracking: `+X` right,
-/// `+Y` up, `-Z` forward.  The full world→mount rotation is applied before a
-/// model selects joint angles, so vehicle yaw, pitch and roll cannot be
-/// mistaken for a solar bearing.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Reflect, Default)]
-#[reflect(Component)]
-pub struct LocalSolar {
-    /// Complete active-world→mount direction, kept as a vector until a
-    /// consumer needs its own coordinates.
-    pub direction: Vec3,
+fn clear_solar_outputs(comp: &mut lunco_cosim_core::SimComponent) {
+    comp.outputs.remove(SUN_MOUNT_X_CONNECTOR);
+    comp.outputs.remove(SUN_MOUNT_Y_CONNECTOR);
+    comp.outputs.remove(SUN_MOUNT_Z_CONNECTOR);
 }
 
-/// Computes [`LocalSolar`] for every explicit environment probe from the scene sun.
+fn solar_diagnostic(code: &str, subject: String, message: String) -> lunco_core::RuntimeDiagnostic {
+    lunco_core::RuntimeDiagnostic {
+        code: code.to_string(),
+        severity: lunco_core::DiagnosticSeverity::Error,
+        producer: "environment-solar".to_string(),
+        subject,
+        message,
+    }
+}
+
+/// Projects semantic [`SunState`] directly into each environment probe's
+/// `SimComponent` outputs before [`CosimSet::Propagate`](lunco_cosim_core::schedule::CosimSet).
 ///
-/// Semantic [`SunState`] is the provider. Render-layer-scoped preview lights
-/// and earthshine never participate in this source path. Writes `LocalSolar`
-/// only when the direction actually changes, to avoid a per-frame
-/// change-detection storm — mirrors `compute_local_gravity`.
-///
-/// Targets entities that carry [`crate::EnvironmentProbe`] so the cache lands
-/// exactly where [`inject_local_solar_into_cosim`] will publish it.
-pub fn compute_local_solar(
-    mut commands: Commands,
+/// The source is the shared celestial sample published to [`SunState`]. This
+/// system converts active-frame direction to each probe's mount frame and
+/// writes the `f64` cosim outputs in one pass at ordinary FixedUpdate cadence.
+/// Missing provider or frame data clears only these three outputs and leaves a
+/// persistent runtime diagnostic; Modelica must never retain a stale direction.
+pub fn publish_solar_inputs_to_cosim(
     sun: Option<Res<SunState>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
-    q_targets: Query<(Entity, Option<&LocalSolar>), With<crate::EnvironmentProbe>>,
+    mut q_targets: Query<
+        (Entity, Option<&mut lunco_cosim_core::SimComponent>),
+        With<crate::EnvironmentProbe>,
+    >,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     if q_targets.is_empty() {
@@ -168,128 +165,116 @@ pub fn compute_local_solar(
         }
         return;
     }
-    let Some(direction_to_sun) = sun
+
+    let mut findings = Vec::new();
+    let direction = sun
         .as_deref()
         .and_then(|state| state.direction_to_sun)
-        .and_then(SunState::normalized_direction)
-    else {
-        for (entity, existing) in &q_targets {
-            if existing.is_some() {
-                commands.entity(entity).remove::<LocalSolar>();
-            }
+        .and_then(SunState::normalized_direction);
+    let direction_world = match (direction, active_frame.as_deref()) {
+        (None, _) => {
+            findings.push(solar_diagnostic(
+                "solar-source-missing",
+                "EnvironmentProbe".to_string(),
+                "a solar environment probe has no valid semantic SunState; solar Modelica inputs were cleared"
+                    .to_string(),
+            ));
+            None
         }
-        if let Some(mut diagnostics) = diagnostics {
-            diagnostics.replace_producer("environment-solar", std::iter::empty());
+        (Some(_), None) => {
+            findings.push(solar_diagnostic(
+                "solar-frame-missing",
+                "ActivePhysicsFrame".to_string(),
+                "SunState exists but no ActivePhysicsFrame is bound; solar Modelica inputs were cleared"
+                    .to_string(),
+            ));
+            None
         }
-        return;
-    };
-
-    let Some(active_frame) = active_frame else {
-        for (entity, existing) in &q_targets {
-            if existing.is_some() {
-                commands.entity(entity).remove::<LocalSolar>();
-            }
-        }
-        if let Some(mut diagnostics) = diagnostics {
-            diagnostics.replace_producer(
-                "environment-solar",
-                [lunco_core::RuntimeDiagnostic {
-                    code: "solar-frame".to_string(),
-                    severity: lunco_core::DiagnosticSeverity::Error,
-                    producer: "environment-solar".to_string(),
-                    subject: "LocalSolar".to_string(),
-                    message: "a semantic SunState exists but no ActivePhysicsFrame is bound"
-                        .to_string(),
-                }],
-            );
-        }
-        return;
-    };
-    let Ok((_, frame_rotation)) =
-        lunco_spatial::coords::world_pose(active_frame.0, &q_parents, &q_grids, &q_spatial)
-    else {
-        for (entity, existing) in &q_targets {
-            if existing.is_some() {
-                commands.entity(entity).remove::<LocalSolar>();
-            }
-        }
-        if let Some(mut diagnostics) = diagnostics {
-            diagnostics.replace_producer(
-                "environment-solar",
-                [lunco_core::RuntimeDiagnostic {
-                    code: "solar-frame".to_string(),
-                    severity: lunco_core::DiagnosticSeverity::Error,
-                    producer: "environment-solar".to_string(),
-                    subject: format!("frame:{:?}", active_frame.0),
-                    message: "the bound ActivePhysicsFrame has no complete BigSpace pose"
-                        .to_string(),
-                }],
-            );
-        }
-        return;
-    };
-    let direction_to_sun_world = frame_rotation.0 * direction_to_sun.as_dvec3();
-    if !direction_to_sun_world.is_finite() || direction_to_sun_world.length_squared() < 1.0e-24 {
-        for (entity, existing) in &q_targets {
-            if existing.is_some() {
-                commands.entity(entity).remove::<LocalSolar>();
-            }
-        }
-        if let Some(mut diagnostics) = diagnostics {
-            diagnostics.replace_producer(
-                "environment-solar",
-                [lunco_core::RuntimeDiagnostic {
-                    code: "solar-frame".to_string(),
-                    severity: lunco_core::DiagnosticSeverity::Error,
-                    producer: "environment-solar".to_string(),
-                    subject: "LocalSolar".to_string(),
-                    message:
-                        "the semantic SunState direction is invalid after active-frame projection"
+        (Some(direction), Some(active_frame)) => {
+            match lunco_spatial::coords::world_pose(
+                active_frame.0,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) {
+                Ok((_, frame_rotation)) => {
+                    let world = frame_rotation.0 * direction.as_dvec3();
+                    (world.is_finite() && world.length_squared() >= 1.0e-24).then_some(world)
+                }
+                Err(_) => {
+                    findings.push(solar_diagnostic(
+                        "solar-frame-invalid",
+                        format!("frame:{:?}", active_frame.0),
+                        "the bound ActivePhysicsFrame has no complete BigSpace pose; solar Modelica inputs were cleared"
                             .to_string(),
-                }],
-            );
+                    ));
+                    None
+                }
+            }
         }
-        return;
+    };
+    if direction.is_some() && direction_world.is_none() && findings.is_empty() {
+        findings.push(solar_diagnostic(
+            "solar-direction-invalid",
+            "SunState".to_string(),
+            "the semantic SunState direction is invalid after active-frame projection; solar Modelica inputs were cleared"
+                .to_string(),
+        ));
     }
+
     let mut missing_mounts = 0;
-    for (entity, existing) in &q_targets {
+    let mut missing_interfaces = 0;
+    for (entity, sim) in &mut q_targets {
+        let Some(mut sim) = sim else {
+            missing_interfaces += 1;
+            continue;
+        };
+        let Some(direction_world) = direction_world else {
+            clear_solar_outputs(&mut sim);
+            continue;
+        };
         let Ok((_, mount_rotation)) =
             lunco_spatial::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
         else {
+            clear_solar_outputs(&mut sim);
             missing_mounts += 1;
-            if existing.is_some() {
-                commands.entity(entity).remove::<LocalSolar>();
-            }
             continue;
         };
-        let next = LocalSolar {
-            direction: crate::mount_frame::direction_in_mount_rotation(
-                direction_to_sun_world,
-                mount_rotation.0,
-            ),
-        };
-        if existing == Some(&next) {
+        let direction_mount =
+            crate::mount_frame::direction_in_mount_rotation(direction_world, mount_rotation.0);
+        if !direction_mount.is_finite() || direction_mount.length_squared() < 1.0e-12 {
+            clear_solar_outputs(&mut sim);
+            missing_mounts += 1;
             continue;
         }
-        commands.entity(entity).try_insert(next);
+        sim.outputs
+            .insert(SUN_MOUNT_X_CONNECTOR.to_string(), direction_mount.x as f64);
+        sim.outputs
+            .insert(SUN_MOUNT_Y_CONNECTOR.to_string(), direction_mount.y as f64);
+        sim.outputs
+            .insert(SUN_MOUNT_Z_CONNECTOR.to_string(), direction_mount.z as f64);
+    }
+
+    if missing_mounts > 0 {
+        findings.push(solar_diagnostic(
+            "solar-mount-invalid",
+            "EnvironmentProbe".to_string(),
+            format!(
+                "{missing_mounts} environment probe(s) have no complete BigSpace pose; their solar Modelica inputs were cleared"
+            ),
+        ));
+    }
+    if missing_interfaces > 0 {
+        findings.push(solar_diagnostic(
+            "solar-probe-interface-missing",
+            "EnvironmentProbe".to_string(),
+            format!(
+                "{missing_interfaces} environment probe(s) have no SimComponent output interface"
+            ),
+        ));
     }
     if let Some(mut diagnostics) = diagnostics {
-        if missing_mounts == 0 {
-            diagnostics.replace_producer("environment-solar", std::iter::empty());
-        } else {
-            diagnostics.replace_producer(
-                "environment-solar",
-                [lunco_core::RuntimeDiagnostic {
-                    code: "solar-mount".to_string(),
-                    severity: lunco_core::DiagnosticSeverity::Error,
-                    producer: "environment-solar".to_string(),
-                    subject: "EnvironmentProbe".to_string(),
-                    message: format!(
-                        "{missing_mounts} environment probe(s) have no complete BigSpace pose for solar projection"
-                    ),
-                }],
-            );
-        }
+        diagnostics.replace_producer("environment-solar", findings);
     }
 }
 
@@ -784,58 +769,45 @@ pub fn sun_render_finalize_needed(
     sun.is_some_and(|state| state.is_changed()) || !q_sun.is_empty()
 }
 
-/// Publishes each entity's [`LocalSolar`] as `SimComponent` **outputs**
-/// [`SUN_MOUNT_X_CONNECTOR`] / [`SUN_MOUNT_Y_CONNECTOR`] /
-/// [`SUN_MOUNT_Z_CONNECTOR`].
-///
-/// Runs after [`compute_local_solar`] and before cosim propagation, so the
-/// fresh outputs are read the same tick. Writes every tick because a model's
-/// own output sync may rewrite its outputs map (same reasoning as the gravity
-/// bridge). If no scene sun is available, removes only the solar outputs while
-/// retaining the schema-declared source contract for later binding.
-pub fn inject_local_solar_into_cosim(
-    mut q: Query<
-        (Option<&LocalSolar>, &mut lunco_cosim_core::SimComponent),
-        With<crate::EnvironmentProbe>,
-    >,
-) {
-    for (solar, mut comp) in &mut q {
-        let Some(solar) = solar else {
-            comp.outputs.remove(SUN_MOUNT_X_CONNECTOR);
-            comp.outputs.remove(SUN_MOUNT_Y_CONNECTOR);
-            comp.outputs.remove(SUN_MOUNT_Z_CONNECTOR);
-            continue;
-        };
-        comp.outputs
-            .insert(SUN_MOUNT_X_CONNECTOR.to_string(), solar.direction.x as f64);
-        comp.outputs
-            .insert(SUN_MOUNT_Y_CONNECTOR.to_string(), solar.direction.y as f64);
-        comp.outputs
-            .insert(SUN_MOUNT_Z_CONNECTOR.to_string(), solar.direction.z as f64);
-    }
-}
+// Direct SunState→SimComponent publication is implemented above with the
+// active-frame and probe-mount conversions in the same FixedUpdate pass.
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn missing_sun_removes_cached_local_direction() {
+    fn missing_sun_clears_solar_outputs_and_reports_the_missing_provider() {
         let mut app = App::new();
-        app.add_systems(Update, compute_local_solar);
-        let probe = app
-            .world_mut()
-            .spawn((
-                crate::EnvironmentProbe,
-                LocalSolar {
-                    direction: Vec3::NEG_Z,
-                },
-            ))
-            .id();
+        app.init_resource::<lunco_core::RuntimeDiagnostics>();
+        let mut sim = lunco_cosim_core::SimComponent::default();
+        sim.outputs.insert(SUN_MOUNT_X_CONNECTOR.to_owned(), 1.0);
+        sim.outputs.insert(SUN_MOUNT_Y_CONNECTOR.to_owned(), 2.0);
+        sim.outputs.insert(SUN_MOUNT_Z_CONNECTOR.to_owned(), 3.0);
+        sim.outputs
+            .insert(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR.to_owned(), 9.81);
+        let probe = app.world_mut().spawn((crate::EnvironmentProbe, sim)).id();
+        app.add_systems(Update, publish_solar_inputs_to_cosim);
+
         app.update();
+        let outputs = &app
+            .world()
+            .get::<lunco_cosim_core::SimComponent>(probe)
+            .unwrap()
+            .outputs;
+        assert!(!outputs.contains_key(SUN_MOUNT_X_CONNECTOR));
+        assert!(!outputs.contains_key(SUN_MOUNT_Y_CONNECTOR));
+        assert!(!outputs.contains_key(SUN_MOUNT_Z_CONNECTOR));
+        assert_eq!(
+            outputs.get(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR),
+            Some(&9.81)
+        );
         assert!(
-            app.world().get::<LocalSolar>(probe).is_none(),
-            "a scene without a sun must not retain a stale solar direction"
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .iter()
+                .any(|finding| finding.code == "solar-source-missing")
         );
     }
 
@@ -893,34 +865,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_solar_direction_removes_only_solar_outputs() {
-        let mut app = App::new();
-        let mut sim = lunco_cosim_core::SimComponent::default();
-        sim.outputs.insert(SUN_MOUNT_X_CONNECTOR.to_owned(), 1.0);
-        sim.outputs.insert(SUN_MOUNT_Y_CONNECTOR.to_owned(), 2.0);
-        sim.outputs.insert(SUN_MOUNT_Z_CONNECTOR.to_owned(), 3.0);
-        sim.outputs
-            .insert(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR.to_owned(), 9.81);
-        let entity = app.world_mut().spawn((crate::EnvironmentProbe, sim)).id();
-        app.add_systems(Update, inject_local_solar_into_cosim);
-
-        app.update();
-
-        let outputs = &app
-            .world()
-            .get::<lunco_cosim_core::SimComponent>(entity)
-            .unwrap()
-            .outputs;
-        assert!(!outputs.contains_key(SUN_MOUNT_X_CONNECTOR));
-        assert!(!outputs.contains_key(SUN_MOUNT_Y_CONNECTOR));
-        assert!(!outputs.contains_key(SUN_MOUNT_Z_CONNECTOR));
-        assert_eq!(
-            outputs.get(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR),
-            Some(&9.81)
-        );
-    }
-
-    #[test]
     fn rotated_site_frame_is_projected_before_mount_conversion() {
         let mut app = App::new();
         let site_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
@@ -939,13 +883,14 @@ mod tests {
             direction_to_sun: Some(Vec3::NEG_Z),
             ..Default::default()
         });
-        app.add_systems(Update, compute_local_solar);
+        app.add_systems(Update, publish_solar_inputs_to_cosim);
 
         let mount_rotation = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
         let probe = app
             .world_mut()
             .spawn((
                 crate::EnvironmentProbe,
+                lunco_cosim_core::SimComponent::default(),
                 Transform::from_rotation(mount_rotation),
                 GlobalTransform::IDENTITY,
             ))
@@ -953,14 +898,20 @@ mod tests {
         app.update();
 
         let expected = mount_rotation.inverse() * (site_rotation * Vec3::NEG_Z);
-        let got = app
+        let outputs = &app
             .world()
-            .get::<LocalSolar>(probe)
-            .expect("projected solar direction");
+            .get::<lunco_cosim_core::SimComponent>(probe)
+            .expect("cosim output interface")
+            .outputs;
+        let got = Vec3::new(
+            *outputs.get(SUN_MOUNT_X_CONNECTOR).expect("sun x") as f32,
+            *outputs.get(SUN_MOUNT_Y_CONNECTOR).expect("sun y") as f32,
+            *outputs.get(SUN_MOUNT_Z_CONNECTOR).expect("sun z") as f32,
+        );
         assert!(
-            got.direction.abs_diff_eq(expected.normalize(), 1e-5),
+            got.abs_diff_eq(expected.normalize(), 1e-5),
             "site ENU must become active-world before mount conversion: got {:?}, expected {:?}",
-            got.direction,
+            got,
             expected
         );
     }
@@ -982,21 +933,29 @@ mod tests {
             ..Default::default()
         });
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
-        app.add_systems(Update, compute_local_solar);
-        let probe = app
-            .world_mut()
-            .spawn((crate::EnvironmentProbe, LocalSolar { direction: Vec3::X }))
-            .id();
+        app.add_systems(Update, publish_solar_inputs_to_cosim);
+        let mut sim = lunco_cosim_core::SimComponent::default();
+        sim.outputs.insert(SUN_MOUNT_X_CONNECTOR.to_owned(), 0.0);
+        sim.outputs.insert(SUN_MOUNT_Y_CONNECTOR.to_owned(), 0.0);
+        sim.outputs.insert(SUN_MOUNT_Z_CONNECTOR.to_owned(), 1.0);
+        let probe = app.world_mut().spawn((crate::EnvironmentProbe, sim)).id();
 
         app.update();
 
-        assert!(app.world().get::<LocalSolar>(probe).is_none());
+        let outputs = &app
+            .world()
+            .get::<lunco_cosim_core::SimComponent>(probe)
+            .unwrap()
+            .outputs;
+        assert!(!outputs.contains_key(SUN_MOUNT_X_CONNECTOR));
+        assert!(!outputs.contains_key(SUN_MOUNT_Y_CONNECTOR));
+        assert!(!outputs.contains_key(SUN_MOUNT_Z_CONNECTOR));
         assert!(
             app.world()
                 .resource::<lunco_core::RuntimeDiagnostics>()
                 .findings
                 .iter()
-                .any(|finding| finding.code == "solar-mount")
+                .any(|finding| finding.code == "solar-mount-invalid")
         );
     }
 

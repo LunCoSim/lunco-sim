@@ -124,16 +124,25 @@ recomputes it every frame from the Sun–Earth–site geometry as
 its own driver on the next frame. There is correspondingly no slider — the inspector shows
 a readout, and what moves it is the sim clock.
 
-The Sun's shipped values are the documented calibration for scenes without a live solar
-distance model. The ephemeris provider samples the one `CelestialTime` child of
+The Sun's shipped values are the documented calibration for static/manual scenes
+without a composed `LunCoCelestialBodyAPI` source. In that mode, exactly one
+unscoped authored `DistantLight` below the active scene root supplies the static
+direction. A scene that declares celestial bodies selects the ephemeris source
+and requires a root site anchor for local solar directions; its authored light
+is render-only. The ephemeris provider samples the one `CelestialTime` child of
 `WorldTime` to publish `SunState` direction and irradiance. The render light,
 shadows, and the environment bridge project that same semantic state; none
-selects a second solar clock. `LocalSolar` is a per-probe mount-frame direction
-cache, not a time source. It is refreshed during ordinary `FixedUpdate` and
-published to Modelica at the existing co-simulation communication point.
+selects a second solar clock.
+
+The environment bridge converts `SunState` through the active physics frame and
+probe mount, then writes `sun_mount_x/y/z` directly to the probe's
+`SimComponent` before `CosimSet::Propagate`. There is no intermediate
+per-probe solar cache. A missing or invalid semantic direction clears those
+outputs and publishes a Runtime Diagnostic, so a Modelica controller cannot
+continue from a stale value.
 
 ```
-CelestialTime ephemeris + site frame → SunState → LocalSolar → EnvironmentProbe → Modelica controller
+CelestialTime ephemeris + site frame → SunState → EnvironmentProbe cosim outputs → Modelica controller
                                       └── DirectionalLight → SunRenderState → renderer and terrain shadows
 ```
 

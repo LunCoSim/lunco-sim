@@ -784,7 +784,7 @@ fn link_event(name: &str, (a, b): (u64, u64), jd: f64) -> TelemetryEvent {
 /// (`assets/models/CommsLink.mo`) receives real geometry through an ordinary
 /// output→input wire.
 ///
-/// The gravity/solar-bridge idiom (`lunco-environment`'s `inject_local_solar_into_cosim`):
+/// The gravity/solar-provider idiom (`lunco-environment`'s direct cosim projection):
 /// cosim stays domain-agnostic, this domain system writes the value, and the USD wiring
 /// is explicit. The kernel keeps publishing geometry and ONLY geometry — metres and a
 /// verdict. Bits per second are the channel model's business, and the channel model is

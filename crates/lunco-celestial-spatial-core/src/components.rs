@@ -15,6 +15,15 @@ pub struct CelestialBodyDecl {
     pub naif: i32,
 }
 
+/// The composed scene declares at least one celestial body source.
+///
+/// This marker records source-mode presence on the mounted scene root even
+/// when a body's individual declaration is malformed. Runtime consumers use
+/// it to reject the static authored-light source for a celestial scene instead
+/// of masking a failed ephemeris projection with stale lighting.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CelestialSourcePresent;
+
 /// Marker for the inertial solar-system root grid owned by the spatial runtime.
 #[derive(Component)]
 pub struct SolarSystemRoot;

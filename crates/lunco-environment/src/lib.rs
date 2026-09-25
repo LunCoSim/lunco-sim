@@ -5,8 +5,8 @@
 //! See `README.md` for the full architecture, rationale, and how to add new
 //! environment domains (atmosphere, radiation, magnetic field, etc.).
 //!
-//! Currently implements **gravity only**. Other domains follow the same
-//! pattern — see the README for templates.
+//! Currently implements gravity, solar-direction inputs, lunar lighting, and
+//! horizon self-shadowing. See the README for ownership and extension guidance.
 
 use avian3d::prelude::{ConstantLinearAcceleration, RigidBody};
 use bevy::math::{DQuat, DVec3};
@@ -58,17 +58,16 @@ pub use gravity_types::{
 pub mod lighting;
 pub use lighting::{FULL_EARTH_EARTHSHINE_LUX, LunarSun, drive_earthshine_from_phase};
 
-/// Solar direction as a co-simulation source (`LocalSolar` + the sun→cosim
-/// bridge). The lighting-direction analog of the gravity bridge.
+/// Solar direction as a direct co-simulation source projection. The
+/// lighting-direction analog of the gravity bridge.
 ///
 /// **Render-free.** It reads semantic [`SunState`], not a render light. The
 /// render light is a projection of that state, so a headless provider and a
 /// GUI cannot silently disagree about the direction.
 pub mod solar;
 pub use solar::{
-    LocalSolar, SunRenderState, SunState, compute_local_solar, finalize_sun_render_state,
-    inject_local_solar_into_cosim, project_sun_state_to_light, sun_render_finalize_needed,
-    tracked_sun_light_projection,
+    SunRenderState, SunState, finalize_sun_render_state, project_sun_state_to_light,
+    publish_solar_inputs_to_cosim, sun_render_finalize_needed, tracked_sun_light_projection,
 };
 
 /// Explicit USD-authored source of mount-local environmental signals.
@@ -118,8 +117,8 @@ pub use horizon::{
 /// System sets for environment computation and consumption.
 ///
 /// Ordered chain in [`FixedUpdate`]:
-/// 1. [`Compute`](EnvironmentSet::Compute) — write `Local*` components from providers
-/// 2. [`Apply`](EnvironmentSet::Apply) — consumers like Avian gravity projection
+/// 1. [`Compute`](EnvironmentSet::Compute) — compute per-entity `Local*` values
+/// 2. [`Apply`](EnvironmentSet::Apply) — project gravity and publish direct cosim outputs
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EnvironmentSet {
     /// Computes per-entity environment components from body providers.
@@ -716,8 +715,8 @@ register_commands!(on_set_environment_light);
 /// Registers environment components, computation, and consumption systems.
 ///
 /// Add after [`lunco_celestial_spatial::GravityPlugin`]. Ordering in `FixedUpdate`:
-/// 1. [`EnvironmentSet::Compute`] — writes `LocalGravity` (and future `Local*`)
-/// 2. [`EnvironmentSet::Apply`] — projects gravity onto Avian RigidBodies
+/// 1. [`EnvironmentSet::Compute`] — writes `LocalGravity`
+/// 2. [`EnvironmentSet::Apply`] — applies gravity and publishes environment cosim outputs
 pub struct EnvironmentPlugin;
 
 fn clear_environment_sun_state(mut sun: ResMut<SunState>, mut render_sun: ResMut<SunRenderState>) {
@@ -778,7 +777,6 @@ impl Plugin for EnvironmentPlugin {
         // `RenderLayers` is `bevy_camera`; neither depends on `bevy_render`, so
         // the earthshine fill and the sun→cosim direction feed run headless too
         // (a sun-tracking Modelica model on the `--no-ui` server needs them).
-        app.register_type::<LocalSolar>();
         app.register_type::<LocalEarth>();
         app.register_type::<EnvironmentProbe>();
         app.register_type::<EarthDirectionRequired>();
@@ -816,14 +814,12 @@ impl Plugin for EnvironmentPlugin {
         // and the phase moves ~0.5°/day so it is nowhere near rate-sensitive.
         app.add_systems(Update, lighting::drive_earthshine_from_phase);
 
-        // Solar source: mirror gravity. Compute the per-entity sun
-        // direction, then publish it as cosim outputs before propagation
-        // so a sun-tracking model reads it the same tick.
+        // Solar source: convert the latest semantic sun sample into each probe's
+        // mount frame and publish it directly to cosim outputs before propagation.
         app.add_systems(
             FixedUpdate,
             (
-                compute_local_solar.in_set(EnvironmentSet::Compute),
-                inject_local_solar_into_cosim
+                publish_solar_inputs_to_cosim
                     .in_set(EnvironmentSet::Apply)
                     .before(lunco_cosim_core::schedule::CosimSet::Propagate),
                 // Earth pointing rides the same three-phase ordering: an antenna
