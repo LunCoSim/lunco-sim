@@ -8275,6 +8275,7 @@ dependencies = [
  "lunco-modelica-ui-core",
  "lunco-networking",
  "lunco-networking-sync",
+ "lunco-notifications-core",
  "lunco-render",
  "lunco-render-bevy",
  "lunco-render-recovery",

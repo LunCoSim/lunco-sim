@@ -471,6 +471,8 @@ fn record_camera_error(
     commands: &mut Commands,
 ) {
     if status.last_error.as_deref() != Some(message.as_str()) {
+        warn!("[camera] {message}");
+        lunco_core::trigger_runtime_error(commands, "camera-selection", message.clone());
         status.last_error = Some(message);
         commands.trigger(CameraSelectionStatusChanged);
     }
@@ -524,8 +526,7 @@ pub fn on_set_active_camera(
     match resolve_named_camera(want, &q_cams) {
         Ok(target) => commands.trigger(ActivateCamera::director(target)),
         Err(message) => {
-            record_camera_error(&mut status, message.clone(), &mut commands);
-            warn!("[camera] {message}");
+            record_camera_error(&mut status, message, &mut commands);
         }
     }
 }
@@ -541,8 +542,7 @@ pub fn on_set_user_camera(
     match resolve_named_camera(want, &q_cams) {
         Ok(target) => commands.trigger(ActivateCamera::user(target)),
         Err(message) => {
-            record_camera_error(&mut status, message.clone(), &mut commands);
-            warn!("[camera] {message}");
+            record_camera_error(&mut status, message, &mut commands);
         }
     }
 }
@@ -565,8 +565,7 @@ pub fn on_request_local_avatar_view(
     let target = local_avatar.0.filter(|entity| q_cameras.contains(*entity));
     let Some(target) = target else {
         let message = "the scene has no local avatar camera to observe".to_string();
-        record_camera_error(&mut status, message.clone(), &mut commands);
-        warn!("[camera] {message}");
+        record_camera_error(&mut status, message, &mut commands);
         return;
     };
     commands.trigger(ActivateCamera::user(target));
@@ -585,8 +584,7 @@ pub fn on_resume_camera_director(
     selection.director_revision = selection.director_revision.wrapping_add(1);
     if q_tracks.is_empty() {
         let message = "the scene has no authored CameraTrack to resume".to_string();
-        record_camera_error(&mut status, message.clone(), &mut commands);
-        warn!("[camera] {message}");
+        record_camera_error(&mut status, message, &mut commands);
     } else {
         clear_camera_error(&mut status, &mut commands);
     }
@@ -689,8 +687,7 @@ pub fn on_activate_camera(
                 );
             } else {
                 let message = format!("camera {target:?} is not a window camera");
-                record_camera_error(&mut status, message.clone(), &mut commands);
-                warn!("[camera] {message}");
+                record_camera_error(&mut status, message, &mut commands);
             }
         }
         Err(_) => {
@@ -704,8 +701,7 @@ pub fn on_activate_camera(
                 })
                 .unwrap_or_else(|| "entity no longer exists".to_string());
             let message = format!("camera {target:?} ({identity}) is not a SceneCamera");
-            record_camera_error(&mut status, message.clone(), &mut commands);
-            warn!("[camera] {message}");
+            record_camera_error(&mut status, message, &mut commands);
         }
     }
 }
@@ -1862,7 +1858,6 @@ pub(crate) fn validate_authored_camera_contract(
             if changed {
                 if let Some(error) = contract.errors.first() {
                     record_camera_error(&mut status, error.clone(), &mut commands);
-                    error!("[camera] {error}");
                 }
             }
             return;
@@ -1990,7 +1985,6 @@ pub(crate) fn validate_authored_camera_contract(
     if changed {
         if let Some(error) = contract.errors.first() {
             record_camera_error(&mut status, error.clone(), &mut commands);
-            error!("[camera] {error}");
         } else if status
             .last_error
             .as_deref()
