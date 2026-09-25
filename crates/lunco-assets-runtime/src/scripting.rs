@@ -21,8 +21,19 @@ use std::path::{Component, Path, PathBuf};
 use lunco_assets_core::lunco_source::ASSETS_DIR_NAME;
 
 /// Marker that distinguishes a scripting policy manifest from other authored
-/// TOML files in the runtime asset library.
+/// TOML files across application and Twin asset scopes.
 pub const POLICY_MANIFEST_KIND: &str = "lunco.policy.v1";
+
+/// Runtime namespace that owns a policy manifest.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyScope {
+    /// Policies installed with the application asset library.
+    #[default]
+    Application,
+    /// Policies layered over one mounted Twin.
+    Twin,
+}
 
 // The runtime asset tree is the only source of these authored files. The
 // directories are discovered by `AssetManifest`/Bevy on web and by the storage
@@ -136,7 +147,7 @@ pub struct PolicySpec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct StartupSpec {
-    /// Relative `.rhai` source path beside the application manifest.
+    /// Relative `.rhai` source path beside the owning policy manifest.
     pub source: String,
     /// Function exported by `source`.
     pub entry: String,
@@ -151,8 +162,10 @@ pub struct StartupSpec {
 pub struct PolicyManifest {
     /// Authored discriminator used by runtime discovery.
     pub kind: String,
-    /// The one application bootstrap function. Twin manifests omit this and
-    /// contribute only policy overrides to the application's bootstrap.
+    /// Namespace that owns this manifest; required in authored TOML.
+    pub scope: PolicyScope,
+    /// The owning scope's bootstrap function. Twin manifests may omit this
+    /// when they contain no policy overrides.
     #[serde(default)]
     pub startup: Option<StartupSpec>,
     /// Policies to load in declaration order.
@@ -183,7 +196,7 @@ pub struct LoadedPolicyBundle {
     pub policies: Vec<LoadedPolicy>,
 }
 
-/// One resolved application startup function.
+/// One resolved policy startup function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedStartup {
     /// Manifest metadata for the startup function.
@@ -249,6 +262,36 @@ fn parse_policy_manifest(text: &str, location: &Path) -> Result<PolicyManifest, 
         }
     }
     Ok(manifest)
+}
+
+fn policy_manifest_scope(text: &str, location: &Path) -> Result<Option<PolicyScope>, String> {
+    let Ok(value) = toml::from_str::<toml::Value>(text) else {
+        return Ok(None);
+    };
+    let Some(kind) = value.get("kind").and_then(toml::Value::as_str) else {
+        return Ok(None);
+    };
+    if kind != POLICY_MANIFEST_KIND {
+        return Ok(None);
+    }
+    let scope = value
+        .get("scope")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "policy manifest {} must declare string scope = \"application\" or \"twin\"",
+                location.display()
+            )
+        })?;
+    match scope {
+        "application" => Ok(Some(PolicyScope::Application)),
+        "twin" => Ok(Some(PolicyScope::Twin)),
+        other => Err(format!(
+            "policy manifest {} declares unsupported scope '{}'; expected 'application' or 'twin'",
+            location.display(),
+            other
+        )),
+    }
 }
 
 fn validate_rhai_source_path(source: &str, location: &Path, kind: &str) -> Result<(), String> {
@@ -355,6 +398,20 @@ fn require_application_startup(
     Ok(bundle)
 }
 
+fn is_toml_path(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()) == Some("toml")
+}
+
+fn is_indexed_policy_candidate_path(relative_path: &Path) -> bool {
+    is_toml_path(relative_path)
+        && !relative_path.components().any(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .is_some_and(|name| name.starts_with('.') || name == "target")
+        })
+}
+
 fn collect_toml_sources(current: &Path, files: &mut Vec<(PathBuf, String)>) -> Result<(), String> {
     for path in lunco_storage::read_directory_sync(current)
         .map_err(|error| format!("cannot read asset directory {}: {error}", current.display()))?
@@ -370,9 +427,7 @@ fn collect_toml_sources(current: &Path, files: &mut Vec<(PathBuf, String)>) -> R
             Ok(lunco_storage::StorageEntryKind::Directory) => {
                 collect_toml_sources(&path, files)?;
             }
-            Ok(lunco_storage::StorageEntryKind::File)
-                if path.extension().and_then(|x| x.to_str()) == Some("toml") =>
-            {
+            Ok(lunco_storage::StorageEntryKind::File) if is_toml_path(&path) => {
                 let source = lunco_storage::read_text_file_sync(&path)
                     .map_err(|error| format!("cannot read asset {}: {error}", path.display()))?;
                 files.push((path, source));
@@ -415,8 +470,9 @@ fn asset_prefix(root: &Path, path: &Path) -> Result<String, String> {
 
 /// Load the application policy set and its authored startup function at sim startup.
 ///
-/// The native synchronous path discovers the uniquely marked application policy
-/// manifest from the runtime asset tree and reads its sources through storage.
+/// The native synchronous path discovers the uniquely marked
+/// `scope = "application"` policy manifest from the runtime asset tree and
+/// reads its sources through storage.
 /// Web startup uses the asset pipeline and must not call this synchronous helper.
 pub fn active_policy_set() -> Result<Vec<LoadedPolicy>, String> {
     Ok(active_policy_bundle()?.policies)
@@ -432,23 +488,14 @@ pub fn active_policy_bundle() -> Result<LoadedPolicyBundle, String> {
         collect_toml_sources(&assets_root, &mut files)?;
         let mut candidates = Vec::new();
         for (path, text) in files {
-            let is_policy = toml::from_str::<toml::Value>(&text)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("kind")
-                        .and_then(toml::Value::as_str)
-                        .map(str::to_owned)
-                })
-                .is_some_and(|kind| kind == POLICY_MANIFEST_KIND);
-            if is_policy {
+            if policy_manifest_scope(&text, &path)? == Some(PolicyScope::Application) {
                 candidates.push((path, text));
             }
         }
         if candidates.len() != 1 {
             return Err(match candidates.len() {
                 0 => format!(
-                    "runtime asset tree {} contains no application policy manifest marked kind '{}'",
+                    "runtime asset tree {} contains no policy manifest marked kind '{}' with scope 'application'",
                     assets_root.display(),
                     POLICY_MANIFEST_KIND
                 ),
@@ -479,35 +526,43 @@ pub fn active_policy_bundle() -> Result<LoadedPolicyBundle, String> {
 
 /// Load the active Twin's optional policy set and its separate startup function.
 ///
-/// Twin policy sources are selected by the uniquely marked authored policy
-/// manifest anywhere under the Twin root. No application defaults are
+/// Twin policy sources are selected by the uniquely marked `scope = "twin"`
+/// manifest in the indexed Twin file inventory. No application defaults are
 /// substituted here: a Twin with no policy manifest simply contributes no
 /// overrides. Application code decides whether and how to layer the returned
 /// Twin bundle over the application bundle.
-pub fn twin_policy_set(root: &Path) -> Result<Option<LoadedPolicyBundle>, String> {
+pub fn twin_policy_set(twin: &lunco_twin::Twin) -> Result<Option<LoadedPolicyBundle>, String> {
+    let root = &twin.root;
     let mut files = Vec::new();
-    collect_toml_sources(root, &mut files)?;
-    let mut candidates = files
-        .into_iter()
-        .filter_map(|(path, text)| {
-            let is_policy = toml::from_str::<toml::Value>(&text)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("kind")
-                        .and_then(toml::Value::as_str)
-                        .map(str::to_owned)
-                })
-                .is_some_and(|kind| kind == POLICY_MANIFEST_KIND);
-            is_policy.then_some((path, text))
-        })
-        .collect::<Vec<_>>();
+    for entry in twin.files() {
+        if !is_indexed_policy_candidate_path(&entry.relative_path) {
+            continue;
+        }
+        let path = root.join(&entry.relative_path);
+        let source = lunco_storage::read_text_file_sync(&path)
+            .map_err(|error| format!("cannot read asset {}: {error}", path.display()))?;
+        files.push((path, source));
+    }
+    let mut candidates = Vec::new();
+    for (path, text) in files {
+        match policy_manifest_scope(&text, &path)? {
+            Some(PolicyScope::Twin) => candidates.push((path, text)),
+            Some(PolicyScope::Application) => {
+                return Err(format!(
+                    "policy manifest {} has application scope but is inside Twin root {}",
+                    path.display(),
+                    root.display()
+                ));
+            }
+            None => {}
+        }
+    }
     if candidates.is_empty() {
         return Ok(None);
     }
     if candidates.len() != 1 {
         return Err(format!(
-            "Twin root {} contains {} policy manifests marked kind '{}'; exactly one is required",
+            "Twin root {} contains {} policy manifests marked kind '{}' with scope 'twin'; exactly one is required",
             root.display(),
             candidates.len(),
             POLICY_MANIFEST_KIND
@@ -537,6 +592,7 @@ mod tests {
 
     const FEATURE_OPTIONAL_POLICY: &str = r#"
 kind = "lunco.policy.v1"
+scope = "application"
 
 [[policies]]
 hook = "render.shadow_quality"

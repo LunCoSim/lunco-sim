@@ -1,0 +1,12 @@
+kind = "lunco.policy.v1"
+scope = "twin"
+
+[startup]
+source = "startup.rhai"
+entry = "install_policies"
+
+[[policies]]
+hook = "camera.default_presentation"
+source = "camera_presentation.rhai"
+entry = "twin_default_presentation"
+required = true

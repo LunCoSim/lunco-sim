@@ -55,7 +55,9 @@ registry. A concise README beside a domain is for navigation; runtime identity
 stays in the asset and its `defaultPrim`.
 
 The application policy manifest is identified by
-`kind = "lunco.policy.v1"`. Its `scripting.source.classify` policy assigns
+`kind = "lunco.policy.v1"` and `scope = "application"`; Twin policy manifests
+use `scope = "twin"` to keep the namespaces distinct. Its
+`scripting.source.classify` policy assigns
 authored Rhai sources to the prelude, standard tool libraries, or ordinary
 scenario content. Rust loads the source tree through the asset/storage layer
 and applies that decision; source directories are not repeated in Rust

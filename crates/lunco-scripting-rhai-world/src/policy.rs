@@ -1716,12 +1716,12 @@ pub fn load_application_policies(
 
 /// Load only the active Twin's optional policy layer.
 pub fn load_twin_policies(
-    root: &Path,
+    twin: &lunco_workspace::Twin,
     registry: &mut ScriptedPolicyRegistry,
     journal: Option<&JournalResource>,
 ) -> PolicyLoadReport {
     let previous = registry.policies.clone();
-    let twin = match lunco_assets_runtime::scripting::twin_policy_set(root) {
+    let twin_bundle = match lunco_assets_runtime::scripting::twin_policy_set(twin) {
         Ok(twin) => twin,
         Err(error) => {
             let report = report_load_error("Twin", error, registry, journal);
@@ -1731,12 +1731,16 @@ pub fn load_twin_policies(
             return report;
         }
     };
-    let twin = twin.map(|mut twin| {
-        twin.policies = coalesce_loaded_policies(twin.policies);
-        twin
+    let twin_bundle = twin_bundle.map(|mut bundle| {
+        bundle.policies = coalesce_loaded_policies(bundle.policies);
+        bundle
     });
-    let report =
-        report_for_twin_policies(format!("Twin {}", root.display()), twin, registry, journal);
+    let report = report_for_twin_policies(
+        format!("Twin {}", twin.root.display()),
+        twin_bundle,
+        registry,
+        journal,
+    );
     if registry.policies != previous {
         registry.revision = registry.revision.wrapping_add(1);
     }
@@ -1792,7 +1796,7 @@ pub fn sync_policies_on_twin_added(
     };
     #[cfg(feature = "native-plugins")]
     log_native_plugin_report(native_plugins.load_for_twin(twin_id, twin));
-    let report = load_twin_policies(&twin.root, &mut registry, journal.as_deref());
+    let report = load_twin_policies(twin, &mut registry, journal.as_deref());
     registry.active_twin = Some(twin_id);
     registry.lifecycle = invoke_twin_lifecycle(
         event,
@@ -1833,33 +1837,27 @@ pub fn wind_down_policies_on_twin_closed(
     registry.active_twin = None;
     registry.status = registry.application_status.clone();
     let next = workspace.as_deref().and_then(|workspace| {
-        workspace.active_twin.and_then(|twin_id| {
-            workspace
-                .twin(twin_id)
-                .map(|twin| (twin_id, twin.root.clone()))
-        })
+        workspace
+            .active_twin
+            .and_then(|twin_id| workspace.twin(twin_id).map(|twin| (twin_id, twin)))
     });
-    if let Some((twin_id, root)) = next {
+    if let Some((twin_id, twin)) = next {
         #[cfg(feature = "native-plugins")]
-        if let Some(twin) = workspace
-            .as_deref()
-            .and_then(|workspace| workspace.twin(twin_id))
-        {
-            log_native_plugin_report(native_plugins.load_for_twin(twin_id, twin));
-        }
-        let report = load_twin_policies(&root, &mut registry, journal.as_deref());
+        log_native_plugin_report(native_plugins.load_for_twin(twin_id, twin));
+        let root = &twin.root;
+        let report = load_twin_policies(twin, &mut registry, journal.as_deref());
         registry.active_twin = Some(twin_id);
         registry.lifecycle = invoke_twin_lifecycle(
             "startup",
             twin_id,
-            &root,
+            root,
             &report,
             lunco_core::RuntimePhase::Start,
         );
         log_report(&report);
         if let Some(name) = roots
             .as_deref()
-            .and_then(|roots| roots.name_for_root(&root).ok().flatten())
+            .and_then(|roots| roots.name_for_root(root).ok().flatten())
         {
             commands.trigger(lunco_assets_runtime::TwinAssetMounted {
                 twin: twin_id,

@@ -70,6 +70,9 @@ Put the implementation in `assets/scripting/policy/<name>.rhai` and add one
 entry to `assets/scripting/policy/index.toml`:
 
 ```toml
+kind = "lunco.policy.v1"
+scope = "application" # use "twin" for a Twin-owned manifest
+
 [[policies]]
 hook = "my.hook"
 source = "my_policy.rhai"
@@ -78,15 +81,19 @@ deterministic = false
 required = false
 ```
 
-The manifest's single `[startup]` entry names the Rhai function that receives
-and installs all resolved policy records. The application manifest is loaded
-at simulation startup. A Twin may provide its own uniquely marked policy manifest; its
+The required `scope` separates `application` policy discovery from the mounted
+Twin's `twin` policy layer. The manifest's single `[startup]` entry names the
+Rhai function that receives and installs all resolved policy records. The
+application manifest is loaded at simulation startup. A Twin may provide its
+own uniquely marked `scope = "twin"` policy manifest; its
 matching entries replace application records before its own startup function
 runs when that Twin becomes active. The Twin startup function receives the
 Twin-owned records; application policies remain active for seams the Twin does
 not replace. A Twin manifest that contains policy records must declare its own
 `[startup]` source and entry; an empty Twin policy directory may omit it. Do
-not add a Rust-side policy list or a second bootstrap path.
+not add a Rust-side policy list or a second bootstrap path. Twin policy
+manifests are selected from the mounted Twin's indexed file inventory, so keep
+them inside that Twin root; activation does not rescan the directory tree.
 When `skip_when_hook_unavailable = true`, the runtime omits the policy only
 when that hook owner is not linked into the selected build and reports its id
 in `policy_status().unavailable`. Source, compile, and activation failures

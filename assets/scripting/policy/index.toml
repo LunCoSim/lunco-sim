@@ -8,6 +8,7 @@
 # then reports them as unavailable when that owner is not linked.
 
 kind = "lunco.policy.v1"
+scope = "application"
 
 [startup]
 source = "startup.rhai"

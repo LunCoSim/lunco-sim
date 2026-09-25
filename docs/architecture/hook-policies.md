@@ -61,8 +61,11 @@ production Rhai test.
 ## Runtime policy selection
 
 Application policies are selected at simulation startup from the unique
-authored TOML manifest marked `kind = "lunco.policy.v1"` in the runtime asset
-tree. The repository ships that manifest at
+authored TOML manifest marked `kind = "lunco.policy.v1"` and
+`scope = "application"` in the runtime asset tree. Twin policies use the same
+manifest kind with `scope = "twin"`; the explicit scope keeps Twin assets from
+colliding with the application namespace during discovery. The repository
+ships the application manifest at
 `assets/scripting/policy/index.toml`, but its location is not a Rust path
 contract. The manifest has one `[startup]` entry. That entry names the Rhai
 function that receives the manifest-resolved policy records and installs them
@@ -74,12 +77,14 @@ selected composition then leaves it out when its hook owner is not linked and
 reports the hook in `policy_status().unavailable`. This flag skips only an
 absent owner. Missing source, Rhai compile errors, and invocation failures
 remain visible; a required policy cannot be skipped. A Twin may provide an
-independent policy manifest under its own root; its records are merged
-with application records (Twin entries replace the same hook id) and its own
-startup function receives the Twin records that it owns when that Twin becomes
-active. A Twin manifest with policy records must declare its own `[startup]`;
-an empty Twin policy directory may omit it. Source bytes are resolved by the
-asset/storage layer.
+independent `scope = "twin"` policy manifest under its own root; its records
+are merged with application records (Twin entries replace the same hook id),
+and its own startup function receives the Twin records that it owns when that
+Twin becomes active. A Twin manifest with policy records must declare its own `[startup]`;
+an empty Twin policy directory may omit it. The manifest is selected from the
+already-indexed Twin file inventory, avoiding a second recursive filesystem
+walk during activation; only indexed TOML candidates and their declared Rhai
+sources are read through the asset/storage layer.
 
 The Rhai policy bootstrap runs in `PreStartup`, before startup systems consume
 authored policies. For example, rendering quality is owned by the

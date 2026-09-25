@@ -15,6 +15,18 @@ fn simulation_dependencies(me, ctx) {
 }
 
 let checks = [];
+let policy = policy_status();
+let twin_presentation = invoke_hook("camera.default_presentation", [#{}]);
+checks.push(t_true(policy.scope.contains("sysml_async_analysis")
+    && policy.error == ()
+    && policy.failed.len() == 0
+    && policy.required_failures.len() == 0
+    && policy.installed == ["camera.default_presentation"]
+    && policy.lifecycle.event == "assets_mounted"
+    && policy.lifecycle.status == "ok"
+    && twin_presentation.ok == true
+    && twin_presentation.value == "none",
+    "the indexed Twin policy manifest installs its scoped hook without replacing the application lifecycle"));
 let analyzed = query("AnalyzeSysml", #{
     path: PATH,
     tables: ["requirements", "verifications"],

@@ -1185,12 +1185,14 @@ and an authored Rhai function returns the declared type. The declaration is
 collected automatically from the owner; there is no central hook list.
 
 Application policy selection is authored in the uniquely marked
-`kind = "lunco.policy.v1"` manifest in the runtime asset library, shipped in
+`kind = "lunco.policy.v1"`, `scope = "application"` manifest in the runtime
+asset library, shipped in
 [`assets/scripting/policy/index.toml`](../assets/scripting/policy/index.toml)
 and loaded at simulation startup. Its single `[startup]` function receives the
 resolved policy records and installs every `[[policies]]` entry through the
-typed bootstrap surface. A Twin may add its own uniquely marked policy manifest with a
-separate `[startup]` function; the Twin function receives its authored entries,
+typed bootstrap surface. A Twin may add its own `scope = "twin"` policy
+manifest with a separate `[startup]` function; the Twin function receives its
+authored entries,
 which replace matching application policies when the Twin is active. Use
 `list_hooks()` to inspect the reflected
 `parameters: [{name, type}]` and `output` contract, `policy_status()` to read
