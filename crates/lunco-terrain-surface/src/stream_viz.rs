@@ -1578,6 +1578,51 @@ impl PendingTileBakes {
                 })
     }
 
+    fn take_ready(&mut self, generation: u32, budget: usize) -> Vec<(QuadCoord, BakedTile)> {
+        self.ready
+            .retain(|(_, ready_generation, _)| *ready_generation == generation);
+        self.ready.sort_by_key(|(coord, ready_generation, _)| {
+            (coord.depth, coord.x, coord.z, *ready_generation)
+        });
+        let commit_count = self.ready.len().min(budget);
+        self.ready
+            .drain(..commit_count)
+            .map(|(coord, _, baked)| (coord, baked))
+            .collect()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn accept_completed_bakes(
+        &mut self,
+        terrain: Entity,
+        completions: impl IntoIterator<Item = TerrainTileBakeCompletion>,
+    ) {
+        for completion in completions {
+            let generation = self
+                .jobs
+                .get(&completion.coord)
+                .filter(|job| job.key == completion.key)
+                .map(|job| job.generation);
+            let Some(generation) = generation else {
+                continue;
+            };
+            self.jobs.remove(&completion.coord);
+            match completion.result {
+                Ok(baked) => self.ready.push((completion.coord, generation, baked)),
+                Err(()) => {
+                    self.failed.insert((completion.coord, generation));
+                    bevy::log::error!(
+                        target: "terrain_stream",
+                        entity = ?terrain,
+                        coord = ?completion.coord,
+                        generation,
+                        "terrain tile bake panicked; the tile is held until its surface changes"
+                    );
+                }
+            }
+        }
+    }
+
     /// Drop in-flight bakes whose tile overlaps the committed surface change.
     /// A bounded change leaves pending work elsewhere valid; retag it to the
     /// new visual generation so the completed mesh can still be published.
@@ -2746,30 +2791,10 @@ pub fn update_lod_tiles(
         ) in &mut terrains
         {
             #[cfg(not(target_arch = "wasm32"))]
-            for completion in tile_completions.remove(&terrain).unwrap_or_default() {
-                let generation = pending
-                    .jobs
-                    .get(&completion.coord)
-                    .filter(|job| job.key == completion.key)
-                    .map(|job| job.generation);
-                let Some(generation) = generation else {
-                    continue;
-                };
-                pending.jobs.remove(&completion.coord);
-                match completion.result {
-                    Ok(baked) => pending.ready.push((completion.coord, generation, baked)),
-                    Err(()) => {
-                        pending.failed.insert((completion.coord, generation));
-                        bevy::log::error!(
-                            target: "terrain_stream",
-                            entity = ?terrain,
-                            coord = ?completion.coord,
-                            generation,
-                            "terrain tile bake panicked; the tile is held until its surface changes"
-                        );
-                    }
-                }
-            }
+            pending.accept_completed_bakes(
+                terrain,
+                tile_completions.remove(&terrain).unwrap_or_default(),
+            );
 
             // A first cover and a cover invalidated by a live depth-bound change
             // are admitted immediately. Other camera/profile changes wait for the
@@ -3393,18 +3418,9 @@ pub fn update_lod_tiles(
                     None => true,
                 }
             });
-            done.sort_by_key(|(coord, r#gen, _)| (coord.depth, coord.x, coord.z, *r#gen));
             pending.ready.append(done);
-            pending
-                .ready
-                .sort_by_key(|(coord, r#gen, _)| (coord.depth, coord.x, coord.z, *r#gen));
-            let commit_count = pending.ready.len().min(profile.terrain_lod_bakes_per_frame);
-            for (coord, r#gen, baked) in pending.ready.drain(..commit_count) {
-                // A bake from a superseded generation (heights changed while it ran) is
-                // discarded — its mesh would show the OLD terrain.
-                if r#gen != cur_gen {
-                    continue;
-                }
+            let ready = pending.take_ready(cur_gen, profile.terrain_lod_bakes_per_frame);
+            for (coord, baked) in ready {
                 let handle = meshes.add(baked.mesh);
                 let oy = baked.origin_y;
                 mesh_cache.insert((terrain, coord, baked.res), handle.clone(), oy);
@@ -4062,6 +4078,21 @@ mod draw_partition_tests {
             .with_vertex_shader("shaders/terrain_geomorph.wgsl")
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_baked_tile(marker: f64) -> BakedTile {
+        BakedTile {
+            mesh: Mesh::new(
+                bevy::mesh::PrimitiveTopology::TriangleList,
+                bevy::asset::RenderAssetUsages::RENDER_WORLD,
+            ),
+            center: [marker, 0.0],
+            depth: 1,
+            res: 1,
+            morph_end: 0.0,
+            origin_y: 0.0,
+        }
+    }
+
     #[test]
     fn terrain_cover_cadence_is_wall_time_driven_and_drops_catch_up_work() {
         let mut cadence = TerrainStreamCadence::default();
@@ -4187,6 +4218,68 @@ mod draw_partition_tests {
                 },
             ]
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reversed_worker_completions_publish_in_coordinate_order_and_fence_stale_keys() {
+        let mut pending = PendingTileBakes::default();
+        let terrain = Entity::PLACEHOLDER;
+        let tiles = [
+            (c(1, 0, 0), 1, 10.0),
+            (c(1, 0, 1), 2, 20.0),
+            (c(1, 1, 0), 3, 30.0),
+            (c(1, 1, 1), 4, 40.0),
+        ];
+        let key_for = |operation| {
+            lunco_core_runtime::AsyncWorkKey::new(
+                lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                0,
+                terrain.to_bits() as u128,
+                7,
+                operation,
+            )
+        };
+        for (coord, operation, _) in tiles {
+            pending.jobs.insert(
+                coord,
+                PendingTileBake {
+                    generation: 7,
+                    key: key_for(operation),
+                },
+            );
+        }
+        let mut arrivals = vec![TerrainTileBakeCompletion {
+            terrain,
+            coord: c(1, 0, 0),
+            key: key_for(99),
+            result: Ok(test_baked_tile(-1.0)),
+        }];
+        arrivals.extend(tiles.iter().rev().map(|(coord, operation, marker)| {
+            TerrainTileBakeCompletion {
+                terrain,
+                coord: *coord,
+                key: key_for(*operation),
+                result: Ok(test_baked_tile(*marker)),
+            }
+        }));
+        pending.accept_completed_bakes(terrain, arrivals);
+
+        let ready = pending.take_ready(7, tiles.len());
+
+        assert_eq!(
+            ready.iter().map(|(coord, _)| *coord).collect::<Vec<_>>(),
+            [c(1, 0, 0), c(1, 0, 1), c(1, 1, 0), c(1, 1, 1)],
+        );
+        assert_eq!(
+            ready
+                .iter()
+                .map(|(_, baked)| baked.center[0])
+                .collect::<Vec<_>>(),
+            [10.0, 20.0, 30.0, 40.0],
+        );
+        assert!(pending.ready.is_empty());
+        assert!(pending.jobs.is_empty());
     }
 
     fn diagnostic_template() -> ShaderLook {
