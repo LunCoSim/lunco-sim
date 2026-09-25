@@ -335,7 +335,13 @@ host-local tuning writes use the reflected component/resource and port seams.
 The scenario driver is the authoritative Rhai lifecycle runtime. `RunRhai` uses
 the same engine and bridge for one-shot evaluation without attaching a
 persistent `ScriptedModel`; it is a separate execution mode, not a second
-lifecycle or compatibility implementation.
+lifecycle or compatibility implementation. One-shot code and tool requests
+borrow the driver's prepared engine, including its authored prelude, import
+resolver, and registered tool modules. The driver refreshes its engine only
+when the tool-library generation changes; a request does not reread authored
+Rhai assets or rebuild the engine. While startup preparation is pending, queued
+requests remain queued. A thread-local print destination captures output for
+the active request while scenario output continues to use the application log.
 
 The owning system supplies a typed `RuntimeExecutionContext` for each scenario
 phase and one-shot REPL/tool evaluation. Rhai reads it with

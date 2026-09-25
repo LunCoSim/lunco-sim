@@ -1161,6 +1161,7 @@ fn build_world_engine_base(
     prepared_modules: lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts,
 ) -> Engine {
     let mut engine = Engine::new();
+    engine.on_print(route_world_rhai_print);
 
     lunco_hooks_rhai::register_json(&mut engine);
 
@@ -2981,8 +2982,7 @@ impl Default for RhaiScenarioRuntime {
         let sources = lunco_assets_runtime::script_source::ScriptSources::default();
         let prepared_modules =
             lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::required();
-        let mut engine = build_world_engine_base(sources.clone(), prepared_modules.clone());
-        engine.on_print(|s| info!("[rhai] {s}"));
+        let engine = build_world_engine_base(sources.clone(), prepared_modules.clone());
         Self {
             engine: std::sync::Arc::new(engine),
             preparation_revision: 0,
@@ -3023,7 +3023,6 @@ impl RhaiScenarioRuntime {
     pub(crate) fn install_prelude(&mut self, files: Vec<(String, String)>) -> Result<(), String> {
         let mut rebuilt =
             build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
-        rebuilt.on_print(|s| info!("[rhai] {s}"));
         let prelude_ast = install_prelude_on_engine(&mut rebuilt, files.clone())?;
         self.engine = std::sync::Arc::new(rebuilt);
         self.preparation_revision = self.preparation_revision.wrapping_add(1);
@@ -3781,7 +3780,6 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             Some(engine) => {
                 let mut rebuilt =
                     build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
-                rebuilt.on_print(|s| info!("[rhai] {s}"));
                 // A runtime may receive tool changes before its asynchronous
                 // prelude asset has arrived. Rebuild the base engine in that
                 // state; scenario execution remains gated by
@@ -4263,10 +4261,88 @@ pub enum PendingWorldScript {
     },
 }
 
+std::thread_local! {
+    static WORLD_RHAI_PRINT_CAPTURE: std::cell::RefCell<Option<std::sync::Arc<std::sync::Mutex<String>>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// Restore the thread's previous one-shot stdout destination after evaluation.
+struct OneShotRhaiPrintCapture {
+    previous: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+}
+
+impl OneShotRhaiPrintCapture {
+    /// Route `print(...)` from the shared runtime engine into one command result.
+    fn enter(output: std::sync::Arc<std::sync::Mutex<String>>) -> Self {
+        let previous = WORLD_RHAI_PRINT_CAPTURE.with(|capture| capture.replace(Some(output)));
+        Self { previous }
+    }
+}
+
+impl Drop for OneShotRhaiPrintCapture {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        WORLD_RHAI_PRINT_CAPTURE.with(|capture| {
+            capture.replace(previous);
+        });
+    }
+}
+
+/// Keep scenario prints on the normal log path and scope REPL output per thread.
+fn route_world_rhai_print(message: &str) {
+    let output = WORLD_RHAI_PRINT_CAPTURE.with(|capture| capture.borrow().clone());
+    if let Some(output) = output {
+        if let Ok(mut output) = output.lock() {
+            output.push_str(message);
+            output.push('\n');
+        }
+    } else {
+        info!("[rhai] {message}");
+    }
+}
+
+/// Obtain the prepared application engine, refreshing its tool modules once
+/// when their registry generation changes. `None` means authored startup
+/// preparation is still in flight, so queued work must remain pending.
+fn world_script_engine(world: &mut World) -> Result<Option<std::sync::Arc<Engine>>, String> {
+    let Some((ready, error)) = world
+        .get_resource::<RhaiRuntimeStatus>()
+        .map(|status| (status.ready, status.error.clone()))
+    else {
+        return Err("Rhai runtime status is not installed".to_owned());
+    };
+    if !ready {
+        return match error {
+            Some(error) => Err(format!("Rhai runtime preparation failed: {error}")),
+            None => Ok(None),
+        };
+    }
+
+    let Some(mut driver) =
+        world.get_resource_mut::<lunco_scripting::scenario::ScenarioDriver<RhaiScenarioRuntime>>()
+    else {
+        return Err("Rhai scenario runtime is not installed".to_owned());
+    };
+    driver.runtime.maintain();
+    if !driver.runtime.prelude_ready {
+        return Err("Rhai runtime is ready without an installed prelude".to_owned());
+    }
+    if driver.runtime.tool_gen != crate::tool_libs::generation() {
+        return Ok(None);
+    }
+    Ok(Some(driver.runtime.engine.clone()))
+}
+
 /// Exclusive system: run every queued snippet against the live World, record
 /// its internal result, and resolve any waiting API request with the completed
 /// stdout or error.
 pub fn drain_world_scripts(world: &mut World) {
+    let engine = match world_script_engine(world) {
+        Ok(Some(engine)) => Ok(engine),
+        Ok(None) => return,
+        Err(error) => Err(error),
+    };
     let pending = std::mem::take(&mut world.resource_mut::<PendingWorldScripts>().queue);
     if pending.is_empty() {
         return;
@@ -4291,7 +4367,10 @@ pub fn drain_world_scripts(world: &mut World) {
             } => (
                 id,
                 correlation_id,
-                eval_with_world_as(world, &code, authority),
+                match &engine {
+                    Ok(engine) => eval_with_engine(world, engine, &code, authority),
+                    Err(error) => Err(error.clone()),
+                },
             ),
             PendingWorldScript::Tool {
                 id,
@@ -4303,7 +4382,12 @@ pub fn drain_world_scripts(world: &mut World) {
             } => (
                 id,
                 correlation_id,
-                eval_tool_with_world_as(world, &tool, &hook, &args, authority),
+                match &engine {
+                    Ok(engine) => {
+                        eval_tool_with_engine(world, engine, &tool, &hook, &args, authority)
+                    }
+                    Err(error) => Err(error.clone()),
+                },
             ),
         };
         let outcome = match outcome {
@@ -4342,28 +4426,23 @@ pub fn eval_with_world_as(
     code: &str,
     authority: Option<lunco_command_contracts::SessionId>,
 ) -> Result<String, String> {
+    let engine = world_script_engine(world)?
+        .ok_or_else(|| "Rhai runtime preparation is still in progress".to_owned())?;
+    eval_with_engine(world, &engine, code, authority)
+}
+
+/// Evaluate against the prepared scenario engine without rebuilding its
+/// resolver, modules, or authored prelude for each one-shot request.
+fn eval_with_engine(
+    world: &mut World,
+    engine: &Engine,
+    code: &str,
+    authority: Option<lunco_command_contracts::SessionId>,
+) -> Result<String, String> {
     use std::sync::{Arc, Mutex};
 
-    // A fresh engine per call keeps state isolated; cheap relative to the work.
-    //
-    // It shares the world's script registry, so an `import` submitted through RunRhai
-    // resolves exactly as it would inside a scenario. A private registry here would
-    // make the REPL a place where imports mysteriously fail — the kind of
-    // inconsistency that costs an hour to diagnose.
-    let sources = world
-        .get_resource::<lunco_assets_runtime::script_source::ScriptSources>()
-        .cloned()
-        .unwrap_or_default();
-    let mut engine = build_world_engine(sources)?;
-
     let out = Arc::new(Mutex::new(String::new()));
-    let sink = out.clone();
-    engine.on_print(move |s| {
-        if let Ok(mut buf) = sink.lock() {
-            buf.push_str(s);
-            buf.push('\n');
-        }
-    });
+    let _print_capture = OneShotRhaiPrintCapture::enter(out.clone());
 
     let context = application_execution_context(
         world,
@@ -4399,6 +4478,20 @@ pub fn eval_tool_with_world_as(
     args: &TelemetryValue,
     authority: Option<lunco_command_contracts::SessionId>,
 ) -> Result<String, String> {
+    let engine = world_script_engine(world)?
+        .ok_or_else(|| "Rhai runtime preparation is still in progress".to_owned())?;
+    eval_tool_with_engine(world, &engine, tool, hook, args, authority)
+}
+
+/// Invoke a typed tool hook against the warmed engine used by scenario scripts.
+fn eval_tool_with_engine(
+    world: &mut World,
+    engine: &Engine,
+    tool: &str,
+    hook: &str,
+    args: &TelemetryValue,
+    authority: Option<lunco_command_contracts::SessionId>,
+) -> Result<String, String> {
     if tool.is_empty()
         || !tool
             .chars()
@@ -4415,19 +4508,8 @@ pub fn eval_tool_with_world_as(
     }
 
     use std::sync::{Arc, Mutex};
-    let sources = world
-        .get_resource::<lunco_assets_runtime::script_source::ScriptSources>()
-        .cloned()
-        .unwrap_or_default();
-    let mut engine = build_world_engine(sources)?;
     let out = Arc::new(Mutex::new(String::new()));
-    let sink = out.clone();
-    engine.on_print(move |s| {
-        if let Ok(mut buf) = sink.lock() {
-            buf.push_str(s);
-            buf.push('\n');
-        }
-    });
+    let _print_capture = OneShotRhaiPrintCapture::enter(out.clone());
 
     let context = application_execution_context(
         world,
@@ -4490,6 +4572,76 @@ mod tests {
     };
     use lunco_scripting::scenario::{CompileOutcome, CompilePreparation, ScenarioRuntime};
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
+
+    #[test]
+    fn one_shot_eval_reuses_prepared_runtime_engine_and_captures_print() {
+        let _registry_guard = crate::tool_libs::registry_test_guard();
+        let tool_name = "one_shot_cached_runtime_probe";
+        crate::tool_libs::register_tool_library(
+            tool_name,
+            "fn on_test(context) { print(context); context + \"!\" }",
+        );
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        runtime
+            .install_prelude(vec![(
+                "inline-test-prelude.rhai".to_owned(),
+                "fn cached_answer() { 40 + 2 }".to_owned(),
+            )])
+            .expect("inline prelude must install");
+        let prepared_engine = runtime.engine.clone();
+
+        let mut world = bevy::prelude::World::new();
+        world.insert_resource(lunco_scripting::scenario::ScenarioDriver::with_runtime(
+            runtime,
+        ));
+        world.insert_resource(super::RhaiRuntimeStatus {
+            ready: true,
+            error: None,
+        });
+
+        let stdout =
+            super::eval_with_world_as(&mut world, "print(\"cached\"); cached_answer()", None)
+                .expect("one-shot evaluation must use the prepared runtime engine");
+        let tool_stdout = super::eval_tool_with_world_as(
+            &mut world,
+            tool_name,
+            "on_test",
+            &TelemetryValue::String("world".to_owned()),
+            None,
+        )
+        .expect("tool hooks must use the same prepared runtime engine");
+
+        assert_eq!(stdout, "cached\n42");
+        assert_eq!(tool_stdout, "world\nworld!");
+        let driver = world
+            .resource::<lunco_scripting::scenario::ScenarioDriver<super::RhaiScenarioRuntime>>();
+        assert!(std::sync::Arc::ptr_eq(
+            &prepared_engine,
+            &driver.runtime.engine,
+        ));
+    }
+
+    #[test]
+    fn one_shot_queue_waits_for_authored_runtime_preparation() {
+        let mut world = bevy::prelude::World::new();
+        world.insert_resource(super::RhaiRuntimeStatus::default());
+        world.insert_resource(super::PendingWorldScripts {
+            queue: vec![super::PendingWorldScript::Code {
+                id: 0,
+                code: "1 + 1".to_owned(),
+                authority: None,
+                correlation_id: None,
+            }],
+        });
+
+        super::drain_world_scripts(&mut world);
+
+        assert_eq!(
+            world.resource::<super::PendingWorldScripts>().queue.len(),
+            1,
+            "requests must remain queued until the authored prelude is ready"
+        );
+    }
 
     #[test]
     fn scenario_compile_runs_as_immutable_prep_and_commits_before_initialization() {

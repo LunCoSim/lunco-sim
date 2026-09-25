@@ -490,6 +490,44 @@ not bound active Rhai evaluation or queue depth and has no measured FPS delta;
 it is a narrow idle-path reduction, not the UI-isolation fix. No new simulator
 or FPS profile was started for this change.
 
+### 2026-09-25 — reuse the prepared Rhai engine for one-shot requests
+
+The prior settled Tracy capture recorded seven post-readiness invocations of
+`drain_world_scripts`, each taking 79–370 ms on the exclusive application
+thread. The requests were not labeled by workload, so these durations cannot
+be assigned to a particular tool. Source inspection found that each queued
+snippet rebuilt a Rhai engine, rereading native authored sources and compiling
+the prelude even though `ScenarioDriver<RhaiScenarioRuntime>` already owned a
+prepared engine. One-shot code and tool callbacks now borrow that engine;
+`maintain()` refreshes tool modules only when their registry generation
+changes, and scoped print capture preserves command stdout without replacing
+the shared engine callback. Requests stay queued until authored runtime
+preparation completes.
+
+- `scripts/run_rust_tests.sh -p lunco-scripting-rhai-world --lib --filter
+  one_shot_ -j 1` passed both engine-reuse/stdout and preparation-queue tests.
+- `cargo build -j 4 -p lunco-luncosim --bin luncosim --features tracy` passed.
+- In `scripts/perf/captures/sss-rhai-engine-reuse-20260925.tracy`, a controlled
+  harmless `RunRhai` probe's exclusive drain span was 0.071 ms. This is not an
+  apples-to-apples comparison with the earlier unlabeled callbacks and does
+  not establish a clean FPS gain.
+- The separate non-Tracy, High-quality Apollo run measured about 66.8 FPS over
+  an 82.0 s diagnostic interval and roughly 2.3 ms average Avian step time
+  (about 56 steps/s). The 150+ FPS and 0.5 ms physics goals remain unmet.
+- The settled portion of the new trace (`t >= 14 s`; schedule spans overlap and
+  must not be added) measured Render at 8.02/10.11/13.35 ms p50/p95/p99,
+  FixedMain at 5.92/8.05/9.72 ms, and PhysicsSchedule at 2.79/3.67/4.32 ms.
+  BigSpace high-precision propagation measured 0.294/0.529/0.662 ms p50/p95/p99;
+  gravity computation was 0.308/1.090/1.309 ms and exposure publication
+  1.179/1.671/2.093 ms. GPU-clustering preparation had a 54.7 ms maximum
+  outlier despite a 0.043 ms median, so that tail needs focused attribution.
+
+The callback rebuild was a severe outlier path, but it does not explain the
+steady render cost. The remaining capture points to distributed Render and
+main-world fixed/update work, with a clustering outlier worth isolating. No
+visual-quality settings were changed. The clean run and profiler session both
+used owned API port 4379 sequentially and exited through typed API `Exit`.
+
 ## Remaining blocker
 
 The 400 FPS acceptance target is not met. The maintained BigSpace dependency

@@ -37,6 +37,11 @@ structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
 
+One-shot `RunRhai` and tool callbacks share the prepared `ScenarioDriver`
+engine. When profiling a callback stall, separate one-time startup/prelude or
+tool-generation refresh from request execution; do not rebuild the engine for
+each callback.
+
 For Bevy visibility costs, distinguish the active scene camera from auxiliary
 shadow-map subviews. If adapter capability supports GPU culling, put
 `NoCpuCulling` on the scene camera so camera frustum work can move to GPU
