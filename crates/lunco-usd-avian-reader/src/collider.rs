@@ -71,6 +71,32 @@ pub enum ColliderBuildOutcome {
     DeferredMeshAsset,
 }
 
+/// One geometric part of an Avian collider after USD approximation cooking.
+#[derive(Clone, Debug)]
+pub enum ColliderGeometryPart {
+    /// Triangle topology used by a static triangle-mesh collider.
+    TriangleMesh {
+        /// Vertices in the collider prim's local frame.
+        vertices: Vec<[f64; 3]>,
+        /// Triangle vertex indices.
+        triangles: Vec<[u32; 3]>,
+    },
+    /// Vertices of one convex collider part after the backend cook.
+    ConvexHull {
+        /// Hull vertices in the collider prim's local frame.
+        vertices: Vec<[f64; 3]>,
+    },
+}
+
+/// Collision geometry produced by the same USD-to-Avian reader used at runtime.
+#[derive(Clone, Debug)]
+pub struct AuthoredColliderGeometry {
+    /// Standard USD mesh approximation; primitive colliders have no mesh mode.
+    pub approximation: Option<CollisionApprox>,
+    /// Cooked shape parts. Convex decomposition produces one entry per hull.
+    pub parts: Vec<ColliderGeometryPart>,
+}
+
 /// Project one explicitly authored USD collision prim into an Avian collider.
 ///
 /// This is the shared projection boundary for specialized realizations such as
@@ -81,6 +107,20 @@ pub enum ColliderBuildOutcome {
 pub fn authored_collider_from_usd(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
+) -> Result<Collider, ColliderProjectionError> {
+    let scale = local_transform_at(reader, sdf_path, 0.0)
+        .map_err(ColliderProjectionError::Transform)?
+        .map_or(Vec3::ONE, |transform| transform.scale);
+    authored_collider_from_usd_at_scale(reader, sdf_path, scale)
+}
+
+/// Project one explicitly authored collision prim using its caller-supplied
+/// composed scale. Compound-body readers use this when intermediate Xforms
+/// contribute scale without producing a collider entity of their own.
+pub fn authored_collider_from_usd_at_scale(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    sdf_path: &SdfPath,
+    scale: Vec3,
 ) -> Result<Collider, ColliderProjectionError> {
     if !reader.has_api_schema(sdf_path, ptok::API_COLLISION) {
         return Err(ColliderProjectionError::Backend {
@@ -106,7 +146,7 @@ pub fn authored_collider_from_usd(
         });
     }
 
-    let collider = match build_collider_from_usd(reader, sdf_path)? {
+    let collider = match build_collider_from_usd_at_scale(reader, sdf_path, scale)? {
         ColliderBuildOutcome::Built(collider) => collider,
         ColliderBuildOutcome::UnsupportedGeometry { type_name } => {
             return Err(ColliderProjectionError::Backend {
@@ -134,6 +174,123 @@ pub fn authored_collider_from_usd(
         });
     }
     Ok(collider)
+}
+
+/// Cook a mesh or cube collision prim and return the geometry Avian will use.
+/// Each convex-decomposition member remains a separate part so callers cannot
+/// accidentally fill the gaps between disconnected hulls.
+pub fn authored_collider_geometry_from_usd(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    sdf_path: &SdfPath,
+) -> Result<Option<AuthoredColliderGeometry>, ColliderProjectionError> {
+    if !reader.has_api_schema(sdf_path, ptok::API_COLLISION) {
+        return Ok(None);
+    }
+    match read_authored_bool_or_default(reader, sdf_path, ptok::A_COLLISION_ENABLED, true) {
+        Ok(false) => return Ok(None),
+        Ok(true) => {}
+        Err(()) => {
+            return Err(ColliderProjectionError::Backend {
+                prim: sdf_path.to_string(),
+                detail: format!("malformed {}", ptok::A_COLLISION_ENABLED),
+            });
+        }
+    }
+    let Some(type_name) = reader.type_name(sdf_path) else {
+        return Ok(None);
+    };
+    if !matches!(type_name.as_str(), "Mesh" | "Cube") {
+        return Ok(None);
+    }
+
+    // The stage transform is applied by the query after this local cook. This
+    // avoids applying the prim scale once in Avian and again in the composed
+    // transform used to return canonical-stage coordinates.
+    let collider = authored_collider_from_usd_at_scale(reader, sdf_path, Vec3::ONE)?;
+    let approximation = if type_name == "Mesh" {
+        Some(
+            read_mesh_collision_approximation(reader, sdf_path).map_err(|error| {
+                ColliderProjectionError::InvalidApproximation {
+                    prim: error.prim,
+                    value: error.value,
+                }
+            })?,
+        )
+    } else {
+        None
+    };
+    let parts = collider_geometry_parts(&collider, sdf_path)?;
+    Ok(Some(AuthoredColliderGeometry {
+        approximation,
+        parts,
+    }))
+}
+
+fn collider_geometry_parts(
+    collider: &Collider,
+    prim: &SdfPath,
+) -> Result<Vec<ColliderGeometryPart>, ColliderProjectionError> {
+    let shape = collider.shape();
+    if let Some(mesh) = shape.as_trimesh() {
+        return Ok(vec![ColliderGeometryPart::TriangleMesh {
+            vertices: mesh
+                .vertices()
+                .iter()
+                .map(|point| [point.x as f64, point.y as f64, point.z as f64])
+                .collect(),
+            triangles: mesh.indices().to_vec(),
+        }]);
+    }
+    if let Some(hull) = shape.as_convex_polyhedron() {
+        return Ok(vec![ColliderGeometryPart::ConvexHull {
+            vertices: hull
+                .points()
+                .iter()
+                .map(|point| [point.x as f64, point.y as f64, point.z as f64])
+                .collect(),
+        }]);
+    }
+    if let Some(cuboid) = shape.as_cuboid() {
+        let half = cuboid.half_extents;
+        let vertices = (0..8)
+            .map(|bits| {
+                [
+                    (if bits & 1 == 0 { -half.x } else { half.x }) as f64,
+                    (if bits & 2 == 0 { -half.y } else { half.y }) as f64,
+                    (if bits & 4 == 0 { -half.z } else { half.z }) as f64,
+                ]
+            })
+            .collect();
+        return Ok(vec![ColliderGeometryPart::ConvexHull { vertices }]);
+    }
+    if let Some(compound) = shape.as_compound() {
+        let mut parts = Vec::with_capacity(compound.shapes().len());
+        for (pose, child) in compound.shapes() {
+            let Some(hull) = child.as_convex_polyhedron() else {
+                return Err(ColliderProjectionError::Backend {
+                    prim: prim.to_string(),
+                    detail: "Avian convex decomposition contains a non-convex part".to_owned(),
+                });
+            };
+            let vertices = hull
+                .points()
+                .iter()
+                .map(|point| {
+                    let point = pose.transform_point(*point);
+                    [point.x as f64, point.y as f64, point.z as f64]
+                })
+                .collect();
+            parts.push(ColliderGeometryPart::ConvexHull { vertices });
+        }
+        if !parts.is_empty() {
+            return Ok(parts);
+        }
+    }
+    Err(ColliderProjectionError::Backend {
+        prim: prim.to_string(),
+        detail: "Avian produced a collider shape that has no mesh or convex-vertex query"
+            .to_owned(),
+    })
 }
 
 pub fn collect_child_colliders_from_usd(
@@ -458,10 +615,9 @@ pub fn build_collider_from_usd_at_scale(
             .map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64))
             .collect();
         // Read the standard schema token into its upstream typed enum once.
-        // `None` means the source mesh is used directly. Avian realizes that
-        // exact geometry as a triangle mesh; it realizes the two convex modes
-        // directly. The remaining standard modes are rejected explicitly until
-        // a faithful Avian shape projection exists.
+        // `None` uses the source mesh as a triangle mesh; Avian also realizes
+        // convex hull, convex decomposition, and bounding-cube modes. Any
+        // other token stays an explicit unsupported-approximation error.
         // `physics:approximation` is a property OF `PhysicsMeshCollisionAPI`, so
         // it only means anything when that schema is applied.
         let approximation =

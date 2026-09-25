@@ -6,16 +6,16 @@
 //! and authoring code can therefore derive one placement envelope without
 //! importing the large visual adapter.
 
-use bevy::prelude::{Quat, Transform, Vec3};
+use bevy::math::{DMat4, DQuat, DVec3};
 use lunco_usd_bevy_stage::{
-    Purpose, StageView, UsdReadObject, effective_purpose, local_transform_at, stage_convention,
+    Purpose, StageView, UsdReadObject, effective_purpose, stage_convention,
 };
 use openusd::schemas::physics::CollisionApprox;
 use openusd::sdf::Path as SdfPath;
 
 use crate::{
-    ShapeDims, read_mesh_collision_approximation, read_shape_dims, read_usd_mesh_indexed,
-    usd_axis_to_quat, usd_plane_surface_vertices,
+    ShapeDims, UsdGeomAxis, read_mesh_collision_approximation, read_shape_dims,
+    read_usd_mesh_indexed, usd_plane_surface_vertices,
 };
 
 /// Small gap (metres) left between an asset's lowest collision point and the
@@ -32,8 +32,9 @@ pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
 /// box into a running min/max. Nested rigid bodies and authored vehicle wheels
 /// are included because this is the placement envelope for the complete
 /// composed asset. Shape dimensions and native mesh points come from the
-/// shared scene readers, so the box cannot drift from the corresponding
-/// visual or Avian geometry.
+/// shared scene readers. The fidelity field marks bounds that conservatively
+/// enclose a convex decomposition's source mesh or a transformed curved
+/// primitive's local bounds; the exact collider envelope may be tighter.
 ///
 /// Returns `Ok(None)` when no collision geometry is found. Malformed authored
 /// collision data is an error, not an empty footprint: callers must not replace
@@ -42,44 +43,20 @@ pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
 pub struct ObjectAabb {
     pub min: bevy::math::DVec3,
     pub max: bevy::math::DVec3,
+    /// Whether the bounds exactly match the collider or conservatively
+    /// enclose source geometry or transformed local shape bounds.
+    pub fidelity: CollisionBoundsFidelity,
 }
 
-/// Exact composed points for one supported collision shape, in canonical
-/// stage coordinates. Direct Mesh points describe its authored surface;
-/// convex-hull Mesh points describe hull input. Cube points are its eight
-/// transformed corners. Other primitive types need their own exact geometry
-/// provider rather than treating an AABB as the shape.
-#[derive(Clone, Debug)]
-pub struct PrimCollisionGeometry {
-    pub source: CollisionGeometrySource,
-    pub vertices: Vec<[f64; 3]>,
-}
-
-/// Typed source that defines the one collider point set returned by a geometry
-/// query. Other standard mesh approximation modes require generated geometry
-/// and are returned as explicit unsupported errors.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CollisionGeometrySource {
-    TriangleMesh,
-    ConvexHullMesh,
-    Cube,
-}
-
-impl CollisionGeometrySource {
-    pub const fn type_name(self) -> &'static str {
-        match self {
-            Self::TriangleMesh | Self::ConvexHullMesh => "Mesh",
-            Self::Cube => "Cube",
-        }
-    }
-
-    pub const fn approximation(self) -> Option<CollisionApprox> {
-        match self {
-            Self::TriangleMesh => Some(CollisionApprox::None),
-            Self::ConvexHullMesh => Some(CollisionApprox::ConvexHull),
-            Self::Cube => None,
-        }
-    }
+/// Accuracy contract for a composed collision AABB.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CollisionBoundsFidelity {
+    /// The AABB encloses the extrema of the collider geometry.
+    #[default]
+    Exact,
+    /// The AABB conservatively encloses source geometry or transformed local
+    /// bounds; the exact collider envelope can be tighter.
+    ConservativeGeometryEnvelope,
 }
 
 /// A composed collision tree could not provide a trustworthy placement AABB.
@@ -162,13 +139,14 @@ pub fn collision_aabb(
 ) -> Result<Option<ObjectAabb>, CollisionAabbError> {
     let root = SdfPath::new(root_prim)
         .map_err(|_| CollisionAabbError::InvalidRootPath(root_prim.to_owned()))?;
-    let root_tf = collision_local_transform(reader, &root)?;
+    let root_tf = collision_local_matrix(reader, &root)?;
     let mut candidates = vec![(root.clone(), root_tf)];
     gather_collision_aabb_candidates(reader, &root, root_tf, &mut candidates)?;
     let has_proxy = candidates
         .iter()
         .any(|(path, _)| effective_purpose(reader, path) == Purpose::Proxy);
     let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
+    let mut fidelity = CollisionBoundsFidelity::Exact;
     for (path, world_tf) in candidates {
         if UsdReadObject::text(reader, &path, "lunco:triggerZone")
             .is_some_and(|zone| !zone.trim().is_empty())
@@ -204,9 +182,14 @@ pub fn collision_aabb(
             continue;
         }
         let ty = UsdReadObject::type_name(reader, &path).unwrap_or_default();
-        let (corners, _) = local_shape_corners(reader, &path, &ty, true)?;
+        let (corners, approximation) = local_shape_corners(reader, &path, &ty, true)?;
+        if approximation == Some(CollisionApprox::ConvexDecomposition)
+            || matches!(ty.as_str(), "Sphere" | "Cylinder" | "Cone" | "Capsule")
+        {
+            fidelity = CollisionBoundsFidelity::ConservativeGeometryEnvelope;
+        }
         for corner in corners {
-            let world = world_tf.transform_point(corner.as_vec3()).as_dvec3();
+            let world = world_tf.transform_point3(corner);
             match acc.as_mut() {
                 Some((min, max)) => {
                     *min = min.min(world);
@@ -216,68 +199,7 @@ pub fn collision_aabb(
             }
         }
     }
-    Ok(acc.map(|(min, max)| ObjectAabb { min, max }))
-}
-
-/// Read the exact transformed points for one collision Mesh or Cube. This is
-/// intended for geometric interface checks that need more than an aggregate
-/// AABB. The typed `source` records whether mesh points describe the direct
-/// triangle surface or convex-hull input; approximation modes that generate a
-/// different collider shape return [`CollisionAabbError::UnsupportedApproximation`].
-pub fn prim_collision_geometry(
-    reader: &StageView<'_>,
-    prim_path: &str,
-) -> Result<Option<PrimCollisionGeometry>, CollisionAabbError> {
-    let path = SdfPath::new(prim_path)
-        .map_err(|_| CollisionAabbError::InvalidRootPath(prim_path.to_owned()))?;
-    if !UsdReadObject::has_prim(reader, &path)
-        || !UsdReadObject::is_active(reader, &path)
-        || !UsdReadObject::has_api_schema(
-            reader,
-            &path,
-            openusd::schemas::physics::tokens::API_COLLISION,
-        )
-        || effective_purpose(reader, &path) == Purpose::Guide
-    {
-        return Ok(None);
-    }
-    match UsdReadObject::boolean(reader, &path, "physics:collisionEnabled") {
-        Some(false) => return Ok(None),
-        Some(true) | None
-            if !UsdReadObject::has_authored_attribute(
-                reader,
-                &path,
-                "physics:collisionEnabled",
-            ) => {}
-        Some(true) => {}
-        None => {
-            return Err(CollisionAabbError::InvalidCollisionEnabled {
-                prim: prim_path.to_owned(),
-            });
-        }
-    }
-    let type_name = UsdReadObject::type_name(reader, &path).unwrap_or_default();
-    let (local, approximation) = local_shape_corners(reader, &path, &type_name, true)?;
-    let source = match (type_name.as_str(), approximation) {
-        ("Mesh", Some(CollisionApprox::None)) => CollisionGeometrySource::TriangleMesh,
-        ("Mesh", Some(CollisionApprox::ConvexHull)) => CollisionGeometrySource::ConvexHullMesh,
-        ("Cube", None) => CollisionGeometrySource::Cube,
-        _ => {
-            return Err(CollisionAabbError::MalformedPrimitive {
-                prim: prim_path.to_owned(),
-                type_name,
-            });
-        }
-    };
-    let transform = geometry_world_transform(reader, &path)?;
-    let vertices = local
-        .into_iter()
-        .map(|point| {
-            let world = transform.transform_point(point.as_vec3()).as_dvec3();
-            [world.x, world.y, world.z]
-        })
-        .collect();
-    Ok(Some(PrimCollisionGeometry { source, vertices }))
+    Ok(acc.map(|(min, max)| ObjectAabb { min, max, fidelity }))
 }
 
 /// Derive the composed geometry AABB of one USD shape prim in canonical stage
@@ -297,11 +219,11 @@ pub fn prim_geometry_aabb(
     ) {
         return Ok(None);
     }
-    let transform = geometry_world_transform(reader, &path)?;
+    let transform = geometry_world_matrix_d(reader, &path)?;
     let (corners, _) = local_shape_corners(reader, &path, &type_name, false)?;
     let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
     for corner in corners {
-        let world = transform.transform_point(corner.as_vec3()).as_dvec3();
+        let world = transform.transform_point3(corner);
         match acc.as_mut() {
             Some((min, max)) => {
                 *min = min.min(world);
@@ -310,18 +232,29 @@ pub fn prim_geometry_aabb(
             None => acc = Some((world, world)),
         }
     }
-    Ok(acc.map(|(min, max)| ObjectAabb { min, max }))
+    Ok(acc.map(|(min, max)| ObjectAabb {
+        min,
+        max,
+        fidelity: if matches!(
+            type_name.as_str(),
+            "Sphere" | "Cylinder" | "Cone" | "Capsule"
+        ) {
+            CollisionBoundsFidelity::ConservativeGeometryEnvelope
+        } else {
+            CollisionBoundsFidelity::Exact
+        },
+    }))
 }
 
 /// Read a collision-tree transform while distinguishing USD's identity for an
 /// unauthored xform stack from a malformed authored stack.
-fn collision_local_transform(
+fn collision_local_matrix(
     reader: &StageView<'_>,
     path: &SdfPath,
-) -> Result<Transform, CollisionAabbError> {
-    match local_transform_at(reader, path, 0.0) {
+) -> Result<DMat4, CollisionAabbError> {
+    match lunco_usd_bevy_stage::local_transform_matrix_d_at(reader, path, 0.0) {
         Ok(Some(transform)) => Ok(transform),
-        Ok(None) => Ok(Transform::IDENTITY),
+        Ok(None) => Ok(DMat4::IDENTITY),
         Err(_) => Err(CollisionAabbError::MalformedTransform {
             prim: path.as_str().to_owned(),
         }),
@@ -329,10 +262,12 @@ fn collision_local_transform(
 }
 
 /// Fold local transforms from the stage root to one shape.
-fn geometry_world_transform(
+/// Compose the USD prim's local transforms into canonical stage coordinates
+/// without narrowing authored double-precision matrices.
+pub fn geometry_world_matrix_d(
     reader: &StageView<'_>,
     path: &SdfPath,
-) -> Result<Transform, CollisionAabbError> {
+) -> Result<DMat4, CollisionAabbError> {
     if !UsdReadObject::has_prim(reader, path) {
         return Err(CollisionAabbError::InvalidRootPath(
             path.as_str().to_owned(),
@@ -347,9 +282,14 @@ fn geometry_world_transform(
         chain.push(prim.clone());
         current = prim.parent();
     }
-    let mut transform = Transform::IDENTITY;
+    let mut transform = DMat4::IDENTITY;
     for prim in chain.iter().rev() {
-        transform = transform.mul_transform(collision_local_transform(reader, prim)?);
+        let local = lunco_usd_bevy_stage::local_transform_matrix_d_at(reader, prim, 0.0)
+            .map_err(|_| CollisionAabbError::MalformedTransform {
+                prim: prim.as_str().to_owned(),
+            })?
+            .unwrap_or(DMat4::IDENTITY);
+        transform *= local;
     }
     Ok(transform)
 }
@@ -359,14 +299,14 @@ fn geometry_world_transform(
 fn gather_collision_aabb_candidates(
     reader: &StageView<'_>,
     path: &SdfPath,
-    world_tf: Transform,
-    out: &mut Vec<(SdfPath, Transform)>,
+    world_tf: DMat4,
+    out: &mut Vec<(SdfPath, DMat4)>,
 ) -> Result<(), CollisionAabbError> {
     for child in UsdReadObject::children(reader, path) {
         if !UsdReadObject::is_active(reader, &child) {
             continue;
         }
-        let local = collision_local_transform(reader, &child)?;
+        let local = collision_local_matrix(reader, &child)?;
         let child_world = world_tf * local;
         out.push((child.clone(), child_world));
         gather_collision_aabb_candidates(reader, &child, child_world, out)?;
@@ -394,7 +334,10 @@ fn local_shape_corners(
             })?;
             if !matches!(
                 selected,
-                CollisionApprox::None | CollisionApprox::ConvexHull
+                CollisionApprox::None
+                    | CollisionApprox::ConvexHull
+                    | CollisionApprox::ConvexDecomposition
+                    | CollisionApprox::BoundingCube
             ) {
                 return Err(CollisionAabbError::UnsupportedApproximation {
                     prim: path.as_str().to_owned(),
@@ -409,13 +352,30 @@ fn local_shape_corners(
                 type_name: ty.to_owned(),
             }
         })?;
-        return Ok((
+        let vertices = vertices
+            .into_iter()
+            .map(|[x, y, z]| DVec3::new(x as f64, y as f64, z as f64))
+            .collect::<Vec<_>>();
+        let vertices = if approximation == Some(CollisionApprox::BoundingCube) {
+            let mut min = DVec3::splat(f64::INFINITY);
+            let mut max = DVec3::splat(f64::NEG_INFINITY);
+            for vertex in vertices {
+                min = min.min(vertex);
+                max = max.max(vertex);
+            }
+            (0..8)
+                .map(|bits| {
+                    DVec3::new(
+                        if bits & 1 == 0 { min.x } else { max.x },
+                        if bits & 2 == 0 { min.y } else { max.y },
+                        if bits & 4 == 0 { min.z } else { max.z },
+                    )
+                })
+                .collect()
+        } else {
             vertices
-                .into_iter()
-                .map(|[x, y, z]| bevy::math::DVec3::new(x as f64, y as f64, z as f64))
-                .collect(),
-            approximation,
-        ));
+        };
+        return Ok((vertices, approximation));
     }
     let dimensions = read_shape_dims(reader, path, ty).ok_or_else(|| {
         CollisionAabbError::MalformedPrimitive {
@@ -424,8 +384,8 @@ fn local_shape_corners(
         }
     })?;
     let (half, axis) = match dimensions {
-        ShapeDims::Cube { size } => (bevy::math::DVec3::splat(size * 0.5), None),
-        ShapeDims::Sphere { radius } => (bevy::math::DVec3::splat(radius), None),
+        ShapeDims::Cube { size } => (DVec3::splat(size * 0.5), None),
+        ShapeDims::Sphere { radius } => (DVec3::splat(radius), None),
         ShapeDims::Cylinder {
             radius,
             height,
@@ -435,16 +395,13 @@ fn local_shape_corners(
             radius,
             height,
             axis,
-        } => (
-            bevy::math::DVec3::new(radius, height * 0.5, radius),
-            Some(axis),
-        ),
+        } => (DVec3::new(radius, height * 0.5, radius), Some(axis)),
         ShapeDims::Capsule {
             radius,
             height,
             axis,
         } => (
-            bevy::math::DVec3::new(radius, height * 0.5 + radius, radius),
+            DVec3::new(radius, height * 0.5 + radius, radius),
             Some(axis),
         ),
         ShapeDims::Plane {
@@ -457,10 +414,10 @@ fn local_shape_corners(
                     prim: path.as_str().to_owned(),
                     type_name: ty.to_owned(),
                 })?
-                .orient(usd_axis_to_quat(axis));
+                .orient_d(usd_axis_to_dquat(axis));
             let corners = usd_plane_surface_vertices(width, length, axis)
                 .into_iter()
-                .map(|[x, y, z]| (axis_q * Vec3::new(x as f32, y as f32, z as f32)).as_dvec3())
+                .map(|[x, y, z]| axis_q * DVec3::new(x, y, z))
                 .collect();
             return Ok((corners, approximation));
         }
@@ -471,22 +428,25 @@ fn local_shape_corners(
                 prim: path.as_str().to_owned(),
                 type_name: ty.to_owned(),
             })?
-            .orient(usd_axis_to_quat(axis)),
-        None => Quat::IDENTITY,
+            .orient_d(usd_axis_to_dquat(axis)),
+        None => DQuat::IDENTITY,
     };
     let mut corners = Vec::with_capacity(8);
     for sx in [-1.0_f64, 1.0] {
         for sy in [-1.0_f64, 1.0] {
             for sz in [-1.0_f64, 1.0] {
-                let local = axis_q
-                    * Vec3::new(
-                        (half.x * sx) as f32,
-                        (half.y * sy) as f32,
-                        (half.z * sz) as f32,
-                    );
-                corners.push(local.as_dvec3());
+                let local = axis_q * DVec3::new(half.x * sx, half.y * sy, half.z * sz);
+                corners.push(local);
             }
         }
     }
     Ok((corners, approximation))
+}
+
+fn usd_axis_to_dquat(axis: UsdGeomAxis) -> DQuat {
+    match axis {
+        UsdGeomAxis::X => DQuat::from_rotation_arc(DVec3::Y, DVec3::X),
+        UsdGeomAxis::Y => DQuat::IDENTITY,
+        UsdGeomAxis::Z => DQuat::from_rotation_arc(DVec3::Y, DVec3::Z),
+    }
 }

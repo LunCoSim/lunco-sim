@@ -22,6 +22,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-physics = { path = "../lunco-physics" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
+lunco-usd-avian-reader = { path = "../lunco-usd-avian-reader" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }

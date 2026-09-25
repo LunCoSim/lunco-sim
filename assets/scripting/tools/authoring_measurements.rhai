@@ -355,10 +355,9 @@ fn _maximum_side_gap(inner_shape, outer_shape, lateral_low, lateral_high) {
     if maximum_abs < 0.0 { () } else { signed_at_maximum }
 }
 
-/// Measure a deck/transition/ramp interface from exact composed collider
-/// vertices in one QueryUsdPrims snapshot. The projections are convex hulls
-/// because this relation applies to convexHull meshes and primitive cubes;
-/// unsupported collider approximations remain unavailable.
+/// Measure a deck/transition/ramp interface from cooked collider parts in one
+/// QueryUsdPrims snapshot. This relation needs one convex part per input; a
+/// multi-part decomposition has no single convex footprint.
 fn interface_geometry_observation(doc, spec) {
     if spec == () {
         return unavailable("<incomplete interface>", "interface_geometry",
@@ -412,13 +411,9 @@ fn interface_geometry_observation(doc, spec) {
             "all three exact collider point sets must be in canonical stage coordinates", "QueryUsdPrims");
     }
     for geometry in [deck_geometry, transition_geometry, ramp_geometry] {
-        if geometry.type_name == "Mesh" && geometry.approximation != "convexHull" {
+        if geometry.shape != "convex_hull" || geometry.vertices == () {
             return unavailable(subject, "interface_geometry",
-                "mesh interface collider must use the composed convexHull approximation", "QueryUsdPrims");
-        }
-        if geometry.type_name != "Mesh" && geometry.type_name != "Cube" {
-            return unavailable(subject, "interface_geometry",
-                "interface measurement supports only Mesh and Cube colliders", "QueryUsdPrims");
+                "interface measurement requires exactly one cooked convex collider part per prim", "QueryUsdPrims");
         }
     }
     let travel_sign = if side == "port" { 1.0 } else { -1.0 };
@@ -490,7 +485,7 @@ fn interface_geometry_observation(doc, spec) {
         lateral_coverage_m: lateral_coverage,
         deck_lateral_span_m: deck_lateral_span,
         transition_lateral_span_m: transition_lateral[1] - transition_lateral[0],
-        method: "QueryUsdPrims.collision_geometry+convex_cross_sections",
+        method: "QueryUsdPrims.cooked_collider_parts+convex_cross_sections",
         source: "USD",
     }
 }

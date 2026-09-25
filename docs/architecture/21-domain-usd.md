@@ -527,6 +527,17 @@ reference does not lose a body-root shape merely because the referenced asset
 also contains child colliders, and all composed prim paths remain available to
 the existing joint, Modelica, and collision-filter resolution paths.
 
+`QueryUsdPrim.collision_geometry` reports the cooked Avian geometry for a
+collision Mesh or Cube: triangle topology for direct mesh collision, hull
+vertices for convex shapes, and separate hull parts for convex decomposition.
+It does not expose authored mesh vertices as though they were the realized
+collider. `collision_bounds` reports a composed AABB and a `fidelity` value;
+`exact` means its extrema match the collision geometry, while
+`conservative_geometry_envelope` identifies bounds derived from source-mesh
+envelopes for convex decomposition or local bounds for curved primitives.
+Consumers that need tight decomposition bounds must use cooked collision
+geometry rather than assume the envelope is exact.
+
 ### Rover Definitions
 
 #### Consolidated Base Files

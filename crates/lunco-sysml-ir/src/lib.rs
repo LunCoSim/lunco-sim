@@ -2281,7 +2281,7 @@ pub enum RequirementAuditCode {
     MissingShortName,
     MissingTypedSubject,
     MissingVerification,
-    TextOnlyRequirement,
+    RequirementWithoutFormalConstraint,
     UnresolvedVerificationTarget,
     UnresolvedNameInRequirement,
 }
@@ -2638,8 +2638,9 @@ pub fn evaluate_requirement(
 /// Audit requirement organization under an explicit project policy.
 ///
 /// The audit operates on resolved snapshot handles. It does not rewrite or
-/// reject source loading, and it distinguishes valid text-only requirements
-/// from unresolved references and malformed verification links.
+/// reject source loading, and it distinguishes requirements without formal
+/// `require` constraints from unresolved references and malformed verification
+/// links.
 pub fn audit_requirements(
     analysis: &SysmlAnalysis,
     policy: RequirementAuditPolicy,
@@ -2718,7 +2719,7 @@ pub fn audit_requirements(
             .any(|constraint| constraint.kind == SysmlRequirementConstraintKind::Require);
         if !has_required_constraint {
             report.findings.push(RequirementAuditFinding {
-                code: Code::TextOnlyRequirement,
+                code: Code::RequirementWithoutFormalConstraint,
                 severity: if policy.require_formal_constraint {
                     Severity::Error
                 } else {

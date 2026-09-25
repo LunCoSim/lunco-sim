@@ -1063,6 +1063,7 @@ fn _mesh_shape_attribute_ops(edit_target, shape, points, face_counts,
     if collision_approximation != ()
         && collision_approximation != "convexHull"
         && collision_approximation != "convexDecomposition"
+        && collision_approximation != "boundingCube"
         && collision_approximation != "none" {
         return plan_error("unsupported USD mesh collision approximation");
     }
