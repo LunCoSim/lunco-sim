@@ -120,7 +120,6 @@ pub struct LoweredModelicaConstraint {
 pub struct ModelicaFeatureBinding {
     pub path: SysmlFeaturePath,
     pub variable: String,
-    pub qualified_name: String,
     pub ty: IrType,
 }
 
@@ -199,16 +198,12 @@ fn collect_features(
     features: &mut BTreeMap<SysmlFeaturePath, ModelicaFeatureBinding>,
 ) -> Result<(), ModelicaLoweringError> {
     match &expression.kind {
-        IrExpressionKind::FeatureReference {
-            path,
-            qualified_name,
-        } => {
+        IrExpressionKind::FeatureReference { path } => {
             features
                 .entry(path.clone())
                 .or_insert_with(|| ModelicaFeatureBinding {
                     path: path.clone(),
                     variable: feature_path_identifier(path),
-                    qualified_name: qualified_name.clone(),
                     ty: expression.result_type.clone(),
                 });
         }
@@ -326,13 +321,10 @@ fn modelica_expression(
     features: &BTreeMap<SysmlFeaturePath, ModelicaFeatureBinding>,
 ) -> Result<String, ModelicaLoweringError> {
     match &expression.kind {
-        IrExpressionKind::FeatureReference {
-            path,
-            qualified_name,
-        } => {
+        IrExpressionKind::FeatureReference { path } => {
             let Some(binding) = features.get(path) else {
                 return Err(ModelicaLoweringError::InvalidExpression(format!(
-                    "feature path for `{qualified_name}` was not declared in the lowered model"
+                    "feature path {path:?} was not declared in the lowered model"
                 )));
             };
             Ok(binding.variable.clone())

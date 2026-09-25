@@ -287,7 +287,6 @@ pub struct IrExpression {
 pub enum IrExpressionKind {
     FeatureReference {
         path: SysmlFeaturePath,
-        qualified_name: String,
     },
     StandardConstant {
         constant: IrStandardConstant,
@@ -559,15 +558,14 @@ fn compile_expression(
     let kind = match &expression.data {
         SysmlExpressionData::FeatureReference(feature) => {
             let path = SysmlFeaturePath::single(*feature);
-            let Some(feature_name) = feature_name(analysis, attributes, parameters, *feature)
-            else {
+            if !feature_is_in_snapshot(analysis, *feature) {
                 diagnostics.push(error(
                     IrDiagnosticCode::FeatureNotInSnapshot,
                     &source,
                     "feature reference is not present in the resolved source snapshot",
                 ));
                 return None;
-            };
+            }
             let declared_type = feature_declared_type(attributes, parameters, *feature);
             let unsupported_primitive = declared_type.as_ref().and_then(|ty| match &ty.value {
                 IrValueType::Rational => Some("Rational"),
@@ -584,10 +582,7 @@ fn compile_expression(
                 return None;
             }
             dependencies.push(path.clone());
-            IrExpressionKind::FeatureReference {
-                path,
-                qualified_name: feature_name,
-            }
+            IrExpressionKind::FeatureReference { path }
         }
         SysmlExpressionData::FeatureChain { prefix, target } => {
             let Some(prefix_path) = sysml_feature_path(prefix) else {
@@ -606,14 +601,14 @@ fn compile_expression(
                 ));
                 return None;
             };
-            let Some(feature_name) = feature_name(analysis, attributes, parameters, *target) else {
+            if !feature_is_in_snapshot(analysis, *target) {
                 diagnostics.push(error(
                     IrDiagnosticCode::FeatureNotInSnapshot,
                     &source,
                     "feature-chain target is not present in the resolved source snapshot",
                 ));
                 return None;
-            };
+            }
             let declared_type = feature_declared_type(attributes, parameters, *target);
             let unsupported_primitive = declared_type.as_ref().and_then(|ty| match &ty.value {
                 IrValueType::Rational => Some("Rational"),
@@ -630,10 +625,7 @@ fn compile_expression(
                 return None;
             }
             dependencies.push(path.clone());
-            IrExpressionKind::FeatureReference {
-                path,
-                qualified_name: feature_name,
-            }
+            IrExpressionKind::FeatureReference { path }
         }
         SysmlExpressionData::StandardConstant { feature, constant } => {
             IrExpressionKind::StandardConstant {
@@ -925,29 +917,11 @@ fn compile_expression(
     })
 }
 
-fn feature_name(
-    analysis: &SysmlAnalysis,
-    attributes: &[SysmlAttribute],
-    parameters: &[SysmlFeature],
-    feature: SysmlFeatureHandle,
-) -> Option<String> {
-    attributes
+fn feature_is_in_snapshot(analysis: &SysmlAnalysis, feature: SysmlFeatureHandle) -> bool {
+    analysis
+        .elements()
         .iter()
-        .find(|attribute| attribute.handle == feature)
-        .map(|attribute| attribute.qualified_name.clone())
-        .or_else(|| {
-            parameters
-                .iter()
-                .find(|parameter| parameter.handle == feature)
-                .map(|parameter| parameter.qualified_name.clone())
-        })
-        .or_else(|| {
-            analysis
-                .elements()
-                .iter()
-                .find(|element| element.feature_handle == Some(feature))
-                .map(|element| element.qualified_name.clone())
-        })
+        .any(|element| element.feature_handle == Some(feature))
 }
 
 fn feature_declared_type(
@@ -1439,7 +1413,7 @@ fn fingerprint_expression(hash: &mut Fnv1a, expression: &IrExpression) {
     hash.write_u64(expression.source.start as u64);
     hash.write_u64(expression.source.end as u64);
     match &expression.kind {
-        IrExpressionKind::FeatureReference { path, .. } => {
+        IrExpressionKind::FeatureReference { path } => {
             hash.write_bytes(b"feature");
             for feature in path.features() {
                 hash.write_u64(feature.element.source_revision);

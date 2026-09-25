@@ -307,10 +307,12 @@ pub fn modelica_constraint_value(model: &mut SysmlModelValue, name: &str) -> Dyn
                             let mut feature = Map::new();
                             feature.insert("path".into(), feature_path_dynamic(&binding.path));
                             feature.insert("variable".into(), Dynamic::from(binding.variable));
-                            feature.insert(
-                                "qualified_name".into(),
-                                Dynamic::from(binding.qualified_name),
-                            );
+                            if let Some(qualified_name) =
+                                feature_path_label(&model.analysis, &binding.path)
+                            {
+                                feature
+                                    .insert("qualified_name".into(), Dynamic::from(qualified_name));
+                            }
                             feature.insert("type".into(), ir_type_dynamic(&binding.ty));
                             Dynamic::from_map(feature)
                         })
@@ -1804,16 +1806,9 @@ fn ir_expression_dynamic(expression: &IrExpression) -> Dynamic {
     value.insert("source".into(), Dynamic::from(expression.source.clone()));
     value.insert("type".into(), ir_type_dynamic(&expression.result_type));
     match &expression.kind {
-        IrExpressionKind::FeatureReference {
-            path,
-            qualified_name,
-        } => {
+        IrExpressionKind::FeatureReference { path } => {
             value.insert("kind".into(), Dynamic::from("feature_reference"));
             value.insert("path".into(), feature_path_dynamic(path));
-            value.insert(
-                "qualified_name".into(),
-                Dynamic::from(qualified_name.clone()),
-            );
         }
         IrExpressionKind::StandardConstant {
             constant,

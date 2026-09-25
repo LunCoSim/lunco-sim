@@ -68,7 +68,9 @@ general observations, and the scalar-parameter helper emits only dependencies
 that the constraint actually uses. Provider diagnostics carry the authored
 feature or constraint source location. Rust diagnostic identities use a
 single `IrDiagnosticCode` catalog and serialize with stable `SYSML-IR-NNN`
-report names.
+report names. Feature-reference IR stores only typed snapshot handles;
+qualified labels are derived from the source projection when a report needs
+them.
 
 The affected crates compile with `cargo check`. This is compile evidence only:
 no Rhai fixture or Griffin Editor/runtime gate has run, so actual path
