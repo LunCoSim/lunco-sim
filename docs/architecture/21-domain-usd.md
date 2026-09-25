@@ -104,6 +104,15 @@ bundle installs the implementation plugins explicitly, so vehicle changes do
 not make the vehicle package depend on shader implementation or the 6.5k-line
 cosim implementation.
 
+Live projection replacements use the registered domain owners as a synchronous
+prepare boundary. An owner can promote a local prim refresh to a full-stage reset
+when its derived topology crosses the subtree, then retires that state before the
+generic projector replaces stage entities. A failed preparation leaves the old
+ECS projection intact, emits a structured diagnostic, and faults the mounted
+simulation instead of committing a partial reset. Avian retires joint graph
+edges before native joint components and collider markers; a constraint owned
+by another stage rejects the reset until its topology can be rebuilt together.
+
 Default Twin scene admission uses `AsyncWorkAdmission` to parse the exact
 `UsdSourceText` revision and serialize the restored persistent document
 snapshot off the main schedule. The file-backed registry still owns path

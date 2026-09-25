@@ -41,7 +41,7 @@
 //! may not be loaded yet (async loading). The `process_usd_avian_prims` system runs in the
 //! `Update` schedule and retries every frame until the asset is available.
 
-use avian3d::dynamics::solver::joint_graph::JointGraph;
+use avian3d::dynamics::solver::{islands::PhysicsIslands, joint_graph::JointGraph};
 use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::ecs::component::ComponentId;
@@ -67,8 +67,8 @@ use openusd::sdf::Path as SdfPath;
 // (an attribute UsdPhysics does not define) got invented and lived here for
 // months: a typo in a `&str` compiles.
 use lunco_usd_avian_contracts::{
-    AuthoredInitialVelocity, JointDrive, PendingUsdJoint, ScenePhysicsOwned, ShouldBeDynamic,
-    UsdPhysicsProjected,
+    AuthoredInitialVelocity, JointDrive, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
+    ShouldBeDynamic, UsdPhysicsProjected,
 };
 use lunco_usd_avian_reader::{
     collider::{
@@ -194,31 +194,189 @@ fn prepare_scene_physics_teardown(world: &mut World) {
             world.query_filtered::<Entity, Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>>();
         query.iter(world).collect()
     };
-    let joints: Vec<(Entity, ComponentId)> = {
-        let mut query = world.query_filtered::<(
-            Entity,
-            &avian3d::dynamics::solver::joint_graph::JointComponentId,
-        ), (
-            With<avian3d::dynamics::solver::joint_graph::JointComponentId>,
-            Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>,
-        )>();
+    if let Err(error) = prepare_physics_teardown(world, &scene_entities) {
+        error!("scene physics teardown could not retire its Avian state: {error}");
+        world
+            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
+            .raise("usd-physics-teardown", None, "active-scene", error);
+    }
+}
+
+/// Retire physics derived from one USD stage before its projected entities are
+/// replaced. Whole-source edits and other coarse stage rebuilds do not pass
+/// through the scene-replacement schedule, so they must use this same graph-safe
+/// owner before the generic projector despawns stage entities.
+pub fn prepare_stage_projection_reset(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+) -> Result<(), String> {
+    let mut stage_entities: EntityHashSet = {
+        let mut query = world.query::<(Entity, &UsdPrimPath)>();
         query
             .iter(world)
-            .filter_map(|(entity, joint)| joint.id().map(|id| (entity, id)))
+            .filter(|(_, path)| path.stage_handle.id() == stage_id)
+            .map(|(entity, _)| entity)
             .collect()
     };
-    let colliders: Vec<Entity> = {
-        let mut query = world.query_filtered::<Entity, (
-            With<Collider>,
-            Or<(With<UsdPrimPath>, With<ScenePhysicsOwned>)>,
-        )>();
-        query.iter(world).collect()
-    };
 
-    // Retire every graph edge touching this scene, not just joint entities that
-    // carry a scene marker. A synthesized constraint may be attached before its
-    // ownership marker is visible, while its body is already scene-owned; the
-    // body despawn must never be the first graph transition for that edge.
+    // Synthesized bodies and joints live below authored prims in the entity
+    // hierarchy. Include those explicit physics owners even when they have no
+    // USD path of their own.
+    let hierarchy: Vec<(Entity, Entity)> = {
+        let mut query = world.query::<(Entity, &ChildOf)>();
+        query
+            .iter(world)
+            .map(|(child, parent)| (child, parent.parent()))
+            .collect()
+    };
+    let mut descendants = stage_entities.clone();
+    loop {
+        let before = descendants.len();
+        for (child, parent) in &hierarchy {
+            if descendants.contains(parent) {
+                descendants.insert(*child);
+            }
+        }
+        if descendants.len() == before {
+            break;
+        }
+    }
+    for entity in descendants {
+        if world.get::<ScenePhysicsOwned>(entity).is_some() {
+            stage_entities.insert(entity);
+        }
+    }
+
+    // World-anchor bodies have no hierarchy parent. Resolve them from the
+    // admitted joint edges that touch this stage, so the edge and its private
+    // endpoint are retired together.
+    let graph_links: Vec<(Entity, Entity, Entity)> = world
+        .get_resource::<JointGraph>()
+        .map(|graph| {
+            graph
+                .graph()
+                .all_edge_weights()
+                .map(|edge| (edge.entity, edge.body1, edge.body2))
+                .collect()
+        })
+        .unwrap_or_default();
+    let touching_links: Vec<_> = graph_links
+        .into_iter()
+        .filter(|(joint, body0, body1)| {
+            stage_entities.contains(joint)
+                || stage_entities.contains(body0)
+                || stage_entities.contains(body1)
+        })
+        .collect();
+    for (joint, body0, body1) in &touching_links {
+        for endpoint in [joint, body0, body1] {
+            if world
+                .get::<UsdPrimPath>(*endpoint)
+                .is_some_and(|path| path.stage_handle.id() != stage_id)
+            {
+                return Err(format!(
+                    "stage reset for {stage_id:?} intersects physics edge endpoint {endpoint:?} owned by another stage"
+                ));
+            }
+        }
+        if world.get::<ScenePhysicsOwned>(*joint).is_some() {
+            stage_entities.insert(*joint);
+        }
+    }
+    let stage_anchors: Vec<Entity> = touching_links
+        .iter()
+        .flat_map(|(_, body0, body1)| [*body0, *body1])
+        .filter(|entity| {
+            world.get::<ScenePhysicsOwned>(*entity).is_some()
+                && world.get::<UsdPrimPath>(*entity).is_none()
+        })
+        .collect();
+    stage_entities.extend(stage_anchors.iter().copied());
+
+    prepare_physics_teardown(world, &stage_entities)?;
+
+    for anchor in stage_anchors {
+        if world.get_entity(anchor).is_ok() && world.get::<UsdPrimPath>(anchor).is_none() {
+            world.despawn(anchor);
+        }
+    }
+    Ok(())
+}
+
+/// Promote a local prim refresh to a stage reset when the subtree participates
+/// in Avian state. Joints can connect bodies outside the hierarchy, so resetting
+/// only the edited subtree would leave constraints attached to retired entity
+/// identities.
+pub fn subtree_requires_stage_projection_reset(
+    world: &World,
+    stage_id: AssetId<UsdStageAsset>,
+    prim_path: &str,
+) -> bool {
+    let prefix = prim_path.trim_end_matches('/');
+    let affected: EntityHashSet = world
+        .iter_entities()
+        .filter(|entity| {
+            entity.get::<UsdPrimPath>().is_some_and(|prim| {
+                prim.stage_handle.id() == stage_id
+                    && (prim.path == prefix
+                        || prefix == "/"
+                        || prim.path.starts_with(&format!("{prefix}/")))
+            })
+        })
+        .map(|entity| entity.id())
+        .collect();
+
+    if affected.iter().any(|entity| {
+        world.get::<RigidBody>(*entity).is_some()
+            || world.get::<Collider>(*entity).is_some()
+            || world
+                .get::<avian3d::dynamics::solver::joint_graph::JointComponentId>(*entity)
+                .is_some()
+            || world
+                .get::<lunco_physics::PhysicsJointLink>(*entity)
+                .is_some()
+            || world.get::<PendingUsdJoint>(*entity).is_some()
+            || world.get::<PendingJointAdmission>(*entity).is_some()
+    }) {
+        return true;
+    }
+
+    world.get_resource::<JointGraph>().is_some_and(|graph| {
+        graph.graph().all_edge_weights().any(|edge| {
+            affected.contains(&edge.entity)
+                || affected.contains(&edge.body1)
+                || affected.contains(&edge.body2)
+        })
+    })
+}
+
+fn prepare_physics_teardown(
+    world: &mut World,
+    scene_entities: &EntityHashSet,
+) -> Result<(), String> {
+    let has_physics = scene_entities.iter().any(|entity| {
+        world.get::<RigidBody>(*entity).is_some()
+            || world.get::<Collider>(*entity).is_some()
+            || world
+                .get::<avian3d::dynamics::solver::joint_graph::JointComponentId>(*entity)
+                .is_some()
+            || world
+                .get::<lunco_physics::PhysicsJointLink>(*entity)
+                .is_some()
+    });
+    if !has_physics {
+        return Ok(());
+    }
+    if world.get_resource::<PhysicsIslands>().is_none()
+        || world.get_resource::<JointGraph>().is_none()
+        || world.get_resource::<ContactGraph>().is_none()
+    {
+        return Err(
+            "USD physics entities exist without Avian island, joint, and contact graph resources"
+                .to_owned(),
+        );
+    }
+
     let graph_joints: Vec<Entity> = world
         .resource::<avian3d::dynamics::solver::joint_graph::JointGraph>()
         .graph()
@@ -231,10 +389,30 @@ fn prepare_scene_physics_teardown(world: &mut World) {
         .map(|edge| edge.entity)
         .collect();
 
+    let joints: Vec<(Entity, ComponentId)> = {
+        let mut query = world.query_filtered::<(
+            Entity,
+            &avian3d::dynamics::solver::joint_graph::JointComponentId,
+        ), With<avian3d::dynamics::solver::joint_graph::JointComponentId>>(
+        );
+        query
+            .iter(world)
+            .filter(|(entity, _)| scene_entities.contains(entity) || graph_joints.contains(entity))
+            .filter_map(|(entity, joint)| joint.id().map(|id| (entity, id)))
+            .collect()
+    };
+    let colliders: Vec<Entity> = {
+        let mut query = world.query_filtered::<Entity, With<Collider>>();
+        query
+            .iter(world)
+            .filter(|entity| scene_entities.contains(entity))
+            .collect()
+    };
+
     // Retire constraints before contacts and bodies. The public graph API lets
     // us tolerate an edge whose island was already emptied by an earlier body
     // teardown without asking Avian's observer to unlink it a second time.
-    lunco_usd_avian_joints::retire_joint_graph_edges(world, &graph_joints);
+    lunco_usd_avian_joints::retire_joint_graph_edges(world, &graph_joints)?;
 
     // Remove the joint component and any marker before despawn. The component
     // removal observer now sees no graph edge, and removing JointComponentId
@@ -254,10 +432,22 @@ fn prepare_scene_physics_teardown(world: &mut World) {
             entity_mut.remove::<ColliderMarker>();
         }
     }
+
+    Ok(())
 }
 
 impl Plugin for UsdAvianPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
+            .register(
+                lunco_usd_bevy_core::live_edit::UsdLiveEditOwner::stage_projection_reset_owner(
+                    "usd-avian.physics",
+                    subtree_requires_stage_projection_reset,
+                    prepare_stage_projection_reset,
+                ),
+            );
         // Installs joints parked by `attach_joint` — the USD path attaches
         // authored joints, so this app must be able to land them.
         app.add_plugins(lunco_usd_avian_joints::JointAttachPlugin);
@@ -3789,5 +3979,68 @@ def Cube "Part" (
             &view,
             &SdfPath::new("/Mission/CompoundLander").unwrap()
         ));
+    }
+}
+
+#[cfg(test)]
+mod stage_projection_reset_tests {
+    use super::{prepare_stage_projection_reset, subtree_requires_stage_projection_reset};
+    use avian3d::prelude::RigidBody;
+    use bevy::prelude::{Handle, World};
+    use lunco_usd_bevy_scene::UsdPrimPath;
+    use lunco_usd_bevy_stage::UsdStageAsset;
+
+    #[test]
+    fn local_refresh_promotes_physics_subtrees_and_keeps_visual_subtrees_local() {
+        let mut world = World::new();
+        let stage = Handle::<UsdStageAsset>::default();
+        world.spawn((
+            UsdPrimPath {
+                stage_handle: stage.clone(),
+                path: "/Scene/Rover/Chassis".into(),
+            },
+            RigidBody::Dynamic,
+        ));
+        world.spawn(UsdPrimPath {
+            stage_handle: stage.clone(),
+            path: "/Scene/Camera/Visual".into(),
+        });
+
+        assert!(subtree_requires_stage_projection_reset(
+            &world,
+            stage.id(),
+            "/Scene/Rover"
+        ));
+        assert!(subtree_requires_stage_projection_reset(
+            &world,
+            stage.id(),
+            "/Scene"
+        ));
+        assert!(!subtree_requires_stage_projection_reset(
+            &world,
+            stage.id(),
+            "/Scene/Camera"
+        ));
+    }
+
+    #[test]
+    fn reset_reports_missing_avian_graph_resources_without_mutating_the_stage() {
+        let mut world = World::new();
+        let stage = Handle::<UsdStageAsset>::default();
+        let body = world
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage.clone(),
+                    path: "/Scene/Rover/Chassis".into(),
+                },
+                RigidBody::Dynamic,
+            ))
+            .id();
+
+        let error = prepare_stage_projection_reset(&mut world, stage.id())
+            .expect_err("physics reset requires Avian's graph resources");
+
+        assert!(error.contains("Avian island, joint, and contact graph resources"));
+        assert_eq!(world.get::<RigidBody>(body), Some(&RigidBody::Dynamic));
     }
 }

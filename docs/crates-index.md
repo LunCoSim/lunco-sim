@@ -883,8 +883,10 @@ Physics projection for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas —
 rigid bodies + mass-properties, all collider shapes, and **all joints**
 (revolute/prismatic/fixed/spherical/distance, D6-reduced) with
 `UsdPhysicsDriveAPI` motor drive — to normalized Avian joint plans and
-body/collider components. Native joint construction and lifecycle live in
-`lunco-usd-avian-joints`, including the programmatic wheel hinge. It consumes
+body/collider components. It owns the graph-safe stage-reset preparation used
+by live USD projection before replacing physical entities. Native joint
+construction and lifecycle live in `lunco-usd-avian-joints`, including the
+programmatic wheel hinge. It consumes
 the separate Avian/BigSpace core bridge. Runtime-only; its Rust tests cover
 low-level mechanics with in-memory USDA fixtures, while shipped asset/runtime
 assertions are owned by the Rhai scene-test gate. Lint fact extraction is

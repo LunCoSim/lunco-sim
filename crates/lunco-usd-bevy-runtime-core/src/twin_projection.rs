@@ -1505,7 +1505,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     .host(doc)
                     .map(|h| h.document().composed_source())
                     .unwrap_or_default();
-                rebuild_scene_from_composed(world, scene_id, &cs);
+                if !rebuild_scene_from_composed(world, scene_id, &cs) {
+                    continue;
+                }
             }
             Some(ops) if ops.iter().any(op_needs_rebuild) => {
                 if !ensure_reference_layers_for_rebuild(world, scene_id, &ops) {
@@ -1522,7 +1524,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     .host(doc)
                     .map(|h| h.document().composed_source())
                     .unwrap_or_default();
-                rebuild_scene_from_composed(world, scene_id, &cs);
+                if !rebuild_scene_from_composed(world, scene_id, &cs) {
+                    continue;
+                }
             }
             // Incremental: replay each op's typed delta onto the live stage.
             // The runtime persistence owner snapshots authored edits
@@ -1653,29 +1657,35 @@ fn refresh_dependent_stage_assets(
                 continue;
             }
         };
-
-        // Keep the async asset cache and the live canonical stage on the same
-        // closure.  Future previews opened against this asset therefore see the
-        // same component bytes without a process restart or stale fallback.
-        if let Some(mut asset) = world
-            .resource_mut::<Assets<UsdStageAsset>>()
-            .get_mut(stage_id)
-        {
-            asset.recipe = Some(recipe.clone());
-            asset.projection_plan = Arc::new(projection_plan);
+        if !prepare_stage_projection_reset(world, stage_id) {
+            continue;
         }
 
         let rebuilt = world
             .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
             .is_some_and(|mut stages| stages.rebuild(stage_id, &recipe));
         if rebuilt {
+            // Keep the async asset cache and the live canonical stage on the
+            // same closure. Future previews then read the accepted component
+            // bytes through the normal loader boundary.
+            if let Some(mut asset) = world
+                .resource_mut::<Assets<UsdStageAsset>>()
+                .get_mut(stage_id)
+            {
+                asset.recipe = Some(recipe.clone());
+                asset.projection_plan = Arc::new(projection_plan);
+            }
             // This stage-scoped refresh retires only projected USD entities.  A
             // detached preview camera is owned by `UsdViewportState` and stays
             // exactly where the user left it.
-            refresh_scene_visuals(world, stage_id);
+            refresh_scene_visuals_prepared(world, stage_id);
         } else {
-            warn!(
-                "[usd-live] dependent stage {stage_id:?} matched layer {layer_id} but has no canonical stage to rebuild"
+            report_stage_projection_reset_failure(
+                world,
+                stage_id,
+                format!(
+                    "dependent stage matched layer {layer_id} but its canonical stage could not be rebuilt"
+                ),
             );
         }
     }
@@ -2699,7 +2709,14 @@ fn failed_ref_spawn(
 /// an attribute edit that fans out through a material binding reaches every bound
 /// mesh. Structural changes therefore use one explicit, stage-scoped synchronous
 /// rebuild.
-pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) {
+pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStageAsset>) -> bool {
+    if !prepare_stage_projection_reset(world, scene_id) {
+        return false;
+    }
+    refresh_scene_visuals_prepared(world, scene_id)
+}
+
+fn refresh_scene_visuals_prepared(world: &mut World, scene_id: AssetId<UsdStageAsset>) -> bool {
     let roots: Vec<Entity> = {
         // A live simulation is rooted by `UsdSceneRoot`; each editor preview
         // lease is rooted by `UsdPreviewOnly`. Both are stage ownership roots
@@ -2715,6 +2732,9 @@ pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStag
             .map(|(entity, _)| entity)
             .collect()
     };
+    if roots.is_empty() {
+        return true;
+    }
 
     // `reinstantiate_entity` can only recursively despawn ordinary hierarchy
     // children. Camera mounting deliberately breaks that hierarchy for precision,
@@ -2739,6 +2759,77 @@ pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStag
     for root in roots {
         reinstantiate_entity(world, root);
     }
+    true
+}
+
+/// Let every registered live-edit owner retire its stage-derived state before
+/// the generic projector replaces entities. Owners run in stable id order; a
+/// failure leaves the current ECS projection intact and faults the active stage
+/// so simulation cannot continue against a partially reset topology.
+fn prepare_stage_projection_reset(world: &mut World, stage_id: AssetId<UsdStageAsset>) -> bool {
+    let mut owners = world
+        .get_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
+        .map(|registry| registry.snapshot())
+        .unwrap_or_default();
+    owners.sort_by_key(|owner| owner.id());
+    for owner in owners {
+        if let Err(error) = owner.prepare_stage_projection_reset(world, stage_id) {
+            report_stage_projection_reset_failure(world, stage_id, error);
+            return false;
+        }
+    }
+    true
+}
+
+fn subtree_requires_stage_projection_reset(
+    world: &World,
+    stage_id: AssetId<UsdStageAsset>,
+    prim_path: &str,
+) -> bool {
+    world
+        .get_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
+        .is_some_and(|registry| {
+            registry
+                .snapshot()
+                .iter()
+                .any(|owner| owner.requires_stage_projection_reset(world, stage_id, prim_path))
+        })
+}
+
+fn report_stage_projection_reset_failure(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    detail: String,
+) {
+    const PRODUCER: &str = "usd-stage-projection-reset";
+    let subject = format!("{stage_id:?}");
+    let active_stage = {
+        let mut roots = world.query_filtered::<&UsdPrimPath, With<UsdSceneRoot>>();
+        roots
+            .iter(world)
+            .any(|path| path.stage_handle.id() == stage_id)
+    };
+    if active_stage {
+        world
+            .get_resource_or_insert_with(lunco_core::RuntimeFaults::default)
+            .raise(PRODUCER, None, subject.clone(), detail.clone());
+    }
+    let mut diagnostics =
+        world.get_resource_or_insert_with(lunco_core::RuntimeDiagnostics::default);
+    diagnostics
+        .findings
+        .retain(|finding| !(finding.producer == PRODUCER && finding.subject == subject));
+    diagnostics.findings.push(lunco_core::RuntimeDiagnostic {
+        code: PRODUCER.to_owned(),
+        severity: lunco_core::DiagnosticSeverity::Error,
+        producer: PRODUCER.to_owned(),
+        subject: subject.clone(),
+        message: detail.clone(),
+    });
+    diagnostics
+        .findings
+        .sort_by(|left, right| left.subject.cmp(&right.subject));
+    error!("[usd-live] stage projection reset {subject} failed: {detail}");
 }
 
 /// Notify domain projections, then drop `entity`'s [`UsdSceneProjected`] marker
@@ -2779,6 +2870,14 @@ pub(crate) fn refresh_prim_subtree(
     scene_id: AssetId<UsdStageAsset>,
     path: &str,
 ) {
+    if subtree_requires_stage_projection_reset(world, scene_id, path) {
+        info!(
+            "[usd-live] prim refresh for {scene_id:?}:{path} promoted to a stage reset by a projection owner"
+        );
+        refresh_scene_visuals(world, scene_id);
+        return;
+    }
+
     let entity = {
         let mut q = world.query::<(Entity, &UsdPrimPath)>();
         q.iter(world)
@@ -2835,7 +2934,7 @@ fn rebuild_scene_from_composed(
     world: &mut World,
     scene_id: AssetId<UsdStageAsset>,
     composed_source: &str,
-) {
+) -> bool {
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
     use lunco_usd_compose::recipe::StageRecipe;
     // Recipe = the edited composed source as the root layer + every referenced
@@ -2845,19 +2944,37 @@ fn rebuild_scene_from_composed(
             .get_non_send::<CanonicalStages>()
             .and_then(|s| s.get(scene_id))
         else {
-            return;
+            return false;
         };
         (cs.scene_layer.clone(), cs.layer_bytes_snapshot())
     };
     bytes.insert(scene_layer.clone(), composed_source.as_bytes().to_vec());
     let recipe = StageRecipe::new(scene_layer, bytes);
+    if let Err(error) = UsdStageProjectionPlan::from_recipe(&recipe) {
+        report_stage_projection_reset_failure(
+            world,
+            scene_id,
+            format!("edited composed source could not be prepared: {error}"),
+        );
+        return false;
+    }
+    if !prepare_stage_projection_reset(world, scene_id) {
+        return false;
+    }
     let rebuilt = world
         .get_non_send_mut::<CanonicalStages>()
         .map(|mut stages| stages.rebuild(scene_id, &recipe))
         .unwrap_or(false);
     if rebuilt {
         // Fresh stage (new, empty sink) — re-instantiate every scene root off it.
-        refresh_scene_visuals(world, scene_id);
+        refresh_scene_visuals_prepared(world, scene_id)
+    } else {
+        report_stage_projection_reset_failure(
+            world,
+            scene_id,
+            "prepared composed source could not replace the canonical stage".to_owned(),
+        );
+        false
     }
 }
 

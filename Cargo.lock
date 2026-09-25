@@ -9873,6 +9873,7 @@ dependencies = [
  "lunco-usd-avian-filters",
  "lunco-usd-avian-joints",
  "lunco-usd-avian-reader",
+ "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",

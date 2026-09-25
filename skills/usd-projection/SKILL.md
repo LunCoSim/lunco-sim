@@ -378,9 +378,13 @@ the right behaviour is for it to visibly do nothing.
    domain-specific in-place refresh registers a typed `UsdLiveEditOwner` with
    `lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`. The owner claims only
    its attributes, invalidates its own projection marker when required, and
-   refreshes from the composed stage. Keep `live_consume.rs` generic: if you add
-   an editable attribute and skip both paths, `SetFoo` will journal and save
-   correctly and **nothing will move on screen** until reload.
+   refreshes from the composed stage. Owners also promote a local subtree reset
+   to a stage reset when their runtime topology crosses that subtree. Before a
+   full reset, each owner retires its derived state synchronously; a rejection
+   leaves the current projection in place and faults the active simulation.
+   Keep `live_consume.rs` generic: if you add an editable attribute and skip both
+   paths, `SetFoo` will journal and save correctly and **nothing will move on
+   screen** until reload.
 5. **Author it.** Add a command that lowers to `UsdOp`s (Law 1) and register it
    with `register_commands!` — a command is only reachable from the HTTP API /
    MCP / rhai if its *type* is in the reflect registry.

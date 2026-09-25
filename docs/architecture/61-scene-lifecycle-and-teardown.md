@@ -88,6 +88,15 @@ not covered by the USD prim sweep. They are retired by the dependency-light
 `lunco_core::SceneTeardown` schedule, run before the outgoing prims are
 despawned and before replacement projection starts.
 
+Live document edits use a separate, stage-scoped boundary; they do not invoke
+the application-wide `SceneTeardown`. Before a full-stage re-projection, the
+generic USD runtime asks registered domain owners to retire their derived state.
+An owner promotes a local prim refresh when its physics topology crosses that
+subtree. Avian retires joint graph edges, native joint components, and collider
+markers before the stage entities are replaced, then normal projection admits
+the new constraints. A failed owner preparation aborts replacement, reports a
+structured diagnostic, and safety-holds the mounted simulation.
+
 Celestial state follows the same boundary. Its derived tree is retired,
 `OrbitalViewPin` is cleared, and `ActivePhysicsFrame` is restored to the
 persistent `WorldGrid` unconditionally; this is not inferred from a later frame

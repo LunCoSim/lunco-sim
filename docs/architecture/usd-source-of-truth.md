@@ -235,8 +235,12 @@ Adding a new specialized live-edit domain means registering one
 `UsdLiveEditOwner` in `lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`;
 the generic runtime then invokes the owner without importing that domain crate.
 The owner claims only its authored attributes and performs its validated
-in-place refresh. Ordinary transforms, lights, and structural changes remain
-on the generic projection path.
+in-place refresh. Owners can also promote a local reset to a full-stage reset
+when their derived topology crosses the edited subtree, and retire their state
+before the generic projector replaces entities. Failed preparation aborts the
+replacement and faults the mounted simulation. Ordinary transforms, lights,
+and structural changes without domain-owned topology remain on the generic
+projection path.
 
 ### Step 3: generic projection on change (the fast path)
 

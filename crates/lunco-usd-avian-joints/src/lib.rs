@@ -34,7 +34,7 @@ const JOINT_SEAT_ERROR_THRESHOLD: f64 = 0.1;
 /// that asks the island manager to unlink the same edge twice. Retiring the
 /// edge while all bodies are still present makes subsequent component removal
 /// harmless.
-pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) {
+pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) -> Result<(), String> {
     let mut graph_state: SystemState<(
         ResMut<PhysicsIslands>,
         ResMut<JointGraph>,
@@ -48,10 +48,10 @@ pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) {
         let Ok((mut islands, mut joint_graph, contact_graph, mut body_islands)) =
             graph_state.get_mut(world)
         else {
-            error!(
-                "joint graph retirement blocked: Avian graph resources have conflicting access; keeping the topology intact"
+            return Err(
+                "Avian graph resources are unavailable for joint retirement; keeping the topology intact"
+                    .to_owned(),
             );
-            return;
         };
 
         for &entity in entities {
@@ -86,6 +86,7 @@ pub fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) {
         }
     }
     graph_state.apply(world);
+    Ok(())
 }
 
 /// A constructed native constraint that has not yet become an ECS component.
@@ -365,7 +366,10 @@ fn retire_requested_joints(world: &mut World) {
     }
 
     let entities: Vec<Entity> = requested.iter().map(|(entity, _)| *entity).collect();
-    retire_joint_graph_edges(world, &entities);
+    if let Err(error) = retire_joint_graph_edges(world, &entities) {
+        error!("joint detach blocked: {error}");
+        return;
+    }
 
     for (entity, component_id) in requested {
         let Ok(mut entity_mut) = world.get_entity_mut(entity) else {

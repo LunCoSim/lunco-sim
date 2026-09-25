@@ -210,13 +210,17 @@ drills the Inspector to that subpart's own PRIM
 multi-select extend** and retains the existing selection; it does not drill.
 The drill also requires the rover to already be the primary selection.
 
-Edits go `ApplyUsdOp SetAttribute` → document → **in-place resync, never a
-respawn**. `UsdSimPlugin` registers the vehicle wheel owner with
+Wheel, suspension, tire, and authored vehicle-control edits go
+`ApplyUsdOp SetAttribute` → document → **in-place resync**. `UsdSimPlugin` registers the vehicle wheel owner with
 `lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry`; that owner claims the
 wheel, suspension, tire, and authored vehicle-control attributes and refreshes
-the live components from the composed stage — same entities, joints untouched.
-Never poke `WheelRaycast`/`RevoluteJoint` components directly; the next
-document change would overwrite you.
+the live components from the composed stage, preserving the current entities
+and joints. Other edits that touch a rigid body, collider, or joint promote to a
+stage-wide reset so external joint endpoints are retired and admitted together.
+The physics owner removes graph edges before joint components and collider
+markers; a failed reset holds the active simulation and reports the owner error.
+Never poke `WheelRaycast`/`RevoluteJoint` components directly; the next document
+change would overwrite you.
 
 ## Delivery order
 
