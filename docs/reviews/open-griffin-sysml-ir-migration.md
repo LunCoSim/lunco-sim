@@ -70,7 +70,9 @@ feature or constraint source location. Rust diagnostic identities use a
 single `IrDiagnosticCode` catalog and serialize with stable `SYSML-IR-NNN`
 report names. Feature-reference IR stores only typed snapshot handles;
 qualified labels are derived from the source projection when a report needs
-them.
+them. Constraint body projection assigns each expression statement to its
+nearest owning constraint declaration, preventing nested constraint bodies
+from being duplicated into a parent constraint's IR.
 
 The affected crates compile with `cargo check`. This is compile evidence only:
 no Rhai fixture or Griffin Editor/runtime gate has run, so actual path

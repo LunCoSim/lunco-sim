@@ -1935,15 +1935,22 @@ fn project_constraints(
     let mut constraints = Vec::new();
     for &file in project_files {
         let file_elements = workspace.file_elements(file).to_vec();
+        let mut constraint_spans = HashMap::<(u32, u32), Vec<u32>>::new();
+        for &id in &file_elements {
+            if !is_projected_constraint_kind(workspace.model().kind(id)) {
+                continue;
+            }
+            let Some((range, _)) = workspace.element_ranges(id) else {
+                continue;
+            };
+            constraint_spans
+                .entry((u32::from(range.start()), u32::from(range.end())))
+                .or_default()
+                .push(id.index() as u32);
+        }
         for id in file_elements {
             let kind = workspace.model().kind(id);
-            if !matches!(
-                kind,
-                ElementKind::ConstraintDefinition
-                    | ElementKind::ConstraintUsage
-                    | ElementKind::AssertConstraintUsage
-                    | ElementKind::Invariant
-            ) {
+            if !is_projected_constraint_kind(kind) {
                 continue;
             }
             let Some(element) = elements
@@ -1965,10 +1972,8 @@ fn project_constraints(
                 .syntax()
                 .descendants()
                 .filter(|node| node.kind() == SyntaxKind::EXPR_STMT)
-                .filter(|node| {
-                    let start = u32::from(node.text_range().start());
-                    let end = u32::from(node.text_range().end());
-                    start >= element.start && end <= element.end
+                .filter(|statement| {
+                    nearest_constraint_owner(statement, &constraint_spans) == Some(element.id)
                 })
                 .filter_map(|statement| statement.children().next())
                 .map(|node| {
@@ -1992,6 +1997,31 @@ fn project_constraints(
         }
     }
     constraints
+}
+
+fn is_projected_constraint_kind(kind: ElementKind) -> bool {
+    matches!(
+        kind,
+        ElementKind::ConstraintDefinition
+            | ElementKind::ConstraintUsage
+            | ElementKind::AssertConstraintUsage
+            | ElementKind::Invariant
+    )
+}
+
+fn nearest_constraint_owner(
+    statement: &SyntaxNode,
+    constraint_spans: &HashMap<(u32, u32), Vec<u32>>,
+) -> Option<u32> {
+    for ancestor in statement.ancestors() {
+        let range = ancestor.text_range();
+        if let Some(owners) =
+            constraint_spans.get(&(u32::from(range.start()), u32::from(range.end())))
+        {
+            return (owners.len() == 1).then_some(owners[0]);
+        }
+    }
+    None
 }
 
 /// Resolve the standard `ConstraintUsage::constraintDefinition` relation from
