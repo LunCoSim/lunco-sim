@@ -1721,6 +1721,7 @@ fn finish_dem_worker(
     curvature: Option<Res<crate::oracle::TerrainBodyCurvature>>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut admission: Option<ResMut<lunco_core_runtime::AsyncWorkAdmission>>,
 ) {
     let curvature_radius = curvature.map(|c| c.radius_m);
     // Drain failed wasm bakes:
@@ -1858,6 +1859,7 @@ fn finish_dem_worker(
                         previous_surface_change,
                         tiles,
                         pending,
+                        admission.as_deref_mut(),
                         &mut mesh_cache,
                         has_static_mesh,
                         job.target_res,
@@ -1989,6 +1991,7 @@ fn swap_terrain_grid(
     previous_surface_change: Option<&crate::surface_change::TerrainSurfaceChange>,
     tiles: Option<Mut<crate::stream_viz::LodTiles>>,
     pending: Option<Mut<crate::stream_viz::PendingTileBakes>>,
+    admission: Option<&mut lunco_core_runtime::AsyncWorkAdmission>,
     mesh_cache: &mut crate::stream_viz::LodMeshCache,
     has_static_mesh: bool,
     target_res: usize,
@@ -2028,6 +2031,7 @@ fn swap_terrain_grid(
         half,
         tiles,
         pending,
+        admission,
         mesh_cache,
     );
     // Scatter layers re-run once the applied-marker is gone (next frame).
@@ -2346,6 +2350,7 @@ pub(crate) fn finish_dem_restamp(
     >,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     mut mesh_cache: ResMut<crate::stream_viz::LodMeshCache>,
+    mut admission: Option<ResMut<lunco_core_runtime::AsyncWorkAdmission>>,
 ) {
     use bevy::tasks::futures_lite::future;
     for (
@@ -2484,6 +2489,7 @@ pub(crate) fn finish_dem_restamp(
             half,
             tiles,
             pending,
+            admission.as_deref_mut(),
             &mut mesh_cache,
         );
 

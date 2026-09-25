@@ -51,10 +51,17 @@ itself isolate CPU cost or give `Visualization` an independent cadence. Terrain
 cover reselection has an explicit 30 Hz wall-clock skip boundary, and its
 immutable calculation uses shared bounded background admission. The owning
 system checks the camera, surface, and operation signatures before committing a
-result. Tile-mesh CPU bakes still use the per-terrain task queue; mesh upload,
-visibility, and residency commit in `Update`. This removes the quadtree cover
-walk from the UI frame, while tile-bake admission and per-frame ECS work still
-share that frame.
+result. Native tile-mesh bakes use the same bounded admission at `Interactive`
+priority, with the owner's nearest-first rank followed by stable operation
+identity. The terrain owner validates each completion against its current key,
+then uploads and publishes meshes in stable coordinate order under a per-frame
+budget. Camera, generation, and surface changes withdraw queued work; already
+running work can finish but its stale result is discarded. Removing the terrain
+owner cancels its queued visualization preparation and retires queued results.
+Browser builds keep their async cache path until a Web Worker transport exists.
+These CPU jobs no longer enter the frame's Bevy task queue directly. Selection,
+mesh upload, visibility, and residency changes still use the `Update`
+visualization cycle.
 
 The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
 `EntityIndex` → `TimeSpineSet`. Lifecycle projection creates the ECS entities;
@@ -471,12 +478,12 @@ source and origin facts for shared `AsyncWorkAdmission`; the owner commits only
 for the exact current generation and origin URI. `InspectSysmlDocument`
 distinguishes pending, ready, and failed states, and editor verification treats
 pending as retryable. This analysis remains editor-only and never holds
-simulation progress. Terrain cover preparation now uses shared admission;
-remaining USD and Modelica library preparation and terrain tile-bake admission
-remain owner-local or synchronous. On wasm, native admission rejects CPU work
-until a Web Worker transport exists; terrain cover preparation therefore stays
-synchronous on that host rather than silently running on the browser main
-thread.
+simulation progress. Terrain cover preparation and native tile-mesh baking use
+shared admission. Remaining USD and Modelica library preparation remain
+owner-local or synchronous. On wasm, native admission rejects CPU work until a
+Web Worker transport exists; terrain cover preparation remains explicit and
+synchronous on that host, and tile bakes retain their explicit browser cache
+path.
 
 Results are committed only by their owner at a named cycle boundary. Results
 for presentation may be adopted when current and useful. Results that change
@@ -879,15 +886,16 @@ The whole-simulation guarantee remains open because:
     application frame while preserving serial command order. A single native
     bridge call can still be expensive, and scenario hooks remain serialized
     in their owning schedules. On native hosts, terrain selection is frame-driven
-    during capture while cover preparation and tile bakes remain asynchronous.
-    Offline capture holds virtual time at the advanced frame until terrain
-    readiness clears; stable tile-order publication is bounded per `Update` by
-    the configured terrain bake budget. Web cover preparation still lacks worker
-    transport and remains a separate open boundary.
+    during capture while cover preparation and tile bakes use bounded shared
+    admission. Offline capture holds virtual time at the advanced frame until
+    terrain readiness clears; stable tile-order publication is bounded per
+    `Update` by the configured terrain bake budget. Web cover preparation still
+    lacks worker transport and remains a separate open boundary.
 14. The async admission queue limits its own in-flight requests to four and
-    priority selects queued work only. It cannot preempt running jobs, and many
-    visualization/preparation producers still submit directly to Bevy pools;
-    there is no measured cross-owner CPU reservation for UI and simulation.
+    priority selects queued work only. It cannot preempt running jobs. Native
+    terrain cover and tile baking now use it, while other visualization and
+    preparation producers still submit directly to Bevy pools; there is no
+    measured cross-owner CPU reservation for UI and simulation.
 
 These findings and their owner-specific file evidence are maintained in
 [`../reviews/open-deterministic-simulation-contract.md`](../reviews/open-deterministic-simulation-contract.md).

@@ -140,6 +140,8 @@ type AsyncWork = Box<dyn FnOnce() + Send + 'static>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct QueueKey {
     priority: AsyncWorkPriority,
+    /// Owner-selected order within one semantic priority class.
+    order: u64,
     key: AsyncWorkKey,
 }
 
@@ -169,10 +171,10 @@ struct QueuedWorkState {
 
 /// Shared admission queue for CPU preparation running on Bevy's async pool.
 ///
-/// Submissions are bounded and sorted by semantic priority, then by stable
-/// owner identity. A reserved lower-priority share prevents background work
-/// from starvation. Domain owners retain result types, stale-result checks,
-/// and commit boundaries.
+/// Submissions are bounded and sorted by semantic priority, owner-selected
+/// order, then stable operation identity. A reserved lower-priority share
+/// prevents background work from starvation. Domain owners retain result
+/// types, stale-result checks, and commit boundaries.
 #[derive(Resource)]
 pub struct AsyncWorkAdmission {
     queued: Mutex<QueuedWorkState>,
@@ -202,9 +204,23 @@ impl AsyncWorkAdmission {
         key: AsyncWorkKey,
         job: impl FnOnce() + Send + 'static,
     ) -> Result<(), AsyncWorkRejection> {
+        self.submit_ordered(priority, key, 0, job)
+    }
+
+    /// Admit immutable work with an owner-defined stable order within its
+    /// semantic priority class. Lower values start first; equal values use the
+    /// stable operation key. The order affects worker admission only, never
+    /// result validity or the owner's commit order.
+    pub fn submit_ordered(
+        &mut self,
+        priority: AsyncWorkPriority,
+        key: AsyncWorkKey,
+        order: u64,
+        job: impl FnOnce() + Send + 'static,
+    ) -> Result<(), AsyncWorkRejection> {
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (priority, key, job);
+            let _ = (priority, key, order, job);
             self.shared.rejected.fetch_add(1, Ordering::Relaxed);
             self.shared.revision.fetch_add(1, Ordering::Release);
             return Err(AsyncWorkRejection::NativeDispatcherUnavailable);
@@ -231,9 +247,14 @@ impl AsyncWorkAdmission {
                 return Err(AsyncWorkRejection::QueueFull);
             }
 
-            queued
-                .jobs
-                .insert(QueueKey { priority, key }, Box::new(job));
+            queued.jobs.insert(
+                QueueKey {
+                    priority,
+                    order,
+                    key,
+                },
+                Box::new(job),
+            );
             queued.keys.insert(key);
             self.shared.submitted.fetch_add(1, Ordering::Relaxed);
             self.shared.revision.fetch_add(1, Ordering::Release);
@@ -296,6 +317,50 @@ impl AsyncWorkAdmission {
                 .capacity_revision
                 .fetch_add(1, Ordering::Release);
             true
+        }
+    }
+
+    /// Withdraw every queued request for one owner identity. Work already
+    /// dispatched to a worker remains owner-fenced at its result boundary.
+    pub fn cancel_owner(
+        &mut self,
+        kind: AsyncWorkKind,
+        scope_generation: u64,
+        identity: u128,
+    ) -> usize {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (kind, scope_generation, identity);
+            0
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut queued = self.queued.lock().unwrap_or_else(PoisonError::into_inner);
+            let keys = queued
+                .jobs
+                .keys()
+                .filter(|queue_key| {
+                    queue_key.key.kind == kind
+                        && queue_key.key.scope_generation == scope_generation
+                        && queue_key.key.identity == identity
+                })
+                .copied()
+                .collect::<Vec<_>>();
+            for queue_key in &keys {
+                queued.jobs.remove(queue_key);
+                queued.keys.remove(&queue_key.key);
+            }
+            if !keys.is_empty() {
+                self.shared
+                    .cancelled
+                    .fetch_add(keys.len() as u64, Ordering::Relaxed);
+                self.shared.revision.fetch_add(1, Ordering::Release);
+                self.shared
+                    .capacity_revision
+                    .fetch_add(1, Ordering::Release);
+            }
+            keys.len()
         }
     }
 
@@ -534,6 +599,50 @@ mod tests {
             job();
         }
         assert_eq!(*seen.lock().unwrap(), [9, 2, 8, 1]);
+    }
+
+    #[test]
+    fn owner_order_precedes_operation_identity_within_a_priority_class() {
+        let mut admission = AsyncWorkAdmission::default();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        for (order, identity) in [(8, 1), (2, 9), (2, 3), (5, 4)] {
+            let seen = Arc::clone(&seen);
+            admission
+                .submit_ordered(
+                    AsyncWorkPriority::Interactive,
+                    key(identity),
+                    order,
+                    move || seen.lock().unwrap().push(identity),
+                )
+                .unwrap();
+        }
+
+        for _ in 0..4 {
+            let (_, _, job) = admission.pop_next().unwrap();
+            job();
+        }
+        assert_eq!(*seen.lock().unwrap(), [3, 9, 4, 1]);
+    }
+
+    #[test]
+    fn owner_teardown_cancels_only_its_queued_preparation() {
+        let mut admission = AsyncWorkAdmission::default();
+        let kind = AsyncWorkKind::VisualizationPreparation;
+        let owner_key = |identity, operation| AsyncWorkKey::new(kind, 12, identity, 8, operation);
+        for (identity, operation) in [(51, 1), (51, 2), (52, 1)] {
+            admission
+                .submit(
+                    AsyncWorkPriority::Interactive,
+                    owner_key(identity, operation),
+                    || {},
+                )
+                .unwrap();
+        }
+
+        assert_eq!(admission.cancel_owner(kind, 12, 51), 2);
+        assert_eq!(admission.snapshot().cancelled, 2);
+        assert_eq!(admission.pop_next().unwrap().1, owner_key(52, 1));
+        assert!(admission.pop_next().is_none());
     }
 
     #[test]

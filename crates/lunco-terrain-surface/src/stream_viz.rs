@@ -36,6 +36,7 @@
 
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid, Stationary};
 use lunco_core::{Command, HorizonShadowTerrain, on_command, register_commands};
@@ -46,10 +47,11 @@ use lunco_materials::{
 };
 use lunco_obstacle_field::grid_mesh;
 use lunco_terrain_core::{HeightSource, measure_node_error};
+#[cfg(not(target_arch = "wasm32"))]
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{
     collections::VecDeque,
     collections::{HashMap, HashSet},
-    panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
@@ -1485,30 +1487,89 @@ struct BakedTile {
     origin_y: f64,
 }
 
+fn assemble_baked_tile(
+    tile_mesh: crate::tile_mesh::TileMesh,
+    oracle: &SurfaceOracle,
+    center: [f64; 2],
+    depth: u32,
+    resolution: usize,
+    morph_end: f32,
+) -> BakedTile {
+    // RENDER_WORLD only: tile CPU vertex data is never read after upload (physics
+    // uses the collider ring and picking uses the oracle).
+    let mut mesh = grid_mesh(
+        tile_mesh.positions,
+        tile_mesh.normals,
+        tile_mesh.uvs,
+        tile_mesh.indices,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tile_mesh.morph_targets);
+    mesh.insert_attribute(ATTRIBUTE_MORPH_NORMAL, tile_mesh.morph_normals);
+    mesh.insert_attribute(ATTRIBUTE_MORPH_EDGE, tile_mesh.edge_masks);
+    BakedTile {
+        mesh,
+        center,
+        depth,
+        res: resolution,
+        morph_end,
+        origin_y: oracle.height_at(center[0], center[1]),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingTileBake {
+    generation: u32,
+    key: lunco_core_runtime::AsyncWorkKey,
+}
+
 /// In-flight off-thread tile bakes for a terrain, keyed by quadtree node. The CPU
-/// bake (`bake_tile_mesh` + grid mesh build) runs on the [`AsyncComputeTaskPool`];
-/// the main thread only uploads the finished mesh + spawns the entity — so baking
-/// never blocks the frame ("non-blocking, extend outward"). Cancelled by drop when
-/// the terrain despawns.
+/// bake and grid-mesh assembly run under the shared bounded preparation admission;
+/// the main thread only uploads the finished mesh + spawns the entity. Browser
+/// builds keep their explicit asynchronous cache path until worker transport exists.
 #[derive(Component, Default)]
 pub struct PendingTileBakes {
+    #[cfg(not(target_arch = "wasm32"))]
+    jobs: HashMap<QuadCoord, PendingTileBake>,
+    #[cfg(target_arch = "wasm32")]
     tasks: HashMap<QuadCoord, (u32, Task<BakedTile>)>,
     ready: Vec<(QuadCoord, u32, BakedTile)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    next_operation: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    capacity_wait_revision: Option<u64>,
+    failed: HashSet<(QuadCoord, u32)>,
 }
 
 impl PendingTileBakes {
     fn len(&self) -> usize {
-        self.tasks.len() + self.ready.len()
+        #[cfg(not(target_arch = "wasm32"))]
+        let jobs = self.jobs.len();
+        #[cfg(target_arch = "wasm32")]
+        let jobs = self.tasks.len();
+        jobs + self.ready.len()
     }
 
     fn is_empty(&self) -> bool {
-        self.tasks.is_empty() && self.ready.is_empty()
+        #[cfg(not(target_arch = "wasm32"))]
+        let jobs_empty = self.jobs.is_empty();
+        #[cfg(target_arch = "wasm32")]
+        let jobs_empty = self.tasks.is_empty();
+        jobs_empty && self.ready.is_empty()
     }
 
     fn has_current(&self, coord: QuadCoord, generation: u32) -> bool {
-        self.tasks
+        #[cfg(not(target_arch = "wasm32"))]
+        let has_job = self
+            .jobs
             .get(&coord)
-            .is_some_and(|(pending_generation, _)| *pending_generation == generation)
+            .is_some_and(|job| job.generation == generation);
+        #[cfg(target_arch = "wasm32")]
+        let has_job = self
+            .tasks
+            .get(&coord)
+            .is_some_and(|(pending_generation, _)| *pending_generation == generation);
+        has_job
             || self
                 .ready
                 .iter()
@@ -1525,17 +1586,36 @@ impl PendingTileBakes {
         change: TerrainSurfaceChange,
         generation: Option<u32>,
         root_half_extent: f64,
+        admission: Option<&mut lunco_core_runtime::AsyncWorkAdmission>,
     ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut admission = admission;
         let Some(generation) = generation else {
-            self.tasks.clear();
+            self.cancel_jobs(admission);
             self.ready.clear();
+            self.failed.clear();
             return;
         };
         let Some(bounds) = change.dirty_bounds else {
-            self.tasks.clear();
+            self.cancel_jobs(admission);
             self.ready.clear();
+            self.failed.clear();
             return;
         };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.jobs.retain(|coord, job| {
+            if node_overlaps_aabb(*coord, root_half_extent, bounds) {
+                if let Some(admission) = admission.as_deref_mut() {
+                    admission.cancel_queued(job.key);
+                }
+                false
+            } else {
+                job.generation = generation;
+                true
+            }
+        });
+        #[cfg(target_arch = "wasm32")]
         self.tasks.retain(|coord, (pending_generation, _)| {
             if node_overlaps_aabb(*coord, root_half_extent, bounds) {
                 false
@@ -1552,6 +1632,53 @@ impl PendingTileBakes {
                 true
             }
         });
+        self.failed
+            .retain(|(coord, _)| !node_overlaps_aabb(*coord, root_half_extent, bounds));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut retagged = HashSet::with_capacity(self.failed.len());
+            for (coord, _) in self.failed.drain() {
+                retagged.insert((coord, generation));
+            }
+            self.failed = retagged;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.capacity_wait_revision = None;
+        }
+    }
+
+    fn cancel_jobs(&mut self, admission: Option<&mut lunco_core_runtime::AsyncWorkAdmission>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut admission = admission;
+            for job in self.jobs.values() {
+                if let Some(admission) = admission.as_deref_mut() {
+                    admission.cancel_queued(job.key);
+                }
+            }
+            self.jobs.clear();
+            self.capacity_wait_revision = None;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = admission;
+            self.tasks.clear();
+        }
+        self.ready.clear();
+    }
+
+    fn cancel_for_missing_demand(
+        &mut self,
+        admission: &mut lunco_core_runtime::AsyncWorkAdmission,
+    ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.cancel_jobs(Some(admission));
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = admission;
+            self.cancel_jobs(None);
+        }
     }
 }
 
@@ -1565,6 +1692,7 @@ pub(crate) fn invalidate_visual_products(
     root_half_extent: f64,
     tiles: Option<Mut<LodTiles>>,
     pending: Option<Mut<PendingTileBakes>>,
+    admission: Option<&mut lunco_core_runtime::AsyncWorkAdmission>,
     mesh_cache: &mut LodMeshCache,
 ) {
     let generation = if let Some(mut tiles) = tiles {
@@ -1577,7 +1705,7 @@ pub(crate) fn invalidate_visual_products(
         None
     };
     if let Some(mut pending) = pending {
-        pending.apply_surface_change(change, generation, root_half_extent);
+        pending.apply_surface_change(change, generation, root_half_extent, admission);
     }
     mesh_cache.drop_region(terrain, change.dirty_bounds, root_half_extent);
 }
@@ -2144,11 +2272,27 @@ pub(crate) struct TerrainCoverResults {
     queue: Arc<Mutex<VecDeque<TerrainCoverCompletion>>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default, Clone)]
+pub(crate) struct TerrainTileBakeResults {
+    queue: Arc<Mutex<VecDeque<TerrainTileBakeCompletion>>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct TerrainTileBakeCompletion {
+    terrain: Entity,
+    coord: QuadCoord,
+    key: lunco_core_runtime::AsyncWorkKey,
+    result: Result<BakedTile, ()>,
+}
+
 #[derive(bevy::ecs::system::SystemParam)]
 #[doc(hidden)]
 pub struct TerrainCoverWork<'w> {
     admission: ResMut<'w, lunco_core_runtime::AsyncWorkAdmission>,
     results: Res<'w, TerrainCoverResults>,
+    #[cfg(not(target_arch = "wasm32"))]
+    tile_results: Res<'w, TerrainTileBakeResults>,
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -2342,6 +2486,43 @@ pub(crate) fn advance_terrain_stream_cadence(
     cadence.advance(wall_time.delta());
 }
 
+/// Withdraw presentation preparation when its terrain owner leaves the ECS
+/// world. Running jobs remain fenced by entity identity and their result is
+/// discarded if the owner no longer exists.
+pub(crate) fn cancel_removed_terrain_preparation(
+    mut removed: RemovedComponents<PendingTileBakes>,
+    owners: Query<(), With<PendingTileBakes>>,
+    mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
+    cover_results: Res<TerrainCoverResults>,
+    #[cfg(not(target_arch = "wasm32"))] tile_results: Res<TerrainTileBakeResults>,
+) {
+    let removed = removed
+        .read()
+        .filter(|&entity| owners.get(entity).is_err())
+        .collect::<HashSet<_>>();
+    if removed.is_empty() {
+        return;
+    }
+    for entity in &removed {
+        admission.cancel_owner(
+            lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+            0,
+            entity.to_bits() as u128,
+        );
+    }
+    cover_results
+        .queue
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|completion| !removed.contains(&completion.token.terrain));
+    #[cfg(not(target_arch = "wasm32"))]
+    tile_results
+        .queue
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|completion| !removed.contains(&completion.terrain));
+}
+
 /// Per-frame scratch for [`update_lod_tiles`] — the collections the streaming
 /// pass used to heap-allocate EVERY frame per terrain (material swaps, finished
 /// bakes, the sort keys, the hole-cover set, the wanted set, the selection
@@ -2372,6 +2553,9 @@ pub struct StreamScratch {
     sel: Vec<Selected>,
     /// Results returned by bounded background cover preparation.
     cover_completions: HashMap<Entity, Vec<TerrainCoverCompletion>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Results returned by shared-priority streamed tile bakes.
+    tile_completions: HashMap<Entity, Vec<TerrainTileBakeCompletion>>,
     /// Tile material updates collected while the terrain query is borrowed.
     /// Applying them after the terrain pass keeps the two mutable ECS views in
     /// one explicit `ParamSet` without weakening either ownership filter.
@@ -2464,12 +2648,16 @@ pub fn update_lod_tiles(
         visual_foci,
         sel,
         cover_completions,
+        #[cfg(not(target_arch = "wasm32"))]
+        tile_completions,
         stitch_updates,
         stitch_applied,
     } = &mut *scratch;
     stitch_updates.clear();
     stitch_applied.clear();
     cover_completions.clear();
+    #[cfg(not(target_arch = "wasm32"))]
+    tile_completions.clear();
     {
         let mut queue = cover_work
             .results
@@ -2485,7 +2673,7 @@ pub fn update_lod_tiles(
     }
     if demands.visual.is_empty() {
         let mut terrain_rows = terrain_queries.p0();
-        for (terrain, _, _, mut tiles, _, _, _, _, _, _, _, _, _) in &mut terrain_rows {
+        for (terrain, _, _, mut tiles, mut pending, _, _, _, _, _, _, _, _) in &mut terrain_rows {
             let completion = cover_completions.remove(&terrain).and_then(|mut results| {
                 let index = results.iter().position(|completion| {
                     tiles.pending_cover
@@ -2501,8 +2689,33 @@ pub fn update_lod_tiles(
             if completion.is_some() {
                 tiles.pending_cover = None;
             }
+            pending.cancel_for_missing_demand(&mut cover_work.admission);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            tile_completions.clear();
+            cover_work
+                .tile_results
+                .queue
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear();
         }
         return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut queue = cover_work
+            .tile_results
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for completion in queue.drain(..) {
+            tile_completions
+                .entry(completion.terrain)
+                .or_default()
+                .push(completion);
+        }
     }
     // Per-frame bake budget shared across all terrains (amortise scale changes).
     //
@@ -2532,6 +2745,32 @@ pub fn update_lod_tiles(
             frozen,
         ) in &mut terrains
         {
+            #[cfg(not(target_arch = "wasm32"))]
+            for completion in tile_completions.remove(&terrain).unwrap_or_default() {
+                let generation = pending
+                    .jobs
+                    .get(&completion.coord)
+                    .filter(|job| job.key == completion.key)
+                    .map(|job| job.generation);
+                let Some(generation) = generation else {
+                    continue;
+                };
+                pending.jobs.remove(&completion.coord);
+                match completion.result {
+                    Ok(baked) => pending.ready.push((completion.coord, generation, baked)),
+                    Err(()) => {
+                        pending.failed.insert((completion.coord, generation));
+                        bevy::log::error!(
+                            target: "terrain_stream",
+                            entity = ?terrain,
+                            coord = ?completion.coord,
+                            generation,
+                            "terrain tile bake panicked; the tile is held until its surface changes"
+                        );
+                    }
+                }
+            }
+
             // A first cover and a cover invalidated by a live depth-bound change
             // are admitted immediately. Other camera/profile changes wait for the
             // next wall-clock selection cycle, while the prior cover remains live.
@@ -2921,6 +3160,7 @@ pub fn update_lod_tiles(
                         continue;
                     };
                     tiles.cover_operation = operation;
+                    #[cfg(not(target_arch = "wasm32"))]
                     let token = TerrainCoverToken {
                         terrain,
                         generation: cur_gen,
@@ -3030,6 +3270,18 @@ pub fn update_lod_tiles(
             // The retained coarse base is always kept pending until its generation is
             // complete; fine requests are admitted only after that cover is ready.
             let pending_before = pending.len();
+            #[cfg(not(target_arch = "wasm32"))]
+            pending.jobs.retain(|coord, job| {
+                let keep = job.generation == cur_gen
+                    && (wanted.contains(coord)
+                        || parent_fallbacks.contains(coord)
+                        || is_coarse_fallback(*coord));
+                if !keep {
+                    cover_work.admission.cancel_queued(job.key);
+                }
+                keep
+            });
+            #[cfg(target_arch = "wasm32")]
             pending.tasks.retain(|coord, (r#gen, _)| {
                 *r#gen == cur_gen
                     && (wanted.contains(coord)
@@ -3037,6 +3289,12 @@ pub fn update_lod_tiles(
                         || is_coarse_fallback(*coord))
             });
             pending.ready.retain(|(coord, r#gen, _)| {
+                *r#gen == cur_gen
+                    && (wanted.contains(coord)
+                        || parent_fallbacks.contains(coord)
+                        || is_coarse_fallback(*coord))
+            });
+            pending.failed.retain(|(coord, r#gen)| {
                 *r#gen == cur_gen
                     && (wanted.contains(coord)
                         || parent_fallbacks.contains(coord)
@@ -3120,10 +3378,12 @@ pub fn update_lod_tiles(
                 tiles.tiles.get(c).is_some_and(|s| s.r#gen == cur_gen)
             };
 
-            // Poll tasks without waiting. Ready meshes are committed in stable tile
-            // order and bounded by the per-frame work budget. Offline capture waits at
-            // its presentation boundary for readiness rather than blocking this system.
+            // Worker arrivals are only data. Accept results for the current owner key,
+            // then publish meshes in stable tile order under the per-frame budget.
+            // Offline capture waits at its presentation boundary for readiness rather
+            // than blocking this system.
             done.clear();
+            #[cfg(target_arch = "wasm32")]
             pending.tasks.retain(|coord, (r#gen, task)| {
                 match block_on(future::poll_once(&mut *task)) {
                     Some(baked) => {
@@ -3200,10 +3460,10 @@ pub fn update_lod_tiles(
             }
 
             // ── Queue new work, nearest-first ────────────────────────────
-            // Cache hits spawn instantly; misses spawn an off-thread bake task (budgeted:
-            // `bakes_per_frame` new tasks/frame, ≤ MAX_INFLIGHT in flight). Tiles anchor
-            // to their OWN big_space `CellCoord` (vertices baked relative to the tile
-            // centre) so far-from-origin tiles keep f32 precision.
+            // Cache hits spawn instantly; native misses use shared admission and the
+            // browser keeps its explicit cache task path. Tiles anchor to their OWN
+            // big_space `CellCoord` so far-from-origin tiles keep f32 precision.
+            #[cfg(target_arch = "wasm32")]
             let pool = AsyncComputeTaskPool::get();
             // The retained coarse cover is queued before the selection. It is a
             // complete DEM-derived floor; finer work never creates an uncovered area.
@@ -3225,7 +3485,7 @@ pub fn update_lod_tiles(
             // priority hint. Starting fine bakes beside it can saturate the worker
             // pool on a cold cache and leave an area without a ready ancestor. Admit
             // only coarse work until the complete cover exists; then refine nearest-first.
-            for s in coarse.iter().chain(sel.iter()) {
+            for (_priority_order, s) in coarse.iter().chain(sel.iter()).enumerate() {
                 if !tiles.coarse_ready && !is_coarse_fallback(s.coord) {
                     continue;
                 }
@@ -3233,6 +3493,9 @@ pub fn update_lod_tiles(
                 // or in-flight current-gen bake). Stale tiles fall through → re-baked.
                 let have_pending = pending.has_current(s.coord, cur_gen);
                 if fresh_tile(&tiles, &s.coord) || have_pending {
+                    continue;
+                }
+                if pending.failed.contains(&(s.coord, cur_gen)) {
                     continue;
                 }
                 let depth = s.coord.depth as u32;
@@ -3283,73 +3546,139 @@ pub fn update_lod_tiles(
                     }
                     continue;
                 }
-                // Cache miss → needs a bake. Respect the per-frame + in-flight budgets
-                // (keep scanning for cheap cache hits regardless of the bake budget).
+                // Cache miss → needs a bake. Respect the per-frame and per-terrain
+                // budgets while the shared native admission enforces the global worker
+                // bound. Keep scanning for cheap cache hits regardless of bake budget.
                 if bake_budget == 0 || pending.len() >= max_inflight {
                     continue;
                 }
-                bake_budget -= 1;
                 let oracle_arc = hf.0.clone();
                 let coord = s.coord;
                 let region = s.region;
                 let half = h;
                 let center = s.region.center;
-                let task = pool.spawn(async move {
-                    // Off-thread body → invisible to Bevy's per-system spans; give
-                    // Tracy (`--features tracy`) its own zone.
-                    let _span = bevy::log::info_span!("terrain_tile_bake").entered();
-                    // Content-addressed bake: a warm reload of the same composed
-                    // surface streams this tile from the platform cache; a miss
-                    // samples the oracle (over-zoom Nyquist-gated at this tile's
-                    // vertex spacing inside the bake) and persists for next time.
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let tm = crate::tile_cache::bake_tile_mesh_cached(
-                        oracle_arc.as_ref(),
-                        coord,
-                        region,
-                        tile_res,
-                        half,
-                        center,
-                    );
-                    #[cfg(target_arch = "wasm32")]
-                    let tm = crate::tile_cache::bake_tile_mesh_cached_async(
-                        oracle_arc.clone(),
-                        coord,
-                        region,
-                        tile_res,
-                        half,
-                        center,
-                    )
-                    .await;
-                    // RENDER_WORLD only: nothing reads a tile mesh's CPU vertex data back
-                    // (physics rides the collider ring, picking rides the oracle), so the
-                    // ~160 KB CPU copy per tile — ~164 MB across a full cache, doubled
-                    // against VRAM — was pure waste. (The STATIC terrain mesh keeps
-                    // `default()`: the horizon bake reads it back.)
-                    let mut mesh = grid_mesh(
-                        tm.positions,
-                        tm.normals,
-                        tm.uvs,
-                        tm.indices,
-                        bevy::asset::RenderAssetUsages::RENDER_WORLD,
-                    );
-                    mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tm.morph_targets);
-                    mesh.insert_attribute(ATTRIBUTE_MORPH_NORMAL, tm.morph_normals);
-                    mesh.insert_attribute(ATTRIBUTE_MORPH_EDGE, tm.edge_masks);
-                    // The SAME anchor `bake_tile_mesh_cached` rebased the mesh Y by (full
-                    // oracle at the tile centre). Carried on `BakedTile` so the main thread
-                    // places the tile at exactly the height its mesh was baked for.
-                    let origin_y = oracle_arc.height_at(center[0], center[1]);
-                    BakedTile {
-                        mesh,
-                        center,
-                        depth,
-                        res: tile_res,
-                        morph_end,
-                        origin_y,
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let capacity_revision = cover_work.admission.capacity_revision();
+                    if pending.capacity_wait_revision == Some(capacity_revision) {
+                        break;
                     }
-                });
-                pending.tasks.insert(s.coord, (cur_gen, task));
+                    pending.capacity_wait_revision = None;
+
+                    let Some(operation) = pending.next_operation.checked_add(1) else {
+                        bevy::log::error!(
+                            target: "terrain_stream",
+                            entity = ?terrain,
+                            coord = ?coord,
+                            "terrain tile bake operation identity is exhausted"
+                        );
+                        pending.failed.insert((coord, cur_gen));
+                        continue;
+                    };
+                    pending.next_operation = operation;
+                    let key = lunco_core_runtime::AsyncWorkKey::new(
+                        lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                        0,
+                        terrain.to_bits() as u128,
+                        cur_gen as u64,
+                        operation,
+                    );
+                    let queue = Arc::clone(&cover_work.tile_results.queue);
+                    let bake_oracle = Arc::clone(&oracle_arc);
+                    let depth = coord.depth as u32;
+                    let resolution = tile_res;
+                    let result_key = key;
+                    let job = move || {
+                        let result = catch_unwind(AssertUnwindSafe(|| {
+                            let _span = bevy::log::info_span!("terrain_tile_bake").entered();
+                            let tile_mesh = crate::tile_cache::bake_tile_mesh_cached(
+                                bake_oracle.as_ref(),
+                                coord,
+                                region,
+                                resolution,
+                                half,
+                                center,
+                            );
+                            assemble_baked_tile(
+                                tile_mesh,
+                                bake_oracle.as_ref(),
+                                center,
+                                depth,
+                                resolution,
+                                morph_end,
+                            )
+                        }))
+                        .map_err(|_| ());
+                        queue
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .push_back(TerrainTileBakeCompletion {
+                                terrain,
+                                coord,
+                                key: result_key,
+                                result,
+                            });
+                    };
+                    match cover_work.admission.submit_ordered(
+                        lunco_core_runtime::AsyncWorkPriority::Interactive,
+                        key,
+                        _priority_order as u64,
+                        job,
+                    ) {
+                        Ok(()) => {
+                            pending.jobs.insert(
+                                coord,
+                                PendingTileBake {
+                                    generation: cur_gen,
+                                    key,
+                                },
+                            );
+                            pending.capacity_wait_revision = None;
+                            bake_budget -= 1;
+                        }
+                        Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+                            pending.capacity_wait_revision =
+                                Some(cover_work.admission.capacity_revision());
+                            break;
+                        }
+                        Err(rejection) => {
+                            bevy::log::error!(
+                                target: "terrain_stream",
+                                entity = ?terrain,
+                                coord = ?coord,
+                                ?rejection,
+                                "terrain tile bake was rejected by shared preparation admission"
+                            );
+                            pending.failed.insert((coord, cur_gen));
+                        }
+                    }
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    bake_budget -= 1;
+                    let tile_generation = cur_gen;
+                    let task = pool.spawn(async move {
+                        let _span = bevy::log::info_span!("terrain_tile_bake").entered();
+                        let tile_mesh = crate::tile_cache::bake_tile_mesh_cached_async(
+                            Arc::clone(&oracle_arc),
+                            coord,
+                            region,
+                            tile_res,
+                            half,
+                            center,
+                        )
+                        .await;
+                        assemble_baked_tile(
+                            tile_mesh,
+                            oracle_arc.as_ref(),
+                            center,
+                            coord.depth as u32,
+                            tile_res,
+                            morph_end,
+                        )
+                    });
+                    pending.tasks.insert(coord, (tile_generation, task));
+                }
             }
 
             // The base is complete once every enumerated coarse node is resident at this
@@ -3879,6 +4208,8 @@ mod draw_partition_tests {
             .init_resource::<crate::overlay::TerrainOverlayParams>()
             .init_resource::<crate::overlay::TerrainDiagnosticLook>()
             .add_systems(Update, update_lod_tiles);
+        #[cfg(not(target_arch = "wasm32"))]
+        app.init_resource::<TerrainTileBakeResults>();
 
         app.update();
     }

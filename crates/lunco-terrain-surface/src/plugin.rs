@@ -186,6 +186,8 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
         app.init_resource::<crate::stream_viz::TerrainStreamFrameDriven>();
         app.init_resource::<crate::stream_viz::TerrainStreamCadence>();
         app.init_resource::<crate::stream_viz::TerrainCoverResults>();
+        #[cfg(not(target_arch = "wasm32"))]
+        app.init_resource::<crate::stream_viz::TerrainTileBakeResults>();
         app.add_systems(PreUpdate, crate::stream_viz::advance_terrain_stream_cadence);
         crate::overlay::register(app);
         crate::derived_layers::register(app);
@@ -199,6 +201,7 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
             Update,
             (
                 (
+                    crate::stream_viz::cancel_removed_terrain_preparation,
                     crate::stream_viz::mark_terrain_visual_foci,
                     crate::stream_viz::collect_terrain_detail_demands,
                     crate::stream_viz::update_lod_tiles,

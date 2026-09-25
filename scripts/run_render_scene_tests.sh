@@ -194,6 +194,12 @@ for scene in "${SCENES[@]}"; do
         fi
     fi
 
+    if [[ -z "$reason" && "$name" == "terrain_shader_appearance" ]]; then
+        if ! grep -Fq 'TERRAIN LOD STREAM: PASS' "$log"; then
+            reason="authored terrain stream did not report a settled selected cover"
+        fi
+    fi
+
     if [[ -z "$reason" && "$name" =~ ^(six_wheel_visual|rocker_bogie_antenna_visual|parts_attached_visual)$ ]]; then
         # These fixtures are authored visual reviews, so a successful process
         # and a PNG are not enough: reject black or empty captures by checking

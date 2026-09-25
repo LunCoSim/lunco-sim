@@ -303,6 +303,13 @@ selects which queued job starts; the owner still validates and commits its
 typed result at its own boundary. WebAssembly's Bevy async-compute pool runs
 cooperatively on the browser main thread, so expensive web work needs an
 explicit worker transport rather than this native dispatcher.
+Native terrain cover analysis and streamed tile-mesh bakes share this admission.
+Tile bakes use `Interactive` priority and a stable owner-selected nearest-first
+rank; the terrain owner fences completions by operation key and publishes meshes
+in stable coordinate order under its frame budget. Surface changes and owner
+removal withdraw queued work, and already-running stale results are discarded.
+Keep the browser tile-cache path explicit until Web Worker transport is
+available.
 Serialize each Modelica step's input assignments in variable-name order;
 never let hash-map iteration choose a worker command's observable order.
 File-backed Rhai source assets are parsed and const-folded by the asynchronous
