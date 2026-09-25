@@ -342,6 +342,8 @@ pub struct IrParameter {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConstraintIr {
     pub element: SysmlElementHandle,
+    /// Resolved predicate type of this constraint usage, when uniquely typed.
+    pub definition: Option<SysmlElementHandle>,
     pub qualified_name: String,
     pub source: SysmlSourceRef,
     pub parameters: Vec<IrParameter>,
@@ -519,9 +521,15 @@ pub fn compile_constraint(
         }
     }
 
-    let fingerprint = fingerprint_constraint(&constraint.element, &parameters, &expressions);
+    let fingerprint = fingerprint_constraint(
+        &constraint.element,
+        constraint.definition,
+        &parameters,
+        &expressions,
+    );
     let constraint_ir = ConstraintIr {
         element: constraint.element.handle,
+        definition: constraint.definition,
         qualified_name: constraint.element.qualified_name.clone(),
         source: source_of(&constraint.element, analysis.source_revision()),
         parameters,
@@ -1387,15 +1395,24 @@ fn error(code: IrDiagnosticCode, source: &SysmlSourceRef, message: &str) -> IrDi
 
 fn fingerprint_constraint(
     element: &lunco_sysml_ast::SysmlElement,
+    definition: Option<SysmlElementHandle>,
     parameters: &[IrParameter],
     expressions: &[IrExpression],
 ) -> u64 {
     let mut hash = Fnv1a::new();
-    hash.write_bytes(b"lunco.sysml.constraint-ir.v1");
+    hash.write_bytes(b"lunco.sysml.constraint-ir.v2");
     hash.write_bytes(element.qualified_name.as_bytes());
     hash.write_u64(element.handle.source_revision);
     hash.write_u64(element.handle.source_fingerprint);
     hash.write_u64(element.handle.element_id as u64);
+    if let Some(definition) = definition {
+        hash.write_bytes(b"constraint-definition");
+        hash.write_u64(definition.source_revision);
+        hash.write_u64(definition.source_fingerprint);
+        hash.write_u64(definition.element_id as u64);
+    } else {
+        hash.write_bytes(b"no-constraint-definition");
+    }
     for parameter in parameters {
         hash.write_bytes(parameter.qualified_name.as_bytes());
         hash.write_u64(parameter.feature.element.element_id as u64);

@@ -752,6 +752,9 @@ impl SysmlExpression {
 pub struct SysmlConstraint {
     /// Source-backed constraint element.
     pub element: SysmlElement,
+    /// Resolved predicate type for a constraint usage, when uniquely typed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<SysmlElementHandle>,
     /// Typed feature members declared by this constraint definition or usage.
     ///
     /// Constraint parameters are KerML features too; keeping them separate
@@ -1951,6 +1954,12 @@ fn project_constraints(
             };
             let parameters =
                 project_constraint_parameters(workspace, files, elements, type_catalog, element);
+            let definition =
+                constraint_definition_target(workspace, id).map(|definition| SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: definition.index() as u32,
+                });
             let expressions = workspace
                 .file_parse(file)
                 .syntax()
@@ -1976,12 +1985,32 @@ fn project_constraints(
                 .collect();
             constraints.push(SysmlConstraint {
                 element: element.clone(),
+                definition,
                 parameters,
                 expressions,
             });
         }
     }
     constraints
+}
+
+/// Resolve the standard `ConstraintUsage::constraintDefinition` relation from
+/// its source-backed `FeatureTyping`. The metamodel marks the former as
+/// derived, but the upstream semantic workspace currently materializes the
+/// typing relationship rather than that derived property.
+fn constraint_definition_target(workspace: &Workspace, usage: ElementId) -> Option<ElementId> {
+    let model = workspace.model();
+    if !model.kind(usage).is_a(ElementKind::ConstraintUsage) {
+        return None;
+    }
+
+    let mut definitions = model
+        .owned_typing(usage)
+        .iter()
+        .filter_map(|&typing| model.general(typing))
+        .filter(|&target| model.kind(target).is_a(ElementKind::Predicate));
+    let definition = definitions.next()?;
+    definitions.next().is_none().then_some(definition)
 }
 
 fn project_constraint_parameters(

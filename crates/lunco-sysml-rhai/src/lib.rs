@@ -1657,6 +1657,13 @@ fn constraint_dynamic(constraint: &lunco_sysml_ast::SysmlConstraint) -> Dynamic 
     let mut value = Map::new();
     value.insert("element".into(), element_dynamic(&constraint.element));
     value.insert(
+        "definition".into(),
+        constraint
+            .definition
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
         "parameters".into(),
         Dynamic::from_array(
             constraint
@@ -1714,6 +1721,13 @@ fn compiled_constraint_dynamic(compiled: &CompiledConstraint) -> Dynamic {
 
 fn constraint_ir_dynamic(constraint: &ConstraintIr) -> Dynamic {
     let mut value = Map::new();
+    value.insert(
+        "definition".into(),
+        constraint
+            .definition
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
     value.insert(
         "qualified_name".into(),
         Dynamic::from(constraint.qualified_name.clone()),
