@@ -99,7 +99,8 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
                 Update,
                 lunco_scripting_rhai_world::world_bridge::drain_world_scripts
                     .in_set(lunco_core::RuntimeCycleSet::Repl)
-                    .run_if(scripts_run_here),
+                    .run_if(scripts_run_here)
+                    .run_if(world_scripts_are_queued),
             )
             .add_systems(
                 Update,
@@ -203,4 +204,50 @@ fn scripts_run_here(role: Option<Res<lunco_core_session::NetworkRole>>) -> bool 
         role.as_deref(),
         Some(lunco_core_session::NetworkRole::Client)
     )
+}
+
+/// Avoid scheduling the exclusive live-world drain on frames with no REPL work.
+#[cfg(feature = "rhai")]
+fn world_scripts_are_queued(
+    pending: Res<lunco_scripting_rhai_world::world_bridge::PendingWorldScripts>,
+) -> bool {
+    !pending.queue.is_empty()
+}
+
+#[cfg(all(test, feature = "rhai"))]
+mod tests {
+    use bevy::prelude::{App, IntoScheduleConfigs, ResMut, Resource, Update};
+    use lunco_scripting_rhai_world::world_bridge::{PendingWorldScript, PendingWorldScripts};
+
+    use super::world_scripts_are_queued;
+
+    #[derive(Resource, Default)]
+    struct Scheduled(usize);
+
+    fn count_schedule_run(mut count: ResMut<Scheduled>) {
+        count.0 += 1;
+    }
+
+    #[test]
+    fn empty_repl_queue_does_not_schedule_its_exclusive_drain() {
+        let mut app = App::new();
+        app.init_resource::<PendingWorldScripts>();
+        app.init_resource::<Scheduled>();
+        app.add_systems(Update, count_schedule_run.run_if(world_scripts_are_queued));
+
+        app.update();
+        assert_eq!(app.world().resource::<Scheduled>().0, 0);
+
+        app.world_mut()
+            .resource_mut::<PendingWorldScripts>()
+            .queue
+            .push(PendingWorldScript::Code {
+                id: 0,
+                code: String::new(),
+                authority: None,
+                correlation_id: None,
+            });
+        app.update();
+        assert_eq!(app.world().resource::<Scheduled>().0, 1);
+    }
 }
