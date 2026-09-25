@@ -61,6 +61,10 @@ pub struct ValidationReport {
     pub errors: Vec<String>,
     /// Non-fatal diagnostics produced by the loader or authored lint policy.
     pub warnings: Vec<String>,
+    /// Structured findings produced by the authored lint policy. `errors` and
+    /// `warnings` remain the concise display surface; automation should use
+    /// these stable rule identifiers and fields instead of parsing prose.
+    pub findings: Vec<ValidationFinding>,
     /// Kind-specific extras: `model`/`params`/`inputs` (.mo),
     /// `wheel_prims` (.usda), `shader_params` (.wgsl).
     pub info: serde_json::Value,
@@ -84,6 +88,7 @@ impl ValidationReport {
             ok: true,
             errors: Vec::new(),
             warnings: Vec::new(),
+            findings: Vec::new(),
             info: json!({}),
             lint_facts: None,
             sysml_analysis: None,
@@ -100,6 +105,16 @@ impl ValidationReport {
         self.ok = self.errors.is_empty();
         self
     }
+}
+
+/// Machine-readable finding emitted by a source or asset lint policy.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ValidationFinding {
+    pub domain: String,
+    pub rule: String,
+    pub severity: String,
+    pub subject: String,
+    pub message: String,
 }
 
 /// Resolve the caller's reference to a disk file, mirroring the engine's
@@ -413,10 +428,18 @@ fn apply_lint_policy(mut report: ValidationReport, text: &str) -> ValidationRepo
         facts.extend(domain_facts);
     }
 
-    for f in lunco_lint::run_lint(&report.kind, H::Map(facts)) {
-        match f.severity {
-            lunco_lint::LintSeverity::Error => report.errors.push(f.line()),
-            _ => report.warnings.push(f.line()),
+    for finding in lunco_lint::run_lint(&report.kind, H::Map(facts)) {
+        let line = finding.line();
+        report.findings.push(ValidationFinding {
+            domain: finding.domain,
+            rule: finding.rule,
+            severity: finding.severity.as_str().to_owned(),
+            subject: finding.subject,
+            message: finding.message,
+        });
+        match finding.severity {
+            lunco_lint::LintSeverity::Error => report.errors.push(line),
+            _ => report.warnings.push(line),
         }
     }
     report.finish()
@@ -710,12 +733,14 @@ impl ApiQueryProvider for ValidateSysmlProvider {
         let source_revision = analysis
             .map(|analysis| ApiValue::UInt(analysis.source_revision()))
             .unwrap_or(ApiValue::Unit);
+        let findings = lunco_api_core::api_value_from_serializable(&report.findings)?;
         Ok(Some(api_value!({
             "path": report.path,
             "kind": report.kind,
             "ok": report.ok,
             "errors": report.errors,
             "warnings": report.warnings,
+            "findings": findings,
             "source_files": ApiValue::Array(source_files),
             "source_revision": source_revision,
         })))
