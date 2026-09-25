@@ -104,16 +104,22 @@ pub struct SunRenderState {
 }
 
 impl SunRenderState {
-    fn publish(&mut self, direction_to_sun_world: Vec3) {
+    fn publish(&mut self, direction_to_sun_world: Vec3) -> bool {
         if self.direction_to_sun_world != Some(direction_to_sun_world) {
             self.direction_to_sun_world = Some(direction_to_sun_world);
             self.revision = self.revision.wrapping_add(1);
+            true
+        } else {
+            false
         }
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) -> bool {
         if self.direction_to_sun_world.take().is_some() {
             self.revision = self.revision.wrapping_add(1);
+            true
+        } else {
+            false
         }
     }
 }
@@ -599,16 +605,87 @@ pub fn project_sun_state_to_light(
     };
 }
 
+/// Build the change gate for the Bevy scene-light projection. The physical
+/// provider publishes `SunState`; the light is updated only when that sample,
+/// its physics frame, or the light's spatial ancestry changes.
+pub fn tracked_sun_light_projection() -> impl bevy::ecs::schedule::SystemCondition<()> {
+    lunco_core_runtime::gate::tracked(
+        "environment_sun_light_projection",
+        sun_light_projection_needed,
+    )
+}
+
+fn sun_light_projection_needed(
+    sun: Option<Res<SunState>>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    q_sun: Query<
+        (Entity, Option<&ChildOf>),
+        (
+            With<bevy::light::DirectionalLight>,
+            Without<Earthshine>,
+            Without<bevy::camera::visibility::RenderLayers>,
+        ),
+    >,
+    changed_suns: Query<
+        (),
+        (
+            With<bevy::light::DirectionalLight>,
+            Without<Earthshine>,
+            Without<bevy::camera::visibility::RenderLayers>,
+            Or<(
+                Added<bevy::light::DirectionalLight>,
+                Added<ChildOf>,
+                Changed<ChildOf>,
+                Changed<big_space::prelude::CellCoord>,
+            )>,
+        ),
+    >,
+    q_parents: Query<&ChildOf>,
+    changed_spatial: Query<
+        (),
+        (
+            Without<bevy::light::DirectionalLight>,
+            Or<(
+                Changed<Transform>,
+                Changed<big_space::prelude::CellCoord>,
+                Changed<ChildOf>,
+                Changed<big_space::prelude::Grid>,
+            )>,
+        ),
+    >,
+) -> bool {
+    if sun.is_some_and(|state| state.is_changed())
+        || mount.is_some_and(|state| state.is_changed())
+        || active_frame.as_ref().is_some_and(|frame| frame.is_changed())
+        || !changed_suns.is_empty()
+    {
+        return true;
+    }
+
+    let changed_pose = |entity| {
+        lunco_spatial::coords::world_pose_changed(entity, &q_parents, &changed_spatial)
+    };
+    active_frame
+        .as_ref()
+        .is_some_and(|frame| changed_pose(frame.0))
+        || q_sun
+            .iter()
+            .any(|(_, parent)| parent.is_some_and(|parent| changed_pose(parent.parent())))
+}
+
 /// Keep the last committed render-sun sample while a scene transaction is
 /// still assembling its transforms. Scene teardown clears the resource at the
 /// ownership boundary; during a load, an incomplete frame is therefore a
 /// pending presentation product rather than a new "black" sun.
 fn clear_render_sun_if_scene_is_idle(
-    render_state: &mut SunRenderState,
+    render_state: &mut ResMut<SunRenderState>,
     coordinator: Option<&lunco_core::SceneTransitionCoordinator>,
 ) {
-    if coordinator.is_none_or(|coordinator| coordinator.active().is_none()) {
-        render_state.clear();
+    if coordinator.is_none_or(|coordinator| coordinator.active().is_none())
+        && render_state.bypass_change_detection().clear()
+    {
+        render_state.set_changed();
     }
 }
 
@@ -684,7 +761,29 @@ pub fn finalize_sun_render_state(
     if let Some(mut diagnostics) = diagnostics {
         diagnostics.replace_producer("environment-sun-render", std::iter::empty());
     }
-    render_state.publish(actual);
+    if render_state
+        .bypass_change_detection()
+        .publish(actual)
+    {
+        render_state.set_changed();
+    }
+}
+
+/// Admit the finalized-light projection only when its semantic source or the
+/// propagated scene-sun transform changes.
+pub fn sun_render_finalize_needed(
+    sun: Option<Res<SunState>>,
+    q_sun: Query<
+        (),
+        (
+            With<bevy::light::DirectionalLight>,
+            Without<Earthshine>,
+            Without<bevy::camera::visibility::RenderLayers>,
+            Or<(Added<GlobalTransform>, Changed<GlobalTransform>)>,
+        ),
+    >,
+) -> bool {
+    sun.is_some_and(|state| state.is_changed()) || !q_sun.is_empty()
 }
 
 /// Publishes each entity's [`LocalSolar`] as `SimComponent` **outputs**
@@ -752,7 +851,10 @@ mod tests {
         app.init_resource::<SunState>();
         app.init_resource::<SunRenderState>();
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
-        app.add_systems(Update, project_sun_state_to_light);
+        app.add_systems(
+            Update,
+            project_sun_state_to_light.run_if(tracked_sun_light_projection()),
+        );
 
         app.update();
 
@@ -763,6 +865,33 @@ mod tests {
             diagnostics.findings[0].severity,
             lunco_core::DiagnosticSeverity::Error
         );
+    }
+
+    #[test]
+    fn sun_light_projection_gate_skips_unchanged_frames() {
+        let mut app = App::new();
+        app.init_resource::<SunState>();
+        app.init_resource::<lunco_core_runtime::gate::GateActivity>();
+        app.world_mut().spawn((
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            DirectionalLight::default(),
+        ));
+        app.add_systems(
+            Update,
+            project_sun_state_to_light.run_if(tracked_sun_light_projection()),
+        );
+
+        app.update();
+        app.update();
+
+        let activity = app
+            .world()
+            .resource::<lunco_core_runtime::gate::GateActivity>()
+            .get("environment_sun_light_projection")
+            .expect("tracked light projection gate");
+        assert_eq!(activity.evaluations, 2);
+        assert_eq!(activity.fired, 1);
     }
 
     #[test]
@@ -901,7 +1030,10 @@ mod tests {
                 DirectionalLight::default(),
             ))
             .id();
-        app.add_systems(Update, project_sun_state_to_light);
+        app.add_systems(
+            Update,
+            project_sun_state_to_light.run_if(tracked_sun_light_projection()),
+        );
 
         app.update();
 

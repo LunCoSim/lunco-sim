@@ -18,7 +18,7 @@ const PORT_WAIT_S = 30.0;
 const TRACK_S = 12.0;
 const DRIVE_S = 5.0;
 const CHARGE_S = 12.0;
-const SUN_STEP = 1.0;
+const SUN_STEP_DAYS = 2.0;
 const YAW_DELTA_MIN = 0.2;
 const HINGE_TOL = 0.18;
 const SOC_DROP_MIN = 0.01;
@@ -27,7 +27,6 @@ const MOTION_MIN_M = 0.25;
 const IDLE_DRIVE_TOL = 0.001;
 const MOTOR_LOAD_MIN_W = 1.0;
 const POWER_TOL_W = 0.1;
-const ROUTE_THROTTLE = 0.6;
 
 // Every observed value is an authored rover-root boundary port. Generated
 // member identifiers are implementation details, not a scenario contract.
@@ -75,11 +74,12 @@ fn on_start(me, ctx) {
     this.incidence_after_step = ();
     this.yaw_before = ();
     this.yaw_after_step = ();
+    this.epoch_before_sun_step = ();
+    this.epoch_after_sun_step = ();
     this.hinge_after_step = ();
     this.position_before_drive = ();
     this.position_after_drive = ();
     this.route = ();
-    this.route_goal = ();
     this.island_drive_left_after_stop = ();
     this.island_drive_right_after_stop = ();
     this.peak_motor_power = 0.0;
@@ -126,10 +126,11 @@ fn on_tick(me, ctx) {
         this.available_before = get(this.elec, "solar_available_power");
         this.incidence_before = island_value(this.elec, SOLAR_INCIDENCE);
         this.yaw_before = get(this.tracker, "yaw");
+        this.epoch_before_sun_step = clock_snapshot()["epoch_jd"];
+        cmd("SetMissionEpoch", #{ epoch_jd: this.epoch_before_sun_step + SUN_STEP_DAYS });
         this.phase = "track_sun";
         this.phase_started = this.t;
-        cmd("SetEnvironmentLight", #{ sun_yaw: SUN_STEP });
-        print("[solar-cycle] ports live; stepping canonical environment sun");
+        print("[solar-cycle] ports live; advancing physical epoch for ephemeris sun tracking");
         return;
     }
 
@@ -139,6 +140,7 @@ fn on_tick(me, ctx) {
         this.incidence_after_step = island_value(this.elec, SOLAR_INCIDENCE);
         this.yaw_after_step = get(this.tracker, "yaw");
         this.hinge_after_step = get(this.hinge, "angle");
+        this.epoch_after_sun_step = clock_snapshot()["epoch_jd"];
         this.soc_before_drive = island_value(this.elec, BATTERY_SOC);
         this.position_before_drive = world_pos(this.rover);
         this.route = find("/SolarRoverTest/Route");
@@ -146,8 +148,6 @@ fn on_tick(me, ctx) {
             finish_failure(this, "scene-level route was not composed");
             return;
         }
-        this.route_goal = [this.position_before_drive[0], this.position_before_drive[1],
-            this.position_before_drive[2] - 20.0];
         emit("route_start", 1);
         this.phase = "drive";
         this.phase_started = this.t;
@@ -156,9 +156,6 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == "drive" {
-        if this.route_goal != () {
-            nav_to(this.rover, this.route_goal, ROUTE_THROTTLE, 1.0);
-        }
         let motor = island_value(this.elec, MOTOR_ELECTRICAL_POWER);
         if motor != () && motor > this.peak_motor_power {
             this.peak_motor_power = motor;
@@ -195,7 +192,7 @@ fn on_tick(me, ctx) {
         if phase_t < DRIVE_S { return; }
         this.soc_after_drive = island_value(this.elec, BATTERY_SOC);
         this.position_after_drive = world_pos(this.rover);
-        brake(this.rover);
+        emit("runtime.ui.action", #{ action: "program.toggle" });
         this.phase = "charge";
         this.phase_started = this.t;
         print("[solar-cycle] route stopped; observing idle solar recharge");
@@ -231,6 +228,13 @@ fn verdict(s) {
     f.push(t_present(s.incidence_after_step, "panel incidence after sun step"));
     f.push(t_present(s.yaw_after_step, "SunTracker yaw"));
     f.push(t_present(s.hinge_after_step, "panel hinge angle"));
+    f.push(t_present(s.epoch_before_sun_step, "physical epoch before Sun step"));
+    f.push(t_present(s.epoch_after_sun_step, "physical epoch after Sun step"));
+
+    if s.epoch_before_sun_step != () && s.epoch_after_sun_step != () {
+        f.push(t_true(s.epoch_after_sun_step > s.epoch_before_sun_step + SUN_STEP_DAYS,
+            "physical WorldTime did not advance through the ephemeris Sun step"));
+    }
     f.push(t_present(s.position_before_drive, "rover position before route"));
     f.push(t_present(s.position_after_drive, "rover position after route"));
 
@@ -294,6 +298,8 @@ fn verdict(s) {
           r4(s.soc_after_drive) + " -> " + r4(s.soc_after_charge));
     print("[solar-cycle] yaw " + r4(s.yaw_before) + " -> " +
           r4(s.yaw_after_step) + ", hinge=" + r4(s.hinge_after_step));
+    print("[solar-cycle] physical epoch " + r4(s.epoch_before_sun_step) +
+          " -> " + r4(s.epoch_after_sun_step) + " TDB JD");
     print("[solar-cycle] tracker sun_mount_x=" +
           r4(get(s.tracker, "sun_mount_x")));
     print("[solar-cycle] power " + r2(s.power_before) + "W -> " +

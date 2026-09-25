@@ -78,6 +78,83 @@ pub fn normal_at_bounded(
     [-gx / len, 1.0 / len, -gz / len]
 }
 
+/// Piecewise-linear height on the measured posting line of a square raster.
+///
+/// Both the globe cutout and the local terrain boundary evaluate this same
+/// function. Globe triangles can intersect the square edge between raster
+/// postings; returning the linear posting segment there keeps those additional
+/// vertices on the exact same rendered boundary as the surface tile mesh.
+/// `half_extent` and posting positions follow the raster's `f32` geometry
+/// contract, while sampled heights remain `f64`.
+pub fn square_boundary_height_at(
+    source: &dyn HeightSource,
+    x: f64,
+    z: f64,
+    half_extent: f64,
+    resolution: usize,
+) -> Option<f64> {
+    let spacing = square_boundary_posting_spacing(half_extent, resolution)? as f32;
+    let half_f32 = half_extent as f32;
+
+    let half = half_extent.abs();
+    let tolerance = (half * 1.0e-9).max(1.0e-6);
+    let x_edge = (x.abs() - half).abs() <= tolerance;
+    let z_edge = (z.abs() - half).abs() <= tolerance;
+    if !x_edge && !z_edge {
+        return None;
+    }
+
+    // At a corner either edge gives the same authored endpoint. Prefer X so
+    // all consumers resolve corners in one deterministic direction.
+    let (edge_x, along, along_is_z) = if x_edge {
+        (x.signum() * half_extent, z, true)
+    } else {
+        (x, z.signum() * half_extent, false)
+    };
+    let q = ((along as f32 + half_f32) / spacing).clamp(0.0, resolution as f32 - 1.0);
+    let lower = (q.floor() as usize).min(resolution - 1);
+    let upper = (lower + 1).min(resolution - 1);
+    let t = (q - lower as f32) as f64;
+    let sample = |index: usize| {
+        let coordinate = square_boundary_sample_coordinate(index, resolution, half_extent)?;
+        if along_is_z {
+            Some(source.height_at(edge_x, coordinate))
+        } else {
+            Some(source.height_at(coordinate, z.signum() * half_extent))
+        }
+    };
+    let low = sample(lower)?;
+    Some(low + (sample(upper)? - low) * t)
+}
+
+/// Physical spacing between the authored postings of a square raster edge.
+/// The calculation follows `HeightGrid`'s `f32` geometry contract so every
+/// boundary consumer uses the same sample coordinates and normal stencil.
+pub fn square_boundary_posting_spacing(half_extent: f64, resolution: usize) -> Option<f64> {
+    if resolution < 2 || !half_extent.is_finite() || half_extent <= 0.0 {
+        return None;
+    }
+    let half = half_extent as f32;
+    let spacing = (2.0_f32 * half) / (resolution as f32 - 1.0);
+    (spacing.is_finite() && spacing > 0.0).then_some(spacing as f64)
+}
+
+/// Position of one square raster boundary posting, using the raster's stored
+/// single-precision extent and spacing exactly as `HeightGrid` does.
+pub fn square_boundary_sample_coordinate(
+    index: usize,
+    resolution: usize,
+    half_extent: f64,
+) -> Option<f64> {
+    if index >= resolution {
+        return None;
+    }
+    square_boundary_posting_spacing(half_extent, resolution)?;
+    let half = half_extent as f32;
+    let spacing = (2.0_f32 * half) / (resolution as f32 - 1.0);
+    Some((-half + index as f32 * spacing) as f64)
+}
+
 /// A finite-square view of a [`HeightSource`].  It owns the boundary contract:
 /// height samples are clamped to the measured footprint and derivatives use
 /// one-sided differences there.  Consumers such as field rasters can therefore

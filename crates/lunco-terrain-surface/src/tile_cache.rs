@@ -19,7 +19,7 @@ use lunco_terrain_core::{HeightSource, QuadCoord, Square};
 
 use crate::band::SurfaceBand;
 use crate::oracle::SurfaceOracle;
-use crate::tile_mesh::{TileMesh, bake_tile_mesh};
+use crate::tile_mesh::{TileMesh, bake_tile_mesh_with_boundary};
 
 /// Bump when `bake_tile_mesh` math (heights, normals eps, morph snap, edge masks,
 /// detail gating) or the blob layout changes.
@@ -46,7 +46,11 @@ use crate::tile_mesh::{TileMesh, bake_tile_mesh};
 /// ~44 % fewer oracle samples per tile.
 /// v10: seam walls were removed; edge membership is serialized for deterministic
 /// topology-driven vertex stitching, and morph targets preserve parent edge X/Z.
-const CACHE_FORMAT_VERSION: u64 = 10;
+/// v11: DEM perimeter tiles include the shared posting-linear globe boundary and
+/// a triangulated async-baked strip into the band-limited tile interior.
+/// v12: perimeter normals use the native posting spacing shared with globe
+/// boundary shading, rather than the much coarser tile-vertex spacing.
+const CACHE_FORMAT_VERSION: u64 = 12;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -103,14 +107,16 @@ impl lunco_precompute::Bake for TileBake<'_> {
         let origin_y = self
             .oracle
             .height_at(self.region.center[0], self.region.center[1]);
-        bake_tile_mesh(
+        bake_tile_mesh_with_boundary(
             &limited,
             &parent_limited,
+            self.oracle,
             self.region,
             self.res,
             self.dem_half_extent,
             self.origin_xz,
             origin_y,
+            self.oracle.grid().res,
         )
     }
 

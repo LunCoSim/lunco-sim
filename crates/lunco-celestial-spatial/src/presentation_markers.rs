@@ -1,9 +1,8 @@
-//! Render-only marker copies in the interpolated celestial presentation branch.
+//! Render-only marker copies under same-epoch celestial presentation grids.
 //!
 //! Functional station entities stay under the causal body grid. Their visible
-//! screen markers also get a copy under the body's interpolated presentation
-//! grid, so the marker remains on the moving globe without changing link or
-//! physics coordinates.
+//! screen markers also get a copy under the body's presentation grid, so the
+//! marker remains on the globe without changing link or physics coordinates.
 
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
@@ -83,7 +82,7 @@ pub(crate) fn presentation_markers_need_sync(
 }
 
 /// Mirror screen markers below a geodetic anchor into the matching body-fixed
-/// presentation grid.
+/// presentation grid at the current `WorldTime` epoch.
 #[allow(clippy::type_complexity)]
 pub(crate) fn sync_presentation_markers(
     frame_index: Res<ReferenceFrameIndex>,

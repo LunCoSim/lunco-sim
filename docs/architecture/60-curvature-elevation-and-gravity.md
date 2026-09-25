@@ -36,8 +36,14 @@ The globe cutout projects the authored square from the site's radial datum
 (`body radius + site datum`). Its collar transitions the gnomonic coordinates to
 the body's mean radius and ends on the exact radial globe. The surface and globe
 boundaries therefore share the same angular footprint at nonzero site elevation.
-The cutout edge is split at the local surface's authored grid samples so both
-meshes follow the same boundary curve.
+The cutout edge is split at the local surface's authored grid samples. Globe
+and terrain tiles evaluate one shared piecewise-linear height curve along that
+edge. Each terrain tile touching the square adds a perimeter strip through the
+same postings and joins it to the tile's band-limited interior; the strip stays
+fixed during geomorph and is built in the asynchronous, cached tile bake. This
+shares the native posting-scale perimeter normals between both meshes, avoiding
+the dark seam produced by coarse tile normals. It closes coarse-tile corner gaps
+without adding per-frame sampling or a shell.
 Globe tiles throughout the collar use that same handoff, even when they do not
 intersect the cutout.
 

@@ -850,7 +850,7 @@ fn on_event(me, evt, ctx) {
                 generation: route_revision_for(this),
             });
         }
-        if projected_doc != this.route_document { return; }
+        if projected_doc.to_string() != this.route_document.to_string() { return; }
         // Projection is the authoritative invalidation boundary for route
         // presentation. Compare its composed point key here, after the stage
         // is current, rather than polling topology from the control task. The

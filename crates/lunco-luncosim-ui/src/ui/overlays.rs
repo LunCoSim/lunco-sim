@@ -1,18 +1,7 @@
 //! Which floating overlays the viewport shows — a persisted user preference.
 //!
-//! Three things used to draw over the 3D view unconditionally in the View
-//! perspective: the celestial-time readout (top-left), the view-mode switcher (top-centre) and
-//! the rover HUD. The first two are *chrome you configure once*, not information
-//! you read every frame, and neither had an off switch anywhere — their visibility
-//! was a pair of system `run_if`s and nothing else, so "hide it" meant editing
-//! Rust.
-//!
-//! Both are now OFF by default and live behind [`OverlaySettings`]. The sky-time
-//! readout is configured from the workbench **Time** menu, while the view
-//! switcher is configured from **Camera** beside its body controls.
-//!
-//! The rover HUD is deliberately NOT in here: it only draws while you are
-//! possessing a vessel, so it is already answering a question you just asked.
+//! The view-mode switcher is optional viewport chrome. The rover HUD only
+//! draws while possessing a vessel and is owned by the avatar UI.
 
 use bevy::prelude::*;
 use lunco_input_ui::InputOverlaySettings;
@@ -24,41 +13,21 @@ use lunco_workbench_state::RuntimeSurfaceLayouts;
 use lunco_workspace::{ResetTwinSetting, SetTwinSetting, TwinSettingInput, WorkspaceResource};
 use serde::{Deserialize, Serialize};
 
-/// Persisted visibility of the optional viewport overlays. Stored under the
+/// Persisted visibility of optional viewport overlays. Stored under the
 /// `"overlays"` key of `settings.json`.
 ///
-/// `Default` is all-off: a fresh install shows the terrain and nothing on top of
-/// it. Both fields are opt-IN, the same rule the celestial subsystem and the
-/// trajectory lines already follow — content and chrome appear because something
-/// asked for them, never because a default said yes.
+/// `Default` is off: a fresh install shows the scene without the view switcher.
 #[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub(crate) struct OverlaySettings {
-    /// Persisted schema marker. A missing marker represents settings written
-    /// before the HUD's opt-in default was made explicit and is migrated below.
-    #[serde(default = "overlay_settings_schema_version")]
-    schema_version: u8,
-    #[serde(default)]
-    /// The sky-time pill (top-left): the interpolated physical-time epoch.
-    pub sky_clock: bool,
     #[serde(default)]
     /// The view-mode switcher pill (top-centre): Surface / Moon / Earth, which
     /// doubles as the readout of which body the camera is focused on.
     pub view_switcher: bool,
 }
 
-const OVERLAY_SETTINGS_SCHEMA_VERSION: u8 = 1;
-
-fn overlay_settings_schema_version() -> u8 {
-    // A missing marker identifies settings written before versioned overlay
-    // preferences existed. Fresh defaults set the current version explicitly.
-    0
-}
-
 impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
-            schema_version: OVERLAY_SETTINGS_SCHEMA_VERSION,
-            sky_clock: false,
             view_switcher: false,
         }
     }
@@ -67,54 +36,6 @@ impl Default for OverlaySettings {
 impl SettingsSection for OverlaySettings {
     const KEY: &'static str = "overlays";
 
-    fn migrate_persisted(&mut self) {
-        if self.schema_version < OVERLAY_SETTINGS_SCHEMA_VERSION {
-            self.sky_clock = false;
-            self.schema_version = OVERLAY_SETTINGS_SCHEMA_VERSION;
-        }
-    }
-}
-
-/// `run_if` for the sky-clock overlay.
-pub(crate) fn sky_clock_visible(settings: Option<Res<OverlaySettings>>) -> bool {
-    settings.is_some_and(|s| s.sky_clock)
-}
-
-/// Contribute the celestial clock controls and visibility preference to the
-/// workbench Time menu.
-///
-/// Registered at `Startup`; a no-op when the workbench layout is absent (headless
-/// runs, `luncosim test`), which is why it takes `&mut World` and bails rather than
-/// requiring the resource.
-pub(crate) fn register_time_menu(world: &mut World) {
-    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
-        return;
-    };
-    menus.register_time_menu(|ui, ctx| {
-        super::celestial_time::sky_clock_menu_ui(ui, ctx);
-
-        ui.separator();
-        ui.label(
-            bevy_egui::egui::RichText::new("Viewport overlays")
-                .weak()
-                .small(),
-        );
-        // Edit a copy and write back only on a real change: `set_resource`
-        // applies the replacement after the menu pass, so opening the menu does
-        // not mark the resource changed and rewrite settings.json.
-        let Some(mut edited) = ctx.resource::<OverlaySettings>().copied() else {
-            return;
-        };
-        let original = edited;
-        ui.checkbox(&mut edited.sky_clock, "Time HUD (top-left)")
-            .on_hover_text(
-                "Show the floating sky-clock controls. They remain available in \
-                 the Time menu when the HUD is hidden.",
-            );
-        if edited != original {
-            ctx.set_resource(edited);
-        }
-    });
 }
 
 /// Contribute the view-switcher preference to the workbench Camera menu.
@@ -254,8 +175,6 @@ fn register_hud_settings_menu(world: &mut World) {
             return;
         };
         let original_overlays = overlays;
-        ui.checkbox(&mut overlays.sky_clock, "Time HUD (top-left)")
-            .on_hover_text("Show the celestial time HUD and its current epoch.");
         ui.checkbox(
             &mut overlays.view_switcher,
             "Surface view switcher (top-centre)",
@@ -351,7 +270,7 @@ fn register_hud_settings_menu(world: &mut World) {
 /// Registers [`OverlaySettings`] (persisted) and its menu rows.
 pub(crate) fn plugin(app: &mut App) {
     app.register_settings_section::<OverlaySettings>();
-    app.add_systems(Startup, (register_time_menu, register_hud_settings_menu));
+    app.add_systems(Startup, register_hud_settings_menu);
 }
 
 #[cfg(test)]
@@ -359,30 +278,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_hides_the_sky_clock() {
-        assert!(!OverlaySettings::default().sky_clock);
-    }
-
-    #[test]
-    fn legacy_persisted_sky_clock_is_migrated_off_once() {
-        let mut settings: OverlaySettings = serde_json::from_value(serde_json::json!({
-            "sky_clock": true,
-            "view_switcher": false,
-        }))
-        .expect("legacy overlay settings");
-        settings.migrate_persisted();
-        assert!(!settings.sky_clock);
-        assert_eq!(settings.schema_version, OVERLAY_SETTINGS_SCHEMA_VERSION);
-    }
-
-    #[test]
-    fn migrated_opt_in_remains_persisted() {
-        let mut settings = OverlaySettings {
-            schema_version: OVERLAY_SETTINGS_SCHEMA_VERSION,
-            sky_clock: true,
-            view_switcher: false,
-        };
-        settings.migrate_persisted();
-        assert!(settings.sky_clock);
+    fn default_hides_the_view_switcher() {
+        assert!(!OverlaySettings::default().view_switcher);
     }
 }

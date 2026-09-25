@@ -16,7 +16,10 @@
 //! and assembles the attributes into a Bevy `Mesh`.
 
 use lunco_obstacle_field::field::grid_indices;
-use lunco_terrain_core::{HeightSource, normal_at_bounded};
+use lunco_terrain_core::{
+    HeightSource, normal_at_bounded, square_boundary_height_at,
+    square_boundary_posting_spacing, square_boundary_sample_coordinate,
+};
 
 use lunco_terrain_core::quadtree::Square;
 
@@ -291,6 +294,575 @@ pub fn bake_tile_mesh<S: HeightSource, M: HeightSource>(
     }
 }
 
+/// Bake a regular CDLOD tile and replace any DEM perimeter edge with a strip
+/// that follows the shared globe/surface boundary posting curve. The regular
+/// tile remains band-limited; only its outer edge uses the full source, and its
+/// transition into the regular interior is triangulated here during the
+/// existing asynchronous tile bake.
+#[allow(clippy::too_many_arguments)]
+pub fn bake_tile_mesh_with_boundary<S: HeightSource, M: HeightSource, B: HeightSource>(
+    src: &S,
+    morph_src: &M,
+    boundary_src: &B,
+    region: Square,
+    res: usize,
+    dem_half_extent: f64,
+    origin_xz: [f64; 2],
+    origin_y: f64,
+    boundary_grid_resolution: usize,
+) -> TileMesh {
+    let mut mesh = bake_tile_mesh(
+        src,
+        morph_src,
+        region,
+        res,
+        dem_half_extent,
+        origin_xz,
+        origin_y,
+    );
+    stitch_dem_boundary(
+        &mut mesh,
+        boundary_src,
+        region,
+        res.max(2),
+        dem_half_extent,
+        origin_xz,
+        origin_y,
+        boundary_grid_resolution,
+    );
+    mesh
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DemEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+fn stitch_dem_boundary<B: HeightSource>(
+    mesh: &mut TileMesh,
+    boundary_src: &B,
+    region: Square,
+    res: usize,
+    dem_half_extent: f64,
+    origin_xz: [f64; 2],
+    origin_y: f64,
+    boundary_grid_resolution: usize,
+) {
+    if res < 3 || boundary_grid_resolution < 2 || !dem_half_extent.is_finite() {
+        return;
+    }
+    let Some(boundary_normal_epsilon) =
+        square_boundary_posting_spacing(dem_half_extent, boundary_grid_resolution)
+    else {
+        return;
+    };
+
+    let step = region.side() / (res - 1) as f64;
+    let x0 = region.center[0] - region.half;
+    let z0 = region.center[1] - region.half;
+    let on_edge = |coordinate: f64| {
+        (coordinate.abs() - dem_half_extent.abs()).abs()
+            <= (dem_half_extent.abs() * 1.0e-9).max(1.0e-6)
+    };
+    let mut active = [false; 4]; // top, bottom, left, right
+    active[0] = on_edge(z0);
+    active[1] = on_edge(z0 + region.side());
+    active[2] = on_edge(x0);
+    active[3] = on_edge(x0 + region.side());
+    if !active.into_iter().any(|edge| edge) {
+        return;
+    }
+
+    // The coarse boundary vertices must lie on the same posting-linear source
+    // curve as the globe's cutout, including vertices between DEM postings.
+    for edge in [DemEdge::Top, DemEdge::Bottom, DemEdge::Left, DemEdge::Right] {
+        if !edge_active(edge, active) {
+            continue;
+        }
+        for along_index in 0..res {
+            let vertex = edge_vertex(edge, along_index, res);
+            let (wx, wz) = edge_world(edge, along_index, res, x0, z0, step);
+            update_boundary_vertex(
+                mesh,
+                vertex,
+                boundary_src,
+                wx,
+                wz,
+                dem_half_extent,
+                boundary_grid_resolution,
+                origin_xz,
+                origin_y,
+                boundary_normal_epsilon,
+            );
+        }
+    }
+
+    let mut indices = Vec::with_capacity(mesh.indices.len() + boundary_grid_resolution * 16);
+    for iz in 0..res - 1 {
+        for ix in 0..res - 1 {
+            let outer_cell = (active[0] && iz == 0)
+                || (active[1] && iz == res - 2)
+                || (active[2] && ix == 0)
+                || (active[3] && ix == res - 2);
+            if outer_cell {
+                continue;
+            }
+            let i = (iz * res + ix) as u32;
+            indices.extend_from_slice(&[
+                i,
+                i + res as u32,
+                i + 1,
+                i + 1,
+                i + res as u32,
+                i + res as u32 + 1,
+            ]);
+        }
+    }
+
+    for edge in [DemEdge::Top, DemEdge::Bottom, DemEdge::Left, DemEdge::Right] {
+        if edge_active(edge, active) {
+            stitch_edge_strips(
+                mesh,
+                &mut indices,
+                boundary_src,
+                edge,
+                active,
+                res,
+                x0,
+                z0,
+                step,
+                dem_half_extent,
+                boundary_grid_resolution,
+                origin_xz,
+                origin_y,
+                boundary_normal_epsilon,
+            );
+        }
+    }
+    for corner in [Corner::TopLeft, Corner::TopRight, Corner::BottomLeft, Corner::BottomRight] {
+        if corner_active(corner, active) {
+            stitch_corner(
+                mesh,
+                &mut indices,
+                boundary_src,
+                corner,
+                res,
+                x0,
+                z0,
+                step,
+                dem_half_extent,
+                boundary_grid_resolution,
+                origin_xz,
+                origin_y,
+                boundary_normal_epsilon,
+            );
+        }
+    }
+    mesh.indices = indices;
+}
+
+fn edge_active(edge: DemEdge, active: [bool; 4]) -> bool {
+    active[match edge {
+        DemEdge::Top => 0,
+        DemEdge::Bottom => 1,
+        DemEdge::Left => 2,
+        DemEdge::Right => 3,
+    }]
+}
+
+fn edge_vertex(edge: DemEdge, along_index: usize, res: usize) -> u32 {
+    let index = match edge {
+        DemEdge::Top => along_index,
+        DemEdge::Bottom => (res - 1) * res + along_index,
+        DemEdge::Left => along_index * res,
+        DemEdge::Right => along_index * res + res - 1,
+    };
+    index as u32
+}
+
+fn edge_inner_vertex(edge: DemEdge, along_index: usize, res: usize) -> u32 {
+    let index = match edge {
+        DemEdge::Top => res + along_index,
+        DemEdge::Bottom => (res - 2) * res + along_index,
+        DemEdge::Left => along_index * res + 1,
+        DemEdge::Right => along_index * res + res - 2,
+    };
+    index as u32
+}
+
+fn edge_world(
+    edge: DemEdge,
+    along_index: usize,
+    res: usize,
+    x0: f64,
+    z0: f64,
+    step: f64,
+) -> (f64, f64) {
+    match edge {
+        DemEdge::Top => (x0 + along_index as f64 * step, z0),
+        DemEdge::Bottom => (x0 + along_index as f64 * step, z0 + (res - 1) as f64 * step),
+        DemEdge::Left => (x0, z0 + along_index as f64 * step),
+        DemEdge::Right => (x0 + (res - 1) as f64 * step, z0 + along_index as f64 * step),
+    }
+}
+
+fn segment_postings<B: HeightSource>(
+    mesh: &mut TileMesh,
+    boundary_src: &B,
+    edge: DemEdge,
+    segment: usize,
+    res: usize,
+    x0: f64,
+    z0: f64,
+    step: f64,
+    dem_half_extent: f64,
+    boundary_grid_resolution: usize,
+    origin_xz: [f64; 2],
+    origin_y: f64,
+    boundary_normal_epsilon: f64,
+) -> Vec<u32> {
+    let (x_start, z_start) = edge_world(edge, segment, res, x0, z0, step);
+    let (x_end, z_end) = edge_world(edge, segment + 1, res, x0, z0, step);
+    let start = match edge {
+        DemEdge::Top | DemEdge::Bottom => x_start,
+        DemEdge::Left | DemEdge::Right => z_start,
+    };
+    let end = match edge {
+        DemEdge::Top | DemEdge::Bottom => x_end,
+        DemEdge::Left | DemEdge::Right => z_end,
+    };
+    let min = start.min(end);
+    let max = start.max(end);
+    let half_f32 = dem_half_extent as f32;
+    let posting_step = (2.0_f32 * half_f32) / (boundary_grid_resolution as f32 - 1.0);
+    let mut points = Vec::new();
+    points.push(edge_vertex(edge, segment, res));
+    if posting_step.is_finite() && posting_step > 0.0 {
+        let q0 = ((min as f32 + half_f32) / posting_step)
+            .clamp(0.0, boundary_grid_resolution as f32 - 1.0);
+        let q1 = ((max as f32 + half_f32) / posting_step)
+            .clamp(0.0, boundary_grid_resolution as f32 - 1.0);
+        let first = q0.ceil() as usize;
+        let last = (q1.floor() as usize).min(boundary_grid_resolution - 1);
+        let tolerance = (dem_half_extent.abs() * 1.0e-9).max(1.0e-6);
+        if first <= last {
+            for posting in first..=last {
+                let Some(along) = square_boundary_sample_coordinate(
+                    posting,
+                    boundary_grid_resolution,
+                    dem_half_extent,
+                ) else {
+                    continue;
+                };
+                if along <= min + tolerance || along >= max - tolerance {
+                    continue;
+                }
+                let (wx, wz) = match edge {
+                    DemEdge::Top => (along, z_start),
+                    DemEdge::Bottom => (along, z_start),
+                    DemEdge::Left => (x_start, along),
+                    DemEdge::Right => (x_start, along),
+                };
+                if let Some(vertex) = append_boundary_vertex(
+                    mesh,
+                    boundary_src,
+                    wx,
+                    wz,
+                    edge,
+                    boundary_grid_resolution,
+                    dem_half_extent,
+                    origin_xz,
+                    origin_y,
+                    boundary_normal_epsilon,
+                ) {
+                    points.push(vertex);
+                }
+            }
+        }
+    }
+    points.push(edge_vertex(edge, segment + 1, res));
+    points
+}
+
+fn append_boundary_vertex<B: HeightSource>(
+    mesh: &mut TileMesh,
+    boundary_src: &B,
+    wx: f64,
+    wz: f64,
+    edge: DemEdge,
+    boundary_grid_resolution: usize,
+    dem_half_extent: f64,
+    origin_xz: [f64; 2],
+    origin_y: f64,
+    boundary_normal_epsilon: f64,
+) -> Option<u32> {
+    let height = square_boundary_height_at(
+        boundary_src,
+        wx,
+        wz,
+        dem_half_extent,
+        boundary_grid_resolution,
+    )?;
+    let n = normal_at_bounded(
+        boundary_src,
+        wx,
+        wz,
+        boundary_normal_epsilon,
+        dem_half_extent,
+    );
+    let normal = [n[0] as f32, n[1] as f32, n[2] as f32];
+    let position = [
+        (wx - origin_xz[0]) as f32,
+        (height - origin_y) as f32,
+        (wz - origin_xz[1]) as f32,
+    ];
+    let mut edge_mask = [0.0; 4];
+    edge_mask[match edge {
+        DemEdge::Top => 0,
+        DemEdge::Bottom => 1,
+        DemEdge::Left => 2,
+        DemEdge::Right => 3,
+    }] = 1.0;
+    let index = mesh.positions.len() as u32;
+    mesh.positions.push(position);
+    mesh.morph_targets.push(position);
+    mesh.morph_normals.push(normal);
+    mesh.normals.push(normal);
+    mesh.edge_masks.push(edge_mask);
+    mesh.uvs.push([
+        ((wx + dem_half_extent) / (2.0 * dem_half_extent)) as f32,
+        ((wz + dem_half_extent) / (2.0 * dem_half_extent)) as f32,
+    ]);
+    Some(index)
+}
+
+fn update_boundary_vertex<B: HeightSource>(
+    mesh: &mut TileMesh,
+    vertex: u32,
+    boundary_src: &B,
+    wx: f64,
+    wz: f64,
+    dem_half_extent: f64,
+    boundary_grid_resolution: usize,
+    origin_xz: [f64; 2],
+    origin_y: f64,
+    boundary_normal_epsilon: f64,
+) {
+    let Some(height) = square_boundary_height_at(
+        boundary_src,
+        wx,
+        wz,
+        dem_half_extent,
+        boundary_grid_resolution,
+    ) else {
+        return;
+    };
+    let n = normal_at_bounded(
+        boundary_src,
+        wx,
+        wz,
+        boundary_normal_epsilon,
+        dem_half_extent,
+    );
+    let normal = [n[0] as f32, n[1] as f32, n[2] as f32];
+    let position = [
+        (wx - origin_xz[0]) as f32,
+        (height - origin_y) as f32,
+        (wz - origin_xz[1]) as f32,
+    ];
+    let index = vertex as usize;
+    mesh.positions[index] = position;
+    mesh.morph_targets[index] = position;
+    mesh.normals[index] = normal;
+    mesh.morph_normals[index] = normal;
+}
+
+#[derive(Clone, Copy)]
+enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+fn corner_active(corner: Corner, active: [bool; 4]) -> bool {
+    match corner {
+        Corner::TopLeft => active[0] && active[2],
+        Corner::TopRight => active[0] && active[3],
+        Corner::BottomLeft => active[1] && active[2],
+        Corner::BottomRight => active[1] && active[3],
+    }
+}
+
+fn stitch_edge_strips<B: HeightSource>(
+    mesh: &mut TileMesh,
+    indices: &mut Vec<u32>,
+    boundary_src: &B,
+    edge: DemEdge,
+    active: [bool; 4],
+    res: usize,
+    x0: f64,
+    z0: f64,
+    step: f64,
+    dem_half_extent: f64,
+    boundary_grid_resolution: usize,
+    origin_xz: [f64; 2],
+    origin_y: f64,
+    boundary_normal_epsilon: f64,
+) {
+    let skip_start = match edge {
+        DemEdge::Top | DemEdge::Bottom => active[2],
+        DemEdge::Left | DemEdge::Right => active[0],
+    };
+    let skip_end = match edge {
+        DemEdge::Top | DemEdge::Bottom => active[3],
+        DemEdge::Left | DemEdge::Right => active[1],
+    };
+    for segment in 0..res - 1 {
+        if (skip_start && segment == 0) || (skip_end && segment == res - 2) {
+            continue;
+        }
+        let boundary = segment_postings(
+            mesh,
+            boundary_src,
+            edge,
+            segment,
+            res,
+            x0,
+            z0,
+            step,
+            dem_half_extent,
+            boundary_grid_resolution,
+            origin_xz,
+            origin_y,
+            boundary_normal_epsilon,
+        );
+        let inner_start = edge_inner_vertex(edge, segment, res);
+        let inner_end = edge_inner_vertex(edge, segment + 1, res);
+        for pair in boundary.windows(2) {
+            push_triangle_up(mesh, indices, inner_start, pair[0], pair[1]);
+        }
+        if let Some(&last) = boundary.last() {
+            push_triangle_up(mesh, indices, inner_start, last, inner_end);
+        }
+    }
+}
+
+fn stitch_corner<B: HeightSource>(
+    mesh: &mut TileMesh,
+    indices: &mut Vec<u32>,
+    boundary_src: &B,
+    corner: Corner,
+    res: usize,
+    x0: f64,
+    z0: f64,
+    step: f64,
+    dem_half_extent: f64,
+    boundary_grid_resolution: usize,
+    origin_xz: [f64; 2],
+    origin_y: f64,
+    boundary_normal_epsilon: f64,
+) {
+    let (horizontal, vertical, horizontal_segment, vertical_segment, corner_vertex, diagonal) =
+        match corner {
+            Corner::TopLeft => (DemEdge::Top, DemEdge::Left, 0, 0, 0, res + 1),
+            Corner::TopRight => (
+                DemEdge::Top,
+                DemEdge::Right,
+                res - 2,
+                0,
+                res - 1,
+                res + res - 2,
+            ),
+            Corner::BottomLeft => (
+                DemEdge::Bottom,
+                DemEdge::Left,
+                0,
+                res - 2,
+                (res - 1) * res,
+                (res - 2) * res + 1,
+            ),
+            Corner::BottomRight => (
+                DemEdge::Bottom,
+                DemEdge::Right,
+                res - 2,
+                res - 2,
+                res * res - 1,
+                (res - 2) * res + res - 2,
+            ),
+        };
+    let mut horizontal_points = segment_postings(
+        mesh,
+        boundary_src,
+        horizontal,
+        horizontal_segment,
+        res,
+        x0,
+        z0,
+        step,
+        dem_half_extent,
+        boundary_grid_resolution,
+        origin_xz,
+        origin_y,
+        boundary_normal_epsilon,
+    );
+    let mut vertical_points = segment_postings(
+        mesh,
+        boundary_src,
+        vertical,
+        vertical_segment,
+        res,
+        x0,
+        z0,
+        step,
+        dem_half_extent,
+        boundary_grid_resolution,
+        origin_xz,
+        origin_y,
+        boundary_normal_epsilon,
+    );
+    if matches!(corner, Corner::TopRight | Corner::BottomRight) {
+        horizontal_points.reverse();
+    }
+    if matches!(corner, Corner::TopLeft | Corner::TopRight) {
+        vertical_points.reverse();
+    }
+
+    // Walk the two measured edges through their shared corner and opposite
+    // grid vertex. A fan at that opposite vertex fills exactly this corner cell.
+    let mut boundary = horizontal_points;
+    boundary.push(diagonal as u32);
+    boundary.extend(
+        vertical_points
+            .into_iter()
+            .take_while(|&v| v != corner_vertex as u32),
+    );
+    let center = diagonal as u32;
+    for index in 0..boundary.len() {
+        let a = boundary[index];
+        let b = boundary[(index + 1) % boundary.len()];
+        push_triangle_up(mesh, indices, center, a, b);
+    }
+}
+
+fn push_triangle_up(mesh: &TileMesh, indices: &mut Vec<u32>, a: u32, b: u32, c: u32) {
+    let [ax, _, az] = mesh.positions[a as usize];
+    let [bx, _, bz] = mesh.positions[b as usize];
+    let [cx, _, cz] = mesh.positions[c as usize];
+    let cross_y = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+    if cross_y.abs() <= f32::EPSILON {
+        return;
+    }
+    if cross_y > 0.0 {
+        indices.extend_from_slice(&[a, b, c]);
+    } else {
+        indices.extend_from_slice(&[a, c, b]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +982,164 @@ mod tests {
 
         assert_eq!(mesh.positions.len(), res * res);
         assert_eq!(mesh.indices.len(), (res - 1) * (res - 1) * 6);
+    }
+
+    #[test]
+    fn dem_perimeter_uses_every_posting_and_has_closed_corner_topology() {
+        let res_dem = 9;
+        let half = 100.0f32;
+        let spacing = (2.0 * half) / (res_dem as f32 - 1.0);
+        let mut heights = vec![0.0; res_dem * res_dem];
+        // High edge relief between the coarse tile's corner/edge vertices is
+        // the condition that opened the visible globe-to-surface corner gaps.
+        for ix in 0..res_dem {
+            let x = -half + ix as f32 * spacing;
+            heights[ix] = (40.0 * (x * 0.11).sin()) as f64;
+            heights[(res_dem - 1) * res_dem + ix] = (35.0 * (x * 0.09).cos()) as f64;
+            heights[ix * res_dem] = (32.0 * (x * 0.13).cos()) as f64;
+            heights[ix * res_dem + res_dem - 1] = (28.0 * (x * 0.15).sin()) as f64;
+        }
+        let boundary = HeightGrid {
+            res: res_dem,
+            half_extent: half,
+            heights,
+        };
+        let flat = flat_dem();
+        let tile_res = 5;
+        let mesh = bake_tile_mesh_with_boundary(
+            &flat,
+            &flat,
+            &boundary,
+            Square {
+                center: [0.0, 0.0],
+                half: half as f64,
+            },
+            tile_res,
+            half as f64,
+            [0.0, 0.0],
+            0.0,
+            res_dem,
+        );
+
+        // The nonlinear postings skipped by the coarse five-vertex edge are
+        // present at their authored heights, including the four corner bands.
+        for edge in [DemEdge::Top, DemEdge::Bottom, DemEdge::Left, DemEdge::Right] {
+            let mut edge_vertices: Vec<(f32, u32)> = mesh
+                .positions
+                .iter()
+                .enumerate()
+                .filter_map(|(index, position)| {
+                    let on_edge = match edge {
+                        DemEdge::Top => (position[2] + half).abs() < 1.0e-4,
+                        DemEdge::Bottom => (position[2] - half).abs() < 1.0e-4,
+                        DemEdge::Left => (position[0] + half).abs() < 1.0e-4,
+                        DemEdge::Right => (position[0] - half).abs() < 1.0e-4,
+                    };
+                    on_edge.then_some((
+                        match edge {
+                            DemEdge::Top | DemEdge::Bottom => position[0],
+                            DemEdge::Left | DemEdge::Right => position[2],
+                        },
+                        index as u32,
+                    ))
+                })
+                .collect();
+            edge_vertices.sort_by(|a, b| a.0.total_cmp(&b.0));
+            edge_vertices.dedup_by(|a, b| (a.0 - b.0).abs() < 1.0e-4);
+            assert_eq!(edge_vertices.len(), res_dem, "missing boundary posting on {edge:?}");
+
+            for &(along, vertex) in &edge_vertices {
+                let (x, z) = match edge {
+                    DemEdge::Top => (along as f64, -(half as f64)),
+                    DemEdge::Bottom => (along as f64, half as f64),
+                    DemEdge::Left => (-(half as f64), along as f64),
+                    DemEdge::Right => (half as f64, along as f64),
+                };
+                let expected = square_boundary_height_at(
+                    &boundary,
+                    x,
+                    z,
+                    half as f64,
+                    res_dem,
+                )
+                .expect("boundary source sample");
+                assert!((mesh.positions[vertex as usize][1] as f64 - expected).abs() < 1.0e-4);
+                assert_eq!(mesh.positions[vertex as usize], mesh.morph_targets[vertex as usize]);
+                assert_eq!(mesh.normals[vertex as usize], mesh.morph_normals[vertex as usize]);
+                let posting_spacing =
+                    square_boundary_posting_spacing(half as f64, res_dem).unwrap();
+                let expected_normal = normal_at_bounded(
+                    &boundary,
+                    x,
+                    z,
+                    posting_spacing,
+                    half as f64,
+                )
+                .map(|component| component as f32);
+                assert_eq!(mesh.normals[vertex as usize], expected_normal);
+            }
+
+            let mut edge_counts = std::collections::HashMap::<(u32, u32), usize>::new();
+            for triangle in mesh.indices.chunks_exact(3) {
+                for (a, b) in [
+                    (triangle[0], triangle[1]),
+                    (triangle[1], triangle[2]),
+                    (triangle[2], triangle[0]),
+                ] {
+                    let key = if a < b { (a, b) } else { (b, a) };
+                    *edge_counts.entry(key).or_default() += 1;
+                }
+            }
+            for pair in edge_vertices.windows(2) {
+                let a = pair[0].1;
+                let b = pair[1].1;
+                let key = if a < b { (a, b) } else { (b, a) };
+                assert_eq!(edge_counts.get(&key), Some(&1), "open or multiply drawn segment on {edge:?}");
+            }
+        }
+
+        let mut edge_counts = std::collections::HashMap::<(u32, u32), usize>::new();
+        let mut covered_area = 0.0_f64;
+        for triangle in mesh.indices.chunks_exact(3) {
+            let points = [
+                mesh.positions[triangle[0] as usize],
+                mesh.positions[triangle[1] as usize],
+                mesh.positions[triangle[2] as usize],
+            ];
+            let [a, b, c] = points;
+            covered_area += 0.5
+                * (((b[0] - a[0]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[0] - a[0]))
+                    .abs() as f64);
+            for (a, b) in [
+                (triangle[0], triangle[1]),
+                (triangle[1], triangle[2]),
+                (triangle[2], triangle[0]),
+            ] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                *edge_counts.entry(key).or_default() += 1;
+            }
+        }
+        for ((a, b), count) in edge_counts {
+            let [ax, _, az] = mesh.positions[a as usize];
+            let [bx, _, bz] = mesh.positions[b as usize];
+            let tolerance = 1.0e-4;
+            let is_boundary = ((ax + half).abs() < tolerance
+                && (bx + half).abs() < tolerance)
+                || ((ax - half).abs() < tolerance && (bx - half).abs() < tolerance)
+                || ((az + half).abs() < tolerance && (bz + half).abs() < tolerance)
+                || ((az - half).abs() < tolerance && (bz - half).abs() < tolerance);
+            assert_eq!(count, if is_boundary { 1 } else { 2 }, "non-manifold edge {a}-{b}");
+        }
+        assert!(
+            (covered_area - (2.0 * half as f64).powi(2)).abs() < 1.0e-2,
+            "boundary strips and corners cover {covered_area} m², expected the complete square"
+        );
+
+        assert!(
+            mesh.indices
+                .iter()
+                .all(|&index| (index as usize) < mesh.positions.len())
+        );
     }
 
     /// Regression fixture for the normal carried by a geomorphed tile.

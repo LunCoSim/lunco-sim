@@ -560,12 +560,19 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
    relief onto the same body-curved datum. The cutout uses the site's radial
    datum, and the collar moves its gnomonic coordinates back to the body's mean
    radius before meeting the radial globe. Cutout boundary edges are split at
-   the DEM's authored grid samples so the globe and site use the same source
-   points. Globe tiles throughout the collar receive the same handoff, including
-   tiles that do not cross the cutout, so neighboring tile edges stay continuous.
-   This keeps the merge registered at nonzero site elevations. There is no shell
-   sink, guessed wall, or second terrain source. Full lat/lon↔XZ reprojection for
-   non-equirectangular DEMs remains deferred.
+   the DEM's authored grid samples. Perimeter surface tiles bake a matching
+   strip from those same posting-linear heights into their band-limited interior;
+   their boundary remains fixed during geomorph. Both sides derive boundary
+   normals at the native posting spacing, so coarse tile shading stays continuous
+   with the globe at grazing light angles. This keeps coarse terrain tiles joined
+   to the globe even where corner relief changes sharply between samples.
+   The strip is generated in the existing async tile bake and content-addressed
+   cache, with no per-frame boundary sampling. Globe tiles throughout the collar
+   receive the same handoff, including tiles that do not cross the cutout, so
+   neighboring tile edges stay continuous. This keeps the merge registered at
+   nonzero site elevations. There is no shell sink, guessed wall, or second
+   terrain source. Full lat/lon↔XZ reprojection for non-equirectangular DEMs
+   remains deferred.
 6. **Tile bake cache** — **partly done**: visual tile meshes are
    content-addressed on disk (`tile_cache`, keyed on `SurfaceOracle::surface_key`
    + tile coord), so a warm reload of the same composed surface streams instead

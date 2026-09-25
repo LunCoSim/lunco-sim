@@ -67,7 +67,8 @@ pub use lighting::{FULL_EARTH_EARTHSHINE_LUX, LunarSun, drive_earthshine_from_ph
 pub mod solar;
 pub use solar::{
     LocalSolar, SunRenderState, SunState, compute_local_solar, finalize_sun_render_state,
-    inject_local_solar_into_cosim, project_sun_state_to_light,
+    inject_local_solar_into_cosim, project_sun_state_to_light, sun_render_finalize_needed,
+    tracked_sun_light_projection,
 };
 
 /// Explicit USD-authored source of mount-local environmental signals.
@@ -798,11 +799,15 @@ impl Plugin for EnvironmentPlugin {
         // Semantic sun state is the provider boundary. The light's local pose
         // is projected before BigSpace propagation; its finalized world
         // direction is published afterwards for render consumers.
-        app.add_systems(Update, project_sun_state_to_light);
+        app.add_systems(
+            Update,
+            project_sun_state_to_light.run_if(tracked_sun_light_projection()),
+        );
         app.add_systems(
             PostUpdate,
             finalize_sun_render_state
-                .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision),
+                .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
+                .run_if(sun_render_finalize_needed),
         );
 
         // Earthshine follows Earth's phase — the ONE writer of the fill's

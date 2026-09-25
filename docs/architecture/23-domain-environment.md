@@ -140,6 +140,13 @@ is not a provider endpoint, and a Modelica source does not drive it. Controllers
 such as `SunTracker` consume the environment-probe outputs and drive their
 actuators.
 
+The procedural sky disk receives only that finalized direction transformed into
+the active Bevy camera's view frame. It uses a fixed apparent solar size at the
+shader boundary; ephemeris positions and astronomical distances never enter the
+sky material. Light orientation and sky wiring are change-gated by the physical
+sun sample and their spatial inputs, so stable frames do not repeat the
+projection work.
+
 For a scene without a celestial site, the composed USD `DistantLight` is still
 the authored source of its fixed sun direction. `lunco-usd-sim` seeds that
 semantic sample only after Bevy/BigSpace transform propagation has produced the

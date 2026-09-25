@@ -6,8 +6,7 @@
 //! `subdivide_face` (camera distance vs tile arc-size); this module integrates
 //! the selection with body-owned textures, grids, and appearance intent.
 //!
-//! Per body, [`GlobeLod`] carries the params + the physical surface grid + the
-//! render presentation grid + look;
+//! Per body, [`GlobeLod`] carries the params + the physical surface grid + look;
 //! [`GlobeTiles`] tracks residency, the bounded mesh cache, and the cached
 //! selection inputs; [`update_globe_lod`] reconciles that state with the camera.
 //! Tile placement uses the grid's `translation_to_grid` together with a
@@ -44,12 +43,6 @@ pub struct GlobeLod {
     /// It is the authoritative local frame for authored surface content and
     /// remains at the authoritative physical tick.
     pub surface_grid: Entity,
-    /// Interpolated presentation grid that owns streamed globe tiles.
-    ///
-    /// Globe tiles are visual derived data. Keeping their grid separate from
-    /// [`Self::surface_grid`] lets render interpolation update globe tiles
-    /// without reposing the physical surface scene.
-    pub globe_grid: Entity,
     /// Appearance intent applied to every tile (the body's blueprint look). Cloned
     /// onto each tile; the binder's content-keyed cache shares one
     /// `ShaderMaterial` per body.
@@ -83,6 +76,15 @@ struct BoundarySiteSource {
 impl HeightSource for BoundarySiteSource {
     fn height_at(&self, x: f64, z: f64) -> f64 {
         if self.region.distance_to([x, z]) <= 0.0 {
+            if let Some(height) = lunco_terrain_core::square_boundary_height_at(
+                self.oracle.as_ref(),
+                x,
+                z,
+                self.region.half,
+                self.oracle.grid().res,
+            ) {
+                return height;
+            }
             return self.oracle.height_at(x, z);
         }
 
@@ -103,15 +105,9 @@ impl HeightSource for BoundarySiteSource {
         if distance >= self.boundary_m {
             return self.curved_datum_height(x, z);
         }
-        let edge_height = self.oracle.height_at(edge_x, edge_z);
+        let edge_height = self.height_at(edge_x, edge_z);
         let t = (distance / self.boundary_m).clamp(0.0, 1.0);
-        let gradient = normal_at_bounded(
-            self.oracle.as_ref(),
-            edge_x,
-            edge_z,
-            self.boundary_m,
-            self.region.half,
-        );
+        let gradient = normal_at_bounded(self, edge_x, edge_z, self.boundary_m, self.region.half);
         let outward_slope = if distance > 0.0 {
             let outward_x = distance_x / distance;
             let outward_z = distance_z / distance;
@@ -513,7 +509,7 @@ pub(crate) fn globe_lod_update_due(
     }
 
     lods.iter()
-        .any(|lod| changed_grids.contains(lod.globe_grid))
+        .any(|lod| changed_grids.contains(lod.surface_grid))
 }
 
 /// Resource limits for live globe streaming.
@@ -847,21 +843,21 @@ pub(crate) fn update_globe_lod(
         // lossy, floating-origin-relative render `GlobalTransform` projection.
         let camera_body_local = camera_position_in_surface_grid(
             camera_entity,
-            lod.globe_grid,
+            lod.surface_grid,
             &q_parents,
             &grids,
             &q_spatial,
         )
         .unwrap_or_else(|| {
             panic!(
-                "globe LOD camera {camera_entity:?} and globe Grid {:?} are not connected through one BigSpace hierarchy",
-                lod.globe_grid
+                "globe LOD camera {camera_entity:?} and surface Grid {:?} are not connected through one BigSpace hierarchy",
+                lod.surface_grid
             )
         });
-        let sg_grid = grids.get(lod.globe_grid).unwrap_or_else(|_| {
+        let sg_grid = grids.get(lod.surface_grid).unwrap_or_else(|_| {
             panic!(
-                "GlobeLod on body {body_ent:?} names {:?} as its globe Grid, but that entity has no Grid component",
-                lod.globe_grid
+                "GlobeLod on body {body_ent:?} names {:?} as its surface Grid, but that entity has no Grid component",
+                lod.surface_grid
             )
         });
         let tile_bytes = tile_mesh_bytes(lod.res);
@@ -872,8 +868,8 @@ pub(crate) fn update_globe_lod(
         let handoff_changed = tiles.last_solve_handoff.as_ref() != handoff;
         if handoff_changed {
             debug!(
-                "globe LOD handoff solve: body={body_ent:?} camera={camera_entity:?} globe_grid={:?} body_local={camera_body_local:?} radius={:.0} handoff={}",
-                lod.globe_grid,
+                "globe LOD handoff solve: body={body_ent:?} camera={camera_entity:?} surface_grid={:?} body_local={camera_body_local:?} radius={:.0} handoff={}",
+                lod.surface_grid,
                 lod.radius_m,
                 handoff.is_some()
             );
@@ -1189,7 +1185,7 @@ pub(crate) fn update_globe_lod(
                     )),
                     // Streamed runtime detail — hidden from author-facing lists.
                     lunco_core::SystemManaged,
-                    ChildOf(lod.globe_grid),
+                    ChildOf(lod.surface_grid),
                 ))
                 .id();
             tiles.resident.insert(coord, ent);

@@ -92,10 +92,11 @@ between completed physical ticks and holds while transport is paused. Do not
 introduce a mission-specific trajectory component or independent clock for
 motion already represented by USD animation.
 
-Celestial body ephemerides are not ordinary USD animation: their render-only
-frames and solar projection read `lunco_time::CelestialTime`. That clock follows
-the mission epoch by default and can be rate-scaled up to 100,000× for sky
-presentation without advancing physical bodies, terrain, or Avian state.
+Celestial body ephemerides are not ordinary USD animation: the physical frame
+tree and semantic solar direction read `WorldTime`. Bevy projects that
+direction into the scene `DirectionalLight`; procedural sky disks read the
+finalized light direction in camera space. Do not add an astronomical Sun
+position or a second celestial clock to the render path.
 
 For the local kinematic avatar, use the existing Avian `MoveAndSlide` query in
 `ActivePhysicsFrame`: convert the source Grid pose, displacement, and up vector
