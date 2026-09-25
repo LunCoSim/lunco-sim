@@ -167,6 +167,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "Pure vector length (native Vec3 or array).",
     ),
     (
+        "vlen_squared",
+        "vlen_squared(a)",
+        "f64 | ()",
+        "Pure squared vector length (native Vec3 or array).",
+    ),
+    (
         "vdot",
         "vdot(a, b)",
         "f64 | ()",

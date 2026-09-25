@@ -86,7 +86,7 @@ The common Rhai engine registers the simulator's existing `bevy::math` values
 directly: `DVec3` is exposed as `Vec3` and `DQuat` as `Quat`. This is a type
 registration, not a second tuple/vector implementation. Constructors and math
 operations (`vec3`, `quat`, `vadd`, `vsub`, `vscale`, `vcross`, `vdot`, `vlen`,
-`vnorm`, `qrot`, quaternion multiplication/inversion, and XYZ-degree Euler
+`vlen_squared`, `vnorm`, `qrot`, quaternion multiplication/inversion, and XYZ-degree Euler
 conversion) execute in Rust/glam and validate finite, non-degenerate inputs.
 Native values are immutable from Rhai properties; invalid construction or an
 overflowing operation is a script error at the call site.

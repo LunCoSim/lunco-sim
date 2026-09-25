@@ -128,8 +128,12 @@ EnvironmentProbe output triplet. Finite targets use their composed position;
 static directional lights supply a framed ray through the same resolver. An
 authored light is a static `sun` source only when no celestial source owns the
 scene, and only after the active composed root has completed celestial-source
-classification. Until that projection is complete, source selection is pending;
-do not seed a static ray that could coexist with a subsequently projected
+classification. The USD celestial projector publishes that result as
+`CelestialSourceClassification` on the scene root; until it is present, static
+Sun seeding waits and `SetEnvironmentLight` yaw/pitch requests leave the
+direction unchanged with a warning. Once classified, only a static scene may
+accept those manual direction updates.
+Do not seed a static ray that could coexist with a subsequently projected
 finite Sun target. When a celestial source owns the root, withdraw any static
 ray left by an earlier classification pass. Missing or invalid targets clear
 their probe samples, publish a RuntimeDiagnostic, and fault an already-running

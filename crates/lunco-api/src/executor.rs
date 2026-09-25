@@ -289,7 +289,9 @@ fn command_response_from_result_with_error_code(
 /// Record a deferred command's result and, when a transport is waiting, emit
 /// its response through the same mapper used by ordinary command dispatch.
 /// `error_code` is supplied by the owning domain because only that owner knows
-/// whether an error means invalid state or an internal failure.
+/// whether an error means a command rejection or an internal failure. A
+/// `CommandRejected` error is retained as `CommandOutcome::Rejected` for
+/// in-process callers as well as mapped to the transport error response.
 pub fn finish_command_result(
     world: &mut World,
     command_id: Option<u64>,
@@ -302,9 +304,18 @@ pub fn finish_command_result(
         correlation_id,
     });
     if let Some(command_id) = command_id {
+        let outcome = match result {
+            Ok(ack) => lunco_core::CommandOutcome::Succeeded(ack),
+            Err(message) if matches!(error_code, ApiErrorCode::CommandRejected) => {
+                lunco_core::CommandOutcome::Rejected(lunco_command_contracts::Reject::InvalidOp(
+                    message,
+                ))
+            }
+            Err(message) => lunco_core::CommandOutcome::Failed(message),
+        };
         world
             .resource_mut::<lunco_core::CommandResults>()
-            .record(command_id, result);
+            .insert(command_id, outcome);
     }
     if let Some(event) = response {
         world.commands().trigger(event);

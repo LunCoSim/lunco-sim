@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy.workspace = true
 avian3d.workspace = true

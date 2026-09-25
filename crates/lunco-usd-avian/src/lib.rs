@@ -1138,9 +1138,11 @@ fn project_pending_joint(
         return true;
     }
     if let Some(joint) = read_joint_spec(reader, sdf_path) {
-        commands
-            .entity(entity)
-            .try_insert((joint, lunco_physics::PhysicsJointPending));
+        commands.entity(entity).try_insert((
+            joint,
+            lunco_physics::PhysicsJointPending,
+            lunco_physics::PhysicsJointTopologyPending,
+        ));
     } else if reader.boolean(sdf_path, ptok::A_JOINT_ENABLED) != Some(false) {
         let detail = "standard UsdPhysics joint was not projected: invalid body relationship, frame, axis, limit, or drive authoring";
         error!("USD physics joint {} rejected: {detail}", sdf_path);
@@ -1764,7 +1766,8 @@ fn build_usd_physics_joints(
                 commands
                     .entity(joint_entity)
                     .remove::<PendingUsdJoint>()
-                    .remove::<lunco_physics::PhysicsJointPending>();
+                    .remove::<lunco_physics::PhysicsJointPending>()
+                    .remove::<lunco_physics::PhysicsJointTopologyPending>();
                 resolve_ticks.remove(&joint_entity);
                 continue;
             }
@@ -1850,7 +1853,8 @@ fn build_usd_physics_joints(
                     commands
                         .entity(joint_entity)
                         .remove::<PendingUsdJoint>()
-                        .remove::<lunco_physics::PhysicsJointPending>();
+                        .remove::<lunco_physics::PhysicsJointPending>()
+                        .remove::<lunco_physics::PhysicsJointTopologyPending>();
                     resolve_ticks.remove(&joint_entity);
                     continue;
                 }
@@ -2016,6 +2020,9 @@ fn build_usd_physics_joints(
             if let Some(damping) = pending.damping {
                 commands.entity(joint_entity).try_insert(damping);
             }
+            commands
+                .entity(joint_entity)
+                .try_remove::<lunco_physics::PhysicsJointTopologyPending>();
         }
 
         commands.entity(joint_entity).remove::<PendingUsdJoint>();

@@ -7595,6 +7595,8 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "lunco-api",
+ "lunco-api-core",
  "lunco-command-contracts",
  "lunco-core",
  "lunco-core-runtime",

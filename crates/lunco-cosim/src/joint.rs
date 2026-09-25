@@ -49,7 +49,7 @@
 
 use avian3d::prelude::{
     AngularVelocity, ComputedCenterOfMass, LinearVelocity, Mass, MotorModel, Position,
-    PrismaticJoint, RevoluteJoint, Rotation,
+    PrismaticJoint, RevoluteJoint, RigidBody, Rotation, Sleeping,
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -171,6 +171,7 @@ fn write_motor_angle(world: &mut World, entity: Entity, value: f64) -> bool {
     if !value.is_finite() {
         return true;
     }
+    let wake_bodies = !j.motor.enabled || j.motor.target_position != value;
     j.motor.enabled = true;
     j.motor.target_position = value;
     j.motor.target_velocity = 0.0;
@@ -178,7 +179,33 @@ fn write_motor_angle(world: &mut World, entity: Entity, value: f64) -> bool {
     if j.motor.max_torque <= 0.0 {
         j.motor.max_torque = JOINT_MOTOR_MAX_TORQUE;
     }
+    let bodies = [j.body1, j.body2];
+    drop(j);
+    if wake_bodies {
+        wake_sleeping_joint_bodies(world, bodies);
+    }
     true
+}
+
+/// A changed drive setpoint is an external input to the constrained island.
+/// Wake its dynamic endpoints so Avian's solver can consume the new motor target.
+fn wake_sleeping_joint_bodies(world: &mut World, bodies: [Entity; 2]) {
+    for body in bodies {
+        let sleeping_dynamic = world
+            .get::<RigidBody>(body)
+            .is_some_and(RigidBody::is_dynamic)
+            && world.get::<Sleeping>(body).is_some();
+        if sleeping_dynamic
+            && let Err(error) = <avian3d::dynamics::solver::islands::WakeBody as Command>::apply(
+                avian3d::dynamics::solver::islands::WakeBody(body),
+                world,
+            )
+        {
+            warn!(
+                "[cosim] joint motor target changed but dynamic body {body:?} could not be woken: {error}"
+            );
+        }
+    }
 }
 
 const PRISMATIC_STATE_PORTS: &[AvianPort] = &[
@@ -452,23 +479,24 @@ pub fn joint_reaction_force(world: &World, entity: Entity) -> Option<f64> {
 /// via position control — same enable-on-write, finite-guard, and default-fill
 /// contract as [`write_motor_angle`].
 fn write_motor_displacement(world: &mut World, entity: Entity, value: f64) -> bool {
-    {
-        let Some(mut j) = world.get_mut::<PrismaticJoint>(entity) else {
-            return false;
-        };
-        if !value.is_finite() {
-            return true;
-        }
-        j.motor.enabled = true;
-        j.motor.target_position = value;
-        j.motor.target_velocity = 0.0;
-    }
     let Some(mut j) = world.get_mut::<PrismaticJoint>(entity) else {
         return false;
     };
+    if !value.is_finite() {
+        return true;
+    }
+    let wake_bodies = !j.motor.enabled || j.motor.target_position != value;
+    j.motor.enabled = true;
+    j.motor.target_position = value;
+    j.motor.target_velocity = 0.0;
     j.motor.motor_model = JOINT_MOTOR_MODEL;
     if j.motor.max_force <= 0.0 {
         j.motor.max_force = JOINT_MOTOR_MAX_FORCE;
+    }
+    let bodies = [j.body1, j.body2];
+    drop(j);
+    if wake_bodies {
+        wake_sleeping_joint_bodies(world, bodies);
     }
     true
 }

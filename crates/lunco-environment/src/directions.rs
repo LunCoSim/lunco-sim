@@ -19,6 +19,16 @@ pub const EARTH_DIRECTION_SOURCE: &str = "earth";
 
 pub use lunco_cosim_core::DirectionSourceId;
 
+/// Composed-scene classification for whether celestial bodies own the Sun
+/// direction source. The component is absent until the active scene's
+/// composition has been inspected; a static authored-light ray must not be
+/// published before that decision is available.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CelestialSourceClassification {
+    /// Whether the composed scene declares at least one celestial body source.
+    pub has_source: bool,
+}
+
 /// Explicit target identity attached to a non-celestial position-bearing entity.
 #[derive(Component, Clone, Debug, Eq, PartialEq)]
 pub struct DirectionTargetId(DirectionSourceId);

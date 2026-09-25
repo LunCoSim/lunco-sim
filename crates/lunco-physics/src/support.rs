@@ -94,6 +94,15 @@ impl PhysicsJointDetachSet {
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PhysicsJointPending;
 
+/// Marks an authored joint whose USD endpoints have not yet been projected into
+/// the runtime joint graph.
+///
+/// This closes authored topology before initial-pose validation. Once the
+/// resolved body link and typed native constraint are published, this marker
+/// clears even if Avian still has to admit the constraint to a solver island.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PhysicsJointTopologyPending;
+
 /// The default initialization policy for every USD-authored dynamic body.
 pub const STRICT_AUTHORED_INITIALIZATION_POLICY: &str = "strict-authored";
 

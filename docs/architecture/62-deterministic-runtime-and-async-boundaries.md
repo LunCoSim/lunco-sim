@@ -626,6 +626,13 @@ solver operations are enabled only under a measured deterministic reduction
 contract. The first safe optimization is parallel preparation and independent
 co-simulation layers, not concurrent writes into the live ECS world.
 
+Authored joint readiness has two distinct facts: resolved body topology and
+Avian solver-island admission. Initial-pose validation waits only for the
+topology projection, and uses the same joint-pair collision exclusions as the
+runtime solver when checking support contact. Avian island admission still
+waits for the validated initial pose. This keeps startup validation from
+waiting on an admission step that itself depends on validation.
+
 Scene readiness follows the same rule. Initial composition must establish one
 simulation start boundary: asynchronous load duration must not consume
 authoritative ticks. Runtime referenced assets and other new participants must
@@ -815,7 +822,11 @@ The whole-simulation guarantee remains open because:
    those pool widths; it does not establish whole-simulation or cross-machine
    determinism. The current profile records effective pool width but does not
    select a deterministic Avian solver profile; that guarantee still needs a
-   measured production choice or deterministic reductions.
+   measured production choice or deterministic reductions. In the same ordered
+   `FixedUpdate` propagation path, a changed joint motor setpoint wakes its
+   sleeping dynamic endpoint island with Avian's `WakeBody` command before the
+   next solver step. The wake is edge-triggered by an enabled-state or target
+   change, so steady repeated setpoints add no wake work.
 6. The command journal does not yet provide a whole-simulation authoritative
    input log and replay verdict. Networking rollback's bounded per-vessel input
    frames retain ordered, latched `SetPorts` setpoints for owned-body replay,

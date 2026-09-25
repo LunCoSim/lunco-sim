@@ -2804,12 +2804,9 @@ fn seed_authored_sun_state(
             With<lunco_usd_sim_celestial::CelestialProjected>,
         ),
     >,
-    q_celestial_roots: Query<
-        (),
-        (
-            With<lunco_usd_bevy_scene::UsdSceneRoot>,
-            With<lunco_celestial_spatial_core::CelestialSourcePresent>,
-        ),
+    q_source_classifications: Query<
+        &lunco_environment::CelestialSourceClassification,
+        With<lunco_usd_bevy_scene::UsdSceneRoot>,
     >,
     q_parents: Query<&ChildOf>,
     q_entities: Query<Entity>,
@@ -2835,7 +2832,10 @@ fn seed_authored_sun_state(
     if q_scene_roots.get(active_root).is_err() || q_projected_roots.get(active_root).is_err() {
         return;
     }
-    if q_celestial_roots.contains(active_root) {
+    let Ok(source_classification) = q_source_classifications.get(active_root) else {
+        return;
+    };
+    if source_classification.has_source {
         directions.set_named(lunco_environment::SUN_DIRECTION_SOURCE, None);
         if authored_seed_revision
             .take()

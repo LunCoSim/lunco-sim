@@ -25,6 +25,7 @@ fn on_start(me, ctx) {
     this.hinge = find("/SandboxScene/Hinge");
     this.arm = find("/SandboxScene/Arm");
     this.at_rest = ();
+    this.write_ok = false;
     this.sent = false;
     this.phase = "rest";
 
@@ -50,8 +51,8 @@ fn on_tick(me, ctx) {
 
     if this.phase == "rest" && this.t >= this.settle_s {
         this.at_rest = a;
-        set(this.hinge, "angle", TARGET);
-        this.sent = true;
+        this.write_ok = set(this.hinge, "angle", TARGET);
+        this.sent = this.write_ok;
         this.phase = "driven";
         print("[motor] commanded angle=" + TARGET);
     }
@@ -59,6 +60,7 @@ fn on_tick(me, ctx) {
     if this.t >= this.done_s {
         this.phase = "done";
         verdict(#{ at_rest: this.at_rest, driven: a, sent: this.sent,
+                   write_ok: this.write_ok,
                    pos: world_pos(this.arm) });
     }
 }
@@ -75,6 +77,7 @@ fn verdict(s) {
     let f = [];
     f.push(t_bounded(s.pos, 100.0, "arm"));
     f.push(t_present(s.driven, "Hinge `angle` port"));
+    f.push(t_true(s.write_ok, "the joint input port rejected the commanded target"));
     f.push(t_true(s.sent, "the scenario never issued its port write"));
 
     if s.at_rest != () {

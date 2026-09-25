@@ -28,6 +28,14 @@ authority, and manual-writability contract. Consumers do not reconstruct those
 facts from a port name; writes still go through the existing typed `SetPorts`
 command.
 
+`SetPorts` validates every named input before changing any value. A valid batch
+returns `applied` after the port backend writes and control holds complete; an
+unknown input or a paused/lifecycle-fenced endpoint returns a terminal
+`rejected` result. Its API/script response is completed by the same deferred
+world closure that applies the writes, so `pending` means the owner has not
+finished yet rather than being the permanent result of a fire-and-forget
+observer.
+
 `PortRegistry::port_entities` is the corresponding discovery projection. Each
 backend enumerates the component or authored surface it owns, and the registry
 merges those candidates once per inspection sample. A consumer must use this
@@ -65,7 +73,10 @@ runs in `FixedUpdate`:
 1. **`Propagate`** — `propagate_connections` reads every source output and writes
    the target input (summing with `+=` so multiple wires sum into one input). A
    `force_*` write lands in the body's `PendingForces` accumulator; a joint
-   `angle`/`displacement` write drives that joint's motor inline.
+   `angle`/`displacement` write drives that joint's motor inline. Changing a
+   motor target wakes sleeping dynamic endpoints through Avian's island wake
+   command, so the next solver step can consume the new setpoint; repeating an
+   unchanged target does not wake the island.
 2. **`ApplyForces`** — the single `apply_pending_forces` system drains
    `PendingForces` into Avian's `Forces` (world force, `apply_local_force` for
    body-frame, `apply_torque`) and clears it. Bodies are `RigidBody::Dynamic`;

@@ -39,6 +39,12 @@ Each body has one body-fixed grid that owns its globe tiles, terrain, vehicles,
 physics, and surface cameras. `CelestialTime`, the affine child of `WorldTime`,
 drives the body's position and axial rotation on this shared grid. Globe
 imagery does not have a parallel presentation hierarchy or time sample.
+
+Authored celestial declarations create the simulation frame hierarchy in both
+windowed and headless hosts. `CelestialConfig::spawn_observer_camera` gates
+only the optional observer-camera entity; its input bindings are resolved in
+that branch and cannot block Sun/Earth/Moon frames or direction sources needed
+by physics and environment consumers.
 ```
 
 The body-fixed grid is the object that rotates. The body entity itself stays

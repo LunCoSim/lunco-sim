@@ -81,13 +81,12 @@ fn scene_time_facts(
     root_prim: Option<&str>,
     reader: Option<&ComposedReader<'_>>,
     root_path: Option<&SdfPath>,
+    has_celestial_source: bool,
 ) -> H {
     let mut epoch_api = false;
     let mut epoch_status = "not_applied";
     let mut authored_epoch_jd = H::Unit;
-    let mut has_celestial_source = false;
     if let (Some(reader), Some(root_path)) = (reader, root_path) {
-        has_celestial_source = composed_stage_has_celestial_source(reader);
         epoch_api = reader.has_api_schema(root_path, "LunCoEpochAPI");
         if epoch_api {
             match read_real_strict(reader, root_path, "lunco:time:epochJd") {
@@ -203,12 +202,14 @@ fn select_scene_time_on_transition_completed(
         error!("[usd-time] {error}");
         return;
     };
+    let has_celestial_source = composed_stage_has_celestial_source(&reader);
     let facts = scene_time_facts(
         transition_kind,
         Some(scene_path),
         Some(&root_path),
         Some(&reader),
         Some(&root_path_sdf),
+        has_celestial_source,
     );
     let context = lunco_core::RuntimeExecutionContext {
         route: Some(lunco_core::RuntimeRoute::twin(
@@ -906,15 +907,11 @@ fn project_celestial_comms_prims(
             continue;
         };
         if is_scene_root {
-            if composed_stage_has_celestial_source(&reader) {
-                commands
-                    .entity(entity)
-                    .try_insert(lunco_celestial_spatial_core::CelestialSourcePresent);
-            } else {
-                commands
-                    .entity(entity)
-                    .try_remove::<lunco_celestial_spatial_core::CelestialSourcePresent>();
-            }
+            commands
+                .entity(entity)
+                .try_insert(lunco_environment::CelestialSourceClassification {
+                    has_source: composed_stage_has_celestial_source(&reader),
+                });
         }
         insert_celestial_comms_components(
             &reader,

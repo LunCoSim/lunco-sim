@@ -69,9 +69,10 @@ pub use solar::{
 /// source-to-cosim publication.
 pub mod directions;
 pub use directions::{
-    DirectionResolutionError, DirectionSourceId, DirectionSourceRequirements, DirectionTargetId,
-    EARTH_DIRECTION_SOURCE, EnvironmentDirections, FramedDirection, SUN_DIRECTION_SOURCE,
-    publish_direction_sources_to_cosim, resolve_direction_for_frame,
+    CelestialSourceClassification, DirectionResolutionError, DirectionSourceId,
+    DirectionSourceRequirements, DirectionTargetId, EARTH_DIRECTION_SOURCE, EnvironmentDirections,
+    FramedDirection, SUN_DIRECTION_SOURCE, publish_direction_sources_to_cosim,
+    resolve_direction_for_frame,
 };
 
 /// Explicit USD-authored source of mount-local environmental signals.
@@ -544,10 +545,12 @@ fn on_set_environment_light(
     mut sun_state: ResMut<SunState>,
     mut directions: ResMut<EnvironmentDirections>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    scene_mount: Option<Res<lunco_core::SceneMountState>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<DirectionalLight>>,
     q_direction_targets: Query<(Entity, &DirectionTargetId)>,
+    q_source_classifications: Query<&CelestialSourceClassification>,
     // The sun(s): every directional light EXCEPT the earthshine fill, so an
     // illuminance/color/direction tweak never clobbers the fill light.
     mut q_sun: Query<
@@ -575,6 +578,24 @@ fn on_set_environment_light(
             unreachable!("a counted scene sun must remain queryable");
         };
         if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
+            if let Some(active_root) = scene_mount.as_deref().and_then(|mount| mount.active_root())
+            {
+                match q_source_classifications.get(active_root) {
+                    Ok(classification) if classification.has_source => {
+                        warn!(
+                            "SetEnvironmentLight direction request rejected: celestial bodies own the `sun` direction in this scene"
+                        );
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        warn!(
+                            "SetEnvironmentLight direction request rejected: the active scene's Sun source has not been classified"
+                        );
+                        return;
+                    }
+                }
+            }
             if q_direction_targets
                 .iter()
                 .any(|(_, target)| target.as_str() == SUN_DIRECTION_SOURCE)

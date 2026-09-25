@@ -51,6 +51,7 @@ pub use binding::*;
 pub use joint::*;
 pub use ports::*;
 
+use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
 use lunco_core_session::ControlAuthorityChanged;
 use lunco_cosim_core::{
     BindingRevision, BrokenConnection, ControlWriteFence, CosimDiagnostics, ForceActuator,
@@ -62,7 +63,7 @@ use lunco_cosim_core::{
 // observer defined below — the ONE generic vessel-control command (a batch of
 // named input-port writes), driving landers, rovers, and any port-bearing vessel.
 use lunco_command_contracts::{Ack, OpId};
-use lunco_core::{on_command, register_commands};
+use lunco_core::{ActiveCommandId, on_command, register_commands};
 use lunco_cosim_core::commands::{ReleaseControl, ReleasePort, SetPorts};
 
 fn endpoint_ready_on_add<T: Component>(
@@ -178,6 +179,7 @@ fn reset_scene_state(
 
 impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
+        app.register_deferred_command::<SetPorts>();
         app.init_resource::<lunco_core_session::CommandPolicyRegistry>();
         app.world_mut()
             .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
@@ -1002,7 +1004,10 @@ mod binding_lifecycle_tests {
 /// inputs, an `InputPorts` surface (throttle/steer/brake, …),
 /// hardware `Port`s, or any future backend, all by name.
 /// `write_port` needs `&mut World`, so we clone the (cheap, `fn`-pointer)
-/// registry and defer the writes through a `Commands` world closure.
+/// registry and defer the writes through a `Commands` world closure. The
+/// command result is completed by that closure after it validates and applies
+/// the whole batch, so scripts and transports never mistake queued work for an
+/// applied control input.
 ///
 /// On control-path latency ("input at tick N → wheels at tick N"), two halves:
 ///
@@ -1027,16 +1032,33 @@ mod binding_lifecycle_tests {
 fn on_set_ports(
     trigger: On<SetPorts>,
     registry: Res<lunco_port_core::ports::PortRegistry>,
+    active_id: Res<ActiveCommandId>,
+    pending_request: Option<Res<PendingApiRequest>>,
     mut commands: Commands,
 ) {
     let reg = registry.clone();
     let target = cmd.target;
     let writes = cmd.writes.clone();
+    let command_id = active_id.get();
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
         if world
             .get_resource::<ControlWriteFence>()
             .is_some_and(|fence| fence.blocks(target))
         {
+            let message = "control endpoint is retiring during a lifecycle transition";
+            if command_id.is_some() {
+                warn!("[cosim] SetPorts rejected: {message}");
+            }
+            finish_command_result(
+                world,
+                command_id,
+                correlation_id,
+                Err(message.into()),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            );
             return;
         }
         // A user-paused causal scene rejects deferred writes to scene entities.
@@ -1052,12 +1074,81 @@ fn on_set_ports(
             .get_resource::<lunco_time::TimeTransport>()
             .is_some_and(|transport| !transport.is_running());
         if user_paused && world.get::<lunco_core::GlobalEntityId>(target).is_some() {
+            let message = "simulation is paused";
+            if command_id.is_some() {
+                warn!("[cosim] SetPorts rejected: {message}");
+            }
+            finish_command_result(
+                world,
+                command_id,
+                correlation_id,
+                Err(message.into()),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            );
+            return;
+        }
+        let invalid_writes = writes
+            .iter()
+            .filter(|(port, _)| !reg.has_input_port(world, target, port))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !invalid_writes.is_empty() {
+            let has_port_surface = !reg.entity_ports(world, target).is_empty();
+            let label = world
+                .get::<Name>(target)
+                .map(|name| name.to_string())
+                .unwrap_or_else(|| format!("{target:?}"));
+            if has_port_surface {
+                let global_id = world.get::<lunco_core::GlobalEntityId>(target).copied();
+                let mut diagnostics = world.resource_mut::<CosimDiagnostics>();
+                for (port, value) in &invalid_writes {
+                    let key = (target, port.clone());
+                    if diagnostics.landed.contains(&key) {
+                        continue;
+                    }
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        diagnostics.faults.entry(key)
+                    {
+                        warn!(
+                            "[cosim] SetPorts targets unknown input port '{}' on {} ({:?}) — batch rejected",
+                            port, label, target
+                        );
+                        entry.insert(BrokenConnection {
+                            entity: target,
+                            global_id,
+                            port: port.clone(),
+                            has_port_surface: true,
+                            dropped_value: *value,
+                        });
+                    }
+                }
+            }
+            let message = if has_port_surface {
+                format!(
+                    "unknown input port(s) on {label}: {}",
+                    invalid_writes
+                        .iter()
+                        .map(|(port, _)| port.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            } else {
+                format!("{label} has no writable input-port surface")
+            };
+            finish_command_result(
+                world,
+                command_id,
+                correlation_id,
+                Err(message),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            );
             return;
         }
         // A setpoint on a WIRED input has to outrank the wire, or the next
         // propagation tick overwrites it and the caller sees a write that
         // "succeeded" and did nothing. The hold is the persistent control
         // intent and ends only through an explicit release or lifecycle clear.
+        let mut write_error = None;
         for (port, value) in &writes {
             if reg.write_port(world, target, port, *value) {
                 if let Some(mut holds) = world.get_resource_mut::<PortHolds>() {
@@ -1081,45 +1172,20 @@ fn on_set_ports(
                 }
                 continue;
             }
-            // M12: the write dropped. Same triage as the wire master's
-            // (`propagate_connections`): an entity exposing NO ports at all is a
-            // structural or still-loading endpoint — load order, not a fault —
-            // while an entity that has ports but not THIS name is the genuine
-            // case (a typo'd port from the API/script/controller). Ledger entry
-            // deduped per `(entity, port)`, exactly like the wiring faults, and
-            // never re-asserted over a port proven to have landed.
-            let has_port_surface = !reg.entity_ports(world, target).is_empty();
-            if !has_port_surface {
-                continue;
-            }
-            let global_id = world.get::<lunco_core::GlobalEntityId>(target).copied();
-            // `Name` carries the USD prim path (the reader stamps it on every prim
-            // entity). An entity id in a warning — `1277v0` — is unactionable in a
-            // tester's log; `/SandboxScene/Avatar` is a bug report.
-            let label = world
-                .get::<Name>(target)
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| format!("{target:?}"));
-            let mut diag = world.resource_mut::<CosimDiagnostics>();
-            let key = (target, port.clone());
-            if diag.landed.contains(&key) {
-                continue;
-            }
-            if let std::collections::hash_map::Entry::Vacant(e) = diag.faults.entry(key) {
-                warn!(
-                    "[cosim] SetPorts targets unknown input port '{}' on {} ({:?}) — value \
-                     dropped (declare the port or fix the caller)",
-                    port, label, target
-                );
-                e.insert(BrokenConnection {
-                    entity: target,
-                    global_id,
-                    port: port.clone(),
-                    has_port_surface: true,
-                    dropped_value: *value,
-                });
-            }
+            write_error = Some(format!(
+                "port backend refused declared input '{port}' on {target:?}"
+            ));
+            break;
         }
+        let result = write_error
+            .map_or_else(|| Ok(Ack::new(OpId::new())), Err);
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            result,
+            lunco_api_core::ApiErrorCode::InternalError,
+        );
     });
 }
 

@@ -78,10 +78,10 @@ pub use support::{
     PHYSICS_INITIALIZATION_POLICY_HOOK, PhysicsInitializationExternalValidator,
     PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
     PhysicsInitializationSubject, PhysicsJointDetachRequested, PhysicsJointDetachSet,
-    PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact, PhysicsSupportFootprint,
-    PhysicsSupportSet, PhysicsSupportState, PhysicsWheelContact, PhysicsWheelRaycastFilter,
-    STRICT_AUTHORED_INITIALIZATION_POLICY, evaluate_initialization_policy,
-    physics_initialization_context, physics_initialization_facts,
+    PhysicsJointLink, PhysicsJointPending, PhysicsJointTopologyPending, PhysicsSupportContact,
+    PhysicsSupportFootprint, PhysicsSupportSet, PhysicsSupportState, PhysicsWheelContact,
+    PhysicsWheelRaycastFilter, STRICT_AUTHORED_INITIALIZATION_POLICY,
+    evaluate_initialization_policy, physics_initialization_context, physics_initialization_facts,
 };
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.

@@ -1429,7 +1429,7 @@ pub struct JointGraph<'w, 's> {
     spherical: Query<'w, 's, &'static avian3d::prelude::SphericalJoint>,
     distance: Query<'w, 's, &'static avian3d::prelude::DistanceJoint>,
     links: Query<'w, 's, &'static lunco_physics::PhysicsJointLink>,
-    pending: Query<'w, 's, (), With<lunco_physics::PhysicsJointPending>>,
+    topology_pending: Query<'w, 's, (), With<lunco_physics::PhysicsJointTopologyPending>>,
 }
 
 impl JointGraph<'_, '_> {
@@ -1455,12 +1455,30 @@ impl JointGraph<'_, '_> {
         adj
     }
 
-    /// Whether USD has a joint whose endpoints have not reached the live
-    /// entity graph yet. Initial-state validation must wait for this phase:
-    /// judging a root before its authored child body exists in `PhysicsJointLink`
-    /// would report an incomplete assembly instead of the authored pose.
-    fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
+    /// Whether an authored joint has not reached the runtime graph yet.
+    /// Native solver-island admission is a later boundary and must not hold
+    /// initial-pose validation, which is itself required before those islands
+    /// can be admitted.
+    fn has_unresolved_topology(&self) -> bool {
+        !self.topology_pending.is_empty()
+    }
+
+    /// Body pairs connected by a native joint. The shared joint owner filters
+    /// collision for every attached pair, so initial support checks must use
+    /// the same contact contract while native solver admission is pending.
+    fn collision_filtered_pairs(&self) -> HashSet<(Entity, Entity)> {
+        self.links
+            .iter()
+            .map(|link| joint_body_pair(link.body0, link.body1))
+            .collect()
+    }
+}
+
+fn joint_body_pair(body0: Entity, body1: Entity) -> (Entity, Entity) {
+    if body0.to_bits() <= body1.to_bits() {
+        (body0, body1)
+    } else {
+        (body1, body0)
     }
 }
 
@@ -1588,6 +1606,7 @@ fn exact_static_support_penetration(
     members: &[Entity],
     colliders: &[InitialCollider],
     static_supports: &[InitialCollider],
+    collision_filtered_pairs: &HashSet<(Entity, Entity)>,
 ) -> Result<Option<f64>, InitialContactError> {
     let mut penetration = None;
     for dynamic in colliders
@@ -1595,7 +1614,10 @@ fn exact_static_support_penetration(
         .filter(|collider| members.contains(&collider.body))
     {
         for support in static_supports {
-            if members.contains(&support.body) || !dynamic.layers.interacts_with(support.layers) {
+            if members.contains(&support.body)
+                || collision_filtered_pairs.contains(&joint_body_pair(dynamic.body, support.body))
+                || !dynamic.layers.interacts_with(support.layers)
+            {
                 continue;
             }
             let contact = avian3d::collision::collider::contact_query::contact(
@@ -1697,7 +1719,7 @@ pub(crate) fn validate_initial_physics_poses(
     // Joint entities are projected asynchronously from USD. Do not validate an
     // incomplete assembly: the authored topology is part of the initial-state
     // contract and the diagnostic must describe the complete body set.
-    if joints.has_pending() {
+    if joints.has_unresolved_topology() {
         return;
     }
     // The terrain oracle and its collider ring become usable in different
@@ -1847,6 +1869,7 @@ pub(crate) fn validate_initial_physics_poses(
             .get(e)
             .is_ok_and(|(rb, _)| matches!(rb, RigidBody::Dynamic | RigidBody::Kinematic))
     });
+    let collision_filtered_pairs = joints.collision_filtered_pairs();
 
     let mut done: HashSet<Entity> = HashSet::new();
     for (seed, policy, subject, invalid) in &q_needs {
@@ -1997,6 +2020,14 @@ pub(crate) fn validate_initial_physics_poses(
                 !lunco_core::NON_PHYSICAL_QUERY_LAYERS,
             ));
             filter.excluded_entities.extend(members.iter().copied());
+            for &(body0, body1) in &collision_filtered_pairs {
+                if members.contains(&body0) {
+                    filter.excluded_entities.insert(body1);
+                }
+                if members.contains(&body1) {
+                    filter.excluded_entities.insert(body0);
+                }
+            }
             for contact in &footprint.0 {
                 if !contact.probe_origin.is_finite()
                     || !contact.probe_direction.is_finite()
@@ -2071,6 +2102,7 @@ pub(crate) fn validate_initial_physics_poses(
                     &members,
                     &initial_colliders,
                     &static_support_colliders,
+                    &collision_filtered_pairs,
                 ) {
                     Ok(Some(penetration)) => {
                         findings.push(lunco_core::RuntimeDiagnostic {
@@ -2580,7 +2612,8 @@ mod tests {
         };
 
         assert_eq!(
-            exact_static_support_penetration(&[body.body], &[body], &[ramp]).unwrap(),
+            exact_static_support_penetration(&[body.body], &[body], &[ramp], &HashSet::new(),)
+                .unwrap(),
             None,
             "the body's footprint overlaps the ramp AABB, but not the ramp geometry"
         );
@@ -2606,9 +2639,54 @@ mod tests {
         };
 
         assert!(
-            exact_static_support_penetration(&[body.body], &[body], &[support])
+            exact_static_support_penetration(&[body.body], &[body], &[support], &HashSet::new(),)
                 .unwrap()
                 .is_some_and(|penetration| penetration > INITIAL_POSE_TOLERANCE)
+        );
+    }
+
+    #[test]
+    fn initial_support_contact_uses_joint_collision_filtering() {
+        let mut world = World::new();
+        let body = world.spawn_empty().id();
+        let support_body = world.spawn_empty().id();
+        let dynamic = InitialCollider {
+            entity: body,
+            body,
+            collider: Collider::cuboid(1.0, 1.0, 1.0),
+            position: DVec3::new(0.0, 0.4, 0.0),
+            rotation: DQuat::IDENTITY,
+            layers: CollisionLayers::default(),
+        };
+        let support = InitialCollider {
+            entity: support_body,
+            body: support_body,
+            collider: Collider::cuboid(10.0, 1.0, 10.0),
+            position: DVec3::ZERO,
+            rotation: DQuat::IDENTITY,
+            layers: CollisionLayers::default(),
+        };
+
+        assert!(
+            exact_static_support_penetration(
+                &[body],
+                &[dynamic.clone()],
+                &[support.clone()],
+                &HashSet::new(),
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert_eq!(
+            exact_static_support_penetration(
+                &[body],
+                &[dynamic],
+                &[support],
+                &HashSet::from([joint_body_pair(body, support_body)]),
+            )
+            .unwrap(),
+            None,
+            "joint endpoints do not collide during the authored simulation either"
         );
     }
 

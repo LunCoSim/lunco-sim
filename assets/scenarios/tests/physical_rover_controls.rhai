@@ -14,9 +14,20 @@ fn simulation_dependencies(me, ctx) {
     }
 }
 
+fn port_value(target, name, direction) {
+    let record = query("ReadPorts", #{ api_id: target });
+    if record == () || record.ports == () { return (); }
+    for port in record.ports {
+        if port.name == name && port.direction == direction { return port.value; }
+    }
+    ()
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
+    this.phase_start = 0.0;
+    this.active_is_skid = true;
     this.skid = find_path("/PhysicalRoverControls/SkidPhysical");
     this.ack = find_path("/PhysicalRoverControls/AckermannPhysical");
     this.jfl = find_path("/PhysicalRoverControls/AckermannPhysical/Steering_FL_Hinge");
@@ -29,8 +40,6 @@ fn on_start(me, ctx) {
     this.prev_a = ();
     this.fprev_s = ();
     this.fprev_a = ();
-    this.right_f_s = ();
-    this.right_f_a = ();
     this.reverse_f_s = ();
     this.reverse_f_a = ();
 
@@ -51,9 +60,36 @@ fn on_start(me, ctx) {
     this.settle_y_max_a = ();
     this.brake_speed_s = ();
     this.brake_speed_a = ();
+    this.forward_ack_s = ();
+    this.forward_ack_a = ();
+    this.forward_throttle_s = ();
+    this.forward_throttle_a = ();
+    this.forward_drive_left_s = ();
+    this.forward_drive_right_s = ();
+    this.forward_drive_left_a = ();
+    this.forward_drive_right_a = ();
+    this.forward_piloted_s = ();
+    this.forward_piloted_a = ();
+    this.skid_possession = ();
+    this.ack_possession = ();
+    this.settle_measurement_done = false;
+    this.invalid_port_ack = ();
+    this.invalid_port_throttle = ();
+    if this.skid >= 0 {
+        this.skid_possession = cmd("AcquireControl", #{
+            target: this.skid,
+            bind_camera: false,
+        });
+        expect_fault("missing_control_port");
+        this.invalid_port_ack = cmd("SetPorts", #{
+            target: this.skid,
+            writes: [["throttle", 0.25], ["missing_control_port", 1.0]],
+        });
+        this.invalid_port_throttle = port_value(this.skid, "throttle", "in");
+    }
     print("[physical-controls] skid=" + this.skid + " ackermann=" + this.ack +
           " steering_fl=" + this.jfl + " steering_fr=" + this.jfr);
-    print("[physical-controls] settle -> forward -> steer right -> steer left -> reverse -> brake");
+    print("[physical-controls] claim skid -> settle -> skid matrix -> claim Ackermann -> Ackermann matrix");
 }
 
 fn on_tick(me, ctx) {
@@ -96,13 +132,14 @@ fn on_tick(me, ctx) {
         brake(this.ack);
         // A post-contact window is the jitter observation. It starts after the
         // initial drop, so the measurement is suspension ring-down, not spawn.
-        if this.t > 1.0 {
+        if !this.settle_measurement_done && this.t > 1.0 {
             if this.settle_y_min_s == () || ps[1] < this.settle_y_min_s { this.settle_y_min_s = ps[1]; }
             if this.settle_y_max_s == () || ps[1] > this.settle_y_max_s { this.settle_y_max_s = ps[1]; }
             if this.settle_y_min_a == () || pa[1] < this.settle_y_min_a { this.settle_y_min_a = pa[1]; }
             if this.settle_y_max_a == () || pa[1] > this.settle_y_max_a { this.settle_y_max_a = pa[1]; }
         }
-        if this.t >= 3.0 {
+        if this.t - this.phase_start >= 3.0 {
+            this.settle_measurement_done = true;
             this.phase = "forward";
             this.phase_start = this.t;
             this.prev_s = ps;
@@ -114,15 +151,39 @@ fn on_tick(me, ctx) {
 
     let elapsed = this.t - this.phase_start;
     if this.phase == "forward" {
-        drive(this.skid, 0.65, 0.0);
-        drive(this.ack, 0.65, 0.0);
-        this.forward_path_s += ds;
-        this.forward_path_a += da;
+        let target = if this.active_is_skid { this.skid } else { this.ack };
+        let command = drive(target, 0.65, 0.0);
+        if this.active_is_skid {
+            if this.forward_ack_s == () { this.forward_ack_s = command; }
+            this.forward_path_s += ds;
+        } else {
+            if this.forward_ack_a == () { this.forward_ack_a = command; }
+            this.forward_path_a += da;
+        }
         if elapsed >= 3.0 {
+            if this.active_is_skid {
+                this.forward_throttle_s = port_value(this.skid, "throttle", "in");
+                this.forward_drive_left_s = port_value(this.skid, "drive_left", "out");
+                this.forward_drive_right_s = port_value(this.skid, "drive_right", "out");
+                this.forward_piloted_s = port_value(this.skid, "piloted", "out");
+                print("[physical-controls] skid forward command=" + this.forward_ack_s +
+                      " piloted=" + r2(this.forward_piloted_s) +
+                      " throttle=" + r2(this.forward_throttle_s) +
+                      " drive=" + r2(this.forward_drive_left_s) + "/" + r2(this.forward_drive_right_s));
+            } else {
+                this.forward_throttle_a = port_value(this.ack, "throttle", "in");
+                this.forward_drive_left_a = port_value(this.ack, "drive_left", "out");
+                this.forward_drive_right_a = port_value(this.ack, "drive_right", "out");
+                this.forward_piloted_a = port_value(this.ack, "piloted", "out");
+                print("[physical-controls] Ackermann forward command=" + this.forward_ack_a +
+                      " piloted=" + r2(this.forward_piloted_a) +
+                      " throttle=" + r2(this.forward_throttle_a) +
+                      " drive=" + r2(this.forward_drive_left_a) + "/" + r2(this.forward_drive_right_a));
+            }
             this.phase = "right";
             this.phase_start = this.t;
-            this.right_yaw_s = 0.0;
-            this.right_yaw_a = 0.0;
+            if this.active_is_skid { this.right_yaw_s = 0.0; }
+            else { this.right_yaw_a = 0.0; }
             this.fprev_s = fs;
             this.fprev_a = fa;
             this.prev_s = ps;
@@ -133,27 +194,30 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == "right" {
-        drive(this.skid, 0.65, 0.6);
-        drive(this.ack, 0.65, 0.6);
-        let dy_s = yaw_delta_deg(this.fprev_s, fs);
-        let dy_a = yaw_delta_deg(this.fprev_a, fa);
-        if dy_s != () { this.right_yaw_s += dy_s; }
-        if dy_a != () { this.right_yaw_a += dy_a; }
+        let target = if this.active_is_skid { this.skid } else { this.ack };
+        drive(target, 0.65, 0.6);
+        if this.active_is_skid {
+            let dy_s = yaw_delta_deg(this.fprev_s, fs);
+            if dy_s != () { this.right_yaw_s += dy_s; }
+        } else {
+            let dy_a = yaw_delta_deg(this.fprev_a, fa);
+            if dy_a != () { this.right_yaw_a += dy_a; }
+        }
         this.fprev_s = fs;
         this.fprev_a = fa;
         if elapsed >= 4.0 {
-            print("[physical-controls] right model headings fl=" + r2(get(this.ack, "heading_fl")) +
-                  " fr=" + r2(get(this.ack, "heading_fr")) +
-                  " joints fl=" + r2(get(this.jfl, "angle")) +
-                  " fr=" + r2(get(this.jfr, "angle")) +
-                  " knuckle_contact fl=" + r2(get(this.kfl, "contact_force")) +
-                  " fr=" + r2(get(this.kfr, "contact_force")) +
-                  " wheel_contact fl=" + r2(get(this.wfl, "contact_force")) +
-                  " fr=" + r2(get(this.wfr, "contact_force")));
+            if !this.active_is_skid {
+                print("[physical-controls] Ackermann right headings fl=" + r2(get(this.ack, "heading_fl")) +
+                      " fr=" + r2(get(this.ack, "heading_fr")) +
+                      " joints fl=" + r2(get(this.jfl, "angle")) +
+                      " fr=" + r2(get(this.jfr, "angle")) +
+                      " wheel_contact fl=" + r2(get(this.wfl, "contact_force")) +
+                      " fr=" + r2(get(this.wfr, "contact_force")));
+            }
             this.phase = "left";
             this.phase_start = this.t;
-            this.left_yaw_s = 0.0;
-            this.left_yaw_a = 0.0;
+            if this.active_is_skid { this.left_yaw_s = 0.0; }
+            else { this.left_yaw_a = 0.0; }
             this.fprev_s = fs;
             this.fprev_a = fa;
             this.prev_s = ps;
@@ -164,29 +228,35 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == "left" {
-        drive(this.skid, 0.65, -0.6);
-        drive(this.ack, 0.65, -0.6);
-        let dy_s = yaw_delta_deg(this.fprev_s, fs);
-        let dy_a = yaw_delta_deg(this.fprev_a, fa);
-        if dy_s != () { this.left_yaw_s += dy_s; }
-        if dy_a != () { this.left_yaw_a += dy_a; }
+        let target = if this.active_is_skid { this.skid } else { this.ack };
+        drive(target, 0.65, -0.6);
+        if this.active_is_skid {
+            let dy_s = yaw_delta_deg(this.fprev_s, fs);
+            if dy_s != () { this.left_yaw_s += dy_s; }
+        } else {
+            let dy_a = yaw_delta_deg(this.fprev_a, fa);
+            if dy_a != () { this.left_yaw_a += dy_a; }
+        }
         this.fprev_s = fs;
         this.fprev_a = fa;
         if elapsed >= 4.0 {
-            print("[physical-controls] left model headings fl=" + r2(get(this.ack, "heading_fl")) +
-                  " fr=" + r2(get(this.ack, "heading_fr")) +
-                  " joints fl=" + r2(get(this.jfl, "angle")) +
-                  " fr=" + r2(get(this.jfr, "angle")) +
-                  " knuckle_contact fl=" + r2(get(this.kfl, "contact_force")) +
-                  " fr=" + r2(get(this.kfr, "contact_force")) +
-                  " wheel_contact fl=" + r2(get(this.wfl, "contact_force")) +
-                  " fr=" + r2(get(this.wfr, "contact_force")));
+            if !this.active_is_skid {
+                print("[physical-controls] Ackermann left headings fl=" + r2(get(this.ack, "heading_fl")) +
+                      " fr=" + r2(get(this.ack, "heading_fr")) +
+                      " joints fl=" + r2(get(this.jfl, "angle")) +
+                      " fr=" + r2(get(this.jfr, "angle")) +
+                      " wheel_contact fl=" + r2(get(this.wfl, "contact_force")) +
+                      " fr=" + r2(get(this.wfr, "contact_force")));
+            }
             this.phase = "reverse";
             this.phase_start = this.t;
-            this.reverse_f_s = fs;
-            this.reverse_f_a = fa;
-            this.reverse_projection_s = 0.0;
-            this.reverse_projection_a = 0.0;
+            if this.active_is_skid {
+                this.reverse_f_s = fs;
+                this.reverse_projection_s = 0.0;
+            } else {
+                this.reverse_f_a = fa;
+                this.reverse_projection_a = 0.0;
+            }
             this.prev_s = ps;
             this.prev_a = pa;
             print("[physical-controls] reverse command started");
@@ -195,15 +265,18 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == "reverse" {
-        drive(this.skid, -0.5, 0.0);
-        drive(this.ack, -0.5, 0.0);
-        this.reverse_projection_s += vdot(vsub(ps, previous_s), this.reverse_f_s);
-        this.reverse_projection_a += vdot(vsub(pa, previous_a), this.reverse_f_a);
+        let target = if this.active_is_skid { this.skid } else { this.ack };
+        drive(target, -0.5, 0.0);
+        if this.active_is_skid {
+            this.reverse_projection_s += vdot(vsub(ps, previous_s), this.reverse_f_s);
+        } else {
+            this.reverse_projection_a += vdot(vsub(pa, previous_a), this.reverse_f_a);
+        }
         if elapsed >= 4.0 {
             this.phase = "brake";
             this.phase_start = this.t;
-            this.brake_speed_s = vs;
-            this.brake_speed_a = va;
+            if this.active_is_skid { this.brake_speed_s = vs; }
+            else { this.brake_speed_a = va; }
             this.prev_s = ps;
             this.prev_a = pa;
             print("[physical-controls] brake command started");
@@ -211,17 +284,61 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    brake(this.skid);
-    brake(this.ack);
-    this.brake_speed_s = vs;
-    this.brake_speed_a = va;
+    let target = if this.active_is_skid { this.skid } else { this.ack };
+    brake(target);
+    if this.active_is_skid { this.brake_speed_s = vs; }
+    else { this.brake_speed_a = va; }
     if elapsed >= 2.0 {
+        if this.active_is_skid {
+            this.ack_possession = cmd("AcquireControl", #{
+                target: this.ack,
+                bind_camera: false,
+            });
+            this.active_is_skid = false;
+            this.phase = "forward";
+            this.phase_start = this.t;
+            this.prev_s = ps;
+            this.prev_a = pa;
+            print("[physical-controls] skid matrix complete; Ackermann control claimed");
+            return;
+        }
         this.phase = "done";
         let settle_span_s = this.settle_y_max_s - this.settle_y_min_s;
         let settle_span_a = this.settle_y_max_a - this.settle_y_min_a;
         let fails = [];
         fails.push(t_bounded(ps, 500.0, "physical skid chassis"));
         fails.push(t_bounded(pa, 500.0, "physical Ackermann chassis"));
+        fails.push(t_true(this.forward_ack_s != () && this.forward_ack_s.ok == true,
+            "physical skid SetPorts was not applied: " + this.forward_ack_s));
+        fails.push(t_true(this.forward_ack_a != () && this.forward_ack_a.ok == true,
+            "physical Ackermann SetPorts was not applied: " + this.forward_ack_a));
+        fails.push(t_true(this.forward_ack_s.status == "applied",
+            "physical skid SetPorts did not return a terminal applied result: " + this.forward_ack_s));
+        fails.push(t_true(this.forward_ack_a.status == "applied",
+            "physical Ackermann SetPorts did not return a terminal applied result: " + this.forward_ack_a));
+        fails.push(t_true(this.invalid_port_ack != () && this.invalid_port_ack.status == "rejected"
+                          && this.invalid_port_ack.ok == false,
+            "invalid SetPorts batch did not return a terminal rejection: " + this.invalid_port_ack));
+        fails.push(t_true(this.invalid_port_throttle == 0.0,
+            "invalid SetPorts batch partially changed throttle to " + this.invalid_port_throttle));
+        fails.push(t_true(this.skid_possession != () && this.skid_possession.ok == true,
+            "physical skid rover was not claimed: " + this.skid_possession));
+        fails.push(t_true(this.ack_possession != () && this.ack_possession.ok == true,
+            "physical Ackermann rover was not claimed: " + this.ack_possession));
+        fails.push(t_true(this.forward_throttle_s != () && (this.forward_throttle_s - 0.65).abs() < 0.01,
+            "physical skid throttle input was " + this.forward_throttle_s));
+        fails.push(t_true(this.forward_throttle_a != () && (this.forward_throttle_a - 0.65).abs() < 0.01,
+            "physical Ackermann throttle input was " + this.forward_throttle_a));
+        fails.push(t_true(this.forward_piloted_s == 1.0,
+            "physical skid rover did not own control during its drive matrix"));
+        fails.push(t_true(this.forward_piloted_a == 1.0,
+            "physical Ackermann rover did not own control during its drive matrix"));
+        fails.push(t_true(this.forward_drive_left_s != () && this.forward_drive_left_s > 0.1
+                          && this.forward_drive_right_s > 0.1,
+            "physical skid Modelica drive outputs were " + this.forward_drive_left_s + "/" + this.forward_drive_right_s));
+        fails.push(t_true(this.forward_drive_left_a != () && this.forward_drive_left_a > 0.1
+                          && this.forward_drive_right_a > 0.1,
+            "physical Ackermann Modelica drive outputs were " + this.forward_drive_left_a + "/" + this.forward_drive_right_a));
         fails.push(t_moved(this.forward_path_s, 1.0, "physical skid forward command"));
         fails.push(t_moved(this.forward_path_a, 1.0, "physical Ackermann forward command"));
         fails.push(t_true(this.right_yaw_s.abs() > 2.0,
