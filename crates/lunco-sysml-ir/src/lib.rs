@@ -569,11 +569,14 @@ fn apply_constraint_usage_bindings(
             ));
             continue;
         }
-        if formal.direction == IrFeatureDirection::Out {
+        if !matches!(
+            formal.direction,
+            IrFeatureDirection::In | IrFeatureDirection::InOut
+        ) {
             diagnostics.push(error(
                 IrDiagnosticCode::ConstraintUsageBindingInvalid,
                 &binding.source,
-                "output constraint parameters cannot be supplied as input bindings",
+                "only input or inout constraint parameters accept usage-site values",
             ));
             continue;
         }
