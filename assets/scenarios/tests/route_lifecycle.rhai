@@ -10,6 +10,10 @@ const RIBBON_GEOMETRY = "/RouteLifecycle/Route/RouteRibbon/Geometry";
 const ADMISSION_LANDING_PATH = "/RouteLifecycle/AdmissionLanding";
 const ADMISSION_POINT_PATH = "/RouteLifecycle/AdmissionPoint";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path(SUBJECT_PATH)], required_inputs: [] }
+}
+
 fn direct_points(doc) {
     let result = query("QueryUsdPrim", #{ doc_id: doc, path: ROUTE, children: true });
     let points = [];

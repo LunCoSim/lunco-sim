@@ -15,6 +15,10 @@ const ROVER_TARGET = "/Traverse/Rover/SolarPanel/PanelSurface";
 const ADD_X = 1000.0;
 const ADD_Y = 700.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path(SUBJECT)], required_inputs: [] }
+}
+
 fn route_points() {
     let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
     if route == () || route.ok == false || route.children == () { return (); }
@@ -119,7 +123,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 0 {
         let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
-        this.subject = find(SUBJECT);
+        this.subject = find_path(SUBJECT);
         if route == () || route.ok == false || route.doc_id == () || this.subject < 0 {
             return;
         }

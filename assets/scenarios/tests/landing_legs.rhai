@@ -29,6 +29,16 @@
 
 /// One log row. Built by successive `+=`: rhai caps EXPRESSION complexity and a
 /// single multi-value concatenation chain trips it at compile time.
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/LandingLegsTest/Lander"),
+            find_path("/LandingLegsTest/Lander/AttitudePropulsion"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn row(t, pos, y, tilt, f, x) {
     let s = "[legs] t=" + r2(t) + "s";
     s += "  hull_y=" + r4(y);
@@ -80,33 +90,33 @@ fn on_start(me, ctx) {
     this.max_lateral_error = 0.0;
     this.max_axial_mismatch = 0.0;
 
-    this.hull = find("/LandingLegsTest/Lander");
-    this.rcs = find("/LandingLegsTest/Lander/AttitudePropulsion");
-    this.ground = find("/LandingLegsTest/Ground");
-    this.site = find("/LandingLegsTest");
-    this.moon = find("/LandingLegsTest/SolarSystem/Moon");
-    this.environment = find("/LandingLegsTest/Lander/Environment");
+    this.hull = find_path("/LandingLegsTest/Lander");
+    this.rcs = find_path("/LandingLegsTest/Lander/AttitudePropulsion");
+    this.ground = find_path("/LandingLegsTest/Ground");
+    this.site = find_path("/LandingLegsTest");
+    this.moon = find_path("/LandingLegsTest/SolarSystem/Moon");
+    this.environment = find_path("/LandingLegsTest/Lander/Environment");
     // Site placement rotates the whole scene to the Moon's local tangent.
     // Capture the authored hull up-vector once; comparing against global +Y
     // would report the latitude frame as a lander tilt.
     this.surface_up = world_up(this.hull);
     this.legs = [
-        find("/LandingLegsTest/Lander/LegPX"),
-        find("/LandingLegsTest/Lander/LegNX"),
-        find("/LandingLegsTest/Lander/LegPZ"),
-        find("/LandingLegsTest/Lander/LegNZ"),
+        find_path("/LandingLegsTest/Lander/LegPX"),
+        find_path("/LandingLegsTest/Lander/LegNX"),
+        find_path("/LandingLegsTest/Lander/LegPZ"),
+        find_path("/LandingLegsTest/Lander/LegNZ"),
     ];
     this.pads = [
-        find("/LandingLegsTest/Lander/LegPX/PadPX"),
-        find("/LandingLegsTest/Lander/LegNX/PadNX"),
-        find("/LandingLegsTest/Lander/LegPZ/PadPZ"),
-        find("/LandingLegsTest/Lander/LegNZ/PadNZ"),
+        find_path("/LandingLegsTest/Lander/LegPX/PadPX"),
+        find_path("/LandingLegsTest/Lander/LegNX/PadNX"),
+        find_path("/LandingLegsTest/Lander/LegPZ/PadPZ"),
+        find_path("/LandingLegsTest/Lander/LegNZ/PadNZ"),
     ];
     this.springs = [
-        find("/LandingLegsTest/Lander/LegPX_Spring"),
-        find("/LandingLegsTest/Lander/LegNX_Spring"),
-        find("/LandingLegsTest/Lander/LegPZ_Spring"),
-        find("/LandingLegsTest/Lander/LegNZ_Spring"),
+        find_path("/LandingLegsTest/Lander/LegPX_Spring"),
+        find_path("/LandingLegsTest/Lander/LegNX_Spring"),
+        find_path("/LandingLegsTest/Lander/LegPZ_Spring"),
+        find_path("/LandingLegsTest/Lander/LegNZ_Spring"),
     ];
     let hull_pos = world_pos(this.hull);
     this.start_hull_rotation = world_rotation(this.hull);

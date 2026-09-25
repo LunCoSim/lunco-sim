@@ -15,6 +15,7 @@ lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-storage = { path = "../lunco-storage" }
 serde = { workspace = true }
+web-time.workspace = true
 
 [lints]
 workspace = true

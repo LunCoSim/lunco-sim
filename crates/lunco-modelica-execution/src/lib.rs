@@ -82,6 +82,7 @@ impl Plugin for ModelicaExecutionPlugin {
 
         app.init_resource::<lunco_signal::SimRegistry>();
         app.init_resource::<SimSampleStream>();
+        app.init_resource::<lunco_modelica_runtime::ModelicaStepDiagnostics>();
         app.add_message::<ModelicaNotice>();
         app.add_message::<CompileRequested>();
 

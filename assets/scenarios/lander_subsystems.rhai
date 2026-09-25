@@ -25,7 +25,7 @@ fn own_gnc(me) {
     // though the source prim is the vessel's `Subsystems` child.
     let lander_path = usd_path(me);
     if lander_path == () { return -1; }
-    find(lander_path + "/GNC")
+    find_path(lander_path + "/GNC")
 }
 
 fn simulation_dependencies(me, ctx) {

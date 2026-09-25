@@ -4,17 +4,27 @@
 // Modelica owns allocation and actuator math; USD owns the physical topology;
 // Rust realizes the generic ports, contacts, joints, and body state.
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/PhysicalRoverControls/SkidPhysical"),
+            find_path("/PhysicalRoverControls/AckermannPhysical"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
-    this.skid = find("/PhysicalRoverControls/SkidPhysical");
-    this.ack = find("/PhysicalRoverControls/AckermannPhysical");
-    this.jfl = find("/PhysicalRoverControls/AckermannPhysical/Steering_FL_Hinge");
-    this.jfr = find("/PhysicalRoverControls/AckermannPhysical/Steering_FR_Hinge");
-    this.kfl = find("/PhysicalRoverControls/AckermannPhysical/SteeringKnuckle_FL");
-    this.kfr = find("/PhysicalRoverControls/AckermannPhysical/SteeringKnuckle_FR");
-    this.wfl = find("/PhysicalRoverControls/AckermannPhysical/Suspension_FL/Wheel_FL");
-    this.wfr = find("/PhysicalRoverControls/AckermannPhysical/Suspension_FR/Wheel_FR");
+    this.skid = find_path("/PhysicalRoverControls/SkidPhysical");
+    this.ack = find_path("/PhysicalRoverControls/AckermannPhysical");
+    this.jfl = find_path("/PhysicalRoverControls/AckermannPhysical/Steering_FL_Hinge");
+    this.jfr = find_path("/PhysicalRoverControls/AckermannPhysical/Steering_FR_Hinge");
+    this.kfl = find_path("/PhysicalRoverControls/AckermannPhysical/SteeringKnuckle_FL");
+    this.kfr = find_path("/PhysicalRoverControls/AckermannPhysical/SteeringKnuckle_FR");
+    this.wfl = find_path("/PhysicalRoverControls/AckermannPhysical/Suspension_FL/Wheel_FL");
+    this.wfr = find_path("/PhysicalRoverControls/AckermannPhysical/Suspension_FR/Wheel_FR");
     this.prev_s = ();
     this.prev_a = ();
     this.fprev_s = ();
@@ -256,8 +266,8 @@ fn on_tick(me, ctx) {
 }
 
 fn on_stop(me, ctx) {
-    let skid = find("/PhysicalRoverControls/SkidPhysical");
-    let ack = find("/PhysicalRoverControls/AckermannPhysical");
+    let skid = find_path("/PhysicalRoverControls/SkidPhysical");
+    let ack = find_path("/PhysicalRoverControls/AckermannPhysical");
     if skid >= 0 { brake(skid); }
     if ack >= 0 { brake(ack); }
 }

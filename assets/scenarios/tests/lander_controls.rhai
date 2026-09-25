@@ -8,6 +8,10 @@ const EPS = 0.0001;
 const GRAVITY_Y = -1.62;
 const GRAVITY_TOLERANCE = 0.05;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path(ROOT + "/Lander")], required_inputs: [] }
+}
+
 fn near(actual, expected) {
     actual != () && (actual - expected).abs() < EPS
 }
@@ -62,9 +66,9 @@ fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.phase = 0;
     this.done = false;
-    this.lander = find(ROOT + "/Lander");
-    this.avatar = find(ROOT + "/Avatar");
-    this.environment = find(ROOT + "/Lander/Environment");
+    this.lander = find_path(ROOT + "/Lander");
+    this.avatar = find_path(ROOT + "/Avatar");
+    this.environment = find_path(ROOT + "/Lander/Environment");
     this.camera_follow = get(this.lander, "CameraFollow");
     this.orbit_entered = false;
     this.returned_to_follow = false;

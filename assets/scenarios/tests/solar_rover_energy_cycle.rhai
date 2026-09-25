@@ -40,6 +40,17 @@ const SOLAR_INCIDENCE = "solar_incidence";
 const MOTOR_ELECTRICAL_POWER = "motor_electrical_power";
 const MOTOR_TERMINAL_CURRENT = "motor_terminal_current";
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/SolarRoverTest/SolarRover"),
+            find_path("/SolarRoverTest/SolarRover/SunTrackerController"),
+            find_path("/SolarRoverTest/SolarRover/Comms/EarthTrackerController"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn island_value(elec, port) {
     get(elec, port)
 }
@@ -65,11 +76,11 @@ fn on_start(me, ctx) {
     this.phase = "await_ports";
     this.done = false;
 
-    this.rover = find("/SolarRoverTest/SolarRover");
-    this.elec = find("/SolarRoverTest/SolarRover");
-    this.tracker = find("/SolarRoverTest/SolarRover/SunTrackerController");
-    this.earth_tracker = find("/SolarRoverTest/SolarRover/Comms/EarthTrackerController");
-    this.hinge = find("/SolarRoverTest/SolarRover/Hinge");
+    this.rover = find_path("/SolarRoverTest/SolarRover");
+    this.elec = find_path("/SolarRoverTest/SolarRover");
+    this.tracker = find_path("/SolarRoverTest/SolarRover/SunTrackerController");
+    this.earth_tracker = find_path("/SolarRoverTest/SolarRover/Comms/EarthTrackerController");
+    this.hinge = find_path("/SolarRoverTest/SolarRover/Hinge");
     this.earth_direction_x = ();
     this.earth_direction_y = ();
     this.earth_direction_z = ();
@@ -170,7 +181,7 @@ fn on_tick(me, ctx) {
         this.hinge_after_step = get(this.hinge, "angle");
         this.soc_before_drive = island_value(this.elec, BATTERY_SOC);
         this.position_before_drive = world_pos(this.rover);
-        this.route = find("/SolarRoverTest/Route");
+        this.route = find_path("/SolarRoverTest/Route");
         if this.route < 0 {
             finish_failure(this, "scene-level route was not composed");
             return;

@@ -9,6 +9,13 @@ const STEP_YAW = 1.0;      // radians the static sun ray is moved to (~57 deg)
 const TOL_RAD = 0.15;      // servo convergence band (~8.6 deg)
 const PORT_WAIT_S = 20.0;  // budget for the Modelica model to compile and publish
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [
+        find_path("/SunTrackerTest/SolarTower/Controller"),
+        find_path("/SunTrackerTest/SpacecraftController"),
+    ], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     // Wait for Modelica publication before sampling the direction triplets.
@@ -17,12 +24,12 @@ fn on_start(me, ctx) {
     this.settle_s = 2.0;    // after the ports appear, let the model reach steady state
     this.track_s = 12.0;    // first-order servo: give it time to slew and settle
 
-    this.ctrl = find("/SunTrackerTest/SolarTower/Controller");
-    this.spacecraft_ctrl = find("/SunTrackerTest/SpacecraftController");
-    this.spacecraft_target = find("/SunTrackerTest/SpacecraftTarget");
-    this.hinge = find("/SunTrackerTest/SolarTower/Hinge");
-    this.mast = find("/SunTrackerTest/SolarTower/Mast");
-    this.head = find("/SunTrackerTest/SolarTower/YawHead");
+    this.ctrl = find_path("/SunTrackerTest/SolarTower/Controller");
+    this.spacecraft_ctrl = find_path("/SunTrackerTest/SpacecraftController");
+    this.spacecraft_target = find_path("/SunTrackerTest/SpacecraftTarget");
+    this.hinge = find_path("/SunTrackerTest/SolarTower/Hinge");
+    this.mast = find_path("/SunTrackerTest/SolarTower/Mast");
+    this.head = find_path("/SunTrackerTest/SolarTower/YawHead");
 
     this.az_before = ();
     this.direction_y_before = ();

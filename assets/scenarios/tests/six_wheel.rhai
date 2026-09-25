@@ -24,6 +24,10 @@
 // for its exit code. Helpers come from `prelude/auto_tests.rhai` and
 // `prelude/nav.rhai` (`yaw_delta_deg`, which reports right-hand yaw POSITIVE).
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/SixWheelTest/Rover")], required_inputs: [] }
+}
+
 fn port_value(target, name, direction) {
     let record = query("ReadPorts", #{ api_id: target });
     if record == () || record.ports == () { return (); }
@@ -118,18 +122,18 @@ fn on_tick(me, ctx) {
 
     this.readiness_elapsed += dt();
 
-    if this.rover == () || this.rover < 0 { this.rover = find("/SixWheelTest/Rover"); }
+    if this.rover == () || this.rover < 0 { this.rover = find_path("/SixWheelTest/Rover"); }
     if this.camera == () || this.camera < 0 {
-        this.camera = find("/SixWheelTest/Rover/FrontCamera");
+        this.camera = find_path("/SixWheelTest/Rover/FrontCamera");
     }
     if this.controller == () || this.controller < 0 {
-        this.controller = find("/SixWheelTest/Rover/HeadlightController_L");
+        this.controller = find_path("/SixWheelTest/Rover/HeadlightController_L");
     }
     if this.light == () || this.light < 0 {
-        this.light = find("/SixWheelTest/Rover/Headlight_L/Light");
+        this.light = find_path("/SixWheelTest/Rover/Headlight_L/Light");
     }
     if this.light_right == () || this.light_right < 0 {
-        this.light_right = find("/SixWheelTest/Rover/Headlight_R/Light");
+        this.light_right = find_path("/SixWheelTest/Rover/Headlight_R/Light");
     }
 
     if this.rover == () || this.rover < 0 || this.camera == () || this.camera < 0 ||

@@ -2,10 +2,14 @@
 // The reusable balloon defaults to vacuum, so this scene proves that the
 // environment inputs still produce buoyancy when a scene authors them.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/ModelicaBalloonEarth/EarthBalloon/Plant")], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
-    this.balloon = find("/ModelicaBalloonEarth/EarthBalloon");
-    this.plant = find("/ModelicaBalloonEarth/EarthBalloon/Plant");
+    this.balloon = find_path("/ModelicaBalloonEarth/EarthBalloon");
+    this.plant = find_path("/ModelicaBalloonEarth/EarthBalloon/Plant");
     this.started = false;
     this.start_pos = ();
     this.done = false;

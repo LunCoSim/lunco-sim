@@ -24,12 +24,16 @@ const ZERO_TOL = 1.0e-4; // 0.1 mW
 const BATTERY_DISCHARGE_POWER = "battery_discharge_power";
 const MOTOR_MECHANICAL_POWER = "motor_mechanical_power";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/BatteryEmptyActuator/Rover")], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "wait";
     this.done = false;
-    this.rover = find("/BatteryEmptyActuator/Rover");
-    this.elec = find("/BatteryEmptyActuator/Rover");
+    this.rover = find_path("/BatteryEmptyActuator/Rover");
+    this.elec = find_path("/BatteryEmptyActuator/Rover");
     this.event_seen = false;
     this.drained = ();
     this.max_battery_discharge_power = 0.0;

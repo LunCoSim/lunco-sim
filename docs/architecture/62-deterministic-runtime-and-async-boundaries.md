@@ -149,13 +149,29 @@ other scripts continue. The owner must not guess a scope or move the script to
 another clock. Runtime callback errors also remain visible and local to their
 owner, with required authoritative hooks holding or faulting that owner.
 
-Every cycle exposes low-cost aggregate duration, work admitted/completed,
-queue/in-flight depth, and deadline/overload counts through the existing
-diagnostics boundary. Counters are updated at cycle/task boundaries rather than
-collecting full per-system payloads or emitting a telemetry sample every frame.
-Use those metrics to find the owner, then profile the production path with the
-adjacent Tracy workflow. Run an unprofiled pass for frame-rate acceptance; the
-profiler capture is diagnostic evidence, not the performance number.
+Cycle labels establish ownership and ordering, but the runtime does not yet
+provide a complete cross-owner duration, queue, and overload view. Owners with
+measured hot paths should expose bounded aggregates at task boundaries rather
+than retaining traces or emitting telemetry every frame. Use those owner metrics
+to find a candidate, then profile the production path with the adjacent Tracy
+workflow. Run a separate unprofiled pass for frame-rate acceptance; the profiler
+capture is diagnostic evidence, not the performance number.
+
+The live Modelica worker exposes per-participant step diagnostics through
+`CosimStatus`: solver-step service duration, dispatch-to-response latency, and
+the native worker's pending-task count when the solver starts. These are
+recorded once per completed solver step and reset with the Modelica session.
+Set `include_values: false` when reading fleet diagnostics to omit complete
+input/output maps and verbose model/error strings while retaining compact model
+status, counts, and step metrics. Rhai profilers can also set
+`include_entities: false` to receive the aggregate `modelica_step_profile`
+without constructing per-participant strings.
+Response latency includes worker queueing, transport, and owner response
+handling; it is not a pure queue-wait measurement. Browser worker queue depth is
+not currently observable and is reported as unavailable. Compare these values
+on representative scenes before changing the serialized Modelica worker or
+introducing a parallel solver; use Tracy to determine whether solver service or
+other owner work dominates.
 
 Every cross-domain callback receives an immutable `RuntimeExecutionContext`
 from its owning Rust cycle with:
@@ -526,8 +542,10 @@ identities from the composed world and parameters; commands, direct mutations,
 emitted events, and live port access are rejected in this phase. While a plan is
 pending, all Modelica participants remain synchronized and simulation time
 stays held by the scenario's exact preparation key. The production sensor scene
-verifies declared Modelica reads, rejects a live port read during planning, and
-rejects a live non-Modelica id before the scenario can enter `on_start`.
+verifies declared Modelica reads, rejects a live port read during planning and
+a live non-Modelica id before `on_start`, and proves that one scenario cannot
+read, write, or consume events from a Modelica participant declared only by
+another scenario.
 This hook runs before mutable top-level initialization, so derive its result
 from `me`, scenario parameters, and read-only world queries rather than
 top-level initialization effects. Once all declared inputs are Ready, the owner
@@ -564,10 +582,20 @@ dependency. Required owner inputs occupy
 the same plan but do not add Modelica barrier participants. While a dependency
 plan is pending, all Modelica
 participants are synchronized. After admission, direct simulation-clock access
-to an unbarriered Modelica port or event fails at the scripting owner with a
-diagnostic that names the missing hook. Presentation reads continue to observe
+to an undeclared Modelica participant or event fails at the scripting owner with a
+diagnostic that names the missing hook. This includes `get`, `port`, and
+`query("ReadPorts", #{ api_id })`; the query surface cannot bypass the plan.
+Presentation reads continue to observe
 committed state without joining the authoritative barrier. Continuous
 calculations and physics remain in their domain owners.
+
+The shared barrier synchronizes solver work; it does not grant script access.
+The scripting owner checks port reads through every public script surface,
+writes, targeted commands, and event
+delivery against the calling scenario's own committed dependency plan. A
+participant in USD wiring or another scenario's plan still must be declared by
+the scenario that consumes it. This distinction keeps solver membership
+aggregate while making script dependencies attributable and reviewable.
 
 The composed dependency graph also defines safe parallelism. Participants in
 the same dependency layer may calculate concurrently from one immutable input
@@ -705,9 +733,10 @@ The whole-simulation guarantee remains open because:
    independent. Initial USD composition dependencies are fetched and composed
    by the root asset loader before the stage asset reaches structural
    projection.
-3. Rhai port and event reads require a declared `simulation_dependencies`
-   closure and unbarriered access fails visibly. A complete typed action path
-   for every script write remains open.
+3. Rhai Modelica port and event access requires the calling scenario to declare
+   each participant in its own `simulation_dependencies` plan; aggregate
+   barrier membership from USD wiring or another scenario does not grant access.
+   A complete typed action path for every script write remains open.
 4. Twin `AnalyzeSysml`/`ValidateSysml` queries now read committed async source
    snapshots; read-only analysis uses interactive admission and does not hold
    simulation time. Scenario plans can now wait on generic owner-published

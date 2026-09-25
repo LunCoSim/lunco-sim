@@ -7,10 +7,14 @@ pub fn on_remove_modelica(
     trigger: On<Remove, ModelicaModel>,
     channels: Res<ModelicaChannels>,
     mut sim_registry: ResMut<lunco_signal::SimRegistry>,
+    step_diagnostics: Option<ResMut<lunco_modelica_runtime::ModelicaStepDiagnostics>>,
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
     sim_registry.remove_entity(entity);
+    if let Some(mut diagnostics) = step_diagnostics {
+        diagnostics.remove(entity);
+    }
     // Scene teardown can remove `ModelicaModel` as part of despawning the
     // entity. `try_remove` makes the ownership transition safe in both cases:
     // explicit component removal and an entity that has already gone away.
@@ -476,6 +480,7 @@ pub fn spawn_modelica_requests(
                 step_id,
                 start_time,
                 stop_time,
+                submitted_at: web_time::Instant::now(),
             });
             model.is_stepping = true;
             coupling_held |= shared_clock_participant;
@@ -574,12 +579,14 @@ pub fn handle_modelica_responses(
     runner_res: Option<Res<lunco_modelica_runner::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
     participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
+    step_diagnostics: Option<ResMut<lunco_modelica_runtime::ModelicaStepDiagnostics>>,
     coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
 ) {
     let mut compile_states = compile_states;
     let mut source_roots = source_roots;
     let mut faults = faults;
+    let mut step_diagnostics = step_diagnostics;
     while let Ok(result) = channels.rx.try_recv() {
         // Source-root load ack: route to the registry and short-
         // circuit before any of the sim-result handling below
@@ -811,10 +818,25 @@ pub fn handle_modelica_responses(
                     model.last_error = Some(detail);
                     continue;
                 }
+                if let (Some(diagnostics), Some(worker_duration_ns)) = (
+                    step_diagnostics.as_deref_mut(),
+                    result.worker_step_duration_ns,
+                ) {
+                    diagnostics.record_step(
+                        result.entity,
+                        result.session_id,
+                        worker_duration_ns,
+                        in_flight.submitted_at.elapsed().as_nanos() as u64,
+                        result.worker_backlog_count,
+                    );
+                }
                 model.in_flight_step = None;
             } else {
                 // A lifecycle transition supersedes any older transaction only
                 // after its session has advanced. It starts a fresh sequence.
+                if let Some(diagnostics) = step_diagnostics.as_deref_mut() {
+                    diagnostics.begin_session(result.entity, result.session_id);
+                }
                 model.in_flight_step = None;
                 model.next_step_id = 1;
             }

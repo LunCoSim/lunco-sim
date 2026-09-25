@@ -65,6 +65,17 @@ const TRAVERSE_THROTTLE = 0.32;
 // rover is nearest without ever reaching the next one.
 const LANE_HALF_WIDTH = 5.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/RoverComparison/Easy"),
+            find_path("/RoverComparison/Medium"),
+            find_path("/RoverComparison/Awful"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 4.0;
@@ -98,7 +109,7 @@ fn on_start(me, ctx) {
     this.lane_stations = [];
     this.goals = [];
     for c in candidates {
-        let gid = find(c[1]);
+        let gid = find_path(c[1]);
         if gid != () && gid >= 0 {
             this.names.push(c[0]);
             this.rovers.push(gid);
@@ -126,7 +137,7 @@ fn on_start(me, ctx) {
     // The course, read off the scene. Each entry is [gid, x, z] so the lane split
     // and the progress count below are both plain arithmetic on authored poses.
     this.stations = [];
-    let lanes = find("/RoverComparison/Lanes");
+    let lanes = find_path("/RoverComparison/Lanes");
     if lanes != () && lanes >= 0 {
         for gid in children(lanes) {
             let p = world_pos(gid);

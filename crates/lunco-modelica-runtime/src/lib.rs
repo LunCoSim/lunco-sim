@@ -69,6 +69,8 @@ pub struct InFlightModelicaStep {
     pub step_id: u64,
     pub start_time: f64,
     pub stop_time: f64,
+    /// Monotonic owner timestamp used for diagnostic response-latency samples.
+    pub submitted_at: web_time::Instant,
 }
 
 /// Channels for communicating with the background simulation worker.
@@ -184,6 +186,15 @@ pub struct ModelicaResult {
     pub loaded_source_root_id: Option<String>,
     #[serde(default)]
     pub compile_diagnostics: Vec<lunco_doc::Diagnostic>,
+    /// Solver execution duration for a completed live worker step, in ns.
+    /// Absent when the result did not execute the solver (for example, a
+    /// deferred first-step preparation).
+    #[serde(default)]
+    pub worker_step_duration_ns: Option<u64>,
+    /// Number of queued/in-flight worker tasks when this step starts.
+    /// Browser worker transports may not expose their internal queue depth.
+    #[serde(default)]
+    pub worker_backlog_count: Option<u64>,
 }
 
 impl Default for ModelicaResult {
@@ -209,7 +220,96 @@ impl Default for ModelicaResult {
             compiled_model_name: None,
             loaded_source_root_id: None,
             compile_diagnostics: Vec::new(),
+            worker_step_duration_ns: None,
+            worker_backlog_count: None,
         }
+    }
+}
+
+/// Bounded aggregate diagnostics for the live Modelica step handoff.
+///
+/// This records one compact sample per completed worker step. It does not
+/// retain traces or variable payloads, so `CosimStatus` can expose the worker
+/// service cost and response delay without adding per-frame sampling work.
+#[derive(Resource, Default)]
+pub struct ModelicaStepDiagnostics {
+    participants: HashMap<Entity, ModelicaParticipantStepDiagnostics>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModelicaParticipantStepDiagnostics {
+    pub session_id: u64,
+    pub samples: u64,
+    pub last_worker_step_duration_ns: u64,
+    pub total_worker_step_duration_ns: u64,
+    pub max_worker_step_duration_ns: u64,
+    pub last_response_latency_ns: u64,
+    pub max_response_latency_ns: u64,
+    pub last_worker_backlog_count: Option<u64>,
+    pub max_worker_backlog_count: Option<u64>,
+}
+
+impl ModelicaStepDiagnostics {
+    pub fn participant(&self, entity: Entity) -> Option<&ModelicaParticipantStepDiagnostics> {
+        self.participants.get(&entity)
+    }
+
+    pub fn participants(
+        &self,
+    ) -> impl Iterator<Item = (Entity, &ModelicaParticipantStepDiagnostics)> {
+        self.participants
+            .iter()
+            .map(|(entity, diagnostics)| (*entity, diagnostics))
+    }
+
+    pub fn begin_session(&mut self, entity: Entity, session_id: u64) {
+        self.participants.insert(
+            entity,
+            ModelicaParticipantStepDiagnostics {
+                session_id,
+                ..Default::default()
+            },
+        );
+    }
+
+    pub fn record_step(
+        &mut self,
+        entity: Entity,
+        session_id: u64,
+        worker_step_duration_ns: u64,
+        response_latency_ns: u64,
+        worker_backlog_count: Option<u64>,
+    ) {
+        let diagnostics = self.participants.entry(entity).or_default();
+        if diagnostics.session_id != session_id {
+            *diagnostics = ModelicaParticipantStepDiagnostics {
+                session_id,
+                ..Default::default()
+            };
+        }
+        diagnostics.samples = diagnostics.samples.saturating_add(1);
+        diagnostics.last_worker_step_duration_ns = worker_step_duration_ns;
+        diagnostics.total_worker_step_duration_ns = diagnostics
+            .total_worker_step_duration_ns
+            .saturating_add(worker_step_duration_ns);
+        diagnostics.max_worker_step_duration_ns = diagnostics
+            .max_worker_step_duration_ns
+            .max(worker_step_duration_ns);
+        diagnostics.last_response_latency_ns = response_latency_ns;
+        diagnostics.max_response_latency_ns =
+            diagnostics.max_response_latency_ns.max(response_latency_ns);
+        diagnostics.last_worker_backlog_count = worker_backlog_count;
+        if let Some(count) = worker_backlog_count {
+            diagnostics.max_worker_backlog_count = Some(
+                diagnostics
+                    .max_worker_backlog_count
+                    .map_or(count, |current| current.max(count)),
+            );
+        }
+    }
+
+    pub fn remove(&mut self, entity: Entity) {
+        self.participants.remove(&entity);
     }
 }
 

@@ -5,9 +5,14 @@ const ROOT = "/RouteProgress";
 const ROUTE = ROOT + "/Route";
 const SUBJECT_PATH = ROOT + "/Subject";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path(SUBJECT_PATH)], required_inputs: [] }
+}
+
 fn event_is_within(entity, ancestor) {
-    if entity == () || entity < 0 || ancestor < 0 { return false; }
-    let current = entity;
+    if entity == () || ancestor < 0 { return false; }
+    let current = entity.to_int();
+    if current < 0 { return false; }
     for depth in 0..32 {
         if current == ancestor { return true; }
         let next = parent(current);
@@ -15,6 +20,19 @@ fn event_is_within(entity, ancestor) {
         current = next;
     }
     false
+}
+
+fn event_has_causal_stamp(evt) {
+    let context = execution_context();
+    let producer = context.producer;
+    if producer == () || producer.sequence.to_int() != evt.sim_tick {
+        return false;
+    }
+    if context.cycle == "simulation" {
+        return context.sequence != ()
+            && context.sequence.to_int() > producer.sequence.to_int();
+    }
+    context.cycle == "lifecycle" && context.sequence == ()
 }
 
 fn point_paths(doc) {
@@ -88,7 +106,7 @@ fn on_start(me, ctx) {
     this.done = false;
     this.checks = [];
     this.doc = -1;
-    this.subject = find(SUBJECT_PATH);
+    this.subject = find_path(SUBJECT_PATH);
     this.route_entity = find_path(ROUTE);
     this.point_one_entered = 0;
     this.started = 0;
@@ -99,11 +117,11 @@ fn on_start(me, ctx) {
 
 fn on_event(me, evt, ctx) {
     if this.done { return; }
-    if evt.name.starts_with("enter:") && sim_tick() <= evt.sim_tick {
+    if evt.name.starts_with("enter:") && !event_has_causal_stamp(evt) {
         this.event_order_ok = false;
     }
     if evt.name == "enter:route_P1"
-        && event_is_within(evt.value, find(SUBJECT_PATH)) {
+        && event_is_within(evt.value, find_path(SUBJECT_PATH)) {
         this.point_one_entered += 1;
     }
     if evt.source == this.route_entity {
@@ -127,7 +145,7 @@ fn on_tick(me, ctx) {
         let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
         if route == () || route.ok == false || route.doc_id == () { return; }
         this.doc = route.doc_id;
-        this.subject = find(SUBJECT_PATH);
+        this.subject = find_path(SUBJECT_PATH);
         if this.subject < 0 { return; }
         let listed = program_editor::list(this.doc, ROUTE);
         if listed == () || !listed.ok || listed.programs.len() != 1 { return; }
@@ -192,6 +210,9 @@ fn on_tick(me, ctx) {
             || this.reached[0] != 1 { return; }
         let points = point_paths(this.doc);
         if points.len() != 3 { return; }
+        if !color_is(marker_color(this.doc, points[1]), [0.55, 0.55, 0.55]) {
+            return;
+        }
         this.checks.push(t_true(
             color_is(marker_color(this.doc, points[1]), [0.55, 0.55, 0.55]),
             "the next sensor event marks its route point visited"));

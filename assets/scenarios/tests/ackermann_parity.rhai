@@ -4,6 +4,16 @@
 // wheel/joint graph; the composed Modelica controller publishes drive values and
 // final front-knuckle headings through the same port fabric used by this test.
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/AckermannParity/RoverRaycast"),
+            find_path("/AckermannParity/RoverPhysical"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn port_value(target, name, direction) {
     let record = query("ReadPorts", #{ api_id: target });
     if record == () || record.ports == () { return (); }
@@ -16,8 +26,8 @@ fn port_value(target, name, direction) {
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
-    this.raycast = find("/AckermannParity/RoverRaycast");
-    this.physical = find("/AckermannParity/RoverPhysical");
+    this.raycast = find_path("/AckermannParity/RoverRaycast");
+    this.physical = find_path("/AckermannParity/RoverPhysical");
     this.raycast_start = ();
     this.physical_start = ();
     if this.raycast < 0 || this.physical < 0 {

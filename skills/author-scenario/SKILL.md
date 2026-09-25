@@ -72,8 +72,11 @@ tick. The first `on_start` does not replay events from before the program
 started. Query current state from the owning subsystem for startup decisions,
 then use `on_event` for later transitions.
 
-Use `simulation_dependencies(me, ctx)` when startup needs Modelica ports/events
-or a committed cross-domain input. Return both arrays, even when one is empty:
+Use `simulation_dependencies(me, ctx)` whenever a simulation-clock hook reads
+Modelica values through `get`, `port`, or `query("ReadPorts", #{ api_id })`,
+writes Modelica ports, consumes Modelica events, or depends on a committed
+cross-domain input. The owner uses the plan for startup admission and runtime
+access checks. Return both arrays, even when one is empty:
 
 ```rhai
 fn simulation_dependencies(me, ctx) {
@@ -95,7 +98,12 @@ poll analysis from `on_tick`. A missing owner or failed input produces a
 diagnostic. Keep the selection policy in Rhai and use the key contract exposed
 by the domain owner. Every `modelica_entities` id must resolve to a live
 Modelica participant; a live but unrelated entity fails the source revision
-before initialization.
+before initialization. Declare every Modelica participant this scenario reads
+or writes through a port or whose event it consumes. The aggregate solver
+barrier is not an access grant: membership through USD connections or another
+scenario's plan does not authorize this scenario to read that participant.
+Undeclared simulation-clock access through `get`, `port`, `ReadPorts`, a
+targeted command, or an event fails with a scenario diagnostic.
 
 The reusable route marker is a translucent, unlit, shadowless annotation. Its
 unvisited colour is bright green and its visited colour is gray in standard

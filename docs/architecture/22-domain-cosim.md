@@ -722,8 +722,12 @@ selecting an arbitrary grid.
 
 `CosimStatus` (`ApiQueryProvider`) returns a snapshot of every
 USD-driven cosim entity (`UsdSourcedCosim`) — position, velocity,
-Modelica timing, propagated `force_y` — for live introspection without
-log polling.
+Modelica timing, propagated values, and bounded worker diagnostics — for live
+introspection without log polling. Set `include_values: false` for a bounded
+fleet view that omits input/output maps and verbose model/error details; the
+default includes those values and full error reasons. Rhai fleet diagnostics can
+set `include_entities: false` to read aggregate counts and Modelica worker
+metrics without constructing per-participant rows.
 
 ## See also
 

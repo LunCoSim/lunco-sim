@@ -1967,18 +1967,19 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 if receive_events {
                     for ev in &events {
                         if let Some(source) = bridge_core::resolve_entity(world, ev.source) {
-                            let unbarriered_modelica_event = world
+                            let undeclared_modelica_event = world
                                 .get_resource::<
                                     lunco_core_runtime::SimulationBarrierParticipants,
                                 >()
                                 .is_some_and(|participants| {
                                     participants.is_modelica_participant(source)
-                                        && !participants.requires_barrier(source)
+                                        && !participants
+                                            .scenario_declares_dependency(entity, source)
                                 });
-                            if unbarriered_modelica_event {
+                            if undeclared_modelica_event {
                                 runtime_errors.push(Diagnostic::error(
                                     format!(
-                                        "scenario received event {:?} from unbarriered Modelica entity {}; include the producer in simulation_dependencies(me, ctx)",
+                                        "scenario received event {:?} from Modelica entity {} without this scenario's declared dependency in simulation_dependencies(me, ctx)",
                                         ev.name, ev.source
                                     ),
                                     None,
@@ -2438,8 +2439,7 @@ fn resolve_simulation_dependencies(
     let mut ids = ids;
     ids.sort_unstable();
     ids.dedup();
-    let participants = world
-        .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
+    let participants = world.get_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
     let mut entities = Vec::with_capacity(ids.len());
     for id in ids {
         let raw = u64::try_from(id).map_err(|_| {
@@ -2456,9 +2456,7 @@ fn resolve_simulation_dependencies(
                 None,
             )
         })?;
-        if !participants
-            .is_some_and(|participants| participants.is_modelica_participant(entity))
-        {
+        if !participants.is_some_and(|participants| participants.is_modelica_participant(entity)) {
             return Err(Diagnostic::error(
                 format!(
                     "simulation_dependencies declared entity {id}, but it is not a live Modelica participant"

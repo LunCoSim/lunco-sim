@@ -15,6 +15,10 @@
 
 const WAIT_S = 30.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/SandboxScene/Oscillator")], required_inputs: [] }
+}
+
 fn query_ok(record) {
     record != () && record.ok != false
 }
@@ -50,7 +54,7 @@ fn rover_topology_ok(path) {
 }
 
 fn rover_contract(path, expected_raycast, expected_physical) {
-    let entity = find(path);
+    let entity = find_path(path);
     if entity == () || entity < 0 { return false; }
     let wheels = vessel_wheel_summary(entity);
     let controls = get(entity, "throttle") != ()
@@ -297,12 +301,12 @@ fn scene_contract() {
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
-    this.osc = find("/SandboxScene/Oscillator");
-    this.target = find("/SandboxScene/CosimTarget");
-    this.joint_a = find("/SandboxScene/JointTestA");
-    this.joint_b = find("/SandboxScene/JointTestB");
-    this.base = find("/SandboxScene/Base");
-    this.arm = find("/SandboxScene/Base/Arm");
+    this.osc = find_path("/SandboxScene/Oscillator");
+    this.target = find_path("/SandboxScene/CosimTarget");
+    this.joint_a = find_path("/SandboxScene/JointTestA");
+    this.joint_b = find_path("/SandboxScene/JointTestB");
+    this.base = find_path("/SandboxScene/Base");
+    this.arm = find_path("/SandboxScene/Base/Arm");
     this.scene_checked = false;
     print("[sandbox-smoke] ── composed arena smoke contract ─────────────");
 }

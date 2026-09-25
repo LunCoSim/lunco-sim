@@ -8,6 +8,17 @@ const DRIVE_SECONDS = 10.0;
 const DRIVE_DISTANCE_M = 20.0;
 const DRIVE_THROTTLE = 0.20;
 
+fn simulation_dependencies(me, ctx) {
+    let group = find_path("/MultiRoverStress/Rovers");
+    let modelica_entities = [];
+    if group != () && group >= 0 {
+        for rover in children(group) {
+            modelica_entities.push(rover);
+        }
+    }
+    #{ modelica_entities: modelica_entities, required_inputs: [] }
+}
+
 fn state_scalar(value) {
     if value == () { return "<unit>"; }
     value.to_string()
@@ -21,6 +32,29 @@ fn state_vector(value) {
         text += state_scalar(component);
     }
     text
+}
+
+fn modelica_worker_step_profile() {
+    let status = query("CosimStatus", #{
+        include_values: false,
+        include_entities: false,
+    });
+    if status == () || status.ok == false || status.modelica_step_profile == () {
+        return #{ participants: 0, samples: 0.0, mean_worker_step_us: 0.0,
+            max_worker_step_us: 0.0, max_response_latency_ms: 0.0,
+            max_worker_backlog: (), compact_values_omitted: false,
+            entity_count: 0 };
+    }
+    let profile = status.modelica_step_profile;
+    #{ participants: profile.participants,
+        samples: profile.samples.to_float(),
+        mean_worker_step_us: profile.worker_step_mean_ns / 1000.0,
+        max_worker_step_us: profile.worker_step_max_ns.to_float() / 1000.0,
+        max_response_latency_ms: profile.response_latency_max_ns.to_float() / 1_000_000.0,
+        max_worker_backlog: profile.worker_backlog_count_max,
+        compact_values_omitted: status.values_included == false
+            && status.entities_included == false && status.entities.len() == 0,
+        entity_count: status.entity_count }
 }
 
 fn close_scalar(actual, expected, tolerance) {
@@ -266,7 +300,7 @@ fn on_start(me, ctx) {
         0
     };
 
-    let group = find("/MultiRoverStress/Rovers");
+    let group = find_path("/MultiRoverStress/Rovers");
     if group == () || group < 0 {
         print("MULTI-ROVER STRESS: FAIL — /MultiRoverStress/Rovers is absent");
         emit("MULTI_ROVER_STRESS", "FAIL");
@@ -479,6 +513,7 @@ fn on_tick(me, ctx) {
         print("D4_STATE_TRACE_V1|" + sample.row);
     }
     let checks = [];
+    let modelica_profile = modelica_worker_step_profile();
     checks.push(t_true(this.authored_pose_valid,
         "authored rover transforms are active and seeded before physics runs"));
     checks.push(t_true(this.guidance_checked && this.guidance_command_ready,
@@ -488,6 +523,26 @@ fn on_tick(me, ctx) {
     checks.push(t_true(this.deterministic_trace_valid
             && this.deterministic_trace_ticks.len() == 6,
         "one initial and five complete, path-ordered physics snapshots were captured"));
+    checks.push(t_true(modelica_profile.participants.to_float() == 20.0
+            && modelica_profile.entity_count.to_float()
+                >= modelica_profile.participants.to_float()
+            && modelica_profile.samples > 0.0
+            && modelica_profile.mean_worker_step_us > 0.0,
+        "CosimStatus did not expose diagnostics for all 20 Modelica participants"));
+    checks.push(t_true(modelica_profile.compact_values_omitted == true,
+        "compact CosimStatus copied full Modelica input/output maps"));
+    let backlog = "unavailable";
+    if modelica_profile.max_worker_backlog != () {
+        backlog = modelica_profile.max_worker_backlog.to_string();
+    }
+    print("MODELica_STEP_PROFILE_V1|participants="
+        + modelica_profile.participants.to_string()
+        + "|entity_count=" + modelica_profile.entity_count.to_string()
+        + "|samples=" + modelica_profile.samples.to_string()
+        + "|mean_worker_step_us=" + modelica_profile.mean_worker_step_us.to_string()
+        + "|max_worker_step_us=" + modelica_profile.max_worker_step_us.to_string()
+        + "|max_response_latency_ms=" + modelica_profile.max_response_latency_ms.to_string()
+        + "|max_worker_backlog=" + backlog);
     print("D4_PROFILE_V1|" + this.physics_compute_threads.to_string());
     for i in 0..this.rovers.len() {
         let at = world_pos(this.rovers[i]);

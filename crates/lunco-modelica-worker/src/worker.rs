@@ -2676,7 +2676,20 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
             continue;
         }
 
-        for cmd in to_process {
+        let round_size = to_process.len();
+        for (round_index, cmd) in to_process.into_iter().enumerate() {
+            let is_step = matches!(&cmd, ModelicaCommand::Step { .. });
+            let worker_backlog_count = is_step.then(|| {
+                let remaining_round = round_size.saturating_sub(round_index + 1);
+                remaining_round
+                    .saturating_add(step_lane.len())
+                    .saturating_add(compile_lane.len())
+                    .saturating_add(rx.len())
+                    .saturating_add(pending_compile_works.len())
+                    .saturating_add(pending_compiles.len())
+                    .saturating_add(source_root_preparation_order.len())
+                    .saturating_add(pending_source_root_installs.len()) as u64
+            });
             let tx_inner = tx.clone();
             let panic_entity = match &cmd {
                 ModelicaCommand::Step { entity, .. }
@@ -2998,6 +3011,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
 
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
+                                let step_started = web_time::Instant::now();
                                 for (name, val) in inputs {
                                     set_input_or_warn(
                                         stepper,
@@ -3016,10 +3030,14 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                     .or_else(|| {
                                         validate_step_completion(stepper.time(), stop_time).err()
                                     });
+                                let worker_step_duration_ns =
+                                    step_started.elapsed().as_nanos() as u64;
                                 if let Some(e) = step_err {
                                     let mut r = step_result_ok(entity, session_id, step_id);
                                     r.new_time = stepper.time();
                                     r.step_id = Some(step_id);
+                                    r.worker_step_duration_ns = Some(worker_step_duration_ns);
+                                    r.worker_backlog_count = worker_backlog_count;
                                     // Runtime solver blow-up: `SimulationDiagnosticError`
                                     // Display is human-readable (the `Solver` variant
                                     // carries no source span, so it stays unlocated).
@@ -3056,6 +3074,8 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         is_parameter_update: false,
                                         is_reset: false,
                                         detected_input_names: Vec::new(),
+                                        worker_step_duration_ns: Some(worker_step_duration_ns),
+                                        worker_backlog_count,
                                         ..Default::default()
                                     });
                                 }
@@ -3348,6 +3368,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
 
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
+                    let step_started = web_time::Instant::now();
                     for (name, val) in &inputs {
                         let _ = stepper.set_input(name, *val);
                     }
@@ -3356,6 +3377,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         .err()
                         .map(|error| error.to_string())
                         .or_else(|| validate_step_completion(stepper.time(), stop_time).err());
+                    let worker_step_duration_ns = step_started.elapsed().as_nanos() as u64;
 
                     if let Some(e) = step_err {
                         send(ModelicaResult {
@@ -3371,6 +3393,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             is_parameter_update: false,
                             is_reset: false,
                             detected_input_names: Vec::new(),
+                            worker_step_duration_ns: Some(worker_step_duration_ns),
                             ..Default::default()
                         });
                         w.steppers.remove(&entity);
@@ -3394,6 +3417,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             is_parameter_update: false,
                             is_reset: false,
                             detected_input_names: Vec::new(),
+                            worker_step_duration_ns: Some(worker_step_duration_ns),
                             ..Default::default()
                         });
                     }

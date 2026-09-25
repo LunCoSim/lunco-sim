@@ -6,7 +6,7 @@ const LIVE_PREVIEW = 15501;
 const FORK_PREVIEW = 15502;
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find(ROOT + "/Network")], required_inputs: [] }
+    #{ modelica_entities: [find_path(ROOT + "/Network")], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -27,7 +27,7 @@ fn preview_has_solver() {
     for d in query("ListOpenDocuments").open_documents {
         if d.kind == "modelica" && d.title.contains("DormantPreviewNetwork") { return true; }
     }
-    let entity = find(DORMANT + "/Network");
+    let entity = find_path(DORMANT + "/Network");
     entity >= 0
 }
 fn on_tick(me, ctx) {
@@ -40,7 +40,7 @@ fn on_tick(me, ctx) {
         return;
     }
     if this.phase == 0 {
-        let live = find(ROOT + "/Network");
+        let live = find_path(ROOT + "/Network");
         if live < 0 || get(live, "voltage") == () { return; }
         this.live = live;
         this.checks.push(t_true(get(live, "voltage") > 20.0, "live electrical network solves"));

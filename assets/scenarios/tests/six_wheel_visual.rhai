@@ -1,8 +1,12 @@
 // Graphics acceptance for the authored six-wheel rover presentation.
 const TEST_KIND = "graphics";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/SixWheelVisual/Rover")], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
-    this.rover = find("/SixWheelVisual/Rover");
+    this.rover = find_path("/SixWheelVisual/Rover");
     this.done = false;
     this.t = 0.0;
     if this.rover >= 0 {

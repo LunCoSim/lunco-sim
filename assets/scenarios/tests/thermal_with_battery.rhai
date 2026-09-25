@@ -22,13 +22,23 @@
 
 const PORT_WAIT_S = 30.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/ThermalWithBatteryTest/Rover"),
+            find_path("/ThermalWithBatteryTest/Rover/Thermal"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
 
-    this.rover = find("/ThermalWithBatteryTest/Rover");
-    this.elec = find("/ThermalWithBatteryTest/Rover");
-    this.thermal = find("/ThermalWithBatteryTest/Rover/Thermal");
+    this.rover = find_path("/ThermalWithBatteryTest/Rover");
+    this.elec = find_path("/ThermalWithBatteryTest/Rover");
+    this.thermal = find_path("/ThermalWithBatteryTest/Rover/Thermal");
 
     print("[thermal-battery] ── thermal + electrical participants coexist ────");
 }

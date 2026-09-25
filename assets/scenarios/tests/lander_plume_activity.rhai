@@ -2,6 +2,18 @@
 // Rhai owns only the stimulus; Modelica owns engine activity and photometry,
 // while USD owns the plume geometry, shader bindings, and light connections.
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/LanderPlumeActivity/Lander"),
+            find_path("/LanderPlumeActivity/Lander/MainPropulsion"),
+            find_path("/LanderPlumeActivity/Lander/FlameCore/Photometry"),
+            find_path("/LanderPlumeActivity/Lander/AttitudePropulsion"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn number_or_zero(value) {
     if value == () { 0.0 } else { value }
 }
@@ -20,10 +32,10 @@ fn print_metrics(s) {
 }
 
 fn on_start(me, ctx) {
-    this.lander = find("/LanderPlumeActivity/Lander");
-    this.main = find("/LanderPlumeActivity/Lander/MainPropulsion");
-    this.photometry = find("/LanderPlumeActivity/Lander/FlameCore/Photometry");
-    this.rcs = find("/LanderPlumeActivity/Lander/AttitudePropulsion");
+    this.lander = find_path("/LanderPlumeActivity/Lander");
+    this.main = find_path("/LanderPlumeActivity/Lander/MainPropulsion");
+    this.photometry = find_path("/LanderPlumeActivity/Lander/FlameCore/Photometry");
+    this.rcs = find_path("/LanderPlumeActivity/Lander/AttitudePropulsion");
     this.done = false;
     this.elapsed = 0.0;
     this.subject_ok = this.lander >= 0 && this.main >= 0 && this.photometry >= 0

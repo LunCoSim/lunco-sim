@@ -556,6 +556,16 @@ impl SimulationBarrierParticipants {
             || self.scenario_participants.contains(&entity)
     }
 
+    /// Whether `scenario` declares `participant` in its committed Rhai plan.
+    ///
+    /// `entities` and `scenario_participants` are aggregate solver-barrier
+    /// membership; neither identifies which scenario reads a participant.
+    pub fn scenario_declares_dependency(&self, scenario: Entity, participant: Entity) -> bool {
+        self.scenario_entities
+            .get(&scenario)
+            .is_some_and(|entities| entities.contains(&participant))
+    }
+
     pub fn replace(&mut self, entities: impl IntoIterator<Item = Entity>) {
         self.entities.clear();
         self.entities.extend(entities);

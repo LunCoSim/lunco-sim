@@ -16,6 +16,18 @@ fn verdict(pass, reason) {
     }
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/LanderTest/Lander/MainPropulsion"),
+            find_path("/LanderTest/Lander/AttitudePropulsion"),
+            find_path("/LanderTest/Lander"),
+            find_path("/LanderTest/Lander/GNC"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn scalar_ok(v) {
     v != () && v.is_finite();
 }
@@ -34,18 +46,18 @@ fn on_start(me, ctx) {
     this.touchdown = false;
     this.deployed = false;
     this.course_complete = false;
-    this.main = find("/LanderTest/Lander/MainPropulsion");
-    this.rcs = find("/LanderTest/Lander/AttitudePropulsion");
-    this.lander = find("/LanderTest/Lander");
-    this.gnc = find("/LanderTest/Lander/GNC");
+    this.main = find_path("/LanderTest/Lander/MainPropulsion");
+    this.rcs = find_path("/LanderTest/Lander/AttitudePropulsion");
+    this.lander = find_path("/LanderTest/Lander");
+    this.gnc = find_path("/LanderTest/Lander/GNC");
     // Contact is owned by each Leg* rigid body. Pad* is only its welded
     // collider child and has no independent runtime contact surface.
-    this.leg_px = find("/LanderTest/Lander/LegPX");
-    this.leg_nx = find("/LanderTest/Lander/LegNX");
-    this.leg_pz = find("/LanderTest/Lander/LegPZ");
-    this.leg_nz = find("/LanderTest/Lander/LegNZ");
-    this.rover = find("/LanderTest/SkidRover");
-    this.goal = find("/LanderTest/Route/P2");
+    this.leg_px = find_path("/LanderTest/Lander/LegPX");
+    this.leg_nx = find_path("/LanderTest/Lander/LegNX");
+    this.leg_pz = find_path("/LanderTest/Lander/LegPZ");
+    this.leg_nz = find_path("/LanderTest/Lander/LegNZ");
+    this.rover = find_path("/LanderTest/SkidRover");
+    this.goal = find_path("/LanderTest/Route/P2");
     this.event_sources_ok = true;
     this.native_contacts_seen = false;
     this.model_contacts_seen = false;
@@ -226,9 +238,9 @@ fn on_tick(me, ctx) {
     if this.elapsed > 480.0 {
         this.done = true;
         let route_detail = "rover=" + world_pos(this.rover) +
-            " point0=" + world_pos(find("/LanderTest/Route/P0")) +
-            " point1=" + world_pos(find("/LanderTest/Route/P1")) +
-            " point2=" + world_pos(find("/LanderTest/Route/P2"));
+            " point0=" + world_pos(find_path("/LanderTest/Route/P0")) +
+            " point1=" + world_pos(find_path("/LanderTest/Route/P1")) +
+            " point2=" + world_pos(find_path("/LanderTest/Route/P2"));
         verdict(false, "production descent/deployment/course did not finish in 480 simulated seconds; " + route_detail);
     }
 }

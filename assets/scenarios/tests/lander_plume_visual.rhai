@@ -3,10 +3,21 @@
 // while USD owns the plume geometry, material bindings, and camera.
 const TEST_KIND = "graphics";
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/LanderPlumeVisual/Lander"),
+            find_path("/LanderPlumeVisual/Lander/MainPropulsion"),
+            find_path("/LanderPlumeVisual/Lander/FlameCore/Photometry"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn on_start(me, ctx) {
-    this.lander = find("/LanderPlumeVisual/Lander");
-    this.main = find("/LanderPlumeVisual/Lander/MainPropulsion");
-    this.photometry = find("/LanderPlumeVisual/Lander/FlameCore/Photometry");
+    this.lander = find_path("/LanderPlumeVisual/Lander");
+    this.main = find_path("/LanderPlumeVisual/Lander/MainPropulsion");
+    this.photometry = find_path("/LanderPlumeVisual/Lander/FlameCore/Photometry");
     this.elapsed = 0.0;
     this.done = false;
     this.command_ok = false;
@@ -20,7 +31,7 @@ fn on_start(me, ctx) {
             target: this.lander,
             bind_camera: false,
         });
-        let review_camera = find("/LanderPlumeVisual/VisualCamera");
+        let review_camera = find_path("/LanderPlumeVisual/VisualCamera");
         if possession.ok && review_camera >= 0 {
             // Keep the review camera independent from the control handoff,
             // then reassert its authored absolute pose through the public

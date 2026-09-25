@@ -95,7 +95,11 @@ owner.
 Don't trust the picture — read the ports. Over the HTTP API
 (`--api 4101`, see [the API doc](../architecture/12-api.md)):
 
-- `CosimStatus` — snapshots the co-simulation graph and live Modelica variables.
+- `CosimStatus` — snapshots the co-simulation graph and live Modelica variables,
+  including per-session solver-step service time, response latency, and
+  available native worker backlog diagnostics. Set `include_values: false` for
+  a bounded fleet view without input/output maps or verbose model/error details;
+  use `include_entities: false` for aggregate Modelica worker metrics only.
 - `ReadPorts` — reads one entity's typed named ports.
 - `GetBrokenConnections` — reports terminal and pending wiring diagnostics.
 

@@ -5,8 +5,12 @@
 // observable runtime verdict. Parser and annotation implementation details are
 // owned by their focused unit tests, not by this scene test.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/AnnotatedRocketStageTest/RocketStage")], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
-    this.stage = find("/AnnotatedRocketStageTest/RocketStage");
+    this.stage = find_path("/AnnotatedRocketStageTest/RocketStage");
     this.elapsed = 0.0;
     this.phase = 0;
     this.done = false;

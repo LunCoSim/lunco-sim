@@ -7,6 +7,13 @@ const EDITABLE = ROOT + "/EditableOscillator";
 const UNTOUCHED = ROOT + "/UntouchedOscillator";
 const SOURCE = "lunco://models/Oscillator.mo";
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [find_path(EDITABLE), find_path(UNTOUCHED)],
+        required_inputs: [],
+    }
+}
+
 fn query_ok(record) {
     record != () && record.ok != false
 }
@@ -64,8 +71,8 @@ fn on_tick(me, ctx) {
     }
 
     if this.doc < 0 { this.doc = find_document(); }
-    if this.editable < 0 { this.editable = find(EDITABLE); }
-    if this.untouched < 0 { this.untouched = find(UNTOUCHED); }
+    if this.editable < 0 { this.editable = find_path(EDITABLE); }
+    if this.untouched < 0 { this.untouched = find_path(UNTOUCHED); }
     if this.doc < 0 || this.editable < 0 || this.untouched < 0 { return; }
 
     let signal = get(this.editable, "signal");

@@ -44,6 +44,17 @@ const BATTERY_SOC = "soc";
 const SOLAR_POWER = "solar_power";
 const MOTOR_ELECTRICAL_POWER = "motor_electrical_power";
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/SolarDomainNestedRef/BatteryOnly"),
+            find_path("/SolarDomainNestedRef/Direct"),
+            find_path("/SolarDomainNestedRef/Nested"),
+        ],
+        required_inputs: [],
+    }
+}
+
 /// Whether an island is stepping — i.e. publishing the authored boundary port.
 fn island_live(elec, port) {
     if elec < 0 { return false; }
@@ -77,17 +88,17 @@ fn on_start(me, ctx) {
     this.drive_until = 0.0;
     this.traced = false;
 
-    this.b_elec = find("/SolarDomainNestedRef/BatteryOnly");
-    this.d_elec = find("/SolarDomainNestedRef/Direct");
-    this.n_elec = find("/SolarDomainNestedRef/Nested");
-    this.d_panel = find("/SolarDomainNestedRef/Direct/SolarPanel");
-    this.n_panel = find("/SolarDomainNestedRef/Nested/SolarPanel");
+    this.b_elec = find_path("/SolarDomainNestedRef/BatteryOnly");
+    this.d_elec = find_path("/SolarDomainNestedRef/Direct");
+    this.n_elec = find_path("/SolarDomainNestedRef/Nested");
+    this.d_panel = find_path("/SolarDomainNestedRef/Direct/SolarPanel");
+    this.n_panel = find_path("/SolarDomainNestedRef/Nested/SolarPanel");
 
     // The bodies, for the drive phase. Distinct from the network roots
     // above: `drive` addresses the vehicle, `get` addresses its island.
-    this.b_rover = find("/SolarDomainNestedRef/BatteryOnly");
-    this.d_rover = find("/SolarDomainNestedRef/Direct");
-    this.n_rover = find("/SolarDomainNestedRef/Nested");
+    this.b_rover = find_path("/SolarDomainNestedRef/BatteryOnly");
+    this.d_rover = find_path("/SolarDomainNestedRef/Direct");
+    this.n_rover = find_path("/SolarDomainNestedRef/Nested");
 
     // Panel power sampled AT REST, before any motion tilts the array. The
     // direct-vs-nested equality claim is about composition, and comparing two

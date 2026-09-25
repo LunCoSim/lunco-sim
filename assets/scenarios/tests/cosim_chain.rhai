@@ -8,7 +8,7 @@ const WAIT_S = 30.0;
 
 fn simulation_dependencies(me, ctx) {
     #{
-        modelica_entities: [find("/CosimChain/Oscillator")],
+        modelica_entities: [find_path("/CosimChain/Oscillator")],
         required_inputs: [],
     }
 }
@@ -16,9 +16,9 @@ fn simulation_dependencies(me, ctx) {
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
-    this.osc = find("/CosimChain/Oscillator");
-    this.amp = find("/CosimChain/Amplifier");
-    this.target = find("/CosimChain/CosimTarget");
+    this.osc = find_path("/CosimChain/Oscillator");
+    this.amp = find_path("/CosimChain/Amplifier");
+    this.target = find_path("/CosimChain/CosimTarget");
     this.max_signal = 0.0;
     this.max_scaled = 0.0;
     this.max_velocity = 0.0;

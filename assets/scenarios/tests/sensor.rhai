@@ -39,6 +39,34 @@ fn first_tick_trace_value(sample) {
     }
 }
 
+fn modelica_worker_step_diagnostics() {
+    let status = query("CosimStatus", #{ include_values: false });
+    if status == () || status.entities == () { return (); }
+    let full_status = query("CosimStatus");
+    for entity in status.entities {
+        let diagnostics = entity.modelica_step_diagnostics;
+        if diagnostics != () && diagnostics.samples.to_float() > 0.0 {
+            let default_values_present = false;
+            if full_status != () && full_status.values_included == true {
+                for full_entity in full_status.entities {
+                    if full_entity.name == entity.name {
+                        default_values_present = full_entity.inputs.len()
+                            + full_entity.outputs.len() > 0;
+                    }
+                }
+            }
+            return #{ diagnostics: diagnostics,
+                compact_values_omitted: status.values_included == false
+                    && entity.inputs.len() == 0 && entity.outputs.len() == 0,
+                compact_status_retained: entity.status != ()
+                    && entity.modelica_var_count.to_float() > 0.0
+                    && entity.modelica_current_time != (),
+                default_values_present: default_values_present };
+        }
+    }
+    ()
+}
+
 fn scenario_command_succeeded(result) {
     let succeeded = false;
     try { succeeded = result.ok == true; } catch (error) { }
@@ -54,8 +82,8 @@ fn invalid_modelica_dependency_source() {
 }
 
 fn start_invalid_modelica_dependency_probe() {
-    let target = find("/SandboxScene/Avatar");
-    let unrelated = find("/SandboxScene/Box50");
+    let target = find_path("/SandboxScene/Avatar");
+    let unrelated = find_path("/SandboxScene/Box");
     if target < 0 || unrelated < 0 {
         return #{ accepted: false, target: target };
     }
@@ -80,6 +108,104 @@ fn poll_invalid_modelica_dependency(target) {
         }
     }
     rejected
+}
+
+fn undeclared_modelica_access_source() {
+    let source = "fn simulation_dependencies(me, ctx) {\n";
+    source += "  #{ modelica_entities: [], required_inputs: [] }\n";
+    source += "}\n";
+    source += "fn on_start(me, ctx) {\n";
+    source += "  let result = cmd(\"SetPorts\", #{ target: ctx.modelica_target, writes: [[\"raw_acceleration_y\", 3.0]], seq: 0, tick: 0 });\n";
+    source += "  let error = \"\";\n";
+    source += "  try { error = result.error; } catch (failure) { }\n";
+    source += "  emit(\"sensor_undeclared_command_rejected\", result != () && result.ok == false && error.contains(\"without this scenario's declared dependency\"));\n";
+    source += "  let ports = query(\"ReadPorts\", #{ api_id: ctx.modelica_target });\n";
+    source += "  emit(\"sensor_undeclared_readports_rejected\", ports != () && ports.ok == false && ports.error.contains(\"without this scenario's declared dependency\"));\n";
+    source += "  port(ctx.modelica_target, \"specific_force_x\");\n";
+    source += "}\n";
+    source
+}
+
+fn start_undeclared_modelica_access_probe(target, modelica_target) {
+    if target < 0 || modelica_target < 0 {
+        return #{ accepted: false, target: target };
+    }
+    let result = cmd("RunScenario", #{
+        target: target,
+        source: undeclared_modelica_access_source(),
+        params: #{ modelica_target: modelica_target },
+    });
+    #{ accepted: scenario_command_succeeded(result), target: target }
+}
+
+fn poll_undeclared_modelica_access(target) {
+    if target < 0 { return false; }
+    let status = query("ScriptStatus", #{ target: target });
+    if status == () || status.state != "error" || status.diagnostics == () {
+        return false;
+    }
+    for diagnostic in status.diagnostics {
+        if diagnostic.message.contains("without this scenario's declared dependency") {
+            return true;
+        }
+    }
+    false
+}
+
+fn modelica_event_producer_source() {
+    let source = "fn simulation_dependencies(me, ctx) {\n";
+    source += "  #{ modelica_entities: [ctx.modelica_source], required_inputs: [] }\n";
+    source += "}\n";
+    source += "fn on_tick(me, ctx) {\n";
+    source += "  if this.sent == true { return; }\n";
+    source += "  this.sent = true;\n";
+    source += "  emit(\"sensor_modelica_event_dependency_probe\", true);\n";
+    source += "}\n";
+    source
+}
+
+fn undeclared_modelica_event_consumer_source() {
+    let source = "fn simulation_dependencies(me, ctx) {\n";
+    source += "  #{ modelica_entities: [], required_inputs: [] }\n";
+    source += "}\n";
+    source += "fn on_event(me, evt, ctx) {\n";
+    source += "  if evt.name == \"sensor_modelica_event_dependency_probe\" { emit(\"sensor_modelica_event_consumer_ran\", true); }\n";
+    source += "}\n";
+    source
+}
+
+fn start_undeclared_modelica_event_probe(modelica_source, receiver) {
+    if modelica_source < 0 || receiver < 0 {
+        return #{ producer_accepted: false, consumer_accepted: false, receiver: receiver };
+    }
+    let producer = cmd("RunScenario", #{
+        target: modelica_source,
+        source: modelica_event_producer_source(),
+        params: #{ modelica_source: modelica_source },
+    });
+    let consumer = cmd("RunScenario", #{
+        target: receiver,
+        source: undeclared_modelica_event_consumer_source(),
+        params: #{}
+    });
+    #{ producer_accepted: scenario_command_succeeded(producer),
+       consumer_accepted: scenario_command_succeeded(consumer),
+       receiver: receiver }
+}
+
+fn poll_undeclared_modelica_event(receiver) {
+    if receiver < 0 { return false; }
+    let status = query("ScriptStatus", #{ target: receiver });
+    if status == () || status.state != "error" || status.diagnostics == () {
+        return false;
+    }
+    for diagnostic in status.diagnostics {
+        if diagnostic.message.contains("scenario received event")
+            && diagnostic.message.contains("without this scenario's declared dependency") {
+            return true;
+        }
+    }
+    false
 }
 
 fn telemetry_history_count(name) {
@@ -115,9 +241,9 @@ fn scenario_actor_order_source() {
 }
 
 fn start_scenario_actor_order_probe(me) {
-    let first = find("/SandboxScene/Box");
-    let second = find("/SandboxScene/Box50");
-    let marker_entity = find("/SandboxScene/Box/Altimeter");
+    let first = find_path("/SandboxScene/Box");
+    let second = find_path("/SandboxScene/Box50");
+    let marker_entity = find_path("/SandboxScene/Box/Altimeter");
     let original_x = ();
     try { original_x = get(marker_entity, "Transform.translation.x"); } catch (error) { }
     if me <= 0 || first < 0 || second < 0 || first == second
@@ -166,8 +292,8 @@ fn start_scenario_actor_order_probe(me) {
 }
 
 fn simulation_dependencies(me, ctx) {
-    let imu = find("/SandboxScene/Box/IMU");
-    let altimeter = find("/SandboxScene/Box/Altimeter/Model");
+    let imu = find_path("/SandboxScene/Box/IMU");
+    let altimeter = find_path("/SandboxScene/Box/Altimeter/Model");
     let port_read_rejected = false;
     let mutation_rejected = false;
     try {
@@ -192,9 +318,9 @@ fn on_start(me, ctx) {
     this.start_count += 1;
     this.scene_generation = execution_context().generation;
     this.generation_stable = true;
-    this.box = find("/SandboxScene/Box");
-    this.imu = find("/SandboxScene/Box/IMU");
-    this.altimeter = find("/SandboxScene/Box/Altimeter/Model");
+    this.box = find_path("/SandboxScene/Box");
+    this.imu = find_path("/SandboxScene/Box/IMU");
+    this.altimeter = find_path("/SandboxScene/Box/Altimeter/Model");
     this.telemetry_probe_name = "sensor_scheduler_probe";
     let telemetry_probe = cmd("ControlTelemetry", #{
         entity: this.box,
@@ -216,6 +342,27 @@ fn on_start(me, ctx) {
     this.invalid_dependency_target = invalid_dependency_probe.target;
     this.invalid_dependency_plan_rejected = false;
     this.invalid_dependency_started = false;
+    let undeclared_access_probe = start_undeclared_modelica_access_probe(
+        find_path("/SandboxScene/Box/Altimeter"), this.imu,
+    );
+    this.undeclared_access_setup_ok = undeclared_access_probe.accepted;
+    this.undeclared_access_target = undeclared_access_probe.target;
+    this.undeclared_access_rejected = false;
+    let undeclared_command_probe = undeclared_access_probe;
+    this.undeclared_command_setup_ok = undeclared_command_probe.accepted;
+    this.undeclared_command_result_received = false;
+    this.undeclared_command_rejected = false;
+    this.undeclared_readports_result_received = false;
+    this.undeclared_readports_rejected = false;
+    let event_receiver = find_path("/SandboxScene/Box/IMU");
+    let undeclared_event_probe = start_undeclared_modelica_event_probe(
+        this.altimeter, event_receiver,
+    );
+    this.undeclared_event_setup_ok = undeclared_event_probe.producer_accepted
+        && undeclared_event_probe.consumer_accepted;
+    this.undeclared_event_receiver = undeclared_event_probe.receiver;
+    this.undeclared_event_rejected = false;
+    this.undeclared_event_delivered = false;
     this.phase = "settle";
     print("[sensors] ── raw Avian + Modelica ─────────────────────────");
 }
@@ -227,6 +374,17 @@ fn on_event(me, evt, ctx) {
     }
     if evt.name == "sensor_invalid_dependency_started" {
         this.invalid_dependency_started = evt.value == true;
+    }
+    if evt.name == "sensor_undeclared_command_rejected" {
+        this.undeclared_command_result_received = true;
+        this.undeclared_command_rejected = evt.value == true;
+    }
+    if evt.name == "sensor_undeclared_readports_rejected" {
+        this.undeclared_readports_result_received = true;
+        this.undeclared_readports_rejected = evt.value == true;
+    }
+    if evt.name == "sensor_modelica_event_consumer_ran" {
+        this.undeclared_event_delivered = true;
     }
 }
 
@@ -241,6 +399,16 @@ fn on_tick(me, ctx) {
     if !this.invalid_dependency_plan_rejected {
         this.invalid_dependency_plan_rejected = poll_invalid_modelica_dependency(
             this.invalid_dependency_target,
+        );
+    }
+    if !this.undeclared_access_rejected {
+        this.undeclared_access_rejected = poll_undeclared_modelica_access(
+            this.undeclared_access_target,
+        );
+    }
+    if !this.undeclared_event_rejected {
+        this.undeclared_event_rejected = poll_undeclared_modelica_event(
+            this.undeclared_event_receiver,
         );
     }
 
@@ -295,6 +463,8 @@ fn on_tick(me, ctx) {
         );
         let systems = physics_acceptance::system_evidence();
         let system_acceptance = physics_acceptance::system_acceptance(systems);
+        let step_report = modelica_worker_step_diagnostics();
+        let step_diagnostics = if step_report == () { () } else { step_report.diagnostics };
         verdict(#{
             fx: get(this.imu, "specific_force_x"),
             fy: get(this.imu, "specific_force_y"),
@@ -316,14 +486,29 @@ fn on_tick(me, ctx) {
             invalid_dependency_setup_ok: this.invalid_dependency_setup_ok,
             invalid_dependency_plan_rejected: this.invalid_dependency_plan_rejected,
             invalid_dependency_started: this.invalid_dependency_started,
+            undeclared_access_setup_ok: this.undeclared_access_setup_ok,
+            undeclared_access_rejected: this.undeclared_access_rejected,
+            undeclared_command_setup_ok: this.undeclared_command_setup_ok,
+            undeclared_command_result_received: this.undeclared_command_result_received,
+            undeclared_command_rejected: this.undeclared_command_rejected,
+            undeclared_readports_result_received: this.undeclared_readports_result_received,
+            undeclared_readports_rejected: this.undeclared_readports_rejected,
+            undeclared_event_setup_ok: this.undeclared_event_setup_ok,
+            undeclared_event_rejected: this.undeclared_event_rejected,
+            undeclared_event_delivered: this.undeclared_event_delivered,
             telemetry_probe_setup_ok: this.telemetry_probe_setup_ok,
             telemetry_probe_count: this.telemetry_probe_count,
+            modelica_step_diagnostics: step_diagnostics,
+            cosim_status_values_omitted: if step_report == () { false } else { step_report.compact_values_omitted },
+            cosim_status_default_values_present: if step_report == () { false } else { step_report.default_values_present },
+            cosim_status_compact_fields_retained: if step_report == () { false } else { step_report.compact_status_retained },
         }, this.dependency_port_read_rejected, this.dependency_mutation_rejected,
-            this.first_tick);
+            this.first_tick, step_diagnostics);
     }
 }
 
-fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first_tick) {
+fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first_tick,
+           modelica_step_diagnostics) {
     let f = [];
     f.push(t_true(dependency_port_read_rejected == true,
         "dependency planning allowed a live Modelica port read"));
@@ -358,8 +543,39 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
         "simulation_dependencies accepted a live non-Modelica entity"));
     f.push(t_true(s.invalid_dependency_started == false,
         "scenario on_start ran after its Modelica dependency plan was rejected"));
+    f.push(t_true(s.undeclared_access_setup_ok == true,
+        "the undeclared Modelica access probe did not attach"));
+    f.push(t_true(s.undeclared_access_rejected == true,
+        "a scenario accessed a Modelica participant declared only by another scenario"));
+    f.push(t_true(s.undeclared_command_setup_ok == true
+        && s.undeclared_command_result_received == true
+        && s.undeclared_command_rejected == true,
+        "a targeted SetPorts command bypassed this scenario's Modelica dependency plan"));
+    f.push(t_true(s.undeclared_readports_result_received == true
+        && s.undeclared_readports_rejected == true,
+        "ReadPorts exposed another scenario's Modelica participant without a declared dependency"));
+    f.push(t_true(s.undeclared_event_setup_ok == true
+        && s.undeclared_event_rejected == true
+        && s.undeclared_event_delivered == false,
+        "a scenario consumed an event from a Modelica participant it did not declare"));
     f.push(t_true(s.telemetry_probe_setup_ok == true && s.telemetry_probe_count.to_float() >= 2.0,
         "the production telemetry query did not observe fixed-clock samples from the authored channel"));
+    f.push(t_present(modelica_step_diagnostics, "Modelica worker step diagnostics"));
+    f.push(t_true(s.cosim_status_values_omitted == true,
+        "compact CosimStatus did not omit full Modelica input/output maps"));
+    f.push(t_true(s.cosim_status_default_values_present == true,
+        "CosimStatus did not retain full input/output maps by default"));
+    f.push(t_true(s.cosim_status_compact_fields_retained == true,
+        "compact CosimStatus omitted its status, Modelica count, or current time"));
+    if modelica_step_diagnostics != () {
+        f.push(t_true(modelica_step_diagnostics.samples.to_float() > 0.0
+            && modelica_step_diagnostics.worker_step_last_ns.to_float() > 0.0
+            && modelica_step_diagnostics.worker_step_mean_ns.is_finite()
+            && modelica_step_diagnostics.response_latency_last_ns.to_float() > 0.0,
+            "Modelica diagnostics did not separate solver service from response latency"));
+        f.push(t_true(modelica_step_diagnostics.worker_backlog_count_last != (),
+            "native Modelica diagnostics did not expose worker backlog at step start"));
+    }
     f.push(t_present(first_tick, "first authoritative behavior tick snapshot"));
     if first_tick != () {
         f.push(t_true(first_tick.tick >= 0 && first_tick.cycle == "simulation"

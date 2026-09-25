@@ -39,6 +39,11 @@ parameter map. The hook returns a map with `modelica_entities: [ids]` and
 per source/parameter revision, requires each id to identify a live Modelica
 participant, and adds them to the shared causal barrier. An unresolved id or a
 live non-Modelica entity fails that source revision with a visible diagnostic.
+Every simulation-clock Modelica port access must be covered by the calling
+scenario's own plan, including `get`, `port`, and `query("ReadPorts", #{ api_id })`;
+aggregate barrier membership from USD wiring or another scenario does not
+authorize the read or write. The owner enforces this at the port, query,
+targeted-command, and event-delivery boundaries.
 Required input keys refer to producer namespaces registered in the generic
 `SimulationDependencyStates` resource. The scenario holds its existing
 `ScriptPreparation` key until every required input is Ready; it retries only
@@ -344,11 +349,20 @@ from the Rust owner, not a script directive. A callback error remains visible
 and local to its owner; required authoritative hooks hold/fault their owner.
 Never panic or silently report success for a failed hook.
 
-Every cycle boundary should expose low-cost aggregate duration, work and queue
-counts, and missed-budget/overload counts through the existing diagnostics
-owner. Use these to target a Tracy capture, then measure frame responsiveness in
-a separate unprofiled run. Do not feed a per-frame diagnostics firehose through
-the simulation telemetry sampler.
+Cycle labels identify ordering and ownership; they do not imply that every owner
+already publishes timing and queue metrics. Expose bounded aggregates at task
+boundaries where measurements are needed, then use them to target a Tracy
+capture and measure frame responsiveness in a separate unprofiled run. Do not
+feed a per-frame diagnostics firehose through the simulation telemetry sampler.
+`CosimStatus` exposes per-session Modelica solver-step duration, dispatch-to-
+response latency, and the native worker's pending-task count at step start.
+Pass `include_values: false` for a bounded fleet view without input/output maps
+or verbose model/error details; status, counts, and timing remain available.
+Rhai profilers can pass `include_entities: false` to read aggregate worker
+metrics without constructing a string-bearing row for every participant.
+Response latency includes queueing, transport, and owner response handling; it
+is not a pure queue-wait measurement. The browser worker does not expose its
+internal queue depth.
 
 Keep telemetry's two lanes distinct: authoritative events used by Rhai retain
 their producer tick and deterministic delivery order; continuous samples are

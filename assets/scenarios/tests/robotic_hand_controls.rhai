@@ -4,6 +4,10 @@
 // filtered closure state and symmetric joint-angle math. Rhai owns this
 // command sequence and its observations; it does not calculate joint motion.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/RoboticHandControls/Hand/Controller")], required_inputs: [] }
+}
+
 fn issue_hand_command(state, open_value, grasp_value) {
     let result = cmd("SetPorts", #{
         target: state.controller,
@@ -43,15 +47,15 @@ fn on_start(me, ctx) {
 
 fn resolve_handles() {
     #{
-        controller: find("/RoboticHandControls/Hand/Controller"),
-        left_joint: find("/RoboticHandControls/Hand/Finger_Left_Hinge"),
-        center_joint: find("/RoboticHandControls/Hand/Finger_Center_Hinge"),
-        right_joint: find("/RoboticHandControls/Hand/Finger_Right_Hinge"),
-        palm: find("/RoboticHandControls/Hand/Palm"),
-        left: find("/RoboticHandControls/Hand/Finger_Left"),
-        center: find("/RoboticHandControls/Hand/Finger_Center"),
-        right: find("/RoboticHandControls/Hand/Finger_Right"),
-        target: find("/RoboticHandControls/Hand/GripTarget"),
+        controller: find_path("/RoboticHandControls/Hand/Controller"),
+        left_joint: find_path("/RoboticHandControls/Hand/Finger_Left_Hinge"),
+        center_joint: find_path("/RoboticHandControls/Hand/Finger_Center_Hinge"),
+        right_joint: find_path("/RoboticHandControls/Hand/Finger_Right_Hinge"),
+        palm: find_path("/RoboticHandControls/Hand/Palm"),
+        left: find_path("/RoboticHandControls/Hand/Finger_Left"),
+        center: find_path("/RoboticHandControls/Hand/Finger_Center"),
+        right: find_path("/RoboticHandControls/Hand/Finger_Right"),
+        target: find_path("/RoboticHandControls/Hand/GripTarget"),
     }
 }
 

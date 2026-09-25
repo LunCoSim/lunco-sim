@@ -4,13 +4,13 @@
 
 fn simulation_dependencies(me, ctx) {
     #{
-        modelica_entities: [find("/SolarRoverTest/SolarRover")],
+        modelica_entities: [find_path("/SolarRoverTest/SolarRover")],
         required_inputs: [],
     }
 }
 
 fn on_event(me, evt, ctx) {
-    let route = find("/SolarRoverTest/Route");
+    let route = find_path("/SolarRoverTest/Route");
     if evt.name != "route_point_reached" || evt.source != route { return; }
     let index = evt.value;
     if index == () { return; }
@@ -25,7 +25,7 @@ fn on_event(me, evt, ctx) {
 }
 
 fn soc() {
-    let r = find("/SolarRoverTest/SolarRover");
+    let r = find_path("/SolarRoverTest/SolarRover");
     if r < 0 { return (); }
     get(r, "soc")
 }

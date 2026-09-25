@@ -554,8 +554,10 @@ fn policy_units(net) {
     for unit in net.units {
         let instance = "network_unit_" + (index + 1).to_string();
         if net.units.len == 1 { instance = "network_system"; }
-        let class_name = "NetworkUnit_" + (index + 1).to_string();
-        if net.units.len == 1 { class_name = "NetworkSystem"; }
+        // Generated unit classes share Rumoca's source-library namespace, so
+        // include the unique root model identity even for a single-unit graph.
+        let class_name = net.model_name + "_NetworkUnit_" + (index + 1).to_string();
+        if net.units.len == 1 { class_name = net.model_name + "_NetworkSystem"; }
         let rewritten = #{
             name: class_name,
             source_name: unit.name,

@@ -190,7 +190,16 @@ Worker-side Modelica state is cleaned up with the scene transition.
 the value currently flowing through `SimComponent.inputs["force_y"]`. Each row
 also has a `status` string (`Unbound`, `Compiling`, `Running`, `Paused`, or
 `Error: …`), so a source-only program or failed source load is visible instead
-of looking like a missing participant.
+of looking like a missing participant. `modelica_step_diagnostics` reports
+bounded per-session solver-step service time, dispatch-to-response latency, and
+native pending-task count at solver start; it is absent until a step completes.
+Response latency includes queueing, transport, and owner response handling, and
+the browser worker does not currently report its internal queue depth.
+Pass `include_values: false` for a bounded fleet view that omits input/output
+maps and verbose model/error details; the default retains all named values and
+full error reasons. Rhai fleet profilers can also pass `include_entities: false`
+to receive `entity_count` and an aggregate `modelica_step_profile` without
+building participant rows.
 Useful for confirming a chain works end-to-end without polling logs.
 
 ### See also

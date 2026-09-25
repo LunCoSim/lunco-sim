@@ -4,6 +4,10 @@
 // This Rhai test checks the resulting command surface and observable motion;
 // it does not inspect or recreate a Rust steering algorithm.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/SixIndependentParity/Rover")], required_inputs: [] }
+}
+
 fn port_value(target, name, direction) {
     let record = query("ReadPorts", #{ api_id: target });
     if record == () || record.ports == () { return (); }
@@ -20,7 +24,7 @@ fn authored_asset_contract(rover) {
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
-    this.rover = find("/SixIndependentParity/Rover");
+    this.rover = find_path("/SixIndependentParity/Rover");
     this.start = ();
     this.asset_contract = false;
     if this.rover < 0 {

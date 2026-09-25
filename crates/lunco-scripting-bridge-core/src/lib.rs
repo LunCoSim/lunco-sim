@@ -42,7 +42,7 @@ use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
     ApiCommandEvent, authz_target_gid_value, command_result_value, validate_command_params_value,
 };
-use lunco_api::queries::{ApiVisibility, execute_query_value};
+use lunco_api::queries::{ApiVisibility, api_param_u64, execute_query_value};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api_core::{ApiValue, api_value_from_u64};
 use lunco_command_contracts::{OpId, SessionId};
@@ -565,10 +565,15 @@ fn validate_simulation_target_dependency(
     else {
         return Ok(());
     };
-    if participants.is_modelica_participant(entity) && !participants.requires_barrier(entity) {
-        return Err(format!(
-            "{operation} targets unbarriered Modelica entity {gid}; include the entity in simulation_dependencies(me, ctx)"
-        ));
+    if participants.is_modelica_participant(entity) {
+        let scenario = resolve_entity(world, current_self());
+        if !scenario
+            .is_some_and(|scenario| participants.scenario_declares_dependency(scenario, entity))
+        {
+            return Err(format!(
+                "{operation} targets Modelica entity {gid} without this scenario's declared dependency; include it in simulation_dependencies(me, ctx)"
+            ));
+        }
     }
     Ok(())
 }
@@ -919,6 +924,18 @@ pub fn command_result<B: ValueBuilder>(b: &B, id: u64) -> B::Value {
 /// and provider errors are `Err`, so callers can distinguish an empty answer
 /// from a broken or unavailable query surface.
 pub fn query_value(name: &str, params: ApiValue) -> Result<Option<ApiValue>, String> {
+    let access = with_world(|world| {
+        if name != "ReadPorts" {
+            return Ok(());
+        }
+        let Some(target) = api_param_u64(&params, "api_id") else {
+            return Ok(());
+        };
+        validate_simulation_target_dependency(world, Some(target), "ReadPorts")
+    });
+    if let Some(Err(error)) = access {
+        return Err(format!("query '{name}' denied: {error}"));
+    }
     with_world(|world| execute_query_value(world, name, &params))
         .ok_or_else(|| "no world in scope".to_string())?
         .map_err(|error| {
@@ -975,12 +992,13 @@ pub enum ScriptPortAccess {
 }
 
 /// Reject live-port access during dependency planning and simulation-clock
-/// access to an unbarriered Modelica port.
+/// access to a Modelica participant outside this scenario's plan.
 ///
-/// A scenario may declare its cross-entity Modelica participants through
-/// `simulation_dependencies(me, ctx)`. Existing USD causal edges also satisfy
-/// this contract. Port access from application/presentation cycles is a view of
-/// committed state and does not join the authoritative simulation barrier.
+/// A scenario declares the Modelica participants it accesses through
+/// `simulation_dependencies(me, ctx)`. USD causal edges contribute to the
+/// shared barrier but do not authorize a scenario's access. Port access from
+/// application/presentation cycles observes committed state without joining
+/// the authoritative simulation barrier.
 pub fn validate_simulation_port_access(
     gid: u64,
     name: &str,
@@ -1012,20 +1030,11 @@ pub fn validate_simulation_port_access(
                 "simulation_dependencies may resolve entity ids but cannot read or write live port {name:?} on entity {gid}"
             ));
         }
-        let Some(participants) =
-            world.get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
-        else {
-            return Ok(());
-        };
-        if !participants.is_modelica_participant(entity) {
-            return Ok(());
-        }
-        if participants.requires_barrier(entity) {
-            return Ok(());
-        }
-        Err(format!(
-            "Modelica port {name:?} on entity {gid} is outside the shared simulation barrier; include the entity in simulation_dependencies(me, ctx)"
-        ))
+        validate_simulation_target_dependency(
+            world,
+            Some(gid),
+            &format!("Modelica port {name:?}"),
+        )
     })
     .unwrap_or(Ok(()))
 }

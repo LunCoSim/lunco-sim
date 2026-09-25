@@ -239,13 +239,17 @@ and complete member-variable units/descriptions); Rhai owns the hierarchy,
 annotation graphics, and policy-side layout so visual changes do not require a
 Rust rebuild.
 
-The shipped electrical presentation uses readable policy-owned unit class and
-instance names (`NetworkSystem`/`NetworkUnit_N` and `network_system`/`network_unit_N`),
-a dedicated power-bus rail, and standard `Line` waypoints on every generated acausal
+The shipped electrical presentation uses root-unique policy-owned unit class
+names (`<root>_NetworkSystem`/`<root>_NetworkUnit_N`) with readable instance
+names (`network_system`/`network_unit_N`), a dedicated power-bus rail, and
+standard `Line` waypoints on every generated acausal
 connection. Each route includes the icon-to-rail stubs and rail crossing, so a
 panel is not visually mistaken for a direct motor connection. The rail is drawn
 in the unit `Diagram`; it is not a second graph
-or an inferred runtime connection. The policy chooses the highest-incidence
+or an inferred runtime connection. Unit class identity includes its unique root
+because generated USD networks share the Rumoca source-library namespace;
+reusing `NetworkSystem` or `NetworkUnit_N` across roots creates conflicting
+class definitions. The policy chooses the highest-incidence
 member in each connected unit as the visual bus hub, with an authored
 `LunCoModelicaTopologyAPI` `storage` role breaking equal-incidence ties. It
 places authored `source` members on one bank and `load` members on the opposite

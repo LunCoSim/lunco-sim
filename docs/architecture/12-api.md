@@ -102,7 +102,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `SnapshotVariables` | `{"doc_id": u64, "names": string[]?}` | Get the current values of simulation variables/inputs. |
 | `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, Twin, admitted source libraries, and open docs. Bundled results remain available in hosts without an active Workspace session; Twin/open-document matches are included when `WorkspacePlugin` is present. |
 | `GetShareLink` | `{"doc_id": u64?}` | Generate a sharing URL for the document source. |
-| `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
+| `CosimStatus` | `{"include_values": bool?, "include_entities": bool?}` | List USD-driven cosim entities with live telemetry. Both options default to `true`; `include_values: false` omits input/output maps and verbose model/error details, while `include_entities: false` returns only counts, synchronization state, and an aggregate Modelica step profile. |
 | `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |
 | `CausalTrace` | `{"target": u64, "correlation_id": u64?}` | Explain one semantic edge through its authored binding, selected port owner, USD connection/admission state, and current measured channels. |
 
@@ -458,8 +458,18 @@ and camera binding.
 
 `CosimStatus` returns one row per USD-driven cosim entity
 (`UsdSourcedCosim`) with position, velocity, Modelica timing, status, and
-propagated wire values. `status` exposes `Unbound`, `Compiling`, `Running`,
-`Paused`, or an `Error: …` reason for source-only and failed participants:
+propagated wire values by default. For fleet diagnostics, pass
+`{"include_values":false}` to omit input/output maps and verbose model/error
+strings; timing, status, counts, and bounded worker diagnostics remain available.
+Compact error status is `Error`; the default full view includes its reason.
+`status` exposes `Unbound`, `Compiling`, `Running`, `Paused`, or `Error` for
+source-only and failed participants:
+
+Set `include_entities` to `false` when a Rhai script needs only fleet metrics.
+The response then has an empty `entities` array, `entity_count`, and
+`modelica_step_profile` aggregates (`participants`, `samples`, mean/max worker
+step duration, maximum response latency, and available maximum worker backlog).
+This avoids copying per-participant strings into script values.
 
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \

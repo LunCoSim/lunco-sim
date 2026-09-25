@@ -10,6 +10,18 @@ const EPS = 0.0001;
 const MIN_SOLAR_CLEARANCE = 0.1;
 const WAIT_S = 30.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [
+            find_path("/BatteryMountsTest/Skid"),
+            find_path("/BatteryMountsTest/SixWheel"),
+            find_path("/BatteryMountsTest/RockerBogie"),
+            find_path("/BatteryMountsTest/Rucheyok"),
+        ],
+        required_inputs: [],
+    }
+}
+
 fn close_vec(actual, expected) {
     if actual == () || expected == () || actual.len() != expected.len() {
         return false;
@@ -23,7 +35,7 @@ fn close_vec(actual, expected) {
 }
 
 fn wheel_projection_ok(root_path, spec) {
-    let root = find(root_path);
+    let root = find_path(root_path);
     if root == () || root < 0 { return false; }
     vessel_wheels_match(root, spec[5], 0, spec[6], spec[7], spec[8], spec[9], 1.5)
 }
@@ -66,10 +78,10 @@ fn battery_ok(spec) {
         return false;
     }
 
-    let battery = find(path);
-    let body_entity = find(root_path + "/" + spec[3]);
-    let solar_entity = find(root_path + "/SolarPanel");
-    let vessel = find(root_path);
+    let battery = find_path(path);
+    let body_entity = find_path(root_path + "/" + spec[3]);
+    let solar_entity = find_path(root_path + "/SolarPanel");
+    let vessel = find_path(root_path);
     if battery < 0 || body_entity < 0 || solar_entity < 0 || vessel < 0 {
         return false;
     }
@@ -110,7 +122,7 @@ fn battery_ok(spec) {
         } else {
             let deck_translate = deck.attrs["xformOp:translate"];
             let deck_scale = deck.attrs["xformOp:scale"];
-            let deck_entity = find(root_path + "/" + spec[4]);
+            let deck_entity = find_path(root_path + "/" + spec[4]);
             if deck_entity < 0 {
                 false
             } else {

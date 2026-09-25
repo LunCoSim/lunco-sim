@@ -14,7 +14,7 @@ use lunco_cosim_core::{
     UsdSourcedCosim,
 };
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
-use lunco_modelica_runtime::ModelicaModel;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaStepDiagnostics};
 use lunco_render::SceneCamera;
 use lunco_usd_bevy_camera::camera_mount::MountedCamera;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
@@ -540,19 +540,47 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
 
 /// API query provider: `curl … {"type":"ExecuteCommand","command":"CosimStatus","params":{}}`
 /// returns one row per USD-driven cosim entity with position, model
-/// state, and propagated cosim values. The response also includes the
+/// state, and propagated cosim values. Set `include_values` to `false` for a
+/// bounded fleet view with status, counts, timing, and diagnostics; it omits
+/// input/output maps and verbose model/error details. The default is `true`.
+/// Set `include_entities` to `false` to return only participant counts and an
+/// aggregate Modelica step profile for workloads too large for script values.
+/// The response also includes the
 /// authoritative synchronization projection so a rate/worker diagnosis can
 /// distinguish a causal barrier from an unrelated model still running on its
-/// worker. Lets you probe the running binary without polling logs.
+/// worker. Per-participant step diagnostics separate solver service duration
+/// from end-to-end response latency and report available worker backlog samples.
+/// This allows live profiling without polling logs or collecting per-frame traces.
 pub struct CosimStatusProvider;
 
 impl lunco_api::ApiQueryProvider for CosimStatusProvider {
     fn name(&self) -> &'static str {
         "CosimStatus"
     }
-    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let include_values = match params.get("include_values") {
+            None => true,
+            Some(ApiValue::Bool(include_values)) => *include_values,
+            Some(_) => {
+                return api_error(
+                    lunco_api_core::ApiErrorCode::DeserializationError,
+                    "CosimStatus: include_values must be a boolean",
+                );
+            }
+        };
+        let include_entities = match params.get("include_entities") {
+            None => true,
+            Some(ApiValue::Bool(include_entities)) => *include_entities,
+            Some(_) => {
+                return api_error(
+                    lunco_api_core::ApiErrorCode::DeserializationError,
+                    "CosimStatus: include_entities must be a boolean",
+                );
+            }
+        };
         let Some(mut q) = QueryState::<
             (
+                Entity,
                 &Name,
                 &Transform,
                 Option<&SimComponent>,
@@ -567,43 +595,73 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
             );
         };
 
-        let entities: Vec<ApiValue> = q
-            .iter(world)
-            .map(|(name, tf, comp, model, lv)| {
-                // Full input/output maps so any cosim signal is readable
-                // (the solar tracker's `yaw`/`tracking_error`, the balloon's
-                // `buoyancy`, …) — not just a hardcoded set. This is the
-                // general "read cosim world state" surface.
-                let outputs = comp
-                    .map(|c| {
+        let entity_count = q.iter(world).count();
+        let entities: Vec<ApiValue> = if include_entities {
+            q.iter(world)
+                .map(|(entity, name, tf, comp, model, lv)| {
+                let status = comp
+                    .map(|c| match &c.status {
+                        SimStatus::Idle => "Idle".to_string(),
+                        SimStatus::Compiling => "Compiling".to_string(),
+                        SimStatus::Running => "Running".to_string(),
+                        SimStatus::Paused => "Paused".to_string(),
+                        SimStatus::Error(reason) if include_values => {
+                            format!("Error: {reason}")
+                        }
+                        SimStatus::Error(_) => "Error".to_string(),
+                    })
+                    .unwrap_or_else(|| "Unbound".to_string());
+                // Include every input/output signal when requested, without
+                // hardcoding signal names. Compact status consumers can omit
+                // these potentially large maps.
+                let outputs = if include_values {
+                    comp.map(|c| {
                         c.outputs
                             .iter()
                             .map(|(k, v)| (k.clone(), api_value!(*v)))
                             .collect::<Vec<_>>()
                     })
-                    .unwrap_or_default();
-                let inputs = comp
-                    .map(|c| {
+                    .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let inputs = if include_values {
+                    comp.map(|c| {
                         c.inputs
                             .iter()
                             .map(|(k, v)| (k.clone(), api_value!(*v)))
                             .collect::<Vec<_>>()
                     })
-                    .unwrap_or_default();
-                api_value!({
+                    .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let step_diagnostics = world
+                    .get_resource::<ModelicaStepDiagnostics>()
+                    .and_then(|diagnostics| diagnostics.participant(entity))
+                    .map(|diagnostics| {
+                        api_value!({
+                            "samples": diagnostics.samples,
+                            "worker_step_last_ns": diagnostics.last_worker_step_duration_ns,
+                            "worker_step_mean_ns": diagnostics.total_worker_step_duration_ns as f64
+                                / diagnostics.samples.max(1) as f64,
+                            "worker_step_max_ns": diagnostics.max_worker_step_duration_ns,
+                            "response_latency_last_ns": diagnostics.last_response_latency_ns,
+                            "response_latency_max_ns": diagnostics.max_response_latency_ns,
+                            "worker_backlog_count_last": diagnostics.last_worker_backlog_count,
+                            "worker_backlog_count_max": diagnostics.max_worker_backlog_count,
+                        })
+                    })
+                    .unwrap_or(ApiValue::Unit);
+                if include_values {
+                    api_value!({
                     "name": name.as_str(),
                     "y": tf.translation.y,
                     "yaw": tf.rotation.to_euler(EulerRot::YXZ).0,
                     "vy": lv.map(|v| v.0.y).unwrap_or(0.0),
                     "has_simcomponent": comp.is_some(),
                     "model": comp.map(|c| c.model_name.clone()).unwrap_or_default(),
-                    "status": comp.map(|c| match &c.status {
-                        SimStatus::Idle => "Idle".to_string(),
-                        SimStatus::Compiling => "Compiling".to_string(),
-                        SimStatus::Running => "Running".to_string(),
-                        SimStatus::Paused => "Paused".to_string(),
-                        SimStatus::Error(reason) => format!("Error: {reason}"),
-                    }).unwrap_or_else(|| "Unbound".to_string()),
+                    "status": status,
                     "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
                     "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
                     "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
@@ -618,6 +676,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                         .map(|m| m.next_communication_time)
                         .unwrap_or(0.0),
                     "modelica_is_stepping": model.is_some_and(|m| m.is_stepping),
+                    "modelica_step_diagnostics": step_diagnostics,
                     // The Modelica worker's durable failure verdict is the
                     // reason readiness may be holding the world. Surface it
                     // here beside timing/ports so live API diagnosis does not
@@ -625,9 +684,75 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     "modelica_error": model.and_then(|m| m.last_error.clone()),
                     "outputs": ApiValue::Map(outputs),
                     "inputs": ApiValue::Map(inputs),
+                    })
+                } else {
+                    api_value!({
+                        "name": name.as_str(),
+                        "y": tf.translation.y,
+                        "yaw": tf.rotation.to_euler(EulerRot::YXZ).0,
+                        "vy": lv.map(|v| v.0.y).unwrap_or(0.0),
+                        "has_simcomponent": comp.is_some(),
+                        "status": status,
+                        "modelica_var_count": model.map(|m| m.variables.len()).unwrap_or(0),
+                        "modelica_paused": model.map(|m| m.paused).unwrap_or(false),
+                        "modelica_current_time": model.map(|m| m.current_time).unwrap_or(0.0),
+                        "modelica_target_time": model.map(|m| m.target_time).unwrap_or(0.0),
+                        "modelica_communication_period_secs": model.and_then(|m| {
+                            m.communication_period_secs.is_finite().then_some(m.communication_period_secs)
+                        }),
+                        "modelica_next_communication_time": model
+                            .map(|m| m.next_communication_time)
+                            .unwrap_or(0.0),
+                        "modelica_is_stepping": model.is_some_and(|m| m.is_stepping),
+                        "modelica_step_diagnostics": step_diagnostics,
+                        "modelica_error_present": model.is_some_and(|m| m.last_error.is_some()),
+                        "outputs": ApiValue::Map(Vec::new()),
+                        "inputs": ApiValue::Map(Vec::new()),
+                    })
+                }
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut diagnostic_participants = 0u64;
+        let mut diagnostic_samples = 0u64;
+        let mut total_worker_step_duration_ns = 0u128;
+        let mut max_worker_step_duration_ns = 0u64;
+        let mut max_response_latency_ns = 0u64;
+        let mut max_worker_backlog_count = None;
+        if let Some(diagnostics) = world.get_resource::<ModelicaStepDiagnostics>() {
+            for (entity, participant) in diagnostics.participants() {
+                if world.get::<UsdSourcedCosim>(entity).is_none() || participant.samples == 0 {
+                    continue;
+                }
+                diagnostic_participants = diagnostic_participants.saturating_add(1);
+                diagnostic_samples = diagnostic_samples.saturating_add(participant.samples);
+                total_worker_step_duration_ns = total_worker_step_duration_ns
+                    .saturating_add(participant.total_worker_step_duration_ns as u128);
+                max_worker_step_duration_ns =
+                    max_worker_step_duration_ns.max(participant.max_worker_step_duration_ns);
+                max_response_latency_ns =
+                    max_response_latency_ns.max(participant.max_response_latency_ns);
+                if let Some(count) = participant.max_worker_backlog_count {
+                    max_worker_backlog_count = Some(
+                        max_worker_backlog_count.map_or(count, |current: u64| current.max(count)),
+                    );
+                }
+            }
+        }
+        let modelica_step_profile = api_value!({
+            "participants": diagnostic_participants,
+            "samples": diagnostic_samples,
+            "worker_step_mean_ns": if diagnostic_samples > 0 {
+                total_worker_step_duration_ns as f64 / diagnostic_samples as f64
+            } else {
+                0.0
+            },
+            "worker_step_max_ns": max_worker_step_duration_ns,
+            "response_latency_max_ns": max_response_latency_ns,
+            "worker_backlog_count_max": max_worker_backlog_count,
+        });
         let barrier = world
             .get_resource::<lunco_core_runtime::SimulationBarrier>()
             .copied()
@@ -636,24 +761,28 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
             .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
             .map(|participants| (participants.topology_ready, participants.entities.len()))
             .unwrap_or((false, 0));
-        let causal_participants = world
-            .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
-            .map(|participants| {
-                participants
-                    .entities
-                    .iter()
-                    .map(|entity| {
-                        api_value!({
-                            "entity": entity.to_bits(),
-                            "name": world.get::<Name>(*entity).map(Name::as_str),
-                            "usd_path": world
-                                .get::<UsdPrimPath>(*entity)
-                                .map(|path| path.path.as_str()),
+        let causal_participants = if include_entities {
+            world
+                .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+                .map(|participants| {
+                    participants
+                        .entities
+                        .iter()
+                        .map(|entity| {
+                            api_value!({
+                                "entity": entity.to_bits(),
+                                "name": world.get::<Name>(*entity).map(Name::as_str),
+                                "usd_path": world
+                                    .get::<UsdPrimPath>(*entity)
+                                    .map(|path| path.path.as_str()),
+                            })
                         })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let Some(mut causal_sinks) =
             QueryState::<(), With<lunco_port_core::CausalStateSink>>::try_new(world)
         else {
@@ -676,7 +805,11 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
         });
         api_ok(api_value!({
             "entities": entities,
+            "entity_count": entity_count,
             "synchronization": synchronization,
+            "modelica_step_profile": modelica_step_profile,
+            "values_included": include_values,
+            "entities_included": include_entities,
         }))
     }
 }

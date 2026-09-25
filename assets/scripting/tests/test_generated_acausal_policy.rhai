@@ -43,7 +43,8 @@ fn test_generated_acausal_policy(net) {
     require(source.contains("fontSize=22"), "diagram title font is too small");
     require(source.contains("fontSize=18"), "power bus label font is too small");
     require(source.contains("network_system"), "single-unit instance name is not readable");
-    require(source.contains("model NetworkSystem"), "single-unit class name is not readable");
+    require(source.contains("model " + net.model_name + "_NetworkSystem"),
+        "single-unit class name must be readable and unique to its generated root");
     require(!source.contains("Unit_" + net.model_name), "encoded unit class name leaked into the UI");
     require(!source.contains("Generated unit"), "poster-like unit icon leaked into Modelica");
     require(!source.contains("COMPOSED TOPOLOGY"), "poster graphics leaked into Modelica");

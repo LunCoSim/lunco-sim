@@ -54,6 +54,22 @@ fn route_path(me) {
     parent_path(program_path(me))
 }
 
+fn simulation_dependencies(me, ctx) {
+    let program = program_path(me);
+    if program == () {
+        throw "route program path is unavailable while resolving its Modelica dependency";
+    }
+    let result = query("QueryUsdPrim", #{ path: program, rels: ["inputs:subject"] });
+    if result == () || result.ok == false || result.relationships == () {
+        throw "route subject relationship is unavailable while resolving its Modelica dependency";
+    }
+    let targets = result.relationships["inputs:subject"];
+    if targets == () || targets.len() != 1 {
+        throw "route program must have exactly one subject while resolving its Modelica dependency";
+    }
+    #{ modelica_entities: [find_path(targets[0])], required_inputs: [] }
+}
+
 // A route point is an ordinary direct child with the standard trigger-zone
 // attribute. This keeps presentation prims and program implementations out of
 // the ordered control set without relying on a prim-name convention.
@@ -401,8 +417,9 @@ fn current_zone(me, state) {
 }
 
 fn route_entrant_matches(subject, entrant) {
-    if entrant == () || entrant < 0 { return false; }
-    let current = entrant;
+    if entrant == () { return false; }
+    let current = entrant.to_int();
+    if current < 0 { return false; }
     for depth in 0..32 {
         if current == subject { return true; }
         let next = parent(current);

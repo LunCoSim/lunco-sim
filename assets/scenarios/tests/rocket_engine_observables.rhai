@@ -4,11 +4,15 @@
 // source resolution, Modelica worker lifecycle, and output collection all
 // remain in the same path used by a real authored scene.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/RocketEngineObservables/Engine")], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.phase = 0;
     this.done = false;
-    this.engine = find("/RocketEngineObservables/Engine");
+    this.engine = find_path("/RocketEngineObservables/Engine");
     this.idle_mass = ();
     this.burn_mass = ();
     this.impulse = ();
