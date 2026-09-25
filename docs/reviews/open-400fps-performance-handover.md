@@ -210,6 +210,38 @@ uncontended before/after FPS comparison and detailed Tracy zone inspection are
 still required; the 400 FPS acceptance target remains open. Other simulator
 sessions and an unrelated Cargo build were left untouched.
 
+### 2026-09-24 — Summer Space School settled-frame profile
+
+- Captured the production debug build from this checkout with Tracy enabled,
+  High quality, `--no-vsync`, and `--no-throttle`, using the real
+  `traverse_apollo15.usda` scene and API port 43442. The 40.33 s capture is
+  `scripts/perf/captures/sss-optimization-20260924.tracy` (1,438 Tracy frames,
+  11,219,291 zones, 285 MB). API readiness drained to zero pending items; the
+  owned run exited through typed API `Exit`, and port 43442 was released.
+- Session 43122 remained active throughout and was not inspected or changed.
+  Consequently neither this trace nor the following FPS window is an
+  uncontended acceptance result.
+- Tracy self-time aggregates for recurring systems showed approximately
+  0.63 ms/call for `drain_world_scripts` (1,437 calls), 0.58 ms for BigSpace
+  `propagate_high_precision_channeled` (1,382), and 0.56 ms for Bevy's
+  `check_point_light_mesh_visibility` (1,437). `check_dir_light_mesh_visibility`
+  plus its command application accounted for another 0.82 ms/call combined;
+  GPU preprocessing bind groups were 0.50 ms and GPU clustering preparation
+  0.38 ms per call. These distributed CPU costs, not one dominant opaque pass,
+  are the main measured render/update leads. The Tracy-run opaque GPU pass
+  averaged about 2.02 ms; this is diagnostic only.
+- `drain_world_scripts` is an exclusive Update system called every frame; its
+  source drains `PendingWorldScripts` and returns immediately when the queue is
+  empty. Its measured recurring cost makes avoiding the idle exclusive-system
+  pass a high-priority A/B candidate. Bevy `Core3d` ran 9,547 times for 1,437
+  root frames; the camera driver also runs auxiliary shadow-map views, so this
+  count does not mean there are 6.6 output cameras.
+- A separate, non-Tracy production run with the same scene and quality gathered
+  16 post-readiness one-second diagnostic samples: mean 104.7 FPS (58.4–151.9),
+  frame time 10.46 ms (6.78–17.13), and Avian step time 0.89 ms (0.73–1.08).
+  The existing session still running makes these contention-affected, not a
+  clean acceptance measurement. The 150+ FPS target remains unverified.
+
 ## Remaining blocker
 
 The 400 FPS acceptance target is not met. The maintained BigSpace dependency
