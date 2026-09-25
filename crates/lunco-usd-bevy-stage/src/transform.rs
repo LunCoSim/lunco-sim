@@ -66,7 +66,20 @@ pub fn grid_translation_d_at(
         return Ok(None);
     }
 
-    let order = read_xform_op_order(reader, path).ok_or_else(|| malformed_transform(path))?;
+    let Some(order) = read_xform_op_order(reader, path) else {
+        if !reader.has_authored_attribute(path, "xformOpOrder")
+            || authored_empty_xform_op_order(reader, path)
+        {
+            return Ok(None);
+        }
+        return Err(malformed_transform(path));
+    };
+    let translation_is_ordered = order.iter().any(|operation| {
+        operation.strip_prefix("!invert!").unwrap_or(operation) == "xformOp:translate"
+    });
+    if !translation_is_ordered {
+        return Ok(None);
+    }
     if order.first().map(String::as_str) != Some("xformOp:translate")
         || order.iter().skip(1).any(|operation| {
             let operation = operation.strip_prefix("!invert!").unwrap_or(operation);
@@ -263,8 +276,8 @@ fn valid_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath, order: &[String]
     })
 }
 
-fn authored_empty_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> bool {
-    match UsdReadObject::attr_value(reader, path, "xformOpOrder") {
+fn authored_empty_xform_op_order(reader: &dyn UsdReadObject, path: &SdfPath) -> bool {
+    match reader.attr_value(path, "xformOpOrder") {
         Some(Value::TokenVec(values)) => values.is_empty(),
         Some(Value::StringVec(values)) => values.is_empty(),
         Some(Value::TokenListOp(op)) => op.flatten().is_empty(),
@@ -339,5 +352,26 @@ def Xform "Vehicle"
         let path = SdfPath::new("/Vehicle").expect("valid prim path");
 
         assert!(grid_translation_d_at(&stage, &path, 0.0).is_err());
+    }
+
+    #[test]
+    fn double3_translation_outside_the_ordered_stack_is_ignored() {
+        let stage = plan(
+            r#"#usda 1.0
+def Xform "Camera"
+{
+    double3 xformOp:translate = (-340, -1907, -340)
+    double3 xformOp:rotateXYZ = (116.89, -11.28, 18.27)
+    uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+}
+"#,
+        );
+        let path = SdfPath::new("/Camera").expect("valid prim path");
+
+        assert_eq!(
+            grid_translation_d_at(&stage, &path, 0.0).expect("valid ordered stack"),
+            None,
+            "an authored op omitted from xformOpOrder is inert in USD"
+        );
     }
 }

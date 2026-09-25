@@ -866,7 +866,7 @@ Authored `timeSamples` drive entities at the physical presentation time
 assets, not just single-layer files. A prim with any animated channel is tagged
 `UsdAnimated`; the per-frame samplers then drive:
 
-- **Transform** — the full transform decode above, evaluated at the entity's resolved time. A prim directly beneath a BigSpace `Grid` may use `double3 xformOp:translate`; its f64 position is split into `(CellCoord, Transform)` before the cell-local translation is narrowed. This high-precision path accepts a translate-first stack followed by rotations and scale; a transform stack whose translation cannot be split with its authored meaning intact is rejected visibly.
+- **Transform** — the full transform decode above, evaluated at the entity's resolved time. A prim directly beneath a BigSpace `Grid` may use `double3 xformOp:translate`; its f64 position is split into `(CellCoord, Transform)` before the cell-local translation is narrowed. This high-precision path accepts a translate-first stack followed by rotations and scale; a transform stack whose ordered translation cannot be split with its authored meaning intact is rejected visibly. A translation attribute omitted from `xformOpOrder` is inert and does not block projection.
 - **Visibility** — animated `visibility` token (held).
 - **Material** — animated `inputs:diffuseColor` / `inputs:opacity` (and geom
   `primvars:displayColor`) into the entity's **`PbrLook`** — the render-free appearance

@@ -231,7 +231,9 @@ array of maps, the manifest identifies the key/label/action fields plus
 dimensions. HTML/CSS can bind those dimensions for the authored trigger while
 the egui popup uses the same values for its bounded content area. Missing or
 malformed dimensions are an authored UI error and do not silently fall back to
-a Rust size.
+a Rust size. While the popup is open, its bounds are registered with the shared
+scene-pick gate so option clicks stay in the popup instead of reaching the 3D
+scene underneath.
 The shared `lunco-usd-bevy-camera::camera_switch::camera_display_labels` policy
 is used by the exposure, Camera menu, USD prim tree, entity tree, and
 Inspector: unique authored leaves stand alone; duplicate leaves gain the
@@ -240,6 +242,9 @@ hexadecimal/UUID-like owner suffixes are omitted; an unavoidable normalized
 collision gets a small ordinal. The full USD path remains the selection
 identity and is available through tooltips, diagnostics, and `active_name`,
 never replaced by the display projection.
+
+Failed camera actions are logged and published as shared runtime errors; the
+application presents them through its shared warning toast.
 
 Camera and exposure updates are reactive: camera status is rebuilt after its
 selection, viewport, camera-entity, or track inputs change; it emits a

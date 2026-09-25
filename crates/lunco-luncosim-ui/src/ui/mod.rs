@@ -267,6 +267,7 @@ impl Plugin for LunCoSimUiPlugin {
             .add_plugins(|app: &mut App| {
                 use lunco_workbench_core::WorkbenchPanelAppExt;
                 app.add_observer(on_runtime_ui_action)
+                    .add_observer(on_runtime_error_warning)
                     .add_observer(on_dismiss_terrain_overlay)
                     .add_observer(scripted_menus::on_script_ui_request)
                     .add_observer(scripted_menus::clear_scripted_menus_on_twin_closed);
@@ -457,11 +458,17 @@ fn on_runtime_ui_action(
 ) {
     match trigger.event().action.as_str() {
         "view.surface" => {
-            if !orbital_pin.is_some_and(|pin| pin.active) {
-                return;
-            }
             if let Ok(target) = q_avatar.single() {
-                commands.trigger(lunco_camera_core::ReturnFromOrbit { camera: target });
+                if orbital_pin.is_some_and(|pin| pin.active) {
+                    commands.trigger(lunco_camera_core::ReturnFromOrbit { camera: target });
+                } else {
+                    commands.trigger(ObserveAvatar {});
+                }
+            } else {
+                report_runtime_ui_failure(
+                    &mut commands,
+                    "the scene has no local avatar camera to observe",
+                );
             }
         }
         "view.body.moon" => {
@@ -531,6 +538,17 @@ fn on_runtime_ui_action(
             });
         }
     }
+}
+
+/// Present recoverable runtime faults through the shared notification surface.
+/// Domain menus keep their controls and selection state; the warning is owned
+/// by the application-wide notification layer.
+fn on_runtime_error_warning(trigger: On<lunco_core::RuntimeError>, mut commands: Commands) {
+    commands.trigger(lunco_notifications_core::ShowNotification {
+        text: trigger.event().message.clone(),
+        kind: "warn".to_owned(),
+        secs: 0.0,
+    });
 }
 
 fn runtime_ui_action_parameters_to_telemetry(
@@ -723,10 +741,11 @@ fn draw_runtime_ui_dropdowns(
     mut egui_ctx: EguiContexts,
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
     exposures: Res<lunco_exposure_core::EngineExposures>,
-    roots: Query<(&runtime_ui::RuntimeUiSurface, &Visibility)>,
+    roots: Query<(Entity, &runtime_ui::RuntimeUiSurface, &Visibility)>,
     manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
     layout: Option<Res<WorkbenchSnapshot>>,
     theme: Option<Res<lunco_theme::Theme>>,
+    mut pick_gate: ResMut<lunco_workbench_core::scene_pick::ScenePickGate>,
     mut commands: Commands,
 ) {
     if !layout.is_some_and(|layout| {
@@ -750,11 +769,11 @@ fn draw_runtime_ui_dropdowns(
         dropdowns.close();
         return;
     };
-    let Some(anchor) = roots.iter().find_map(|(surface, visibility)| {
+    let Some((source, anchor)) = roots.iter().find_map(|(entity, surface, visibility)| {
         (surface.namespace() == surface_definition.namespace
             && matches!(*visibility, Visibility::Visible)
             && surface.is_mounted())
-        .then(|| surface.applied_rect())
+        .then(|| surface.applied_rect().map(|rect| (entity, rect)))
         .flatten()
     }) else {
         return;
@@ -786,7 +805,7 @@ fn draw_runtime_ui_dropdowns(
     };
     let mut selected_action = None;
 
-    egui::Popup::new(
+    let popup = egui::Popup::new(
         popup_id,
         ctx.clone(),
         anchor,
@@ -819,6 +838,9 @@ fn draw_runtime_ui_dropdowns(
                     runtime_ui_dropdown_options(ui, exposure, definition, selected_key.as_deref());
             });
     });
+    if let Some(popup) = popup {
+        pick_gate.record_chrome_panel(popup.response.rect, popup.response.rect);
+    }
 
     if selected_action.is_some() {
         open = false;
@@ -831,14 +853,10 @@ fn draw_runtime_ui_dropdowns(
         dropdowns.close();
     }
     if let Some(action) = selected_action {
-        commands.trigger(lunco_telemetry_core::TelemetryEvent {
-            name: "runtime.ui.action".to_owned(),
-            source: 0,
-            severity: lunco_telemetry_core::Severity::Info,
-            data: lunco_telemetry_core::TelemetryValue::String(action),
-            timestamp: 0.0,
-            sim_secs: 0.0,
-            sim_tick: 0,
+        commands.trigger(runtime_ui::RuntimeUiAction {
+            action,
+            source,
+            parameters: lunco_hooks::HookValue::Map(Vec::new()),
         });
     }
 }
@@ -864,16 +882,6 @@ fn register_camera_menu(world: &mut World) {
                 CameraSelectionOwner::Generated => "generated",
             };
             ui.label(format!("Active: {active}  ·  Owner: {owner}"));
-            if let Some(error) = &state.last_error {
-                ui.colored_label(bevy_egui::egui::Color32::from_rgb(235, 130, 130), error);
-            }
-            if let Some(contract) =
-                ctx.resource::<lunco_usd_bevy_camera::camera_switch::CameraContractStatus>()
-            {
-                for error in &contract.errors {
-                    ui.colored_label(bevy_egui::egui::Color32::from_rgb(255, 110, 110), error);
-                }
-            }
             if state.avatar_available && ui.button(CAMERA_OBSERVE_AVATAR).clicked() {
                 ctx.trigger(ObserveAvatar {});
                 ui.close();
