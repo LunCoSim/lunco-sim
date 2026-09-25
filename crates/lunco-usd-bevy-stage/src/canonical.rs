@@ -286,6 +286,55 @@ impl CanonicalStage {
         Ok(())
     }
 
+    /// Restore a local prim subtree through one root-layer transaction. The
+    /// change sink receives the precise Sdf additions and reconciles this path.
+    pub(crate) fn restore_prim_subtree(
+        &self,
+        path: &SdfPath,
+        snapshot_usda: &str,
+        sibling_order: &[String],
+    ) -> anyhow::Result<()> {
+        let plan = lunco_usd_authoring::author::prepare_prim_subtree_restore(
+            self.stage.root_layer().data(),
+            path,
+            snapshot_usda,
+            sibling_order,
+        )
+        .map_err(|error| anyhow::anyhow!("prepare prim restore at {path}: {error}"))?;
+        self.stage
+            .batch_edit(&[self.scene_layer.as_str()], |edits| {
+                lunco_usd_authoring::author::apply_snapshot_restore(edits[0].data_mut(), plan);
+                Ok(())
+            })
+            .map_err(|error| anyhow::anyhow!("restore prim subtree at {path}: {error}"))?;
+        Ok(())
+    }
+
+    /// Restore a local attribute subtree through one root-layer transaction.
+    pub(crate) fn restore_attribute_subtree(
+        &self,
+        path: &SdfPath,
+        name: &str,
+        snapshot_usda: &str,
+        sibling_order: &[String],
+    ) -> anyhow::Result<()> {
+        let plan = lunco_usd_authoring::author::prepare_attribute_subtree_restore(
+            self.stage.root_layer().data(),
+            path,
+            name,
+            snapshot_usda,
+            sibling_order,
+        )
+        .map_err(|error| anyhow::anyhow!("prepare attribute restore at {path}.{name}: {error}"))?;
+        self.stage
+            .batch_edit(&[self.scene_layer.as_str()], |edits| {
+                lunco_usd_authoring::author::apply_snapshot_restore(edits[0].data_mut(), plan);
+                Ok(())
+            })
+            .map_err(|error| anyhow::anyhow!("restore attribute {path}.{name}: {error}"))?;
+        Ok(())
+    }
+
     /// Restore one standard xform operation and, when supplied, its exact local
     /// `xformOpOrder` captured by the document history inverse.
     pub(crate) fn restore_xform_op(
@@ -846,6 +895,29 @@ impl StageProjector<'_> {
     /// Replay a `RemoveAttribute` history operation.
     pub fn remove_attribute(&self, path: &SdfPath, name: &str) -> anyhow::Result<()> {
         self.0.remove_attribute(path, name)
+    }
+
+    /// Replay a `RestorePrim` history operation.
+    pub fn restore_prim_subtree(
+        &self,
+        path: &SdfPath,
+        snapshot_usda: &str,
+        sibling_order: &[String],
+    ) -> anyhow::Result<()> {
+        self.0
+            .restore_prim_subtree(path, snapshot_usda, sibling_order)
+    }
+
+    /// Replay a `RestoreAttribute` history operation.
+    pub fn restore_attribute_subtree(
+        &self,
+        path: &SdfPath,
+        name: &str,
+        snapshot_usda: &str,
+        sibling_order: &[String],
+    ) -> anyhow::Result<()> {
+        self.0
+            .restore_attribute_subtree(path, name, snapshot_usda, sibling_order)
     }
 
     /// Replay a `RestoreXformOp` history op.

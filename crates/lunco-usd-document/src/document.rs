@@ -736,11 +736,10 @@ pub enum UsdChange {
 /// Forward application routes through [`lunco_usd_authoring::author`] — the op is
 /// authored by SDF path into a transient `Stage` and the updated root layer
 /// is extracted back as [`sdf::Data`]. Inverses are typed where it is cheap
-/// and exact — structural pairs (`AddPrim` ↔ `RemovePrim`, `MovePrim`) and
-/// value-carrying ops whose prior opinion is authored in the target layer —
-/// and fall back to a full-source [`UsdOp::ReplaceSource`] snapshot otherwise
-/// (genuinely structural ops, and prior-unauthored cases where undo must
-/// *remove* the new opinion) — always correct.
+/// and exact — value edits carry their prior opinions, while prim/property
+/// removal carries a local USDA snapshot of only the removed subtree. A full
+/// [`UsdOp::ReplaceSource`] inverse is reserved for operations that genuinely
+/// replace or move a layer-wide structure.
 #[derive(Debug, Clone, Reflect, serde::Serialize, serde::Deserialize)]
 pub enum UsdOp {
     /// Replace the entire source buffer with `text`. Inverse is the
@@ -776,13 +775,26 @@ pub enum UsdOp {
         #[serde(default)]
         reference_prim_path: Option<String>,
     },
-    /// Remove the prim at `path` together with its entire subtree. The
-    /// inverse re-establishes the prior full source.
+    /// Remove the prim at `path` together with its entire subtree. The inverse
+    /// restores only that authored subtree and its sibling position.
     RemovePrim {
         /// Layer to write to.
         edit_target: LayerId,
         /// Absolute USD path of the prim to remove.
         path: String,
+    },
+    /// Restore the exact local authored prim subtree captured by `RemovePrim`.
+    /// This is a typed history operation and stays incremental in the live
+    /// stage; it never replaces or reparses the complete layer.
+    RestorePrim {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim to restore.
+        path: String,
+        /// USDA fragment containing only the removed prim subtree.
+        snapshot_usda: String,
+        /// Parent prim-child order before removal.
+        sibling_order: Vec<String>,
     },
     /// Set the `xformOp:translate` attribute on the prim at `path`.
     /// Authors `xformOpOrder` too if the prim has none yet.
@@ -821,6 +833,19 @@ pub enum UsdOp {
         path: String,
         /// Attribute name, including any namespace separators.
         name: String,
+    },
+    /// Restore the exact local attribute subtree captured by `RemoveAttribute`.
+    RestoreAttribute {
+        /// Layer to write.
+        edit_target: LayerId,
+        /// Absolute USD path of the attribute's owning prim.
+        path: String,
+        /// Attribute name, including any namespace separators.
+        name: String,
+        /// USDA fragment containing only the removed attribute subtree.
+        snapshot_usda: String,
+        /// Parent property order before removal.
+        sibling_order: Vec<String>,
     },
     /// Restore a standard xform operation and the target-layer order captured
     /// by `RemoveXformOp`. This remains a typed document operation so redo is
@@ -1244,10 +1269,12 @@ impl UsdOp {
             Self::ReplaceSource { edit_target, .. }
             | Self::AddPrim { edit_target, .. }
             | Self::RemovePrim { edit_target, .. }
+            | Self::RestorePrim { edit_target, .. }
             | Self::SetTranslate { edit_target, .. }
             | Self::RemoveXformOp { edit_target, .. }
             | Self::RestoreXformOp { edit_target, .. }
             | Self::RemoveAttribute { edit_target, .. }
+            | Self::RestoreAttribute { edit_target, .. }
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
@@ -1289,10 +1316,12 @@ impl UsdOp {
             Self::ReplaceSource { edit_target, .. }
             | Self::AddPrim { edit_target, .. }
             | Self::RemovePrim { edit_target, .. }
+            | Self::RestorePrim { edit_target, .. }
             | Self::SetTranslate { edit_target, .. }
             | Self::RemoveXformOp { edit_target, .. }
             | Self::RestoreXformOp { edit_target, .. }
             | Self::RemoveAttribute { edit_target, .. }
+            | Self::RestoreAttribute { edit_target, .. }
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
@@ -1334,10 +1363,12 @@ impl UsdOp {
                 format!("{parent_path}/{name}")
             }],
             Self::RemovePrim { path, .. }
+            | Self::RestorePrim { path, .. }
             | Self::SetTranslate { path, .. }
             | Self::RemoveXformOp { path, .. }
             | Self::RestoreXformOp { path, .. }
             | Self::RemoveAttribute { path, .. }
+            | Self::RestoreAttribute { path, .. }
             | Self::SetRotate { path, .. }
             | Self::SetScale { path, .. }
             | Self::SetAttribute { path, .. }
@@ -2594,10 +2625,12 @@ impl Document for UsdDocument {
             UsdOp::ReplaceSource { edit_target, .. }
             | UsdOp::AddPrim { edit_target, .. }
             | UsdOp::RemovePrim { edit_target, .. }
+            | UsdOp::RestorePrim { edit_target, .. }
             | UsdOp::SetTranslate { edit_target, .. }
             | UsdOp::RemoveXformOp { edit_target, .. }
             | UsdOp::RestoreXformOp { edit_target, .. }
             | UsdOp::RemoveAttribute { edit_target, .. }
+            | UsdOp::RestoreAttribute { edit_target, .. }
             | UsdOp::SetRotate { edit_target, .. }
             | UsdOp::SetScale { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
@@ -2747,7 +2780,18 @@ impl Document for UsdDocument {
             UsdOp::RemovePrim { path, .. } => {
                 // Can only remove what the target layer itself authored — and not
                 // a prim that layer authors only inside a variant selection.
-                self.require_movable_prim_in(target, &path)?;
+                let prim_sdf = self.require_movable_prim_in(target, &path)?;
+                let parent = prim_sdf.parent().ok_or_else(|| {
+                    DocumentError::ValidationFailed(format!("prim `{path}` has no parent"))
+                })?;
+                let name = prim_sdf.name().ok_or_else(|| {
+                    DocumentError::ValidationFailed(format!("prim `{path}` has no name"))
+                })?;
+                let sibling_order =
+                    author::snapshot_child_order(self.layer(target), &parent, "primChildren", name)
+                        .map_err(author_err)?;
+                let snapshot_usda = author::snapshot_prim_subtree(self.layer(target), &prim_sdf)
+                    .map_err(author_err)?;
                 let authored_source = if target == TargetLayer::Base {
                     self.authored_source
                         .as_deref()
@@ -2755,7 +2799,12 @@ impl Document for UsdDocument {
                 } else {
                     None
                 };
-                let inverse = self.coarse_inverse(target, &id);
+                let inverse = UsdOp::RestorePrim {
+                    edit_target: id,
+                    path: path.clone(),
+                    snapshot_usda,
+                    sibling_order,
+                };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage.remove_prim(path.as_str()).map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
@@ -2763,6 +2812,29 @@ impl Document for UsdDocument {
                 if target == TargetLayer::Base {
                     self.authored_source = authored_source.map(std::sync::Arc::from);
                 }
+                Ok(inverse)
+            }
+
+            UsdOp::RestorePrim {
+                path,
+                snapshot_usda,
+                sibling_order,
+                ..
+            } => {
+                let prim_sdf = parse_prim_path(&path)?;
+                let mut new_data = self.layer(target).clone();
+                author::restore_prim_subtree(
+                    &mut new_data,
+                    &prim_sdf,
+                    &snapshot_usda,
+                    &sibling_order,
+                )
+                .map_err(author_err)?;
+                let inverse = UsdOp::RemovePrim {
+                    edit_target: id,
+                    path: path.clone(),
+                };
+                self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
 
@@ -2957,13 +3029,56 @@ impl Document for UsdDocument {
                     }
                 }
 
+                let sibling_order = author::snapshot_child_order(
+                    self.layer(target),
+                    &prim_sdf,
+                    "propertyChildren",
+                    &name,
+                )
+                .map_err(author_err)?;
+                let snapshot_usda =
+                    author::snapshot_attribute_subtree(self.layer(target), &prim_sdf, &name)
+                        .map_err(author_err)?;
+
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 if !prim_sdf.is_prim_variant_selection_path() {
                     stage.override_prim(&prim_sdf).map_err(author_err)?;
                 }
                 stage.remove_property(property).map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
-                let inverse = self.coarse_inverse(target, &id);
+                let inverse = UsdOp::RestoreAttribute {
+                    edit_target: id,
+                    path: path.clone(),
+                    name: name.clone(),
+                    snapshot_usda,
+                    sibling_order,
+                };
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::RestoreAttribute {
+                path,
+                name,
+                snapshot_usda,
+                sibling_order,
+                ..
+            } => {
+                let prim_sdf = parse_prim_path(&path)?;
+                let mut new_data = self.layer(target).clone();
+                author::restore_attribute_subtree(
+                    &mut new_data,
+                    &prim_sdf,
+                    &name,
+                    &snapshot_usda,
+                    &sibling_order,
+                )
+                .map_err(author_err)?;
+                let inverse = UsdOp::RemoveAttribute {
+                    edit_target: id,
+                    path: path.clone(),
+                    name: name.clone(),
+                };
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
                 Ok(inverse)
             }

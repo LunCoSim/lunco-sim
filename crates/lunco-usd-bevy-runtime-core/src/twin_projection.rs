@@ -647,7 +647,6 @@ fn cancel_pending_reference(world: &mut World, index: usize) {
             return;
         };
         item.removed = true;
-        item.active = false;
         item.translate = None;
         item.deferred_ops.clear();
         (item.progress_key, item.held)
@@ -1881,10 +1880,12 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             format!("/{}/{}", parent_path.trim_matches('/'), name)
         }),
         UsdOp::RemovePrim { path, .. }
+        | UsdOp::RestorePrim { path, .. }
         | UsdOp::SetTranslate { path, .. }
         | UsdOp::RemoveXformOp { path, .. }
         | UsdOp::RestoreXformOp { path, .. }
         | UsdOp::RemoveAttribute { path, .. }
+        | UsdOp::RestoreAttribute { path, .. }
         | UsdOp::SetRotate { path, .. }
         | UsdOp::SetScale { path, .. }
         | UsdOp::SetAttribute { path, .. }
@@ -1903,7 +1904,21 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
         if let Some(index) = pending_index {
             let exact_root =
                 world.resource::<PendingRefSpawns>().items[index].prim_path == owned_path;
-            if matches!(op, UsdOp::AddPrim { .. }) && exact_root {
+            if matches!(op, UsdOp::RestorePrim { .. }) && exact_root {
+                // Undoing a delete while a referenced spawn is still pending
+                // restores the exact authored root only after its dependency
+                // closure is injected into the live stage. Keep the pending
+                // activation state from before the delete; the snapshot owns
+                // the exact authored root state.
+                let mut pending = world.resource_mut::<PendingRefSpawns>();
+                if let Some(item) = pending.items.get_mut(index) {
+                    item.removed = false;
+                    item.translate = None;
+                    item.deferred_ops.clear();
+                    item.deferred_ops.push(op.clone());
+                }
+                return;
+            } else if matches!(op, UsdOp::AddPrim { .. }) && exact_root {
                 // A new authored root is a new transaction. Drop the old
                 // transaction, including any stale activation state, and let
                 // the normal AddPrim path queue/materialize this one.
@@ -2209,6 +2224,54 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 if let Err(e) = cs.projector().remove_prim_at(&sp) {
                     warn!("[twin] remove {path}: {e}");
                 }
+            }
+        }
+        UsdOp::RestorePrim {
+            path,
+            snapshot_usda,
+            sibling_order,
+            ..
+        } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            if let Some(cs) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
+                if let Err(e) =
+                    cs.projector()
+                        .restore_prim_subtree(&sp, snapshot_usda, sibling_order)
+                {
+                    warn!("[twin] restore prim subtree {path}: {e}");
+                }
+            }
+        }
+        UsdOp::RestoreAttribute {
+            path,
+            name,
+            snapshot_usda,
+            sibling_order,
+            ..
+        } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let restored = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|stages| stages.get(scene_id))
+                .map(|stage| {
+                    stage.projector().restore_attribute_subtree(
+                        &sp,
+                        name,
+                        snapshot_usda,
+                        sibling_order,
+                    )
+                });
+            match restored {
+                Some(Ok(())) => refresh_prim_subtree(world, scene_id, path),
+                Some(Err(error)) => warn!("[twin] restore attribute {path}.{name}: {error}"),
+                None => {}
             }
         }
         UsdOp::SetTimeSample {
@@ -2991,6 +3054,15 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             root: None,
             plan: Arc::new(plan),
         };
+        let root_restore = item.deferred_ops.iter().find_map(|op| match op {
+            UsdOp::RestorePrim {
+                path,
+                snapshot_usda,
+                sibling_order,
+                ..
+            } if path == &item.prim_path => Some((snapshot_usda.clone(), sibling_order.clone())),
+            _ => None,
+        });
         let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else {
             let detail = format!("invalid USD prim path `{}`", item.prim_path);
             fail_reference_spawn(world, &mut item, detail);
@@ -3005,15 +3077,23 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 if !cs.add_layer_bytes(recipe.bytes.clone()) {
                     return Err("the owning stage cannot accept referenced layer bytes".to_owned());
                 }
-                cs.projector()
-                    .author_referenced_prim(
-                        &sp,
-                        item.type_name.as_deref(),
-                        &item.asset_path,
-                        item.reference_prim_path.as_deref(),
-                    )
-                    .map_err(|error| format!("failed to author the reference: {error}"))?;
-                let translated = if let Some(translate) = item.translate {
+                if let Some((snapshot_usda, sibling_order)) = root_restore.as_ref() {
+                    cs.projector()
+                        .restore_prim_subtree(&sp, snapshot_usda, sibling_order)
+                        .map_err(|error| format!("failed to restore the prim subtree: {error}"))?;
+                } else {
+                    cs.projector()
+                        .author_referenced_prim(
+                            &sp,
+                            item.type_name.as_deref(),
+                            &item.asset_path,
+                            item.reference_prim_path.as_deref(),
+                        )
+                        .map_err(|error| format!("failed to author the reference: {error}"))?;
+                }
+                let translated = if root_restore.is_none()
+                    && let Some(translate) = item.translate
+                {
                     cs.projector()
                         .author_translate(&sp, translate)
                         .map_err(|error| format!("failed to apply the spawn transform: {error}"))?;
@@ -3061,6 +3141,9 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         // the complete ordered intent; this is just its delayed live-stage
         // projection for first-use references.
         for op in std::mem::take(&mut item.deferred_ops) {
+            if matches!(&op, UsdOp::RestorePrim { path, .. } if path == &item.prim_path) {
+                continue;
+            }
             apply_incremental_op_to_stage(world, item.scene_id, &op);
         }
         crate::live_consume::reproject_physics_if_needed(world, item.scene_id, &item.prim_path);
@@ -3704,12 +3787,16 @@ mod tests {
 
         let stages = app.world().non_send::<CanonicalStages>();
         let stage = stages.get(scene_id).expect("live scene stage remains open");
-        assert!(!stage
-            .view()
-            .has_prim(&SdfPath::new("/World/First").unwrap()));
-        assert!(!stage
-            .view()
-            .has_prim(&SdfPath::new("/World/Second").unwrap()));
+        assert!(
+            !stage
+                .view()
+                .has_prim(&SdfPath::new("/World/First").unwrap())
+        );
+        assert!(
+            !stage
+                .view()
+                .has_prim(&SdfPath::new("/World/Second").unwrap())
+        );
         let pending = app.world().resource::<PendingRefSpawns>();
         assert_eq!(pending.items.len(), 2);
         assert!(pending.items[0].held && pending.items[1].held);
@@ -3727,12 +3814,16 @@ mod tests {
             .non_send::<CanonicalStages>()
             .get(scene_id)
             .expect("live scene stage remains open");
-        assert!(stage
-            .view()
-            .has_prim(&SdfPath::new("/World/First").unwrap()));
-        assert!(stage
-            .view()
-            .has_prim(&SdfPath::new("/World/Second").unwrap()));
+        assert!(
+            stage
+                .view()
+                .has_prim(&SdfPath::new("/World/First").unwrap())
+        );
+        assert!(
+            stage
+                .view()
+                .has_prim(&SdfPath::new("/World/Second").unwrap())
+        );
         let changes = app
             .world_mut()
             .non_send_mut::<CanonicalStages>()
@@ -3753,12 +3844,16 @@ mod tests {
             [first_key.operation_id, second_key.operation_id]
         );
         let projections = app.world().resource::<PendingInstanceProjections>();
-        assert!(projections
-            .plans
-            .contains_key(&(scene_id, "/World/First".into())));
-        assert!(projections
-            .plans
-            .contains_key(&(scene_id, "/World/Second".into())));
+        assert!(
+            projections
+                .plans
+                .contains_key(&(scene_id, "/World/First".into()))
+        );
+        assert!(
+            projections
+                .plans
+                .contains_key(&(scene_id, "/World/Second".into()))
+        );
         assert!(app.world().resource::<SimulationProgress>().is_held());
     }
 

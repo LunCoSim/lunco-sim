@@ -178,10 +178,13 @@ enum UsdOp {
     ReplaceSource   { edit_target, source },           // whole-layer text replace
     AddPrim         { edit_target, parent_path, name, type_name, reference, reference_prim_path },
     RemovePrim      { edit_target, path },
+    RestorePrim     { edit_target, path, snapshot_usda, sibling_order },
     MovePrim        { edit_target, from_path, to_path }, // rename / reparent (NamespaceEditor)
     SetTranslate    { edit_target, path, value },
     SetRotate       { edit_target, path, value },
     SetAttribute    { edit_target, path, name, type_name, value },
+    RemoveAttribute { edit_target, path, name },
+    RestoreAttribute{ edit_target, path, name, snapshot_usda, sibling_order },
     SetRelationship { edit_target, path, name, targets },
     SetConnection   { edit_target, path, name, type_name, sources }, // dataflow edges (W1)
     SetTimeSample   { edit_target, path, name, time, value },
@@ -219,8 +222,12 @@ live projection asynchronous.
 A newly authored `SetAttribute` uses `RemoveAttribute` as its inverse, so adding
 attributes to a growing runtime layer does not serialize the entire layer into
 every undo record. Existing values use a typed restore when representable; the
-full-source inverse remains for existing opinions that cannot be restored by a
-typed operation.
+full-source inverse remains for operations whose effects are genuinely
+layer-wide. Removing a prim or attribute captures only its authored Sdf subtree
+as a USDA fragment plus the owning parent's sibling order. Undo/redo restores
+those specs in one atomic layer edit and sends the ordinary stage change notice;
+it does not serialize the complete layer or rebuild the scene. Sibling order is
+merged against the current parent list so unrelated later children are retained.
 
 Derived presentation has a separate typed boundary: `ApplyUsdTransientOps`
 updates the runtime view from already-authored facts (for example, the route
@@ -288,8 +295,9 @@ generation and records `UsdChange::FullReload`, but does not invent an authored
 operation. `ops_since` returns `None` when the cursor crosses a full reload or the
 op window expires; document sync then sends a layer snapshot, and the stage
 projector rebuilds from composed source. Coarse authored ops (`ReplaceSource`,
-`MovePrim`, `RemoveTimeSample`, `SetRelationship`) rebuild; common interactive ops
-replay incrementally (`apply_incremental_op_to_stage`). A reload whose parsed layer
+`MovePrim`, `RemoveTimeSample`, `SetRelationship`) rebuild; common interactive ops,
+including local subtree remove/restore, replay incrementally
+(`apply_incremental_op_to_stage`). A reload whose parsed layer
 source string is identical is an idempotent no-op and does not advance the
 projection generation.
 
