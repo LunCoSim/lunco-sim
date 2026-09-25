@@ -1793,7 +1793,7 @@ fn validate_evaluation_context(
             diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::ObservationSnapshotMismatch,
-                source: None,
+                source: Some(constraint.source.clone()),
                 message: "provider observation belongs to a different SysML source snapshot"
                     .to_owned(),
             });
@@ -1802,7 +1802,7 @@ fn validate_evaluation_context(
             diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::DuplicateObservationPath,
-                source: None,
+                source: Some(constraint.source.clone()),
                 message: "provider supplied duplicate observations for one SysML feature path"
                     .to_owned(),
             });

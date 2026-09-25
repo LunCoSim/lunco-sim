@@ -340,6 +340,10 @@ pub fn evaluate_constraint_value(
     let compiled = compile_constraint_by_name(&model.analysis, name);
     let mut context = EvaluationContext::default();
     let mut input_diagnostics = Vec::new();
+    let constraint_source = compiled
+        .constraint
+        .as_ref()
+        .map(|constraint| constraint.source.clone());
 
     let allowed_paths = compiled
         .constraint
@@ -352,7 +356,7 @@ pub fn evaluate_constraint_value(
             input_diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::ObservationIsNotRecord,
-                source: None,
+                source: constraint_source.clone(),
                 message: "provider observation must be a Rhai map".to_owned(),
             });
             continue;
@@ -362,7 +366,7 @@ pub fn evaluate_constraint_value(
             input_diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::InvalidObservationPath,
-                source: None,
+                source: constraint_source.clone(),
                 message: "provider observation needs a non-empty typed SysML feature path"
                     .to_owned(),
             });
@@ -370,14 +374,20 @@ pub fn evaluate_constraint_value(
         };
         let feature_name = feature_path_label(&model.analysis, &path)
             .unwrap_or_else(|| format!("feature-path {:?}", path.features()));
-        if !path.belongs_to(
+        let path_is_current = path.belongs_to(
             model.analysis.source_revision(),
             model.analysis.source_fingerprint(),
-        ) {
+        );
+        let source = if path_is_current {
+            feature_path_source(&model.analysis, &path).or_else(|| constraint_source.clone())
+        } else {
+            constraint_source.clone()
+        };
+        if !path_is_current {
             input_diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::ObservationSnapshotMismatch,
-                source: None,
+                source,
                 message: format!(
                     "observation path for `{feature_name}` belongs to another source snapshot"
                 ),
@@ -388,7 +398,7 @@ pub fn evaluate_constraint_value(
             input_diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::ObservationIsNotDependency,
-                source: None,
+                source: source.clone(),
                 message: format!(
                     "observation path for `{feature_name}` is not a dependency of `{name}`"
                 ),
@@ -399,7 +409,7 @@ pub fn evaluate_constraint_value(
             input_diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::DuplicateObservationPath,
-                source: None,
+                source: source.clone(),
                 message: format!(
                     "provider supplied more than one observation for `{feature_name}`"
                 ),
@@ -418,7 +428,7 @@ pub fn evaluate_constraint_value(
             input_diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::ObservationProviderOrStateInvalid,
-                source: None,
+                source: source.clone(),
                 message: format!(
                     "observation for `{feature_name}` needs recognized provider and state"
                 ),
@@ -447,7 +457,7 @@ pub fn evaluate_constraint_value(
                 input_diagnostics.push(IrDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     code: IrDiagnosticCode::InvalidBindingContract,
-                    source: None,
+                    source: source.clone(),
                     message: format!("binding contract for `{feature_name}` must be a Rhai map"),
                 });
                 continue;
@@ -460,7 +470,7 @@ pub fn evaluate_constraint_value(
                 input_diagnostics.push(IrDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     code: IrDiagnosticCode::InvalidBindingContract,
-                    source: None,
+                    source: source.clone(),
                     message: format!(
                         "binding contract for `{feature_name}` needs a recognized provider"
                     ),
@@ -551,6 +561,23 @@ fn feature_path_label(analysis: &SysmlAnalysis, path: &SysmlFeaturePath) -> Opti
                 .iter()
                 .find(|element| element.feature_handle == Some(target))
                 .map(|element| element.qualified_name.clone())
+        })
+}
+
+fn feature_path_source(
+    analysis: &SysmlAnalysis,
+    path: &SysmlFeaturePath,
+) -> Option<SysmlSourceRef> {
+    let target = path.target();
+    analysis
+        .elements()
+        .iter()
+        .find(|element| element.feature_handle == Some(target))
+        .map(|element| SysmlSourceRef {
+            file: element.file.clone(),
+            start: element.start,
+            end: element.end,
+            revision: analysis.source_revision(),
         })
 }
 

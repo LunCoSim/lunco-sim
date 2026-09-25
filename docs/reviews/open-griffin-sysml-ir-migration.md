@@ -65,8 +65,10 @@ The generic AST now preserves dotted `PATH_EXPR` navigation as an ordered
 snapshot-scoped handles through dependency collection, provider observations,
 and Modelica input bindings. The Rhai API accepts complete typed paths for
 general observations, and the scalar-parameter helper emits only dependencies
-that the constraint actually uses. Rust diagnostic identities now use
-`IrDiagnosticCode` and serialize with their stable `SYSML-IR-NNN` report names.
+that the constraint actually uses. Provider diagnostics carry the authored
+feature or constraint source location. Rust diagnostic identities use a
+single `IrDiagnosticCode` catalog and serialize with stable `SYSML-IR-NNN`
+report names.
 
 The affected crates compile with `cargo check`. This is compile evidence only:
 no Rhai fixture or Griffin Editor/runtime gate has run, so actual path
