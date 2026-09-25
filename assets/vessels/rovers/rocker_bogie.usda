@@ -2,169 +2,412 @@
 (
     defaultPrim = "RockerBogie"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# G5 — rocker-bogie chassis with a differential coupling.
-#
-# A complete physical joint-based rocker-bogie suspension with 6 motorized wheels:
-#   - Two side rockers (RockerL/R) hinge to the chassis on the X axis.
-#   - Two bogies (BogieL/R) hinge to the rear of the rockers on the X axis.
-#   - Six wheels (FL/FR/ML/MR/RL/RR) reference the reusable motorized wheel components.
-#   - The differential coupling enforces: θ_left + θ_right → 0.
-#   - Controllable via the authored generic control and drive-law ports.
-#
-# FOR PARAMETER EDITING GUIDE: See the accompanying README.md in this directory.
 
 def Xform "RockerBogie" (
-    doc = "Perseverance-class six-wheel rocker-bogie Mars rover with articulated suspension and differential body leveling."
-    # An ASSEMBLY: a model built out of other models. Its wheels are component models
-    # that arrive by reference, and USD forbids a `component` from containing them.
+    documentation = "Perseverance-class six-wheel rocker-bogie Mars rover with articulated suspension and differential body leveling."
     kind = "assembly"
-    prepend apiSchemas = [
-        "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI",
-        "PhysicsMassAPI",
-        "PhysicsArticulationRootAPI",
-        "PhysxVehicleContextAPI",
-        "LunCoCatalogAPI",
-        "CollectionAPI:components"
-    ]
-    # The ON-BOARD COMPUTER, as a second reference arc — the rover's COMMAND
-    # SURFACE (`throttle`/`steer`/`brake`). Ships with the chassis; without one
-    # this rover accepts no commands at all. See `skid_rover.usda`.
-    prepend references = @lunco://components/avionics/obc.usda@</OBC>
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI", "PhysicsArticulationRootAPI", "PhysxVehicleContextAPI", "LunCoCatalogAPI", "CollectionAPI:components"]
     prepend references = @lunco://components/mobility/drive_laws/modelica_ackermann.usda@</DriveLaw>
     prepend variantSets = ["power", "generation", "thermal"]
-    variants = {
-        string power = "infinite"
-        string generation = "none"
-        string thermal = "none"
-    }
+    variants = { string "generation" = "none"; string "power" = "infinite"; string "thermal" = "none" }
 )
 {
-    # The authored drive law is front-steered Ackermann. Autopilot navigation is
-    # forward-only and uses this capability for its shared heading recovery.
     uniform token lunco:steeringGeometry = "ackermann"
-    def Camera "FrontCamera" (
-        prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
-    )
-    {
-    }
-
     uniform bool lunco:spawnable = true
-    # --- VEHICLE MASS & DAMPING ---
-    #
-    # Perseverance reference envelope: 3.0 m long, 2.7 m wide over the wheel
-    # skins, 2.2 m tall to the camera head, and approximately 1,025 kg ready to
-    # drive. The shared body is 1.90 m wide × 1.00 m high × 3.00 m long; the six
-    # 0.525 m wheels set the overall footprint and obstacle scale.
-    #
-    # The authored mass is the warm-electronics-box/chassis mass. Adding the two
-    # rockers, two bogies, six wheels, six motors, six reductions, OBC and camera
-    # hardware gives the Perseverance-class vehicle mass. Difficulty tiers change
-    # only their authored drive and tire properties.
     float physics:mass = 720.0
-    # ── THERE IS NO AIR. DRAG LIVES IN THE PARTS. ───────────────────────────
-    # Body damping is a fluid model: a force proportional to velocity, applied to
-    # the hull. It is kept near zero so the Mars-rover behavior comes from wheel
-    # contact, bearing drag, and gearbox losses rather than an invented headwind.
-    #
-    # Both are now ~0 and the losses are authored where the hardware loses them:
-    #   · `physxVehicleWheel:dampingRate` = 0.45 N·m·s per wheel — the sealed
-    #     dry-lubricated bearing plus regolith rolling resistance (`wheel.usda`).
-    #   · gearbox `inputs:eta` = 0.85 — a cold multi-stage harmonic drive.
-    #   · tyre μ — lateral friction is what actually resists a yaw, and it does:
-    #     with angular damping gone the rover still turns flat (2.8° peak roll
-    #     under full steer at 0.6 throttle, measured) rather than spinning out.
-    #
-    # 0.05 rather than a hard 0 on the angular term: a rigid body with literally no
-    # rotational damping is a solver liability, and 0.05 is small enough to be lost
-    # in the bearing drag. It is a numerical floor, not a physical claim.
-    #
-    # The body damping is not the speed limiter; the authored motor and gearbox
-    # parameters below own the vehicle's playable speed envelope.
     float physxRigidBody:linearDamping = 0.0
-    float physxRigidBody:angularDamping = 0.05
-
-    # The two bank actuator ports, as attributes the motors CONNECT to. Declaring
-    # them here gives each `inputs:demand.connect` a real property to resolve to, so
-    # the binding is PCP-resolved and path-translated through the reference arcs
-    # instead of matched by name. Without them every `Motor_*` on this chassis wires
-    # to a property that does not exist and the cosim bridge drops the value with
-    # "connection targets unknown input port 'drive_left'" — the same declaration
-    # `six_wheel_rover.usda` has always carried.
+    float physxRigidBody:angularDamping = 0.05000000074505806
     float outputs:drive_left = 0.0
     float outputs:drive_right = 0.0
     float outputs:heading_fl = 0.0
     float outputs:heading_fr = 0.0
     float outputs:brake = 0.0
-
-    # --- Telemetry: the vehicle's own ground speed ---
-    # `speed` is a PHYSICS port (the magnitude of this body's linear velocity, from
-    # the avian backend), not a model variable — which is why it is authored on the
-    # chassis and not on a component: the chassis IS the rigid body being measured.
-    #
-    # It is the one number "is this rover moving, and how fast" needs, and reading it
-    # from a single port beats plotting `velocity_x/y/z` and doing the arithmetic by
-    # eye — those are world-frame, so a rover that turns hands its speed from one
-    # trace to another.
-    # Intent->port control (stage 2): shared rover profile as a child `references`
-    # arc so it composes through a spawn/reference like the wheels.
+    variantSet "power" = {
+        "infinite" {
+            uniform token collection:components:expansionRule = "explicitOnly"
+            rel collection:components:includes
+            prepend rel collection:components:includes = [</RockerBogie/PowerSource>, </RockerBogie/RockerL/Motor_FL>, </RockerBogie/RockerL/TorqueSource_FL>, </RockerBogie/BogieL/Motor_ML>, </RockerBogie/BogieL/TorqueSource_ML>, </RockerBogie/BogieL/Motor_RL>, </RockerBogie/BogieL/TorqueSource_RL>, </RockerBogie/RockerR/Motor_FR>, </RockerBogie/RockerR/TorqueSource_FR>, </RockerBogie/BogieR/Motor_MR>, </RockerBogie/BogieR/TorqueSource_MR>, </RockerBogie/BogieR/Motor_RR>, </RockerBogie/BogieR/TorqueSource_RR>, </RockerBogie/RockerL/Gearbox_FL>, </RockerBogie/RockerR/Gearbox_FR>, </RockerBogie/BogieL/Gearbox_ML>, </RockerBogie/BogieL/Gearbox_RL>, </RockerBogie/BogieR/Gearbox_MR>, </RockerBogie/BogieR/Gearbox_RR>, </RockerBogie/RockerL/Shaft_FL>, </RockerBogie/RockerR/Shaft_FR>, </RockerBogie/BogieL/Shaft_ML>, </RockerBogie/BogieL/Shaft_RL>, </RockerBogie/BogieR/Shaft_MR>, </RockerBogie/BogieR/Shaft_RR>]
+            float inputs:drive_left
+            float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
+            float inputs:drive_right
+            float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
+            float inputs:shaft_speed_FL
+            float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
+            float inputs:shaft_speed_FR
+            float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
+            float inputs:shaft_speed_ML
+            float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
+            float inputs:shaft_speed_RL
+            float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
+            float inputs:shaft_speed_MR
+            float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
+            float inputs:shaft_speed_RR
+            float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
+            float outputs:bus_voltage
+            float outputs:bus_voltage.connect = </RockerBogie/PowerSource.outputs:terminal_voltage_v>
+            float outputs:bus_current
+            float outputs:bus_current.connect = </RockerBogie/PowerSource.outputs:terminal_current_a>
+            float outputs:bus_power
+            float outputs:bus_power.connect = </RockerBogie/PowerSource.outputs:terminal_power_w>
+            over "Battery"
+            {
+                bool active = false
+            }
+            def Xform "PowerSource" (
+                prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
+            )
+            {
+            }
+            over "RockerL"
+            {
+                over "Motor_FL"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+            }
+            over "BogieL"
+            {
+                over "Motor_ML"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+                over "Motor_RL"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+            }
+            over "RockerR"
+            {
+                over "Motor_FR"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+            }
+            over "BogieR"
+            {
+                over "Motor_MR"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+                over "Motor_RR"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
+                }
+            }
+        }
+        "battery" {
+            uniform token collection:components:expansionRule = "explicitOnly"
+            rel collection:components:includes
+            prepend rel collection:components:includes = [</RockerBogie/Battery>, </RockerBogie/RockerL/Motor_FL>, </RockerBogie/RockerL/TorqueSource_FL>, </RockerBogie/BogieL/Motor_ML>, </RockerBogie/BogieL/TorqueSource_ML>, </RockerBogie/BogieL/Motor_RL>, </RockerBogie/BogieL/TorqueSource_RL>, </RockerBogie/RockerR/Motor_FR>, </RockerBogie/RockerR/TorqueSource_FR>, </RockerBogie/BogieR/Motor_MR>, </RockerBogie/BogieR/TorqueSource_MR>, </RockerBogie/BogieR/Motor_RR>, </RockerBogie/BogieR/TorqueSource_RR>, </RockerBogie/RockerL/Gearbox_FL>, </RockerBogie/RockerR/Gearbox_FR>, </RockerBogie/BogieL/Gearbox_ML>, </RockerBogie/BogieL/Gearbox_RL>, </RockerBogie/BogieR/Gearbox_MR>, </RockerBogie/BogieR/Gearbox_RR>, </RockerBogie/RockerL/Shaft_FL>, </RockerBogie/RockerR/Shaft_FR>, </RockerBogie/BogieL/Shaft_ML>, </RockerBogie/BogieL/Shaft_RL>, </RockerBogie/BogieR/Shaft_MR>, </RockerBogie/BogieR/Shaft_RR>]
+            float inputs:drive_left
+            float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
+            float inputs:drive_right
+            float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
+            float inputs:shaft_speed_FL
+            float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
+            float inputs:shaft_speed_FR
+            float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
+            float inputs:shaft_speed_ML
+            float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
+            float inputs:shaft_speed_RL
+            float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
+            float inputs:shaft_speed_MR
+            float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
+            float inputs:shaft_speed_RR
+            float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
+            float outputs:soc
+            float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
+            float outputs:battery_drained
+            float outputs:battery_drained.connect = </RockerBogie/Battery.outputs:drained>
+            float outputs:bus_voltage
+            float outputs:bus_voltage.connect = </RockerBogie/Battery.outputs:terminal_voltage_v>
+            float outputs:bus_current
+            float outputs:bus_current.connect = </RockerBogie/Battery.outputs:terminal_current_a>
+            float outputs:bus_power
+            float outputs:bus_power.connect = </RockerBogie/Battery.outputs:net_power_w>
+            float outputs:battery_net_power
+            float outputs:battery_net_power.connect = </RockerBogie/Battery.outputs:net_power_w>
+            float outputs:battery_charge_power
+            float outputs:battery_charge_power.connect = </RockerBogie/Battery.outputs:charge_power_w>
+            float outputs:battery_discharge_power
+            float outputs:battery_discharge_power.connect = </RockerBogie/Battery.outputs:discharge_power_w>
+            float outputs:motor_electrical_power
+            float outputs:motor_electrical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:electrical_power>
+            float outputs:motor_mechanical_power
+            float outputs:motor_mechanical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:mechanical_power_w>
+            float outputs:motor_terminal_current
+            float outputs:motor_terminal_current.connect = </RockerBogie/RockerL/Motor_FL.outputs:terminal_current_a>
+            over "RockerL"
+            {
+                over "Motor_FL"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+            }
+            over "BogieL"
+            {
+                over "Motor_ML"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+                over "Motor_RL"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+            }
+            over "RockerR"
+            {
+                over "Motor_FR"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+            }
+            over "BogieR"
+            {
+                over "Motor_MR"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+                over "Motor_RR"
+                {
+                    float inputs:demand
+                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
+                    custom token connectors:p
+                    token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                }
+            }
+            def LunCoEvent "BatteryDrained"
+            {
+                uniform token lunco:event:name = "battery_drained"
+                uniform token lunco:event:severity = "warning"
+                uniform bool lunco:event:latched = true
+                double lunco:event:qualificationTime = 0.0
+                float inputs:trigger
+                float inputs:trigger.connect = </RockerBogie.outputs:battery_drained>
+            }
+        }
+    }
+    variantSet "generation" = {
+        "none" {
+        }
+        "solar" {
+            rel collection:components:includes
+            prepend rel collection:components:includes = </RockerBogie/SolarPanel>
+            float outputs:solar_power
+            float outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
+            float outputs:solar_available_power
+            float outputs:solar_available_power.connect = </RockerBogie/SolarPanel.outputs:available_power_w>
+            float outputs:solar_incidence
+            float outputs:solar_incidence.connect = </RockerBogie/SolarPanel.outputs:cos_incidence>
+            def Xform "SolarPanel" (
+                prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
+            )
+            {
+                double3 xformOp:translate = (0.0, 0.55, 0.0)
+                double3 xformOp:scale = (0.42, 0.2, 0.42)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                custom token connectors:p
+                token connectors:p.connect = </RockerBogie/Battery.connectors:p>
+                custom double inputs:target_mount_x
+                double inputs:target_mount_x.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_x>
+                custom double inputs:target_mount_y
+                double inputs:target_mount_y.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_y>
+                custom double inputs:target_mount_z
+                double inputs:target_mount_z.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_z>
+                def Xform "Environment" (
+                    prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+                )
+                {
+                }
+            }
+        }
+    }
+    variantSet "thermal" = {
+        "none" {
+        }
+        "basic" {
+            def Scope "Thermal" (
+                prepend apiSchemas = "CollectionAPI:components"
+                documentation = "Rover thermal control network: motor dissipation → masses → radiators."
+            )
+            {
+                uniform token collection:components:expansionRule = "explicitOnly"
+                rel collection:components:includes
+                prepend rel collection:components:includes = [</RockerBogie/Thermal/MotorHeat_FL>, </RockerBogie/Thermal/MotorHeat_ML>, </RockerBogie/Thermal/MotorHeat_RL>, </RockerBogie/Thermal/MotorHeat_FR>, </RockerBogie/Thermal/MotorHeat_MR>, </RockerBogie/Thermal/MotorHeat_RR>, </RockerBogie/Thermal/MotorThermalLeft>, </RockerBogie/Thermal/MotorThermalRight>, </RockerBogie/Thermal/MotorRadiatorLeft>, </RockerBogie/Thermal/MotorRadiatorRight>, </RockerBogie/Thermal/ThermalBridge>]
+                float inputs:motor_heat_FL
+                float inputs:motor_heat_FL.connect = </RockerBogie/RockerL/Motor_FL.outputs:heat>
+                float inputs:motor_heat_ML
+                float inputs:motor_heat_ML.connect = </RockerBogie/BogieL/Motor_ML.outputs:heat>
+                float inputs:motor_heat_RL
+                float inputs:motor_heat_RL.connect = </RockerBogie/BogieL/Motor_RL.outputs:heat>
+                float inputs:motor_heat_FR
+                float inputs:motor_heat_FR.connect = </RockerBogie/RockerR/Motor_FR.outputs:heat>
+                float inputs:motor_heat_MR
+                float inputs:motor_heat_MR.connect = </RockerBogie/BogieR/Motor_MR.outputs:heat>
+                float inputs:motor_heat_RR
+                float inputs:motor_heat_RR.connect = </RockerBogie/BogieR/Motor_RR.outputs:heat>
+                float outputs:motor_temp_left
+                float outputs:motor_temp_left.connect = </RockerBogie/Thermal/MotorThermalLeft.outputs:temp_k>
+                float outputs:motor_temp_right
+                float outputs:motor_temp_right.connect = </RockerBogie/Thermal/MotorThermalRight.outputs:temp_k>
+                def Xform "ThermalBridge" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</ThermalConductor>
+                )
+                {
+                    custom token connectors:port_a
+                    token connectors:port_a.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                    custom token connectors:port_b
+                    token connectors:port_b.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
+                def Xform "MotorHeat_FL" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    float inputs:heat_w
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_FL>
+                    custom token connectors:port
+                    token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                }
+                def Xform "MotorHeat_ML" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    float inputs:heat_w
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_ML>
+                    custom token connectors:port
+                    token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                }
+                def Xform "MotorHeat_RL" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    float inputs:heat_w
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_RL>
+                    custom token connectors:port
+                    token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                }
+                def Xform "MotorThermalLeft" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
+                )
+                {
+                }
+                def Xform "MotorRadiatorLeft" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
+                )
+                {
+                    custom token connectors:port
+                    token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
+                }
+                def Xform "MotorHeat_FR" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    float inputs:heat_w
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_FR>
+                    custom token connectors:port
+                    token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
+                def Xform "MotorHeat_MR" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    float inputs:heat_w
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_MR>
+                    custom token connectors:port
+                    token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
+                def Xform "MotorHeat_RR" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
+                )
+                {
+                    float inputs:heat_w
+                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_RR>
+                    custom token connectors:port
+                    token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
+                def Xform "MotorThermalRight" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
+                )
+                {
+                }
+                def Xform "MotorRadiatorRight" (
+                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
+                )
+                {
+                    custom token connectors:port
+                    token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
+                }
+            }
+        }
+    }
+    def Camera "FrontCamera" (
+        prepend references = @lunco://components/cameras/rover_front_camera.usda@</FrontCamera>
+    )
+    {
+    }
     def "Controls" (
         prepend references = @lunco://vessels/control_profiles.usda@</RoverControls>
     )
     {
     }
-
-    # --- CHASSIS GEOMETRY & VISUALS ---
-    # Main body — the shared box chassis component (collider + panelised hull
-    # material), referenced INTO this prim so the name `Body` and every local
-    # opinion below survive. Its own scale wins over the component default.
     def Cube "Body" (
         prepend references = @lunco://components/mobility/chassis/box_chassis.usda@</Chassis>
     )
     {
-        # USD reference opinions replace the referenced xformOp value; they do
-        # not multiply it. Widen only the authored X envelope to 1.90 m so the
-        # body-side rocker bearings meet the ±0.99 m rocker pivot frames while
-        # preserving the established 0.50 m height and 1.50 m body length.
         double3 xformOp:scale = (1.9, 0.5, 1.5)
-        # NASA-ish white-grey — the science-platform archetype. Colour is
-        # `primvars:displayColor` and nothing else; the hull shader consumes it
-        # as the base paint.
-        color3f[] primvars:displayColor = [(0.25, 0.26, 0.28)]
-        # Gold accent, keeping the solar-foil heritage of the original body.
+        color3f[] primvars:displayColor = [(0.25, 0.25999999046325684, 0.2800000011920929)]
         over "HullLook"
         {
             over "Shader"
             {
-                color3f inputs:accent_color = (0.85, 0.7, 0.2)
+                color3f inputs:accent_color = (0.8500000238418579, 0.699999988079071, 0.20000000298023224)
             }
         }
     }
-
-    # Slanted Solar panel deck on top of the chassis
     def Cube "SolarDeck"
     {
         double size = 1.0
         double3 xformOp:translate = (0.0, 0.21, 0.0)
         double3 xformOp:scale = (1.05, 0.02, 1.4)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.05, 0.05, 0.2)]
+        color3f[] primvars:displayColor = [(0.05000000074505806, 0.05000000074505806, 0.20000000298023224)]
         bool physics:collisionEnabled = false
     }
-
-    # ── Rocker bearing housings: the body-side half of each hinge ────────────
-    #
-    # The rocker pivots sit at the lower outside corners of the 1.90 m-wide
-    # equipment box. These housings are deliberately larger than the axle shafts
-    # so the body-to-rocker attachment remains visible at rover scale. The
-    # articulated rocker bodies and their authored hinges remain the sole physical
-    # linkage.
-    #
-    # Structure, not a second mechanism: these are children of the CHASSIS and turn
-    # with it, while the arm rotates about them. Collision is off — the rocker's own
-    # `Collider` already occupies this volume, and a second body here would fight it.
     def Cylinder "RockerBearingL"
     {
         uniform token axis = "X"
@@ -172,10 +415,9 @@ def Xform "RockerBogie" (
         double height = 0.12
         double3 xformOp:translate = (-0.96, -0.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.55, 0.42, 0.16)]
+        color3f[] primvars:displayColor = [(0.550000011920929, 0.41999998688697815, 0.1599999964237213)]
         bool physics:collisionEnabled = false
     }
-
     def Cylinder "RockerBearingR"
     {
         uniform token axis = "X"
@@ -183,35 +425,21 @@ def Xform "RockerBogie" (
         double height = 0.12
         double3 xformOp:translate = (0.96, -0.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.55, 0.42, 0.16)]
+        color3f[] primvars:displayColor = [(0.550000011920929, 0.41999998688697815, 0.1599999964237213)]
         bool physics:collisionEnabled = false
     }
-
-    # Shared Earth-tracking antenna. The component owns BOTH its hinges and its
-    # mount: being a child of this chassis is the attachment, so there is no
-    # antenna joint to author here.
-    #
-    # ⚠ THIS IS THE ROVER'S ONLY ANTENNA. A scene that wants a link node on a
-    # rocker-bogie authors an `over "Antenna"` here — it does NOT add a second
-    # antenna child.
-    #
-    # MOUNTED ON THE REAR DECK, on the centreline-left, clear of the forward
-    # science mast at z = -0.6 (forward is -Z: that is where the headlights point).
-    # s = 0.45 ⇒ a 0.52 m dish on a 0.5 m stalk — big enough to read as a high-gain
-    # at rover scale, short enough to stay inside the roll envelope.
     def "Antenna" (
         prepend references = @lunco://components/comms/antenna.usda@</CommsAntenna>
     )
     {
         double3 xformOp:translate = (-0.35, 0.22, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
         over "Mast"
         {
             double radius = 0.02
             double height = 0.5
             double3 xformOp:translate = (0.0, 0.25, 0.0)
-            color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.3199999928474426)]
         }
         over "YawHead"
         {
@@ -231,7 +459,7 @@ def Xform "RockerBogie" (
                             {
                                 over "Driver"
                                 {
-                                    custom float lunco:param:earthOnly = 1
+                                    custom float lunco:param:earthOnly = 1.0
                                 }
                             }
                         }
@@ -240,21 +468,13 @@ def Xform "RockerBogie" (
             }
         }
     }
-
-    # Separate short-range radio device. The steerable dish remains the
-    # directional link endpoint; Wi-Fi is an independent chassis-mounted node.
     def Xform "WifiRadio" (
         prepend references = @lunco://components/comms/wifi_radio.usda@</WifiRadio>
     )
     {
-        # The shared radio's housing starts 0.03 m above its host origin. The
-        # solar deck's top is y=0.23 m, so this host mount places the housing
-        # bottom at y=0.25 m with the intended 0.02 m mating overlap.
         double3 xformOp:translate = (0.0, 0.22, 0.35)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
-    # Instrument platform / science mast
     def Cylinder "Mast"
     {
         uniform token axis = "Y"
@@ -262,60 +482,43 @@ def Xform "RockerBogie" (
         double height = 1.0
         double3 xformOp:translate = (0.0, 0.6, -0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+        color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.3199999928474426)]
         bool physics:collisionEnabled = false
     }
-
     def Cube "CameraHead"
     {
         double size = 1.0
         double3 xformOp:scale = (0.2, 0.15, 0.15)
         double3 xformOp:translate = (0.0, 1.18, -0.6)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
+        color3f[] primvars:displayColor = [(0.15000000596046448, 0.15000000596046448, 0.15000000596046448)]
         bool physics:collisionEnabled = false
     }
-
-    # Headlights
     def Xform "Headlight_L" (
         prepend references = @lunco://components/lights/headlight.usda@</Headlight>
     )
     {
         double3 xformOp:translate = (-0.5, 0.1, -0.9)
-        double3 xformOp:rotateXYZ = (-15, 0, 0)
+        double3 xformOp:rotateXYZ = (-15.0, 0.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
     }
-
     def Xform "Headlight_R" (
         prepend references = @lunco://components/lights/headlight.usda@</Headlight>
     )
     {
         double3 xformOp:translate = (0.5, 0.1, -0.9)
-        double3 xformOp:rotateXYZ = (-15, 0, 0)
+        double3 xformOp:rotateXYZ = (-15.0, 0.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
     }
-
-    # ── Left rocker ─────────────────────────────────────────────────────────
     def Xform "RockerL" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # Structural mass and diagonal inertia for the articulated rocker. These
-        # authored values are part of the vehicle's physical envelope; the
-        # differential constrains its hinge motion independently.
         float physics:mass = 50.0
         float3 physics:diagonalInertia = (30.0, 30.0, 3.0)
-        # Hinge/bearing loss for the articulated arm. Without an authored
-        # rotational loss the loaded rocker mode rings after each tire-contact
-        # correction and makes the chassis bob at speed.
-        float physxRigidBody:angularDamping = 0.1
+        float physxRigidBody:angularDamping = 0.10000000149011612
         double3 xformOp:translate = (-0.99, -0.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        # Rocker main forward-down link (pivots down/forward to front wheel)
-        # Length: 1.265m, Midpoint: (0.0, -0.2, -0.6), Rotated: -18.43 deg about X
-        # Endpoints are the rocker hinge at (0, 0, 0) and the front axle at
-        # (0, -0.4, -1.2) in this rocker frame.
         def Cylinder "FrontLink"
         {
             uniform token axis = "Z"
@@ -324,12 +527,9 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.2, -0.6)
             double3 xformOp:rotateXYZ = (-18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
+            color3f[] primvars:displayColor = [(0.3499999940395355, 0.3499999940395355, 0.3799999952316284)]
             bool physics:collisionEnabled = false
         }
-
-        # Rocker rear-down link (pivots down/backward to bogie hinge)
-        # Length: 0.632m, Midpoint: (0.0, -0.1, 0.3), Rotated: 18.43 deg about X
         def Cylinder "RearLink"
         {
             uniform token axis = "Z"
@@ -338,11 +538,9 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, 0.3)
             double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
+            color3f[] primvars:displayColor = [(0.3499999940395355, 0.3499999940395355, 0.3799999952316284)]
             bool physics:collisionEnabled = false
         }
-
-        # Outward X-axis axle to front wheel
         def Cylinder "Axle"
         {
             uniform token axis = "X"
@@ -350,13 +548,9 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (-0.125, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.3199999928474426)]
             bool physics:collisionEnabled = false
         }
-
-        # Arm-side wheel bearing. The link, bearing, and axle share this
-        # authored joint frame; the bearing is the structural seat between the
-        # diagonal link and the transverse axle, not a floating marker.
         def Cylinder "FrontAxleBearing"
         {
             uniform token axis = "X"
@@ -364,13 +558,9 @@ def Xform "RockerBogie" (
             double height = 0.16
             double3 xformOp:translate = (0.0, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
-        # Rocker-side pivot hub. It overlaps the body-side bearing housing at the
-        # authored hinge frame, making the leg-to-body attachment readable while
-        # remaining a visual-only child of this rigid body.
         def Cylinder "RockerPivotHub"
         {
             uniform token axis = "X"
@@ -378,15 +568,11 @@ def Xform "RockerBogie" (
             double height = 0.2
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
-        # Simplified box collider for the rocker arm (clears the bogie space).
-        # `visibility = "invisible"` — collision-only: the loader would otherwise
-        # render this as a white bar (no displayColor → Color::WHITE fallback).
         def Cube "Collider" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = "PhysicsCollisionAPI"
         )
         {
             double size = 1.0
@@ -396,135 +582,81 @@ def Xform "RockerBogie" (
             token visibility = "invisible"
             bool physics:collisionEnabled = true
         }
-
-        # Front Left Wheel
         def Cylinder "Wheel_FL" (
             prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-            prepend references = [
-                @lunco://components/mobility/wheel.usda@</Wheel>,
-                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
-            ]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/rocker.usda@</Suspension>]
         )
         {
             uniform token axis = "X"
-            # Perseverance wheel: 0.525 m diameter × 0.18 m wide. Both the
-            # UsdGeom radius and PhysX vehicle radius are authored because the
-            # simulation reads the latter for contact and wheel inertia.
             double radius = 0.2625
             double height = 0.18
-            float physxVehicleWheel:radius = 0.2625
-            # A 1,500 N·m catalogue lock is an emergency brake for a much heavier
-            # wheel and makes this articulated rover pitch over on a normal stop.
-            # 100 N·m gives the wheel a finite, controllable stop authority.
+            float physxVehicleWheel:radius = 0.26249998807907104
             float physxVehicleWheel:maxBrakeTorque = 100.0
-            # An aluminium spun wheel with a flexure sidewall, not the 25 kg
-            # placeholder `wheel.usda` ships as its catalogue default.
             float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (-0.3, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
-
-            # --- WHEEL DYNAMICS CONFIGURATION ---
+            color3f[] primvars:displayColor = [(0.15000000596046448, 0.15000000596046448, 0.15000000596046448)]
             int physxVehicleWheelAttachment:index = 0
-            # Complete axle inertia for the authored motor, reduction, and tire assembly.
-            # The 6.8 kg.m2 value is the composed USD mechanical contract.
-            float physxVehicleWheel:moi = 6.8
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
             float inputs:drive.connect = </RockerBogie/RockerL/Shaft_FL.outputs:torque>
+            float inputs:heading
             float inputs:heading.connect = </RockerBogie.outputs:heading_fl>
         }
-
-        # Motor + reduction for the front-left wheel. A CHILD OF THE ROCKER, not of
-        # the chassis: the rocker is its own rigid body, and a motor bolted to the
-        # arm must swing with the arm. Placed inboard of the wheel so its housing
-        # never overlaps the wheel collider.
-        #
-        #   τ_axle = stallTorque · (1 − ω_shaft/noLoadSpeed) · ratio · efficiency · demand
-        # clamped at the gearbox's `maxOutputTorque`; axle no-load speed =
-        # 2400/200 = 12 rad/s. The wheel's authored `inputs:drive` connection
-        # selects the `drive_left` channel explicitly.
         def Xform "Motor_FL" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            # ── A DRIVE ACTUATOR LIVES ON THE AXLE IT TURNS ─────────────────────
-            # Both housings are ON THE WHEEL'S AXIS — same y, same z as Wheel_FL —
-            # with the rocker's own structure between them: motor bolted to the
-            # arm's INBOARD face, harmonic drive on the OUTBOARD face driving the
-            # hub. That is the MER/MSL arrangement and it is what the wiring
-            # already claims (`drivenWheel` → this wheel, `Motor.outputs:torque` →
-            # this gearbox).
-            #
-            # They used to sit at x = ±0.3/±0.15 — 0.9 m inboard of the wheel,
-            # floating in the middle of the vehicle, driving a hub they did not
-            # touch.
-            #
-            # ⚠ AND THEY MUST BE TURNED. `motor.usda`/`gearbox.usda` draw `Body` as
-            # a bare `Cylinder` with no `axis`, so it defaults to Z — fore-and-aft,
-            # broadside to the axle. The component cannot fix this: a wheel's axis
-            # is the VESSEL's decision (Rucheyok's wheels are Z-forward), so the
-            # rotation belongs on the instance, here, where `axis = "X"` is known.
             double3 xformOp:translate = (0.1, -0.4, -1.2)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/RockerL/Gearbox_FL.outputs:speed_a>
-            float inputs:demand.connect = </RockerBogie.outputs:drive_left>
-
-            # ── SPEED KNOB ────────────────────────────────────────────────────
-            # The axle's free-spin cap is `noLoadSpeed / ratio`: 2400 / 200 =
-            # 12 rad/s, or 3.15 m/s at the authored 0.2625 m wheel radius. This
-            # remains the tutorial's playable envelope; torque, tire grip, and
-            # contact losses determine the loaded speed below that ceiling.
-            #
-            # SPEED ONLY. `stallTorque` is untouched here — the axle torque
-            # (stallTorque · 200 · 0.85) is set per tier in `variants/rover_*.usda`,
-            # and it is the torque ladder (153 › 85 › 68 N·m) that now carries the
-            # difficulty, sized against each tier's traction cone.
             float inputs:no_load_speed = 2400.0
+            float inputs:speed
+            float inputs:speed.connect = </RockerBogie/RockerL/Gearbox_FL.outputs:speed_a>
+            float inputs:demand
+            float inputs:demand.connect = </RockerBogie.outputs:drive_left>
         }
-
         def Xform "TorqueSource_FL" (
             prepend references = @lunco://components/mobility/torque.usda@</Torque>
         )
         {
+            float inputs:tau_ref
             float inputs:tau_ref.connect = </RockerBogie/RockerL/Motor_FL.outputs:shaft_torque>
-            custom token connectors:flange.connect = </RockerBogie/RockerL/Gearbox_FL.connectors:flange_a>
+            custom token connectors:flange
+            token connectors:flange.connect = </RockerBogie/RockerL/Gearbox_FL.connectors:flange_a>
         }
-
         def Xform "Gearbox_FL" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
         {
-            # Outboard face of the arm, on the axle, feeding the hub. See Motor_FL.
             double3 xformOp:translate = (-0.055, -0.4, -1.2)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:ratio = 200.0
-            float inputs:eta = 0.85
+            float inputs:eta = 0.8500000238418579
             float inputs:max_output_torque = 400.0
-            custom token connectors:flange_a.connect = </RockerBogie/RockerL/TorqueSource_FL.connectors:flange>
-            custom token connectors:flange_b.connect = </RockerBogie/RockerL/Shaft_FL.connectors:flange>
+            custom token connectors:flange_a
+            token connectors:flange_a.connect = </RockerBogie/RockerL/TorqueSource_FL.connectors:flange>
+            custom token connectors:flange_b
+            token connectors:flange_b.connect = </RockerBogie/RockerL/Shaft_FL.connectors:flange>
         }
-
-        def Xform "Shaft_FL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        def Xform "Shaft_FL" (
+            prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+        )
         {
+            float inputs:speed
             float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_FL>
         }
     }
-
-    # ── Right rocker ────────────────────────────────────────────────────────
     def Xform "RockerR" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # Structural mass and diagonal inertia for the articulated rocker. These
-        # authored values are part of the vehicle's physical envelope; the
-        # differential constrains its hinge motion independently.
         float physics:mass = 50.0
         float3 physics:diagonalInertia = (30.0, 30.0, 3.0)
-        float physxRigidBody:angularDamping = 0.1
+        float physxRigidBody:angularDamping = 0.10000000149011612
         double3 xformOp:translate = (0.99, -0.2, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
         def Cylinder "FrontLink"
         {
             uniform token axis = "Z"
@@ -533,10 +665,9 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.2, -0.6)
             double3 xformOp:rotateXYZ = (-18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
+            color3f[] primvars:displayColor = [(0.3499999940395355, 0.3499999940395355, 0.3799999952316284)]
             bool physics:collisionEnabled = false
         }
-
         def Cylinder "RearLink"
         {
             uniform token axis = "Z"
@@ -545,10 +676,9 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, 0.3)
             double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f[] primvars:displayColor = [(0.35, 0.35, 0.38)]
+            color3f[] primvars:displayColor = [(0.3499999940395355, 0.3499999940395355, 0.3799999952316284)]
             bool physics:collisionEnabled = false
         }
-
         def Cylinder "Axle"
         {
             uniform token axis = "X"
@@ -556,11 +686,9 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (0.125, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.3199999928474426)]
             bool physics:collisionEnabled = false
         }
-
-        # Arm-side wheel bearing at the shared front-link/axle joint.
         def Cylinder "FrontAxleBearing"
         {
             uniform token axis = "X"
@@ -568,10 +696,9 @@ def Xform "RockerBogie" (
             double height = 0.16
             double3 xformOp:translate = (0.0, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
         def Cylinder "RockerPivotHub"
         {
             uniform token axis = "X"
@@ -579,15 +706,11 @@ def Xform "RockerBogie" (
             double height = 0.2
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
-        # Simplified box collider for the rocker arm (clears the bogie space).
-        # `visibility = "invisible"` — collision-only: the loader would otherwise
-        # render this as a white bar (no displayColor → Color::WHITE fallback).
         def Cube "Collider" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = "PhysicsCollisionAPI"
         )
         {
             double size = 1.0
@@ -597,59 +720,49 @@ def Xform "RockerBogie" (
             token visibility = "invisible"
             bool physics:collisionEnabled = true
         }
-
-        # Front Right Wheel
         def Cylinder "Wheel_FR" (
             prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-            prepend references = [
-                @lunco://components/mobility/wheel.usda@</Wheel>,
-                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
-            ]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/rocker.usda@</Suspension>]
         )
         {
             uniform token axis = "X"
             double radius = 0.2625
             double height = 0.18
-            float physxVehicleWheel:radius = 0.2625
+            float physxVehicleWheel:radius = 0.26249998807907104
             float physxVehicleWheel:maxBrakeTorque = 100.0
             float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (0.3, -0.4, -1.2)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
-
+            color3f[] primvars:displayColor = [(0.15000000596046448, 0.15000000596046448, 0.15000000596046448)]
             int physxVehicleWheelAttachment:index = 1
-            # Complete axle inertia for the authored motor, reduction, and tire assembly.
-            # The 6.8 kg.m2 value is the composed USD mechanical contract.
-            float physxVehicleWheel:moi = 6.8
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
             float inputs:drive.connect = </RockerBogie/RockerR/Shaft_FR.outputs:torque>
+            float inputs:heading
             float inputs:heading.connect = </RockerBogie.outputs:heading_fr>
         }
-
-        # Wheel index 1 is odd ⇒ `drive_right`. Mirror of the left rocker.
         def Xform "Motor_FR" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            # Mirror of the left arm — on the axle, arm between motor and gearbox,
-            # both turned onto X. See Motor_FL.
             double3 xformOp:translate = (-0.1, -0.4, -1.2)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/RockerR/Gearbox_FR.outputs:speed_a>
-            float inputs:demand.connect = </RockerBogie.outputs:drive_right>
-            # 12.9 km/h measured — see Motor_FL. All six must
-            # agree, or the fast wheels drag the slow ones and every wheel scrubs.
             float inputs:no_load_speed = 2400.0
+            float inputs:speed
+            float inputs:speed.connect = </RockerBogie/RockerR/Gearbox_FR.outputs:speed_a>
+            float inputs:demand
+            float inputs:demand.connect = </RockerBogie.outputs:drive_right>
         }
-
         def Xform "TorqueSource_FR" (
             prepend references = @lunco://components/mobility/torque.usda@</Torque>
         )
         {
+            float inputs:tau_ref
             float inputs:tau_ref.connect = </RockerBogie/RockerR/Motor_FR.outputs:shaft_torque>
-            custom token connectors:flange.connect = </RockerBogie/RockerR/Gearbox_FR.connectors:flange_a>
+            custom token connectors:flange
+            token connectors:flange.connect = </RockerBogie/RockerR/Gearbox_FR.connectors:flange_a>
         }
-
         def Xform "Gearbox_FR" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
@@ -658,35 +771,30 @@ def Xform "RockerBogie" (
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:ratio = 200.0
-            float inputs:eta = 0.85
+            float inputs:eta = 0.8500000238418579
             float inputs:max_output_torque = 400.0
-            custom token connectors:flange_a.connect = </RockerBogie/RockerR/TorqueSource_FR.connectors:flange>
-            custom token connectors:flange_b.connect = </RockerBogie/RockerR/Shaft_FR.connectors:flange>
+            custom token connectors:flange_a
+            token connectors:flange_a.connect = </RockerBogie/RockerR/TorqueSource_FR.connectors:flange>
+            custom token connectors:flange_b
+            token connectors:flange_b.connect = </RockerBogie/RockerR/Shaft_FR.connectors:flange>
         }
-
-        def Xform "Shaft_FR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        def Xform "Shaft_FR" (
+            prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+        )
         {
+            float inputs:speed
             float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_FR>
         }
     }
-
-    # ── Left bogie ──────────────────────────────────────────────────────────
     def Xform "BogieL" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # The shorter articulated member, with its authored structural mass and
-        # diagonal inertia.
         float physics:mass = 30.0
         float3 physics:diagonalInertia = (15.0, 15.0, 1.5)
-        float physxRigidBody:angularDamping = 0.1
+        float physxRigidBody:angularDamping = 0.10000000149011612
         double3 xformOp:translate = (-0.99, -0.4, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
-        # Bogie front-down link (goes down/forward to middle wheel)
-        # Length: 0.447m, Midpoint: (0.0, -0.1, -0.2), Rotated: -26.57 deg about X
-        # Endpoints are this bogie's rocker hinge at (0, 0, 0) and the
-        # middle axle at (0, -0.2, -0.4) in the bogie frame.
         def Cylinder "FrontLink"
         {
             uniform token axis = "Z"
@@ -695,12 +803,9 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, -0.2)
             double3 xformOp:rotateXYZ = (-26.57, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            color3f[] primvars:displayColor = [(0.44999998807907104, 0.44999998807907104, 0.47999998927116394)]
             bool physics:collisionEnabled = false
         }
-
-        # Bogie rear-down link (goes down/backward to rear wheel)
-        # Length: 0.632m, Midpoint: (0.0, -0.1, 0.3), Rotated: 18.43 deg about X
         def Cylinder "RearLink"
         {
             uniform token axis = "Z"
@@ -709,11 +814,9 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, 0.3)
             double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            color3f[] primvars:displayColor = [(0.44999998807907104, 0.44999998807907104, 0.47999998927116394)]
             bool physics:collisionEnabled = false
         }
-
-        # Axle to middle wheel
         def Cylinder "MiddleAxle"
         {
             uniform token axis = "X"
@@ -721,11 +824,9 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (-0.125, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.3199999928474426)]
             bool physics:collisionEnabled = false
         }
-
-        # Arm-side wheel bearing at the shared front-link/axle joint.
         def Cylinder "MiddleAxleBearing"
         {
             uniform token axis = "X"
@@ -733,11 +834,9 @@ def Xform "RockerBogie" (
             double height = 0.16
             double3 xformOp:translate = (0.0, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
-        # Axle to rear wheel
         def Cylinder "RearAxle"
         {
             uniform token axis = "X"
@@ -745,11 +844,9 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (-0.125, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.3199999928474426)]
             bool physics:collisionEnabled = false
         }
-
-        # Arm-side wheel bearing at the shared rear-link/axle joint.
         def Cylinder "RearAxleBearing"
         {
             uniform token axis = "X"
@@ -757,11 +854,9 @@ def Xform "RockerBogie" (
             double height = 0.16
             double3 xformOp:translate = (0.0, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
-        # Joint cover housing
         def Cylinder "JointCover"
         {
             uniform token axis = "X"
@@ -769,13 +864,11 @@ def Xform "RockerBogie" (
             double height = 0.1
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
-        # Simplified box collider (collision-only, hidden — see RockerL/Collider).
         def Cube "Collider" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = "PhysicsCollisionAPI"
         )
         {
             double size = 1.0
@@ -785,81 +878,66 @@ def Xform "RockerBogie" (
             token visibility = "invisible"
             bool physics:collisionEnabled = true
         }
-
-        # Middle Left Wheel
         def Cylinder "Wheel_ML" (
             prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-            prepend references = [
-                @lunco://components/mobility/wheel.usda@</Wheel>,
-                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
-            ]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/rocker.usda@</Suspension>]
         )
         {
             uniform token axis = "X"
             double radius = 0.2625
             double height = 0.18
-            float physxVehicleWheel:radius = 0.2625
+            float physxVehicleWheel:radius = 0.26249998807907104
             float physxVehicleWheel:maxBrakeTorque = 100.0
             float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (-0.3, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
-
+            color3f[] primvars:displayColor = [(0.15000000596046448, 0.15000000596046448, 0.15000000596046448)]
             int physxVehicleWheelAttachment:index = 2
-            # Complete axle inertia for the authored motor, reduction, and tire assembly.
-            # The 6.8 kg.m2 value is the composed USD mechanical contract.
-            float physxVehicleWheel:moi = 6.8
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
             float inputs:drive.connect = </RockerBogie/BogieL/Shaft_ML.outputs:torque>
         }
-
-        # Rear Left Wheel
         def Cylinder "Wheel_RL" (
             prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-            prepend references = [
-                @lunco://components/mobility/wheel.usda@</Wheel>,
-                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
-            ]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/rocker.usda@</Suspension>]
         )
         {
             uniform token axis = "X"
             double radius = 0.2625
             double height = 0.18
-            float physxVehicleWheel:radius = 0.2625
+            float physxVehicleWheel:radius = 0.26249998807907104
             float physxVehicleWheel:maxBrakeTorque = 100.0
             float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (-0.3, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
-
+            color3f[] primvars:displayColor = [(0.15000000596046448, 0.15000000596046448, 0.15000000596046448)]
             int physxVehicleWheelAttachment:index = 4
-            # Complete axle inertia for the authored motor, reduction, and tire assembly.
-            # The 6.8 kg.m2 value is the composed USD mechanical contract.
-            float physxVehicleWheel:moi = 6.8
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
             float inputs:drive.connect = </RockerBogie/BogieL/Shaft_RL.outputs:torque>
         }
-
-        # Two motors on this bogie — indices 2 and 4, both even ⇒ `drive_left`.
         def Xform "Motor_ML" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            # On the axle, arm between motor and gearbox, turned onto X. See Motor_FL.
             double3 xformOp:translate = (0.1, -0.2, -0.4)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/BogieL/Gearbox_ML.outputs:speed_a>
-            float inputs:demand.connect = </RockerBogie.outputs:drive_left>
             float inputs:no_load_speed = 2400.0
+            float inputs:speed
+            float inputs:speed.connect = </RockerBogie/BogieL/Gearbox_ML.outputs:speed_a>
+            float inputs:demand
+            float inputs:demand.connect = </RockerBogie.outputs:drive_left>
         }
-
         def Xform "TorqueSource_ML" (
             prepend references = @lunco://components/mobility/torque.usda@</Torque>
         )
         {
+            float inputs:tau_ref
             float inputs:tau_ref.connect = </RockerBogie/BogieL/Motor_ML.outputs:shaft_torque>
-            custom token connectors:flange.connect = </RockerBogie/BogieL/Gearbox_ML.connectors:flange_a>
+            custom token connectors:flange
+            token connectors:flange.connect = </RockerBogie/BogieL/Gearbox_ML.connectors:flange_a>
         }
-
         def Xform "Gearbox_ML" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
@@ -868,34 +946,35 @@ def Xform "RockerBogie" (
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:ratio = 200.0
-            float inputs:eta = 0.85
+            float inputs:eta = 0.8500000238418579
             float inputs:max_output_torque = 400.0
-            custom token connectors:flange_a.connect = </RockerBogie/BogieL/TorqueSource_ML.connectors:flange>
-            custom token connectors:flange_b.connect = </RockerBogie/BogieL/Shaft_ML.connectors:flange>
+            custom token connectors:flange_a
+            token connectors:flange_a.connect = </RockerBogie/BogieL/TorqueSource_ML.connectors:flange>
+            custom token connectors:flange_b
+            token connectors:flange_b.connect = </RockerBogie/BogieL/Shaft_ML.connectors:flange>
         }
-
         def Xform "Motor_RL" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            # On the axle, arm between motor and gearbox, turned onto X. See Motor_FL.
             double3 xformOp:translate = (0.1, -0.2, 0.6)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/BogieL/Gearbox_RL.outputs:speed_a>
-            float inputs:demand.connect = </RockerBogie.outputs:drive_left>
             float inputs:no_load_speed = 2400.0
+            float inputs:speed
+            float inputs:speed.connect = </RockerBogie/BogieL/Gearbox_RL.outputs:speed_a>
+            float inputs:demand
+            float inputs:demand.connect = </RockerBogie.outputs:drive_left>
         }
-
-
         def Xform "TorqueSource_RL" (
             prepend references = @lunco://components/mobility/torque.usda@</Torque>
         )
         {
+            float inputs:tau_ref
             float inputs:tau_ref.connect = </RockerBogie/BogieL/Motor_RL.outputs:shaft_torque>
-            custom token connectors:flange.connect = </RockerBogie/BogieL/Gearbox_RL.connectors:flange_a>
+            custom token connectors:flange
+            token connectors:flange.connect = </RockerBogie/BogieL/Gearbox_RL.connectors:flange_a>
         }
-
         def Xform "Gearbox_RL" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
@@ -904,35 +983,37 @@ def Xform "RockerBogie" (
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:ratio = 200.0
-            float inputs:eta = 0.85
+            float inputs:eta = 0.8500000238418579
             float inputs:max_output_torque = 400.0
-            custom token connectors:flange_a.connect = </RockerBogie/BogieL/TorqueSource_RL.connectors:flange>
-            custom token connectors:flange_b.connect = </RockerBogie/BogieL/Shaft_RL.connectors:flange>
+            custom token connectors:flange_a
+            token connectors:flange_a.connect = </RockerBogie/BogieL/TorqueSource_RL.connectors:flange>
+            custom token connectors:flange_b
+            token connectors:flange_b.connect = </RockerBogie/BogieL/Shaft_RL.connectors:flange>
         }
-
-        def Xform "Shaft_ML" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        def Xform "Shaft_ML" (
+            prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+        )
         {
+            float inputs:speed
             float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_ML>
         }
-        def Xform "Shaft_RL" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        def Xform "Shaft_RL" (
+            prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+        )
         {
+            float inputs:speed
             float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_RL>
         }
     }
-
-    # ── Right bogie ─────────────────────────────────────────────────────────
     def Xform "BogieR" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        # The shorter articulated member, with its authored structural mass and
-        # diagonal inertia.
         float physics:mass = 30.0
         float3 physics:diagonalInertia = (15.0, 15.0, 1.5)
-        float physxRigidBody:angularDamping = 0.1
+        float physxRigidBody:angularDamping = 0.10000000149011612
         double3 xformOp:translate = (0.99, -0.4, 0.6)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-
         def Cylinder "FrontLink"
         {
             uniform token axis = "Z"
@@ -941,10 +1022,9 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, -0.2)
             double3 xformOp:rotateXYZ = (-26.57, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            color3f[] primvars:displayColor = [(0.44999998807907104, 0.44999998807907104, 0.47999998927116394)]
             bool physics:collisionEnabled = false
         }
-
         def Cylinder "RearLink"
         {
             uniform token axis = "Z"
@@ -953,10 +1033,9 @@ def Xform "RockerBogie" (
             double3 xformOp:translate = (0.0, -0.1, 0.3)
             double3 xformOp:rotateXYZ = (18.43, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)]
+            color3f[] primvars:displayColor = [(0.44999998807907104, 0.44999998807907104, 0.47999998927116394)]
             bool physics:collisionEnabled = false
         }
-
         def Cylinder "MiddleAxle"
         {
             uniform token axis = "X"
@@ -964,11 +1043,9 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (0.125, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.3199999928474426)]
             bool physics:collisionEnabled = false
         }
-
-        # Arm-side wheel bearing at the shared front-link/axle joint.
         def Cylinder "MiddleAxleBearing"
         {
             uniform token axis = "X"
@@ -976,10 +1053,9 @@ def Xform "RockerBogie" (
             double height = 0.16
             double3 xformOp:translate = (0.0, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
         def Cylinder "RearAxle"
         {
             uniform token axis = "X"
@@ -987,11 +1063,9 @@ def Xform "RockerBogie" (
             double height = 0.25
             double3 xformOp:translate = (0.125, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.30, 0.30, 0.32)]
+            color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.3199999928474426)]
             bool physics:collisionEnabled = false
         }
-
-        # Arm-side wheel bearing at the shared rear-link/axle joint.
         def Cylinder "RearAxleBearing"
         {
             uniform token axis = "X"
@@ -999,10 +1073,9 @@ def Xform "RockerBogie" (
             double height = 0.16
             double3 xformOp:translate = (0.0, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
         def Cylinder "JointCover"
         {
             uniform token axis = "X"
@@ -1010,13 +1083,11 @@ def Xform "RockerBogie" (
             double height = 0.1
             double3 xformOp:translate = (0.0, 0.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.85, 0.7, 0.2)]
+            color3f[] primvars:displayColor = [(0.8500000238418579, 0.699999988079071, 0.20000000298023224)]
             bool physics:collisionEnabled = false
         }
-
-        # Simplified box collider (collision-only, hidden — see RockerL/Collider).
         def Cube "Collider" (
-            prepend apiSchemas = ["PhysicsCollisionAPI"]
+            prepend apiSchemas = "PhysicsCollisionAPI"
         )
         {
             double size = 1.0
@@ -1026,81 +1097,66 @@ def Xform "RockerBogie" (
             token visibility = "invisible"
             bool physics:collisionEnabled = true
         }
-
-        # Middle Right Wheel
         def Cylinder "Wheel_MR" (
             prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-            prepend references = [
-                @lunco://components/mobility/wheel.usda@</Wheel>,
-                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
-            ]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/rocker.usda@</Suspension>]
         )
         {
             uniform token axis = "X"
             double radius = 0.2625
             double height = 0.18
-            float physxVehicleWheel:radius = 0.2625
+            float physxVehicleWheel:radius = 0.26249998807907104
             float physxVehicleWheel:maxBrakeTorque = 100.0
             float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (0.3, -0.2, -0.4)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
-
+            color3f[] primvars:displayColor = [(0.15000000596046448, 0.15000000596046448, 0.15000000596046448)]
             int physxVehicleWheelAttachment:index = 3
-            # Complete axle inertia for the authored motor, reduction, and tire assembly.
-            # The 6.8 kg.m2 value is the composed USD mechanical contract.
-            float physxVehicleWheel:moi = 6.8
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
             float inputs:drive.connect = </RockerBogie/BogieR/Shaft_MR.outputs:torque>
         }
-
-        # Rear Right Wheel
         def Cylinder "Wheel_RR" (
             prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI", "PhysxVehicleWheelAPI"]
-            prepend references = [
-                @lunco://components/mobility/wheel.usda@</Wheel>,
-                @lunco://components/mobility/suspensions/rocker.usda@</Suspension>,
-            ]
+            prepend references = [@lunco://components/mobility/wheel.usda@</Wheel>, @lunco://components/mobility/suspensions/rocker.usda@</Suspension>]
         )
         {
             uniform token axis = "X"
             double radius = 0.2625
             double height = 0.18
-            float physxVehicleWheel:radius = 0.2625
+            float physxVehicleWheel:radius = 0.26249998807907104
             float physxVehicleWheel:maxBrakeTorque = 100.0
             float physxVehicleWheel:mass = 12.0
             double3 xformOp:translate = (0.3, -0.2, 0.6)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            color3f[] primvars:displayColor = [(0.15, 0.15, 0.15)]
-
+            color3f[] primvars:displayColor = [(0.15000000596046448, 0.15000000596046448, 0.15000000596046448)]
             int physxVehicleWheelAttachment:index = 5
-            # Complete axle inertia for the authored motor, reduction, and tire assembly.
-            # The 6.8 kg.m2 value is the composed USD mechanical contract.
-            float physxVehicleWheel:moi = 6.8
+            float physxVehicleWheel:moi = 6.800000190734863
+            float inputs:drive
             float inputs:drive.connect = </RockerBogie/BogieR/Shaft_RR.outputs:torque>
         }
-
-        # Indices 3 and 5, both odd ⇒ `drive_right`. Mirror of the left bogie.
         def Xform "Motor_MR" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            # On the axle, arm between motor and gearbox, turned onto X. See Motor_FL.
             double3 xformOp:translate = (-0.1, -0.2, -0.4)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/BogieR/Gearbox_MR.outputs:speed_a>
-            float inputs:demand.connect = </RockerBogie.outputs:drive_right>
             float inputs:no_load_speed = 2400.0
+            float inputs:speed
+            float inputs:speed.connect = </RockerBogie/BogieR/Gearbox_MR.outputs:speed_a>
+            float inputs:demand
+            float inputs:demand.connect = </RockerBogie.outputs:drive_right>
         }
-
         def Xform "TorqueSource_MR" (
             prepend references = @lunco://components/mobility/torque.usda@</Torque>
         )
         {
+            float inputs:tau_ref
             float inputs:tau_ref.connect = </RockerBogie/BogieR/Motor_MR.outputs:shaft_torque>
-            custom token connectors:flange.connect = </RockerBogie/BogieR/Gearbox_MR.connectors:flange_a>
+            custom token connectors:flange
+            token connectors:flange.connect = </RockerBogie/BogieR/Gearbox_MR.connectors:flange_a>
         }
-
         def Xform "Gearbox_MR" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
@@ -1109,34 +1165,35 @@ def Xform "RockerBogie" (
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:ratio = 200.0
-            float inputs:eta = 0.85
+            float inputs:eta = 0.8500000238418579
             float inputs:max_output_torque = 400.0
-            custom token connectors:flange_a.connect = </RockerBogie/BogieR/TorqueSource_MR.connectors:flange>
-            custom token connectors:flange_b.connect = </RockerBogie/BogieR/Shaft_MR.connectors:flange>
+            custom token connectors:flange_a
+            token connectors:flange_a.connect = </RockerBogie/BogieR/TorqueSource_MR.connectors:flange>
+            custom token connectors:flange_b
+            token connectors:flange_b.connect = </RockerBogie/BogieR/Shaft_MR.connectors:flange>
         }
-
         def Xform "Motor_RR" (
             prepend references = @lunco://components/mobility/motor.usda@</Motor>
         )
         {
-            # On the axle, arm between motor and gearbox, turned onto X. See Motor_FL.
             double3 xformOp:translate = (-0.1, -0.2, 0.6)
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
-            float inputs:speed.connect = </RockerBogie/BogieR/Gearbox_RR.outputs:speed_a>
-            float inputs:demand.connect = </RockerBogie.outputs:drive_right>
             float inputs:no_load_speed = 2400.0
+            float inputs:speed
+            float inputs:speed.connect = </RockerBogie/BogieR/Gearbox_RR.outputs:speed_a>
+            float inputs:demand
+            float inputs:demand.connect = </RockerBogie.outputs:drive_right>
         }
-
-
         def Xform "TorqueSource_RR" (
             prepend references = @lunco://components/mobility/torque.usda@</Torque>
         )
         {
+            float inputs:tau_ref
             float inputs:tau_ref.connect = </RockerBogie/BogieR/Motor_RR.outputs:shaft_torque>
-            custom token connectors:flange.connect = </RockerBogie/BogieR/Gearbox_RR.connectors:flange_a>
+            custom token connectors:flange
+            token connectors:flange.connect = </RockerBogie/BogieR/Gearbox_RR.connectors:flange_a>
         }
-
         def Xform "Gearbox_RR" (
             prepend references = @lunco://components/mobility/gearbox.usda@</Gearbox>
         )
@@ -1145,65 +1202,50 @@ def Xform "RockerBogie" (
             double3 xformOp:rotateXYZ = (0.0, 90.0, 0.0)
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
             float inputs:ratio = 200.0
-            float inputs:eta = 0.85
+            float inputs:eta = 0.8500000238418579
             float inputs:max_output_torque = 400.0
-            custom token connectors:flange_a.connect = </RockerBogie/BogieR/TorqueSource_RR.connectors:flange>
-            custom token connectors:flange_b.connect = </RockerBogie/BogieR/Shaft_RR.connectors:flange>
+            custom token connectors:flange_a
+            token connectors:flange_a.connect = </RockerBogie/BogieR/TorqueSource_RR.connectors:flange>
+            custom token connectors:flange_b
+            token connectors:flange_b.connect = </RockerBogie/BogieR/Shaft_RR.connectors:flange>
         }
-
-        def Xform "Shaft_MR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        def Xform "Shaft_MR" (
+            prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+        )
         {
+            float inputs:speed
             float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_MR>
         }
-        def Xform "Shaft_RR" (prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>)
+        def Xform "Shaft_RR" (
+            prepend references = @lunco://components/mobility/avian_shaft.usda@</AvianShaft>
+        )
         {
+            float inputs:speed
             float inputs:speed.connect = </RockerBogie.inputs:shaft_speed_RR>
         }
     }
-
-    # All joints below DELIBERATELY omit `physics:localPos0`/`localPos1`: each body's
-    # placement is already its `xformOp:translate`, and the avian joint reader DERIVES
-    # the anchor from the composed world poses (body1's origin in body0's rotation
-    # frame; anchor on body1 = origin). This works for the sibling rocker↔bogie hinges
-    # and the scaled hierarchy, so no anchor is typed — or left to drift — twice.
-    # Author a `localPos0` on a joint to override the derivation.
-    #
-    # ── Lateral-axis revolute hinges (chassis ↔ rocker) ─────────────────────
-    # HingeL/R: chassis <-> rocker joints.
-    # NASA MER/MSL use mechanical stops limiting rocker travel to +/-30 to +/-45 degrees.
-    # We use +/-30 degrees to keep the chassis level and prevent differential lockup.
     def PhysicsRevoluteJoint "HingeL" (
-        doc = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
+        documentation = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
     )
     {
         rel physics:body0 = </RockerBogie>
         rel physics:body1 = </RockerBogie/RockerL>
         uniform token physics:axis = "X"
-        float physics:lowerLimit = -30
-        float physics:upperLimit = 30
+        float physics:lowerLimit = -30.0
+        float physics:upperLimit = 30.0
     }
     def PhysicsRevoluteJoint "HingeR" (
-        doc = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
+        documentation = "Chassis-to-rocker hinge. Limited to +/-30 deg to match NASA mechanical stops, preventing excessive chassis roll and differential lockup."
     )
     {
         rel physics:body0 = </RockerBogie>
         rel physics:body1 = </RockerBogie/RockerR>
         uniform token physics:axis = "X"
-        float physics:lowerLimit = -30
-        float physics:upperLimit = 30
+        float physics:lowerLimit = -30.0
+        float physics:upperLimit = 30.0
     }
-
-    # ── Differential coupling (rocker-bogie holonomic constraint) ───────────
-    # The standard PhysX gear joint over the two chassis↔rocker hinges: it couples
-    # θ_left + θ_right → restSum (the drive's targetPosition), so the chassis pitch
-    # tracks the rocker average instead of flopping on a free pitch DOF.
-    #
-    # `solve_differential_gear` projects this relation with an implicit
-    # spring-damper solve in Avian's substep solver. The positive stiffness value
-    # is the authored engagement state; zero disables the gear in the control
-    # scene.
     def PhysxPhysicsGearJoint "Differential" (
-        prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        prepend apiSchemas = "PhysicsDriveAPI:angular"
     )
     {
         rel physxGearJoint:hinge0 = </RockerBogie/HingeL>
@@ -1212,424 +1254,32 @@ def Xform "RockerBogie" (
         float drive:angular:physics:targetPosition = 0.0
         float drive:angular:physics:stiffness = 100000.0
     }
-
-    # ── Lateral-axis revolute hinges (rocker ↔ bogie) ───────────────────────
-    # BogieHingeL/R: rocker <-> bogie joints.
-    # NASA rovers limit bogie rotation to +/-20 to +/-30 degrees to prevent the
-    # middle/rear wheels from colliding with the rocker frame or chassis belly.
-    # We use +/-20 degrees as a safe operating envelope.
     def PhysicsRevoluteJoint "BogieHingeL" (
-        doc = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
+        documentation = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
     )
     {
         rel physics:body0 = </RockerBogie/RockerL>
         rel physics:body1 = </RockerBogie/BogieL>
         uniform token physics:axis = "X"
-        float physics:lowerLimit = -20
-        float physics:upperLimit = 20
+        float physics:lowerLimit = -20.0
+        float physics:upperLimit = 20.0
     }
     def PhysicsRevoluteJoint "BogieHingeR" (
-        doc = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
+        documentation = "Rocker-to-bogie hinge. Limited to +/-20 deg to match NASA stops, preventing middle/rear wheels from colliding with the rocker frame."
     )
     {
         rel physics:body0 = </RockerBogie/RockerR>
         rel physics:body1 = </RockerBogie/BogieR>
         uniform token physics:axis = "X"
-        float physics:lowerLimit = -20
-        float physics:upperLimit = 20
+        float physics:lowerLimit = -20.0
+        float physics:upperLimit = 20.0
     }
-
-    # The six wheels intentionally have NO revolute joints. They are raycast
-    # wheels, so their authored rocker suspension supplies the compliant normal
-    # load while the rocker/bogie bodies and the four structural hinges above
-    # remain real Avian rigid bodies. A wheel revolute would promote each tire to
-    # a second rigid body and bypass the suspension component entirely.
-
-    # --- Drive law -----------------------------------------------------------
-    # HOW throttle/steer become actuator values is COMPOSITION, not an
-    # enumeration. The authored controller publishes the generic drive outputs
-    # consumed by both banks. For a solver-clocked per-side motor law, compose an
-    # authored program on this same vehicle:
-    #
-    #   def "Rover" (
-    #       prepend references = [
-    #           @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>,
-    #           @lunco://components/mobility/drive_laws/modelica_skid.usda@</DriveLaw>,
-    #       ]
-    #   ) {}
-    #
-    # Each wheel authors its `inputs:drive` connection to one of the two drive-bank
-    # ports. The channel assignment is USD topology, not an index heuristic.
-
-    # --- Power: does driving cost anything ----------------------------------
-    # ORTHOGONAL to the drive law: `infinite` deactivates the finite-storage
-    # component, while `battery` keeps it active and composes the reusable
-    # six-motor electrical network into one Modelica DAE. The reference stays
-    # in the stable chassis namespace so USD remaps its authored relationships
-    # through every power realization.
-    #
-    # Same two sets `six_wheel_rover.usda` carries, because the difficulty tiers
-    # (`variants/rover_*.usda`) sit on THIS chassis now and a tier must not lose a
-    # capability by changing suspension.
     def Xform "Battery" (
         prepend references = @lunco://components/power/battery.usda@</Battery>
     )
     {
-        # The 0.8 x 0.3 x 1.2 m pack is centered inside the composed
-        # 0.95 x 0.5 x 1.5 m body. This keeps it below the solar deck and
-        # panel with a structural margin on every axis.
-        double3 xformOp:translate = (0, 0.0, 0)
+        double3 xformOp:translate = (0.0, 0.0, 0.0)
         double3 xformOp:scale = (0.8, 0.3, 1.2)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-    }
-    variantSet "power" = {
-        "infinite" {
-            over "Battery" {
-                bool active = false
-            }
-            def Xform "PowerSource" (
-                prepend references = @lunco://components/power/ideal_voltage_source.usda@</IdealVoltageSource>
-            )
-            {
-            }
-            float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
-            float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
-            float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
-            float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
-            float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
-            float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
-            float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
-            float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
-            float outputs:bus_voltage.connect = </RockerBogie/PowerSource.outputs:terminal_voltage_v>
-            float outputs:bus_current.connect = </RockerBogie/PowerSource.outputs:terminal_current_a>
-            float outputs:bus_power.connect = </RockerBogie/PowerSource.outputs:terminal_power_w>
-            uniform token collection:components:expansionRule = "explicitOnly"
-            prepend rel collection:components:includes = [
-                </RockerBogie/PowerSource>,
-                </RockerBogie/RockerL/Motor_FL>,
-                </RockerBogie/RockerL/TorqueSource_FL>,
-                </RockerBogie/BogieL/Motor_ML>,
-                </RockerBogie/BogieL/TorqueSource_ML>,
-                </RockerBogie/BogieL/Motor_RL>,
-                </RockerBogie/BogieL/TorqueSource_RL>,
-                </RockerBogie/RockerR/Motor_FR>,
-                </RockerBogie/RockerR/TorqueSource_FR>,
-                </RockerBogie/BogieR/Motor_MR>,
-                </RockerBogie/BogieR/TorqueSource_MR>,
-                </RockerBogie/BogieR/Motor_RR>,
-                </RockerBogie/BogieR/TorqueSource_RR>,
-                </RockerBogie/RockerL/Gearbox_FL>,
-                </RockerBogie/RockerR/Gearbox_FR>,
-                </RockerBogie/BogieL/Gearbox_ML>,
-                </RockerBogie/BogieL/Gearbox_RL>,
-                </RockerBogie/BogieR/Gearbox_MR>,
-                </RockerBogie/BogieR/Gearbox_RR>,
-                </RockerBogie/RockerL/Shaft_FL>,
-                </RockerBogie/RockerR/Shaft_FR>,
-                </RockerBogie/BogieL/Shaft_ML>,
-                </RockerBogie/BogieL/Shaft_RL>,
-                </RockerBogie/BogieR/Shaft_MR>,
-                </RockerBogie/BogieR/Shaft_RR>,
-            ]
-            over "RockerL" {
-                over "Motor_FL" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
-                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
-                }
-            }
-            over "BogieL" {
-                over "Motor_ML" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
-                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
-                }
-                over "Motor_RL" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
-                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
-                }
-            }
-            over "RockerR" {
-                over "Motor_FR" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
-                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
-                }
-            }
-            over "BogieR" {
-                over "Motor_MR" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
-                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
-                }
-                over "Motor_RR" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
-                    custom token connectors:p.connect = </RockerBogie/PowerSource.connectors:p>
-                }
-            }
-        }
-
-        "battery" {
-            float inputs:drive_left.connect = </RockerBogie.outputs:drive_left>
-            float inputs:drive_right.connect = </RockerBogie.outputs:drive_right>
-            float inputs:shaft_speed_FL.connect = </RockerBogie/RockerL/Wheel_FL.outputs:shaft_speed>
-            float inputs:shaft_speed_FR.connect = </RockerBogie/RockerR/Wheel_FR.outputs:shaft_speed>
-            float inputs:shaft_speed_ML.connect = </RockerBogie/BogieL/Wheel_ML.outputs:shaft_speed>
-            float inputs:shaft_speed_RL.connect = </RockerBogie/BogieL/Wheel_RL.outputs:shaft_speed>
-            float inputs:shaft_speed_MR.connect = </RockerBogie/BogieR/Wheel_MR.outputs:shaft_speed>
-            float inputs:shaft_speed_RR.connect = </RockerBogie/BogieR/Wheel_RR.outputs:shaft_speed>
-            float outputs:soc.connect = </RockerBogie/Battery.outputs:soc_out>
-            float outputs:battery_drained.connect = </RockerBogie/Battery.outputs:drained>
-            float outputs:bus_voltage.connect = </RockerBogie/Battery.outputs:terminal_voltage_v>
-            float outputs:bus_current.connect = </RockerBogie/Battery.outputs:terminal_current_a>
-            float outputs:bus_power.connect = </RockerBogie/Battery.outputs:net_power_w>
-            float outputs:battery_net_power.connect = </RockerBogie/Battery.outputs:net_power_w>
-            float outputs:battery_charge_power.connect = </RockerBogie/Battery.outputs:charge_power_w>
-            float outputs:battery_discharge_power.connect = </RockerBogie/Battery.outputs:discharge_power_w>
-            # These are authored network-boundary observables for the
-            # front-left actuator. Consumers read the typed Electrical
-            # surface; they never depend on generated Modelica member
-            # identifiers, which are implementation details of the
-            # synthesized wrapper.
-            float outputs:motor_electrical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:electrical_power>
-            float outputs:motor_mechanical_power.connect = </RockerBogie/RockerL/Motor_FL.outputs:mechanical_power_w>
-            float outputs:motor_terminal_current.connect = </RockerBogie/RockerL/Motor_FL.outputs:terminal_current_a>
-            uniform token collection:components:expansionRule = "explicitOnly"
-            prepend rel collection:components:includes = [
-                </RockerBogie/Battery>,
-                </RockerBogie/RockerL/Motor_FL>,
-                </RockerBogie/RockerL/TorqueSource_FL>,
-                </RockerBogie/BogieL/Motor_ML>,
-                </RockerBogie/BogieL/TorqueSource_ML>,
-                </RockerBogie/BogieL/Motor_RL>,
-                </RockerBogie/BogieL/TorqueSource_RL>,
-                </RockerBogie/RockerR/Motor_FR>,
-                </RockerBogie/RockerR/TorqueSource_FR>,
-                </RockerBogie/BogieR/Motor_MR>,
-                </RockerBogie/BogieR/TorqueSource_MR>,
-                </RockerBogie/BogieR/Motor_RR>,
-                </RockerBogie/BogieR/TorqueSource_RR>,
-                </RockerBogie/RockerL/Gearbox_FL>,
-                </RockerBogie/RockerR/Gearbox_FR>,
-                </RockerBogie/BogieL/Gearbox_ML>,
-                </RockerBogie/BogieL/Gearbox_RL>,
-                </RockerBogie/BogieR/Gearbox_MR>,
-                </RockerBogie/BogieR/Gearbox_RR>,
-                </RockerBogie/RockerL/Shaft_FL>,
-                </RockerBogie/RockerR/Shaft_FR>,
-                </RockerBogie/BogieL/Shaft_ML>,
-                </RockerBogie/BogieL/Shaft_RL>,
-                </RockerBogie/BogieR/Shaft_MR>,
-                </RockerBogie/BogieR/Shaft_RR>,
-            ]
-            over "RockerL" {
-                over "Motor_FL" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
-                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
-                }
-            }
-            over "BogieL" {
-                over "Motor_ML" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
-                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
-                }
-                over "Motor_RL" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_left>
-                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
-                }
-            }
-            over "RockerR" {
-                over "Motor_FR" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
-                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
-                }
-            }
-            over "BogieR" {
-                over "Motor_MR" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
-                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
-                }
-                over "Motor_RR" {
-                    float inputs:demand.connect = </RockerBogie.inputs:drive_right>
-                    custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
-                }
-            }
-
-            def LunCoEvent "BatteryDrained" {
-                float inputs:trigger.connect = </RockerBogie.outputs:battery_drained>
-                uniform token lunco:event:name = "battery_drained"
-                uniform token lunco:event:severity = "warning"
-                uniform bool lunco:event:latched = true
-                double lunco:event:qualificationTime = 0.0
-            }
-
-        }
-    }
-
-    variantSet "generation" = {
-        "none" {
-        }
-
-        "solar" {
-            # The panel is declared and wired in one spec so its reusable
-            # geometry, collision, mass, and electrical facet compose
-            # together under this rover instance.
-            def Xform "SolarPanel" (
-                prepend references = @lunco://components/power/solar_panel.usda@</SolarPanel>
-            )
-            {
-                double3 xformOp:translate = (0, 0.55, 0)
-                double3 xformOp:scale = (0.42, 0.2, 0.42)
-                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-
-                custom token connectors:p.connect = </RockerBogie/Battery.connectors:p>
-                float inputs:sun_mount_x.connect = </RockerBogie.inputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </RockerBogie.inputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </RockerBogie.inputs:sun_mount_z>
-
-                def Xform "Environment" (
-                    prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
-                )
-                {
-                }
-            }
-                float inputs:sun_mount_x.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_x>
-                float inputs:sun_mount_y.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_y>
-                float inputs:sun_mount_z.connect = </RockerBogie/SolarPanel/Environment.outputs:sun_mount_z>
-                float outputs:solar_power.connect = </RockerBogie/SolarPanel.outputs:power_out>
-                float outputs:solar_available_power.connect = </RockerBogie/SolarPanel.outputs:available_power_w>
-                float outputs:solar_incidence.connect = </RockerBogie/SolarPanel.outputs:cos_incidence>
-                prepend rel collection:components:includes = [</RockerBogie/SolarPanel>]
-        }
-    }
-
-    # --- Thermal: a SEPARATE domain layer, not a graft onto Electrical ------
-    # `none` is EMPTY. `basic` composes a self-contained `Scope "Thermal"` — its
-    # OWN `CollectionAPI:components`, compiled to its OWN generated DAE — and
-    # couples to the electrical island by CAUSAL cross-domain wires only:
-    # each motor's `outputs:heat` (solved by the electrical DAE) feeds a
-    # `MotorHeatLoad.inputs:heat_w` here as a runtime SimConnection. The acausal
-    # `connectors:port` edges stay INSIDE this thermal collection. An explicit
-    # chassis ThermalConductor joins the two banks, which lets thermal compile
-    # as one physically connected DAE independently of electrical — including
-    # when `power != "battery"` (no electrical island at all). All six motors
-    # get a heat-load bridge; `ML`/`MR` are no longer silently dropped.
-    variantSet "thermal" = {
-        "none" {
-        }
-
-        "basic" {
-            def Scope "Thermal" (
-                prepend apiSchemas = ["CollectionAPI:components"]
-                doc = "Rover thermal control network: motor dissipation → masses → radiators."
-            )
-            {
-                # ── Causal boundary IN: one heat wire per driven wheel ──
-                # Solved by the electrical island and routed here at runtime.
-                # With `power="infinite"` these resolve to the motors' authored
-                # `outputs:heat` directly (still 0 for an uncommanded motor); the
-                # thermal island compiles and runs regardless.
-                # Thermal consumes the solved motor outputs directly. The
-                # generated electrical wrapper resolves these member addresses;
-                # no rover-root heat aliases are needed.
-                float inputs:motor_heat_FL.connect = </RockerBogie/RockerL/Motor_FL.outputs:heat>
-                float inputs:motor_heat_ML.connect = </RockerBogie/BogieL/Motor_ML.outputs:heat>
-                float inputs:motor_heat_RL.connect = </RockerBogie/BogieL/Motor_RL.outputs:heat>
-                float inputs:motor_heat_FR.connect = </RockerBogie/RockerR/Motor_FR.outputs:heat>
-                float inputs:motor_heat_MR.connect = </RockerBogie/BogieR/Motor_MR.outputs:heat>
-                float inputs:motor_heat_RR.connect = </RockerBogie/BogieR/Motor_RR.outputs:heat>
-
-                # ── Causal boundary OUT: bank temperatures published HERE ──
-                float outputs:motor_temp_left.connect  = </RockerBogie/Thermal/MotorThermalLeft.outputs:temp_k>
-                float outputs:motor_temp_right.connect = </RockerBogie/Thermal/MotorThermalRight.outputs:temp_k>
-
-                uniform token collection:components:expansionRule = "explicitOnly"
-                prepend rel collection:components:includes = [
-                    </RockerBogie/Thermal/MotorHeat_FL>,
-                    </RockerBogie/Thermal/MotorHeat_ML>,
-                    </RockerBogie/Thermal/MotorHeat_RL>,
-                    </RockerBogie/Thermal/MotorHeat_FR>,
-                    </RockerBogie/Thermal/MotorHeat_MR>,
-                    </RockerBogie/Thermal/MotorHeat_RR>,
-                    </RockerBogie/Thermal/MotorThermalLeft>,
-                    </RockerBogie/Thermal/MotorThermalRight>,
-                    </RockerBogie/Thermal/MotorRadiatorLeft>,
-                    </RockerBogie/Thermal/MotorRadiatorRight>,
-                    </RockerBogie/Thermal/ThermalBridge>,
-                ]
-
-                def Xform "ThermalBridge" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</ThermalConductor>
-                )
-                {
-                    custom token connectors:port_a.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
-                    custom token connectors:port_b.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
-                }
-
-                # ── Left bank: three heat loads into one mass/radiator node ──
-                def Xform "MotorHeat_FL" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
-                )
-                {
-                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_FL>
-                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
-                }
-                def Xform "MotorHeat_ML" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
-                )
-                {
-                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_ML>
-                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
-                }
-                def Xform "MotorHeat_RL" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
-                )
-                {
-                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_RL>
-                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
-                }
-                def Xform "MotorThermalLeft" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
-                )
-                {
-                }
-                def Xform "MotorRadiatorLeft" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
-                )
-                {
-                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalLeft.connectors:port>
-                }
-
-                # ── Right bank: three heat loads into one mass/radiator node ──
-                def Xform "MotorHeat_FR" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
-                )
-                {
-                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_FR>
-                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
-                }
-                def Xform "MotorHeat_MR" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
-                )
-                {
-                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_MR>
-                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
-                }
-                def Xform "MotorHeat_RR" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorHeatLoad>
-                )
-                {
-                    float inputs:heat_w.connect = </RockerBogie/Thermal.inputs:motor_heat_RR>
-                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
-                }
-                def Xform "MotorThermalRight" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorThermalMass>
-                )
-                {
-                }
-                def Xform "MotorRadiatorRight" (
-                    prepend references = @lunco://components/thermal/motor_thermal.usda@</MotorRadiator>
-                )
-                {
-                    custom token connectors:port.connect = </RockerBogie/Thermal/MotorThermalRight.connectors:port>
-                }
-            }
-        }
     }
 }

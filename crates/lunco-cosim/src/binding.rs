@@ -367,23 +367,23 @@ mod tests {
             .spawn((
                 SimComponent::default(),
                 DeclaredOutputPorts {
-                    names: ["earth_mount_x".to_owned()].into_iter().collect(),
+                    names: ["spacecraft_a_mount_x".to_owned()].into_iter().collect(),
                 },
                 EndpointLifecycle::Ready,
             ))
             .id();
         let target = world
             .spawn((
-                InputPorts::new(&["earth_mount_x"]),
+                InputPorts::new(&["target_mount_x"]),
                 EndpointLifecycle::Ready,
             ))
             .id();
         let edge = world
             .spawn(SimConnection {
                 start_element: source,
-                start_connector: "earth_mount_x".into(),
+                start_connector: "spacecraft_a_mount_x".into(),
                 end_element: target,
-                end_connector: "earth_mount_x".into(),
+                end_connector: "target_mount_x".into(),
                 ..default()
             })
             .id();
@@ -394,9 +394,11 @@ mod tests {
         assert!(world.get::<BoundConnection>(edge).is_some());
         assert!(world.resource::<CosimDiagnostics>().faults.is_empty());
         assert_eq!(
-            world
-                .resource::<PortRegistry>()
-                .read_output_port(&world, source, "earth_mount_x"),
+            world.resource::<PortRegistry>().read_output_port(
+                &world,
+                source,
+                "spacecraft_a_mount_x"
+            ),
             None
         );
     }

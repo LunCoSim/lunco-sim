@@ -1,0 +1,168 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def Xform "StationProbe" (
+        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+    )
+    {
+        double outputs:station_mount_x = 0.0
+        double outputs:station_mount_y = 0.0
+        double outputs:station_mount_z = 0.0
+    }
+    def Xform "MissingProbe" (
+        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+    )
+    {
+        double outputs:absent_mount_x = 0.0
+        double outputs:absent_mount_y = 0.0
+        double outputs:absent_mount_z = 0.0
+    }
+    def Xform "DuplicateProbe" (
+        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+    )
+    {
+        double outputs:dup_mount_x = 0.0
+        double outputs:dup_mount_y = 0.0
+        double outputs:dup_mount_z = 0.0
+    }
+    def Xform "TripletProbeA" (
+        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+    )
+    {
+        double outputs:incomplete_mount_x = 0.0
+        double outputs:incomplete_mount_y = 0.0
+        double outputs:incomplete_mount_z = 0.0
+        double outputs:mismatch_a_mount_x = 0.0
+        double outputs:mismatch_a_mount_y = 0.0
+        double outputs:mismatch_a_mount_z = 0.0
+    }
+    def Xform "TripletProbeB" (
+        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+    )
+    {
+        double outputs:mismatch_b_mount_x = 0.0
+        double outputs:mismatch_b_mount_y = 0.0
+        double outputs:mismatch_b_mount_z = 0.0
+    }
+    def Xform "PrecisionProbe" (
+        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
+    )
+    {
+        float outputs:precision_mount_x = 0.0
+        double outputs:precision_mount_y = 0.0
+        double outputs:precision_mount_z = 0.0
+    }
+    def Xform "ValidConsumer"
+    {
+        custom double inputs:target_mount_x
+        double inputs:target_mount_x.connect = </World/StationProbe.outputs:station_mount_x>
+        custom double inputs:target_mount_y
+        double inputs:target_mount_y.connect = </World/StationProbe.outputs:station_mount_y>
+        custom double inputs:target_mount_z
+        double inputs:target_mount_z.connect = </World/StationProbe.outputs:station_mount_z>
+    }
+    def Xform "MissingConsumer"
+    {
+        custom double inputs:target_mount_x
+        double inputs:target_mount_x.connect = </World/MissingProbe.outputs:absent_mount_x>
+        custom double inputs:target_mount_y
+        double inputs:target_mount_y.connect = </World/MissingProbe.outputs:absent_mount_y>
+        custom double inputs:target_mount_z
+        double inputs:target_mount_z.connect = </World/MissingProbe.outputs:absent_mount_z>
+    }
+    def Xform "DuplicateConsumer"
+    {
+        custom double inputs:target_mount_x
+        double inputs:target_mount_x.connect = </World/DuplicateProbe.outputs:dup_mount_x>
+        custom double inputs:target_mount_y
+        double inputs:target_mount_y.connect = </World/DuplicateProbe.outputs:dup_mount_y>
+        custom double inputs:target_mount_z
+        double inputs:target_mount_z.connect = </World/DuplicateProbe.outputs:dup_mount_z>
+    }
+    def Xform "IncompleteConsumer"
+    {
+        custom double inputs:target_mount_x
+        double inputs:target_mount_x.connect = </World/TripletProbeA.outputs:incomplete_mount_x>
+    }
+    def Xform "MismatchedConsumer"
+    {
+        custom double inputs:target_mount_x
+        double inputs:target_mount_x.connect = </World/TripletProbeA.outputs:mismatch_a_mount_x>
+        custom double inputs:target_mount_y
+        double inputs:target_mount_y.connect = </World/TripletProbeA.outputs:mismatch_a_mount_y>
+        custom double inputs:target_mount_z
+        double inputs:target_mount_z.connect = </World/TripletProbeB.outputs:mismatch_b_mount_z>
+    }
+    def Xform "PrecisionConsumer"
+    {
+        custom float inputs:target_mount_x
+        float inputs:target_mount_x.connect = </World/PrecisionProbe.outputs:precision_mount_x>
+        custom double inputs:target_mount_y
+        double inputs:target_mount_y.connect = </World/PrecisionProbe.outputs:precision_mount_y>
+        custom double inputs:target_mount_z
+        double inputs:target_mount_z.connect = </World/PrecisionProbe.outputs:precision_mount_z>
+    }
+    def Xform "SolarConsumer"
+    {
+        custom double inputs:sun_mount_x
+        double inputs:sun_mount_x.connect = </World/StationProbe.outputs:station_mount_x>
+        custom double inputs:sun_mount_y
+        double inputs:sun_mount_y.connect = </World/StationProbe.outputs:station_mount_y>
+        custom double inputs:sun_mount_z
+        double inputs:sun_mount_z.connect = </World/StationProbe.outputs:station_mount_z>
+    }
+    def Xform "ValidTarget" (
+        prepend apiSchemas = "LunCoDirectionTargetAPI"
+    )
+    {
+        uniform token lunco:directionTarget:id = "station"
+    }
+    def Xform "DuplicateTargetA" (
+        prepend apiSchemas = "LunCoDirectionTargetAPI"
+    )
+    {
+        uniform token lunco:directionTarget:id = "dup"
+    }
+    def Xform "DuplicateTargetB" (
+        prepend apiSchemas = "LunCoDirectionTargetAPI"
+    )
+    {
+        uniform token lunco:directionTarget:id = "dup"
+    }
+    def Xform "InvalidTarget" (
+        prepend apiSchemas = "LunCoDirectionTargetAPI"
+    )
+    {
+        uniform token lunco:directionTarget:id = "Bad-ID"
+    }
+    def Xform "IncompleteTarget" (
+        prepend apiSchemas = "LunCoDirectionTargetAPI"
+    )
+    {
+        uniform token lunco:directionTarget:id = "incomplete"
+    }
+    def Xform "MismatchedTargetA" (
+        prepend apiSchemas = "LunCoDirectionTargetAPI"
+    )
+    {
+        uniform token lunco:directionTarget:id = "mismatch_a"
+    }
+    def Xform "MismatchedTargetB" (
+        prepend apiSchemas = "LunCoDirectionTargetAPI"
+    )
+    {
+        uniform token lunco:directionTarget:id = "mismatch_b"
+    }
+    def Xform "PrecisionTarget" (
+        prepend apiSchemas = "LunCoDirectionTargetAPI"
+    )
+    {
+        uniform token lunco:directionTarget:id = "precision"
+    }
+}

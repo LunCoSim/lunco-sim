@@ -6,34 +6,8 @@
 )
 
 def Xform "World" (
-    prepend apiSchemas = "LunCoEpochAPI"
 )
 {
-    double lunco:time:epochJd = 2461395.5
-    def Xform "SolarProbe" (
-        prepend apiSchemas = "LunCoEnvironmentProbeAPI"
-    )
-    {
-        float outputs:sun_mount_x = 0.0
-        float outputs:sun_mount_y = 0.0
-        float outputs:sun_mount_z = 0.0
-    }
-    def Xform "SolarConsumer" (
-        prepend apiSchemas = "LunCoProgramAPI"
-    )
-    {
-        uniform token info:implementationSource = "sourceAsset"
-        uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/SunTracker.mo@
-        custom float inputs:sun_mount_x
-        float inputs:sun_mount_x.connect = </World/SolarProbe.outputs:sun_mount_x>
-        custom float inputs:sun_mount_y
-        float inputs:sun_mount_y.connect = </World/SolarProbe.outputs:sun_mount_y>
-        custom float inputs:sun_mount_z
-        float inputs:sun_mount_z.connect = </World/SolarProbe.outputs:sun_mount_z>
-    }
-    def DistantLight "Sun"
-    {
-    }
     def Scope "Scenario"
     {
         custom string lunco:scenario = "celestial-solar-source-lint"
@@ -44,10 +18,5 @@ def Xform "World" (
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/celestial_solar_source_lint.rhai@
         }
-    }
-    def Xform "SolarSystem" (
-        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
-    )
-    {
     }
 }

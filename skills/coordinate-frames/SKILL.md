@@ -178,12 +178,18 @@ runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 `BillboardIndex` fact to the shared marker root. Keep both paths on this one
 renderer; do not overwrite `Name` or add a waypoint-specific overlay.
 
-For physics and co-simulation, derive `SunState` from `CelestialTime`. The
-render light and direct probe-to-cosim projection consume that semantic source;
-do not create a separate render-time sun source or local solar clock.
+For physics and co-simulation, resolve a demanded direction target from its
+composed position into each `EnvironmentProbe` frame through the shared
+BigSpace f64 helpers. Normalize the displacement once into `UnitDirection3`;
+frame rotations preserve that unit vector. The USD wire selects the source id,
+while the consumer model uses a generic target-direction input. `SunState`
+contains solar irradiance only. A static `DistantLight` contributes a framed
+ray through the same resolver. Do not add per-body conversion systems, another
+coordinate cache, or a local solar clock.
+
 Publish `SunRenderState` from the finalized scene-sun `GlobalTransform` after
-`BigSpaceSystems::PropagateLowPrecision`. Any conversion of that direction
-through a terrain `GlobalTransform` belongs after that phase in `PostUpdate`:
+`BigSpaceSystems::PropagateLowPrecision`. Any conversion of that render
+direction through a terrain `GlobalTransform` belongs after that phase in `PostUpdate`:
 static material wiring, horizon-cache validity/bake decisions, and
 streamed-tile shadow intent binding all consume that finalized frame. Put
 streamed-tile binding in the public `TerrainSurfaceSet::RenderShadowBinding`

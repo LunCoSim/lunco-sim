@@ -58,16 +58,20 @@ pub use gravity_types::{
 pub mod lighting;
 pub use lighting::{FULL_EARTH_EARTHSHINE_LUX, LunarSun, drive_earthshine_from_phase};
 
-/// Solar direction as a direct co-simulation source projection. The
-/// lighting-direction analog of the gravity bridge.
-///
-/// **Render-free.** It reads semantic [`SunState`], not a render light. The
-/// render light is a projection of that state, so a headless provider and a
-/// GUI cannot silently disagree about the direction.
+/// Solar render projection over the generic direction source system.
 pub mod solar;
 pub use solar::{
-    SunRenderState, SunState, finalize_sun_render_state, project_sun_state_to_light,
-    publish_solar_inputs_to_cosim, sun_render_finalize_needed, tracked_sun_light_projection,
+    SunRenderState, SunState, finalize_sun_render_state, project_environment_sun_to_light,
+    sun_render_finalize_needed, tracked_sun_light_projection,
+};
+
+/// Universal framed direction sources, coordinate conversion, and direct
+/// source-to-cosim publication.
+pub mod directions;
+pub use directions::{
+    DirectionResolutionError, DirectionSourceId, DirectionSourceRequirements, DirectionTargetId,
+    EARTH_DIRECTION_SOURCE, EnvironmentDirections, FramedDirection, SUN_DIRECTION_SOURCE,
+    publish_direction_sources_to_cosim, resolve_direction_for_frame,
 };
 
 /// Explicit USD-authored source of mount-local environmental signals.
@@ -79,30 +83,6 @@ pub use solar::{
 #[derive(Component, Debug, Clone, Copy, Default, Reflect)]
 #[reflect(Component)]
 pub struct EnvironmentProbe;
-
-/// Runtime projection of a composed USD fact: an environment probe has at least
-/// one connected Earth-vector output that a downstream model consumes.
-///
-/// This is deliberately separate from [`EnvironmentProbe`]. The probe publishes
-/// gravity and solar data for many models, but Earth direction is an opt-in
-/// demand. Keeping the demand as a projected component prevents the provider
-/// from treating every atmosphere/gravity probe as an Earth tracker.
-#[derive(Component, Debug, Clone, Copy, Default, Reflect)]
-#[reflect(Component)]
-pub struct EarthDirectionRequired;
-
-/// Earth's direction as a co-simulation source (`LocalEarth` + the earth→cosim
-/// bridge) — what a high-gain antenna points at, the twin of [`solar`] for the
-/// other body in a lunar sky.
-///
-/// Unlike the sun there is no scene light to read, so the direction arrives in
-/// the [`earth::EarthDirectionWorld`] resource, written by `lunco-celestial`
-/// from the ephemeris. See the module docs for why the dependency runs that way.
-pub mod earth;
-mod mount_frame;
-pub use earth::{
-    EarthDirectionWorld, LocalEarth, compute_local_earth, inject_local_earth_into_cosim,
-};
 
 /// Baked horizon-map terrain self-shadowing (the long-range half of the
 /// two-system shadow design). **Render-free**: the heightfield bakes and the
@@ -562,6 +542,12 @@ fn validated_shadow_ranges(
 fn on_set_environment_light(
     trigger: On<SetEnvironmentLight>,
     mut sun_state: ResMut<SunState>,
+    mut directions: ResMut<EnvironmentDirections>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform), Without<DirectionalLight>>,
+    q_direction_targets: Query<(Entity, &DirectionTargetId)>,
     // The sun(s): every directional light EXCEPT the earthshine fill, so an
     // illuminance/color/direction tweak never clobbers the fill light.
     mut q_sun: Query<
@@ -589,29 +575,58 @@ fn on_set_environment_light(
             unreachable!("a counted scene sun must remain queryable");
         };
         if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
-            let Some(direction) = sun_state.direction_to_sun else {
+            if q_direction_targets
+                .iter()
+                .any(|(_, target)| target.as_str() == SUN_DIRECTION_SOURCE)
+            {
                 warn!(
-                    "SetEnvironmentLight direction request rejected: semantic SunState has no provider sample"
+                    "SetEnvironmentLight direction request rejected: `sun` is an authored position target in this scene"
+                );
+                return;
+            }
+            let Some(active_frame) = active_frame.as_deref() else {
+                warn!(
+                    "SetEnvironmentLight direction request rejected: no ActivePhysicsFrame is bound"
                 );
                 return;
             };
-            // Preserve the unspecified axis from semantic state. Reading the
-            // render transform here would create a second direction authority.
-            let Some(direction) = SunState::normalized_direction(direction) else {
-                warn!(
-                    "SetEnvironmentLight direction request rejected: semantic SunState direction is invalid"
-                );
-                return;
+            let source = DirectionSourceId::parse(SUN_DIRECTION_SOURCE)
+                .expect("built-in direction source id is valid");
+            let direction = match resolve_direction_for_frame(
+                &source,
+                active_frame.0,
+                Some(&directions),
+                &q_direction_targets,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            ) {
+                Ok(direction) => direction,
+                Err(error) => {
+                    warn!(
+                        "SetEnvironmentLight direction request rejected: Sun direction cannot be resolved: {error:?}"
+                    );
+                    return;
+                }
             };
-            let rotation = Quat::from_rotation_arc(Vec3::Z, direction);
+            let rotation = DQuat::from_rotation_arc(DVec3::Z, direction.components());
             let (cur_yaw, cur_pitch, _) = rotation.to_euler(EulerRot::YXZ);
-            let yaw = cmd.sun_yaw.unwrap_or(cur_yaw);
-            let pitch = cmd.sun_pitch.unwrap_or(cur_pitch);
-            let next = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0)
-                .mul_vec3(Vec3::Z)
-                .normalize();
-            let irradiance = sun_state.irradiance_lux;
-            sun_state.publish(next, irradiance);
+            let yaw = cmd.sun_yaw.map(f64::from).unwrap_or(cur_yaw);
+            let pitch = cmd.sun_pitch.map(f64::from).unwrap_or(cur_pitch);
+            let next = DQuat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * DVec3::Z;
+            let Some(next) = lunco_spatial::coords::UnitDirection3::normalized(next) else {
+                warn!(
+                    "SetEnvironmentLight direction request rejected: resulting direction is invalid"
+                );
+                return;
+            };
+            directions.set_named(
+                SUN_DIRECTION_SOURCE,
+                Some(FramedDirection {
+                    frame: active_frame.0,
+                    direction: next,
+                }),
+            );
         }
 
         if let Some(lux) = cmd.illuminance {
@@ -719,8 +734,13 @@ register_commands!(on_set_environment_light);
 /// 2. [`EnvironmentSet::Apply`] — applies gravity and publishes environment cosim outputs
 pub struct EnvironmentPlugin;
 
-fn clear_environment_sun_state(mut sun: ResMut<SunState>, mut render_sun: ResMut<SunRenderState>) {
+fn clear_environment_sun_state(
+    mut sun: ResMut<SunState>,
+    mut directions: ResMut<EnvironmentDirections>,
+    mut render_sun: ResMut<SunRenderState>,
+) {
     sun.clear();
+    directions.clear();
     render_sun.clear();
 }
 
@@ -775,17 +795,13 @@ impl Plugin for EnvironmentPlugin {
 
         // Lighting half — RENDER-FREE. `DirectionalLight` is `bevy_light` and
         // `RenderLayers` is `bevy_camera`; neither depends on `bevy_render`, so
-        // the earthshine fill and the sun→cosim direction feed run headless too
+        // the earthshine fill and generic target-direction publication run headless too
         // (a sun-tracking Modelica model on the `--no-ui` server needs them).
-        app.register_type::<LocalEarth>();
         app.register_type::<EnvironmentProbe>();
-        app.register_type::<EarthDirectionRequired>();
         app.register_type::<Earthshine>();
-        // Declared here, WRITTEN by lunco-celestial (which depends on this crate,
-        // so the dependency cannot run the other way). Init'd unconditionally and
-        // left at ZERO — the "not known" state — so a scene with no celestial
-        // hierarchy reads as no-data rather than as a missing resource.
-        app.init_resource::<EarthDirectionWorld>();
+        // Direction samples are source-identified and frame-tagged; providers
+        // publish Sun, Earth, Moon, and other bodies into this one store.
+        app.init_resource::<EnvironmentDirections>();
         app.init_resource::<SunState>();
         app.init_resource::<SunRenderState>();
 
@@ -799,7 +815,7 @@ impl Plugin for EnvironmentPlugin {
         // direction is published afterwards for render consumers.
         app.add_systems(
             Update,
-            project_sun_state_to_light.run_if(tracked_sun_light_projection()),
+            project_environment_sun_to_light.run_if(tracked_sun_light_projection()),
         );
         app.add_systems(
             PostUpdate,
@@ -818,17 +834,9 @@ impl Plugin for EnvironmentPlugin {
         // mount frame and publish it directly to cosim outputs before propagation.
         app.add_systems(
             FixedUpdate,
-            (
-                publish_solar_inputs_to_cosim
-                    .in_set(EnvironmentSet::Apply)
-                    .before(lunco_cosim_core::schedule::CosimSet::Propagate),
-                // Earth pointing rides the same three-phase ordering: an antenna
-                // model must read the angles the same tick they were computed.
-                compute_local_earth.in_set(EnvironmentSet::Compute),
-                inject_local_earth_into_cosim
-                    .in_set(EnvironmentSet::Apply)
-                    .before(lunco_cosim_core::schedule::CosimSet::Propagate),
-            ),
+            (publish_direction_sources_to_cosim
+                .in_set(EnvironmentSet::Apply)
+                .before(lunco_cosim_core::schedule::CosimSet::Propagate),),
         );
 
         // Horizon-map terrain self-shadowing — the BAKE half (heightfield +

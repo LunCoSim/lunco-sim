@@ -64,8 +64,11 @@ under `assets/scenes/tests/` and `assets/scenarios/tests/`.
 
 Environment facts are produced by a distinct
 `components/environment/probe.usda` source prim. Never make a Modelica/Python
-consumer declare `gravity_accel`, `sun_mount_*`, or `earth_mount_*` as its own
-output and connect that output back to itself.
+consumer declare `gravity_accel` or a direction-target triplet as its own
+output and connect that output back to itself. EnvironmentProbe outputs use
+`<target-id>_mount_x/y/z`; reusable Modelica consumers use the generic
+`target_mount_x/y/z` inputs, and their wires choose which object supplies the
+direction.
 
 The engine-recognized **source** extensions are walked into the discovery manifest
 (`crates/lunco-assets-runtime/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,

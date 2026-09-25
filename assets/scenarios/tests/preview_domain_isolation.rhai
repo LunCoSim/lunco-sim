@@ -88,7 +88,7 @@ fn on_tick(me, ctx) {
             let g = assembly_edit::describe(this.fork).generation;
             let ack = assembly_edit::batch(this.fork, "Invalid preview connection remains inert",
                 [#{ SetConnection: #{ edit_target: "@root@", path: DORMANT + "/Network/Panel",
-                    name: "inputs:sun_mount_x", type_name: "float", sources: ["/Absent.outputs:sun_x"] } }], g);
+                    name: "inputs:target_mount_x", type_name: "double", sources: ["/Absent.outputs:sun_x"] } }], g);
             this.rejection_id = ack.id;
             this.observed = 0.0; this.leaked = false; this.phase = 3;
             return;

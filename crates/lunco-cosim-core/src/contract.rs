@@ -3,8 +3,67 @@
 //! These are data-contract names only. Runtime behavior belongs to the owning
 //! environment or celestial domain, while connections remain generic.
 
-/// SimComponent **output** connector carrying an entity's local gravitational
-/// acceleration magnitude (m/s²).
+/// Stable source identifier carried by a framed direction output triplet.
+///
+/// A probe output is named `<id>_mount_x/y/z`; consumers choose their own input
+/// names and connect them to the selected source. Keeping this parser beside
+/// the cosim port contract gives USD authoring, wiring, and environment code
+/// one identity grammar.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DirectionSourceId(String);
+
+impl DirectionSourceId {
+    /// Parse lower-case ASCII ids beginning with a letter and containing only
+    /// letters, digits, and underscores. A trailing underscore is forbidden.
+    pub fn parse(value: &str) -> Option<Self> {
+        let mut chars = value.chars();
+        let first = chars.next()?;
+        (first.is_ascii_lowercase()
+            && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+            && !value.ends_with('_'))
+        .then(|| Self(value.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn mount_connector(&self, axis: char) -> Option<String> {
+        matches!(axis, 'x' | 'y' | 'z').then(|| format!("{}_mount_{axis}", self.0))
+    }
+
+    /// Resolve a direction-source output connector to its stable id.
+    pub fn from_mount_connector(connector: &str) -> Option<Self> {
+        let (source, axis) = connector.rsplit_once("_mount_")?;
+        if !matches!(axis, "x" | "y" | "z") {
+            return None;
+        }
+        Self::parse(source)
+    }
+}
+
+#[cfg(test)]
+mod direction_source_tests {
+    use super::DirectionSourceId;
+
+    #[test]
+    fn direction_source_ids_round_trip_through_axis_connectors() {
+        for axis in ['x', 'y', 'z'] {
+            let source = DirectionSourceId::parse("spacecraft_7").unwrap();
+            let connector = source.mount_connector(axis).unwrap();
+            assert_eq!(
+                DirectionSourceId::from_mount_connector(&connector),
+                Some(source.clone())
+            );
+        }
+        assert!(DirectionSourceId::parse("7_spacecraft").is_none());
+        assert!(DirectionSourceId::parse("spacecraft_").is_none());
+        assert!(DirectionSourceId::from_mount_connector("spacecraft_mount_w").is_none());
+    }
+}
+
+/// SimComponent **output** connector carrying the magnitude of local
+/// gravitational acceleration (m/s²).
 ///
 /// Cosim itself never produces this value — it would have to hardcode a
 /// constant, and the master algorithm stays domain-agnostic. Instead a domain
@@ -13,46 +72,23 @@
 /// gravity flows through an ordinary output→input [`crate::SimConnection`] like
 /// any other signal — correct on the Moon, Earth, or any body.
 pub const GRAVITY_SOURCE_CONNECTOR: &str = "gravity_accel";
+/// Local gravity vector components expressed in the probe frame (m/s²).
 pub const GRAVITY_X_SOURCE_CONNECTOR: &str = "gravity_x";
 pub const GRAVITY_Y_SOURCE_CONNECTOR: &str = "gravity_y";
 pub const GRAVITY_Z_SOURCE_CONNECTOR: &str = "gravity_z";
 
-/// SimComponent output connectors carrying the unit direction **toward the
-/// Sun** in the consumer's authored mount frame.  The convention is shared with
-/// Earth tracking: `+X` right, `+Y` up, `-Z` forward.  Environment systems
-/// publish vectors; models alone convert them to their joint coordinates.
-pub const SUN_MOUNT_X_CONNECTOR: &str = "sun_mount_x";
-pub const SUN_MOUNT_Y_CONNECTOR: &str = "sun_mount_y";
-pub const SUN_MOUNT_Z_CONNECTOR: &str = "sun_mount_z";
-
-/// SimComponent output connectors carrying the unit direction **toward Earth**
-/// in the consumer's authored mount frame.  `+X` is mount-right, `+Y` mount-up,
-/// and `-Z` mount-forward.  The bridge performs one complete inverse mount
-/// rotation; a pointing model then performs the one documented vector→joint
-/// conversion.  Passing site azimuth/elevation to a mount-frame joint is
-/// intentionally not supported because it is ambiguous for pitched or rolled
-/// vehicles.
-pub const EARTH_MOUNT_X_CONNECTOR: &str = "earth_mount_x";
-pub const EARTH_MOUNT_Y_CONNECTOR: &str = "earth_mount_y";
-pub const EARTH_MOUNT_Z_CONNECTOR: &str = "earth_mount_z";
-
-/// The complete output contract of a `LunCoEnvironmentProbeAPI` source prim.
+/// Static output contract of a `LunCoEnvironmentProbeAPI` source prim.
 ///
 /// These are schema-declared properties, so they are not necessarily present in
 /// a live prim's authored `property_names()` list. The USD runtime projection
-/// uses this contract to materialize the source-side port surface that the
-/// environment domain fills and ordinary USD connections consume.
-pub const ENVIRONMENT_PROBE_OUTPUTS: &[&str] = &[
+/// uses this contract to materialize fixed environmental scalars. Direction
+/// outputs are source-identified and materialized from composed wire demand by
+/// the generic environment publisher.
+pub const ENVIRONMENT_PROBE_BASE_OUTPUTS: &[&str] = &[
     GRAVITY_SOURCE_CONNECTOR,
     GRAVITY_X_SOURCE_CONNECTOR,
     GRAVITY_Y_SOURCE_CONNECTOR,
     GRAVITY_Z_SOURCE_CONNECTOR,
-    SUN_MOUNT_X_CONNECTOR,
-    SUN_MOUNT_Y_CONNECTOR,
-    SUN_MOUNT_Z_CONNECTOR,
-    EARTH_MOUNT_X_CONNECTOR,
-    EARTH_MOUNT_Y_CONNECTOR,
-    EARTH_MOUNT_Z_CONNECTOR,
 ];
 
 /// Prefix of the SimComponent **output** connectors `lunco-celestial`'s link bridge
@@ -64,9 +100,9 @@ pub const ENVIRONMENT_PROBE_OUTPUTS: &[&str] = &[
 /// link_<class>_elevation_deg  that peer's elevation above the local horizon
 /// ```
 ///
-/// Same contract as [`SUN_MOUNT_X_CONNECTOR`]: cosim stays domain-agnostic and a domain
-/// system writes the real value each solve, so an RF model (`CommsLink.mo`) receives it
-/// through an ordinary output→input [`crate::SimConnection`].
+/// Cosim stays domain-agnostic and a domain system writes the real value each
+/// solve, so an RF model (`CommsLink.mo`) receives it through an ordinary
+/// output→input [`crate::SimConnection`].
 ///
 /// WHY PER CLASS: `LinkState` already hands every peer to anything that can hold a list
 /// (rhai, the API, the UI). Cosim is the one consumer that cannot — a Modelica port is a

@@ -3,7 +3,6 @@ use big_space::prelude::*;
 
 use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
-use lunco_celestial::geo::solar_tangent_frame;
 use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_materials::{ParamValue, ShaderLook};
@@ -111,62 +110,19 @@ pub fn body_rotation_system(
 /// The inputs are typed `EclipticAu` on purpose: this is the exact pipe that once carried
 /// EQUATORIAL vectors while claiming to be ecliptic, and put the sun 45° below the horizon at
 /// Shackleton. A raw `DVec3` can no longer be handed to it.
-pub fn sun_emit_direction(
-    p_sun: lunco_celestial::frames::EclipticAu,
-    p_moon: lunco_celestial::frames::EclipticAu,
-) -> Option<Vec3> {
-    // Normalize the AU delta in f64 before converting axes or narrowing to the
-    // render-facing f32 direction. A light needs orientation only; converting
-    // this vector to astronomical meters would carry scale the light cannot use.
-    let delta = (p_sun - p_moon).raw();
-    if !delta.is_finite() {
-        return None;
-    }
-    let scale = delta.abs().max_element();
-    if scale == 0.0 {
-        return None;
-    }
-    let to_sun_ecliptic = (delta / scale).normalize();
-    // Ecliptic (x, y, z) maps to the Y-up scene frame (x, z, -y).
-    let to_sun = Vec3::new(
-        to_sun_ecliptic.x as f32,
-        to_sun_ecliptic.z as f32,
-        -to_sun_ecliptic.y as f32,
-    );
-    (to_sun.is_finite() && to_sun.length_squared() > 0.0).then(|| -to_sun.normalize())
-}
-
-/// Point the scene's primary `DirectionalLight` along the celestial-time
-/// Sun direction at the current shared epoch (architecture doc 19 — T2;
-/// replaces the old hardcoded `Vec3::NEG_Z`).
-///
-/// The Sun sits at the heliocentre, so the Moon→Sun direction is just
-/// `-ecliptic_to_bevy(global_position(Moon)).raw()` (mirrors the solar-panel pointing
-/// in the surface integration). A `DirectionalLight` emits along its local forward
-/// (`-Z`) and rays travel FROM the Sun INTO the scene, so the semantic state
-/// stores the opposite look direction. The scene sun is identified structurally
-/// by excluding Earthshine and scoped preview lights; ambiguity is an authored
-/// contract error, never a brightness-based choice.
-///
-/// This semantic state feeds render lighting and fixed-step Modelica inputs
-/// from the same celestial epoch. Its calculation does not depend on a
-/// rendered light; that light is an independent projection of SunState.
+/// Publish the calibrated solar irradiance from the current celestial epoch.
+/// Direction inputs are resolved independently from the actual tagged target
+/// entity by the generic environment probe path, so every probe gets its own
+/// BigSpace-relative bearing.
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
     celestial_time: Res<CelestialTime>,
-    registry: Res<CelestialBodyRegistry>,
     sun_cal: Option<Res<lunco_environment::LunarSun>>,
     mut sun_state: ResMut<lunco_environment::SunState>,
-    // Declared by `lunco-environment` (which cannot depend on this crate) and
-    // filled here — the same shape as `LunarSun` below. `Option` because a build
-    // without `EnvironmentPlugin` has no such resource and must still get a sun.
-    mut earth_dir_out: Option<ResMut<lunco_environment::EarthDirectionWorld>>,
     // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
     q_site: Query<&lunco_celestial::geo::GeodeticAnchor, With<lunco_celestial::geo::SiteAnchor>>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
-    // Last reported sun elevation, so the aim is logged on material change only.
-    mut last_logged_elevation: Local<f32>,
 ) {
     let Some(ephemeris) = ephemeris else {
         sun_state.clear();
@@ -205,10 +161,6 @@ pub fn update_sun_light_system(
         sun_state.clear();
         return;
     };
-    let Some(observer_desc) = registry.get(observer_body) else {
-        sun_state.clear();
-        return;
-    };
 
     let (Some(p_sun), Some(p_observer)) = (
         ephemeris
@@ -221,102 +173,19 @@ pub fn update_sun_light_system(
         sun_state.clear();
         return;
     };
-    let Some(ecliptic_dir) = sun_emit_direction(p_sun, p_observer) else {
-        sun_state.clear();
-        return;
-    };
 
-    let Some(anchor) = site_anchor else {
+    if site_anchor.is_none() {
         // Orbital views without a site do not own a local ENU light frame.
         // Their authored DistantLight remains render-only; it is not a
-        // substitute Modelica input. Clear the semantic direction so probes do
-        // not retain or publish an earlier site sample.
+        // substitute physical irradiance sample.
         sun_state.clear();
         return;
-    };
-    let site_frame = solar_tangent_frame(
-        observer_desc,
-        &anchor.geodetic,
-        // Only the frame orientation is used below. Its translation is
-        // irrelevant to the Sun direction, so keep the astronomical observer
-        // position out of the local-frame calculation.
-        bevy::math::DVec3::ZERO,
-        celestial_time.epoch_jd,
-    );
-    // The site grid's local axes are ENU (+X east, +Y up, -Z north). The
-    // tangent basis is expressed in the inertial ecliptic frame, so this is
-    // the one explicit conversion for a light authored under that site.
-    // It is derived from the same body-fixed pose as terrain and physics,
-    // rather than from an ECS entity re-posed as a camera pin.
-    let solar_to_site = site_frame.frame_to_scene_rotation();
-    let dir = (solar_to_site
-        * bevy::math::DVec3::new(
-            ecliptic_dir.x as f64,
-            ecliptic_dir.y as f64,
-            ecliptic_dir.z as f64,
-        ))
-    .as_vec3()
-    .normalize();
-
-    // Report material changes from the same ephemeris snapshot and site frame
-    // used for the celestial body poses; there is no separate transform-chain
-    // cross-check that could observe a different floating-origin convention.
-    let elevation_deg = (-dir.y).asin().to_degrees();
-    if (elevation_deg - *last_logged_elevation).abs() > 0.5 {
-        *last_logged_elevation = elevation_deg;
-        // World axes are East=+X, Up=+Y, North=−Z; the reported azimuth is the
-        // SUN's (the direction to it), not the emit direction's.
-        let to_sun = -dir;
-        let azimuth_deg = to_sun.x.atan2(-to_sun.z).to_degrees().rem_euclid(360.0);
-        debug!(
-            "[celestial] sun aim: elevation {elevation_deg:.2}°, azimuth {azimuth_deg:.1}° \
-             @ JD {:.5} (observer {observer_body})",
-            celestial_time.epoch_jd,
-        );
     }
     let irradiance = sun_cal.as_deref().and_then(|cal| {
         let r2 = (p_sun - p_observer).length_squared();
         (r2 > 1.0e-4).then_some((cal.illuminance_lux as f64 / r2) as f32)
     });
-    sun_state.publish(-dir, irradiance);
-
-    // …and Earth, the OTHER thing on this body points at. Same rotation, same
-    // frame — an antenna bridge that recomputed the align rotation for itself
-    // could disagree with the light by a frame, and a dish that lags the world by
-    // a frame is a dish that hunts.
-    //
-    // The direction is TOWARD Earth (a look-at vector), not an emit direction:
-    // Earth is a target here, not a light source, so it never gets the sun's sign
-    // flip. `lunco-environment` turns it into az/el and publishes the ports.
-    if let (Some(earth_dir_out), Some(p_earth)) = (
-        earth_dir_out.as_mut(),
-        ephemeris.provider.global_position(
-            lunco_celestial::ephemeris_id::EARTH,
-            celestial_time.epoch_jd,
-        ),
-    ) {
-        let to_earth = lunco_celestial::coords::ecliptic_to_bevy(p_earth - p_observer)
-            .raw()
-            .as_vec3()
-            .normalize_or_zero();
-        // Degenerate (missing Earth data, or Earth and the observer body coincident)
-        // stays ZERO — the resource's documented "not known", which the bridge
-        // refuses to publish rather than reporting Earth due north on the horizon.
-        let next = if to_earth.length_squared() > 0.5 {
-            (solar_to_site
-                * bevy::math::DVec3::new(to_earth.x as f64, to_earth.y as f64, to_earth.z as f64))
-            .as_vec3()
-            .normalize()
-        } else {
-            Vec3::ZERO
-        };
-        if earth_dir_out.0 != next {
-            earth_dir_out.0 = next;
-        }
-    }
-
-    // The render projection is owned by `lunco-environment` and consumes the
-    // semantic state above. This system never reads back or mutates a light.
+    sun_state.publish(irradiance);
 }
 
 pub fn celestial_visuals_system(
@@ -480,69 +349,5 @@ pub fn celestial_visuals_system(
         if look.values.get("transition") != Some(&next) {
             look.values.insert("transition".into(), next);
         }
-    }
-}
-
-#[cfg(test)]
-mod sun_dir_tests {
-    //! Pure ephemeris→sun-direction math ([`sun_emit_direction`], doc 19 — T2).
-    use super::*;
-    use bevy::math::DVec3;
-    use lunco_celestial::frames::EclipticAu;
-
-    #[test]
-    fn degenerate_ephemeris_yields_no_direction() {
-        // Coincident/no-data positions do not define a sun direction, so the
-        // system leaves the light under explicit manual control.
-        assert!(sun_emit_direction(EclipticAu::ZERO, EclipticAu::ZERO).is_none());
-    }
-
-    #[test]
-    fn emit_direction_is_unit_and_points_away_from_sun() {
-        // Sun at the heliocentre, Moon offset along +X (ecliptic).
-        let d = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.0, 0.0)))
-            .expect("non-degenerate");
-        assert!(
-            (d.length() - 1.0).abs() < 1e-5,
-            "emit dir must be unit length"
-        );
-
-        // The light emits AWAY from the Sun: with the Moon on the far side, the
-        // emit direction flips to the antipode.
-        let d_opp = sun_emit_direction(
-            EclipticAu::ZERO,
-            EclipticAu::new(DVec3::new(-1.0, 0.0, 0.0)),
-        )
-        .expect("non-degenerate");
-        assert!(
-            (d + d_opp).length() < 1e-5,
-            "antipodal Moon → antipodal light"
-        );
-    }
-
-    #[test]
-    fn emit_direction_tracks_the_moon_position() {
-        // Two distinct Moon positions give two distinct light directions — i.e.
-        // advancing the epoch (which moves the Moon) re-aims the sun.
-        let a = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.2, 0.0)))
-            .unwrap();
-        let b = sun_emit_direction(EclipticAu::ZERO, EclipticAu::new(DVec3::new(1.0, 0.0, 0.3)))
-            .unwrap();
-        assert!(
-            (a - b).length() > 1e-3,
-            "different Moon positions → different sun aim"
-        );
-    }
-
-    #[test]
-    fn direction_is_normalized_before_render_precision_narrowing() {
-        let d = sun_emit_direction(
-            EclipticAu::new(DVec3::new(1.0e30, 0.0, 0.0)),
-            EclipticAu::ZERO,
-        )
-        .expect("finite direction at large AU magnitude");
-
-        assert!(d.abs_diff_eq(Vec3::NEG_X, 1.0e-6));
-        assert!((d.length() - 1.0).abs() < 1.0e-6);
     }
 }

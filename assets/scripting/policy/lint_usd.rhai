@@ -311,7 +311,7 @@ fn lint_usd(facts) {
     for f in control_binding_contract(facts) { out.push(f); }
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
-    for f in solar_source_contract(facts) { out.push(f); }
+    for f in direction_source_contract(facts) { out.push(f); }
     for f in connection_contract(facts) { out.push(f); }
     for f in runtime_connection_contract(facts) { out.push(f); }
     for f in runtime_joint_contract(facts) { out.push(f); }
@@ -807,92 +807,356 @@ fn epoch_api_requires_authored_time(facts) {
     out
 }
 
-/// Solar Modelica inputs need a real semantic source. A celestial scene gets
-/// its direction from ephemeris in the root site frame; a static scene gets it
-/// from one authored root DistantLight. Check only connected consumers so
-/// unused probe capabilities do not create scene errors. A spawnable root is a
-/// reusable asset whose scene-level environment source is selected by its parent.
-fn solar_source_contract(facts) {
+/// A model's generic target vector is independent of which object the source
+/// wire names. This policy checks a complete f64 triplet, follows direct
+/// EnvironmentProbe wires and assembly input relays, and validates each source
+/// id against one target. Spawnable parts defer target selection to their
+/// parent composition.
+fn direction_source_contract(facts) {
     let out = [];
-    if !has_connected_solar_probe_consumer(facts) { return out; }
-    if facts.stage.root_spawnable == true { return out; }
-
     let root_path = if facts.stage.default_prim == () {
         "<stage>"
     } else {
         "/" + facts.stage.default_prim
     };
-    let has_celestial_source = false;
+
     for prim in facts.prims {
-        if prim.schemas.contains("LunCoCelestialBodyAPI") {
-            has_celestial_source = true;
-            break;
-        }
+        for issue in direction_target_identity_findings(facts, prim) { out.push(issue); }
     }
 
-    if has_celestial_source {
-        let has_root_anchor = false;
-        for prim in facts.prims {
-            if prim.path != root_path { continue; }
-            has_root_anchor = prim.attributes.contains("lunco:anchor:lat")
-                && prim.attributes.contains("lunco:anchor:lon");
-            break;
-        }
-        if !has_root_anchor {
-            out.push(finding(
-                "celestial-solar-site-required",
-                "error",
-                root_path,
-                "A connected solar Modelica input uses a celestial scene, but the selected root has no geodetic site anchor. Author root lunco:anchor:lat and lunco:anchor:lon so the ephemeris can publish a local SunState; the authored DistantLight remains render-only in celestial mode.",
-            ));
-        }
-        return out;
-    }
-
-    let static_sun_count = 0;
     for prim in facts.prims {
-        if prim.type == "DistantLight" && prim.parent == root_path {
-            static_sun_count += 1;
+        for issue in direction_prim_input_findings(facts, prim, root_path) {
+            out.push(issue);
         }
-    }
-    if static_sun_count != 1 {
-        out.push(finding(
-            "static-solar-light-cardinality",
-            "error",
-            root_path,
-            "A connected solar Modelica input in a scene without celestial bodies requires exactly one authored root DistantLight as its static direction source; author one light or add celestial bodies and a root site anchor.",
-        ));
     }
     out
 }
 
-fn has_connected_solar_probe_consumer(facts) {
-    let solar_outputs = [];
-    for provider in facts.prims {
-        if !provider.schemas.contains("LunCoEnvironmentProbeAPI") { continue; }
-        solar_outputs.push(provider.path + ".outputs:sun_mount_x");
-        solar_outputs.push(provider.path + ".outputs:sun_mount_y");
-        solar_outputs.push(provider.path + ".outputs:sun_mount_z");
-    }
-
-    for sink in facts.prims {
-        for connection in sink.connections {
-            if connection.name != "inputs:sun_mount_x"
-                && connection.name != "inputs:sun_mount_y"
-                && connection.name != "inputs:sun_mount_z" {
+fn direction_prim_input_findings(facts, prim, root_path) {
+    let out = [];
+    for frame in direction_input_frames(prim) {
+        if frame == "target" {
+            if facts.stage.root_spawnable == true && direction_spawnable_target_interface(prim) {
                 continue;
             }
-            if connection_uses_solar_probe(connection, solar_outputs) { return true; }
+            for issue in direction_frame_findings(facts, prim, frame, root_path) {
+                out.push(issue);
+            }
+        } else {
+            out.push(direction_input_name_non_generic(prim, frame));
+        }
+    }
+    out
+}
+
+fn direction_spawnable_target_interface(prim) {
+    for axis in ["x", "y", "z"] {
+        let name = "inputs:target_mount_" + axis;
+        if !prim.attributes.contains(name) { return false; }
+        let connection = direction_connection(prim, name);
+        if connection != () && connection.sources.len() != 0 { return false; }
+    }
+    true
+}
+
+fn direction_input_name_non_generic(prim, frame) {
+    finding(
+        "direction-input-name-non-generic", "error", prim.path,
+        "Direction consumer inputs must use `target_mount_x/y/z`; the source identity (`" + frame + "`) belongs on the EnvironmentProbe output wire, not in the consumer port name.",
+    )
+}
+
+fn direction_target_identity_findings(facts, prim) {
+    let out = [];
+    if !prim.schemas.contains("LunCoDirectionTargetAPI") { return out; }
+    let id = prim.direction_target_id;
+    if prim.schemas.contains("LunCoCelestialBodyAPI") { out.push(direction_celestial_conflict(prim)); }
+    if !valid_direction_id(id) {
+        out.push(direction_target_id_invalid(prim));
+        return out;
+    }
+    for issue in direction_duplicate_target_findings(facts, prim, id) { out.push(issue); }
+    out
+}
+
+fn direction_celestial_conflict(prim) {
+    finding(
+        "direction-target-celestial-identity-conflict", "error", prim.path,
+        "A celestial target uses its `lunco:body` NAIF identity. Remove `LunCoDirectionTargetAPI`; use the canonical source id (`sun`, `earth`, `moon`, or `body_<NAIF>`).",
+    )
+}
+
+fn direction_target_id_invalid(prim) {
+    finding(
+        "direction-target-id-invalid", "error", prim.path,
+        "LunCoDirectionTargetAPI requires a non-empty lower-case ASCII id beginning with a letter and containing only letters, digits, and underscores; the id must not end with an underscore.",
+    )
+}
+
+fn direction_duplicate_target_findings(facts, prim, id) {
+    let out = [];
+    for other in facts.prims {
+        if other.path <= prim.path { continue; }
+        if other.schemas.contains("LunCoDirectionTargetAPI") && other.direction_target_id == id {
+            out.push(direction_duplicate_target_finding(prim, other, id));
+        }
+    }
+    out
+}
+
+fn direction_duplicate_target_finding(prim, other, id) {
+    let description = "direction target id `" + id + "` is already used by " + prim.path;
+    finding(
+        "direction-target-id-duplicate", "error", other.path,
+        description + "; each id must resolve to exactly one target in the active scene.",
+    )
+}
+
+fn direction_input_frames(prim) {
+    let frames = [];
+    for attribute in prim.attributes {
+        let parts = direction_input_parts(attribute);
+        if parts != () && !frames.contains(parts.frame) { frames.push(parts.frame); }
+    }
+    frames
+}
+
+fn direction_frame_findings(facts, prim, frame, root_path) {
+    let out = [];
+    let contract = inspect_direction_frame(facts, prim, frame);
+    for issue in contract.issues { out.push(issue); }
+    if !contract.valid {
+        out.push(finding(
+            "direction-input-triplet-invalid", "error", prim.path,
+            "Target frame `" + frame + "` requires exactly one connected double input for each x/y/z component. All axes must come from one EnvironmentProbe source id or relay through the same assembly input triplet.",
+        ));
+    }
+    if contract.kind == "probe" && contract.target_id != () {
+        for issue in direction_source_target_findings(facts, prim, contract.target_id, root_path) {
+            out.push(issue);
+        }
+    }
+    out
+}
+
+fn inspect_direction_frame(facts, prim, frame) {
+    let result = #{ valid: true, kind: (), provider: (), target_id: (), issues: [] };
+    for axis in ["x", "y", "z"] {
+        let edge = inspect_direction_axis_contract(facts, prim, frame, axis);
+        for issue in edge.issues { result.issues.push(issue); }
+        result = merge_direction_axis_contract(result, edge);
+    }
+    result
+}
+
+fn inspect_direction_axis_contract(facts, prim, frame, axis) {
+    let result = #{ valid: true, kind: (), provider: (), target_id: (), issues: [] };
+    let name = "inputs:" + frame + "_mount_" + axis;
+    if !prim.attributes.contains(name) { result.valid = false; return result; }
+    let connection = direction_connection(prim, name);
+    if connection == () || connection.sources.len() != 1 {
+        result.valid = false;
+        return result;
+    }
+    if connection.target_type != "double" {
+        result.issues.push(direction_input_precision_finding(prim, name));
+        result.valid = false;
+    }
+    let source = connection.sources[0].path;
+    let edge = inspect_direction_axis(facts, frame, axis, source);
+    if !edge.valid { result.valid = false; return result; }
+    result.kind = edge.kind;
+    result.provider = edge.provider;
+    result.target_id = edge.target_id;
+    result
+}
+
+fn direction_input_precision_finding(prim, name) {
+    finding(
+        "direction-input-precision", "error", prim.path + "." + name,
+        "Direction components are canonical f64 values; author this input as USD `double` so the connection does not narrow precision.",
+    )
+}
+
+fn merge_direction_axis_contract(result, edge) {
+    if !edge.valid { result.valid = false; return result; }
+    if result.kind == () { result.kind = edge.kind; result.provider = edge.provider; }
+    if result.kind != edge.kind || result.provider != edge.provider { result.valid = false; }
+    if edge.target_id == () { return result; }
+    if result.target_id == () { result.target_id = edge.target_id; }
+    else if result.target_id != edge.target_id { result.valid = false; }
+    result
+}
+
+fn inspect_direction_axis(facts, frame, axis, path) {
+    let direct = direction_output_parts(path);
+    if direct != () && direct.axis == axis {
+        let provider = path.sub_string(0, path.len() - direct.suffix.len());
+        return #{ valid: direction_provider_exists(facts, provider), kind: "probe", provider: provider, target_id: direct.id };
+    }
+    let relay = direction_input_source_parts(path);
+    if relay != () && relay.axis == axis && relay.frame == frame {
+        let provider = path.sub_string(0, path.len() - relay.suffix.len());
+        return #{ valid: true, kind: "relay", provider: provider, target_id: () };
+    }
+    #{ valid: false, kind: (), provider: (), target_id: () }
+}
+
+fn direction_provider_exists(facts, path) {
+    for candidate in facts.prims {
+        if candidate.path == path && candidate.schemas.contains("LunCoEnvironmentProbeAPI") {
+            return true;
         }
     }
     false
 }
 
-fn connection_uses_solar_probe(connection, solar_outputs) {
-    for source in connection.sources {
-        if solar_outputs.contains(source.path) { return true; }
+fn direction_source_target_findings(facts, prim, id, root_path) {
+    if !valid_direction_id(id) {
+        return [direction_input_id_invalid(prim, id)];
     }
-    false
+    if facts.stage.root_spawnable == true { return []; }
+    direction_source_target_count_findings(facts, prim, id, root_path)
+}
+
+fn direction_input_id_invalid(prim, id) {
+    finding(
+        "direction-input-id-invalid", "error", prim.path,
+        "Direction source id `" + id + "` is not a valid lower-case ASCII id.",
+    )
+}
+
+fn direction_source_target_count_findings(facts, prim, id, root_path) {
+    let count = direction_target_count(facts, id, root_path);
+    if count == 0 { return [direction_target_missing(prim, id)]; }
+    if count > 1 { return [direction_target_ambiguous(prim, id, count)]; }
+    []
+}
+
+fn direction_target_missing(prim, id) {
+    finding(
+        "direction-source-target-missing", "error", prim.path,
+        "Direction source `" + id + "` has no matching position target or static Sun ray. Apply LunCoDirectionTargetAPI with this id to the target prim, or use the matching celestial body; static scenes use one root DistantLight for `sun`.",
+    )
+}
+
+fn direction_target_ambiguous(prim, id, count) {
+    let description = "Direction source `" + id + "` resolves to " + count;
+    finding(
+        "direction-source-target-ambiguous", "error", prim.path,
+        description + " target definitions; author exactly one target entity or static ray.",
+    )
+}
+
+fn direction_input_parts(attribute) {
+    if !attribute.starts_with("inputs:") { return (); }
+    let connector = attribute.sub_string("inputs:".len());
+    for axis in ["x", "y", "z"] {
+        let suffix = "_mount_" + axis;
+        if connector.ends_with(suffix) && connector.len() > suffix.len() {
+            let frame_length = connector.len() - suffix.len();
+            let frame = connector.sub_string(0, frame_length);
+            let result = #{};
+            result.frame = frame;
+            result.axis = axis;
+            return result;
+        }
+    }
+    ()
+}
+
+fn direction_output_parts(path) {
+    let marker = ".outputs:";
+    let parts = path.split(marker);
+    if parts.len() != 2 { return (); }
+    let connector = parts[1];
+    for axis in ["x", "y", "z"] {
+        let suffix = "_mount_" + axis;
+        if connector.ends_with(suffix) && connector.len() > suffix.len() {
+            let source_length = connector.len() - suffix.len();
+            let id = connector.sub_string(0, source_length);
+            let property_suffix = marker + connector;
+            let result = #{};
+            result.id = id;
+            result.axis = axis;
+            result.suffix = property_suffix;
+            return result;
+        }
+    }
+    ()
+}
+
+fn direction_input_source_parts(path) {
+    let marker = ".inputs:";
+    let parts = path.split(marker);
+    if parts.len() != 2 { return (); }
+    let connector = parts[1];
+    for axis in ["x", "y", "z"] {
+        let suffix = "_mount_" + axis;
+        if connector.ends_with(suffix) && connector.len() > suffix.len() {
+            let frame_length = connector.len() - suffix.len();
+            let frame = connector.sub_string(0, frame_length);
+            let property_suffix = marker + connector;
+            let result = #{};
+            result.frame = frame;
+            result.axis = axis;
+            result.suffix = property_suffix;
+            return result;
+        }
+    }
+    ()
+}
+
+fn valid_direction_id(id) {
+    if id == () || id.len() == 0 || id.ends_with("_") { return false; }
+    let letters = "abcdefghijklmnopqrstuvwxyz";
+    let rest = letters + "0123456789_";
+    for index in 0..id.len() {
+        let character = id.sub_string(index, 1);
+        if index == 0 {
+            if !letters.contains(character) { return false; }
+        } else if !rest.contains(character) {
+            return false;
+        }
+    }
+    true
+}
+
+fn direction_connection(prim, name) {
+    for connection in prim.connections {
+        if connection.name == name { return connection; }
+    }
+    ()
+}
+
+fn direction_target_count(facts, id, root_path) {
+    let celestial_targets = 0;
+    for prim in facts.prims {
+        if prim.celestial_direction_id == id {
+            celestial_targets += 1;
+        }
+    }
+
+    let explicit_targets = 0;
+    for prim in facts.prims {
+        if prim.schemas.contains("LunCoDirectionTargetAPI")
+            && prim.direction_target_id == id {
+            explicit_targets += 1;
+        }
+    }
+    if celestial_targets > 0 {
+        return celestial_targets + explicit_targets;
+    }
+
+    let static_sun_rays = 0;
+    if id == "sun" {
+        for prim in facts.prims {
+            if prim.type == "DistantLight" && prim.parent == root_path {
+                static_sun_rays += 1;
+            }
+        }
+    }
+    explicit_targets + static_sun_rays
 }
 
 /// A connector WIRE only has meaning inside the one generated Modelica island

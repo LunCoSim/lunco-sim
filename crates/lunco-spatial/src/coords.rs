@@ -199,6 +199,114 @@ impl GridFrameTransform {
     }
 }
 
+/// A dimensionless, unit-length direction expressed in a named spatial frame.
+///
+/// This is not a point and it has no length unit. Construct it with
+/// [`Self::normalized`] at the provider boundary, or validate an already-unit
+/// value with [`Self::from_unit`]. Frame rotations preserve its magnitude;
+/// conversions never silently normalize it again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnitDirection3(DVec3);
+
+impl UnitDirection3 {
+    /// Explicitly normalize a non-zero finite provider vector.
+    pub fn normalized(vector: DVec3) -> Option<Self> {
+        if !vector.is_finite() {
+            return None;
+        }
+        let length_squared = vector.length_squared();
+        (length_squared.is_finite() && length_squared > 0.0)
+            .then(|| Self(vector / length_squared.sqrt()))
+    }
+
+    /// Validate the unit-vector contract without changing the supplied value.
+    pub fn from_unit(vector: DVec3) -> Option<Self> {
+        const UNIT_LENGTH_SQUARED_TOLERANCE: f64 = 1.0e-10;
+        if !vector.is_finite() {
+            return None;
+        }
+        let length_squared = vector.length_squared();
+        (length_squared.is_finite()
+            && (length_squared - 1.0).abs() <= UNIT_LENGTH_SQUARED_TOLERANCE)
+            .then_some(Self(vector))
+    }
+
+    /// The dimensionless components in this direction's current frame.
+    pub const fn components(self) -> DVec3 {
+        self.0
+    }
+
+    /// Reverse the direction without changing its magnitude or frame.
+    pub fn negated(self) -> Self {
+        Self(-self.0)
+    }
+
+    /// Re-express the direction through a rigid rotation, preserving the unit
+    /// length contract without normalizing the vector.
+    pub fn rotated(self, rotation: DQuat) -> Option<Self> {
+        if !rotation.is_finite() || rotation.length_squared() <= f64::MIN_POSITIVE {
+            return None;
+        }
+        Self::from_unit(rotation.normalize() * self.0)
+    }
+}
+
+/// Re-express a unit direction from any source entity frame in any target
+/// entity frame.
+///
+/// `pose_in_grid` resolves both frames against their nearest shared BigSpace
+/// grid and composes only their relative f64 pose. Translation is deliberately
+/// discarded for a free direction; the returned rotation maps source-frame
+/// axes into target-frame axes. This covers celestial-to-spacecraft and
+/// spacecraft-to-spacecraft sensor frames through one operation.
+pub fn unit_direction_between_frames<F: QueryFilter>(
+    direction_in_source: UnitDirection3,
+    source_frame: Entity,
+    target_frame: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<UnitDirection3> {
+    let (_, source_to_target_rotation) =
+        pose_in_grid(source_frame, target_frame, q_parents, q_grids, q_spatial)?;
+    direction_in_source.rotated(source_to_target_rotation)
+}
+
+/// Direction from `source` to `target`, expressed in the source entity's local
+/// frame. Their positions are composed in the closest shared BigSpace grid, so
+/// cell offsets are subtracted before any large world-origin composition.
+/// Normalization happens once when the displacement becomes a unit direction.
+pub fn direction_to_entity_in_entity_frame<F: QueryFilter>(
+    source: Entity,
+    target: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<UnitDirection3> {
+    UnitDirection3::normalized(relative_position_to_entity_in_entity_frame(
+        source, target, q_parents, q_grids, q_spatial,
+    )?)
+}
+
+/// Relative position from `source` to `target`, expressed in the source
+/// entity's local axes and metres. The returned vector remains f64 and is
+/// computed in the nearest shared BigSpace grid before any direction
+/// normalization.
+pub fn relative_position_to_entity_in_entity_frame<F: QueryFilter>(
+    source: Entity,
+    target: Entity,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
+) -> Option<DVec3> {
+    let (_, source_position, source_rotation, target_position, _) =
+        common_grid_poses(source, target, q_parents, q_grids, q_spatial)?;
+    let displacement_in_source = source_rotation.inverse() * (target_position - source_position);
+    displacement_in_source
+        .is_finite()
+        .then_some(displacement_in_source)
+}
+
 /// A point in the OriginAnchor-relative render frame. f64 so the
 /// blessed conversions don't round-trip through f32; construct from render
 /// `Transform`/`GlobalTransform` data via [`RenderPos::from_render_f32`].
@@ -376,6 +484,110 @@ mod active_frame_pose_tests {
         let after = read_pose(&mut world, entity);
         assert!((after.0.0 - local_position).length() < 1.0e-4);
         assert!(after.1.0.angle_between(local_rotation).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn unit_direction_uses_big_space_relative_pose_without_position_loss() {
+        let mut world = World::new();
+        let root = world
+            .spawn((
+                WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let active = world
+            .spawn((
+                WorldGridConfig::default().grid(),
+                CellCoord::new(80_000, -4_000, 7_000),
+                Transform::from_rotation(Quat::from_rotation_y(0.8)),
+                ChildOf(root),
+            ))
+            .id();
+        let target_rotation = DQuat::from_rotation_x(0.37) * DQuat::from_rotation_y(-0.91);
+        let target = world
+            .spawn((
+                Transform::from_xyz(12_345.0, -6_789.0, 9_876.0)
+                    .with_rotation(target_rotation.as_quat()),
+                ChildOf(active),
+            ))
+            .id();
+        let direction = UnitDirection3::normalized(DVec3::new(2.0, -3.0, 5.0)).unwrap();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (parents, grids, spatial) = state.get(&world).unwrap();
+        let converted =
+            unit_direction_between_frames(direction, active, target, &parents, &grids, &spatial)
+                .expect("target is in the active BigSpace frame");
+
+        let expected = target_rotation.inverse() * direction.components();
+        assert!((converted.components() - expected).length() < 1.0e-10);
+        assert!((converted.components().length() - 1.0).abs() < 1.0e-10);
+        assert!(UnitDirection3::from_unit(DVec3::ZERO).is_none());
+        assert!(UnitDirection3::from_unit(DVec3::X * 2.0).is_none());
+        assert!(UnitDirection3::normalized(DVec3::ZERO).is_none());
+    }
+
+    #[test]
+    fn entity_bearings_are_per_observer_and_keep_big_space_cell_precision() {
+        let mut world = World::new();
+        let root = world
+            .spawn((
+                WorldGridConfig::default().grid(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let first_probe = world
+            .spawn((
+                CellCoord::new(80_000, -4_000, 7_000),
+                Transform::default(),
+                ChildOf(root),
+            ))
+            .id();
+        let second_probe = world
+            .spawn((
+                CellCoord::new(80_000, -4_000, 7_000),
+                Transform::from_xyz(0.0, 500.0, 0.0).with_rotation(Quat::from_rotation_y(0.5)),
+                ChildOf(root),
+            ))
+            .id();
+        let target = world
+            .spawn((
+                CellCoord::new(80_001, -4_000, 7_000),
+                Transform::from_xyz(50.0, 0.0, 0.0),
+                ChildOf(root),
+            ))
+            .id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&Grid>,
+            Query<(Option<&CellCoord>, &Transform)>,
+        )> = SystemState::new(&mut world);
+        let (parents, grids, spatial) = state.get(&world).unwrap();
+        let first =
+            direction_to_entity_in_entity_frame(first_probe, target, &parents, &grids, &spatial)
+                .expect("first probe and target share a BigSpace grid");
+        let second =
+            direction_to_entity_in_entity_frame(second_probe, target, &parents, &grids, &spatial)
+                .expect("second probe and target share a BigSpace grid");
+
+        assert!(first.components().distance(DVec3::X) < 1.0e-10);
+        assert!((first.components().length() - 1.0).abs() < 1.0e-10);
+        assert!((second.components() - first.components()).length() > 0.1);
+        assert!(
+            relative_position_to_entity_in_entity_frame(
+                first_probe,
+                first_probe,
+                &parents,
+                &grids,
+                &spatial,
+            )
+            .is_some_and(|displacement| displacement == DVec3::ZERO)
+        );
     }
 
     #[test]

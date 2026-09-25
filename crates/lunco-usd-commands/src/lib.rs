@@ -47,7 +47,7 @@ use lunco_doc_bevy::{
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
-use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
+use lunco_usd_bevy_stage::{StageView, UsdRead, UsdStageAsset};
 use lunco_usd_core::commands::{
     ApplyUsdOp, ApplyUsdOps, ApplyUsdTransientOps, AttachComponent, AttachProgram,
     CommitUsdProposal, CreateUsdProposal, DetachComponent, ReviewUsdProposal, USD_DOCUMENT_KIND,
@@ -58,7 +58,7 @@ use lunco_usd_core::edit_session::{
 };
 use lunco_usd_data::usd_data::UsdDataExt;
 use lunco_usd_document::document::{LayerId, UsdOp};
-use lunco_workspace::{TwinClosed, WorkspaceResource};
+use lunco_workspace::{StorageHandle, TwinClosed, WorkspaceResource};
 use openusd::schemas::lux::tokens as ltok;
 
 /// Plugin that registers the USD document kind, the typed-command
@@ -942,18 +942,73 @@ fn proposal_diagnostics(diagnostics: &[String]) -> String {
 /// flattened scene or a second filesystem resolver. The document replaces the
 /// recipe root with its current opinions for each synchronous operation.
 fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
-    let recipe = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc).map(|stage| {
-        lunco_usd_compose::recipe::StageRecipe::new(
-            stage.scene_layer.clone(),
-            stage.layer_bytes_snapshot(),
-        )
-    });
+    let recipe = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
+        .map(|stage| {
+            lunco_usd_compose::recipe::StageRecipe::new(
+                stage.scene_layer.clone(),
+                stage.layer_bytes_snapshot(),
+            )
+        })
+        .or_else(|| {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                match unmounted_document_authoring_recipe(world, doc) {
+                    Ok(recipe) => recipe,
+                    Err(error) => {
+                        warn!("[UsdAuthoringRecipe] {error}");
+                        None
+                    }
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                None
+            }
+        });
     if let Some(host) = world
         .resource_mut::<DocumentRegistry<UsdDocument>>()
         .host_mut(doc)
     {
         host.document_mut().set_authoring_recipe(recipe);
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn unmounted_document_authoring_recipe(
+    world: &World,
+    doc: DocumentId,
+) -> Result<Option<lunco_usd_compose::recipe::StageRecipe>, String> {
+    let Some(document) = world
+        .get_resource::<DocumentRegistry<UsdDocument>>()
+        .and_then(|registry| registry.host(doc))
+        .map(|host| host.document())
+    else {
+        return Ok(None);
+    };
+    let DocumentOrigin::File { path, .. } = document.origin() else {
+        return Ok(None);
+    };
+    if let Some(error) = document.parse_error() {
+        return Err(format!(
+            "USD document {doc} has a parse error and cannot be composed for authoring: {error}"
+        ));
+    }
+    let path = path.clone();
+    let composed = document.composed_arc();
+    let source = lunco_usd_authoring::author::data_to_usda(&composed)
+        .map_err(|error| format!("cannot serialize USD document composition: {error}"))?;
+    let (root_id, assets_root, twin_root) = document_composition_context(world, doc, &path)?;
+    let recipe = lunco_usd_compose::recipe_from_source_with_roots(
+        &root_id,
+        &source,
+        assets_root.as_deref(),
+        twin_root.as_deref(),
+    )
+    .map_err(|error| format!("cannot resolve USD document composition: {error}"))?;
+    for diagnostic in &recipe.dependency_diagnostics {
+        warn!("[UsdAuthoringRecipe] {diagnostic}");
+    }
+    Ok(Some(recipe))
 }
 
 #[on_command(CreateUsdProposal)]
@@ -1904,13 +1959,13 @@ fn apply_transient_ops_result(
     Ok((ack, total))
 }
 
-/// Validate typed attribute operations against the already-mounted composed
-/// stage before changing the document layer. The document owns local SDF
-/// declarations; this is the complementary check for referenced, payloaded,
-/// and variant-composed declarations that do not exist in that document's
-/// authored data. Keeping the check before the registry mutation preserves the
-/// document/stage transaction when OpenUSD would reject a role or array-shape
-/// mismatch (for example `color3f` versus `color3f[]`).
+/// Validate typed attribute operations against the document's composed stage
+/// before changing its authored layer. Mounted documents use their canonical
+/// stage; standalone file documents resolve the same dependency closure through
+/// `lunco-usd-compose`. The document owns local SDF declarations, while this
+/// check covers referenced, payloaded, and variant-composed declarations.
+/// Keeping the check before registry mutation preserves the edit transaction
+/// when OpenUSD would reject a role or array-shape mismatch.
 fn validate_live_attribute_types(
     world: &World,
     doc: DocumentId,
@@ -1941,28 +1996,131 @@ fn validate_live_attribute_types(
         })
         .collect();
 
-    let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) else {
-        let Some(composed) = world
-            .get_resource::<DocumentRegistry<UsdDocument>>()
-            .and_then(|registry| registry.host(doc))
-            .map(|host| host.document().composed_arc())
-        else {
-            return Ok(());
-        };
-        return validate_authored_attribute_types(&composed, ops, &planned_attributes);
+    let Some(document) = world
+        .get_resource::<DocumentRegistry<UsdDocument>>()
+        .and_then(|registry| registry.host(doc))
+        .map(|host| host.document())
+    else {
+        return Ok(());
     };
-    let view = stage.view();
-    let stage_path = world
-        .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-        .and_then(|scenes| scenes.coords_of(doc))
-        .map(|(name, rel)| lunco_assets_core::twin_uri(&name, &rel));
-    let stage_id = stage_path
-        .and_then(|path| {
-            world
-                .get_resource::<AssetServer>()
-                .and_then(|server| server.get_handle::<UsdStageAsset>(path))
-        })
-        .map(|handle| handle.id());
+    let document_composed = document.composed_arc();
+    if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) {
+        let view = stage.view();
+        let stage_path = world
+            .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+            .and_then(|scenes| scenes.coords_of(doc))
+            .map(|(name, rel)| lunco_assets_core::twin_uri(&name, &rel));
+        let stage_id = stage_path
+            .and_then(|path| {
+                world
+                    .get_resource::<AssetServer>()
+                    .and_then(|server| server.get_handle::<UsdStageAsset>(path))
+            })
+            .map(|handle| handle.id());
+        return validate_attribute_types_in_view(world, ops, &planned_attributes, &view, stage_id);
+    }
+
+    let has_connected_source = ops
+        .iter()
+        .any(|op| matches!(op, UsdOp::SetConnection { sources, .. } if !sources.is_empty()));
+    if !has_connected_source {
+        return validate_authored_attribute_types(&document_composed, ops, &planned_attributes);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let recipe = document.authoring_recipe().ok_or_else(|| {
+            format!("USD document {doc} has no resolved composition for typed connection preflight")
+        })?;
+        let stage =
+            lunco_usd_authoring::author::open_doc_stage_with_recipe(&document_composed, recipe)
+                .map_err(|error| {
+                    format!("cannot compose USD document for connection preflight: {error}")
+                })?;
+        let view = StageView::new(&stage);
+        validate_attribute_types_in_view(world, ops, &planned_attributes, &view, None)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        validate_authored_attribute_types(&document_composed, ops, &planned_attributes)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn document_composition_context(
+    world: &World,
+    doc: DocumentId,
+    path: &Path,
+) -> Result<(String, Option<PathBuf>, Option<PathBuf>), String> {
+    let absolute_path = lunco_storage::canonicalize_file_path(path).map_err(|error| {
+        format!(
+            "cannot resolve USD document path {}: {error}",
+            path.display()
+        )
+    })?;
+    let assets_root = lunco_assets_core::shipped_asset_root(&absolute_path).map(Path::to_path_buf);
+    let twin = world
+        .get_resource::<WorkspaceResource>()
+        .and_then(|workspace| {
+            let entry = workspace.document(doc)?;
+            let owner = workspace.twin(workspace.twin_for(entry)?)?;
+            owner.find_owning(&StorageHandle::File(absolute_path.clone()))
+        });
+
+    if let Some(twin) = twin {
+        let name = twin
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.name.as_str())
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "Twin at {} has no name for USD composition identity",
+                    twin.root.display()
+                )
+            })?;
+        let twin_root = lunco_storage::canonicalize_file_path(&twin.root).map_err(|error| {
+            format!("cannot resolve Twin root {}: {error}", twin.root.display())
+        })?;
+        let relative = absolute_path.strip_prefix(&twin_root).map_err(|_| {
+            format!(
+                "USD document {} is not beneath its owning Twin {}",
+                absolute_path.display(),
+                twin_root.display()
+            )
+        })?;
+        return Ok((
+            lunco_assets_core::twin_uri(name, relative),
+            assets_root,
+            Some(twin_root),
+        ));
+    }
+
+    if let Some(assets_root) = assets_root.as_deref() {
+        let relative = absolute_path.strip_prefix(assets_root).map_err(|_| {
+            format!(
+                "USD document {} is not beneath its shipped asset root {}",
+                absolute_path.display(),
+                assets_root.display()
+            )
+        })?;
+        return Ok((
+            lunco_assets_core::engine_asset_uri(&relative.to_string_lossy()),
+            Some(assets_root.to_path_buf()),
+            None,
+        ));
+    }
+
+    Ok((absolute_path.to_string_lossy().into_owned(), None, None))
+}
+
+fn validate_attribute_types_in_view(
+    world: &World,
+    ops: &[UsdOp],
+    planned_attributes: &HashMap<(String, String), String>,
+    view: &StageView<'_>,
+    stage_id: Option<bevy::asset::AssetId<UsdStageAsset>>,
+) -> Result<(), String> {
     for op in ops {
         let (path, name, requested) = match op {
             UsdOp::SetAttribute {
@@ -1989,7 +2147,7 @@ fn validate_live_attribute_types(
             format!("typed USD edit `{path}.{name}` has an invalid path: {error}")
         })?;
         if let Some(declared) = view.attr_type_name(&sdf_path, name) {
-            if declared != *requested {
+            if declared != *requested && !attribute_type_is_replaced(ops, path, name) {
                 return Err(format!(
                     "typed USD edit `{path}.{name}` requests `{requested}`, but the composed stage declares `{declared}`"
                 ));
@@ -2025,7 +2183,12 @@ fn validate_live_attribute_types(
                 ));
             }
             let Some(source_type) = source_type else {
-                if lunco_usd_bevy_stage::read::has_runtime_port_surface(&view, &source_prim)
+                if type_name == "double" && is_direction_probe_output(source_name) {
+                    if view.has_api_schema(&source_prim, "LunCoEnvironmentProbeAPI") {
+                        continue;
+                    }
+                }
+                if lunco_usd_bevy_stage::read::has_runtime_port_surface(view, &source_prim)
                     && stage_id.is_some_and(|stage_id| {
                         live_runtime_port_exists(world, stage_id, &source_prim, source_name)
                     })
@@ -2044,6 +2207,23 @@ fn validate_live_attribute_types(
         }
     }
     Ok(())
+}
+
+fn attribute_type_is_replaced(ops: &[UsdOp], path: &str, name: &str) -> bool {
+    ops.iter().any(|op| {
+        matches!(op, UsdOp::RemoveAttribute { path: removed_path, name: removed_name, .. }
+            if removed_path == path && removed_name == name)
+    })
+}
+
+/// A direction probe materializes source-id outputs from authored connection
+/// demand. The output is not a schema property, but its connector grammar and
+/// f64 value type are stable and can be validated before runtime projection.
+fn is_direction_probe_output(property_name: &str) -> bool {
+    property_name
+        .strip_prefix("outputs:")
+        .and_then(lunco_cosim_core::DirectionSourceId::from_mount_connector)
+        .is_some()
 }
 
 /// Check the exact dynamic endpoint against the projected registry. A provider
@@ -2129,7 +2309,7 @@ fn validate_authored_attribute_types(
             format!("typed USD edit `{path}.{name}` has an invalid path: {error}")
         })?;
         if let Some(declared) = attr_type(&target_path, name) {
-            if declared != *requested {
+            if declared != *requested && !attribute_type_is_replaced(ops, path, name) {
                 return Err(format!(
                     "typed USD edit `{path}.{name}` requests `{requested}`, but the composed document declares `{declared}`"
                 ));
@@ -2158,6 +2338,16 @@ fn validate_authored_attribute_types(
                 ));
             }
             let Some(source_type) = source_type else {
+                if requested == "double"
+                    && lunco_usd_data::usd_data::has_authored_api_schema(
+                        composed,
+                        &source_prim,
+                        "LunCoEnvironmentProbeAPI",
+                    )
+                    && is_direction_probe_output(source_name)
+                {
+                    continue;
+                }
                 return Err(format!(
                     "USD connection `{path}.{name}` source `{source}` references missing property `{source_name}` on `{source_prim}`"
                 ));

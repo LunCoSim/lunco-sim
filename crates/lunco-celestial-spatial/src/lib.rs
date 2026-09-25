@@ -407,9 +407,6 @@ impl Plugin for CelestialPlugin {
 
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate
-
-        // The environment projects this semantic SunState to the render light
-        // in Update and samples it for cosim on its normal FixedUpdate cadence.
     }
 }
 

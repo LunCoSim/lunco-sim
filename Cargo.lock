@@ -9907,6 +9907,7 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "lunco-celestial",
  "lunco-core-runtime",
  "lunco-hooks",
  "lunco-physics",
@@ -10208,6 +10209,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-geometry-core",
@@ -10215,6 +10217,7 @@ dependencies = [
  "lunco-storage",
  "lunco-twin",
  "lunco-twin-journal",
+ "lunco-usd-authoring",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",

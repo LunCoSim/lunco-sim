@@ -4,18 +4,18 @@ Per-entity environmental state for LunCoSim — gravity, atmosphere, radiation,
 magnetic field, etc. — computed from celestial body providers and consumed by
 physics, co-simulation, and UI.
 
-**Currently implements:** gravity (`LocalGravity`), solar direction
-(direct SunState→cosim projection), lunar-sky lighting parameters (`LunarSun`,
-`FULL_EARTH_EARTHSHINE_LUX`, the `SetEnvironmentLight` tuner command), and baked horizon
-terrain self-shadowing (`HorizonShadowPlugin`). The gravity and solar values are
-already wired into the co-sim graph each tick.
+**Currently implements:** gravity (`LocalGravity`), universal framed direction
+resolution for any tagged target, lunar-sky lighting parameters (`LunarSun`,
+`FULL_EARTH_EARTHSHINE_LUX`, the `SetEnvironmentLight` tuner command), and baked
+horizon terrain self-shadowing (`HorizonShadowPlugin`). Environment probes expose
+f64 gravity values and publish demanded unit direction triplets through ordinary
+co-simulation outputs.
 **Designed to grow into:** atmosphere, solar *radiation* (irradiance/eclipse),
 magnetic field, ambient temperature — anything else that varies with position
 and body.
 
-> Solar, lighting, and horizon projection use render-free Bevy light/camera
-> types; none reads a render transform as a physical solar input or depends on
-> `bevy_render`. A headless host can run the same semantic solar-to-cosim path.
+> Environment direction conversion is render-free. A headless host runs the
+> same target/frame conversion and cosimulation publication as a rendered host.
 
 ## Why this crate exists
 
@@ -42,19 +42,18 @@ Three layers, mapped to ECS:
    (on celestial Body entity)        (on each entity)
 
    ┌─ GravityProvider ─────────►  ┌─ LocalGravity ──────► ConstantLinearAcceleration (Avian)
-   │                              │                       inject_environment (cosim)
-   ├─ AtmosphereProvider ──sys──► ├─ LocalAtmosphere ──► aerodynamic models
-   │                              │                       inject_environment
-   └─ SolarRadiationProvider ──►  └─ LocalRadiation ───► solar panel models
-                                                          inject_environment
+   │                              │                       EnvironmentProbe outputs
+   ├─ AtmosphereProvider ──sys──► ├─ LocalAtmosphere ──► aerodynamic models (planned)
+   │                              │
+   └─ DirectionTargetId ───────►  └─ UnitDirection3 ────► EnvironmentProbe outputs
 ```
 
 | Layer | Lives on | Role |
 | ----- | -------- | ---- |
-| **Provider** | celestial Body entity | Defines HOW the environment varies (gravity model, atmosphere model, etc.) |
-| **Local\*** component | every entity | Cached COMPUTED value at this entity's position THIS tick |
-| **Compute system** | (system) | Reads Provider + entity Transform → writes Local\* |
-| **Consumer system** | (system) | Reads Local\* — doesn't know about celestial bodies |
+| **Provider** | body entity or framed ray | Defines a field or stable direction identity |
+| **Local\*** component | entity that needs a cached field | Stores computed values such as gravity at this position |
+| **Compute system** | system | Reads provider plus spatial state and updates the owning component |
+| **Consumer system** | system | Reads local state or publishes a demanded value to an ordinary cosim port |
 
 ## Mapping to Modelica's `inner`/`outer`
 
@@ -77,12 +76,10 @@ Our ECS analog:
 | `outer World`    | `GravityBody` on the consumer entity   |
 | `world.g`        | `LocalGravity` on the consumer entity  |
 
-Same scoping concept, ECS implementation. The injection from `LocalGravity`
-into a Modelica model happens in this crate's `inject_local_gravity_into_cosim`
-system (implemented — runs in `EnvironmentSet::Apply`, before the cosim
-propagate step). Solar direction uses the same cosim boundary but converts the
-shared `SunState` sample and publishes it directly to probe outputs in one
-FixedUpdate system.
+Same scoping concept, ECS implementation. Gravity is computed once into
+`LocalGravity` and used both by Avian and the probe's f64 cosim outputs. Direction
+inputs use a separate generic conversion: a wire names one source id, and the
+environment resolves its target bearing in that probe's own BigSpace frame.
 
 ## What's implemented
 
@@ -109,28 +106,29 @@ fn read_gravity(q: Query<&LocalGravity>) {
 
 ### Solar direction → Modelica
 
-`SunState` is the semantic provider. Celestial ephemeris publishes the
-direction and irradiance from the shared `CelestialTime` sample; the render
-`DirectionalLight` is only a projection. In ordinary `FixedUpdate`,
-`publish_solar_inputs_to_cosim` converts the latest semantic direction through
-the active physics frame and each probe mount, then writes the three
-`sun_mount_*` outputs before cosim propagation. It writes directly to the
-existing `SimComponent`; no intermediate per-probe cache or second solar clock
-exists. Sun-tracking and panel models consume those outputs through ordinary
-USD wires. The panel's local up component changes sign below the site horizon,
-so its incidence and generated power reach zero at night. The celestial rate
-can advance this input while Modelica and physics keep their existing cadence.
-No render transform is read back as an environment input, and no Modelica
-model drives the physical scene sun.
+The direction system is universal. Celestial bodies use their existing NAIF
+identity (`sun`, `earth`, `moon`, or `body_<NAIF>`). Apply
+`LunCoDirectionTargetAPI` with a unique lower-case id to any other
+position-bearing USD object, such as a spacecraft or moving vehicle. A probe connection to
+`<id>_mount_x/y/z` declares demand. Before cosim propagation,
+`publish_direction_sources_to_cosim` resolves that target relative to each
+probe through `lunco-spatial` BigSpace helpers, normalizes the displacement
+once into `UnitDirection3`, and publishes three f64 outputs. The same target can
+therefore produce different vectors for two observers. A model exposes the
+generic `target_mount_x/y/z` input; its wire selects the target, so changing
+from Sun to Earth, Moon, or a spacecraft does not change the model equations.
+There is no default target. A spawnable component may expose the complete
+unconnected target input triplet for its parent assembly to wire; an assembled
+consumer without a valid source connection is a lint error. The publisher
+never fabricates zero components; an unresolved connected source is diagnosed
+and faults a running consumer instead of selecting a guessed celestial body.
 
-Solar source selection is explicit. A scene with no composed
-`LunCoCelestialBodyAPI` uses exactly one unscoped authored `DistantLight` under
-the active scene root as its static direction source. A scene that declares a
-celestial body uses the ephemeris plus a root site anchor; authored light pose
-remains render-only. Missing celestial solar state clears the three Modelica
-outputs and raises `solar-source-missing` in Runtime Diagnostics. `RunLint`
-reports a connected solar model whose selected source cannot provide a valid
-direction.
+Static authored directional lights provide explicitly framed rays through the
+same resolver. Celestial body positions come from the one `CelestialTime` child
+of `WorldTime`; `SunState` carries irradiance only. Missing, ambiguous,
+coincident, or unresolvable sources remove the sample and publish a structured
+diagnostic. The authored `lint_usd.rhai` policy checks source identity,
+complete double triplets, matching providers, and target cardinality.
 
 ### Lighting parameters: `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX` (`render` feature)
 
@@ -149,8 +147,8 @@ shadow design. Inert until a terrain carries the (USD-stamped)
 ### `EnvironmentPlugin`
 
 Adds `compute_local_gravity` to `FixedUpdate` in the `EnvironmentSet::Compute`
-set, `sync_local_gravity_to_avian` + `inject_local_gravity_into_cosim` in
-`EnvironmentSet::Apply`, including direct solar cosim publication, plus the
+set, `sync_local_gravity_to_avian`, `inject_local_gravity_into_cosim`, and the
+generic demanded-direction publisher in `EnvironmentSet::Apply`, plus the
 render-free lighting and horizon state. Add it once during app setup:
 
 ```rust
@@ -255,33 +253,10 @@ That's the entire pattern. Three components, one system. Done.
 
 ## How environment values reach Modelica models
 
-Once `Local*` components exist, Modelica models get the values via injection
-systems that run in `EnvironmentSet::Apply` before the cosim propagate step.
-Gravity (`inject_local_gravity_into_cosim`) and solar direction
-(`publish_solar_inputs_to_cosim`) are implemented; the sketch below shows the
-general pattern a future atmosphere injector would follow:
-
-```rust
-// Sketch — the generic injection pattern
-fn inject_environment(
-    q: Query<(&LocalGravity, Option<&LocalAtmosphere>, &mut SimComponent)>,
-) {
-    for (gravity, atm, mut comp) in &mut q {
-        // Only inject inputs the model declared
-        if comp.inputs.contains_key("g") {
-            comp.inputs.insert("g".into(), gravity.magnitude());
-        }
-        if let Some(atm) = atm {
-            if comp.inputs.contains_key("airDensity") {
-                comp.inputs.insert("airDensity".into(), atm.density);
-            }
-            if comp.inputs.contains_key("temperature") {
-                comp.inputs.insert("temperature".into(), atm.temperature);
-            }
-        }
-    }
-}
-```
+Modelica receives environmental values through standard composed USD
+output-to-input connections. The environment domain publishes probe samples;
+cosim propagates those sources through its existing connection graph. There is
+no second input-side injection path.
 
 The Modelica model declares whatever environment it needs:
 
@@ -294,15 +269,14 @@ model Balloon
 end Balloon;
 ```
 
-The default values (`= 9.81`, etc.) are used during initial-condition solving
-and stand-alone Modelica testing. At runtime, `inject_environment` overwrites
-them each tick. Models that don't declare an input simply don't get it
-injected — opt-in by name.
+Standalone defaults are for isolated Modelica initialization only. In a scene,
+the composed USD wire defines the runtime source, and missing samples are
+diagnosed rather than replaced with a fabricated environmental value.
 
 ## Roadmap
 
 - [x] **Gravity** — `LocalGravity`, `compute_local_gravity`, `sync_local_gravity_to_avian`, `inject_local_gravity_into_cosim`
-- [x] **Solar direction** — `SunState` projected directly to `EnvironmentProbe` cosim outputs before propagation
+- [x] **Universal direction** — stable target ids, shared BigSpace conversion, per-probe unit vectors, and direct cosim output publication
 - [x] **Lunar lighting** — `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX`, `SetEnvironmentLight` tuner, earthshine fill
 - [x] **Horizon self-shadowing** — `HorizonShadowPlugin`, `HorizonMap`
 - [ ] **Atmosphere** — `LocalAtmosphere`, `AtmosphereProvider`, `StandardAtmosphere` model

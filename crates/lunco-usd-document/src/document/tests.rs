@@ -2026,6 +2026,39 @@ fn remove_prim_drops_block_and_undoes() {
 }
 
 #[test]
+fn remove_attribute_targets_an_authored_variant_root() {
+    let source = r#"#usda 1.0
+def Xform "RockerBogie"
+{
+    variantSet "generation" = {
+        "none" {
+        }
+        "solar" {
+            double inputs:target_mount_x
+        }
+    }
+}
+"#;
+    let mut doc = UsdDocument::new(DocumentId::new(88), source);
+    let variant = "/RockerBogie{generation=solar}";
+    let attribute = SdfPath::new(variant)
+        .unwrap()
+        .append_property("inputs:target_mount_x")
+        .unwrap();
+    assert!(doc.data().spec(&attribute).is_some());
+
+    doc.apply(UsdOp::RemoveAttribute {
+        edit_target: LayerId::root(),
+        path: variant.to_string(),
+        name: "inputs:target_mount_x".into(),
+    })
+    .unwrap();
+
+    assert!(doc.data().spec(&attribute).is_none());
+    assert!(reparses_cleanly(&doc));
+}
+
+#[test]
 fn set_attribute_creates_and_records_typed_value() {
     let mut doc = UsdDocument::with_origin(
         DocumentId::new(12),

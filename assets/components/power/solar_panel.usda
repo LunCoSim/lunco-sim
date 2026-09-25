@@ -2,30 +2,11 @@
 (
     defaultPrim = "SolarPanel"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# A solar panel — a frame, a photovoltaic surface, and the mass and colliders the
-# physics engine carries. The root Xform holds the mass; the children hold
-# `PhysicsCollisionAPI` only.
-#
-# NO `PhysicsRigidBodyAPI`, deliberately. Under UsdPhysics a collider belongs to the
-# nearest ancestor BODY, so a panel bolted to a rover contributes its shapes to that
-# rover — but a body applied here is a SECOND body, attached to nothing, and it fell off
-# the vehicle exactly as the drive motors did (`components/mobility/motor.usda` tells
-# that story; `lunco-usd-avian`'s physics linter now reports the shape at load as
-# `nested-body-no-joint`). A panel that must articulate — a tracker, a deployable — is a
-# body AND a joint, authored together.
-#
-# The panel's electrical facet is declared on the part itself. It is only an
-# independent source pin (`connectors:p`): a mounting assembly decides whether
-# that pin is wired to a battery/bus. Thus the same component is valid on a
-# battery-equipped rover (where it charges the bus) and on a passive structure
-# (where it has no electrical consumer) without inventing a second panel model.
-# USD owns membership and connections; `LunCo.Electrical.SolarPanel` owns the
-# photovoltaic equation once a connected island is assembled at runtime.
 def Xform "SolarPanel" (
-    doc = "Reusable photovoltaic panel component with mass, collision, electrical source, and telemetry facets."
+    documentation = "Reusable photovoltaic panel component with mass, collision, electrical source, and telemetry facets."
     kind = "component"
     prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI", "LunCoTelemetryAPI", "LunCoModelicaTopologyAPI"]
 )
@@ -34,92 +15,73 @@ def Xform "SolarPanel" (
     uniform bool lunco:spawnable = true
     uniform token info:implementationSource = "sourceAsset"
     uniform asset info:sourceAsset = @lunco://models/LunCo/Electrical/SolarPanel.mo@
-
-    # Nameplate values belong to the physical part; the enclosing network root
-    # collects this prim and emits it as a Modelica instance parameter.
     float inputs:area = 18.0
-    float inputs:efficiency = 0.30
+    float inputs:efficiency = 0.30000001192092896
     float inputs:irradiance = 1361.0
-    # The environment supplies the Sun vector in the enclosing network
-    # assembly's mount frame. The mounting assembly owns the illuminated-face
-    # normal in that same frame; fixed horizontal panels use +Y.
-    float inputs:sun_mount_x = 0.0
-    float inputs:sun_mount_y = 1.0
-    float inputs:sun_mount_z = 0.0
     float inputs:panel_normal_x = 0.0
     float inputs:panel_normal_y = 1.0
     float inputs:panel_normal_z = 0.0
-    # `available_power_w` is the sunlight/nameplate production before the
-    # connected bus loads it. `power_out` is the power actually delivered at
-    # the panel terminals, so bus voltage sag belongs in the latter only.
     float outputs:available_power_w
     float outputs:power_out
     float outputs:cos_incidence
     float outputs:terminal_voltage_v
     float outputs:generated_current_a
     custom token connectors:p
-
-    # One channel lives directly on the measured prim. A relationship is only
-    # needed for a declaration Scope that describes a different prim; this
-    # source already owns `power_out`, so direct composition is the canonical
-    # and reference-safe form.
     bool lunco:telemetry = true
     string ui:displayName = "Solar power"
     token lunco:telemetry:port = "power_out"
     token lunco:telemetry:name = "power.solar_power"
     token lunco:telemetry:unit = "W"
     string lunco:telemetry:description = "Solved power delivered by the solar panel at its terminals."
-
     float physics:mass = 15.0
-    # Looks — the panel's photovoltaic surface. A `Material` whose surface comes from a
-    # `Shader` named for the `wgsl` render context, with the shader's parameters as its
-    # `inputs:`.
+    custom double inputs:target_mount_x
+    double inputs:target_mount_x.connect = []
+    custom double inputs:target_mount_y
+    double inputs:target_mount_y.connect = []
+    custom double inputs:target_mount_z
+    double inputs:target_mount_z.connect = []
     def Scope "Looks"
     {
         def Material "SolarPanel"
         {
+            token outputs:surface
             token outputs:surface.connect = </SolarPanel/Looks/SolarPanel/Shader.outputs:surface>
-
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/solar_panel.wgsl@
-                color3f inputs:cell_color = (0.05, 0.05, 0.35)   # cell
-                color3f inputs:bus_color = (0.85, 0.85, 0.90)    # bus line (metal)
-                color3f inputs:frame_color = (0.35, 0.35, 0.38)  # frame border
-                float inputs:cell_rows = 12.0   # cell rows
-                float inputs:cell_cols = 6.0    # cell cols
-                float inputs:cell_gap = 0.02    # cell gap (UV)
-                float inputs:bus_width = 0.004  # bus width (UV)
-                float inputs:border = 0.05      # frame border (UV)
+                color3f inputs:cell_color = (0.05000000074505806, 0.05000000074505806, 0.3499999940395355)
+                color3f inputs:bus_color = (0.8500000238418579, 0.8500000238418579, 0.8999999761581421)
+                color3f inputs:frame_color = (0.3499999940395355, 0.3499999940395355, 0.3799999952316284)
+                float inputs:cell_rows = 12.0
+                float inputs:cell_cols = 6.0
+                float inputs:cell_gap = 0.019999999552965164
+                float inputs:bus_width = 0.004000000189989805
+                float inputs:border = 0.05000000074505806
                 token outputs:surface
             }
         }
     }
-
-    # Panel Frame — structural aluminum
     def Cube "PanelFrame" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = "PhysicsCollisionAPI"
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.005, 0)
+        double3 xformOp:translate = (0.0, -0.005, 0.0)
         double3 xformOp:scale = (6.2, 0.02, 3.2)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.45, 0.45, 0.48)] # Aluminum gray
+        color3f[] primvars:displayColor = [(0.44999998807907104, 0.44999998807907104, 0.47999998927116394)]
         bool physics:collisionEnabled = true
     }
-
-    # Panel Surface — photovoltaic cells (very thin, on top of frame)
     def Cube "PanelSurface" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, 0.0115, 0)
+        double3 xformOp:translate = (0.0, 0.0115, 0.0)
         double3 xformOp:scale = (6.0, 0.003, 3.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.05, 0.05, 0.85)] # Deep blue
+        color3f[] primvars:displayColor = [(0.05000000074505806, 0.05000000074505806, 0.8500000238418579)]
         bool physics:collisionEnabled = true
         rel material:binding = </SolarPanel/Looks/SolarPanel>
     }

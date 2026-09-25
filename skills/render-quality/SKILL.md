@@ -74,9 +74,10 @@ Procedural sky materials opt into the live Sun disc by declaring both
 `sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
 the behavior. The direction is in the active camera's view coordinates, the
 same frame as the shader's view rays. `SunRenderState` comes from the
-CelestialTime-driven `SunState` after the scene light is finalized through
-BigSpace. The renderer projects that one semantic direction into camera space;
-do not add a second ephemeris calculation for sky materials. Camera pose changes
+generic `sun` direction resolver after the scene light is finalized through
+BigSpace. `SunState` supplies irradiance only. The renderer projects the
+finalized light direction into camera space; do not add a second ephemeris
+calculation for sky materials. Camera pose changes
 refresh the direction while CelestialTime is paused. Continuous renderer data
 stays in Rust; author the background and material binding in USD.
 

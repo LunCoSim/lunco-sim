@@ -98,29 +98,34 @@ advance from `WorldTime` at integer fixed ticks; celestial body state reads
 `CelestialTime`. Ordinary render-only consumers may interpolate between
 completed physical states, but they do not advance on wall time.
 
-Celestial frames and the rendered solar direction use `CelestialTime`. By
+Celestial frames, body positions, and body rotation use `CelestialTime`. By
 default it has identity rate and zero offset over `WorldTime`; `SetCelestialClock`
 may change its rate or seek its epoch, but it cannot change the parent. At
-100,000×, ephemerides, body rotation, the semantic SunState, shadows, and
-celestial queries advance from this one sample. Physics and Modelica continue
-at their ordinary fixed-step cadence; Modelica receives the latest
-CelestialTime-derived environment inputs at its usual communication points.
+100,000×, ephemerides, body rotation, solar irradiance, shadows, and celestial
+queries advance from this one sample. Physics and Modelica continue at their
+ordinary fixed-step cadence; Modelica receives the latest target direction at
+its usual communication points through the shared BigSpace conversion.
 The celestial solve gate applies its certified angular error budget to this
 sample. The Time menu and optional sky-clock HUD expose the same rate and seek
 controls; `SetTimeTransport` still controls the separate 0.1×–64× physical
 transport.
 
-Solar input has one explicit source selection. With no composed
-`LunCoCelestialBodyAPI`, a scene that connects a solar Modelica input uses the
-single unscoped authored `DistantLight` under its active USD root as a static
-direction source. When the scene declares celestial bodies, the ephemeris and
-root site anchor own the direction; an authored light remains render-only. A
-missing celestial sample clears the probe's `sun_mount_*` outputs and appears
-as a Runtime Diagnostic. `RunLint` reports connected solar inputs when the
-selected source lacks the required site anchor or static authored light. At
-every celestial rate—including the default 1× and maximum 100,000×—Modelica
-reads the latest available celestial sample at its ordinary fixed-step
-communication point; no physical microsteps are added.
+Every direction input selects a source by wiring a target id to an
+EnvironmentProbe output triplet. Finite targets use their composed position;
+static directional lights supply a framed ray through the same resolver. An
+authored light is a static `sun` source only when no celestial source owns the
+scene. Missing or invalid targets clear their probe samples, publish a
+RuntimeDiagnostic, and fault an already-running consumer rather than feeding
+it a zero vector. `RunLint` checks target identity, cardinality, complete
+double-precision triplets, and provider consistency. At every celestial rate—
+including the default 1× and maximum 100,000×—Modelica reads the latest sample
+at its ordinary fixed-step communication point; no physical microsteps are
+added.
+
+Celestial target ids come from the existing `lunco:body` NAIF identity: `sun`,
+`earth`, and `moon` for NAIF 10, 399, and 301, with `body_<NAIF>` for other
+bodies. Other position-bearing objects use `LunCoDirectionTargetAPI` with an
+authored unique id.
 
 ## 3. Clock tree
 

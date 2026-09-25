@@ -1245,6 +1245,19 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             .value::<f64>(p, "lunco:time:epochJd")
             .map(H::Float)
             .unwrap_or(H::Unit);
+        let direction_target_id = schemas
+            .contains(&"LunCoDirectionTargetAPI".to_string())
+            .then(|| reader.text(p, "lunco:directionTarget:id"))
+            .flatten()
+            .map(H::str)
+            .unwrap_or(H::Unit);
+        let celestial_direction_id = schemas
+            .contains(&"LunCoCelestialBodyAPI".to_string())
+            .then(|| reader.value::<i32>(p, "lunco:body"))
+            .flatten()
+            .and_then(lunco_celestial::ephemeris_id::direction_source_id)
+            .map(H::str)
+            .unwrap_or(H::Unit);
         prims.push(H::map([
             ("path", H::str(p.to_string())),
             ("type", H::str(reader.prim_type_name(p).unwrap_or_default())),
@@ -1263,6 +1276,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ),
             ("connections", H::Array(connections)),
             ("epoch_jd", epoch_jd),
+            ("direction_target_id", direction_target_id),
+            ("celestial_direction_id", celestial_direction_id),
         ]));
     }
 

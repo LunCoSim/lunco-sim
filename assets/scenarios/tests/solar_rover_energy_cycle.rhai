@@ -53,7 +53,10 @@ fn have_ports(s) {
     island_value(s.elec, SOLAR_INCIDENCE) != () &&
     island_value(s.elec, MOTOR_ELECTRICAL_POWER) != () &&
     island_value(s.elec, MOTOR_TERMINAL_CURRENT) != () &&
-    get(s.tracker, "yaw") != () && get(s.hinge, "angle") != ()
+    get(s.tracker, "yaw") != () && get(s.hinge, "angle") != () &&
+    get(s.earth_tracker, "target_mount_x") != () &&
+    get(s.earth_tracker, "target_mount_y") != () &&
+    get(s.earth_tracker, "target_mount_z") != ()
 }
 
 fn on_start(me, ctx) {
@@ -65,7 +68,11 @@ fn on_start(me, ctx) {
     this.rover = find("/SolarRoverTest/SolarRover");
     this.elec = find("/SolarRoverTest/SolarRover");
     this.tracker = find("/SolarRoverTest/SolarRover/SunTrackerController");
+    this.earth_tracker = find("/SolarRoverTest/SolarRover/Comms/EarthTrackerController");
     this.hinge = find("/SolarRoverTest/SolarRover/Hinge");
+    this.earth_direction_x = ();
+    this.earth_direction_y = ();
+    this.earth_direction_z = ();
 
     this.soc_before_drive = ();
     this.soc_after_drive = ();
@@ -115,18 +122,28 @@ fn on_tick(me, ctx) {
     this.t += dt();
     let phase_t = this.t - this.phase_started;
 
-    if this.rover < 0 || this.elec < 0 || this.tracker < 0 || this.hinge < 0 {
+    if this.rover < 0 || this.elec < 0 || this.tracker < 0 ||
+       this.earth_tracker < 0 || this.hinge < 0 {
         finish_failure(this, "solar rover test prim missing (rover=" + this.rover +
             " electrical=" + this.elec + " tracker=" + this.tracker +
-            " hinge=" + this.hinge + ") — wrong composed scene?");
+            " Earth tracker=" + this.earth_tracker + " hinge=" + this.hinge +
+            ") — wrong composed scene?");
         return;
     }
 
     if this.phase == "await_ports" {
         if !have_ports(this) {
             if this.t >= PORT_WAIT_S {
-                finish_failure(this, "generated electrical island or SunTracker ports never appeared " +
-                    "within " + PORT_WAIT_S + "s");
+                let earth_x = get(this.earth_tracker, "target_mount_x");
+                let earth_y = get(this.earth_tracker, "target_mount_y");
+                let earth_z = get(this.earth_tracker, "target_mount_z");
+                if earth_x == () || earth_y == () || earth_z == () {
+                    finish_failure(this, "EarthTracker did not receive the connected `earth` target " +
+                        "through generic target_mount_x/y/z inputs within " + PORT_WAIT_S + "s");
+                } else {
+                    finish_failure(this, "generated electrical island or SunTracker ports never appeared " +
+                        "within " + PORT_WAIT_S + "s");
+                }
             }
             return;
         }
@@ -135,6 +152,9 @@ fn on_tick(me, ctx) {
         this.available_before = get(this.elec, "solar_available_power");
         this.incidence_before = island_value(this.elec, SOLAR_INCIDENCE);
         this.yaw_before = get(this.tracker, "yaw");
+        this.earth_direction_x = get(this.earth_tracker, "target_mount_x");
+        this.earth_direction_y = get(this.earth_tracker, "target_mount_y");
+        this.earth_direction_z = get(this.earth_tracker, "target_mount_z");
         this.phase = "track_sun";
         this.phase_started = this.t;
         cmd("SetEnvironmentLight", #{ sun_yaw: SUN_STEP });
@@ -242,7 +262,7 @@ fn on_tick(me, ctx) {
             }
         }
         let available = island_value(this.elec, SOLAR_AVAILABLE_POWER);
-        let sun_up = get(this.tracker, "sun_mount_y");
+        let sun_up = get(this.tracker, "target_mount_y");
         if available != () && available <= NIGHT_POWER_MAX_W &&
            sun_up != () && sun_up <= 0.0 {
             this.night_reached = true;
@@ -272,6 +292,9 @@ fn verdict(s) {
     f.push(t_present(s.incidence_after_step, "panel incidence after sun step"));
     f.push(t_present(s.yaw_after_step, "SunTracker yaw"));
     f.push(t_present(s.hinge_after_step, "panel hinge angle"));
+    f.push(t_present(s.earth_direction_x, "Earth direction x at the rover antenna mount"));
+    f.push(t_present(s.earth_direction_y, "Earth direction y at the rover antenna mount"));
+    f.push(t_present(s.earth_direction_z, "Earth direction z at the rover antenna mount"));
     f.push(t_present(s.position_before_drive, "rover position before route"));
     f.push(t_present(s.position_after_drive, "rover position after route"));
 
@@ -282,6 +305,14 @@ fn verdict(s) {
     if s.hinge_after_step != () && s.yaw_after_step != () {
         f.push(t_true((s.hinge_after_step - s.yaw_after_step).abs() < HINGE_TOL,
             "hinge angle does not follow SunTracker yaw"));
+    }
+    if s.earth_direction_x != () && s.earth_direction_y != () &&
+       s.earth_direction_z != () {
+        let earth_norm2 = s.earth_direction_x^2 + s.earth_direction_y^2 +
+                          s.earth_direction_z^2;
+        f.push(t_true((earth_norm2 - 1.0).abs() < 1.0e-10,
+            "Earth direction at the antenna mount must be a normalized f64 target vector; norm²=" +
+            earth_norm2));
     }
     if s.power_after_step != () {
         f.push(t_true(s.power_after_step > 0.0,
@@ -370,8 +401,10 @@ fn verdict(s) {
           r4(s.soc_after_drive) + " -> " + r4(s.soc_after_charge));
     print("[solar-cycle] yaw " + r4(s.yaw_before) + " -> " +
           r4(s.yaw_after_step) + ", hinge=" + r4(s.hinge_after_step));
-    print("[solar-cycle] tracker sun_mount_x=" +
-          r4(get(s.tracker, "sun_mount_x")));
+    print("[solar-cycle] tracker target_mount_x=" +
+          r4(get(s.tracker, "target_mount_x")));
+    print("[solar-cycle] EarthTracker target_mount_xyz=" + r4(s.earth_direction_x) + "," +
+          r4(s.earth_direction_y) + "," + r4(s.earth_direction_z));
     print("[solar-cycle] power " + r2(s.power_before) + "W -> " +
           r2(s.power_after_step) + "W, available=" + r2(s.available_before) +
           "W, motor peak=" + r2(s.peak_motor_power) + "W, motor current=" +

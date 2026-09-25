@@ -99,12 +99,15 @@ scene child or `position_in_grid_to_parent_local` for an existing entity; both
 perform the complete parent-pose inverse and split a `CellCoord` only for a
 Grid parent.
 
-Environment projections follow the same boundary: Sun/Earth directions are
-composed from `ActivePhysicsFrame` and mount poses through
-`lunco_spatial::coords::world_pose`, then reduced to render or mechanism vectors.
-They do not read `GlobalTransform` during `Update`, because BigSpace finalizes
-that camera-relative projection in `PostUpdate` and a rotating high-rate frame
-would otherwise be sampled one frame late.
+Environment direction projections follow the same boundary. A source id names
+one finite target entity or one explicitly framed infinite ray; the resolver
+converts that source to each `EnvironmentProbe` frame through the shared f64
+BigSpace helpers and constructs a `UnitDirection3` once. It does not read
+`GlobalTransform` for simulation inputs. Generic Modelica consumers expose
+`target_mount_x/y/z`; changing the source wire changes the target without
+changing the model or adding an Earth/Sun/Moon conversion path. Render
+projection may read a finalized `GlobalTransform` only after BigSpace
+propagation, for presentation and shadow consumers.
 
 Presentation systems that solve a pose repeatedly must compare each derived
 `Transform` and `CellCoord` value before mutating it. Bevy change detection is
@@ -153,10 +156,11 @@ projection only. Do not use a render-relative global X/Z directly for an
 authored site grid, and do not move the terrain or physics frame to compensate
 for a visual pattern.
 
-The same render boundary applies to terrain sun consumers. `SunState` is the
-semantic source for both physics and the render light. The light-local pose is
-projected before BigSpace propagation, and `SunRenderState` is published from
-the finalized scene-sun `GlobalTransform` afterward. Every consumer that
+The same render boundary applies to terrain sun consumers. The shared direction
+resolver supplies the render light's semantic orientation; `SunState` carries
+irradiance only. The light-local pose is projected before BigSpace propagation,
+and `SunRenderState` is published from the finalized scene-sun
+`GlobalTransform` afterward. Every consumer that
 converts that direction through a terrain `GlobalTransform` runs after
 `PropagateLowPrecision`. This includes static terrain material wiring,
 horizon-cache bake decisions, and streamed-tile cache validity. Streamed-tile
@@ -303,14 +307,17 @@ center to sweep across a lunar sky to show its day/night cycle.
 
 `CelestialTime` is an affine child of `WorldTime`, so pause and deterministic
 replay propagate through the one clock tree. Its rate scales the shared
-celestial sample used by body placement and rotation, the semantic SunState,
+celestial sample used by body placement and rotation, solar irradiance,
 lighting and shadows, and celestial queries. Avian keeps its existing fixed
 physics schedule; it does not run 100,000 catch-up steps. During ordinary
-`FixedUpdate`, the environment converts SunState into probe mount frames and
-writes `sun_mount_x/y/z` directly to `SimComponent` before cosim propagation.
-Modelica consumes those outputs at its usual communication points. Thus a
-lunar night changes panel incidence and power without an intermediate solar
-cache, a second model clock, or a faster physics loop.
+`FixedUpdate`, the environment resolves demanded target ids into each probe's
+own mount frame and writes `<id>_mount_x/y/z` directly to that probe's
+`SimComponent` before cosim propagation. Modelica consumes the generic
+`target_mount_x/y/z` input at its usual communication points. A missing,
+coincident, ambiguous, or unresolvable target removes the sample; once a
+consumer is running, a terminal runtime fault stops simulation instead of
+propagating an accumulator zero. No per-body direction cache, second model
+clock, or faster physics loop is involved.
 
 The shared celestial cadence commits the `CelestialTime` sample captured in
 `PreUpdate`. One epoch/revision cursor gates body placement, rotation, solar
@@ -321,14 +328,21 @@ The ordinary render interpolation sample drives authored USD animation. A
 surface station and its marker stay on the same physical body-fixed grid, which
 already follows `CelestialTime`; do not mirror it under another frame.
 Celestial body shader looks retain installed dataset albedo unless USD authors
-an explicit albedo map. One semantic Sun direction feeds the scene light,
-shadow map, terrain shadow, horizon cache, and mount-local Modelica inputs;
-none may select a separate solar time or direction.
+an explicit albedo map. The generic direction resolver feeds the scene light,
+shadow map, terrain shadow, horizon cache, and mount-local Modelica inputs.
+Each consumer names its source through the authored target id and uses the same
+BigSpace conversion. Celestial sources are positioned and rotated from the
+`CelestialTime` child of `WorldTime`; no consumer selects a separate solar
+time.
+
+Celestial source ids use `lunco:body` NAIF identity (`sun`, `earth`, and `moon`
+for 10, 399, and 301; `body_<NAIF>` for other bodies). Non-celestial targets
+use their `LunCoDirectionTargetAPI` id.
 
 The procedural Sun disc uniform uses the active camera's view coordinates,
-matching the shader's view-space rays. `SunRenderState` comes from the same
-CelestialTime-driven `SunState` projected onto the scene light; the render path
-converts that finalized light direction to camera space after BigSpace
+matching the shader's view-space rays. `SunRenderState` records the finalized
+scene-light direction after the generic source resolver projects it onto the
+light; the render path converts that direction to camera space after BigSpace
 propagation. Do not add a second ephemeris or camera-space Sun calculation.
 Camera pose changes refresh the view-space material input while CelestialTime
 is paused.

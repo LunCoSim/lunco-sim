@@ -7,13 +7,11 @@ model EarthTracker "Two-axis high-gain antenna: hold the dish on Earth."
   // point of a component library.
   //
   // ── Where the inputs come from ──────────────────────────────────────────
-  // Unit direction to Earth in the ANTENNA MOUNT frame, published by the
-  // celestial bridge.  The frame is explicit: +X right, +Y up, -Z forward.
-  // It is the full inverse mount attitude, so yaw, pitch and roll are all
-  // accounted for before this model ever chooses a pair of joint angles.
-  input Real earth_mount_x "Earth direction, mount-right";
-  input Real earth_mount_y "Earth direction, mount-up";
-  input Real earth_mount_z "Earth direction, mount-back";
+  // Unit direction to the selected target in the ANTENNA MOUNT frame. The
+  // environment wire chooses the target; coordinate conversion is shared.
+  input Real target_mount_x "Target direction, mount-right";
+  input Real target_mount_y "Target direction, mount-up";
+  input Real target_mount_z "Target direction, mount-back";
 
   parameter Real tau = 1.5 "gimbal time constant (s)";
   parameter Real diameter = 3.0 "reflector diameter (m) — must match the USD dish";
@@ -35,8 +33,8 @@ equation
   // With the USD joints (yaw about +Y, then elevation about +X), its direction
   // is (sin(az) * sin(el), cos(el), cos(az) * sin(el)). Solve that exact
   // geometry here; hosts never duplicate a sign or axis conversion.
-  azimuth.cmd = atan2(earth_mount_x, earth_mount_z);
-  elevation.cmd = acos(max(-1.0, min(1.0, earth_mount_y)));
+  azimuth.cmd = atan2(target_mount_x, target_mount_z);
+  elevation.cmd = acos(max(-1.0, min(1.0, target_mount_y)));
   az = azimuth.angle;
   el = elevation.angle;
 

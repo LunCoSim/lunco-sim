@@ -114,38 +114,93 @@ pub const FULL_EARTH_EARTHSHINE_LUX: f32 = 12.0;
 /// ⇒ 1. The far-source approximation (Earth→Sun ∥ site→Sun) is exact to well
 /// under a degree at 1 AU.
 ///
-/// No-data is a real state and is respected: [`EarthDirectionWorld`] holds a
-/// zero vector until an ephemeris resolves, and a scene with no celestial
-/// hierarchy never writes it at all. Both leave the fill at whatever the USD
-/// authored — 0 — rather than at a guess.
+/// Missing data is an explicit error. The last valid fill sample stays in place
+/// until both framed sources are available again; it is never replaced by a
+/// guessed phase or a fabricated zero.
 pub fn drive_earthshine_from_phase(
-    earth_dir: Option<Res<crate::EarthDirectionWorld>>,
-    sun: Option<Res<crate::SunState>>,
+    directions: Option<Res<crate::EnvironmentDirections>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    q_targets: Query<(Entity, &crate::DirectionTargetId)>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&big_space::prelude::Grid>,
+    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
     mut q_fill: Query<&mut DirectionalLight, With<crate::Earthshine>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     if q_fill.is_empty() {
+        if let Some(mut diagnostics) = diagnostics {
+            diagnostics.replace_producer("environment-earthshine", std::iter::empty());
+        }
         return;
     }
-    let Some(earth_dir) = earth_dir else { return };
-    let e = earth_dir.0;
-    if !e.is_finite() || e.length_squared() < 1e-12 {
-        return;
-    }
-    let Some(sun) = sun else { return };
-    let Some(direction_to_sun) = sun.direction_to_sun else {
+    let mut fail = |code: &str, message: String| {
+        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+            diagnostics.replace_producer(
+                "environment-earthshine",
+                [lunco_core::RuntimeDiagnostic {
+                    code: code.to_string(),
+                    severity: lunco_core::DiagnosticSeverity::Error,
+                    producer: "environment-earthshine".to_string(),
+                    subject: "Earthshine".to_string(),
+                    message,
+                }],
+            );
+        }
+    };
+    let Some(frame) = active_frame.as_deref().map(|frame| frame.0) else {
+        fail(
+            "earthshine-frame-missing",
+            "Earthshine requires an active physics frame to resolve Sun and Earth bearings"
+                .to_string(),
+        );
         return;
     };
-    // SunState is the semantic direction toward the Sun in the site frame;
-    // EarthDirectionWorld uses the same frame. The render fill is a projection
-    // and is never read back as the provider.
-    let s = direction_to_sun;
-    if !s.is_finite() || s.length_squared() < 1e-12 {
+    let Some(earth_id) = crate::DirectionSourceId::parse(crate::EARTH_DIRECTION_SOURCE) else {
+        fail(
+            "earthshine-source-invalid",
+            "built-in Earth source id is invalid".to_string(),
+        );
         return;
+    };
+    let Some(sun_id) = crate::DirectionSourceId::parse(crate::SUN_DIRECTION_SOURCE) else {
+        fail(
+            "earthshine-source-invalid",
+            "built-in Sun source id is invalid".to_string(),
+        );
+        return;
+    };
+    let resolve = |source: &crate::DirectionSourceId| {
+        crate::resolve_direction_for_frame(
+            source,
+            frame,
+            directions.as_deref(),
+            &q_targets,
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        )
+    };
+    let (earth, sun) = match (resolve(&earth_id), resolve(&sun_id)) {
+        (Ok(earth), Ok(sun)) => (earth, sun),
+        (earth, sun) => {
+            fail(
+                "earthshine-direction-source",
+                format!(
+                    "Earthshine requires resolvable `earth` and `sun` direction targets: earth={earth:?}, sun={sun:?}"
+                ),
+            );
+            return;
+        }
+    };
+    drop(fail);
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        diagnostics.replace_producer("environment-earthshine", std::iter::empty());
     }
 
-    let cos_alpha = -(s.normalize().dot(e.normalize()));
+    // Both directions are resolved in the same physical probe frame.
+    let cos_alpha = -sun.components().dot(earth.components());
     let lit_fraction = ((1.0 + cos_alpha) * 0.5).clamp(0.0, 1.0);
-    let lux = FULL_EARTH_EARTHSHINE_LUX * lit_fraction;
+    let lux = (f64::from(FULL_EARTH_EARTHSHINE_LUX) * lit_fraction) as f32;
 
     for mut fill in &mut q_fill {
         // Change-driven: `DirectionalLight` is in the render extract, and the

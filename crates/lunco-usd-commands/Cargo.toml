@@ -10,6 +10,7 @@ lunco-geometry-core = { path = "../lunco-geometry-core" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
 lunco-api = { path = "../lunco-api" }
@@ -24,6 +25,7 @@ lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
+lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-data = { path = "../lunco-usd-data" }

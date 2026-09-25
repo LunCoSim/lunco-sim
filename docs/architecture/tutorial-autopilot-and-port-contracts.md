@@ -96,27 +96,32 @@ remains unavailable.
 
 This distinction is required for the environment probe. Its normal
 `probe.usda` asset is intentionally empty: `LunCoEnvironmentProbeAPI` supplies
-the interface. An authored-property enumeration can therefore see no output
-attributes even though the composed schema declares the contract. The USD
-projection must recognise the API schema and publish the authoritative
-`ENVIRONMENT_PROBE_OUTPUTS` set:
+the fixed gravity interface, while direction outputs are materialized from
+composed wire demand. An authored-property enumeration can therefore see no
+output attributes even though the composed schema declares gravity outputs.
+The USD projection recognizes the API schema and publishes the authoritative
+base output set:
 
 ```text
-gravity_x, gravity_y, gravity_z
-sun_mount_x, sun_mount_y, sun_mount_z
-earth_mount_x, earth_mount_y, earth_mount_z
+gravity_accel, gravity_x, gravity_y, gravity_z
 ```
 
-The environment domain then publishes only facts it currently owns. If a
-`LocalGravity`, `SunDirection`, or Earth-direction value is absent, its sample
-is removed; the declared output remains. Do not insert a zero as a placeholder
-and do not retain a stale value from an earlier scene or body.
+The gravity fields are USD `double`, matching their f64 simulation values.
+Direction outputs use `<id>_mount_x/y/z`, where `id` is the stable identity of
+any finite target or explicitly framed ray. The source id comes from the
+connection; the consuming Modelica component names its local vector
+`target_mount_x/y/z` and can be rewired to another object without changing its
+equations. Each probe resolves its own vector through the shared BigSpace f64
+conversion and normalizes once at the provider boundary. If a target or
+coordinate frame is absent, ambiguous, or coincident with the probe, the
+direction sample is removed and a structured diagnostic is published; no zero
+or stale sample is supplied.
 
 The ownership boundary is therefore:
 
 ```text
 USD API schema / projection  -> declared port names
-environment domain           -> current environmental samples
+environment domain           -> current f64 gravity and requested direction samples
 cosim wiring                 -> topology resolution
 solver / consumer            -> reads only available samples
 ```
@@ -140,7 +145,7 @@ replacing a session and verify that its process and port are gone. Do not
 overlap GUI/API sessions or hide a rebuild behind `cargo run`.
 
 The environment-port regression is closed when a fresh production log shows
-the EarthTracker programs bound and compiled without `earth_mount_*` missing
+the EarthTracker programs bound and compiled without `target_mount_*` missing
 port diagnostics. That closure is independent of the lander's physical
 acceptance: a mission can have correct EarthTracker wiring and still fail later
 because a body, solver, joint, or autopilot state diverges.

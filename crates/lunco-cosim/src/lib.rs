@@ -754,24 +754,24 @@ mod binding_lifecycle_tests {
         app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
 
         let mut source_component = SimComponent::default();
-        source_component.inputs.insert("sun_mount_x".into(), 0.0);
+        source_component.inputs.insert("target_mount_x".into(), 0.0);
         let source = app.world_mut().spawn(source_component).id();
 
         let mut target_component = SimComponent {
             status: SimStatus::Compiling,
             ..Default::default()
         };
-        target_component.inputs.insert("sun_mount_x".into(), 0.0);
+        target_component.inputs.insert("target_mount_x".into(), 0.0);
         let target = app.world_mut().spawn(target_component).id();
 
         let edge = app
             .world_mut()
             .spawn(SimConnection {
                 start_element: source,
-                start_connector: "sun_mount_x".into(),
+                start_connector: "target_mount_x".into(),
                 start_is_input: true,
                 end_element: target,
-                end_connector: "sun_mount_x".into(),
+                end_connector: "target_mount_x".into(),
                 scale: 1.0,
                 offset: 0.0,
             })
