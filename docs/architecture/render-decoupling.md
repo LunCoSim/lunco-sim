@@ -95,6 +95,22 @@ Keep this optimization in `lunco-render-bevy`. Scene-camera reconciliation
 remains the sole owner of which authored window camera is active; Bevy's
 auxiliary shadow subviews are not extra scene cameras and remain intact.
 
+### Auxiliary shadow-view schedule admission
+
+Bevy's camera driver also runs `Core3d` for point- and spot-light shadow roots.
+Those roots need Bevy's shared shadow passes and GPU preprocessing, but not the
+camera-only prepass, main-pass, or post-process stages. `lunco-render-bevy`
+gates those stage sets from the current root's `LightEntity` role. Camera roots
+and other non-light roots retain the complete schedule; shadow roots retain the
+actual shadow-map rendering path, resolution, lights, and quality settings.
+Directional cascades remain attached to their output-camera schedule and are
+not classified as auxiliary light roots.
+This avoids running camera-only stage systems for light roots without treating
+shadow views as output cameras or disabling shadows. Bevy still prepares
+per-view GPU preprocess bind groups and submits its pending command buffers in
+the normal frame-level queue call; only a before/after trace can establish
+whether skipping these stages reduces that batch's buffer count or CPU time.
+
 ### Spotlight shadow relevance
 
 Bevy shares a spotlight's shadow map across all active 3D cameras, but its

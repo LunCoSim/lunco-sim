@@ -50,13 +50,14 @@ pub const DEFAULT_ASSET_PORT: u16 = 5889;
 /// Binding a public interface is safe here (see module docs) and is the default so
 /// native/LAN peers can fetch directly. A deployment that fronts this with nginx
 /// should bind `127.0.0.1` instead (`LUNCO_ASSET_BIND`) so the only public door is
-/// the proxy. Runs on its own OS thread + tokio runtime, mirroring `spawn_server`;
+/// the proxy. Runs on its own OS thread + current-thread Tokio runtime,
+/// mirroring `spawn_server`;
 /// a bind failure is logged and the thread returns (clients then fall back to the
 /// in-session chunk path).
 #[allow(clippy::disallowed_methods)]
 pub fn spawn_asset_server(addr: String, index: AssetIndex) {
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
+        let rt = match super::build_transport_runtime() {
             Ok(rt) => rt,
             Err(e) => {
                 bevy::log::error!("[lunco-api] asset server runtime failed to start: {e}");

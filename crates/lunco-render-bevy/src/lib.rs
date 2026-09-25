@@ -23,6 +23,7 @@ mod sensor_beams;
 mod shader_look;
 pub mod shader_material;
 mod spotlight_shadow_relevance;
+mod shadow_view_schedule;
 
 mod world_label;
 
@@ -162,6 +163,7 @@ impl Plugin for LuncoRenderPlugin {
         scene_camera::build(app);
         gpu_culling::build(app);
         spotlight_shadow_relevance::build(app);
+        shadow_view_schedule::build(app);
         // Shadow filtering is a render policy, not a workbench concern. Attach it
         // when a camera enters the render graph so windowed and offscreen captures
         // use the same lunar terminator without either binary having a second

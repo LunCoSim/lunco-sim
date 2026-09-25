@@ -55,6 +55,12 @@ cases keep the map. This saves only maps provably irrelevant to all outputs;
 Bevy's main-world per-light caster visibility pass is still a separate cost to
 measure.
 
+Bevy's camera driver also executes `Core3d` for point/spot shadow roots. Admit
+camera-only Core3d stage sets only for camera roots; keep the shared shadow
+passes and the GPU preprocessing needed by the depth maps active on light
+roots. Verify the same spotlight pass inventory before and after so this
+scheduling optimization cannot silently remove shadows.
+
 Treat Bevy `Changed<T>`/`Added<T>` filters as population filters, not free
 events: a no-match query can still inspect candidate entities, and separate
 `is_empty()` queries can repeat that work. Combine compatible invalidation
