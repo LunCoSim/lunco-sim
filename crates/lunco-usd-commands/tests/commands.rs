@@ -451,6 +451,10 @@ fn open_file_for_usd_path_creates_document() {
         1,
         "exactly one USD doc opened (no duplicate)"
     );
+    let doc = reg.ids().next().unwrap();
+    let document = reg.host(doc).unwrap().document();
+    assert_eq!(document.parse_error(), None);
+    assert_eq!(document.source(), "#usda 1.0\ndef Xform \"X\" {}\n");
 }
 
 #[test]
@@ -675,8 +679,8 @@ fn apply_usd_op_records_lossless_journal_entries() {
             assert_eq!(format!("{decoded:?}"), format!("{:?}", forward_ops[i]));
             // The inverse is a real UsdOp too. Phase C3 records TYPED
             // inverses where exact: AddPrim of a brand-new prim inverts to
-            // a RemovePrim; SetTranslate that synthesizes `xformOpOrder`
-            // falls back to a coarse full-source ReplaceSource snapshot.
+            // RemovePrim; SetTranslate that synthesizes `xformOpOrder`
+            // inverts to RemoveXformOp and stays incremental on undo.
             let inv: UsdOp = serde_json::from_value(inv_val.clone())
                 .expect("recorded inverse round-trips to UsdOp");
             match i {
@@ -685,8 +689,8 @@ fn apply_usd_op_records_lossless_journal_entries() {
                     "AddPrim of a new prim inverts to a typed RemovePrim, got {inv:?}"
                 ),
                 1 => assert!(
-                    matches!(inv, UsdOp::ReplaceSource { .. }),
-                    "SetTranslate inverts to a coarse ReplaceSource, got {inv:?}"
+                    matches!(inv, UsdOp::RemoveXformOp { .. }),
+                    "SetTranslate inverts to RemoveXformOp, got {inv:?}"
                 ),
                 _ => unreachable!(),
             }

@@ -125,6 +125,24 @@ from `on_start` that the committed source revision is available. The generic
 scenario lifecycle test may verify Pending-to-Ready hold/release mechanics;
 the authored scene gate must verify the domain key and source revision.
 
+For ordered asynchronous scene checks, author the sequence with the existing
+Rhai task tree (`seq`, `once`, `wait_until`, `check`, and `sel`) rather than a
+numeric `phase` switch in `on_tick`. Use named `Fn("callback")` leaves when a
+step needs persistent test state; the task driver binds that state's `this` to
+the callback. Prefer `wait_for`/`wait_for_from` when the owner publishes the
+completion event; use `wait_until` only when no suitable event exists. `wait`
+uses deterministic simulation time, not wall time. For an interruptible
+sequence, put a cheap state guard in `reactive_seq` and let a failed `check`
+cancel its running child; event handlers can update that guard's state, which
+the task kernel observes on its next deterministic pass. Keep test-only
+`on_tick` for a bounded fixed-step watchdog that reports the exact condition
+that timed out. Do not add a separate Rust timer callback or phase runner: task
+progression already owns deterministic waits and callback cadence. Any future
+task deadline must specify its clock and cancellation/failure result as part of
+the task contract. The shared `auto_tests.rhai` prelude already owns assertions
+and terminal verdicts; do not add a parallel test DSL unless the Rhai task
+surface demonstrably cannot express a required contract.
+
 ## Production commands
 
 Resolve the production binary once:

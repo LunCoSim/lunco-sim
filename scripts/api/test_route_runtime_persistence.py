@@ -86,6 +86,7 @@ def main() -> int:
         shutil.copy2(SCENE_SOURCE, scene_path)
         (twin_root / "twin.toml").write_text(
             'name = "RouteRuntimePersistenceGate"\n'
+            'version = "0.1.0"\n'
             "\n[usd]\n"
             'default_scene = "sim/scenes/route_runtime_persistence.usda"\n'
             'scenes = ["sim/scenes/*.usda"]\n'

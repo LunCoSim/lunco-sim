@@ -27,6 +27,9 @@ fn on_start(me, ctx) {
     this.race = 0;
     this.repeated = 0;
     this.forever = 0;
+    this.interrupt_checks = 0;
+    this.interrupt_actions = 0;
+    this.interrupt_recovered = 0;
     this.task_complete = false;
     this.mission_complete = false;
     this.done = false;
@@ -55,9 +58,19 @@ fn on_start(me, ctx) {
     subscribe("TASK_RACE");
     subscribe("TASK_REPEAT");
     subscribe("TASK_FOREVER");
+    subscribe("TASK_INTERRUPT_RECOVERED");
     subscribe("TASK_COMPLETE");
     subscribe("MISSION_COMPLETE");
 }
+
+fn interrupt_guard(me) {
+    this.interrupt_checks += 1;
+    this.interrupt_checks <= 2
+}
+
+fn interrupt_action(me) { this.interrupt_actions += 1; }
+fn interrupt_action_not_done(me) { false }
+fn interrupt_recovery(me) { emit("TASK_INTERRUPT_RECOVERED", 1); }
 
 fn task(me, ctx) {
     emit("TASK_CTX_EMPTY", ctx.len() == 0);
@@ -82,6 +95,13 @@ fn task(me, ctx) {
             wait(0.01),
             once(|m| emit("TASK_REPEAT", 1)),
         ])),
+        sel([
+            reactive_seq([
+                check(Fn("interrupt_guard")),
+                step(Fn("interrupt_action"), Fn("interrupt_action_not_done")),
+            ]),
+            once(Fn("interrupt_recovery")),
+        ]),
         forever(once(|m| emit("TASK_FOREVER", 1))),
     ])
 }
@@ -118,6 +138,7 @@ fn on_event(me, evt, ctx) {
     if evt.name == "TASK_RACE" { this.race += 1; }
     if evt.name == "TASK_REPEAT" { this.repeated += 1; }
     if evt.name == "TASK_FOREVER" { this.forever += 1; }
+    if evt.name == "TASK_INTERRUPT_RECOVERED" { this.interrupt_recovered += 1; }
     if evt.name == "TASK_COMPLETE" { this.task_complete = true; }
     if evt.name == "MISSION_COMPLETE" { this.mission_complete = true; }
     if evt.name == "RHAI_REPL_BUDGET" {
@@ -149,7 +170,7 @@ fn on_tick(me, ctx) {
     }
 
     if this.mission_complete && this.forever >= 3 && this.repl_values.len() == 2
-        && this.repl_operation_limit_rejected {
+        && this.repl_operation_limit_rejected && this.interrupt_recovered == 1 {
         this.done = true;
         report_verdict([
             t_true(this.start_ctx_is_empty, "on_start receives the empty default context"),
@@ -171,6 +192,10 @@ fn on_tick(me, ctx) {
             t_true(this.branch_b2 == 1, "par_all waited for its second branch"),
             t_true(this.race == 1, "par_race completed on its winning branch"),
             t_true(this.repeated == 3, "repeat ran exactly three times"),
+            t_true(this.interrupt_checks == 3 && this.interrupt_actions == 2,
+                "reactive sequence interrupts its running child when its guard changes"),
+            t_true(this.interrupt_recovered == 1,
+                "selector resumes at the fallback after reactive interruption"),
             t_true(this.forever >= 3, "forever kept running"),
             t_true(!this.task_complete, "forever did not report task completion"),
             t_true(this.mission_complete, "gated mission completed"),

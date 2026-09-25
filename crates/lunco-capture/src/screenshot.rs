@@ -1613,6 +1613,9 @@ fn drive_offline_clock(
     // otherwise a slow worker produces duplicate frames at the same simulation
     // time and the captured sequence outruns its force state.
     coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
+    // Visual refinement is independent work. Keep the logical frame fixed while
+    // its active readiness projection is present on the shared status bus.
+    status_bus: Option<Res<lunco_status_core::status_bus::StatusBus>>,
     mut virtual_time: ResMut<bevy::time::Time<bevy::time::Virtual>>,
     mut commands: Commands,
 ) {
@@ -1706,8 +1709,17 @@ fn drive_offline_clock(
         state.frame_just_captured = false;
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(frame_dur));
     } else {
-        // Time advanced this frame and the scene is rendered — capture it, then
-        // hold the clock until the readback delivers.
+        // Time advanced this frame. If its camera move selected new terrain,
+        // hold that logical frame while bounded background work completes; do
+        // not advance physics or capture an intermediate LOD cover.
+        if terrain_stream_busy(status_bus.as_deref()) {
+            commands.insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::ZERO,
+            ));
+            return;
+        }
+        // The frame is presentable — capture it, then hold the clock until the
+        // readback delivers.
         if let Some(target) = &capture_target {
             commands.spawn(Readback::texture(target.0.clone()));
         } else {
@@ -1718,6 +1730,13 @@ fn drive_offline_clock(
             std::time::Duration::ZERO,
         ));
     }
+}
+
+fn terrain_stream_busy(bus: Option<&lunco_status_core::status_bus::StatusBus>) -> bool {
+    bus.is_some_and(|bus| {
+        bus.active_progress()
+            .any(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE)
+    })
 }
 
 /// Observer for Bevy's ScreenshotCaptured event.
@@ -1993,5 +2012,26 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
             "frame_index": state.frame_index,
             "is_waiting_for_frame": state.is_waiting_for_frame,
         })))
+    }
+}
+
+#[cfg(test)]
+mod recording_readiness_tests {
+    use super::*;
+
+    #[test]
+    fn terrain_streaming_holds_capture_but_optional_derived_work_does_not() {
+        use lunco_status_core::status_bus::{StatusBus, TERRAIN_DERIVED_SOURCE, TERRAIN_SOURCE};
+
+        let mut bus = StatusBus::default();
+        assert!(!terrain_stream_busy(Some(&bus)));
+
+        bus.set_progress(TERRAIN_DERIVED_SOURCE, "optional", 0, 0);
+        assert!(!terrain_stream_busy(Some(&bus)));
+
+        bus.set_progress(TERRAIN_SOURCE, "terrain tiles", 0, 0);
+        assert!(terrain_stream_busy(Some(&bus)));
+        bus.remove_progress(TERRAIN_SOURCE);
+        assert!(!terrain_stream_busy(Some(&bus)));
     }
 }

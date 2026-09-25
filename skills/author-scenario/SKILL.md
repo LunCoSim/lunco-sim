@@ -515,7 +515,14 @@ retain a retired event-delivery API.
 For complex reactive policy, compose the task tree in the scenario with the
 prelude's reactive selectors, guards, waits, and event leaves. The generic
 task kernel is shared and fast; no vessel-specific Rust driver or autopilot
-command is required.
+command is required. Use `wait_for` when an owner can publish completion,
+`wait_until` only for state with no suitable event, and `wait(seconds)` for a
+deterministic simulation-time delay. A `reactive_seq` guard is the task-tree
+interruption point: when an event handler updates the guarded state, a failed
+`check` cancels the running child on the next task pass. Do not schedule Rhai
+callbacks from an app-global wall-clock timer; callback execution stays on the
+owning deterministic cycle. If a reusable timeout is needed, its clock,
+cancellation, and failure result must be explicit task semantics.
 
 ## 5. Events — the reactive spine
 

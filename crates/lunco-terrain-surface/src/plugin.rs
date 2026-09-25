@@ -183,7 +183,7 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
         app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
         app.init_resource::<crate::stream_viz::TerrainDetailDemands>();
         app.init_resource::<lunco_viewport_core::SceneViewport>();
-        app.init_resource::<crate::stream_viz::TerrainStreamLockstep>();
+        app.init_resource::<crate::stream_viz::TerrainStreamFrameDriven>();
         app.init_resource::<crate::stream_viz::TerrainStreamCadence>();
         app.init_resource::<crate::stream_viz::TerrainCoverResults>();
         app.add_systems(PreUpdate, crate::stream_viz::advance_terrain_stream_cadence);

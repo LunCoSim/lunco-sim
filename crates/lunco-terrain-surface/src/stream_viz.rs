@@ -1491,9 +1491,32 @@ struct BakedTile {
 /// never blocks the frame ("non-blocking, extend outward"). Cancelled by drop when
 /// the terrain despawns.
 #[derive(Component, Default)]
-pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
+pub struct PendingTileBakes {
+    tasks: HashMap<QuadCoord, (u32, Task<BakedTile>)>,
+    ready: Vec<(QuadCoord, u32, BakedTile)>,
+}
 
 impl PendingTileBakes {
+    fn len(&self) -> usize {
+        self.tasks.len() + self.ready.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty() && self.ready.is_empty()
+    }
+
+    fn has_current(&self, coord: QuadCoord, generation: u32) -> bool {
+        self.tasks
+            .get(&coord)
+            .is_some_and(|(pending_generation, _)| *pending_generation == generation)
+            || self
+                .ready
+                .iter()
+                .any(|(pending_coord, pending_generation, _)| {
+                    *pending_coord == coord && *pending_generation == generation
+                })
+    }
+
     /// Drop in-flight bakes whose tile overlaps the committed surface change.
     /// A bounded change leaves pending work elsewhere valid; retag it to the
     /// new visual generation so the completed mesh can still be published.
@@ -1504,14 +1527,24 @@ impl PendingTileBakes {
         root_half_extent: f64,
     ) {
         let Some(generation) = generation else {
-            self.0.clear();
+            self.tasks.clear();
+            self.ready.clear();
             return;
         };
         let Some(bounds) = change.dirty_bounds else {
-            self.0.clear();
+            self.tasks.clear();
+            self.ready.clear();
             return;
         };
-        self.0.retain(|coord, (pending_generation, _)| {
+        self.tasks.retain(|coord, (pending_generation, _)| {
+            if node_overlaps_aabb(*coord, root_half_extent, bounds) {
+                false
+            } else {
+                *pending_generation = generation;
+                true
+            }
+        });
+        self.ready.retain_mut(|(coord, pending_generation, _)| {
             if node_overlaps_aabb(*coord, root_half_extent, bounds) {
                 false
             } else {
@@ -2049,63 +2082,13 @@ fn bootstrap_cover_is_ready(
     })
 }
 
-/// **Run tile streaming in LOCKSTEP with the frame instead of against the wall
-/// clock.** Set while an offline recording is capturing; clear otherwise.
-///
-/// # Why this exists
-///
-/// Ordinary streaming is real-time paced on purpose: a frame starts at most
-/// the configured `terrain_lod_bakes_per_frame` bakes, caps in-flight work at
-/// `terrain_lod_max_inflight_bakes`, and *polls* those off-thread tasks with `poll_once` — so
-/// a bake lands on whichever frame it happens to finish on. That is exactly right
-/// for interactive play (the frame never blocks on baking) and exactly wrong for
-/// offline capture, because "whichever frame it happens to finish on" is a function
-/// of thread scheduling, not of the shot.
-///
-/// MEASURED: with the recorder's readiness gate and recorder-owned camera-path
-/// release both in place — frame 0 bit-identical across runs — two full runs of
-/// `episode_02_rover.usda` still differed on the FROZEN shots (01, 02, 03, 06) in
-/// 25-38 separate blocks of frames each, with the final frame matching every time.
-/// A transient, not an accumulation: the readiness gate guarantees the wanted tile
-/// set is fully resident at frame 0, but as the camera moves through the shot the
-/// selection changes, new bakes are queued, and they land a
-/// scheduling-dependent number of frames later. Same shot, same camera, different
-/// tiles drawn on any given frame.
-///
-/// # What setting it does
-///
-/// Two changes in [`update_lod_tiles`], both only while set:
-///
-/// 1. **No pacing budgets.** `bakes_per_frame` and `max_inflight_bakes` are
-///    lifted, so the set of bakes STARTED on a frame is a pure function of that
-///    frame's selection rather than of a budget interacting with the previous
-///    frame's carry-over.
-/// 2. **Drain, don't poll.** Pending bakes are blocked on to completion rather than
-///    `poll_once`d, so every bake started on frame N is resident by frame N+1 —
-///    always, on every machine, instead of "eventually".
-///
-/// The result is that what is drawn on frame N is a pure function of N. Note this
-/// does NOT make streaming instantaneous: finalize runs before selection in the
-/// system body, so a tile is still one frame behind the selection that asked for
-/// it. That is fine — reproducibility needs the latency to be CONSTANT, not zero.
-///
-/// It costs frame time (the frame now blocks on baking), which is the correct
-/// trade for an offline render and unacceptable for interactive play. Hence a flag,
-/// not a change of default.
-///
-/// # Who sets it
-///
-/// `lunco-luncosim-ui`, mirroring `OfflineRecordingState::active` — the same inversion
-/// as `report_terrain_stream_status`/`report_scene_spawn_status`, for the same reason.
-/// `lunco-workbench` (which owns the recorder) is a UI-shell crate and cannot name
-/// terrain; `lunco-terrain-surface` must not know what a recorder is. The application
-/// UI package is the assembly point that sees both.
-///
-/// Distinct from [`LodFrozen`], which is an authored per-terrain opt-in that stops
-/// re-selection outright. This one keeps selection live (the shot still refines as
-/// the camera moves) and only makes its timing deterministic.
+/// While offline recording, select terrain cover once per captured frame rather
+/// than on the interactive wall-clock cadence. Bake admission and mesh uploads
+/// remain bounded; the recorder waits at its presentation boundary until the
+/// selected cover is ready, so worker completion timing cannot change a captured
+/// frame or block the UI schedule.
 #[derive(Resource, Default, Clone, Copy, Debug)]
-pub struct TerrainStreamLockstep(pub bool);
+pub struct TerrainStreamFrameDriven(pub bool);
 
 /// Wall-clock cadence for camera-driven terrain-cover reselection.
 ///
@@ -2113,7 +2096,7 @@ pub struct TerrainStreamLockstep(pub bool);
 /// authoritative state. Recomputing its cover at display refresh rate wastes
 /// UI-frame time while a camera moves. The first update is immediate; after
 /// that, missed intervals are dropped so a slow frame never causes catch-up
-/// selection work. Offline lockstep capture explicitly bypasses this cadence.
+/// selection work. Offline frame-driven capture explicitly bypasses this cadence.
 #[derive(Resource)]
 pub struct TerrainStreamCadence {
     interval: Duration,
@@ -2449,8 +2432,9 @@ pub fn update_lod_tiles(
     mut mesh_cache: ResMut<LodMeshCache>,
     quality: Res<lunco_render::RenderingQualitySettings>,
     mut stream_status: ResMut<TerrainStreamStatus>,
-    // Set while an offline recording captures — see [`TerrainStreamLockstep`].
-    lockstep: Res<TerrainStreamLockstep>,
+    // Set while an offline recording captures; selection remains per captured
+    // frame while bake and publication budgets stay bounded.
+    frame_driven: Res<TerrainStreamFrameDriven>,
     cadence: Res<TerrainStreamCadence>,
     mut cover_work: TerrainCoverWork,
     environment: TerrainStreamEnvironment,
@@ -2522,21 +2506,9 @@ pub fn update_lod_tiles(
     }
     // Per-frame bake budget shared across all terrains (amortise scale changes).
     //
-    // Under lockstep the budgets are LIFTED, not merely raised: a budget makes the
-    // bakes started on a frame depend on what the previous frame could not fit,
-    // which is precisely the frame-to-frame carry-over that has to go for the shot
-    // to be reproducible. See [`TerrainStreamLockstep`].
-    let lockstep = lockstep.0;
-    let mut bake_budget = if lockstep {
-        usize::MAX
-    } else {
-        profile.terrain_lod_bakes_per_frame
-    };
-    let max_inflight = if lockstep {
-        usize::MAX
-    } else {
-        profile.terrain_lod_max_inflight_bakes
-    };
+    let frame_driven = frame_driven.0;
+    let mut bake_budget = profile.terrain_lod_bakes_per_frame;
+    let max_inflight = profile.terrain_lod_max_inflight_bakes;
     // Live streaming terrains — the mesh cache is GLOBAL (keyed by `(terrain,
     // coord)`), so its cap must scale with them or two terrains would fight over
     // one terrain's worth of entries and thrash each other every frame.
@@ -2563,7 +2535,7 @@ pub fn update_lod_tiles(
             // A first cover and a cover invalidated by a live depth-bound change
             // are admitted immediately. Other camera/profile changes wait for the
             // next wall-clock selection cycle, while the prior cover remains live.
-            let selection_cycle_due = lockstep
+            let selection_cycle_due = frame_driven
                 || cadence.is_due()
                 || tiles.cover.is_empty()
                 || tiles
@@ -2641,7 +2613,7 @@ pub fn update_lod_tiles(
             // Frozen and already covered ⇒ the drawn set is final. Report it as fully
             // resident (it is — that is the point) so the status bar clears and anything
             // gating on residency, like a camera path waiting to start, is satisfied.
-            if frozen && !tiles.tiles.is_empty() && pending.0.is_empty() {
+            if frozen && !tiles.tiles.is_empty() && pending.is_empty() {
                 stream_status.wanted += tiles.tiles.len();
                 stream_status.resident += tiles.tiles.len();
                 continue;
@@ -2894,7 +2866,7 @@ pub fn update_lod_tiles(
             {
                 let cover_status = selected_cover_status(&tiles, cur_gen);
                 if !promoted_tiles
-                    && pending.0.is_empty()
+                    && pending.is_empty()
                     && tiles.pending_cover.is_none()
                     && tiles.last_sig == Some(sig)
                     && tiles.coarse_ready
@@ -2936,7 +2908,7 @@ pub fn update_lod_tiles(
                 if selection_due
                     && needs_cover_work
                     && tiles.last_sig != Some(sig)
-                    && (tiles.pending_cover.is_none() || lockstep)
+                    && tiles.pending_cover.is_none()
                     && tiles.failed_cover_signature != Some(sig)
                 {
                     let Some(operation) = tiles.cover_operation.checked_add(1) else {
@@ -2976,59 +2948,45 @@ pub fn update_lod_tiles(
                     };
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        if lockstep {
-                            tiles.pending_cover = None;
-                            let prepared = prepare_terrain_cover(request);
-                            commit_prepared_terrain_cover(
-                                &mut tiles, &mut errs, prepared, oracle_key, sig,
-                            );
-                            sel.clear();
-                            sel.extend(tiles.cover_selected.iter().copied());
-                        } else {
-                            let queue = Arc::clone(&cover_work.results.queue);
-                            let job = move || {
-                                let result = catch_unwind(AssertUnwindSafe(|| {
-                                    prepare_terrain_cover(request)
-                                }))
-                                .map_err(|_| ());
-                                queue
-                                    .lock()
-                                    .unwrap_or_else(PoisonError::into_inner)
-                                    .push_back(TerrainCoverCompletion { token, result });
-                            };
-                            let key = lunco_core_runtime::AsyncWorkKey::new(
-                                lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
-                                0,
-                                terrain.to_bits() as u128,
-                                sig,
-                                operation,
-                            );
-                            match cover_work.admission.submit(
-                                lunco_core_runtime::AsyncWorkPriority::Background,
-                                key,
-                                job,
-                            ) {
-                                Ok(()) => {
-                                    tiles.pending_cover = Some((cur_gen, sig, oracle_key, operation));
-                                }
-                                Err(lunco_core_runtime::AsyncWorkRejection::DuplicateKey) => {
-                                    tiles.pending_cover = Some((cur_gen, sig, oracle_key, operation));
-                                }
-                                Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
-                                    bevy::log::warn_once!(
-                                        "terrain cover preparation is waiting for shared async capacity"
-                                    );
-                                }
-                                Err(
-                                    lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable,
-                                ) => {
-                                    bevy::log::error!(
-                                        target: "terrain_stream",
-                                        entity = ?terrain,
-                                        "native cover preparation was rejected by the shared dispatcher"
-                                    );
-                                    tiles.failed_cover_signature = Some(sig);
-                                }
+                        let queue = Arc::clone(&cover_work.results.queue);
+                        let job = move || {
+                            let result =
+                                catch_unwind(AssertUnwindSafe(|| prepare_terrain_cover(request)))
+                                    .map_err(|_| ());
+                            queue
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .push_back(TerrainCoverCompletion { token, result });
+                        };
+                        let key = lunco_core_runtime::AsyncWorkKey::new(
+                            lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                            0,
+                            terrain.to_bits() as u128,
+                            sig,
+                            operation,
+                        );
+                        match cover_work.admission.submit(
+                            lunco_core_runtime::AsyncWorkPriority::Background,
+                            key,
+                            job,
+                        ) {
+                            Ok(()) | Err(lunco_core_runtime::AsyncWorkRejection::DuplicateKey) => {
+                                tiles.pending_cover = Some((cur_gen, sig, oracle_key, operation));
+                            }
+                            Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+                                bevy::log::warn_once!(
+                                    "terrain cover preparation is waiting for shared async capacity"
+                                );
+                            }
+                            Err(
+                                lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable,
+                            ) => {
+                                bevy::log::error!(
+                                    target: "terrain_stream",
+                                    entity = ?terrain,
+                                    "native cover preparation was rejected by the shared dispatcher"
+                                );
+                                tiles.failed_cover_signature = Some(sig);
                             }
                         }
                     }
@@ -3071,14 +3029,20 @@ pub fn update_lod_tiles(
             // requests no longer selected before they can occupy every worker slot.
             // The retained coarse base is always kept pending until its generation is
             // complete; fine requests are admitted only after that cover is ready.
-            let pending_before = pending.0.len();
-            pending.0.retain(|coord, (r#gen, _)| {
+            let pending_before = pending.len();
+            pending.tasks.retain(|coord, (r#gen, _)| {
                 *r#gen == cur_gen
                     && (wanted.contains(coord)
                         || parent_fallbacks.contains(coord)
                         || is_coarse_fallback(*coord))
             });
-            stream_status.stale_cancelled += pending_before - pending.0.len();
+            pending.ready.retain(|(coord, r#gen, _)| {
+                *r#gen == cur_gen
+                    && (wanted.contains(coord)
+                        || parent_fallbacks.contains(coord)
+                        || is_coarse_fallback(*coord))
+            });
+            stream_status.stale_cancelled += pending_before - pending.len();
             // Intelligent baking, two phases:
             //
             // 1. CARPET — the selection's coarsest tiles first (a depth-N tile costs
@@ -3156,38 +3120,26 @@ pub fn update_lod_tiles(
                 tiles.tiles.get(c).is_some_and(|s| s.r#gen == cur_gen)
             };
 
-            // ── Finalize completed off-thread bakes ──────────────────────
-            // Poll in-flight tasks; for each finished bake, upload its mesh (cheap, main
-            // thread) + spawn the tile. The expensive DEM sampling already ran on a
-            // worker thread, so the frame never blocks on baking.
-            //
-            // ...unless we are in LOCKSTEP (offline capture), where the frame blocks on
-            // EVERY in-flight bake instead. `poll_once` returns whatever happens to be
-            // done, which makes the tile set drawn on a given frame a function of thread
-            // scheduling; draining to completion makes it a function of the frame index.
-            // See [`TerrainStreamLockstep`] for the measurement that motivated this.
+            // Poll tasks without waiting. Ready meshes are committed in stable tile
+            // order and bounded by the per-frame work budget. Offline capture waits at
+            // its presentation boundary for readiness rather than blocking this system.
             done.clear();
-            if lockstep {
-                for (coord, (r#gen, task)) in pending.0.drain() {
-                    done.push((coord, r#gen, block_on(task)));
-                }
-                // `drain()` on a `HashMap` yields in an arbitrary (hash-seed-dependent)
-                // order, and downstream `done` handling inserts into `LodTiles`/despawns
-                // — so sort to a deterministic order before consuming it. Coordinates are
-                // unique per terrain, so this is a total order.
-                done.sort_by_key(|(coord, _, _)| (coord.depth, coord.x, coord.z));
-            } else {
-                pending.0.retain(|coord, (r#gen, task)| {
-                    match block_on(future::poll_once(&mut *task)) {
-                        Some(baked) => {
-                            done.push((*coord, *r#gen, baked));
-                            false
-                        }
-                        None => true,
+            pending.tasks.retain(|coord, (r#gen, task)| {
+                match block_on(future::poll_once(&mut *task)) {
+                    Some(baked) => {
+                        done.push((*coord, *r#gen, baked));
+                        false
                     }
-                });
-            }
-            for (coord, r#gen, baked) in done.drain(..) {
+                    None => true,
+                }
+            });
+            done.sort_by_key(|(coord, r#gen, _)| (coord.depth, coord.x, coord.z, *r#gen));
+            pending.ready.append(done);
+            pending
+                .ready
+                .sort_by_key(|(coord, r#gen, _)| (coord.depth, coord.x, coord.z, *r#gen));
+            let commit_count = pending.ready.len().min(profile.terrain_lod_bakes_per_frame);
+            for (coord, r#gen, baked) in pending.ready.drain(..commit_count) {
                 // A bake from a superseded generation (heights changed while it ran) is
                 // discarded — its mesh would show the OLD terrain.
                 if r#gen != cur_gen {
@@ -3279,7 +3231,7 @@ pub fn update_lod_tiles(
                 }
                 // Skip coords already satisfied at the current generation (resident tile
                 // or in-flight current-gen bake). Stale tiles fall through → re-baked.
-                let have_pending = pending.0.get(&s.coord).is_some_and(|(g, _)| *g == cur_gen);
+                let have_pending = pending.has_current(s.coord, cur_gen);
                 if fresh_tile(&tiles, &s.coord) || have_pending {
                     continue;
                 }
@@ -3333,7 +3285,7 @@ pub fn update_lod_tiles(
                 }
                 // Cache miss → needs a bake. Respect the per-frame + in-flight budgets
                 // (keep scanning for cheap cache hits regardless of the bake budget).
-                if bake_budget == 0 || pending.0.len() >= max_inflight {
+                if bake_budget == 0 || pending.len() >= max_inflight {
                     continue;
                 }
                 bake_budget -= 1;
@@ -3397,7 +3349,7 @@ pub fn update_lod_tiles(
                         origin_y,
                     }
                 });
-                pending.0.insert(s.coord, (cur_gen, task));
+                pending.tasks.insert(s.coord, (cur_gen, task));
             }
 
             // The base is complete once every enumerated coarse node is resident at this
@@ -3523,7 +3475,7 @@ pub fn update_lod_tiles(
                     selected_ready,
                     coarse_ready = tiles.coarse_ready,
                     materials_ready = tiles.materials_ready,
-                    backlog = pending.0.len(),
+                    backlog = pending.len(),
                     "terrain has uncovered area (coarse base still baking?)"
                 );
             }
@@ -3534,7 +3486,7 @@ pub fn update_lod_tiles(
                 .iter()
                 .filter(|c| tiles.tiles.get(c).is_some_and(|slot| slot.ready))
                 .count();
-            stream_status.pending += render_pending_count(pending.0.len(), wanted, &tiles)
+            stream_status.pending += render_pending_count(pending.len(), wanted, &tiles)
                 + usize::from(tiles.pending_cover.is_some());
             stream_status.budget_refused += tiles.budget_refused;
             add_focus_readiness(
@@ -3920,7 +3872,7 @@ mod draw_partition_tests {
             .init_resource::<LodMeshCache>()
             .init_resource::<lunco_render::RenderingQualitySettings>()
             .init_resource::<TerrainStreamStatus>()
-            .init_resource::<TerrainStreamLockstep>()
+            .init_resource::<TerrainStreamFrameDriven>()
             .init_resource::<TerrainStreamCadence>()
             .init_resource::<lunco_core_runtime::AsyncWorkAdmission>()
             .init_resource::<TerrainCoverResults>()

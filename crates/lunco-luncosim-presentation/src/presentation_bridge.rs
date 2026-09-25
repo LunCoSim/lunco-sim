@@ -49,7 +49,7 @@ pub(crate) fn register(app: &mut App) {
     );
     app.add_systems(
         Update,
-        mirror_recording_to_terrain_lockstep
+        mirror_recording_to_terrain_frame_driven
             .before(lunco_terrain_surface::stream_viz::update_lod_tiles)
             .run_if(resource_exists::<lunco_capture::screenshot::OfflineRecordingState>),
     );
@@ -328,36 +328,18 @@ fn start_camera_paths_when_recording_starts(
     *was_active = true;
 }
 
-/// Mirror the recorder's `active` bit onto
-/// [`TerrainStreamLockstep`](lunco_terrain_surface::TerrainStreamLockstep), so terrain
-/// tile streaming runs in lockstep with the captured frame instead of against the
-/// wall clock for exactly as long as a recording is capturing.
-///
-/// The problem it closes: the readiness gate makes the scene presentable at frame 0,
-/// and recorder-owned camera-path release makes frame 0 bit-identical across runs —
-/// but neither holds streaming steady THROUGH a shot. As the camera moves the LOD
-/// selection changes, bakes are queued, and they land a scheduling-dependent number
-/// of frames later. MEASURED before this: two runs of `episode_02_rover.usda`
-/// differed on the frozen shots (01, 02, 03, 06) in 25-38 separate blocks of frames
-/// each, with the final frame matching every time — a transient, not accumulation,
-/// which is the signature of streaming catching up at a different rate.
-///
-/// See [`TerrainStreamLockstep`](lunco_terrain_surface::TerrainStreamLockstep) for
-/// what the flag changes and why it is a flag rather than the default.
-///
-/// Level-triggered, not edge-triggered (unlike
-/// [`start_camera_paths_when_recording_starts`], which needs an instant): the flag
-/// must be true for the whole capture and false after, including after a recording
-/// that ended by timing out. Writes only on an actual change so the resource's
-/// change-detection tick stays meaningful.
-fn mirror_recording_to_terrain_lockstep(
+/// Keep terrain cover selection aligned to every logical capture frame. Workers
+/// remain bounded and nonblocking; `report_terrain_stream_status` publishes
+/// readiness to the shared status bus, which the recorder waits on before it
+/// captures an advanced frame.
+fn mirror_recording_to_terrain_frame_driven(
     recording: Res<lunco_capture::screenshot::OfflineRecordingState>,
-    mut lockstep: ResMut<lunco_terrain_surface::TerrainStreamLockstep>,
+    mut frame_driven: ResMut<lunco_terrain_surface::TerrainStreamFrameDriven>,
 ) {
-    if lockstep.0 != recording.active {
-        lockstep.0 = recording.active;
+    if frame_driven.0 != recording.active {
+        frame_driven.0 = recording.active;
         info!(
-            "[terrain] streaming lockstep {} (offline recording {})",
+            "[terrain] frame-driven selection {} (offline recording {})",
             if recording.active { "ON" } else { "OFF" },
             if recording.active { "started" } else { "ended" },
         );

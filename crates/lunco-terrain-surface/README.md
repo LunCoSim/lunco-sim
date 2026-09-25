@@ -38,8 +38,10 @@ On visual hosts, terrain cover selection follows a 30 Hz wall-clock cadence;
 the immutable selection calculation uses shared bounded background admission,
 and its generation-fenced result is committed with tile residency each
 `Update`. Tile-mesh bakes retain their per-terrain worker queue. Offline capture
-lockstep computes selection synchronously every frame so visual output remains
-tied to the captured frame.
+uses per-capture-frame selection and waits asynchronously at the capture boundary
+for the selected terrain cover. On native hosts, bake admission and mesh
+publication remain bounded, and neither cover preparation nor tile baking blocks
+`Update`. Web cover preparation still requires the documented worker transport.
 
 ## Status
 

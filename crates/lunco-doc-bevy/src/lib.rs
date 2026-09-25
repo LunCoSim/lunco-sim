@@ -1532,13 +1532,33 @@ where
     where
         D: lunco_doc::PreparedFileBacked,
     {
-        let prepared_ref = &prepared;
-        self.open_file_using(
-            path,
+        use lunco_doc::OpenOutcome;
+        let path = path.into();
+        if let Some(id) = self.doc_for_file(&path) {
+            let Some(host) = self.hosts.get_mut(&id) else {
+                unreachable!("doc_for_file returned an id with no host");
+            };
+            if host.document().is_dirty() {
+                return (id, OpenOutcome::KeptDirty);
+            }
+            let generation = host.document().generation();
+            if !host.document_mut().reload_prepared_source(prepared) {
+                return (id, OpenOutcome::KeptUnparsable);
+            }
+            if host.document().generation() != generation {
+                self.watch_files(id, []);
+                self.mark_changed(id);
+            }
+            return (id, OpenOutcome::Refreshed);
+        }
+
+        let origin = lunco_doc::DocumentOrigin::File {
+            path: path.clone(),
             writable,
-            move |id, origin| D::with_prepared_origin(id, prepared_ref, origin),
-            move |document| document.reload_prepared_source(prepared_ref),
-        )
+        };
+        let id = self.install(|id| D::with_prepared_origin(id, prepared, origin));
+        self.watch_files(id, []);
+        (id, OpenOutcome::Allocated)
     }
 
     fn open_file_using(
@@ -1597,6 +1617,35 @@ where
             unreachable!("doc_for_file returned an id with no host");
         };
         if !host.document_mut().reset_to_source(&source) {
+            return (id, OpenOutcome::KeptUnparsable);
+        }
+        host.discard_history();
+        self.watch_files(id, []);
+        self.mark_changed(id);
+        (id, OpenOutcome::Refreshed)
+    }
+
+    /// Explicitly reset a resident file from source that was prepared away
+    /// from the document owner thread. Path identity and reset history remain
+    /// owned by this registry, while the language-specific parse result is
+    /// reused rather than reparsed during the owner-frame commit.
+    pub fn reset_prepared_file(
+        &mut self,
+        path: impl Into<std::path::PathBuf>,
+        prepared: D::PreparedSource,
+    ) -> (DocumentId, lunco_doc::OpenOutcome)
+    where
+        D: lunco_doc::PreparedFileBacked,
+    {
+        use lunco_doc::OpenOutcome;
+        let path = path.into();
+        let Some(id) = self.doc_for_file(&path) else {
+            return self.open_prepared_file(path, prepared, true);
+        };
+        let Some(host) = self.hosts.get_mut(&id) else {
+            unreachable!("doc_for_file returned an id with no host");
+        };
+        if !host.document_mut().reset_prepared_source(prepared) {
             return (id, OpenOutcome::KeptUnparsable);
         }
         host.discard_history();
@@ -1847,14 +1896,18 @@ mod tests {
 
         fn with_prepared_origin(
             id: DocumentId,
-            source: &Self::PreparedSource,
+            source: Self::PreparedSource,
             origin: DocumentOrigin,
         ) -> Self {
-            Self::with_origin(id, source.clone(), origin)
+            Self::with_origin(id, source, origin)
         }
 
-        fn reload_prepared_source(&mut self, source: &Self::PreparedSource) -> bool {
-            self.reload_base(source)
+        fn reload_prepared_source(&mut self, source: Self::PreparedSource) -> bool {
+            self.reload_base(&source)
+        }
+
+        fn reset_prepared_source(&mut self, source: Self::PreparedSource) -> bool {
+            self.reset_to_source(&source)
         }
     }
 
@@ -1905,6 +1958,13 @@ mod tests {
         assert_eq!(same_doc, doc);
         assert_eq!(dirty, lunco_doc::OpenOutcome::KeptDirty);
         assert_eq!(registry.host(doc).unwrap().document().source, "local edit");
+
+        let (same_doc, reset) = registry.reset_prepared_file(&path, "fourth".into());
+        assert_eq!(same_doc, doc);
+        assert_eq!(reset, lunco_doc::OpenOutcome::Refreshed);
+        let host = registry.host(doc).unwrap();
+        assert_eq!(host.document().source, "fourth");
+        assert_eq!(host.undo_depth(), 0);
     }
 
     #[test]

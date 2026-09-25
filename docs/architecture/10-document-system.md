@@ -263,6 +263,21 @@ impl<D: Document> DocumentHost<D> {
 }
 ```
 
+A one-operation group uses the same mutation path as `apply`, avoiding a
+transactional document clone when atomic multi-op rollback is not needed. A
+multi-operation group still prepares a private candidate and commits only after
+every op succeeds. Large immutable domain layers can be shared by document
+clones; each successful edit replaces the changed layer snapshot, keeping the
+atomic group boundary without copying unchanged layers.
+
+`PreparedFileBacked` carries immutable parse results from worker preparation
+into the document registry. USD file opens and confirmed file resets read and
+parse on the async task; the registry still decides path identity, dirty-state
+policy, history reset, and the exact owner-thread commit point. A prepared reset
+reuses its parsed SDF layer instead of parsing again during commit. Initial
+prepared documents and clean reloads take ownership of that parsed layer, so
+the owner-thread handoff does not deep-clone it.
+
 `DocumentHost::fork` creates the document and its host history as one typed
 operation: the authored snapshot and undo/redo groups are copied by value, the
 new document owns a fresh derived-state cache, and the external recorder is

@@ -208,6 +208,20 @@ through the edited document's own authoring recipe. Runtime-only endpoints are
 checked against the matching live port registry, so another open Twin cannot
 change whether a document's authored wire is valid.
 
+The command owner reuses the live stage's dependency recipe by canonical-stage
+identity and resolver-closure revision. An ordinary edit does not deep-copy
+every referenced layer's bytes; a newly injected dependency or rebuilt stage
+invalidates that recipe. The live `Stage` remains thread-affine, and edits,
+journaling, and projection still commit through their ordered owner path. This
+cache removes redundant dependency snapshots; it does not make USD authoring or
+live projection asynchronous.
+
+A newly authored `SetAttribute` uses `RemoveAttribute` as its inverse, so adding
+attributes to a growing runtime layer does not serialize the entire layer into
+every undo record. Existing values use a typed restore when representable; the
+full-source inverse remains for existing opinions that cannot be restored by a
+typed operation.
+
 Derived presentation has a separate typed boundary: `ApplyUsdTransientOps`
 updates the runtime view from already-authored facts (for example, the route
 ribbon) without becoming a user `UsdOp`. It still checks the document

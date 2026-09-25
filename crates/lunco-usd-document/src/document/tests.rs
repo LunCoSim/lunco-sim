@@ -24,7 +24,7 @@ fn prepared_usd_source_is_send_safe_and_preserves_source_identity() {
     let prepared = PreparedUsdSource::parse(TINY_USDA.to_owned());
     let doc = UsdDocument::with_prepared_origin(
         DocumentId::new(998),
-        &prepared,
+        prepared.clone(),
         DocumentOrigin::writable_file("/tmp/prepared.usda"),
     );
     assert_eq!(doc.parse_error(), None);
@@ -35,9 +35,71 @@ fn prepared_usd_source_is_send_safe_and_preserves_source_identity() {
         "#usda 1.0\n",
         DocumentOrigin::writable_file("/tmp/resident.usda"),
     );
-    assert!(resident.reload_prepared_base(&prepared));
+    assert!(resident.reload_prepared_base(prepared));
     assert_eq!(resident.source(), TINY_USDA);
     assert_eq!(resident.generation(), 1);
+}
+
+#[test]
+fn prepared_reset_reuses_parse_and_clears_transient_layers() {
+    let reset_source = "#usda 1.0\ndef Xform \"ResetWorld\" {}\n";
+    let prepared = PreparedUsdSource::parse(reset_source.to_owned());
+    let mut resident = UsdDocument::with_origin(
+        DocumentId::new(995),
+        TINY_USDA,
+        DocumentOrigin::writable_file("/tmp/reset_prepared.usda"),
+    );
+    resident.restore_runtime(usda_to_data("#usda 1.0\ndef Xform \"RuntimeOnly\" {}\n").unwrap());
+
+    assert!(resident.reset_prepared_source(prepared));
+    assert!(prim_exists(&resident, "/ResetWorld"));
+    assert!(!prim_exists(&resident, "/World"));
+    assert!(
+        resident
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_none()
+    );
+    assert_eq!(resident.source(), reset_source);
+    assert!(!resident.is_dirty());
+}
+
+#[test]
+fn new_attribute_uses_remove_attribute_as_its_inverse() {
+    let mut doc = UsdDocument::new(DocumentId::new(994), TINY_USDA);
+    let inverse = doc
+        .apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "lunco:triggerZone".into(),
+            type_name: "token".into(),
+            value: "\"zone_1\"".into(),
+        })
+        .unwrap();
+    assert!(matches!(inverse, UsdOp::RemoveAttribute { .. }));
+}
+
+#[test]
+fn document_clones_share_immutable_layers_until_an_edit_commits() {
+    let mut doc = UsdDocument::with_origin(
+        DocumentId::new(996),
+        TINY_USDA,
+        DocumentOrigin::writable_file("/tmp/source_snapshot.usda"),
+    );
+    let clone = doc.clone();
+    assert!(std::sync::Arc::ptr_eq(&doc.base, &clone.base));
+    assert!(std::sync::Arc::ptr_eq(&doc.runtime, &clone.runtime));
+    assert!(std::sync::Arc::ptr_eq(&doc.view, &clone.view));
+
+    doc.apply(UsdOp::SetStageDocumentation {
+        edit_target: LayerId::root(),
+        documentation: Some("newer".into()),
+    })
+    .unwrap();
+
+    assert!(!std::sync::Arc::ptr_eq(&doc.base, &clone.base));
+    assert!(!clone.source().contains("newer"));
+    assert!(doc.source().contains("newer"));
 }
 
 /// Whether a doc's serialized source **reparses cleanly** — the check that
@@ -1098,38 +1160,6 @@ fn set_attribute_array_overwrite_inverts_to_typed_op() {
     );
     doc.apply(inverse).unwrap();
     assert_eq!(doc.source(), before, "undo restores the prior array");
-}
-
-/// Authoring a **brand-new** attribute has no prior value to restore, so it
-/// inverts to the always-correct whole-source snapshot — which also *removes*
-/// the new opinion on undo (something a typed `SetAttribute` cannot express).
-#[test]
-fn set_attribute_create_inverts_to_coarse_snapshot() {
-    const SCENE: &str = "#usda 1.0\ndef Sphere \"Ball\"\n{\n}\n";
-    let mut doc = UsdDocument::new(DocumentId::new(41), SCENE);
-    let ball = SdfPath::new("/Ball").unwrap();
-
-    let inverse = doc
-        .apply(UsdOp::SetAttribute {
-            edit_target: LayerId::root(),
-            path: "/Ball".into(),
-            name: "radius".into(),
-            type_name: "double".into(),
-            value: "5".into(),
-        })
-        .unwrap();
-    assert!(
-        matches!(inverse, UsdOp::ReplaceSource { .. }),
-        "a newly-authored attribute inverts to a whole-source snapshot, got {inverse:?}"
-    );
-
-    // Undo removes the attribute entirely.
-    doc.apply(inverse).unwrap();
-    assert_eq!(
-        doc.data().prim_attribute_value::<f64>(&ball, "radius"),
-        None,
-        "undo of a newly-authored attribute removes it"
-    );
 }
 
 /// One time-sample op at time 5, for the sample-inverse tests.
@@ -2606,6 +2636,42 @@ prepend references = @./traverse.usda@</Traverse>\n\
     assert!(
         doc.source().contains("references"),
         "the base wrapper must remain referenced rather than flattened"
+    );
+}
+
+#[test]
+fn runtime_set_attribute_can_target_descendant_of_runtime_reference() {
+    let base = "#usda 1.0\n(\n    defaultPrim = \"Root\"\n)\ndef Xform \"Root\" {}\n";
+    let mut doc = UsdDocument::with_origin(
+        DocumentId::new(43),
+        base,
+        DocumentOrigin::writable_file("/tmp/runtime-reference-wrapper.usda"),
+    );
+    doc.apply(UsdOp::AddPrim {
+        edit_target: LayerId::runtime(),
+        parent_path: "/Root".into(),
+        name: "P0".into(),
+        type_name: Some("Xform".into()),
+        reference: Some("./route_point.usda".into()),
+        reference_prim_path: None,
+    })
+    .expect("runtime reference can be authored under the base root");
+    doc.apply(UsdOp::SetAttribute {
+        edit_target: LayerId::runtime(),
+        path: "/Root/P0/Trigger".into(),
+        name: "test:historyProbe".into(),
+        type_name: "string".into(),
+        value: "authored".into(),
+    })
+    .expect("runtime edit can target a descendant of a runtime-authored arc");
+
+    assert_eq!(
+        doc.runtime_data().prim_attribute_value::<String>(
+            &SdfPath::new("/Root/P0/Trigger").unwrap(),
+            "test:historyProbe",
+        ),
+        Some("authored".into()),
+        "the attribute opinion stays in the runtime layer"
     );
 }
 

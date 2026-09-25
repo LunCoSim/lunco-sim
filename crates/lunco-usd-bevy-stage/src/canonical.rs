@@ -18,7 +18,10 @@
 //! prepared plan; this stage owns authoring and incremental re-projection.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+static NEXT_CANONICAL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
 
 use lunco_usd_compose::recipe::StageRecipe;
 use openusd::sdf::Path as SdfPath;
@@ -75,6 +78,10 @@ pub struct CanonicalStage {
     /// stages built via [`from_stage`](Self::from_stage) over a foreign resolver
     /// (native `compose_file_to_stage` / tests) — those can't gain layers.
     resolver_bytes: Option<lunco_usd_compose::SharedLayerBytes>,
+    /// Identity and revision let document editors reuse the dependency closure
+    /// recipe without cloning every layer's bytes on each authored edit.
+    resolver_identity: u64,
+    resolver_revision: std::cell::Cell<u64>,
     /// Bumped by the drain step on each observed change (debug / asserts).
     pub generation: u64,
 }
@@ -113,6 +120,8 @@ impl CanonicalStage {
             inbox,
             _sink_id: sink_id,
             resolver_bytes: None,
+            resolver_identity: NEXT_CANONICAL_STAGE_ID.fetch_add(1, Ordering::Relaxed),
+            resolver_revision: std::cell::Cell::new(0),
             generation: 0,
         }
     }
@@ -414,11 +423,33 @@ impl CanonicalStage {
     pub fn add_layer_bytes(&self, extra: HashMap<String, Vec<u8>>) -> bool {
         match &self.resolver_bytes {
             Some(shared) => {
-                shared.borrow_mut().extend(extra);
+                let mut bytes = shared.borrow_mut();
+                let mut changed = false;
+                for (id, layer) in extra {
+                    if bytes.get(&id) != Some(&layer) {
+                        bytes.insert(id, layer);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.resolver_revision.set(
+                        self.resolver_revision
+                            .get()
+                            .checked_add(1)
+                            .expect("canonical stage resolver revision exhausted"),
+                    );
+                }
                 true
             }
             None => false,
         }
+    }
+
+    /// Identity of this resolver and its current byte-closure revision.
+    /// Rebuilt stages receive a new identity even when their revision starts
+    /// at zero, so consumers cannot mistake a replacement closure for a cache hit.
+    pub fn layer_bytes_revision(&self) -> (u64, u64) {
+        (self.resolver_identity, self.resolver_revision.get())
     }
 
     /// Whether the live resolver already holds bytes for layer `id` — so a
@@ -1173,6 +1204,22 @@ mod recipe_tests {
             view.value::<f64>(&SdfPath::new("/Root/Box").unwrap(), "size"),
             Some(3.0)
         );
+    }
+
+    #[test]
+    fn layer_byte_revision_changes_only_when_the_resolver_closure_changes() {
+        let recipe = StageRecipe::from_source("scene.usda", FIXTURE);
+        let canonical = CanonicalStage::from_recipe(&recipe).expect("create canonical stage");
+        let initial = canonical.layer_bytes_revision();
+        let dependency = HashMap::from([("part.usda".to_string(), FIXTURE.as_bytes().to_vec())]);
+
+        assert!(canonical.add_layer_bytes(dependency.clone()));
+        let updated = canonical.layer_bytes_revision();
+        assert_eq!(updated.0, initial.0);
+        assert_ne!(updated.1, initial.1);
+
+        assert!(canonical.add_layer_bytes(dependency));
+        assert_eq!(canonical.layer_bytes_revision(), updated);
     }
 
     #[test]

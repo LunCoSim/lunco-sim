@@ -335,6 +335,23 @@ package checks after changing skill metadata or packaging.
 - Per-frame work is only for continuous rendering, physics, animation, and input.
   Otherwise use observers, asset events, change detection, revisions, or hashes.
   Heavy parsing, baking, mesh generation, and I/O must not block the UI thread.
+- Deterministic execution is a hard runtime requirement: for the same admitted
+  scene revision and ordered authoritative inputs, simulation ticks apply the
+  same state transitions in the same order. UI responsiveness and physics
+  cadence are also hard requirements; neither may wait on I/O, parsing, LOD,
+  baking, persistence, or worker completion. Run separable preparation and
+  non-authoritative work asynchronously with bounded admission, then validate
+  and commit results at the owning deterministic boundary. Never let worker
+  completion order choose authoritative state, skip physics ticks to hide
+  overload, or trade determinism for responsiveness.
+- Preserve runtime owner scope and clock when scheduling scripts: Core,
+  Application, and Twin work are distinct, as are their Simulation,
+  Interaction, Command/REPL, UI, and Presentation cadences. A nested hook
+  inherits its caller's typed execution context; async dispatch does not change
+  its scope, clock, logical sequence, or commit boundary. Keep live-World script
+  evaluation serial until it uses an immutable input snapshot and typed,
+  deterministically ordered actions. See
+  [`docs/architecture/62-deterministic-runtime-and-async-boundaries.md`](docs/architecture/62-deterministic-runtime-and-async-boundaries.md).
 - UI dispatches typed commands and does not mutate domain state directly. UI
   colors, spacing, and rounding come from `lunco-theme`.
 - Runtime persistence loads are off by default and saves are independent; corrupt

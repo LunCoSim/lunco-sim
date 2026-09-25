@@ -120,9 +120,9 @@ viewport height, FOV, near-detail radius, hysteresis, and preview render-layer
 identity. It must not use the main window camera as an implicit substitute.
 
 Selection and bake order must remain deterministic: sort demand and tile keys
-with a total order, use the same lockstep policy as runtime recording, and key
-mesh/cache products by DEM content, layer/oracle key, quadtree coordinate, and
-quality profile.
+with a total order, follow the runtime recorder's capture-frame readiness
+contract without joining worker tasks on `Update`, and key mesh/cache products
+by DEM content, layer/oracle key, quadtree coordinate, and quality profile.
 
 ### 4. Keep one USD→terrain source path
 
@@ -161,8 +161,8 @@ production Twin/runtime host and reports typed evidence for:
    view or the mission terrain.
 7. Missing DEM bytes and invalid shader identity produce a loud structured
    preview error, not a flat/procedural fallback.
-8. Repeated runs under lockstep select the same tile coordinates and oracle/cache
-   keys.
+8. Repeated capture runs select the same tile coordinates and oracle/cache
+   keys while worker completion remains asynchronous.
 
 The gate should call the existing generic API/query and scene-test helpers.
 Only add a Rust test for a pure lower-level invariant that Rhai cannot observe;

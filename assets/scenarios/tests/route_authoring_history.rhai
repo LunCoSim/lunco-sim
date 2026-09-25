@@ -232,7 +232,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 8 {
         if !x_is(this.doc, P0, 3.0) { return; }
-        this.checks.push(t_true(true, "redo reapplies the route-point position"));
+        this.checks.push(t_true(true, "redo reapplies the route-point move"));
         let deleted = waypoint_editor::on_delete(
             route_context(this.doc, P0, [3.0, 1.0, -8.0]),
         );

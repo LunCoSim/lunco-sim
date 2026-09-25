@@ -487,9 +487,11 @@ Other verified tail-risk paths are:
 - Scenario hooks run serially in the fixed simulation path and may invoke
   substantial live-world Rhai work. Their per-tick maximum and p99 costs are
   not currently available beside the Avian solver timing.
-- Terrain visualization's lockstep capture mode waits on every pending bake in
-  `Update`; normal mode polls without waiting but applies every completed mesh
-  in the same pass. Launch count is bounded, completion application is not.
+- Terrain visualization keeps worker joins out of `Update`, including during
+  offline capture. Capture readiness holds virtual time at the advanced logical
+  frame until the selected resident cover is ready; completed meshes publish in
+  stable tile order under a per-frame budget. Capture-frame selection remains
+  current, and queued terrain work remains part of readiness.
 - Shared async admission allows four running jobs and prioritizes only queued
   jobs. It cannot preempt a running CPU task, and visualization owners still
   have direct submissions to Bevy's pools. Pool contention remains a source

@@ -394,13 +394,13 @@ A capture is reproducible only if every source of wall-clock dependence is pinne
 - **Physics** — `frozen: true` plus one `shot_step()` per captured frame (§7). A
   free-running beat is not frame-reproducible.
 - **Shot length** — driven off `shot_frame()`, never a tick counter (§5).
-- **Terrain** — LOD streaming runs in **lockstep** while a recording is active
-  (`TerrainStreamLockstep`, set by `lunco-luncosim` off `OfflineRecordingState::active`).
-  Normally a tile bake lands whenever its async task finishes, so the frame a given
-  tile pops in is wall-clock dependent; in lockstep the frame blocks on the bake
-  instead. Selection stays live — the shot still refines as the camera moves — only
-  its timing is pinned. Distinct from the authored per-terrain `LodFrozen`, which
-  stops re-selection outright.
+- **Terrain** — selection runs once per logical capture frame, and the recorder
+  holds that frame's virtual time until the shared terrain-readiness status clears.
+  On native hosts, cover preparation and tile baking stay asynchronous and mesh
+  uploads are bounded per `Update`. Worker timing changes only the real time
+  needed to produce a frame, not the simulation tick or captured LOD cover. Web
+  cover preparation still needs worker transport. This is distinct from the
+  authored per-terrain `LodFrozen`, which stops re-selection outright.
 - **Camera** — camera paths are evaluated once per render frame on the path's own clock;
   the earlier fixed-cadence + `overstep_fraction()` smoothing was **not** reproducible
   because the residual is wall-clock derived. See

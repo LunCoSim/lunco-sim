@@ -217,11 +217,16 @@ then checks that selection stays unchanged until the explicit menu action.
 In the editor, the runtime edit panel identifies `@runtime@` as the target for
 route points, runtime spawns, and gizmo edits. Its Twin setting tells the user
 whether those authored edits persist across sessions or remain session-only.
-The `route_runtime_persistence` production gate opens a manifest-backed test
-Twin twice through the API: the first run adds a route point and waits for the
-sidecar write, and the second asserts the point was restored before the initial
-scene projection. Both runs verify the source scene file is unchanged. While
-route autopilot is enabled, releasing rover possession ends only the human
+The `route_runtime_persistence` production Rhai scene gate uses the existing
+Rhai task tree (`seq`, named `once`/`wait_until` callbacks, and `check`/`sel`
+branches), with a reactive state guard and a bounded fixed-step watchdog. It
+checks runtime-waypoint creation and restoration; `route_authoring_history`
+separately exercises public undo/redo for route-point movement and deletion.
+The API persistence gate opens a manifest-backed test Twin twice: the first
+run adds the route point and waits for the sidecar write, and the second asserts
+the point and trigger override were restored before the initial scene
+projection. Both persistence runs verify the source scene file is unchanged.
+While route autopilot is enabled, releasing rover possession ends only the human
 control link: the route remains active and continues publishing guidance. The
 rover status view follows the avatar's `ControlLink`, so it reports free flight
 after release and driving again after possession.

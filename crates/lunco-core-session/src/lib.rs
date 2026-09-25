@@ -153,7 +153,7 @@ mod tests {
         let expected = lunco_core::identity::derive_id(&content).unwrap();
         let content_entity = app.world_mut().spawn(content).id();
         let local_entity = app.world_mut().spawn(lunco_core::Provenance::Local).id();
-        app.world_mut().run_schedule(PostUpdate);
+        app.world_mut().run_schedule(PreUpdate);
 
         assert_eq!(
             app.world()

@@ -85,7 +85,7 @@ pub use plugin::{TerrainSurfacePlugin, TerrainSurfaceSet, TerrainSurfaceVisualiz
 pub use query::{TerrainHeightProvider, register_terrain_queries};
 pub use stream_viz::{
     LodFrozen, LodTileOf, LodTiles, SetTerrainRenderingQuality, TerrainLodViz, TerrainNodeErrors,
-    TerrainStreamLockstep, TerrainStreamStatus, TerrainVisualFocus, TileShadowCache,
+    TerrainStreamFrameDriven, TerrainStreamStatus, TerrainVisualFocus, TileShadowCache,
 };
 pub use surface_query::report_unreachable_dem_frame;
 pub use surface_query::{

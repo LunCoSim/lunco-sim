@@ -647,12 +647,15 @@ pub trait PreparedFileBacked: FileBacked {
     /// Construct a document from prepared source and its authoritative origin.
     fn with_prepared_origin(
         id: DocumentId,
-        source: &Self::PreparedSource,
+        source: Self::PreparedSource,
         origin: DocumentOrigin,
     ) -> Self;
 
     /// Replace a clean document's base from prepared source.
-    fn reload_prepared_source(&mut self, source: &Self::PreparedSource) -> bool;
+    fn reload_prepared_source(&mut self, source: Self::PreparedSource) -> bool;
+
+    /// Replace all local state from prepared source after explicit user consent.
+    fn reset_prepared_source(&mut self, source: Self::PreparedSource) -> bool;
 }
 
 /// A file-backed document that can create an independently editable,
@@ -931,6 +934,14 @@ impl<D: Document> DocumentHost<D> {
             ack.new_gen = Some(self.document.generation());
             return Ok(ack);
         }
+        if ops.len() == 1 {
+            let op = ops.into_iter().next().expect("one operation was checked");
+            let mutation = match parent_gen {
+                Some(parent) => Mutation::local_against(parent, op),
+                None => Mutation::local(op),
+            };
+            return self.apply(mutation);
+        }
 
         let mut candidate = self.document.clone();
         let mut inverses = Vec::with_capacity(ops.len());
@@ -974,6 +985,18 @@ impl<D: Document> DocumentHost<D> {
     {
         let ops: Vec<D::Op> = ops.into_iter().collect();
         if ops.is_empty() {
+            let mut ack = Ack::new(OpId::new());
+            ack.new_gen = Some(self.document.generation());
+            return Ok(ack);
+        }
+        if ops.len() == 1 {
+            let op = ops.into_iter().next().expect("one operation was checked");
+            self.document.apply(op).map_err(|error| match error {
+                DocumentError::ReadOnly => Reject::ReadOnly,
+                DocumentError::ValidationFailed(message) | DocumentError::Internal(message) => {
+                    Reject::InvalidOp(message)
+                }
+            })?;
             let mut ack = Ack::new(OpId::new());
             ack.new_gen = Some(self.document.generation());
             return Ok(ack);
@@ -1233,6 +1256,68 @@ mod tests {
         assert_eq!(host.document().text, "Hello World!");
         assert_eq!(host.undo_depth(), 1);
         assert_eq!(host.redo_depth(), 0);
+    }
+
+    #[test]
+    fn single_operation_group_uses_the_document_apply_path_without_cloning() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountedDocument {
+            id: DocumentId,
+            generation: u64,
+            clones: Arc<AtomicUsize>,
+        }
+
+        impl Clone for CountedDocument {
+            fn clone(&self) -> Self {
+                self.clones.fetch_add(1, Ordering::Relaxed);
+                Self {
+                    id: self.id,
+                    generation: self.generation,
+                    clones: self.clones.clone(),
+                }
+            }
+        }
+
+        #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+        struct Increment;
+        impl DocumentOp for Increment {}
+
+        impl Document for CountedDocument {
+            type Op = Increment;
+
+            fn id(&self) -> DocumentId {
+                self.id
+            }
+
+            fn generation(&self) -> u64 {
+                self.generation
+            }
+
+            fn apply(&mut self, _op: Self::Op) -> Result<Self::Op, DocumentError> {
+                self.generation += 1;
+                Ok(Increment)
+            }
+        }
+
+        let clones = Arc::new(AtomicUsize::new(0));
+        let mut host = DocumentHost::new(CountedDocument {
+            id: DocumentId::new(10),
+            generation: 0,
+            clones: clones.clone(),
+        });
+
+        host.apply_group_against(None, [Increment]).unwrap();
+
+        assert_eq!(host.generation(), 1);
+        assert_eq!(host.undo_depth(), 1);
+        assert_eq!(clones.load(Ordering::Relaxed), 0);
+
+        host.apply_group_transient([Increment]).unwrap();
+
+        assert_eq!(host.generation(), 2);
+        assert_eq!(host.undo_depth(), 1);
+        assert_eq!(clones.load(Ordering::Relaxed), 0);
     }
 
     #[test]

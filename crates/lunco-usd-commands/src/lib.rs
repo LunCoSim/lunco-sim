@@ -57,7 +57,7 @@ use lunco_usd_core::edit_session::{
     UsdEditSessions, UsdProposalId, UsdProposalState, validate_proposal,
 };
 use lunco_usd_data::usd_data::UsdDataExt;
-use lunco_usd_document::document::{LayerId, UsdOp};
+use lunco_usd_document::document::{LayerId, PreparedUsdSource, UsdOp};
 use lunco_workspace::{StorageHandle, TwinClosed, WorkspaceResource};
 use openusd::schemas::lux::tokens as ltok;
 
@@ -331,16 +331,16 @@ register_commands!(
 // translation.
 // ─────────────────────────────────────────────────────────────────────
 
-/// Pending file-read kicked off by [`spawn_usd_load`]. Polled by
-/// [`drain_pending_usd_file_loads`] each frame until it completes; the
-/// resulting source is allocated as a USD document.
+/// Pending file read and USD parse kicked off by [`spawn_usd_load`]. Polled by
+/// [`drain_pending_usd_file_loads`] until the immutable preparation is ready;
+/// only identity and lifecycle state are committed on the owner thread.
 struct PendingUsdLoad {
     path: PathBuf,
     /// Root of the Twin that emitted a browser request, if any. A closed Twin
     /// cancels its pending reads before they can create a stale document or
     /// focus a preview for a replaced workspace.
     twin_root: Option<PathBuf>,
-    task: Task<Result<String, String>>,
+    task: Task<Result<PreparedUsdSource, String>>,
 }
 
 #[derive(Resource, Default)]
@@ -352,7 +352,7 @@ pub(crate) struct PendingUsdLoads {
 struct PendingUsdDiscard {
     doc: DocumentId,
     path: PathBuf,
-    task: Task<Result<String, String>>,
+    task: Task<Result<PreparedUsdSource, String>>,
     command_id: Option<u64>,
     correlation_id: Option<u64>,
 }
@@ -419,8 +419,11 @@ pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, twin_root: Option<Pa
         let storage = lunco_storage::FileStorage::new();
         let handle = lunco_storage::StorageHandle::File(path_for_task.clone());
         match storage.read(&handle).await {
-            Ok(bytes) => String::from_utf8(bytes)
-                .map_err(|e| format!("invalid UTF-8 in {}: {e}", path_for_task.display())),
+            Ok(bytes) => {
+                let source = String::from_utf8(bytes)
+                    .map_err(|e| format!("invalid UTF-8 in {}: {e}", path_for_task.display()))?;
+                Ok(PreparedUsdSource::parse(source))
+            }
             Err(e) => Err(format!("failed to read {}: {e:?}", path_for_task.display())),
         }
     });
@@ -475,12 +478,12 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
             Some(Err(err)) => {
                 bevy::log::warn!("[UsdOpenFile] {}", err);
             }
-            Some(Ok(source)) => {
+            Some(Ok(prepared)) => {
                 // Idempotent re-open: the registry owns one document per file and
-                // decides whether the freshly read source can replace its base.
+                // decides whether the freshly parsed source can replace its base.
                 let (doc, outcome) = world
                     .resource_mut::<DocumentRegistry<UsdDocument>>()
-                    .open_file(load.path.clone(), source);
+                    .open_prepared_file(load.path.clone(), prepared, true);
                 claim_user_document_if_projected(world, doc);
                 // A re-open that couldn't take the disk bytes is not an error,
                 // but it is a surprise the user should see. Keep the warning
@@ -647,9 +650,12 @@ fn on_discard_usd_document(
                             let storage = lunco_storage::FileStorage::new();
                             let handle = lunco_storage::StorageHandle::File(task_path.clone());
                             match storage.read(&handle).await {
-                                Ok(bytes) => String::from_utf8(bytes).map_err(|error| {
-                                    format!("invalid UTF-8 in {}: {error}", task_path.display())
-                                }),
+                                Ok(bytes) => {
+                                    let source = String::from_utf8(bytes).map_err(|error| {
+                                        format!("invalid UTF-8 in {}: {error}", task_path.display())
+                                    })?;
+                                    Ok(PreparedUsdSource::parse(source))
+                                }
                                 Err(error) => Err(format!(
                                     "failed to read {}: {error:?}",
                                     task_path.display()
@@ -714,7 +720,7 @@ fn drain_pending_usd_discards(world: &mut World) {
                 } else {
                     let (doc, outcome) = world
                         .resource_mut::<DocumentRegistry<UsdDocument>>()
-                        .reset_file(discard.path.clone(), source);
+                        .reset_prepared_file(discard.path.clone(), source);
                     if doc != discard.doc {
                         Err(format!(
                             "discard source resolved to document {doc}, expected {}",
@@ -938,38 +944,49 @@ fn proposal_diagnostics(diagnostics: &[String]) -> String {
     diagnostics.join("; ")
 }
 
-/// Supply the document owner with the existing resolver closure, never a
-/// flattened scene or a second filesystem resolver. The document replaces the
-/// recipe root with its current opinions for each synchronous operation.
+/// Supply the document owner with its resolver-backed authoring context. A
+/// canonical stage's immutable dependency closure is reused by revision; an
+/// unmounted file document rebuilds its root recipe from current opinions.
 fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
-    let recipe = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
-        .map(|stage| {
-            lunco_usd_compose::recipe::StageRecipe::new(
-                stage.scene_layer.clone(),
-                stage.layer_bytes_snapshot(),
+    let update = if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
+    {
+        let revision = stage.layer_bytes_revision();
+        let cached_revision = world
+            .get_resource::<DocumentRegistry<UsdDocument>>()
+            .and_then(|registry| registry.host(doc))
+            .and_then(|host| host.document().authoring_recipe_revision());
+        (cached_revision != Some(revision)).then(|| {
+            (
+                Some(revision),
+                Some(lunco_usd_compose::recipe::StageRecipe::new(
+                    stage.scene_layer.clone(),
+                    stage.layer_bytes_snapshot(),
+                )),
             )
         })
-        .or_else(|| {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                match unmounted_document_authoring_recipe(world, doc) {
-                    Ok(recipe) => recipe,
-                    Err(error) => {
-                        warn!("[UsdAuthoringRecipe] {error}");
-                        None
-                    }
+    } else {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match unmounted_document_authoring_recipe(world, doc) {
+                Ok(recipe) => Some((None, recipe)),
+                Err(error) => {
+                    warn!("[UsdAuthoringRecipe] {error}");
+                    Some((None, None))
                 }
             }
-            #[cfg(target_arch = "wasm32")]
-            {
-                None
-            }
-        });
-    if let Some(host) = world
-        .resource_mut::<DocumentRegistry<UsdDocument>>()
-        .host_mut(doc)
-    {
-        host.document_mut().set_authoring_recipe(recipe);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Some((None, None))
+        }
+    };
+    if let Some((revision, recipe)) = update {
+        if let Some(host) = world
+            .resource_mut::<DocumentRegistry<UsdDocument>>()
+            .host_mut(doc)
+        {
+            host.document_mut().set_authoring_recipe(revision, recipe);
+        }
     }
 }
 

@@ -567,6 +567,19 @@ select a clock or schedule itself. Hook contracts that affect authoritative
 state declare their owner, inputs, output/action plan, install scope, and
 failure behavior as required by the hook review.
 
+Rhai task trees are the reusable sequencing mechanism for authored behavior
+and ordered asynchronous checks. `wait_for`/`wait_for_from` suspend on an
+owner-published event; `wait_until` samples a predicate at deterministic task
+cadence when no suitable event exists; `wait(seconds)` advances against the
+simulation clock. `reactive_seq([check(guard), body])` rechecks a cheap guard
+each task pass and cancels the running body when the guard fails. An event
+handler may update the guarded state, and the task observes that change on its
+next owning-cycle pass. Tests may keep a bounded fixed-step `on_tick`
+watchdog to produce a useful timeout verdict. Do not add an app-global timer
+that invokes Rhai callbacks outside their owning cycle. A future reusable task
+deadline, if needed by production behavior, must name its clock and define
+cancellation and failure semantics in the task tree.
+
 ## 6. Co-simulation and dependency closure
 
 The causal barrier is only sound when it contains every path by which a
@@ -744,9 +757,13 @@ The whole-simulation guarantee remains open because:
    production `sysml_async_analysis` scene verifies that a declared Twin
    analysis dependency admits the script only after its source-set snapshot is
    ready. Standalone SysML document analysis uses shared async
-   admission and exact generation/origin fencing. Initial USD document
-   parse/overlay serialization remain synchronous. Rhai module body evaluation
-   remains on the owner lifecycle path; it can
+   admission and exact generation/origin fencing. USD file opens and confirmed
+   discards parse on their async file tasks and publish immutable
+   `PreparedUsdSource`; the registry retains identity, dirty-state, history, and
+   owner-thread commit policy. Root Twin composition and live USD edit,
+   journaling, and projection costs are separate paths; USD overlay
+   serialization remains synchronous. Rhai module body evaluation remains on
+   the owner lifecycle path; it can
    execute world behavior even though parsing and compilation are asynchronous.
    Native Modelica source interfaces and their sorted required-root sets are
    extracted once on Bevy's async-compute pool while the source asset loads;
@@ -850,10 +867,12 @@ The whole-simulation guarantee remains open because:
     invocation at 100,000 Rhai operations. This bounds interpreter work per
     application frame while preserving serial command order. A single native
     bridge call can still be expensive, and scenario hooks remain serialized
-    in their owning schedules. Terrain lockstep mode waits for all in-flight
-    bakes inside `Update`, and ordinary mode commits every completed bake in
-    one pass, so worker completion bursts can still produce a main-thread
-    hitch.
+    in their owning schedules. On native hosts, terrain selection is frame-driven
+    during capture while cover preparation and tile bakes remain asynchronous.
+    Offline capture holds virtual time at the advanced frame until terrain
+    readiness clears; stable tile-order publication is bounded per `Update` by
+    the configured terrain bake budget. Web cover preparation still lacks worker
+    transport and remains a separate open boundary.
 14. The async admission queue limits its own in-flight requests to four and
     priority selects queued work only. It cannot preempt running jobs, and many
     visualization/preparation producers still submit directly to Bevy pools;

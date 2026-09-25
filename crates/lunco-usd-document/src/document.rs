@@ -813,8 +813,7 @@ pub enum UsdOp {
         restore_order: Option<Vec<String>>,
     },
     /// Remove one attribute opinion from the selected edit layer, revealing
-    /// any weaker composed value. The inverse is a source snapshot because a
-    /// newly-authored attribute must be removed again on undo.
+    /// any weaker composed value. Undo captures the removed authored opinion.
     RemoveAttribute {
         /// Layer to write.
         edit_target: LayerId,
@@ -1401,24 +1400,25 @@ pub struct UsdDocument {
     /// Loaded dependencies for synchronous composed authoring reads. Current
     /// root opinions always come from this document, including earlier group ops.
     authoring_recipe: Option<std::sync::Arc<StageRecipe>>,
+    authoring_recipe_revision: Option<(u64, u64)>,
     /// The **base** layer: the authored scene's specs (references intact). This
     /// is the canonical content [`source`](Self::source) serializes and Save
     /// writes to disk. Root-targeted ops edit this layer.
-    base: sdf::Data,
+    base: std::sync::Arc<sdf::Data>,
     /// The **runtime** layer: user-authored changes to the live scene. It stays
     /// separate from the base source and can be persisted by Twin policy.
-    runtime: sdf::Data,
+    runtime: std::sync::Arc<sdf::Data>,
     /// Disposable presentation derived from authored/runtime facts.
-    view: sdf::Data,
+    view: std::sync::Arc<sdf::Data>,
     /// Set only when the base source text failed to parse on construction:
     /// holds the verbatim source so [`source`](Self::source) and Save preserve
     /// the file rather than silently emptying it. While `Some`, structural ops
     /// are rejected; a base [`UsdOp::ReplaceSource`] clears it.
-    parse_error: Option<String>,
+    parse_error: Option<std::sync::Arc<str>>,
     /// Original source text while supported edits can preserve it: documentation
     /// edits patch existing USDA strings, and `RemovePrim` deletes one uniquely
     /// located spec. Other base-layer edits use canonical SDF serialization.
-    authored_source: Option<String>,
+    authored_source: Option<std::sync::Arc<str>>,
     generation: u64,
     /// Revision of the authored base layer. It is independent from the
     /// document generation so derived caches can name every layer input.
@@ -1470,6 +1470,7 @@ impl Clone for UsdDocument {
         Self {
             id: self.id,
             authoring_recipe: self.authoring_recipe.clone(),
+            authoring_recipe_revision: self.authoring_recipe_revision,
             base: self.base.clone(),
             runtime: self.runtime.clone(),
             view: self.view.clone(),
@@ -1508,16 +1509,20 @@ impl UsdDocument {
     /// until a [`UsdOp::ReplaceSource`] supplies valid source.
     pub fn with_origin(id: DocumentId, source: impl Into<String>, origin: DocumentOrigin) -> Self {
         let prepared = PreparedUsdSource::parse(source.into());
-        Self::with_prepared_origin(id, &prepared, origin)
+        Self::with_prepared_origin(id, prepared, origin)
     }
 
     fn with_prepared_origin(
         id: DocumentId,
-        source: &PreparedUsdSource,
+        source: PreparedUsdSource,
         origin: DocumentOrigin,
     ) -> Self {
-        let (base, parse_error, authored_source) = match &source.parsed {
-            Ok(data) => (data.clone(), None, Some(source.source.clone())),
+        let PreparedUsdSource {
+            source: source_text,
+            parsed,
+        } = source;
+        let (base, parse_error, authored_source) = match parsed {
+            Ok(data) => (data, None, Some(source_text)),
             Err(error) => {
                 warn!(
                     "[usd] document {} source did not parse as USDA ({error}); \
@@ -1526,7 +1531,7 @@ impl UsdDocument {
                 );
                 (
                     usda_to_data(EMPTY_USDA).unwrap_or_default(),
-                    Some(source.source.clone()),
+                    Some(source_text),
                     None,
                 )
             }
@@ -1538,11 +1543,12 @@ impl UsdDocument {
         Self {
             id,
             authoring_recipe: None,
-            base,
-            runtime: usda_to_data(EMPTY_USDA).unwrap_or_default(),
-            view: usda_to_data(EMPTY_USDA).unwrap_or_default(),
-            parse_error,
-            authored_source,
+            authoring_recipe_revision: None,
+            base: std::sync::Arc::new(base),
+            runtime: std::sync::Arc::new(usda_to_data(EMPTY_USDA).unwrap_or_default()),
+            view: std::sync::Arc::new(usda_to_data(EMPTY_USDA).unwrap_or_default()),
+            parse_error: parse_error.map(std::sync::Arc::from),
+            authored_source: authored_source.map(std::sync::Arc::from),
             generation: 0,
             base_revision: 0,
             runtime_revision: 0,
@@ -1555,17 +1561,21 @@ impl UsdDocument {
         }
     }
 
-    fn reload_prepared_base(&mut self, source: &PreparedUsdSource) -> bool {
-        match &source.parsed {
+    fn reload_prepared_base(&mut self, source: PreparedUsdSource) -> bool {
+        let PreparedUsdSource {
+            source: source_text,
+            parsed,
+        } = source;
+        match parsed {
             Ok(data) => {
                 if self.parse_error.is_none()
-                    && self.authored_source.as_deref() == Some(&source.source)
+                    && self.authored_source.as_deref() == Some(source_text.as_str())
                 {
                     return true;
                 }
-                self.commit(TargetLayer::Base, data.clone(), UsdChange::FullReload);
+                self.commit(TargetLayer::Base, data, UsdChange::FullReload);
                 self.parse_error = None;
-                self.authored_source = Some(source.source.clone());
+                self.authored_source = Some(std::sync::Arc::from(source_text));
                 self.last_saved_base_revision = Some(self.base_revision);
                 true
             }
@@ -1591,10 +1601,10 @@ impl UsdDocument {
     /// original text is returned instead so the file is never corrupted.
     pub fn source(&self) -> String {
         if let Some(raw) = &self.parse_error {
-            return raw.clone();
+            return raw.to_string();
         }
         if let Some(source) = &self.authored_source {
-            return source.clone();
+            return source.to_string();
         }
         author::data_to_usda(&self.base).unwrap_or_else(|e| {
             warn!("[usd] failed to serialize document {}: {e}", self.id.raw());
@@ -1627,8 +1637,23 @@ impl UsdDocument {
     ///
     /// The document owns authored and runtime data; the runtime USD crate owns
     /// the non-sendable composed stage built from this recipe.
-    pub fn set_authoring_recipe(&mut self, recipe: Option<StageRecipe>) {
+    pub fn authoring_recipe_revision(&self) -> Option<(u64, u64)> {
+        self.authoring_recipe_revision
+    }
+
+    /// Attach a resolver-backed edit context. Revisioned recipes are reused
+    /// while their immutable dependency closure is stable; unrevisioned recipes
+    /// are refreshed from the current document source.
+    pub fn set_authoring_recipe(
+        &mut self,
+        revision: Option<(u64, u64)>,
+        recipe: Option<StageRecipe>,
+    ) {
+        if revision.is_some() && self.authoring_recipe_revision == revision {
+            return;
+        }
         self.authoring_recipe = recipe.map(std::sync::Arc::new);
+        self.authoring_recipe_revision = revision;
     }
 
     /// The resolver closure used for authored operations on referenced prims.
@@ -1792,7 +1817,7 @@ impl UsdDocument {
     /// (base) source when the base is un-parseable.
     pub fn composed_source(&self) -> String {
         if let Some(raw) = &self.parse_error {
-            return raw.clone();
+            return raw.to_string();
         }
         author::data_to_usda(&self.composed_arc()).unwrap_or_else(|e| {
             warn!(
@@ -1807,7 +1832,7 @@ impl UsdDocument {
     /// overlay. Disposable presentation is deliberately omitted.
     pub fn persistent_composed_source(&self) -> Result<String, DocumentError> {
         if let Some(raw) = &self.parse_error {
-            return Ok(raw.clone());
+            return Ok(raw.to_string());
         }
         let composed = author::compose_layers(&self.base, &self.runtime);
         author::data_to_usda(&composed).map_err(|error| {
@@ -1839,7 +1864,7 @@ impl UsdDocument {
         }
         let mut fork = self.clone();
         fork.id = id;
-        fork.view = usda_to_data(EMPTY_USDA).unwrap_or_default();
+        fork.view = std::sync::Arc::new(usda_to_data(EMPTY_USDA).unwrap_or_default());
         fork.view_revision = 0;
         fork.origin = DocumentOrigin::untitled(name);
         fork.last_saved_base_revision = None;
@@ -1882,7 +1907,7 @@ impl UsdDocument {
     /// back, so the `is_dirty` check must not be a thing a caller can forget.
     pub(crate) fn reload_base(&mut self, source: &str) -> bool {
         let prepared = PreparedUsdSource::parse(source.to_owned());
-        self.reload_prepared_base(&prepared)
+        self.reload_prepared_base(prepared)
     }
 
     /// Replace the authored base and generated runtime layers from the file
@@ -1890,16 +1915,24 @@ impl UsdDocument {
     /// user-confirmed full-reset operation; ordinary reloads preserve runtime
     /// state and never overwrite dirty authoring work.
     pub(crate) fn reset_to_source(&mut self, source: &str) -> bool {
-        let Ok(base) = usda_to_data(source) else {
+        self.reset_prepared_source(PreparedUsdSource::parse(source.to_owned()))
+    }
+
+    fn reset_prepared_source(&mut self, prepared: PreparedUsdSource) -> bool {
+        let PreparedUsdSource {
+            source: source_text,
+            parsed,
+        } = prepared;
+        let Ok(base) = parsed else {
             warn!(
                 "[usd] document {} full reset source did not parse as USDA; keeping the resident document",
                 self.id.raw()
             );
             return false;
         };
-        self.base = base;
-        self.runtime = usda_to_data(EMPTY_USDA).unwrap_or_default();
-        self.view = usda_to_data(EMPTY_USDA).unwrap_or_default();
+        self.base = std::sync::Arc::new(base);
+        self.runtime = std::sync::Arc::new(usda_to_data(EMPTY_USDA).unwrap_or_default());
+        self.view = std::sync::Arc::new(usda_to_data(EMPTY_USDA).unwrap_or_default());
         self.base_revision += 1;
         self.runtime_revision += 1;
         self.view_revision += 1;
@@ -1910,7 +1943,7 @@ impl UsdDocument {
         self.changes
             .push_back((self.generation, UsdChange::FullReload));
         self.parse_error = None;
-        self.authored_source = Some(source.to_owned());
+        self.authored_source = Some(std::sync::Arc::from(source_text));
         self.last_saved_base_revision = Some(self.base_revision);
         true
     }
@@ -2104,16 +2137,16 @@ impl UsdDocument {
     fn commit(&mut self, t: TargetLayer, data: sdf::Data, change: UsdChange) {
         match t {
             TargetLayer::Base => {
-                self.base = data;
+                self.base = std::sync::Arc::new(data);
                 self.base_revision += 1;
                 self.authored_source = None;
             }
             TargetLayer::Runtime => {
-                self.runtime = data;
+                self.runtime = std::sync::Arc::new(data);
                 self.runtime_revision += 1;
             }
             TargetLayer::View => {
-                self.view = data;
+                self.view = std::sync::Arc::new(data);
                 self.view_revision += 1;
             }
         }
@@ -2180,9 +2213,14 @@ impl UsdDocument {
     fn path_is_under_composed_arc_path(&self, path: &SdfPath) -> bool {
         let mut ancestor = Some(path.clone());
         while let Some(path) = ancestor {
-            if self.base.spec(&path).is_some_and(|spec| {
-                spec.get("references").is_some() || spec.get("payload").is_some()
-            }) {
+            if [&self.base, &self.runtime, &self.view]
+                .into_iter()
+                .any(|layer| {
+                    layer.spec(&path).is_some_and(|spec| {
+                        spec.get("references").is_some() || spec.get("payload").is_some()
+                    })
+                })
+            {
                 return true;
             }
             ancestor = path.parent();
@@ -2511,14 +2549,18 @@ impl lunco_doc::PreparedFileBacked for UsdDocument {
 
     fn with_prepared_origin(
         id: DocumentId,
-        source: &Self::PreparedSource,
+        source: Self::PreparedSource,
         origin: DocumentOrigin,
     ) -> Self {
         UsdDocument::with_prepared_origin(id, source, origin)
     }
 
-    fn reload_prepared_source(&mut self, source: &Self::PreparedSource) -> bool {
+    fn reload_prepared_source(&mut self, source: Self::PreparedSource) -> bool {
         self.reload_prepared_base(source)
+    }
+
+    fn reset_prepared_source(&mut self, source: Self::PreparedSource) -> bool {
+        UsdDocument::reset_prepared_source(self, source)
     }
 }
 
@@ -2608,7 +2650,7 @@ impl Document for UsdDocument {
                 }
                 self.commit(target, new_data, UsdChange::FullReload);
                 if target == TargetLayer::Base {
-                    self.authored_source = Some(text);
+                    self.authored_source = Some(std::sync::Arc::from(text));
                 }
                 Ok(inverse)
             }
@@ -2719,7 +2761,7 @@ impl Document for UsdDocument {
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });
                 if target == TargetLayer::Base {
-                    self.authored_source = authored_source;
+                    self.authored_source = authored_source.map(std::sync::Arc::from);
                 }
                 Ok(inverse)
             }
@@ -3199,18 +3241,17 @@ impl Document for UsdDocument {
                 };
 
                 // Typed inverse: restore the attribute's prior value in THIS layer,
-                // so undo replays incrementally (the projector's `apply_incremental_
-                // op_to_stage` path) instead of a `ReplaceSource` that forces a
-                // whole-layer rebuild. Only when the attribute already had a value
-                // here that round-trips; a newly-authored attribute (or an
-                // un-recoverable literal) falls back to the always-correct whole-
-                // source snapshot — which also correctly *removes* the new opinion on
-                // undo, something a typed `SetAttribute` cannot express. For a string
+                // so undo replays incrementally instead of replacing the whole layer.
+                // A newly authored attribute is exactly undone by `RemoveAttribute`;
+                // only an existing value that cannot be represented as a typed
+                // literal needs the general source-snapshot inverse. For a string
                 // the prior value is recovered RAW (matching the raw author above);
                 // for other types via `value_to_literal`.
-                let prior = prim_sdf
-                    .append_property(name.as_str())
-                    .ok()
+                let prior_attribute = prim_sdf.append_property(name.as_str()).ok();
+                let prior_attribute_exists = prior_attribute
+                    .as_ref()
+                    .is_some_and(|attr| self.layer(target).spec(attr).is_some());
+                let prior = prior_attribute
                     .and_then(|attr| self.layer(target).field(&attr, "default").cloned());
                 let recovered = if is_string {
                     match prior {
@@ -3240,6 +3281,11 @@ impl Document for UsdDocument {
                         name: name.clone(),
                         type_name: type_name.clone(),
                         value: v,
+                    },
+                    None if !prior_attribute_exists => UsdOp::RemoveAttribute {
+                        edit_target: id,
+                        path: path.clone(),
+                        name: name.clone(),
                     },
                     None => self.coarse_inverse(target, &id),
                 };
@@ -3342,7 +3388,7 @@ impl Document for UsdDocument {
                     },
                 );
                 if target == TargetLayer::Base {
-                    self.authored_source = authored_source;
+                    self.authored_source = authored_source.map(std::sync::Arc::from);
                 }
                 Ok(inverse)
             }
@@ -3789,7 +3835,7 @@ impl Document for UsdDocument {
                     },
                 );
                 if target == TargetLayer::Base {
-                    self.authored_source = authored_source;
+                    self.authored_source = authored_source.map(std::sync::Arc::from);
                 }
                 Ok(inverse)
             }
@@ -3868,7 +3914,7 @@ impl Document for UsdDocument {
                     },
                 );
                 if target == TargetLayer::Base {
-                    self.authored_source = authored_source;
+                    self.authored_source = authored_source.map(std::sync::Arc::from);
                 }
                 Ok(inverse)
             }
