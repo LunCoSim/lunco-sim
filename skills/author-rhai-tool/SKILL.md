@@ -97,7 +97,7 @@ pose, and control math. They are the simulator's `bevy::math::DVec3` and
 `DQuat`, registered once by `lunco-scripting-rhai-world`; do not define tuple/vector
 helpers in a tool library. `world_pos3`, `world_forward3`, and
 `world_rotation_quat` keep the hot path native, and `vadd`/`vsub`/`vscale`/
-`vcross`/`vdot`/`vlen`/`squared_norm`/`vnorm`/`qrot` dispatch to Rust for native operands.
+`vcross`/`vdot`/`vlen`/`norm_squared`/`vnorm`/`qrot` dispatch to Rust for native operands.
 Constructors and quaternion/Euler conversions reject non-finite or degenerate
 values with a script error.
 

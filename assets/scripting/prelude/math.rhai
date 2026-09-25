@@ -1,6 +1,6 @@
 // ── Math on the [x,y,z] arrays world_pos returns ───────────────────────────
 //
-// `vadd` `vsub` `vscale` `vlen` `squared_norm` `vdot` `vcross` `vnorm` `clamp` `angle_deg`
+// `vadd` `vsub` `vscale` `vlen` `norm_squared` `vdot` `vcross` `vnorm` `clamp` `angle_deg`
 // `yaw_delta_deg` are NATIVE — registered from Rust in
 // `lunco_scripting::rhai_math`, on the same `[x, y, z]` float arrays. They are
 // not defined here because `acos` is a partial function: a dot product of two

@@ -522,7 +522,7 @@ pub fn register(engine: &mut Engine) {
                 .then_some(length)
                 .ok_or_else(|| invalid_value("vector length must be finite"))
         })
-        .register_fn("squared_norm", |v: DVec3| {
+        .register_fn("norm_squared", |v: DVec3| {
             let length_squared = v.length_squared();
             length_squared
                 .is_finite()
@@ -560,7 +560,7 @@ pub fn register(engine: &mut Engine) {
         _ => Dynamic::UNIT,
     });
 
-    engine.register_fn("squared_norm", |a: Dynamic| match to_vec3(&a) {
+    engine.register_fn("norm_squared", |a: Dynamic| match to_vec3(&a) {
         Some(v) => {
             let length_squared = v.length_squared();
             if length_squared.is_finite() {
@@ -859,7 +859,7 @@ mod tests {
             "yaw_delta_deg([0.0, 0.0, 1.0], ())",
             "angle_deg((), ())",
             "vlen(())",
-            "squared_norm(())",
+            "norm_squared(())",
             "vdot((), [1.0, 0.0, 0.0])",
             "vsub((), [1.0, 0.0, 0.0])",
             "vadd([1.0, 0.0, 0.0], ())",
@@ -1006,9 +1006,9 @@ mod tests {
         assert_eq!(d.as_float().unwrap(), 5.0);
         let d = eval("vlen([3.0, 4.0, 0.0])");
         assert_eq!(d.as_float().unwrap(), 5.0);
-        let d = eval("squared_norm(vec3(3.0, 4.0, 0.0))");
+        let d = eval("norm_squared(vec3(3.0, 4.0, 0.0))");
         assert_eq!(d.as_float().unwrap(), 25.0);
-        let d = eval("squared_norm([3.0, 4.0, 0.0])");
+        let d = eval("norm_squared([3.0, 4.0, 0.0])");
         assert_eq!(d.as_float().unwrap(), 25.0);
 
         let d = eval("qrot(quat_identity(), [4.0, 5.0, 6.0])");

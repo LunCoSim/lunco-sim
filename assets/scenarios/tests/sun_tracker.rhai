@@ -188,12 +188,12 @@ fn verdict(s) {
     }
     if s.az_before != () && s.direction_y_before != () && s.direction_z_before != ()
        && s.az != () && s.direction_y != () && s.direction_z != () {
-        let before_norm2 = squared_norm([s.az_before, s.direction_y_before, s.direction_z_before]);
-        let after_norm2 = squared_norm([s.az, s.direction_y, s.direction_z]);
-        f.push(t_true((before_norm2 - 1.0).abs() < 1.0e-10,
-            "direction provider did not publish a unit vector before the step: norm²=" + before_norm2));
-        f.push(t_true((after_norm2 - 1.0).abs() < 1.0e-10,
-            "direction provider did not publish a unit vector after the step: norm²=" + after_norm2));
+        let before_norm_squared = norm_squared([s.az_before, s.direction_y_before, s.direction_z_before]);
+        let after_norm_squared = norm_squared([s.az, s.direction_y, s.direction_z]);
+        f.push(t_true((before_norm_squared - 1.0).abs() < 1.0e-10,
+            "direction provider did not publish a unit vector before the step: norm²=" + before_norm_squared));
+        f.push(t_true((after_norm_squared - 1.0).abs() < 1.0e-10,
+            "direction provider did not publish a unit vector after the step: norm²=" + after_norm_squared));
     }
     if s.yaw != () && s.yaw_before != () {
         f.push(t_true((s.yaw - s.yaw_before).abs() > 0.2,
@@ -205,12 +205,12 @@ fn verdict(s) {
     if s.spacecraft_x_before != () && s.spacecraft_y_before != () &&
        s.spacecraft_z_before != () && s.spacecraft_x_after != () &&
        s.spacecraft_y_after != () && s.spacecraft_z_after != () {
-        let before_norm2 = squared_norm([s.spacecraft_x_before, s.spacecraft_y_before, s.spacecraft_z_before]);
-        let after_norm2 = squared_norm([s.spacecraft_x_after, s.spacecraft_y_after, s.spacecraft_z_after]);
-        f.push(t_true((before_norm2 - 1.0).abs() < 1.0e-10,
-            "arbitrary spacecraft bearing was not unit length before motion: norm²=" + before_norm2));
-        f.push(t_true((after_norm2 - 1.0).abs() < 1.0e-10,
-            "arbitrary spacecraft bearing was not unit length after motion: norm²=" + after_norm2));
+        let before_norm_squared = norm_squared([s.spacecraft_x_before, s.spacecraft_y_before, s.spacecraft_z_before]);
+        let after_norm_squared = norm_squared([s.spacecraft_x_after, s.spacecraft_y_after, s.spacecraft_z_after]);
+        f.push(t_true((before_norm_squared - 1.0).abs() < 1.0e-10,
+            "arbitrary spacecraft bearing was not unit length before motion: norm²=" + before_norm_squared));
+        f.push(t_true((after_norm_squared - 1.0).abs() < 1.0e-10,
+            "arbitrary spacecraft bearing was not unit length after motion: norm²=" + after_norm_squared));
         f.push(t_true(s.spacecraft_x_before > 0.99 && s.spacecraft_y_before.abs() < 1.0e-6 &&
                       s.spacecraft_z_before.abs() < 1.0e-6,
             "the first spacecraft target should be +X from the probe; got " +
