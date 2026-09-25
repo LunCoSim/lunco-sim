@@ -176,7 +176,7 @@ resolution, and the High quality preset are unchanged. This removes irrelevant
 shadow-view preparation after extraction; Bevy's main-world per-light caster
 visibility work remains in place.
 
-- Six focused `spotlight_shadow_relevance` unit tests passed. The regular and
+- Six focused shadow-relevance unit tests passed. The regular and
   Tracy-enabled production binaries both built, and the High-quality Apollo
   scene reached `/api/ready` with no pending work. Both owned sessions shut down
   through typed API `Exit`; their ports were released.
@@ -209,6 +209,37 @@ This change preserves authored visual quality by construction, but a settled,
 uncontended before/after FPS comparison and detailed Tracy zone inspection are
 still required; the 400 FPS acceptance target remains open. Other simulator
 sessions and an unrelated Cargo build were left untouched.
+
+### 2026-09-25 — point-light cubemap shadow views
+
+The Rhai-reuse capture has eight camera-schedule roots on each of 2,022 settled
+frames: one primary 3D camera, one additional camera schedule with no `Core3d`
+zones, and six auxiliary light-shadow views. The trace does not identify the
+auxiliary views' owning lights; six roots are consistent with a point-light
+cubemap, but that mapping needs runtime confirmation. Bevy's `camera_driver`
+still spends a mean 3.36 ms per root frame across all view schedules, while
+each auxiliary schedule costs about 0.28–0.45 ms median. On the render thread,
+after excluding the first 14 seconds, the settled `Render` schedule is 8.02 ms
+median / 10.11 ms p95 (2,022 samples); `RenderGraph` is 4.55 / 5.90 ms. These
+are distinct thread/schedule spans, not costs to add together. `Render` alone
+exceeds the 6.67 ms budget for 150 FPS.
+The existing local-light filter only handled spotlights, despite already
+running immediately before Bevy's `prepare_lights` on extracted render-world
+data.
+
+The filter now checks point-light range spheres as well as conservative
+spotlight-cone bounds against every active extracted 3D camera and compatible
+render layer. It disables only the extracted shadow-map flag when no output can
+contain any geometry inside the light's influence volume. Invalid/non-finite
+bounds and tangent camera intersections retain the authored shadow path. This
+preserves direct lighting, authored settings, and all potentially visible
+shadows. Focused geometric tests cover visible and disjoint point-light ranges.
+The subsequent 30.32 s Apollo trace (470 profiler frames, recorded with other
+simulator sessions active) retained the same six auxiliary shadow roots; no
+Apollo shadow-root reduction or FPS gain is demonstrated. The trace is
+diagnostic only, and a settled uncontended FPS run plus production visual
+comparison remain outstanding. This makes the render-thread camera/view work,
+not this point-light filter, the next measured target.
 
 ### 2026-09-24 — Summer Space School settled-frame profile
 

@@ -16,13 +16,13 @@ mod env_light;
 mod gpu_culling;
 pub mod horizon_shade;
 pub mod link_beams;
+mod local_light_shadow_relevance;
 pub mod look_cache;
 mod procedural_sky;
 mod scene_camera;
 mod sensor_beams;
 mod shader_look;
 pub mod shader_material;
-mod spotlight_shadow_relevance;
 mod shadow_view_schedule;
 
 mod world_label;
@@ -162,7 +162,7 @@ impl Plugin for LuncoRenderPlugin {
         }
         scene_camera::build(app);
         gpu_culling::build(app);
-        spotlight_shadow_relevance::build(app);
+        local_light_shadow_relevance::build(app);
         shadow_view_schedule::build(app);
         // Shadow filtering is a render policy, not a workbench concern. Attach it
         // when a camera enters the render graph so windowed and offscreen captures

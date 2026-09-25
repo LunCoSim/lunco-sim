@@ -51,19 +51,19 @@ CPU-built per-light visibility lists. Unsupported adapters retain CPU camera
 culling. Measure GPU headroom and compare a clean FPS run plus a separate Tracy
 capture; do not trade away shadows or authored quality to reduce CPU time.
 
-Spotlight shadow views are filtered at the render boundary: compare a
-conservative bound of each extracted spotlight frustum with every active
-extracted `Camera3d` frustum and compatible `RenderLayers` before Bevy prepares
-shadow views. Do not mutate the authored `SpotLight`, omit offscreen cameras, or
-infer relevance from the light origin alone. Uncertain bounds and boundary
-cases keep the map. This saves only maps provably irrelevant to all outputs;
-Bevy's main-world per-light caster visibility pass is still a separate cost to
-measure.
+Local-light shadow views are filtered at the render boundary: compare a point
+light's finite range sphere or a conservative bound of each extracted spotlight
+frustum with every active extracted `Camera3d` frustum and compatible
+`RenderLayers` before Bevy prepares shadow views. Do not mutate authored lights,
+omit offscreen cameras, or infer relevance from the light origin alone.
+Uncertain bounds and boundary cases keep the map. This saves only maps
+provably irrelevant to all outputs; Bevy's main-world per-light caster
+visibility pass is still a separate cost to measure.
 
 Bevy's camera driver also executes `Core3d` for point/spot shadow roots. Admit
 camera-only Core3d stage sets only for camera roots; keep the shared shadow
 passes and the GPU preprocessing needed by the depth maps active on light
-roots. Verify the same spotlight pass inventory before and after so this
+roots. Verify the same retained shadow pass inventory before and after so this
 scheduling optimization cannot silently remove shadows.
 
 Treat Bevy `Changed<T>`/`Added<T>` filters as population filters, not free

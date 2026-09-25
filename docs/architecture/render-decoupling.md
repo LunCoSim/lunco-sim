@@ -111,26 +111,26 @@ per-view GPU preprocess bind groups and submits its pending command buffers in
 the normal frame-level queue call; only a before/after trace can establish
 whether skipping these stages reduces that batch's buffer count or CPU time.
 
-### Spotlight shadow relevance
+### Local-light shadow relevance
 
-Bevy shares a spotlight's shadow map across all active 3D cameras, but its
-default view preparation can still schedule that map when the finite spotlight
-cone misses every output. `lunco-render-bevy` checks the extracted spotlight
-frustum against every extracted 3D camera frustum and its render layers before
-`prepare_lights`. A sphere enclosing the complete spotlight frustum is used as
-a conservative broad-phase bound: false positives retain extra maps; a map is
-skipped only when the bound is disjoint from every layer-compatible camera.
-Boundary tests include a floating-point error pad, and missing or malformed
-frusta keep the map.
+Bevy shares each local light's shadow map across active 3D cameras, but its
+default view preparation can still schedule the map when the light cannot
+affect any output. Before `prepare_lights`, `lunco-render-bevy` checks every
+extracted 3D camera frustum and render layer against a conservative bound for
+the light's influence: a point light uses its finite range sphere, while a
+spotlight uses a sphere enclosing its finite cone frustum. False positives keep
+extra maps; a map is skipped only when the bound is disjoint from every
+layer-compatible camera. Boundary tests include a floating-point error pad,
+and missing or malformed bounds keep the map.
 
 The adapter changes only `ExtractedPointLight.shadow_maps_enabled` in the render
-world for that frame. It does not mutate the authored `SpotLight`, suppress the
-spotlight's direct illumination, alter shadow resolution, or change quality
-settings. It considers all active extracted 3D cameras, including offscreen
-capture cameras, rather than assuming the primary window is the only output.
-This removes irrelevant spotlight shadow-view preparation and rendering; Bevy's
-main-world per-light caster visibility pass still runs before extraction and
-remains a separate profiling target.
+world for that frame. It does not mutate the authored point/spot light, suppress
+direct illumination where it can reach visible geometry, alter shadow
+resolution, or change quality settings. It considers all active extracted 3D
+cameras, including offscreen capture cameras, rather than assuming the primary
+window is the only output. This removes only irrelevant local-light shadow-view
+preparation and rendering; Bevy's main-world per-light caster visibility pass
+still runs before extraction and remains a separate profiling target.
 
 When adding a crate to the simulation core, check both sides before merging:
 

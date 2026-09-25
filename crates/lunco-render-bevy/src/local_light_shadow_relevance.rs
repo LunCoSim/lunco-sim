@@ -1,11 +1,11 @@
-//! Avoid preparing spotlight shadow views that cannot contribute to any output.
+//! Avoid preparing local-light shadow views that cannot contribute to any output.
 //!
-//! Bevy shares each spotlight shadow map across cameras. Its normal path keeps
-//! maps for visible lights even when the light's finite cone misses every active
-//! 3D camera. This render-world adapter tests the authored light frustum against
-//! every extracted 3D camera and suppresses only that light's shadow-map flag.
-//! The main-world light, direct illumination, light range, and shadow quality
-//! settings remain unchanged.
+//! Bevy shares local-light shadow maps across cameras. Its normal path keeps
+//! maps for visible lights even when their bounded influence misses every active
+//! 3D camera. This render-world adapter checks a conservative point-light range
+//! sphere or spotlight-cone bound against every extracted 3D camera and
+//! suppresses only that light's shadow-map flag. The main-world light, direct
+//! illumination, influence range, and shadow quality settings remain unchanged.
 
 use bevy::{
     camera::{
@@ -25,13 +25,13 @@ pub(super) fn build(app: &mut App) {
 
     render_app.add_systems(
         Render,
-        suppress_irrelevant_spotlight_shadows
+        suppress_irrelevant_local_light_shadows
             .in_set(RenderSystems::CreateViews)
             .before(bevy::pbr::prepare_lights),
     );
 }
 
-fn suppress_irrelevant_spotlight_shadows(
+fn suppress_irrelevant_local_light_shadows(
     mut lights: Query<(&mut ExtractedPointLight, &RenderLayers, Option<&Frustum>)>,
     cameras: Query<(&Frustum, Option<&RenderLayers>), (With<Camera3d>, With<ExtractedCamera>)>,
 ) {
@@ -43,16 +43,23 @@ fn suppress_irrelevant_spotlight_shadows(
 
     let default_layers = RenderLayers::default();
     for (mut light, light_layers, light_frustum) in &mut lights {
-        // Point-light cubemaps are not part of this optimization. Bevy encodes
-        // spots as ExtractedPointLight with spot_light_angles populated.
-        if !light.shadow_maps_enabled || light.spot_light_angles.is_none() {
+        if !light.shadow_maps_enabled {
             continue;
         }
 
-        let Some(light_frustum) = light_frustum else {
-            continue;
+        let light_bounds = if light.spot_light_angles.is_some() {
+            let Some(light_frustum) = light_frustum else {
+                continue;
+            };
+            conservative_frustum_sphere(light_frustum)
+        } else {
+            Some(point_light_influence_sphere(
+                light.transform.translation(),
+                light.range,
+            ))
         };
-        let Some(light_bounds) = conservative_frustum_sphere(light_frustum) else {
+
+        let Some(light_bounds) = light_bounds else {
             continue;
         };
 
@@ -60,17 +67,25 @@ fn suppress_irrelevant_spotlight_shadows(
             .iter()
             .map(|(frustum, layers)| (frustum, layers.unwrap_or(&default_layers)));
         let irrelevant_to_all_cameras =
-            spotlight_shadow_is_irrelevant(light_bounds, light_layers, camera_views);
+            local_light_shadow_is_irrelevant(light_bounds, light_layers, camera_views);
 
         if irrelevant_to_all_cameras {
             // This is render-world extracted state only. extract_lights refreshes
-            // it from the authored SpotLight before the next render schedule.
+            // it from the authored local light before the next render schedule.
             light.shadow_maps_enabled = false;
         }
     }
 }
 
-/// A sphere enclosing all corners of a finite light frustum.
+/// A sphere enclosing a point light's finite influence range.
+fn point_light_influence_sphere(center: bevy::math::Vec3, range: f32) -> Sphere {
+    Sphere {
+        center: center.into(),
+        radius: range,
+    }
+}
+
+/// A sphere enclosing all corners of a finite spotlight frustum.
 ///
 /// The sphere is only a broad-phase bound. Its larger-than-cone shape can keep
 /// an unnecessary shadow map, but cannot reject a cone that reaches a camera.
@@ -106,7 +121,7 @@ fn conservative_frustum_sphere(frustum: &Frustum) -> Option<Sphere> {
     })
 }
 
-fn spotlight_shadow_is_irrelevant<'a>(
+fn local_light_shadow_is_irrelevant<'a>(
     light_bounds: Sphere,
     light_layers: &RenderLayers,
     camera_views: impl IntoIterator<Item = (&'a Frustum, &'a RenderLayers)>,
@@ -168,21 +183,24 @@ fn frustum_intersects_sphere_conservatively(frustum: &Frustum, sphere: Sphere) -
 #[cfg(test)]
 mod tests {
     use bevy::{
+        camera::Camera3d,
         camera::{
             CameraProjection, PerspectiveProjection,
             primitives::{Frustum, Sphere},
             visibility::RenderLayers,
         },
+        ecs::system::RunSystemOnce,
         math::{
             Vec3,
             primitives::{HalfSpace, ViewFrustum},
         },
         prelude::{GlobalTransform, Transform},
+        render::{Render, camera::ExtractedCamera},
     };
 
     use super::{
         conservative_frustum_sphere, frustum_intersects_sphere_conservatively,
-        spotlight_shadow_is_irrelevant,
+        local_light_shadow_is_irrelevant, point_light_influence_sphere,
     };
 
     fn perspective_frustum(position: Vec3, far: f32, fov: f32) -> Frustum {
@@ -210,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn spotlight_bounds_are_finite_and_tighter_than_the_point_range_sphere() {
+    fn spotlight_bounds_are_finite_and_enclose_the_frustum() {
         let spot_frustum = perspective_frustum(Vec3::ZERO, 90.0, 20.0_f32.to_radians());
         let bounds = conservative_frustum_sphere(&spot_frustum).unwrap();
 
@@ -222,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn any_matching_camera_view_keeps_the_spotlight_shadow() {
+    fn any_matching_camera_view_keeps_the_local_light_shadow() {
         let spotlight = conservative_frustum_sphere(&perspective_frustum(
             Vec3::new(100.0, 0.0, 0.0),
             20.0,
@@ -234,13 +252,132 @@ mod tests {
         let receiving_view =
             perspective_frustum(Vec3::new(100.0, 0.0, 0.0), 30.0, 60.0_f32.to_radians());
 
-        assert!(!spotlight_shadow_is_irrelevant(
+        assert!(!local_light_shadow_is_irrelevant(
             spotlight,
             &light_layers,
             [
                 (&offscreen_view, &light_layers),
                 (&receiving_view, &light_layers)
             ],
+        ));
+    }
+
+    #[test]
+    fn point_light_range_disjoint_from_the_camera_skips_its_shadow() {
+        let light_bounds = point_light_influence_sphere(Vec3::new(100.0, 0.0, 0.0), 20.0);
+        let light_layers = RenderLayers::default();
+        let camera_frustum = perspective_frustum(Vec3::ZERO, 30.0, 60.0_f32.to_radians());
+
+        assert!(local_light_shadow_is_irrelevant(
+            light_bounds,
+            &light_layers,
+            [(&camera_frustum, &light_layers)],
+        ));
+    }
+
+    #[test]
+    fn point_light_influence_intersecting_the_camera_keeps_its_shadow() {
+        let light_bounds = point_light_influence_sphere(Vec3::new(0.0, 0.0, -20.0), 100.0);
+        let light_layers = RenderLayers::default();
+        let camera_frustum = perspective_frustum(Vec3::ZERO, 30.0, 60.0_f32.to_radians());
+
+        assert!(!local_light_shadow_is_irrelevant(
+            light_bounds,
+            &light_layers,
+            [(&camera_frustum, &light_layers)],
+        ));
+    }
+
+    fn extracted_camera() -> ExtractedCamera {
+        use bevy::ecs::schedule::ScheduleLabel;
+
+        ExtractedCamera {
+            target: None,
+            physical_viewport_size: None,
+            physical_target_size: None,
+            viewport: None,
+            schedule: Render.intern(),
+            order: 0,
+            output_mode: Default::default(),
+            msaa_writeback: Default::default(),
+            clear_color: Default::default(),
+            sorted_camera_index_for_target: 0,
+            exposure: 1.0,
+            hdr: false,
+            compositing_space: None,
+        }
+    }
+
+    fn extracted_point_light(position: Vec3, range: f32) -> bevy::pbr::ExtractedPointLight {
+        bevy::pbr::ExtractedPointLight {
+            color: bevy::color::LinearRgba::WHITE,
+            intensity: 1.0,
+            range,
+            radius: 0.0,
+            transform: GlobalTransform::from(Transform::from_translation(position)),
+            shadow_maps_enabled: true,
+            contact_shadows_enabled: false,
+            shadow_depth_bias: 0.0,
+            shadow_normal_bias: 0.0,
+            shadow_map_near_z: 0.1,
+            spot_light_angles: None,
+            volumetric: false,
+            soft_shadows_enabled: false,
+            affects_lightmapped_mesh_diffuse: false,
+        }
+    }
+
+    #[test]
+    fn render_filter_skips_only_an_offscreen_point_light_shadow_map() {
+        let mut world = bevy::prelude::World::new();
+        let camera_frustum = perspective_frustum(Vec3::ZERO, 30.0, 60.0_f32.to_radians());
+        world.spawn((
+            Camera3d::default(),
+            extracted_camera(),
+            camera_frustum.clone(),
+            RenderLayers::default(),
+        ));
+        let offscreen_light = world
+            .spawn((
+                extracted_point_light(Vec3::new(100.0, 0.0, 0.0), 20.0),
+                RenderLayers::default(),
+            ))
+            .id();
+        let visible_light = world
+            .spawn((
+                extracted_point_light(Vec3::new(0.0, 0.0, -20.0), 100.0),
+                RenderLayers::default(),
+            ))
+            .id();
+
+        world
+            .run_system_once(super::suppress_irrelevant_local_light_shadows)
+            .expect("render-world relevance filter must run");
+
+        assert!(
+            !world
+                .get::<bevy::pbr::ExtractedPointLight>(offscreen_light)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+        assert!(
+            world
+                .get::<bevy::pbr::ExtractedPointLight>(visible_light)
+                .unwrap()
+                .shadow_maps_enabled
+        );
+    }
+
+    #[test]
+    fn invalid_point_light_range_keeps_its_shadow() {
+        let light_bounds = point_light_influence_sphere(Vec3::ZERO, f32::INFINITY);
+        let light_layers = RenderLayers::default();
+        let camera_frustum = perspective_frustum(Vec3::ZERO, 30.0, 60.0_f32.to_radians());
+
+        assert!(!local_light_shadow_is_irrelevant(
+            light_bounds,
+            &light_layers,
+            [(&camera_frustum, &light_layers)],
         ));
     }
 
@@ -255,7 +392,7 @@ mod tests {
         let light_layers = RenderLayers::default();
         let camera_frustum = perspective_frustum(Vec3::ZERO, 30.0, 60.0_f32.to_radians());
 
-        assert!(spotlight_shadow_is_irrelevant(
+        assert!(local_light_shadow_is_irrelevant(
             spotlight,
             &light_layers,
             [(&camera_frustum, &light_layers)],
@@ -276,7 +413,7 @@ mod tests {
 
         assert!(camera_frustum.intersects_sphere(&spotlight, true));
         assert!(!light_layers.intersects(&camera_layers));
-        assert!(spotlight_shadow_is_irrelevant(
+        assert!(local_light_shadow_is_irrelevant(
             spotlight,
             &light_layers,
             [(&camera_frustum, &camera_layers)],
