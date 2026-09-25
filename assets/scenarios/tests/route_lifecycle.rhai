@@ -295,6 +295,21 @@ fn on_tick(me, ctx) {
     this.elapsed += dt();
     if this.elapsed > 45.0 {
         let detail = "route lifecycle acceptance timed out in phase " + this.phase;
+        if this.phase == 0 {
+            let listed = program_editor::list(this.doc, ROUTE);
+            let programs = if listed == () || !listed.ok {
+                -1
+            } else {
+                listed.programs.len()
+            };
+            detail += "; doc=" + this.doc.to_string()
+                + ", subject=" + find_path(SUBJECT_PATH).to_string()
+                + ", points=" + point_count(this.doc).to_string()
+                + ", ribbon=" + ribbon_count(this.doc).to_string()
+                + ", normals=" + ribbon_normals_match(this.doc, 3).to_string()
+                + ", anchor=" + ribbon_anchor_matches_point(this.doc, ROUTE + "/P0").to_string()
+                + ", programs=" + programs.to_string();
+        }
         if this.phase == 2 {
             detail += "; point_count=" + point_count(this.doc).to_string()
                 + ", new_point=" + this.new_point.to_string()
@@ -332,7 +347,7 @@ fn on_tick(me, ctx) {
         let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
         if route == () || route.ok == false || route.doc_id == () { return; }
         this.doc = route.doc_id;
-        this.subject = find(SUBJECT_PATH);
+        this.subject = find_path(SUBJECT_PATH);
         if this.subject < 0 || point_count(this.doc) != 3 || ribbon_count(this.doc) != 3
             || !ribbon_normals_match(this.doc, 3)
             || !ribbon_anchor_matches_point(this.doc, ROUTE + "/P0") {
@@ -395,7 +410,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 1 {
         if !this.program_switch_complete {
-            this.program_switch_subject = find(SUBJECT_PATH);
+            this.program_switch_subject = find_path(SUBJECT_PATH);
             this.route_ready = false;
             // The source-edit command may restart the replacement program
             // before it returns. Enter the observation phase first so a
@@ -456,7 +471,7 @@ fn on_tick(me, ctx) {
         }
         this.checks.push(t_true(true,
             "runtime USD source switching activates a new authored Rhai program"));
-        this.checks.push(t_true(find(SUBJECT_PATH) == this.program_switch_subject,
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.program_switch_subject,
             "switching a program preserves the subject entity identity"));
         let restored = program_editor::switch_source(
             this.doc,
@@ -480,7 +495,7 @@ fn on_tick(me, ctx) {
         }
         this.checks.push(t_true(true,
             "the original program source can be restored without rebuilding its subject"));
-        this.checks.push(t_true(find(SUBJECT_PATH) == this.program_switch_subject,
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.program_switch_subject,
             "program replacement does not recreate the physical subject"));
         // Wait for the restored program's lifecycle start before delivering a
         // one-shot scene event. A semantic event is not a durable command and
@@ -665,7 +680,7 @@ fn on_tick(me, ctx) {
         let moved = waypoint_editor::on_move(context(this.doc, this.new_point, [4.0, 1.0, -32.0]));
         this.checks.push(t_true(moved.ok == true && moved.path == this.new_point,
             "route-point move is a typed USD edit"));
-        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "adding and moving a point preserve the live subject identity"));
         this.phase = 3;
         return;
@@ -686,7 +701,7 @@ fn on_tick(me, ctx) {
         if point_count(this.doc) != 3 || has_path(this.doc, this.new_point)
             || ribbon_count(this.doc) != 3 { return; }
         this.checks.push(t_true(true, "deleting a point updates ribbon topology"));
-        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "deleting a point does not rebuild the subject"));
         let moved = waypoint_editor::on_move(context(
             this.doc, ROUTE + "/P2", [2.0, 1.0, -26.0],
@@ -703,7 +718,7 @@ fn on_tick(me, ctx) {
             || ribbon_count(this.doc) != 3 { return; }
         this.checks.push(t_true(true,
             "moving a referenced route point updates its composed ribbon"));
-        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "moving a referenced point preserves the subject identity"));
         let undone = cmd("UndoDocument", #{ doc_id: this.doc });
         if undone == () || undone.ok != true { return; }
@@ -717,7 +732,7 @@ fn on_tick(me, ctx) {
             || ribbon_count(this.doc) != 3 { return; }
         this.checks.push(t_true(true,
             "undo removes only the local transform opinion from a referenced point"));
-        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "undoing a referenced transform preserves the subject identity"));
         let redone = cmd("RedoDocument", #{ doc_id: this.doc });
         if redone == () || redone.ok != true { return; }
@@ -731,7 +746,7 @@ fn on_tick(me, ctx) {
             || ribbon_count(this.doc) != 3 { return; }
         this.checks.push(t_true(true,
             "redo reapplies the referenced transform without scene reprojection"));
-        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "redoing a referenced transform preserves the subject identity"));
         let deleted = waypoint_editor::on_delete(context(this.doc, ROUTE + "/P2", ()));
         this.checks.push(t_true(deleted.ok == true,
@@ -755,7 +770,7 @@ fn on_tick(me, ctx) {
             || ribbon_count(this.doc) != 3 { return; }
         this.checks.push(t_true(true,
             "undo restores a referenced route point and its ribbon"));
-        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "undoing a referenced route edit preserves the subject identity"));
         let redone = cmd("RedoDocument", #{ doc_id: this.doc });
         if redone == () || redone.ok != true { return; }
@@ -768,7 +783,7 @@ fn on_tick(me, ctx) {
             || ribbon_count(this.doc) != 2 { return; }
         this.checks.push(t_true(true,
             "redo reapplies the referenced route-point deletion"));
-        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "redoing a referenced route edit preserves the subject identity"));
         waypoint_editor::on_delete(context(this.doc, ROUTE + "/P1", ()));
         this.phase = 6;

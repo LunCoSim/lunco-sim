@@ -19,6 +19,10 @@ pub use lunco_runtime_context::{
 pub enum RuntimeCycleSet {
     /// Scene/Twin lifecycle transaction boundary.
     Lifecycle,
+    /// Admit stable identities for entities created by lifecycle projection.
+    IdentityAdmission,
+    /// Publish identity lookups after identity admission and before simulation.
+    EntityIndex,
     /// Fixed simulation cycle.
     Simulation,
     /// Wall-clock avatar/camera interaction cycle.

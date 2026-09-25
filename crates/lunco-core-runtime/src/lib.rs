@@ -138,6 +138,15 @@ impl Plugin for LunCoCoreRuntimePlugin {
         )
         .add_systems(FixedUpdate, advance_sim_tick.in_set(SimTickSet));
         app.configure_sets(
+            PreUpdate,
+            (
+                lunco_core::RuntimeCycleSet::Lifecycle,
+                lunco_core::RuntimeCycleSet::IdentityAdmission,
+                lunco_core::RuntimeCycleSet::EntityIndex,
+            )
+                .chain(),
+        );
+        app.configure_sets(
             Update,
             (
                 lunco_core::RuntimeCycleSet::Lifecycle,

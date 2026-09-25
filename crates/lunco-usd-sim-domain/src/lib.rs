@@ -16,7 +16,7 @@ use lunco_modelica_ast::ast_extract::{
 };
 use lunco_modelica_ast::{Causality, StoredDefinition};
 use lunco_modelica_runtime::{
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
+    ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
     ModelicaSignalProvenance, NoticeLevel,
 };
 use lunco_modelica_runtime::{ModelicaSource, resolve_communication_period_secs};
@@ -748,8 +748,6 @@ fn commit_domain_projection(
     root_path: &SdfPath,
     view: &dyn ComposedReader,
     classes: &MemberClasses,
-    channels: &ModelicaChannels,
-    source_roots: Option<&mut lunco_modelica_source_roots::SourceRootRegistry>,
     requested: &str,
     model_name: &str,
     synthesized: Result<SynthOutcome, Vec<DomainProjectionError>>,
@@ -857,8 +855,11 @@ fn commit_domain_projection(
         inputs: interface.inputs,
         communication_period_secs: synthesized.communication_period_secs,
         session_id,
-        is_stepping: true,
-        is_compiling: true,
+        // The generated source is published below, then linked to its standard
+        // Modelica document by `sync_generated_network_documents`. The normal
+        // lifecycle compile admission owns compilation after that link exists.
+        is_stepping: false,
+        is_compiling: false,
         resume_after_compile: true,
         ..default()
     };
@@ -898,52 +899,11 @@ fn commit_domain_projection(
             return false;
         }
     };
-    let root_admission = match source_roots {
-        Some(source_roots) => lunco_modelica_source_roots::admit_compile_roots(
-            source_roots,
-            synthesized.source_roots.iter().cloned(),
-            channels,
-        ),
-        None if synthesized.source_roots.is_empty() => Ok(()),
-        None => Err("Modelica source-root registry is not installed".to_owned()),
-    };
-    let dispatch_error = root_admission
-        .err()
-        .map(|error| format!("could not admit generated Modelica source roots: {error}"))
-        .or_else(|| {
-            channels
-                .tx
-                .send(ModelicaCommand::Compile {
-                    entity,
-                    session_id,
-                    model_name: compiled_name,
-                    source,
-                    doc_uri: doc_uri.clone(),
-                    extra_sources: Vec::new(),
-                    parameter_overrides: Vec::new(),
-                    stream: None,
-                    // The worker, not this projector, owns backend selection and DAE
-                    // lowering for generated domain networks.
-                    realtime_safe: false,
-                })
-                .err()
-                .map(|error| format!("could not dispatch generated model compile: {error}"))
-        });
-    if let Some(message) = &dispatch_error {
-        model.is_stepping = false;
-        model.is_compiling = false;
-        model.last_error = Some(message.clone());
-        notices.write(ModelicaNotice {
-            level: NoticeLevel::Error,
-            text: format!("[{}] Compile error: {message}", model.model_name),
-        });
-    } else {
-        info!(
-            "[domain-projection] compiling `{}` from {} component(s) via `{requested}` as \
-             generated://{}.mo",
-            prim.path, component_count, model_name
-        );
-    }
+    info!(
+        "[domain-projection] published `{}` from {} component(s) via `{requested}` as \
+         generated://{}.mo for Modelica lifecycle admission",
+        prim.path, component_count, model_name
+    );
     let generated_source = GeneratedModelicaSource {
         network_root: prim.path.clone(),
         doc_uri,
@@ -956,7 +916,7 @@ fn commit_domain_projection(
         boundary_inputs: synthesized.inputs.iter().cloned().collect(),
         boundary_outputs: synthesized.outputs.iter().cloned().collect(),
         layout: synthesized.layout,
-        projection_error: dispatch_error,
+        projection_error: None,
     };
     retire_sim_interface(commands, entity);
     commands.entity(entity).try_insert((
@@ -1007,15 +967,12 @@ pub fn project_domain_islands(
         Res<SynthesizerRegistry>,
         Option<Res<lunco_core::SceneTransitionCoordinator>>,
     ),
-    mut modelica_admission: (
-        Option<Res<ModelicaChannels>>,
-        Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
-    ),
+    modelica_channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
-    let Some(channels) = modelica_admission.0.as_deref() else {
+    if modelica_channels.is_none() {
         return;
-    };
+    }
     if candidates.projection.is_empty() {
         return;
     }
@@ -1171,8 +1128,6 @@ pub fn project_domain_islands(
                 &root_path,
                 &reader,
                 &classes,
-                channels,
-                modelica_admission.1.as_deref_mut(),
                 &requested,
                 &model_name,
                 synthesized,
@@ -1216,15 +1171,12 @@ pub fn poll_domain_projection_tasks(
     canonical: NonSend<CanonicalStages>,
     classes: Res<MemberClasses>,
     scene_transitions: Option<Res<lunco_core::SceneTransitionCoordinator>>,
-    mut modelica_admission: (
-        Option<Res<ModelicaChannels>>,
-        Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
-    ),
+    modelica_channels: Option<Res<ModelicaChannels>>,
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
-    let Some(channels) = modelica_admission.0.as_deref() else {
+    if modelica_channels.is_none() {
         return;
-    };
+    }
     let current_scene_generation = scene_transitions
         .as_deref()
         .and_then(lunco_core::SceneTransitionCoordinator::lifecycle_generation);
@@ -1287,8 +1239,6 @@ pub fn poll_domain_projection_tasks(
             &root_path,
             view,
             &classes,
-            channels,
-            modelica_admission.1.as_deref_mut(),
             &task.requested,
             &task.model_name,
             synthesized,

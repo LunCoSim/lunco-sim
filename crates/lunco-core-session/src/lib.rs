@@ -35,7 +35,10 @@ impl Plugin for LunCoCoreSessionPlugin {
             .init_resource::<LocalDriveInput>()
             .init_resource::<AppliedInputSeq>()
             .add_systems(lunco_core::SceneTeardown, reset_session_scene_state)
-            .add_systems(PostUpdate, assign_global_entity_ids)
+            .add_systems(
+                PreUpdate,
+                assign_global_entity_ids.in_set(lunco_core::RuntimeCycleSet::IdentityAdmission),
+            )
             .add_systems(FixedFirst, sync_applied_seq_owners);
         commands::register_all_commands(app);
     }

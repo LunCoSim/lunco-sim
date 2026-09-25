@@ -37,6 +37,27 @@ contract remains open.
 
 ## Migration order
 
+### Generated Modelica lifecycle
+
+The USD domain projector now publishes generated source and its parsed
+interface before Modelica compilation. The generated-source owner links a
+normal document, then lifecycle admission dispatches `CompileRequested` through
+the same source-generation and worker-session fences used by authored models.
+This avoids a second compile path whose result could arrive before the generated
+participant had its document lifecycle state. The production
+`route_lifecycle` scene gate is the runtime acceptance for this boundary.
+
+### Pre-simulation identity and entity indexes
+
+Lifecycle projection, stable identity assignment, and API path-index
+publication now have explicit ordered `PreUpdate` cycles before `TimeSpineSet`
+can release fixed simulation. Newly admitted referenced entities therefore
+resolve through `find_path` on their first resumed tick. The production
+`route_lifecycle` Rhai gate passed twice with the same seed: both runs recorded
+74 assertions and 56 fixed ticks. Application update counts were 102 and 96,
+so this confirms a stable simulation verdict and horizon, not a deterministic
+wall-frame count.
+
 Use the canonical staged plan in
 [`62-deterministic-runtime-and-async-boundaries.md`](../architecture/62-deterministic-runtime-and-async-boundaries.md#10-migration-order).
 The terrain visualization capability split (D15), first Rhai execution

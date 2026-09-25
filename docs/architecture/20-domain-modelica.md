@@ -147,9 +147,12 @@ The shipped source and visual Modelica schema is the Rhai policy
 replace that seam without a Rust rebuild. The policy must return the complete
 synthesis result: `source`, `units`, `layout.units`, `layout.members`,
 `source_roots`, and `member_output_aliases`. The Rust projector only validates
-that those outputs cover the composed USD graph and then sends the exact
-returned source to the compiler. A missing or invalid policy is an explicit
-projection error, never a compiled-schema fallback.
+that those outputs cover the composed USD graph, then publishes the generated
+source and its parsed interface. The generated-source owner links that source
+to a normal Modelica document; lifecycle compile admission dispatches only
+after the document is current. This gives generated and authored models the
+same source-generation, session, and worker-result fences. A missing or invalid
+policy is an explicit projection error, never a compiled-schema fallback.
 
 The production Rust boundary keeps these policy contracts in the public
 `lunco_usd_sim_domain::synthesis` module; the sibling `network` module owns USD
@@ -177,12 +180,14 @@ Before a live Modelica compile is submitted, its owner admits required roots
 through `lunco-modelica-source-roots` and sends each `LoadSourceRoot` before the
 `Compile` command on the same ordered worker channel. File-backed source assets
 carry sorted root requirements from their prepared AST interface; generated
-domain compiles use the root set returned by the authored synthesizer policy;
-document compiles derive roots from the primary and sibling document ASTs. The
-worker holds compile work until pending root preparation commits in admission
-order, then uses a compile entry point that rejects any dependency not already
-admitted. A failed root is recorded in the compiler session, so dependent
-compiles return the root error instead of repeating synchronous file discovery.
+domain sources expose the authored root manifest for generated-document class
+resolution, while compile dispatch derives and admits compiler dependencies
+from the parsed document AST; document compiles also include sibling document
+ASTs. The worker holds compile work until pending root preparation commits in
+admission order, then uses a compile entry point that rejects any dependency
+not already admitted. A failed root is recorded in the compiler session, so
+dependent compiles return the root error instead of repeating synchronous file
+discovery.
 Synchronous compiler convenience methods remain for CLI and batch callers. Root
 reads, bound-input extraction, and parsing run on the bounded preparation
 pool. Session installation and ordinary Rumoca DAE compilation remain

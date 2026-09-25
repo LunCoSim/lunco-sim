@@ -2415,7 +2415,12 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
         // Block only when idle; otherwise just soak up whatever has arrived
         // since the last command, so Steps that landed during a long compile
         // are scheduled ahead of older queued compiles.
-        if compile_lane.is_empty() && step_lane.is_empty() {
+        if compile_lane.is_empty()
+            && step_lane.is_empty()
+            && ready_solve_preparations.is_empty()
+            && ready_source_root_preparations.is_empty()
+            && ready_compiler_completions.is_empty()
+        {
             if pending_compile_works.is_empty()
                 && pending_compiles.is_empty()
                 && source_root_preparation_order.is_empty()

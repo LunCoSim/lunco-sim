@@ -238,6 +238,15 @@ stage/root/member reverse index; stage-asset changes and generation gaps only
 requeue roots on that stage. Reserve the all-prim pass for initial discovery.
 Do not use the USD wiring latch as a membership signal, add a second stage scan,
 or use a name-based candidate list.
+After validation, publish the generated source and interface, link the source
+to its normal Modelica document, then let lifecycle compile admission dispatch
+it. Do not send a worker compile directly from USD projection; the standard
+path owns document-generation and session fencing for generated and authored
+models alike.
+Lifecycle projection is followed by stable identity admission and API/path
+index publication before the time spine releases simulation. Newly projected
+references must resolve by path on their first resumed tick through that
+ordered runtime path.
 The generated-source browser/API projection has its own source/document
 invalidation boundary. Do not gate it on live `ModelicaModel` output or clock
 changes; those are solver state and must stay in the Modelica runtime owner.

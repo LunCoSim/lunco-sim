@@ -762,6 +762,16 @@ participant with one public boundary. The synthesizer may partition its graph
 into several generated Modelica units, but those units remain inside the same
 root and are not additional ECS participants.
 
+After validating a generated source, publish it with its parsed interface and
+link it to the normal Modelica document. Lifecycle compile admission dispatches
+the compile once that document is current, using the same generation/session
+fences as authored models. USD projection must not send a direct worker compile.
+
+Scene lifecycle projection, stable entity identity assignment, and API/path
+index publication run in that order in `PreUpdate`, before `TimeSpineSet` can
+release simulation. Do not add a separate startup identity pass or readiness
+poll; a projected reference must resolve by path on the first resumed tick.
+
 Keep acausal conservation connectors (`Pin`, `HeatPort`, `FluidPort`, `Flange`,
 and equivalent domain connectors) inside the root whose solver owns their
 algebraic equations. A typed scalar USD connection between two roots is causal

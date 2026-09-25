@@ -37,6 +37,8 @@ The runtime uses these existing cycle families:
 | Cycle | Work | Clock contract |
 |---|---|---|
 | `Lifecycle` | scene/Twin admission and teardown | discrete boundary; no elapsed-time integration |
+| `IdentityAdmission` | assign stable identities to entities created by lifecycle projection | discrete boundary; ordered after lifecycle projection |
+| `EntityIndex` | publish API/path lookup indexes for admitted identities | discrete boundary; ordered after identity admission and before time advancement |
 | `Simulation` | co-simulation, Rhai behavior, controllers, physics | fixed `SimTick`; domain time is derived from that tick |
 | `Interaction` | avatar and camera interaction | wall-rooted `interaction` domain |
 | `Command` / `Repl` | typed command admission and one-shot script evaluation | application/wall cadence; never advances simulation time |
@@ -53,6 +55,15 @@ result. Tile-mesh CPU bakes still use the per-terrain task queue; mesh upload,
 visibility, and residency commit in `Update`. This removes the quadtree cover
 walk from the UI frame, while tile-bake admission and per-frame ECS work still
 share that frame.
+
+The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
+`EntityIndex` → `TimeSpineSet`. Lifecycle projection creates the ECS entities;
+the identity owner assigns their stable IDs; then the API registry publishes
+path lookups for those identities. Only after those steps can the time spine
+release the next fixed tick. This makes newly admitted referenced entities
+visible through `find_path` on the first resumed tick, without a startup-only
+route or a second scene-ready signal. The production `route_lifecycle` Rhai
+gate exercises reference admission and verifies that first-tick observation.
 
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
 Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled
@@ -389,6 +400,13 @@ document changed during compilation, the old result is discarded and an active
 model remains held with its run intent for the current revision. The scene
 admission hold still needs to include reference closure, Modelica preparation,
 Rhai activation, and physics readiness in one transaction.
+
+Generated domain projection follows the same path: it publishes the validated
+source and interface, the document owner links a generated Modelica document,
+and the next lifecycle admission emits `CompileRequested`. Projection does not
+send a worker command before the model has a linked document. This preserves
+the compile dispatcher's source-generation and session fences and makes the
+generated participant's readiness state visible to lifecycle admission.
 Twin SysML source-set analysis is read-only preparation for the active Twin, so
 it uses `Interactive` priority and does not acquire `SimulationProgress`.
 `AnalyzeSysml` reports `Pending` until the current snapshot is committed. A
@@ -695,10 +713,11 @@ The whole-simulation guarantee remains open because:
    Native Modelica source interfaces and their sorted required-root sets are
    extracted once on Bevy's async-compute pool while the source asset loads;
    co-simulation, member discovery, and the web workbench reuse that
-   revision-matched interface. Live compile producers admit those roots before
-   `Compile` on one ordered worker channel; generated models use the authored
-   root manifest, and document compiles derive requirements from their parsed
-   source set. Worker root preparation commits in admission order; the live
+   revision-matched interface. Live compile producers derive and admit compiler
+   dependencies from the parsed document AST before `Compile` on one ordered
+   worker channel; generated source documents also expose their authored root
+   manifest for class resolution. Document compiles derive requirements from
+   their primary and sibling parsed source set. Worker root preparation commits in admission order; the live
    compile entry point rejects unadmitted roots, and a failed root is retained
    as a terminal compiler state for dependent compiles. Native root installs and
    ordinary compiles run on the single Rumoca actor, while immutable DAE lowering

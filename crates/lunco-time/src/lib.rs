@@ -748,7 +748,7 @@ impl Plugin for TimePlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(
             PreUpdate,
-            TimeSpineSet.after(lunco_core::RuntimeCycleSet::Lifecycle),
+            TimeSpineSet.after(lunco_core::RuntimeCycleSet::EntityIndex),
         );
         // `SimTick` lives in `lunco-core`; `init_resource` is idempotent, so this
         // is harmless where another plugin also inserts it and makes the spine
