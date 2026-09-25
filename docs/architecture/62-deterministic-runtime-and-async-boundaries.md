@@ -64,6 +64,10 @@ release the next fixed tick. This makes newly admitted referenced entities
 visible through `find_path` on the first resumed tick, without a startup-only
 route or a second scene-ready signal. The production `route_lifecycle` Rhai
 gate exercises reference admission and verifies that first-tick observation.
+The owner-level `drain_ref_spawns` test makes a later reference ready before its
+authored predecessor, confirms neither prim is projected while the prefix is
+incomplete, and checks both live-stage commits follow authored order after the
+predecessor becomes ready.
 
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
 Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled

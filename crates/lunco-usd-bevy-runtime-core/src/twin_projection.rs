@@ -3586,6 +3586,183 @@ mod tests {
     }
 
     #[test]
+    fn drain_ref_spawns_commits_a_ready_successor_after_its_unready_prefix() {
+        use bevy::asset::AssetApp;
+        use bevy::prelude::*;
+        use lunco_usd_bevy_stage::canonical::CanonicalStages;
+        use lunco_usd_bevy_stage::read::UsdRead;
+        use openusd::sdf::Path as SdfPath;
+
+        const FIRST_REFERENCE: &str =
+            "#usda 1.0\n(\n    defaultPrim = \"FirstAsset\"\n)\ndef Xform \"FirstAsset\"\n{\n}\n";
+        const SECOND_REFERENCE: &str =
+            "#usda 1.0\n(\n    defaultPrim = \"SecondAsset\"\n)\ndef Xform \"SecondAsset\"\n{\n}\n";
+
+        let scene_recipe = lunco_usd_compose::recipe::StageRecipe::from_source("scene.usda", TINY);
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>()
+            .init_non_send::<CanonicalStages>()
+            .init_resource::<PendingRefSpawns>()
+            .init_resource::<PendingInstanceProjections>()
+            .init_resource::<SimulationProgress>();
+
+        let scene_handle = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset::from_recipe(scene_recipe.clone()).expect("prepare scene"));
+        let scene_id = scene_handle.id();
+        let (first_reference_id, second_reference_id) = {
+            let mut stages = app.world_mut().non_send_mut::<CanonicalStages>();
+            let stage = stages
+                .get_or_build(scene_id, &scene_recipe)
+                .expect("open the live scene stage");
+            (
+                stage.canonical_reference_id("first.usda"),
+                stage.canonical_reference_id("second.usda"),
+            )
+        };
+        let first_reference_recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
+            first_reference_id,
+            FIRST_REFERENCE,
+        );
+        let second_reference_recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
+            second_reference_id,
+            SECOND_REFERENCE,
+        );
+        let first_handle = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
+            UsdStageAsset::from_recipe(first_reference_recipe).expect("prepare first reference"),
+        );
+        let second_handle = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
+            UsdStageAsset::from_recipe(second_reference_recipe).expect("prepare second reference"),
+        );
+
+        let root = app
+            .world_mut()
+            .spawn((
+                UsdSceneRoot,
+                UsdPrimPath {
+                    stage_handle: scene_handle,
+                    path: "/World".to_owned(),
+                },
+            ))
+            .id();
+        let mut mounts = lunco_core::SceneMountState::default();
+        mounts.register_root(root, true);
+        app.world_mut().insert_resource(mounts);
+
+        let (first_key, second_key) = {
+            let mut pending = app.world_mut().resource_mut::<PendingRefSpawns>();
+            let first_key = pending
+                .allocate_progress_key()
+                .expect("first reference operation identity");
+            let second_key = pending
+                .allocate_progress_key()
+                .expect("second reference operation identity");
+            let make_spawn =
+                |progress_key, prim_path: &str, asset_path: &str, ref_handle| RefSpawn {
+                    progress_key,
+                    scene_id,
+                    prim_path: prim_path.to_owned(),
+                    type_name: Some("Xform".to_owned()),
+                    asset_path: asset_path.to_owned(),
+                    reference_prim_path: None,
+                    ref_handle,
+                    translate: None,
+                    deferred_ops: Vec::new(),
+                    active: true,
+                    held: false,
+                    asset_ready: false,
+                    failure: None,
+                    failure_reported: false,
+                    removed: false,
+                };
+            pending.push(
+                make_spawn(
+                    first_key,
+                    "/World/First",
+                    "first.usda",
+                    first_handle.clone(),
+                ),
+                false,
+            );
+            pending.push(
+                make_spawn(
+                    second_key,
+                    "/World/Second",
+                    "second.usda",
+                    second_handle.clone(),
+                ),
+                false,
+            );
+            // Force the later authored result to arrive first.
+            pending.ready.insert(second_handle.id());
+            (first_key, second_key)
+        };
+
+        drain_ref_spawns(app.world_mut());
+
+        let stages = app.world().non_send::<CanonicalStages>();
+        let stage = stages.get(scene_id).expect("live scene stage remains open");
+        assert!(!stage
+            .view()
+            .has_prim(&SdfPath::new("/World/First").unwrap()));
+        assert!(!stage
+            .view()
+            .has_prim(&SdfPath::new("/World/Second").unwrap()));
+        let pending = app.world().resource::<PendingRefSpawns>();
+        assert_eq!(pending.items.len(), 2);
+        assert!(pending.items[0].held && pending.items[1].held);
+        assert!(pending.items[1].asset_ready);
+        assert!(app.world().resource::<SimulationProgress>().is_held());
+
+        app.world_mut()
+            .resource_mut::<PendingRefSpawns>()
+            .ready
+            .insert(first_handle.id());
+        drain_ref_spawns(app.world_mut());
+
+        let stage = app
+            .world()
+            .non_send::<CanonicalStages>()
+            .get(scene_id)
+            .expect("live scene stage remains open");
+        assert!(stage
+            .view()
+            .has_prim(&SdfPath::new("/World/First").unwrap()));
+        assert!(stage
+            .view()
+            .has_prim(&SdfPath::new("/World/Second").unwrap()));
+        let changes = app
+            .world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .get_mut(scene_id)
+            .expect("live scene stage remains open")
+            .drain_changes();
+        let reference_commit_order = changes
+            .iter()
+            .flat_map(|change| change.resynced.iter())
+            .filter_map(|path| match path.to_string().as_str() {
+                "/World/First" => Some(first_key.operation_id),
+                "/World/Second" => Some(second_key.operation_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reference_commit_order,
+            [first_key.operation_id, second_key.operation_id]
+        );
+        let projections = app.world().resource::<PendingInstanceProjections>();
+        assert!(projections
+            .plans
+            .contains_key(&(scene_id, "/World/First".into())));
+        assert!(projections
+            .plans
+            .contains_key(&(scene_id, "/World/Second".into())));
+        assert!(app.world().resource::<SimulationProgress>().is_held());
+    }
+
+    #[test]
     fn preview_reference_failure_does_not_hold_the_active_simulation() {
         let mut world = World::new();
         world.insert_resource(PendingRefSpawns::default());
