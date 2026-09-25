@@ -184,8 +184,13 @@ BigSpace f64 helpers. Normalize the displacement once into `UnitDirection3`;
 frame rotations preserve that unit vector. The USD wire selects the source id,
 while the consumer model uses a generic target-direction input. `SunState`
 contains solar irradiance only. A static `DistantLight` contributes a framed
-ray through the same resolver. Do not add per-body conversion systems, another
-coordinate cache, or a local solar clock.
+ray through the same resolver only after composed-root celestial-source
+classification confirms that no finite celestial target owns `sun`. Celestial
+roots use their finite body target exclusively, and a prior static ray is
+withdrawn before probe resolution. Do not add per-body conversion systems,
+another coordinate cache, or a local solar clock.
+Invalid input bindings may withhold the optional observer camera, but cannot
+block creation of celestial targets used by the direction resolver.
 
 Publish `SunRenderState` from the finalized scene-sun `GlobalTransform` after
 `BigSpaceSystems::PropagateLowPrecision`. Any conversion of that render

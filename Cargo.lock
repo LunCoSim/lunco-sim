@@ -10392,6 +10392,7 @@ dependencies = [
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",
  "lunco-usd-sim-authoring",
+ "lunco-usd-sim-celestial",
  "lunco-usd-sim-core",
  "openusd",
  "web-time",

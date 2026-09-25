@@ -252,6 +252,13 @@ fixed-step cadence. From lunar ground, Earth stays near one sky position
 because the Moon is tidally locked; its axial spin still advances the day/night
 pattern. BigSpace propagates both the changed Earth grid pose and rotation to
 `GlobalTransform`; one cadence gate commits the CelestialTime sample it read.
+Static authored-light rays are selected only after the active composed root's
+celestial projection has classified its source ownership. A celestial root owns
+the finite body target exclusively; any static ray seeded before classification
+must be withdrawn before probe resolution.
+The celestial hierarchy must not wait on interactive input bindings: invalid
+bindings may withhold the optional observer camera, but must not suppress the
+finite targets consumed by physics and Modelica.
 
 ### Runtime scopes, cycles, and publication boundaries
 

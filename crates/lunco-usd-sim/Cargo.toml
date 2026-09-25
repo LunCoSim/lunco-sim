@@ -23,6 +23,7 @@ lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-usd-actuation = { path = "../lunco-usd-actuation" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-authoring = { path = "../lunco-usd-sim-authoring" }
+lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial" }
 # `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set).
 # `lunco-materials` is render-free: `shader_material.rs` (the `AsBindGroup` that
 # pulled `bevy_pbr`) moved to `lunco-render-bevy` on 2026-07-13, so this crate's
