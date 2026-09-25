@@ -828,11 +828,12 @@ pub async fn read_asset_meta(
             #[cfg(not(target_arch = "wasm32"))]
             if meta.spawnable {
                 // The metadata parser answers "did this file opt into the
-                // palette?". Native pre-flight answers the next, user-facing
-                // question: "will the same file survive the runtime loader?"
-                // Keep invalid content out of the palette instead of making a
-                // user discover the failure only after dropping it into a sim.
-                let report = lunco_scene_validation::validate::validate_asset(
+                // palette?". Native loadability pre-flight answers whether the
+                // same file will survive the runtime loader. This automatic
+                // catalog scan must not run authored lint policies; lint is
+                // available through explicit validation commands and CLI/API
+                // requests.
+                let report = lunco_scene_validation::validate::validate_asset_loadability(
                     &asset.abs_path.to_string_lossy(),
                 );
                 if !report.ok {

@@ -48,9 +48,8 @@
 //! `facts` is whatever the domain gathered ([`HookValue`] maps/arrays — typed, not
 //! JSON). `severity` is `"error"`, `"warn"` or `"info"`; anything else is read as
 //! `"warn"` rather than dropped, because a typo in a rule must not silently delete
-//! the finding it was written to raise. A policy that returns a non-array, or
-//! faults, yields no findings and logs why — a broken linter must never be able to
-//! stop a scene from loading.
+//! the finding it was written to raise. A policy that returns a non-array or
+//! faults yields an explicit error finding without stopping a scene from loading.
 
 use bevy::prelude::*;
 use lunco_hooks::HookValue as H;
@@ -231,9 +230,9 @@ impl LintReport {
 /// Ask a domain's authored rules what is wrong with `facts`.
 ///
 /// Returns an empty vec when no policy is registered for the domain — the
-/// no-scripting case — and when the policy faults or answers with something that
-/// is not an array of finding maps. A linter is diagnostics: it may not break the
-/// thing it is diagnosing.
+/// no-scripting case. Policy faults and invalid result shapes become explicit
+/// error findings so validation cannot report a clean result when linting did
+/// not run. Findings remain diagnostic and do not prevent scene loading.
 pub fn run_lint(domain: &str, facts: H) -> Vec<LintFinding> {
     let hook = hook_id(domain);
     let Some(outcome) = lunco_hooks::invoke(&hook, &[facts]) else {
@@ -244,18 +243,26 @@ pub fn run_lint(domain: &str, facts: H) -> Vec<LintFinding> {
     let result = match outcome {
         Ok(v) => v,
         Err(e) => {
-            // A rule that throws is a broken RULE, not a broken scene. Say so
-            // once, loudly enough to be fixed, and load anyway.
-            error!("[lint] policy '{hook}' faulted: {e:?} — no findings from this domain");
-            return Vec::new();
+            let message = format!("authored lint policy failed: {e}");
+            error!("[lint] policy '{hook}' faulted: {e:?}");
+            return vec![policy_failure(
+                domain,
+                "policy-execution-failed",
+                &hook,
+                message,
+            )];
         }
     };
     let H::Array(items) = result else {
-        warn!(
-            "[lint] policy '{hook}' returned {result:?}, expected an array of \
-             #{{rule, severity, subject, message}} — no findings recorded"
-        );
-        return Vec::new();
+        let message =
+            format!("authored lint policy returned {result:?}; expected an array of finding maps");
+        error!("[lint] policy '{hook}' returned a non-array result: {result:?}");
+        return vec![policy_failure(
+            domain,
+            "policy-invalid-result",
+            &hook,
+            message,
+        )];
     };
     let mut out = Vec::new();
     for item in items {
@@ -291,6 +298,16 @@ pub fn run_lint(domain: &str, facts: H) -> Vec<LintFinding> {
     out
 }
 
+fn policy_failure(domain: &str, rule: &str, hook: &str, message: String) -> LintFinding {
+    LintFinding {
+        domain: domain.to_string(),
+        rule: rule.to_string(),
+        severity: LintSeverity::Error,
+        subject: hook.to_string(),
+        message,
+    }
+}
+
 /// Bevy wiring: the report resource, cleared when a scene is torn down.
 ///
 /// Deliberately NOT a scene-lifecycle dependency — this crate stays substrate, so
@@ -323,6 +340,13 @@ mod tests {
         }
     }
 
+    struct Faulting;
+    impl ScriptHook for Faulting {
+        fn invoke(&self, _args: &[H]) -> lunco_hooks::HookResult {
+            Err(lunco_hooks::HookError("expected lint policy fault".into()))
+        }
+    }
+
     fn finding_map(rule: &str, sev: &str) -> H {
         H::map([
             ("rule", H::str(rule)),
@@ -339,6 +363,25 @@ mod tests {
             deterministic: false,
             hook: Arc::new(Canned(items)),
         });
+    }
+
+    #[test]
+    fn policy_fault_is_reported_as_an_error_finding() {
+        let _ = register(RegisteredHook {
+            id: hook_id("test_fault"),
+            backend: "test".into(),
+            deterministic: false,
+            hook: Arc::new(Faulting),
+        });
+
+        let findings = run_lint("test_fault", H::Unit);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule, "policy-execution-failed");
+        assert_eq!(findings[0].severity, LintSeverity::Error);
+        assert_eq!(findings[0].subject, "lint.test_fault");
+        assert!(findings[0].message.contains("expected lint policy fault"));
+
+        lunco_hooks::unregister(&hook_id("test_fault"));
     }
 
     #[test]
