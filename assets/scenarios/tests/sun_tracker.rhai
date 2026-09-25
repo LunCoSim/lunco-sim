@@ -1,69 +1,61 @@
-// ── The co-sim fabric tracks the sun, end to end ────────────────────────────
-//
 // TEST-ONLY. Runs against `scenes/tests/sun_tracker.usda`.
-//
-// WHAT IT GUARDS. Four different subsystems have to work for a solar panel to
-// follow the sun, and the chain is authored entirely in USD — no actuator hack,
-// no Rust in the loop:
-//
-//   solar bridge --(sun_mount_x/y/z)--> SunTracker.mo --(yaw)--> Hinge angle --> panel
-//
-// Every joint of that chain fails QUIETLY. A wire that did not resolve leaves the
-// port reading zero; a Modelica model that failed to compile leaves its outputs
-// at their initial values; a `inputs:angle.connect` that names the wrong prim
-// simply never drives the joint. In each case the scene loads, the panel sits
-// there, and it looks like a panel that happens to be pointing the right way.
-//
-// ── WHY A STEP, NOT A SNAPSHOT ──────────────────────────────────────────────
-//
-// Reading a yaw once proves almost nothing: at the scene's start it can be near
-// zero, so a dead controller with a dead wire and an unmoved joint appears right.
-// So the sun is MOVED — `SetEnvironmentLight` with
-// a new `sun_yaw` — and the whole chain has to follow it. A step the controller
-// did not track is a step nothing else can fake.
-//
-// ── HOW FAILURE IS SIGNALLED ────────────────────────────────────────────────
-//
-// `emit("SUN_TRACKER", "PASS"|"FAIL")`. Helpers from `prelude/auto_tests.rhai`.
+// The test sends a static `sun` ray and a moving `spacecraft_b` point target
+// through one EnvironmentProbe. Both consumers expose only `target_mount_xyz`;
+// the provider wire selects the source. It checks unit length, frame conversion,
+// Modelica response, and the final joint motion through the production scene
+// test binary.
 
-const STEP_YAW = 1.0;      // radians the sun is moved to (~57 deg)
+const STEP_YAW = 1.0;      // radians the static sun ray is moved to (~57 deg)
 const TOL_RAD = 0.15;      // servo convergence band (~8.6 deg)
 const PORT_WAIT_S = 20.0;  // budget for the Modelica model to compile and publish
 
 fn on_start(me, ctx) {
     this.t = 0.0;
-    // WAIT FOR THE PORTS, do not assume a settle time. `SunTracker.mo` compiles
-    // asynchronously and publishes nothing until it does — on the first run of
-    // this file a fixed 4 s settle sampled `sun_mount_x` while it was still ()
-    // and the "did the sun actually move" guard below skipped itself in silence.
-    // That is the exact failure this test exists to catch, committed by the test.
+    // Wait for Modelica publication before sampling the direction triplets.
     this.phase = "await_ports";
     this.phase_start = 0.0;
     this.settle_s = 2.0;    // after the ports appear, let the model reach steady state
     this.track_s = 12.0;    // first-order servo: give it time to slew and settle
 
     this.ctrl = find("/SunTrackerTest/SolarTower/Controller");
+    this.spacecraft_ctrl = find("/SunTrackerTest/SpacecraftController");
+    this.spacecraft_target = find("/SunTrackerTest/SpacecraftTarget");
     this.hinge = find("/SunTrackerTest/SolarTower/Hinge");
     this.mast = find("/SunTrackerTest/SolarTower/Mast");
     this.head = find("/SunTrackerTest/SolarTower/YawHead");
 
     this.az_before = ();
+    this.direction_y_before = ();
+    this.direction_z_before = ();
     this.yaw_before = ();
     this.mast_forward_before = ();
     this.head_forward_before = ();
+    this.spacecraft_x_before = ();
+    this.spacecraft_y_before = ();
+    this.spacecraft_z_before = ();
+    this.spacecraft_yaw_before = ();
+    this.spacecraft_x_after = ();
+    this.spacecraft_y_after = ();
+    this.spacecraft_z_after = ();
+    this.spacecraft_yaw_after = ();
 
-    print("[sun] ── co-sim fabric tracks the sun ─────────────────────────");
-    print("[sun] controller gid=" + this.ctrl + " hinge gid=" + this.hinge);
+    print("[direction] ── static ray and spacecraft target ───────────────");
+    print("[direction] sun controller gid=" + this.ctrl + " hinge gid=" + this.hinge +
+          " spacecraft controller gid=" + this.spacecraft_ctrl);
 }
 
 fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
 
     if this.ctrl == () || this.ctrl < 0 || this.hinge == () || this.hinge < 0 ||
-       this.mast == () || this.mast < 0 || this.head == () || this.head < 0 {
+       this.mast == () || this.mast < 0 || this.head == () || this.head < 0 ||
+       this.spacecraft_ctrl == () || this.spacecraft_ctrl < 0 ||
+       this.spacecraft_target == () || this.spacecraft_target < 0 {
         fail_fast("sun tracker assembly prims not found (ctrl=" + this.ctrl +
                   " hinge=" + this.hinge + " mast=" + this.mast + " head=" +
-                  this.head + ") — wrong scene?", "SUN TRACKER", "SUN_TRACKER");
+                  this.head + " spacecraft_ctrl=" + this.spacecraft_ctrl +
+                  " spacecraft_target=" + this.spacecraft_target +
+                  ") — wrong scene?", "SUN TRACKER", "SUN_TRACKER");
         this.phase = "done";
         return;
     }
@@ -72,37 +64,79 @@ fn on_tick(me, ctx) {
     let leg = this.t - this.phase_start;
 
     if this.phase == "await_ports" {
-        if get(this.ctrl, "sun_mount_x") != () && get(this.ctrl, "yaw") != () {
+        if get(this.ctrl, "target_mount_x") != () && get(this.ctrl, "yaw") != () &&
+           get(this.spacecraft_ctrl, "target_mount_x") != () &&
+           get(this.spacecraft_ctrl, "yaw") != () {
             print("[sun] ports live at t=" + r2(this.t) + "s");
             this.phase = "settle";
             this.phase_start = this.t;
         } else if this.t > PORT_WAIT_S {
-            fail_fast("Controller published no sun_mount_x/yaw within " +
+            fail_fast("Controller published no target_mount_x/yaw within " +
                       PORT_WAIT_S + "s — SunTracker.mo never compiled, or its " +
                       "outputs are not exposed as ports", "SUN TRACKER", "SUN_TRACKER");
             this.phase = "done";
         }
     } else if this.phase == "settle" {
         if leg >= this.settle_s {
-            this.az_before = get(this.ctrl, "sun_mount_x");
+            this.az_before = get(this.ctrl, "target_mount_x");
+            this.direction_y_before = get(this.ctrl, "target_mount_y");
+            this.direction_z_before = get(this.ctrl, "target_mount_z");
             this.yaw_before = get(this.ctrl, "yaw");
             this.mast_forward_before = world_forward(this.mast);
             this.head_forward_before = world_forward(this.head);
-            print("[sun] before the step: sun_mount_x=" + r4(this.az_before) +
+            this.spacecraft_x_before = get(this.spacecraft_ctrl, "target_mount_x");
+            this.spacecraft_y_before = get(this.spacecraft_ctrl, "target_mount_y");
+            this.spacecraft_z_before = get(this.spacecraft_ctrl, "target_mount_z");
+            this.spacecraft_yaw_before = get(this.spacecraft_ctrl, "yaw");
+            let moved = cmd("MoveEntity", #{ entity_id: this.spacecraft_target,
+                                                translation: [0.0, 0.0, -10.0] });
+            if moved == () || moved.ok == false {
+                fail_fast("could not move the tagged spacecraft direction target",
+                    "SUN TRACKER", "SUN_TRACKER");
+                this.phase = "done";
+                return;
+            }
+            print("[sun] before the step: target_mount_x=" + r4(this.az_before) +
                   " yaw=" + r4(this.yaw_before) + " angle=" + r4(get(this.hinge, "angle")));
-            // MOVE THE SUN. Everything after this is the chain's response.
-            cmd("SetEnvironmentLight", #{ sun_yaw: STEP_YAW });
-            print("[sun] step: SetEnvironmentLight sun_yaw=" + STEP_YAW + " rad");
-            this.phase = "track";
+            this.phase = "spacecraft_track";
             this.phase_start = this.t;
         }
-    } else if this.phase == "track" {
+    } else if this.phase == "spacecraft_track" {
+        if leg >= this.track_s {
+            this.spacecraft_x_after = get(this.spacecraft_ctrl, "target_mount_x");
+            this.spacecraft_y_after = get(this.spacecraft_ctrl, "target_mount_y");
+            this.spacecraft_z_after = get(this.spacecraft_ctrl, "target_mount_z");
+            this.spacecraft_yaw_after = get(this.spacecraft_ctrl, "yaw");
+            cmd("SetEnvironmentLight", #{ sun_yaw: STEP_YAW });
+            print("[sun] step: SetEnvironmentLight sun_yaw=" + STEP_YAW + " rad");
+            this.phase = "sun_track";
+            this.phase_start = this.t;
+        } else if leg % 4.0 < dt() {
+            print("[direction] spacecraft vector=" +
+                  r4(get(this.spacecraft_ctrl, "target_mount_x")) + "," +
+                  r4(get(this.spacecraft_ctrl, "target_mount_y")) + "," +
+                  r4(get(this.spacecraft_ctrl, "target_mount_z")) +
+                  " yaw=" + r4(get(this.spacecraft_ctrl, "yaw")));
+        }
+    } else if this.phase == "sun_track" {
         if leg >= this.track_s {
             this.phase = "done";
             verdict(#{
                 az_before: this.az_before,
+                direction_y_before: this.direction_y_before,
+                direction_z_before: this.direction_z_before,
+                spacecraft_x_before: this.spacecraft_x_before,
+                spacecraft_y_before: this.spacecraft_y_before,
+                spacecraft_z_before: this.spacecraft_z_before,
+                spacecraft_yaw_before: this.spacecraft_yaw_before,
+                spacecraft_x_after: this.spacecraft_x_after,
+                spacecraft_y_after: this.spacecraft_y_after,
+                spacecraft_z_after: this.spacecraft_z_after,
+                spacecraft_yaw_after: this.spacecraft_yaw_after,
                 yaw_before: this.yaw_before,
-                az: get(this.ctrl, "sun_mount_x"),
+                az: get(this.ctrl, "target_mount_x"),
+                direction_y: get(this.ctrl, "target_mount_y"),
+                direction_z: get(this.ctrl, "target_mount_z"),
                 yaw: get(this.ctrl, "yaw"),
                 angle: get(this.hinge, "angle"),
                 mast_forward: world_forward(this.mast),
@@ -111,51 +145,77 @@ fn on_tick(me, ctx) {
                 head_forward_before: this.head_forward_before,
             });
         } else if leg % 4.0 < dt() {
-            print("[sun] t=" + r2(this.t) + "s  sun_mount_x=" + r4(get(this.ctrl, "sun_mount_x")) +
+            print("[sun] t=" + r2(this.t) + "s  target_mount_x=" + r4(get(this.ctrl, "target_mount_x")) +
                   " yaw=" + r4(get(this.ctrl, "yaw")) + " angle=" + r4(get(this.hinge, "angle")));
         }
     }
 }
 
-// ── The verdict ─────────────────────────────────────────────────────────────
-//
-//   ports present    a wire that did not resolve, or a model that did not
-//                    compile, publishes NOTHING — and an absent port reads the
-//                    same as a port reading zero, which is the answer this test
-//                    would otherwise accept.
-//   the sun moved    the bridge saw the step. Without this the two agreements
-//                    below are "0 ≈ 0 ≈ 0" and a dead chain passes.
-//   controller tracks  `yaw` converged on the NEW azimuth: the model ran and its
-//                    input was really wired to the bridge.
-//   the joint follows  the measured hinge `angle` matches `yaw`, so the
-//                    cross-prim `inputs:angle.connect` reaches the joint motor.
-//                    The controller can be perfect and the panel still not move.
+// The verdict requires observed input samples, a changed bearing, Modelica
+// response, and matching joint motion.
 fn verdict(s) {
     let f = [];
-    f.push(t_present(s.az, "Controller sun_mount_x port"));
+    f.push(t_present(s.az, "Controller target_mount_x port"));
+    f.push(t_present(s.direction_y, "Controller target_mount_y port"));
+    f.push(t_present(s.direction_z, "Controller target_mount_z port"));
+    f.push(t_present(s.direction_y_before, "Controller target_mount_y initial sample"));
+    f.push(t_present(s.direction_z_before, "Controller target_mount_z initial sample"));
     f.push(t_present(s.yaw, "Controller yaw port"));
     f.push(t_present(s.angle, "Hinge angle port"));
     f.push(t_present(s.mast_forward, "Mast world orientation"));
     f.push(t_present(s.head_forward, "YawHead world orientation"));
+    f.push(t_present(s.spacecraft_x_before, "spacecraft target_mount_x before move"));
+    f.push(t_present(s.spacecraft_y_before, "spacecraft target_mount_y before move"));
+    f.push(t_present(s.spacecraft_z_before, "spacecraft target_mount_z before move"));
+    f.push(t_present(s.spacecraft_yaw_before, "spacecraft yaw before target move"));
+    f.push(t_present(s.spacecraft_x_after, "spacecraft target_mount_x after move"));
+    f.push(t_present(s.spacecraft_y_after, "spacecraft target_mount_y after move"));
+    f.push(t_present(s.spacecraft_z_after, "spacecraft target_mount_z after move"));
+    f.push(t_present(s.spacecraft_yaw_after, "spacecraft yaw after target move"));
 
-    // Two halves of one guard, and the SECOND is the load-bearing one. The
-    // commanded `sun_yaw` is not a mount-frame vector component, so how far
-    // `sun_mount_x` moves for a given step is not something this file gets to
-    // predict — measured, it was 0.30 against a
-    // 0.3 threshold, which is a test one epoch away from failing for no reason.
-    // The bar is therefore "it moved at all, well clear of noise", and the real
-    // evidence is that the CHAIN moved: yaw slewed 0.6 rad to follow it.
     if s.az != () && s.az_before != () {
         f.push(t_true((s.az - s.az_before).abs() > 0.1,
-            "the solar bridge did not see the sun move: sun_mount_x went from " +
+            "the environment probe did not see its source change: target_mount_x went from " +
             r4(s.az_before) + " to " + r4(s.az) + " after a " + STEP_YAW +
-            " rad step. Everything below compares two numbers that never changed."));
+            " rad step"));
+    }
+    if s.az_before != () && s.direction_y_before != () && s.direction_z_before != ()
+       && s.az != () && s.direction_y != () && s.direction_z != () {
+        let before_norm2 = s.az_before^2 + s.direction_y_before^2 + s.direction_z_before^2;
+        let after_norm2 = s.az^2 + s.direction_y^2 + s.direction_z^2;
+        f.push(t_true((before_norm2 - 1.0).abs() < 1.0e-10,
+            "direction provider did not publish a unit vector before the step: norm²=" + before_norm2));
+        f.push(t_true((after_norm2 - 1.0).abs() < 1.0e-10,
+            "direction provider did not publish a unit vector after the step: norm²=" + after_norm2));
     }
     if s.yaw != () && s.yaw_before != () {
         f.push(t_true((s.yaw - s.yaw_before).abs() > 0.2,
             "the panel never slewed: yaw went from " + r4(s.yaw_before) + " to " +
             r4(s.yaw) + " rad across the step. A controller already sitting where " +
             "the sun ended up agrees with it for free."));
+    }
+
+    if s.spacecraft_x_before != () && s.spacecraft_y_before != () &&
+       s.spacecraft_z_before != () && s.spacecraft_x_after != () &&
+       s.spacecraft_y_after != () && s.spacecraft_z_after != () {
+        let before_norm2 = s.spacecraft_x_before^2 + s.spacecraft_y_before^2 + s.spacecraft_z_before^2;
+        let after_norm2 = s.spacecraft_x_after^2 + s.spacecraft_y_after^2 + s.spacecraft_z_after^2;
+        f.push(t_true((before_norm2 - 1.0).abs() < 1.0e-10,
+            "arbitrary spacecraft bearing was not unit length before motion: norm²=" + before_norm2));
+        f.push(t_true((after_norm2 - 1.0).abs() < 1.0e-10,
+            "arbitrary spacecraft bearing was not unit length after motion: norm²=" + after_norm2));
+        f.push(t_true(s.spacecraft_x_before > 0.99 && s.spacecraft_y_before.abs() < 1.0e-6 &&
+                      s.spacecraft_z_before.abs() < 1.0e-6,
+            "the first spacecraft target should be +X from the probe; got " +
+            s.spacecraft_x_before + "," + s.spacecraft_y_before + "," + s.spacecraft_z_before));
+        f.push(t_true(s.spacecraft_z_after < -0.99 && s.spacecraft_x_after.abs() < 1.0e-6 &&
+                      s.spacecraft_y_after.abs() < 1.0e-6,
+            "moving the target spacecraft to -Z did not update its observer-frame bearing; got " +
+            s.spacecraft_x_after + "," + s.spacecraft_y_after + "," + s.spacecraft_z_after));
+    }
+    if s.spacecraft_yaw_before != () && s.spacecraft_yaw_after != () {
+        f.push(t_true((s.spacecraft_yaw_after - s.spacecraft_yaw_before).abs() > 0.2,
+            "the generic spacecraft target did not drive its Modelica consumer"));
     }
 
     if s.angle != () && s.yaw != () {
@@ -178,7 +238,7 @@ fn verdict(s) {
     }
 
     print("[sun] ── results ───────────────────────────────────────────");
-    print("[sun]   sun_mount_x  " + r4(s.az_before) + " -> " + r4(s.az));
+    print("[sun]   target_mount_x  " + r4(s.az_before) + " -> " + r4(s.az));
     print("[sun]   yaw          " + r4(s.yaw_before) + " -> " + r4(s.yaw) + " rad");
     print("[sun]   hinge angle  " + r4(s.angle) + " rad");
 

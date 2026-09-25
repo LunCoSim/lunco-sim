@@ -239,9 +239,10 @@ moving scene objects use standard USD `timeSamples` through
 `lunco-usd-bevy-animation`. Do not create a mission-only trajectory component
 or clock when composed USD animation expresses the motion.
 Celestial state uses the one `lunco-time::CelestialTime` sample, an affine
-child of `WorldTime`. It drives ephemerides, body rotation, semantic SunState,
-lighting, shadows, geometry queries, and the environment values consumed by
-Modelica. A rate up to 100,000× leaves Avian and Modelica at their ordinary
+child of `WorldTime`. It drives ephemerides, body rotation, solar irradiance,
+lighting, shadows, geometry queries, and target positions consumed by the
+generic EnvironmentProbe direction resolver. `SunState` contains irradiance;
+it is not a parallel direction source. A rate up to 100,000× leaves Avian and Modelica at their ordinary
 fixed-step cadence. From lunar ground, Earth stays near one sky position
 because the Moon is tidally locked; its axial spin still advances the day/night
 pattern. BigSpace propagates both the changed Earth grid pose and rotation to

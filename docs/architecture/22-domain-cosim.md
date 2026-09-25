@@ -645,9 +645,10 @@ worker answered, the prim existed with **no ports at all** — so every wire int
 it hit `write_port → false` and the propagation master reported a *dangling
 wire*: a diagnostic that means "your wiring is wrong", raised for wiring that was
 correct. On older solar-rover scenes that included `sun_azimuth`, `panel_yaw`
-and `vehicle_throttle` on every load. The current solar-rover scene has no
-sun-to-light Modelica wire: ephemeris owns the semantic sun sample, and the
-rover's `SunTracker` consumes the explicit `EnvironmentProbe` outputs.
+and `vehicle_throttle` on every load. The solar-rover scene has no
+Modelica-to-light wire: celestial systems own body position and irradiance,
+while the rover's `SunTracker` consumes a generic target vector selected by
+its `EnvironmentProbe` wires.
 
 Two lessons generalise beyond Modelica:
 

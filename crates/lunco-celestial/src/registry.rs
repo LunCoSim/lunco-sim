@@ -39,6 +39,22 @@ pub mod ephemeris_id {
     pub const MOON: i32 = 301;
     /// Earth.
     pub const EARTH: i32 = 399;
+
+    /// Canonical direction-source identity for a celestial body. The three
+    /// familiar bodies keep their semantic names; all other bodies use their
+    /// stable NAIF identity, independent of display names and prim paths.
+    /// Negative NAIF identifiers use `body_m<absolute id>` so the result
+    /// follows the shared direction-port identifier grammar.
+    pub fn direction_source_id(naif: i32) -> Option<String> {
+        match naif {
+            SUN => Some("sun".to_owned()),
+            EARTH => Some("earth".to_owned()),
+            MOON => Some("moon".to_owned()),
+            0 => None,
+            value if value > 0 => Some(format!("body_{value}")),
+            value => Some(format!("body_m{}", value.unsigned_abs())),
+        }
+    }
 }
 
 /// Centralized catalog of all celestial bodies and their physical constants.
@@ -285,6 +301,31 @@ impl CelestialBodyRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direction_source_ids_use_stable_ephemeris_identity() {
+        assert_eq!(
+            ephemeris_id::direction_source_id(ephemeris_id::SUN).as_deref(),
+            Some("sun")
+        );
+        assert_eq!(
+            ephemeris_id::direction_source_id(ephemeris_id::EARTH).as_deref(),
+            Some("earth")
+        );
+        assert_eq!(
+            ephemeris_id::direction_source_id(ephemeris_id::MOON).as_deref(),
+            Some("moon")
+        );
+        assert_eq!(
+            ephemeris_id::direction_source_id(3).as_deref(),
+            Some("body_3")
+        );
+        assert_eq!(
+            ephemeris_id::direction_source_id(-100).as_deref(),
+            Some("body_m100")
+        );
+        assert_eq!(ephemeris_id::direction_source_id(0), None);
+    }
 
     /// `spins()` must agree with the presence of IAU elements — the invariant
     /// that replaced the cached `rotation_rate_rad_per_day` field.

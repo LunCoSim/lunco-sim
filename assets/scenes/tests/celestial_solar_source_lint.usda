@@ -1,0 +1,22 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+)
+{
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "celestial-solar-source-lint"
+        def Scope "Test" (
+            prepend apiSchemas = "LunCoProgramAPI"
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/celestial_solar_source_lint.rhai@
+        }
+    }
+}

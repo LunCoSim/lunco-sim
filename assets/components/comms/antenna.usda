@@ -2,256 +2,121 @@
 (
     defaultPrim = "CommsAntenna"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Comms antenna — the ONE dish in the catalogue (doc 43).
-#
-# The feed aperture is this assembly's connectivity endpoint. The generic link
-# kernel pairs it with every other node, applies the `link.connected` verdict
-# (range, elevation, body + terrain occlusion), and publishes link state there.
-# Keeping the endpoint on the rotating feed makes link geometry, RF state and the
-# visible beam share the exact same physical origin. Author `lunco:link:class` /
-# `maxRangeM` / `minElevationDeg` on `DishHead/LinkAperture` per instance.
-#
-# ── The reflector is PARAMETRIC, and it is a real paraboloid ──────────────────
-#
-# The surface is LATHED by the engine from the three numbers on `Reflector`, and
-# `lunco-usd-bevy-lathe` regenerates it whenever one of them changes. The control-point
-# net is NEVER authored alongside them: two spellings of one shape let the drawn
-# contour disagree with the declared model. `y = r²/4f`, walked from a small apex
-# to the rim; the u direction (the exact rational circle — 9 CVs, √2/2 diagonals,
-# doubled interior knots) is GENERATED, so the rim stays genuinely round rather
-# than an octagon.
-#
-# `LunCoLatheAPI` below is the explicit opt-in to this generator. A profile token
-# without that schema is not a lathe declaration; it is an authored NurbsPatch
-# with no control net and therefore has no surface to render.
-#
-# This geometry was the descent lander's `HighGainDish`, authored inline there and
-# nowhere else while every other antenna in the project drew a FLATTENED SPHERE.
-# One dish, one spelling: the lander, the base mast, the rovers and the Earth
-# stations all reference this prim now.
-#
-# ── The two knobs, and which one to turn ──────────────────────────────────────
-#
-#   SIZE  → `over "YawHead" { over "DishGimbal" { over "DishHead" { double3 xformOp:scale = (s, s, s) } } }`
-#           The whole head — reflector, feed arm, horn — scales together, so the
-#           feed stays at the focus. This is the knob you almost always want.
-#           Dish diameter = 2 · rimRadius · s = 1.16 · s metres.
-#
-#   SHAPE → `over "YawHead" { over "DishGimbal" { over "DishHead" { over "Reflector" { float lunco:lathe:focalLength = … } } } }`
-#           f/D — how deep the bowl is. Changing `rimRadius` alone does NOT move
-#           the authored feed-arm control points, so a rim change wants the arm
-#           re-authored; scale does not.
-#
-#   MOUNT → Reference this prim as a child of the body it rides on, and place it
-#           with `xformOp:translate`. That is the whole mount. The antenna owns
-#           BOTH its joints and names nothing outside itself, so the same
-#           component mounts on a rover, lander, tower, or ground station with no
-#           host-side physics at all.
-#
-#           `YawJoint` names `</CommsAntenna>` — this root, a plain Xform. A joint
-#           endpoint that is not itself a body resolves to the nearest ANCESTOR
-#           body, so the endpoint is whatever vehicle this is parented under.
-#           Parenting IS the attachment; the component cannot know, and never
-#           writes, the host's path.
-#
-#           To mount it inert (a parked dish, a static display), either
-#           `over "YawJoint" ( active = false )` to take the mechanism off the
-#           stage — what `ground_station.usda` does, since it parks the elevation
-#           hinge and the controller too — or
-#           `over "YawJoint" { bool physics:jointEnabled = false }` to keep the
-#           prim and leave it unsimulated. Both are stock USD and neither
-#           requires touching this file. (`jointEnabled` is declared `bool`, NOT
-#           `uniform bool`: spelling it uniform is a variability mismatch and the
-#           override is silently ignored.)
-#
-# Examples in the tree: `structures/comms_mast.usda` (s = 3.4, mast hidden — the
-# tower is the mast), `vessels/landers/descent_lander.usda` (s = 2.6, mast as the
-# deck boom), `vessels/rovers/rocker_bogie.usda` (s = 0.35, stock mast).
 def Xform "CommsAntenna" (
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend apiSchemas = "LunCoCatalogAPI"
     kind = "component"
-    doc = "Parabolic Earth-tracking antenna mechanism — Modelica pointing controller, azimuth/elevation head, lathed reflector, feed arm and horn. Owns both its hinges — mount it by referencing it as a child of the body it rides on."
+    documentation = "Parabolic Earth-tracking antenna mechanism — Modelica pointing controller, azimuth/elevation head, lathed reflector, feed arm and horn. Owns both its hinges — mount it by referencing it as a child of the body it rides on."
 )
 {
-    # A mechanism, not a free-standing object: it has no body of its own and
-    # yaws against whatever it is parented to. `comms_mast.usda` is the spawnable
-    # tower host.
     uniform bool lunco:spawnable = false
-
     def Cylinder "Mast"
     {
         uniform token axis = "Y"
         double radius = 0.03
         double height = 0.8
-        double3 xformOp:translate = (0, 0.4, 0)
+        double3 xformOp:translate = (0.0, 0.4, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        color3f[] primvars:displayColor = [(0.7, 0.7, 0.72)]
+        color3f[] primvars:displayColor = [(0.699999988079071, 0.699999988079071, 0.7200000286102295)]
         bool physics:collisionEnabled = false
     }
-
-    # The rotating bodies are articulation links, not decorative transforms.
-    # They deliberately have no collider: the mechanism must not change a
-    # vehicle's contact shape.  A collider-less dynamic body cannot derive an
-    # inertia tensor, though, so both its mass and its principal body-frame
-    # inertia are authored here.  Omitting that tensor leaves an invalid link in
-    # the host vehicle's articulation and lets its constraint impulses corrupt
-    # the chassis solve.
-    #
-    # The antenna owns both hinges; the host supplies nothing but a parent and a
-    # translate.
     def Xform "YawHead" (
         prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     )
     {
-        double3 xformOp:translate = (0, 0.8, 0)
+        double3 xformOp:translate = (0.0, 0.8, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        float physics:mass = 0.8
-        # Compact azimuth drive housing (about 0.18 × 0.10 × 0.18 m), expressed
-        # in this body's local axes.
-        float3 physics:diagonalInertia = (0.003, 0.0048, 0.003)
+        float physics:mass = 0.800000011920929
+        float3 physics:diagonalInertia = (0.003000000026077032, 0.004800000227987766, 0.003000000026077032)
         bool physics:collisionEnabled = false
-
         def Xform "DishGimbal" (
             prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
         )
         {
-            float physics:mass = 0.6
-            # Dish, feed and elevation frame.  The X-axis value is the pitch
-            # axis; the transverse values retain the reflector's larger radius.
-            float3 physics:diagonalInertia = (0.036, 0.018, 0.036)
+            float physics:mass = 0.6000000238418579
+            float3 physics:diagonalInertia = (0.035999998450279236, 0.017999999225139618, 0.035999998450279236)
             bool physics:collisionEnabled = false
-
-            # The elevation pivot is the pole's top, not the reflector surface.
-            # This short yoke terminates at the reflector's rear apex, so the pole
-            # visibly supports the dish instead of passing through it. It is part of
-            # this articulated link; the authored link mass/inertia above includes
-            # the yoke, dish and feed as one rigid mechanism.
             def Cylinder "DishYoke"
             {
                 uniform token axis = "Y"
                 double radius = 0.07
-                double height = 0.10
-                double3 xformOp:translate = (0, 0.05, 0)
+                double height = 0.1
+                double3 xformOp:translate = (0.0, 0.05, 0.0)
                 uniform token[] xformOpOrder = ["xformOp:translate"]
-                color3f[] primvars:displayColor = [(0.24, 0.25, 0.27)]
+                color3f[] primvars:displayColor = [(0.23999999463558197, 0.25, 0.27000001072883606)]
                 bool physics:collisionEnabled = false
             }
-
-            # The head: everything that must stay in proportion with the dish.
-            # Scale THIS, not the reflector, so the feed horn stays at the focus.
-    #
-            # Default s = 0.6 ⇒ a 0.70 m dish, the rover/lander whip class.
             def Xform "DishHead"
             {
-                # The yoke ends at the reflector's apex. This is a visual/mount
-                # offset within the gimbal body, not an Euler-written pose; the
-                # revolute joint remains the only source of its rotation.
-                double3 xformOp:translate = (0, 0.10, 0)
+                double3 xformOp:translate = (0.0, 0.1, 0.0)
                 double3 xformOp:scale = (0.6, 0.6, 0.6)
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-
-        # A dish is a THIN SHELL — a real reflector is paint on a skin, not a solid
-        # — so it must draw from behind as well as in front. `doubleSided` is stock
-        # UsdGeomGprim and says exactly that; a two-surface volume would double the
-        # geometry to model a thickness nothing at this scale can resolve.
-        #
-        # `apexRadius` is deliberately non-zero: a ring collapsed exactly onto the
-        # axis is a degenerate row whose normal is a zero cross product, and a NaN
-        # normal renders as a black hole at the vertex of the dish.
                 def NurbsPatch "Reflector" (
-                    prepend apiSchemas = ["LunCoLatheAPI"]
+                    prepend apiSchemas = "LunCoLatheAPI"
                 )
                 {
-            uniform bool doubleSided = true
-            uniform token lunco:lathe:profile = "paraboloid"
-            float lunco:lathe:apexRadius = 0.02
-            float lunco:lathe:rimRadius = 0.58
-            float lunco:lathe:focalLength = 0.35
-            int vVertexCount = 4
-            int vOrder = 3
-            # White thermal-control paint — what a high-gain reflector is actually
-            # finished in.
-            color3f[] primvars:displayColor = [(0.95, 0.95, 0.93)]
-            bool physics:collisionEnabled = false
+                    uniform bool doubleSided = true
+                    uniform token lunco:lathe:profile = "paraboloid"
+                    float lunco:lathe:apexRadius = 0.019999999552965164
+                    float lunco:lathe:rimRadius = 0.5799999833106995
+                    float lunco:lathe:focalLength = 0.3499999940395355
+                    int vVertexCount = 4
+                    int vOrder = 3
+                    color3f[] primvars:displayColor = [(0.949999988079071, 0.949999988079071, 0.9300000071525574)]
+                    bool physics:collisionEnabled = false
                 }
-
-        # Feed arm: a NURBS curve swept into a TUBE by its authored `widths` — rim
-        # to focus (f = 0.35 above the apex) in one smooth cubic.
                 def NurbsCurves "FeedArm"
                 {
-            int[] curveVertexCounts = [4]
-            int[] order = [4]
-            double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
-            point3f[] points = [(0.56, 0.25, 0), (0.44, 0.44, 0), (0.16, 0.47, 0), (0.0, 0.38, 0)]
-            float[] widths = [0.03]
-            color3f[] primvars:displayColor = [(0.75, 0.75, 0.78)]
-            bool physics:collisionEnabled = false
+                    int[] curveVertexCounts = [4]
+                    int[] order = [4]
+                    double[] knots = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+                    point3f[] points = [(0.5600000023841858, 0.25, 0.0), (0.4399999976158142, 0.4399999976158142, 0.0), (0.1599999964237213, 0.4699999988079071, 0.0), (0.0, 0.3799999952316284, 0.0)]
+                    float[] widths = [0.029999999329447746]
+                    color3f[] primvars:displayColor = [(0.75, 0.75, 0.7799999713897705)]
+                    bool physics:collisionEnabled = false
                 }
-
-        # RF has a phase centre just ahead of the feed horn. It is the only link
-        # node in this assembly: a beam, range/elevation verdict and CommsLink
-        # model therefore move with the dish instead of using the mast/root as an
-        # approximate endpoint. Nest the horn under it so the visual and the
-        # physical endpoint have one transform, one spelling.
                 def Xform "LinkAperture" (
-                    prepend apiSchemas = ["LunCoLinkAPI"]
-                    doc = "Dish feed phase centre: connectivity endpoint and link-beam origin."
+                    prepend apiSchemas = "LunCoLinkAPI"
+                    documentation = "Dish feed phase centre: connectivity endpoint and link-beam origin."
                 )
                 {
-            bool lunco:linkNode = true
-            double3 xformOp:translate = (0.0, 0.36, 0.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-
-            # The feed horn at the focus, looking back into the reflector.
+                    bool lunco:linkNode = true
+                    double3 xformOp:translate = (0.0, 0.36, 0.0)
+                    uniform token[] xformOpOrder = ["xformOp:translate"]
                     def Cylinder "FeedHorn"
                     {
-                uniform token axis = "Y"
-                double radius = 0.045
-                double height = 0.09
-                color3f[] primvars:displayColor = [(0.3, 0.3, 0.34)]
-                bool physics:collisionEnabled = false
+                        uniform token axis = "Y"
+                        double radius = 0.045
+                        double height = 0.09
+                        color3f[] primvars:displayColor = [(0.30000001192092896, 0.30000001192092896, 0.3400000035762787)]
+                        bool physics:collisionEnabled = false
                     }
-
-            # Dedicated communications indicator — intentionally separate from
-            # navigation/route colours and from the green/red link beams. This
-            # is the physical "radio powered" LED at the feed assembly, so an
-            # operator can identify the communications hardware at a glance.
-            # It sits just ahead of the phase centre along the feed's Y axis;
-            # keeping its transverse coordinates at zero preserves the dish
-            # bore-sight instead of introducing a lateral visual offset.
                     def Material "CommsIndicatorMaterial"
                     {
-                token outputs:surface.connect = <PreviewSurface.outputs:surface>
+                        token outputs:surface
+                        token outputs:surface.connect = </CommsAntenna/YawHead/DishGimbal/DishHead/LinkAperture/CommsIndicatorMaterial/PreviewSurface.outputs:surface>
                         def Shader "PreviewSurface"
                         {
-                    uniform token info:id = "UsdPreviewSurface"
-                    color3f inputs:diffuseColor = (0.005, 0.05, 0.012)
-                    color3f inputs:emissiveColor = (0.04, 2.6, 0.30)
-                    float inputs:metallic = 0.0
-                    float inputs:roughness = 0.26
-                    token outputs:surface
+                            uniform token info:id = "UsdPreviewSurface"
+                            color3f inputs:diffuseColor = (0.004999999888241291, 0.05000000074505806, 0.012000000104308128)
+                            color3f inputs:emissiveColor = (0.03999999910593033, 2.5999999046325684, 0.30000001192092896)
+                            float inputs:metallic = 0.0
+                            float inputs:roughness = 0.25999999046325684
+                            token outputs:surface
                         }
                     }
-
                     def Sphere "CommsIndicator" (
-                        prepend apiSchemas = ["MaterialBindingAPI"]
+                        prepend apiSchemas = "MaterialBindingAPI"
                     )
                     {
-                double radius = 0.055
-                double3 xformOp:translate = (0.0, 0.085, 0.0)
-                uniform token[] xformOpOrder = ["xformOp:translate"]
-                # This is an absolute path within the component asset. A
-                # relative target would resolve below CommsIndicator itself,
-                # while the shared material is its sibling under LinkAperture.
-                rel material:binding = </CommsAntenna/YawHead/DishGimbal/DishHead/LinkAperture/CommsIndicatorMaterial>
-                bool physics:collisionEnabled = false
+                        double radius = 0.055
+                        double3 xformOp:translate = (0.0, 0.085, 0.0)
+                        uniform token[] xformOpOrder = ["xformOp:translate"]
+                        rel material:binding = </CommsAntenna/YawHead/DishGimbal/DishHead/LinkAperture/CommsIndicatorMaterial>
+                        bool physics:collisionEnabled = false
                     }
-
-            # The beam is a child of the physical endpoint, so its generic driver
-            # resolves this LinkState rather than the antenna mount.
                     def "LinkBeam" (
                         prepend references = @lunco://components/comms/link_beam.usda@</LinkBeam>
                     )
@@ -261,73 +126,40 @@ def Xform "CommsAntenna" (
             }
         }
     }
-
-    # Pointing mathematics is Modelica, not a scenario script. A distinct
-    # environment source supplies the unit direction in THIS root's mount frame:
-    # +X right, +Y up, -Z forward. EarthTracker is the sole vector→joint-angle
-    # conversion; hosts never copy an axis or sign convention.
     def Xform "Environment" (
         prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
     )
     {
     }
-
     def Xform "EarthTrackerController" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
+        prepend apiSchemas = "LunCoProgramAPI"
     )
     {
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://models/LunCo/Pointing/EarthTracker.mo@
-        float inputs:earth_mount_x.connect = </CommsAntenna/Environment.outputs:earth_mount_x>
-        float inputs:earth_mount_y.connect = </CommsAntenna/Environment.outputs:earth_mount_y>
-        float inputs:earth_mount_z.connect = </CommsAntenna/Environment.outputs:earth_mount_z>
+        custom double inputs:target_mount_x
+        double inputs:target_mount_x.connect = </CommsAntenna/Environment.outputs:earth_mount_x>
+        custom double inputs:target_mount_y
+        double inputs:target_mount_y.connect = </CommsAntenna/Environment.outputs:earth_mount_y>
+        custom double inputs:target_mount_z
+        double inputs:target_mount_z.connect = </CommsAntenna/Environment.outputs:earth_mount_z>
     }
-
-    # ── The two hinges. BOTH live here, and nowhere else. ────────────────────
-    #
-    # They used to be split: elevation here, azimuth authored by each host. Every
-    # host therefore wrote the same joint against a prim inside this component's
-    # namespace — `AntennaYawJoint`, `CommsYawJoint`, `HighGainYawJoint`, three
-    # spellings of one mechanism, each also hand-typing an anchor that had to
-    # agree with a mast height it did not own. One host simply never wrote it and
-    # its dish silently never tracked.
-    #
-    # The Modelica controller provides radians directly to the standard joint
-    # port; neither joint ever writes an Euler transform.
-
-    # AZIMUTH. `body0` is this component's ROOT — not a body — so it resolves to
-    # the nearest ancestor body: whatever vehicle this antenna is parented under.
-    # That is the entire mount interface, and it is why nothing here names a host.
-    #
-    # Both anchors are deliberately UNAUTHORED. They derive from the transform
-    # hierarchy, which is the only place that knows where the head sits: the host
-    # sets this component's `translate` and may override the mast's height, and a
-    # typed anchor would have to be kept in agreement with both by hand — which is
-    # precisely what the old per-host joints got wrong.
     def PhysicsRevoluteJoint "YawJoint"
     {
         rel physics:body0 = </CommsAntenna>
         rel physics:body1 = </CommsAntenna/YawHead>
         uniform token physics:axis = "Y"
-        # Explicit port declaration: the cosim joint adapter exposes the
-        # measured and commanded angle through this USD property. Without the
-        # sink, the authored tracker connection is silently dropped during
-        # composition.
         float inputs:angle
         float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:az>
     }
-
-    # ELEVATION. `body0` is the yaw head and `body1` the elevation frame — both
-    # local, both bodies, so no resolution is involved.
     def PhysicsRevoluteJoint "ElevationJoint"
     {
         rel physics:body0 = </CommsAntenna/YawHead>
         rel physics:body1 = </CommsAntenna/YawHead/DishGimbal>
         uniform token physics:axis = "X"
-        point3f physics:localPos0 = (0, 0, 0)
-        point3f physics:localPos1 = (0, 0, 0)
+        point3f physics:localPos0 = (0.0, 0.0, 0.0)
+        point3f physics:localPos1 = (0.0, 0.0, 0.0)
         float inputs:angle
         float inputs:angle.connect = </CommsAntenna/EarthTrackerController.outputs:el>
     }
-
 }

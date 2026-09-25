@@ -13,9 +13,9 @@ model SolarPanel
   parameter Real v_mp = 48.0 "Module voltage at maximum power, V";
 
   input Real irradiance "Incident irradiance, W/m2";
-  input Real sun_mount_x "Sun direction in the electrical assembly frame, +X right";
-  input Real sun_mount_y "Sun direction in the electrical assembly frame, +Y up";
-  input Real sun_mount_z "Sun direction in the electrical assembly frame, -Z forward";
+  input Real target_mount_x "Target direction in the panel frame, +X right";
+  input Real target_mount_y "Target direction in the panel frame, +Y up";
+  input Real target_mount_z "Target direction in the panel frame, -Z forward";
   input Real panel_normal_x "Panel illuminated-face normal in the electrical assembly frame";
   input Real panel_normal_y "Panel illuminated-face normal in the electrical assembly frame";
   input Real panel_normal_z "Panel illuminated-face normal in the electrical assembly frame";
@@ -27,19 +27,16 @@ model SolarPanel
   output Real terminal_voltage_v(unit="V") "Electrical bus voltage at the solar-panel terminals";
   output Real generated_current_a(unit="A") "Current delivered from the panel to the electrical bus";
 
-  Real sun_norm "Magnitude of the supplied Sun vector";
   Real panel_normal_norm "Magnitude of the authored panel normal";
-  Real alignment "Normalized signed Sun-to-panel alignment";
+  Real alignment "Signed alignment of the unit target direction and panel normal";
 equation
-  sun_norm = sqrt(max(1.0e-12,
-    sun_mount_x^2 + sun_mount_y^2 + sun_mount_z^2));
   panel_normal_norm = sqrt(max(1.0e-12,
     panel_normal_x^2 + panel_normal_y^2 + panel_normal_z^2));
   alignment = (
-    sun_mount_x * panel_normal_x
-    + sun_mount_y * panel_normal_y
-    + sun_mount_z * panel_normal_z
-  ) / (sun_norm * panel_normal_norm);
+    target_mount_x * panel_normal_x
+    + target_mount_y * panel_normal_y
+    + target_mount_z * panel_normal_z
+  ) / panel_normal_norm;
   cos_incidence = min(max(alignment, 0.0), 1.0);
 
   // A PV MODULE IS A CURRENT SOURCE. Photocurrent is proportional to the light

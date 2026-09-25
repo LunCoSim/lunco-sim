@@ -10,7 +10,7 @@ mod resolver;
 
 pub mod recipe;
 
-use recipe::StageClosureLimits;
+use recipe::{StageClosureLimits, StageDependencyDiagnostic};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
@@ -217,13 +217,52 @@ pub fn compose_file_to_stage_with_roots(
         None => lunco_assets_path::canonicalize_root(&path.to_string_lossy()),
     };
     let root_bytes = lunco_assets_core::read_asset_file_bytes(path)
-        .map_err(|e| anyhow!("cannot read {}: {e}", path.display()))?;
+        .map_err(|error| anyhow!("cannot read {}: {error}", path.display()))?;
+    let source = std::str::from_utf8(&root_bytes)
+        .map_err(|error| anyhow!("USD root {} is not UTF-8: {error}", path.display()))?;
+    compose_source_to_stage_with_roots(&root_id, source, assets_root, twin_root)
+        .map(|(stage, _)| stage)
+}
+
+/// Compose current in-memory layer source against the same asset resolver used
+/// for file-backed stages. Document authoring uses this when no live canonical
+/// stage is attached, so referenced schemas and dynamic API ports keep their
+/// normal USD composition semantics during typed preflight.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn compose_source_to_stage_with_roots(
+    root_id: &str,
+    source: &str,
+    assets_root: Option<&Path>,
+    twin_root: Option<&Path>,
+) -> Result<(Stage, Vec<StageDependencyDiagnostic>)> {
+    let recipe = recipe_from_source_with_roots(root_id, source, assets_root, twin_root)?;
+    let diagnostics = recipe.dependency_diagnostics.clone();
+    let stage = Stage::builder()
+        .resolver(LuncoUsdResolver::new(recipe.bytes.clone()))
+        .open(&recipe.root_id)
+        .map_err(|error| anyhow!("USD composition error: {error}"))?;
+    Ok((stage, diagnostics))
+}
+
+/// Resolve the transitive USD layer closure for an in-memory root layer using
+/// the asset roots belonging to its document. The returned recipe can be
+/// attached to a USD document so each typed edit composes its current root
+/// opinions through the same dependency resolver.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn recipe_from_source_with_roots(
+    root_id: &str,
+    source: &str,
+    assets_root: Option<&Path>,
+    twin_root: Option<&Path>,
+) -> Result<recipe::StageRecipe> {
+    let root_bytes = source.as_bytes().to_vec();
     let limits = StageClosureLimits::default();
     check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
     let mut total_bytes = root_bytes.len();
-    let mut bytes = HashMap::from([(root_id.clone(), root_bytes)]);
-    let mut seen = std::collections::HashSet::from([root_id.clone()]);
-    let mut queue = vec![(root_id.clone(), 0_usize)];
+    let mut bytes = HashMap::from([(root_id.to_owned(), root_bytes)]);
+    let mut seen = std::collections::HashSet::from([root_id.to_owned()]);
+    let mut queue = vec![(root_id.to_owned(), 0_usize)];
+    let mut diagnostics = Vec::new();
     while let Some((id, depth)) = queue.pop() {
         let raw = bytes.get(&id).expect("queued USD layer is present");
         let child_ids = child_layer_ids(&id, raw)?;
@@ -241,11 +280,16 @@ pub fn compose_file_to_stage_with_roots(
             );
             let child = match child {
                 Ok(child) => child,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    diagnostics.push(StageDependencyDiagnostic::missing(
+                        id.clone(),
+                        child_id.clone(),
+                    ));
+                    continue;
+                }
                 Err(error) => {
                     return Err(anyhow!(
-                        "failed to fetch USD composition dependency {child_id} for {}: {error}",
-                        path.display()
+                        "failed to fetch USD composition dependency {child_id} for {id}: {error}"
                     ));
                 }
             };
@@ -257,10 +301,9 @@ pub fn compose_file_to_stage_with_roots(
             queue.push((child_id, child_depth));
         }
     }
-    Stage::builder()
-        .resolver(LuncoUsdResolver::new(bytes))
-        .open(&root_id)
-        .map_err(|e| anyhow!("USD composition error: {e}"))
+    let mut recipe = recipe::StageRecipe::new(root_id, bytes);
+    recipe.dependency_diagnostics = diagnostics;
+    Ok(recipe)
 }
 
 #[cfg(target_arch = "wasm32")]

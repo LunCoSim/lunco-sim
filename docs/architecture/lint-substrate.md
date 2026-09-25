@@ -92,7 +92,8 @@ facts.drives[]  #{ path, joint_type, body0, body1, realization,
 facts.gear_drives[] #{ path, valid, realization, ratio, rest_offset,
                        target_velocity, stiffness, damping, max_force }
 facts.prims[]   #{ path, type, parent, schemas[], attributes[],
-                    connected_attributes[], connections[] }  ← the GENERIC projection
+                    connected_attributes[], connections[], direction_target_id,
+                    celestial_direction_id }  ← the GENERIC projection
 facts.prims[].connections[] #{ name, target_type, sources[] }
 facts.prims[].connections[].sources[] #{ path, path_valid, prim_exists,
                                          property_exists, runtime_provider,

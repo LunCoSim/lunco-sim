@@ -122,7 +122,9 @@ fn sky_clock_ui(
             };
             if ui
                 .selectable_label((scale - m).abs() < f64::EPSILON, label)
-                .on_hover_text("Scale the shared celestial epoch relative to WorldTime.")
+                .on_hover_text(
+                    "Scale the shared celestial epoch relative to WorldTime. The default is 1×.\nModelica reads the latest sample at its ordinary fixed-step cadence; changing this rate does not add physics or Modelica steps.",
+                )
                 .clicked()
             {
                 request = Some(SetCelestialClock {

@@ -303,19 +303,18 @@ fn strip_rigid_body_inputs(
     }
 }
 
-/// Publish the complete runtime interface of an environment probe.
+/// Publish the statically declared scalar interface of an environment probe.
 ///
-/// `LunCoEnvironmentProbeAPI` declares these outputs on the schema class. The
+/// `LunCoEnvironmentProbeAPI` declares gravity outputs on the schema class. The
 /// live OpenUSD `property_names()` query intentionally reports authored
 /// properties, not properties inherited from a codeless API schema, so using
 /// [`declared_interface`] alone would create an empty source component for the
-/// usual empty `probe.usda` asset. The environment domain owns this connector
-/// contract; its systems fill the values when the corresponding fact exists,
-/// while the declared-output component keeps the no-data probe structurally
-/// connected without inventing a sample.
+/// usual empty `probe.usda` asset. The environment domain owns the gravity
+/// outputs; direction outputs are materialized from composed wire demand by
+/// the generic direction publisher.
 fn environment_probe_interface() -> DeclaredOutputPorts {
     DeclaredOutputPorts {
-        names: lunco_cosim_core::ENVIRONMENT_PROBE_OUTPUTS
+        names: lunco_cosim_core::ENVIRONMENT_PROBE_BASE_OUTPUTS
             .iter()
             .map(|name| (*name).to_owned())
             .collect(),
@@ -527,6 +526,16 @@ pub(crate) fn process_usd_cosim_prims(
         // queued by this pipeline uses the same despawn-safe form for the same
         // reason. The visual synchronization boundary owns that policy.
         commands.entity(entity).try_insert(UsdSourcedCosim);
+        if reader.has_api_schema(&sdf_path, "LunCoDirectionTargetAPI")
+            && !reader.has_api_schema(&sdf_path, "LunCoCelestialBodyAPI")
+        {
+            if let Some(target_id) = reader
+                .text(&sdf_path, "lunco:directionTarget:id")
+                .and_then(|value| lunco_environment::DirectionTargetId::new(&value))
+            {
+                commands.entity(entity).try_insert(target_id);
+            }
+        }
         if reader.has_api_schema(&sdf_path, "LunCoEnvironmentProbeAPI") {
             let declared_outputs = environment_probe_interface();
             commands.entity(entity).try_insert((
@@ -3020,18 +3029,18 @@ mod tests {
     #[test]
     fn usd_connection_properties_are_declared_as_scalar_ports() {
         assert_eq!(
-            declared_port_name("inputs:earth_mount_x.connect", "inputs:"),
-            Some("earth_mount_x".to_owned())
+            declared_port_name("inputs:target_mount_x.connect", "inputs:"),
+            Some("target_mount_x".to_owned())
         );
         assert_eq!(
-            declared_port_name("outputs:earth_mount_z", "outputs:"),
-            Some("earth_mount_z".to_owned())
+            declared_port_name("outputs:spacecraft_mount_z", "outputs:"),
+            Some("spacecraft_mount_z".to_owned())
         );
         assert_eq!(declared_port_name("physics:mass", "inputs:"), None);
     }
 
     #[test]
-    fn environment_probe_publishes_schema_declared_output_contract() {
+    fn environment_probe_declares_fixed_fields_and_leaves_direction_ports_dynamic() {
         let outputs = environment_probe_interface();
         assert_eq!(
             outputs
@@ -3039,11 +3048,14 @@ mod tests {
                 .iter()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>(),
-            lunco_cosim_core::ENVIRONMENT_PROBE_OUTPUTS
+            lunco_cosim_core::ENVIRONMENT_PROBE_BASE_OUTPUTS
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>()
         );
+        assert!(outputs.names.iter().all(|name| {
+            lunco_environment::DirectionSourceId::from_mount_connector(name).is_none()
+        }));
     }
 
     /// A model that has been parsed and dispatched but not yet solved:

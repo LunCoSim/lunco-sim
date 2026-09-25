@@ -131,7 +131,8 @@ pub(super) struct WiringQueries<'w, 's> {
             Has<ModelicaModel>,
             Option<&'static GeneratedModelicaSource>,
             Has<lunco_environment::EnvironmentProbe>,
-            Has<lunco_environment::EarthDirectionRequired>,
+            Option<&'static lunco_environment::DirectionSourceRequirements>,
+            Option<&'static DeclaredOutputPorts>,
             Option<&'static lunco_port_core::PortSurface>,
             Option<&'static UsdInstanceProjection>,
         ),
@@ -551,15 +552,17 @@ pub(super) fn rewire_usd_connections(
         (Entity, &str),
     > = HashMap::new();
     let mut environment_probe_entities = HashSet::new();
-    let mut earth_direction_already_required = HashSet::new();
+    let mut direction_requirements_already_required = HashMap::new();
+    let mut declared_probe_outputs = HashMap::new();
     let mut port_surfaces = HashMap::new();
-    for (e, p, _, generated, is_probe, has_earth_direction, surface, projection) in
+    for (e, p, _, generated, is_probe, direction_requirements, declared, surface, projection) in
         live_endpoints.iter().copied()
     {
         if is_probe {
             environment_probe_entities.insert(e);
-            if has_earth_direction {
-                earth_direction_already_required.insert(e);
+            declared_probe_outputs.insert(e, declared);
+            if let Some(requirements) = direction_requirements {
+                direction_requirements_already_required.insert(e, requirements.clone());
             }
         }
         if let Some(surface) = surface {
@@ -588,10 +591,11 @@ pub(super) fn rewire_usd_connections(
     // exactly what makes an input a parameter.
     let mut defaults: HashMap<Entity, HashMap<String, f64>> = HashMap::new();
 
-    // Earth demand is a composed-wire fact, not a property of every environment
-    // probe. Reconcile membership after the connection sweep and preserve probes
-    // whose authored demand did not change.
-    let mut earth_direction_required = std::collections::HashSet::new();
+    // Direction demand is a composed-wire fact, not a property of every
+    // environment probe. The connector stem selects any source (`sun`, `earth`,
+    // `moon`, or another authored identifier) through one generic contract.
+    let mut direction_requirements =
+        HashMap::<Entity, std::collections::BTreeSet<lunco_environment::DirectionSourceId>>::new();
 
     // Reuse identical edge entities so a new endpoint does not invalidate and
     // rebind every connection in the scene. A changed authored edge is replaced
@@ -613,7 +617,7 @@ pub(super) fn rewire_usd_connections(
             });
     }
 
-    for (entity, prim_path, has_modelica, _, _, _, wheel_endpoints, projection) in
+    for (entity, prim_path, has_modelica, _, _, _, _, wheel_endpoints, projection) in
         live_endpoints.iter().copied()
     {
         let id = prim_path.stage_handle.id();
@@ -889,16 +893,15 @@ pub(super) fn rewire_usd_connections(
                     };
                     (element, src_conn.to_string())
                 };
-                if !start_is_input
-                    && environment_probe_entities.contains(&start_element)
-                    && matches!(
-                        src_conn.as_str(),
-                        lunco_cosim_core::EARTH_MOUNT_X_CONNECTOR
-                            | lunco_cosim_core::EARTH_MOUNT_Y_CONNECTOR
-                            | lunco_cosim_core::EARTH_MOUNT_Z_CONNECTOR
-                    )
-                {
-                    earth_direction_required.insert(start_element);
+                if !start_is_input && environment_probe_entities.contains(&start_element) {
+                    if let Some(source) =
+                        lunco_environment::DirectionSourceId::from_mount_connector(&src_conn)
+                    {
+                        direction_requirements
+                            .entry(start_element)
+                            .or_default()
+                            .insert(source);
+                    }
                 }
 
                 // ── The SOURCE side of the runtime-output indirection ────────
@@ -1068,15 +1071,53 @@ pub(super) fn rewire_usd_connections(
         }
     }
 
-    for entity in earth_direction_already_required.difference(&earth_direction_required) {
-        commands
-            .entity(*entity)
-            .remove::<lunco_environment::EarthDirectionRequired>();
+    for (entity, previous) in &direction_requirements_already_required {
+        if direction_requirements.get(entity) != Some(&previous.0) {
+            commands
+                .entity(*entity)
+                .remove::<lunco_environment::DirectionSourceRequirements>();
+        }
     }
-    for entity in earth_direction_required.difference(&earth_direction_already_required) {
-        commands
-            .entity(*entity)
-            .try_insert(lunco_environment::EarthDirectionRequired);
+    for (entity, required) in &direction_requirements {
+        if direction_requirements_already_required
+            .get(entity)
+            .map(|previous| &previous.0)
+            != Some(required)
+        {
+            commands
+                .entity(*entity)
+                .try_insert(lunco_environment::DirectionSourceRequirements(
+                    required.clone(),
+                ));
+        }
+    }
+
+    // Direction outputs are dynamic ports: the authored connection names the
+    // source id, and the environment publisher later supplies its samples. Add
+    // those names to the existing optional-sample port contract now so binding
+    // does not depend on a target having produced its first valid bearing.
+    // The static gravity outputs and demanded direction triplets share the one
+    // `DeclaredOutputPorts` owner consumed by PortRegistry.
+    for entity in environment_probe_entities {
+        let mut names: HashSet<String> = lunco_cosim_core::ENVIRONMENT_PROBE_BASE_OUTPUTS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        if let Some(sources) = direction_requirements.get(&entity) {
+            for source in sources {
+                names.extend(
+                    ['x', 'y', 'z']
+                        .into_iter()
+                        .filter_map(|axis| source.mount_connector(axis)),
+                );
+            }
+        }
+        let current = declared_probe_outputs.get(&entity).copied().flatten();
+        if current.is_none_or(|current| current.names != names) {
+            commands
+                .entity(entity)
+                .try_insert(DeclaredOutputPorts { names });
+        }
     }
 }
 

@@ -1631,6 +1631,11 @@ impl UsdDocument {
         self.authoring_recipe = recipe.map(std::sync::Arc::new);
     }
 
+    /// The resolver closure used for authored operations on referenced prims.
+    pub fn authoring_recipe(&self) -> Option<&StageRecipe> {
+        self.authoring_recipe.as_deref()
+    }
+
     /// Validate against real composition and preserve its inherited operation
     /// order. No dependency data is copied into the authored layer.
     fn transform_edit_context(
@@ -2136,6 +2141,30 @@ impl UsdDocument {
     fn require_prim_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
         let sdf = parse_prim_path(path)?;
         if prim_in(&self.base, &sdf) || prim_in(&self.runtime, &sdf) || prim_in(&self.view, &sdf) {
+            Ok(sdf)
+        } else {
+            Err(DocumentError::ValidationFailed(format!(
+                "path `{path}` not found"
+            )))
+        }
+    }
+
+    /// Validate an attribute owner, including an authored variant root.
+    ///
+    /// A variant root is an Sdf `Variant` spec rather than a `Prim` spec, but
+    /// it can own properties such as `inputs:*`. Attribute removal addresses
+    /// that spec directly and does not need to create an over prim first.
+    fn require_attribute_owner_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
+        let sdf = parse_prim_path(path)?;
+        let authored_variant = sdf.is_prim_variant_selection_path()
+            && [&self.base, &self.runtime, &self.view]
+                .into_iter()
+                .any(|data| matches!(data.spec(&sdf), Some(spec) if spec.ty == SpecType::Variant));
+        if authored_variant
+            || prim_in(&self.base, &sdf)
+            || prim_in(&self.runtime, &sdf)
+            || prim_in(&self.view, &sdf)
+        {
             Ok(sdf)
         } else {
             Err(DocumentError::ValidationFailed(format!(
@@ -2852,7 +2881,7 @@ impl Document for UsdDocument {
             }
 
             UsdOp::RemoveAttribute { path, name, .. } => {
-                let prim_sdf = match self.require_prim_anywhere(&path) {
+                let prim_sdf = match self.require_attribute_owner_anywhere(&path) {
                     Ok(prim) => prim,
                     Err(error) => {
                         let prim = parse_prim_path(&path)?;
@@ -2887,7 +2916,9 @@ impl Document for UsdDocument {
                 }
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                stage.override_prim(&prim_sdf).map_err(author_err)?;
+                if !prim_sdf.is_prim_variant_selection_path() {
+                    stage.override_prim(&prim_sdf).map_err(author_err)?;
+                }
                 stage.remove_property(property).map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 let inverse = self.coarse_inverse(target, &id);

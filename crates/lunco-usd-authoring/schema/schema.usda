@@ -755,9 +755,9 @@ class "LunCoEnvironmentProbeAPI" (
         token apiSchemaType = "singleApply"
     }
     doc = """Marks a transform as an explicit source of local environmental
-    signals. The prim's transform is the mount frame: environment systems
-    publish gravity and Sun/Earth directions as ordinary outputs, and authored
-    USD connections select which programs consume them.
+    signals. The prim's transform is the gravity and direction-probe origin.
+    Environment systems publish fixed f64 gravity outputs; direction outputs are
+    materialized from authored source-id connections and resolved for each probe.
 
     A probe is a source, never a solver and never a consumer. Keeping it on a
     distinct prim avoids the old consumer self-wire pattern, makes the provider
@@ -765,26 +765,37 @@ class "LunCoEnvironmentProbeAPI" (
     mistaking environmental injection for algebraic feedback."""
 )
 {
-    float outputs:gravity_accel = 0 (
+    double outputs:gravity_accel = 0 (
         doc = "Local gravitational acceleration magnitude, m/s2."
     )
-    float outputs:sun_mount_x = 0 (
-        doc = "Unit direction toward the Sun in the probe frame, +X right."
+    double outputs:gravity_x = 0 (
+        doc = "Local gravitational acceleration X component, m/s2."
     )
-    float outputs:sun_mount_y = 0 (
-        doc = "Unit direction toward the Sun in the probe frame, +Y up."
+    double outputs:gravity_y = 0 (
+        doc = "Local gravitational acceleration Y component, m/s2."
     )
-    float outputs:sun_mount_z = 0 (
-        doc = "Unit direction toward the Sun in the probe frame, -Z forward."
+    double outputs:gravity_z = 0 (
+        doc = "Local gravitational acceleration Z component, m/s2."
     )
-    float outputs:earth_mount_x = 0 (
-        doc = "Unit direction toward Earth in the probe frame, +X right."
-    )
-    float outputs:earth_mount_y = 0 (
-        doc = "Unit direction toward Earth in the probe frame, +Y up."
-    )
-    float outputs:earth_mount_z = 0 (
-        doc = "Unit direction toward Earth in the probe frame, -Z forward."
+}
+
+class "LunCoDirectionTargetAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = """Assigns a stable identifier to a position-bearing target for environment
+    direction inputs. An EnvironmentProbe connected to `<id>_mount_x/y/z` computes the
+    direction from its own origin to this prim's composed position through BigSpace.
+    The id is lower-case ASCII with digits and underscores, and must identify exactly
+    one target in the active scene. Apply this API to non-celestial objects; a
+    `LunCoCelestialBodyAPI` target uses its stable `lunco:body` NAIF identity. This API
+    defines identity only; it does not cache a direction or provide coordinate
+    conversion."""
+)
+{
+    uniform token lunco:directionTarget:id = "" (
+        doc = "Stable source id used as the stem of `<id>_mount_x/y/z` direction ports."
     )
 }
 

@@ -1,21 +1,7 @@
-//! **A general reference-frame system.** Zero-cost, and the point is what it makes impossible.
-//!
-//! Every position in this crate used to be a bare `DVec3`, with the frame living only in the
-//! variable name (`rel_pos_au`, `pos_bevy_m`, `body_local`, `site_in_solar`). The compiler
-//! could not tell eight frames apart — and **the two most expensive bugs preserved in this
-//! code's own comments are both silent frame mixes**:
-//!
-//! 1. **The Shackleton sun.** VSOP2013/ELP return ICRF/**equatorial** vectors; the
-//!    `EphemerisProvider` contract says **ecliptic**. Nobody rotated. Every "up" and "north"
-//!    was off by the obliquity (23.44°), which at Shackleton put the sun **~45° below the
-//!    horizon** — pitch-black ground — instead of the real grazing ~1°. It was *double*-wrong:
-//!    `ecliptic_to_bevy` had itself been rotating by the obliquity to compensate, so the fix
-//!    had to land in two files at once.
-//! 2. **The sun published in the wrong frame.** An ecliptic (solar) direction was written into
-//!    a solar direction resource, which consumers read as **site-ENU**. Terrain lit from nowhere.
-//!
-//! Both were **silent** — no panic, no NaN, just a world lit from the wrong place. That is
-//! exactly the failure a type system is for.
+//! **A general reference-frame system.** Zero-cost frame types keep ephemeris
+//! positions and directions tied to their declared axes and units until an
+//! explicit conversion boundary. Environment consumers use the shared
+//! BigSpace coordinate helpers rather than adding body-specific conversions.
 //!
 //! # The split: KIND is a type, IDENTITY is a value
 //!

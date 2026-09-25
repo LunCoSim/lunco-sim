@@ -87,10 +87,7 @@ fn scene_time_facts(
     let mut authored_epoch_jd = H::Unit;
     let mut has_celestial_source = false;
     if let (Some(reader), Some(root_path)) = (reader, root_path) {
-        has_celestial_source = reader
-            .prim_paths()
-            .iter()
-            .any(|path| reader.has_api_schema(path, "LunCoCelestialBodyAPI"));
+        has_celestial_source = composed_stage_has_celestial_source(reader);
         epoch_api = reader.has_api_schema(root_path, "LunCoEpochAPI");
         if epoch_api {
             match read_real_strict(reader, root_path, "lunco:time:epochJd") {
@@ -250,6 +247,13 @@ fn select_scene_time_on_transition_completed(
 }
 
 type ComposedReader<'a> = dyn lunco_usd_bevy_stage::read::UsdReadObject + 'a;
+
+fn composed_stage_has_celestial_source(reader: &ComposedReader<'_>) -> bool {
+    reader
+        .prim_paths()
+        .iter()
+        .any(|path| reader.has_api_schema(path, "LunCoCelestialBodyAPI"))
+}
 
 /// NAIF id of the default anchor body (the Moon).
 const DEFAULT_ANCHOR_BODY: i32 = 301;
@@ -901,6 +905,17 @@ fn project_celestial_comms_prims(
         let Ok(sdf_path) = SdfPath::new(&resolved_path) else {
             continue;
         };
+        if is_scene_root {
+            if composed_stage_has_celestial_source(&reader) {
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_celestial_spatial_core::CelestialSourcePresent);
+            } else {
+                commands
+                    .entity(entity)
+                    .try_remove::<lunco_celestial_spatial_core::CelestialSourcePresent>();
+            }
+        }
         insert_celestial_comms_components(
             &reader,
             entity,

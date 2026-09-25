@@ -12,8 +12,8 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 # `DirectionalLight` / `CascadeShadowConfig` / `GlobalAmbientLight`; `bevy_camera`
 # gives `RenderLayers` + `Exposure`; `bevy_mesh` + `bevy_image` give the horizon
 # bake its `Mesh3d` input and its `Image` output. NONE of them depends on
-# `bevy_render`, so gravity, the earthshine fill, the sun→cosim feed AND the
-# heightfield-shadow bakes all build and run without wgpu.
+# `bevy_render`, so gravity, the earthshine fill, universal direction-to-cosim
+# projection AND the heightfield-shadow bakes all build and run without wgpu.
 #
 # The two things that used to force `bevy_pbr` here have MOVED to the binder crate:
 #   1. `wire_terrain_materials` → `lunco-render-bevy::horizon_shade`

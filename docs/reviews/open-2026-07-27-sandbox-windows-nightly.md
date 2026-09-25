@@ -241,18 +241,11 @@ The first three are the interesting ones. Entity `1277v0` is identified 0.86 s e
 08:36:37.647  INFO  [celestial] body 399 took its imagery from dataset 'earth'
 ```
 
-```
-08:36:37.246  WARN  [environment] 34 co-sim model(s) want a local Earth direction, but
-                    `EarthDirectionWorld` is degenerate — no Earth-relative port will be published
-                    and every Earth-tracking mechanism will hold its authored pose …
-08:36:37.742  INFO  [environment] local Earth direction is available again
-```
+The placement warning is not true by the time it is read. The scene *does* reference `@lunco://celestial/solar_system.usda@</SolarSystem>` (`sandbox_scene.usda:46`) and the solar frame *does* anchor — 61 ms later. `place_site_anchored_solar_frame` in `crates/lunco-celestial-spatial/src/placement.rs:135` simply runs before the celestial BigSpace setup has spawned the grid, and its `*warned` latch (line 136) is one-shot, so the false alarm is the permanent record.
 
-Neither warning is true by the time it is read. The scene *does* reference `@lunco://celestial/solar_system.usda@</SolarSystem>` (`sandbox_scene.usda:46`) and the solar frame *does* anchor — 61 ms later. `place_site_anchored_solar_frame` in `crates/lunco-celestial-spatial/src/placement.rs:135` simply runs before the celestial BigSpace setup has spawned the grid, and its `*warned` latch (line 136) is one-shot, so the false alarm is the permanent record.
+The message is also disproportionate: "the scene will render unlit" is the symptom of the genuine failure this warning was written for, so a tester reading the log will attribute the (real, unrelated) shadow loss from Issue 2 to this line.
 
-The messages are also disproportionate: "the scene will render unlit" and "every Earth-tracking mechanism will hold its authored pose" are exactly the symptoms of the genuine failure this warning was written for, so a tester reading the log will attribute the (real, unrelated) shadow loss from Issue 2 to this line.
-
-**Fix:** defer the verdict instead of latching the first observation. Give both checks a settle window — warn only if the condition still holds after the scene has finished loading (a `SceneLoaded`/readiness gate, or N frames). Both already detect recovery (`local Earth direction is available again`), so the state machine exists; it just needs to run before the warning, not after. Where a warning has been superseded, say so explicitly.
+**Fix:** defer the placement verdict instead of latching the first observation. Warn only if the condition still holds after the scene has finished loading (a `SceneLoaded`/readiness gate, or N frames). The placement check should resolve startup ordering before publishing a warning.
 
 ---
 

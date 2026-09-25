@@ -398,6 +398,11 @@ pub fn setup_big_space_hierarchy(
     let _sun_body = commands
         .spawn((
             sun.body_component(),
+            lunco_environment::DirectionTargetId::new(
+                &lunco_celestial::ephemeris_id::direction_source_id(sun.ephemeris_id)
+                    .expect("the Sun has a non-zero NAIF id"),
+            )
+            .expect("canonical celestial source ids follow the direction contract"),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -514,6 +519,11 @@ pub fn setup_big_space_hierarchy(
     let earth_body = commands
         .spawn((
             earth.body_component(),
+            lunco_environment::DirectionTargetId::new(
+                &lunco_celestial::ephemeris_id::direction_source_id(earth.ephemeris_id)
+                    .expect("Earth has a non-zero NAIF id"),
+            )
+            .expect("canonical celestial source ids follow the direction contract"),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -609,6 +619,11 @@ pub fn setup_big_space_hierarchy(
     let moon_body = commands
         .spawn((
             moon.body_component(),
+            lunco_environment::DirectionTargetId::new(
+                &lunco_celestial::ephemeris_id::direction_source_id(moon.ephemeris_id)
+                    .expect("the Moon has a non-zero NAIF id"),
+            )
+            .expect("canonical celestial source ids follow the direction contract"),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),
@@ -719,6 +734,11 @@ pub fn setup_big_space_hierarchy(
         }
         commands.spawn((
             body_desc.body_component(),
+            lunco_environment::DirectionTargetId::new(
+                &lunco_celestial::ephemeris_id::direction_source_id(body_desc.ephemeris_id)
+                    .expect("catalog entries represent bodies with non-zero NAIF ids"),
+            )
+            .expect("canonical celestial source ids follow the direction contract"),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),

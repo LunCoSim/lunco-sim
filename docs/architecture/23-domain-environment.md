@@ -124,46 +124,51 @@ recomputes it every frame from the Sun–Earth–site geometry as
 its own driver on the next frame. There is correspondingly no slider — the inspector shows
 a readout, and what moves it is the sim clock.
 
-The Sun's shipped values are the documented calibration for scenes without a live solar
-distance model. The ephemeris provider samples the one `CelestialTime` child of
-`WorldTime` to publish `SunState` direction and irradiance. The render light,
-shadows, and the environment bridge project that same semantic state; none
-selects a second solar clock. `LocalSolar` is a per-probe mount-frame direction
-cache, not a time source. It is refreshed during ordinary `FixedUpdate` and
-published to Modelica at the existing co-simulation communication point.
+Every finite direction target is one position-bearing entity. Celestial bodies
+derive their stable source id from their existing `lunco:body` NAIF identifier:
+`sun`, `earth`, and `moon` for NAIF 10, 399, and 301, then `body_<NAIF>` for
+other bodies. Do not apply `LunCoDirectionTargetAPI` to a celestial body. Other
+objects use that API to author one unique lower-case id. The selected source id
+is the stem of the probe output triplet (`<id>_mount_x/y/z`); it does not
+determine consumer input names. Each consumer exposes a generic
+`target_mount_x/y/z` vector, so the same solar panel or pointing controller can
+receive a bearing to the Sun, Earth, Moon, a spacecraft, or another vehicle by
+changing only its USD wire.
 
-```
-CelestialTime ephemeris + site frame → SunState → LocalSolar → EnvironmentProbe → Modelica controller
-                                      └── DirectionalLight → SunRenderState → renderer and terrain shadows
-```
+The environment publisher reads source demand from composed USD connections,
+resolves each probe-to-target displacement through the shared BigSpace f64
+coordinate helpers, normalizes it once into `UnitDirection3`, then writes the
+three `double` values to that probe's `SimComponent` before
+`CosimSet::Propagate`. A missing, coincident, ambiguous, or unresolvable target
+removes the sample and emits a structured `RuntimeDiagnostic`; no local-body
+projection cache or guessed direction feeds Modelica.
 
-The celestial rate changes the sampled solar direction while the fixed physics
-and Modelica schedules keep their configured cadence. A panel on a horizontal
-mount receives the Sun's local up/down direction, so its incidence and
-available power fall to zero below the local horizon. The Sun tracker and
-panel model both consume the same mount-frame vector through authored USD
-connections.
+Static directional lights use the same resolver as explicit framed rays. The
+render light consumes the resolved `sun` ray or target for presentation,
+`SunRenderState` records its finalized render direction for shadows, and
+Modelica reads the probe outputs through ordinary USD connections. A celestial
+scene gets finite body positions from the ephemeris driven by the one
+`CelestialTime` child of `WorldTime`; static scenes get their fixed direction
+from one authored `DistantLight`. Neither choice adds another coordinate or
+time-conversion path.
 
-`SunRenderState` is published from the finalized light direction and feeds
-terrain shadow projection and the asynchronous horizon cache. The render light
-is not a provider endpoint, and a Modelica source does not drive it. Controllers
-such as `SunTracker` consume the environment-probe outputs and drive their
-actuators.
+Direction target ids must be unique and valid, every composed consumer triplet
+must be complete and `double`, and its three axes must come from one
+probe/source or relay through one assembly input. A spawnable component may
+expose the complete unconnected `target_mount_x/y/z` interface; its parent
+composition supplies and validates those wires. The consumer port name is
+always `target_mount_x/y/z`; the source id appears only on the probe output
+wire. Rhai policy `lint_usd.rhai` reports source-named consumer inputs, invalid
+target identity, missing targets, ambiguous targets, incomplete triplets, and
+precision narrowing before simulation.
 
-For a scene without a celestial site, the composed USD `DistantLight` is still
-the authored source of its fixed sun direction. `lunco-usd-sim` seeds that
-semantic sample only after Bevy/BigSpace transform propagation has produced the
-light's composed world rotation; the next environment pass projects the sample
-back to the same light. Reading `GlobalTransform` during the USD `Update` pass
-would see the identity value for a newly admitted light and turn a valid
-downward sun into a horizontal light.
-
-The render boundary also owns the visible contract failures. `RuntimeDiagnostics` reports
-`environment-sun/sun-contract` when the active scene has zero or multiple unscoped suns,
-`sun-state` when the semantic sample is absent or invalid, `physics-frame` when the bound
-frame is missing, and `sun-parent` when a child light has no live parent transform. The
-environment projector clears its own findings only after the corresponding state is valid;
-`RuntimeDiagnostics` and `LintReport` expose the same findings to the UI and API.
+There is no implicit direction target. In an assembled scene, a target triplet
+without a valid source connection is a lint error; the publisher never guesses
+Sun/Earth or fabricates zero components. A connected source that cannot be
+resolved has its sample withdrawn and raises a diagnostic, and a running
+co-simulation consumer faults. The authoring action is to connect one valid
+source id to the generic target triplet or resolve the lint finding before
+running the model.
 
 ## Invariants
 
@@ -178,14 +183,11 @@ Gravity, the earthshine fill and **the sun feed** all run headless.
 > did (`wire_terrain_materials` / `shade_dynamic_entities`, and the `Bloom` arm of
 > `SetEnvironmentLight`) now live in `lunco-render-bevy`.
 
-**2. Solar azimuth is NORTH-referenced** — radians clockwise from north
-(`0 = N`, `+π/2 = E`, `±π = S`), which is the standard solar convention. This is the
-value published on the `sun_azimuth` port and consumed by sun-tracker models.
-
-> A south-referenced azimuth is off by exactly 180° and produces output that looks
-> entirely plausible — a panel that tracks confidently in the wrong direction. The
-> convention is stated on `SunDirection::azimuth` and on `SOLAR_AZIMUTH_CONNECTOR`
-> for exactly that reason.
+**2. Direction normalization has one owner.** The generic provider converts
+finite position displacement to `UnitDirection3` once. Rigid frame rotations
+preserve unit length; downstream Modelica models consume that contract directly.
+Authored panel normals remain independently normalized because they are model
+parameters, not coordinate-conversion output.
 
 ## Modelica `inner`/`outer` analog
 
@@ -219,9 +221,12 @@ model Balloon
 end Balloon;
 ```
 
-A planned `inject_environment` system in `lunco-cosim` will read `Local*`
-components and write matching keys into `SimComponent.inputs` — opt-in by
-input name. Not yet implemented.
+`lunco-environment` writes the probe's current gravity samples and requested
+direction triplets to its `SimComponent.outputs`. Cosim topology remains an
+ordinary USD output-to-input connection, and Modelica consumes the values at
+its configured communication points. An absent provider sample is removed and
+reported; the bridge does not inject an input-side alias or keep a second
+per-body projection cache.
 
 ## See also
 

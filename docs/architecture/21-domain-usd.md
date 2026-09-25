@@ -203,6 +203,10 @@ program authoring intent and lowers its complete source/port/wire contract to
 that same USD operation path. `UsdOp` implements
 both `DocumentOp` and `lunco_twin_journal::OpPayload` — so **authoring an edit *is*
 journaling it *is* syncing it** (see the [networking sync architecture](../../crates/lunco-networking/SYNC_ARCHITECTURE.md)).
+Typed connection preflight resolves referenced providers and applied API schemas
+through the edited document's own authoring recipe. Runtime-only endpoints are
+checked against the matching live port registry, so another open Twin cannot
+change whether a document's authored wire is valid.
 
 Derived presentation has a separate typed boundary: `ApplyUsdTransientOps`
 updates the runtime view from already-authored facts (for example, the route

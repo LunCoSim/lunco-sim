@@ -8,6 +8,7 @@ description = "Composed USD physics facts for Rhai lint policies"
 [dependencies]
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-celestial = { path = "../lunco-celestial" }
 avian3d = { workspace = true }
 bevy = { workspace = true }
 lunco-hooks = { path = "../lunco-hooks" }

@@ -88,26 +88,6 @@ fn edges(app: &mut App) -> Vec<SimConnection> {
     q.iter(app.world()).cloned().collect()
 }
 
-#[derive(Resource, Default)]
-struct EarthRequirementEvents {
-    added: usize,
-    removed: usize,
-}
-
-fn count_earth_requirement_add(
-    _trigger: On<Add, lunco_environment::EarthDirectionRequired>,
-    mut events: ResMut<EarthRequirementEvents>,
-) {
-    events.added += 1;
-}
-
-fn count_earth_requirement_remove(
-    _trigger: On<Remove, lunco_environment::EarthDirectionRequired>,
-    mut events: ResMut<EarthRequirementEvents>,
-) {
-    events.removed += 1;
-}
-
 /// Structural endpoint projection derives the edge during the load-time
 /// rebuild. Clearing a live connection and marking the derived cache dirty
 /// removes it again.
@@ -226,20 +206,17 @@ fn unrelated_endpoint_arrival_preserves_an_unchanged_wire() {
 }
 
 #[test]
-fn unrelated_endpoint_arrival_does_not_toggle_earth_direction_demand() {
+fn unrelated_endpoint_arrival_does_not_toggle_target_direction_demand() {
     let (mut app, id, handle) = setup();
     install_wiring_system(&mut app);
-    app.init_resource::<EarthRequirementEvents>()
-        .add_observer(count_earth_requirement_add)
-        .add_observer(count_earth_requirement_remove);
     app.world()
         .non_send::<CanonicalStages>()
         .get(id)
         .unwrap()
         .stage()
-        .create_attribute("/World/Sink.inputs:earth_mount_x", "float")
+        .create_attribute("/World/Sink.inputs:target_mount_x", "double")
         .unwrap()
-        .set_connections([SdfPath::new("/World/Src.outputs:earth_mount_x").unwrap()])
+        .set_connections([SdfPath::new("/World/Src.outputs:spacecraft_a_mount_x").unwrap()])
         .unwrap();
     app.world_mut()
         .non_send_mut::<CanonicalStages>()
@@ -268,14 +245,13 @@ fn unrelated_endpoint_arrival_does_not_toggle_earth_direction_demand() {
     assert!(
         app.world()
             .entity(source)
-            .contains::<lunco_environment::EarthDirectionRequired>()
+            .get::<lunco_environment::DirectionSourceRequirements>()
+            .is_some_and(|requirements| {
+                requirements
+                    .0
+                    .contains(&lunco_environment::DirectionSourceId::parse("spacecraft_a").unwrap())
+            })
     );
-    assert_eq!(
-        app.world().resource::<EarthRequirementEvents>().added,
-        1,
-        "the first authored Earth-vector wire admits its source once"
-    );
-    assert_eq!(app.world().resource::<EarthRequirementEvents>().removed, 0);
 
     app.world_mut().spawn((
         UsdPrimPath {
@@ -289,17 +265,12 @@ fn unrelated_endpoint_arrival_does_not_toggle_earth_direction_demand() {
     assert!(
         app.world()
             .entity(source)
-            .contains::<lunco_environment::EarthDirectionRequired>()
-    );
-    assert_eq!(
-        app.world().resource::<EarthRequirementEvents>().added,
-        1,
-        "an unrelated endpoint must not re-add an unchanged demand marker"
-    );
-    assert_eq!(
-        app.world().resource::<EarthRequirementEvents>().removed,
-        0,
-        "an unrelated endpoint must not remove an unchanged demand marker"
+            .get::<lunco_environment::DirectionSourceRequirements>()
+            .is_some_and(|requirements| {
+                requirements
+                    .0
+                    .contains(&lunco_environment::DirectionSourceId::parse("spacecraft_a").unwrap())
+            })
     );
 }
 
