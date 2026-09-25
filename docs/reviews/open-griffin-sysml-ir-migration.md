@@ -53,10 +53,10 @@ previous 0.58 rad text was stale.
 
 This is an implemented migration slice, not production Editor acceptance. The
 generic check path and Griffin constraints still need a focused live Rhai
-check. Most Griffin mesh/layout predicates, the custom parameter audit, and
-requirement checks expressed only in Twin Rhai remain to be migrated. The
-language gaps below still block source-driven topology and aggregate
-constraints.
+check. Most Griffin mesh/layout predicates and requirement checks expressed
+only in Twin Rhai remain to be migrated. The Twin-specific geometry-parameter
+audit also remains separate from the generic requirement audit. The language
+gaps below still block source-driven topology and aggregate constraints.
 
 ### 2026-09-25 typed feature-path update
 
@@ -112,7 +112,15 @@ operation for duplicate short names, project-required identifiers and typed
 subjects, verification coverage, text-only requirement classification, and
 unresolved names/verification targets. The Griffin requirements tool exposes
 that audit as an explicit review operation; normal Twin startup does not run
-it.
+it. A generic `sysml-audit` CLI now runs the same policy over one or more
+SysML/KerML files or directories, with explicit policy flags and JSON output.
+Identifier and typed-subject policies apply to requirement usages, where those
+SysML properties belong; reusable definitions are audited for formal required
+constraints separately. Verification coverage comes from the resolved
+`verifiedRequirement` relationship in the semantic model. The authored
+`lint.sysml` policy's verification checks now compare those same resolved
+snapshot handles; written `verify` names remain display/source data rather than
+identifiers used to decide coverage.
 
 This closes generic membership selection and aggregate evaluation, not the
 complete SysML binding semantics. The existing Griffin solar verification
@@ -126,12 +134,14 @@ binding shape to prepare. The AST now projects explicit feature-value bindings
 on constraint usages through resolved redefinition handles, and the IR
 substitutes supported typed actual expressions before requirement evaluation.
 Defaults, output binding, general binding relationships, and
-specialization/redefinition traversal remain unsupported. This batch
-compile-checks the affected crates, but does not run the authored scenario or
-exercise a Griffin usage containing actual bindings.
-The grouped path is present in authored Griffin verification, but it was not
-executed in this batch. No tests, Griffin audit run, or Editor/runtime
-verification were performed in this batch.
+specialization/redefinition traversal remain unsupported. The explicit CLI
+engineering-review audit was run over the Twin's 21 SysML/KerML source files:
+it found no parser/name diagnostics and no policy errors. It reported 154
+informational text-only requirement definitions; this policy does not require
+every qualitative requirement definition to carry a formal predicate. The
+grouped evaluator and bound-argument path remain compile-checked only: no tests,
+authored scenario, actual-bound Griffin usage, authored `lint.sysml` policy
+execution, or Editor/runtime verification were run in this batch.
 
 ## Audit of the current Griffin model
 
@@ -161,7 +171,7 @@ permanent semantic layer.
 | Ports, interfaces, connections, and bindings | Values such as `sourceComponent`, `usdPath`, and frame/unit strings | Rhai manually joins endpoints and providers; no typed contract says which observation supplies a feature | Typed endpoint/feature chains and standard binding/connectors with source spans and target identity |
 | Constraint definitions/usages | Reusable parameterized definitions exist; source projection distinguishes `require`/`assume`; the IR executes grouped `require` memberships by handle and applies projected feature-value bindings; Griffin's solar scenario calls the grouped path | Current Griffin usage members have no actual argument bindings, so providers still select values by qualified predicate and parameter display name. Defaults, output binding, and full specialization traversal remain | Complete default/output/general bindings and specialization traversal; derive provider observations from source-owned feature bindings where the model defines them |
 | Feature navigation | Dotted `PATH_EXPR` now projects to typed feature chains and exact dependency paths; compile-checked, not runtime-verified | Griffin source and providers have not yet been migrated to consume full typed paths; optional navigation and collection-valued traversal remain unsupported | Runtime-verified standard feature navigation, collection-aware path typing, and explicit unavailable/invalid propagation |
-| Collections and aggregates | Parallel arrays and index assumptions | Index drift and hand-coded reductions for mass, COM, inertia, envelopes | Homogeneous scalar sequence literals, one-based indexing, typed `sum`/`product`, size predicates, and Boolean aggregates now compile/evaluate; feature-valued, structured/N-dimensional collections and reductions remain required |
+| Collections and aggregates | Parallel arrays and index assumptions | Index drift and hand-coded reductions for mass, COM, inertia, envelopes | Homogeneous scalar sequence literals, one-based indexing, scalar indexing, `size`/emptiness, `sum`/`product`, Boolean aggregates, and scalar `min`/`max` now compile/evaluate. Feature-valued and structured collections, collection navigation, filtering/selection, and reusable reductions remain open |
 | Quantities and units | Many anonymous `Real` values and naming conventions such as `...M`, `...Kg`, `...Deg`, plus string `frameUnits` | Unit correctness is policy convention rather than a source-checked contract | Standard quantity kinds, unit literals/conversion contracts, dimensional checking, and frame/time metadata |
 | Frames and realization | USD paths, component names, and frame information are strings | A value can be numerically valid but attached to the wrong prim/frame | Provider binding contract: source feature, provider (`usd`, `modelica`, telemetry, derived), target, frame, unit, and time validity |
 | Requirement/verification membership | Required/assumed memberships and verify targets are represented by source-linked typed handles; grouped evaluation validates verification coverage | Assert/invariant/satisfy provenance and full source-to-provider evidence identity are incomplete; most Twin observers still use authored names | Complete the generic relationship graph and derive evidence from source identities rather than duplicated status catalogs |
@@ -222,17 +232,20 @@ arrays, dotted feature paths, and a recognized subset of standard-library
 invocations. Griffin needs more before it can remove its main workarounds:
 
 1. Runtime-verified navigation through part/feature usages, optional-access
-   semantics, and collection-valued paths (the typed dotted-path representation
-   and exact provider identity now compile);
-2. executing requirement `require` membership as a bound plan, default
-   expansion, output/result binding, and general user-defined function-body
-   execution (explicitly bound calls to source-projected `ConstraintDefinition`s
-   now compile/evaluate with typed input arguments; a uniquely typed usage's
-   predicate handle is projected from standard `FeatureTyping`);
-3. feature-valued and structured collection construction, multidimensional
-   indexing, and reductions for station, leg, engine, mass, COM, inertia, and
-   envelope sets (homogeneous scalar sequences and one-based indexing now
-   compile through the IR);
+   semantics, and collection-valued paths (typed dotted paths and exact
+   provider identity compile, while runtime path resolution has not been
+   exercised in Griffin);
+2. default expansion, output/result binding, general binding relationships,
+   specialization/redefinition traversal, and general user-defined
+   function-body execution (explicitly bound calls to source-projected
+   `ConstraintDefinition`s and grouped `require` membership evaluation are
+   implemented; actual bindings compile but have not been exercised by a
+   Griffin usage);
+3. feature-valued and structured collection construction, collection path
+   navigation, filtering/selection, multidimensional indexing, and reusable
+   reductions for station, leg, engine, mass, COM, inertia, and envelope sets
+   (homogeneous scalar sequences, one-based indexing, `size`, emptiness,
+   `sum`, `product`, Boolean aggregates, and scalar `min`/`max` are supported);
 4. dimensional quantity/unit checking and conversion contracts, with no
    inference from suffixes or bare `Real` values;
 5. null/invalid/error semantics that preserve an inconclusive or invalid

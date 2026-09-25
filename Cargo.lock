@@ -9587,6 +9587,7 @@ dependencies = [
  "lunco-hash",
  "lunco-sysml-ast",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

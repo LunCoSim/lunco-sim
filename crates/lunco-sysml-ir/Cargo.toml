@@ -9,6 +9,7 @@ description = "Typed, source-pinned SysML/KerML constraint IR and evaluator"
 lunco-hash = { path = "../lunco-hash" }
 lunco-sysml-ast = { path = "../lunco-sysml-ast" }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

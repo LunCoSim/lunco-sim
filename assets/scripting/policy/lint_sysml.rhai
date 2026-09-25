@@ -31,30 +31,17 @@ fn same_element_handle(left, right) {
         && left.element_id == right.element_id
 }
 
-fn has_requirement_target(target, requirements) {
-    for requirement in requirements {
-        let name = requirement.qualified_name;
-        if name == target || name.ends_with("::" + target) {
-            return true;
-        }
+fn verification_has_requirement(verification, requirement) {
+    let requirement_handle = requirement.element.handle;
+    for target_handle in verification.verified_requirements {
+        if same_element_handle(target_handle, requirement_handle) { return true; }
     }
     false
 }
 
 fn requirement_is_verified(requirement, verifications) {
-    let qualified = requirement.qualified_name;
-    let short = qualified;
-    if qualified.contains("::") {
-        let pieces = qualified.split("::");
-        short = pieces[pieces.len() - 1];
-    }
     for verification in verifications {
-        for target in verification.verifies {
-            let exact = target == qualified;
-            let local = target == short;
-            let suffix = qualified.ends_with("::" + target);
-            if exact || local || suffix { return true; }
-        }
+        if verification_has_requirement(verification, requirement) { return true; }
     }
     false
 }
@@ -103,25 +90,12 @@ fn verification_shape(facts) {
                 "verification case has no subject; bind its execution/test owner explicitly",
             ));
         }
-        if verification.verifies.is_empty() {
+        if verification.verified_requirements.is_empty() {
             out.push(finding(
                 "sysml-verification-without-requirement",
                 "error",
                 subject,
-                "verification case must verify at least one requirement usage",
-            ));
-            continue;
-        }
-        for target in verification.verifies {
-            if has_requirement_target(target, facts.requirements) { continue; }
-            let message = "verification target `";
-            message += target;
-            message += "` does not resolve to a requirement in the loaded SysML source set";
-            out.push(finding(
-                "sysml-verification-target-unresolved",
-                "error",
-                subject,
-                message,
+                "verification objective must resolve at least one `verifiedRequirement` relationship",
             ));
         }
     }

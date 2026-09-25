@@ -2244,9 +2244,11 @@ pub struct RequirementEvaluationReport {
 /// project policies, but are not universal SysML validity rules.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequirementAuditPolicy {
-    /// Require requirement definitions to declare a short name.
+    /// Require each requirement usage to declare its project identifier as a
+    /// SysML short name. Reusable requirement definitions need not carry an
+    /// instance identifier.
     pub require_short_name: bool,
-    /// Require requirement definitions to declare a typed subject.
+    /// Require each requirement usage to declare at least one typed subject.
     pub require_typed_subject: bool,
     /// Require each requirement definition to be covered by a verification
     /// case through a resolved requirement usage.
@@ -2650,6 +2652,11 @@ pub fn audit_requirements(
         .iter()
         .filter(|record| record.element.kind == "RequirementDefinition")
         .collect::<Vec<_>>();
+    let usages = analysis
+        .requirements()
+        .iter()
+        .filter(|record| record.element.kind == "RequirementUsage")
+        .collect::<Vec<_>>();
     let mut report = RequirementAuditReport {
         source_revision: analysis.source_revision(),
         source_fingerprint: analysis.source_fingerprint(),
@@ -2658,7 +2665,7 @@ pub fn audit_requirements(
 
     let mut identifiers =
         HashMap::<(Option<SysmlElementHandle>, String), SysmlElementHandle>::new();
-    for requirement in &definitions {
+    for requirement in &usages {
         let element = &requirement.element;
         let source = source_of(element, analysis.source_revision());
         if let Some(short_name) = &element.short_name {
@@ -2680,7 +2687,7 @@ pub fn audit_requirements(
                 severity: Severity::Error,
                 element: element.handle,
                 source: source.clone(),
-                message: "project policy requires a short name on every requirement definition"
+                message: "project policy requires a short name on every requirement usage"
                     .to_owned(),
             });
         }
@@ -2696,11 +2703,15 @@ pub fn audit_requirements(
                 severity: Severity::Error,
                 element: element.handle,
                 source: source.clone(),
-                message: "project policy requires a typed subject on every requirement definition"
+                message: "project policy requires a typed subject on every requirement usage"
                     .to_owned(),
             });
         }
+    }
 
+    for requirement in &definitions {
+        let element = &requirement.element;
+        let source = source_of(element, analysis.source_revision());
         let has_required_constraint = requirement
             .constraints
             .iter()
@@ -2723,6 +2734,29 @@ pub fn audit_requirements(
             });
         }
 
+        for diagnostic in analysis.diagnostics().iter().filter(|diagnostic| {
+            diagnostic.kind == SysmlDiagnosticKind::Name
+                && diagnostic.file == element.file
+                && diagnostic.start >= element.start
+                && diagnostic.end <= element.end
+        }) {
+            report.findings.push(RequirementAuditFinding {
+                code: Code::UnresolvedNameInRequirement,
+                severity: Severity::Error,
+                element: element.handle,
+                source: SysmlSourceRef {
+                    file: diagnostic.file.clone(),
+                    start: diagnostic.start,
+                    end: diagnostic.end,
+                    revision: analysis.source_revision(),
+                },
+                message: diagnostic.message.clone(),
+            });
+        }
+    }
+
+    for requirement in &usages {
+        let element = &requirement.element;
         for diagnostic in analysis.diagnostics().iter().filter(|diagnostic| {
             diagnostic.kind == SysmlDiagnosticKind::Name
                 && diagnostic.file == element.file

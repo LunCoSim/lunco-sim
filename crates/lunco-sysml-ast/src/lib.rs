@@ -1686,7 +1686,14 @@ impl SysmlAnalysis {
         let records = project_records(&attributes, source_revision);
         let requirements =
             project_requirements(&workspace, &project_indices, &files, &elements, &attributes);
-        let verifications = project_verifications(&files, &elements, &references);
+        let verifications = project_verifications(
+            &workspace,
+            &project_indices,
+            &files,
+            &elements,
+            source_revision,
+            source_fingerprint,
+        );
 
         Self {
             files,
@@ -2217,38 +2224,36 @@ fn project_constraint_parameters(
         semantic_type_id(workspace, "Quantities::TensorQuantityValue"),
     ];
     let mut type_cache = HashMap::new();
+    let semantic_ids = (0..workspace.file_count())
+        .flat_map(|file| workspace.file_elements(file).iter().copied())
+        .map(|id| (id.index() as u32, id))
+        .collect::<HashMap<_, _>>();
     elements
         .iter()
         .filter(|element| element.owner_handle == Some(constraint.handle))
-        .filter(|element| element.kind == "ReferenceUsage" || element.kind == "Feature")
         .filter_map(|element| {
+            let semantic_id = *semantic_ids.get(&element.id)?;
+            let (name, direction) = {
+                let model = workspace.model();
+                if !model.kind(semantic_id).is_a(ElementKind::Feature) {
+                    return None;
+                }
+                let name = model.effective_name(semantic_id)?.to_owned();
+                let direction = match model.direction(semantic_id) {
+                    Some("in") => SysmlFeatureDirection::In,
+                    Some("out") => SysmlFeatureDirection::Out,
+                    Some("inout") => SysmlFeatureDirection::InOut,
+                    _ => SysmlFeatureDirection::None,
+                };
+                (name, direction)
+            };
             let file = files.iter().find(|file| file.name == element.file)?;
             let declaration = file
                 .text
                 .get(element.start as usize..element.end as usize)?;
-            let trimmed = declaration.trim();
-            let (direction, after_direction) = if let Some(rest) = trimmed.strip_prefix("inout") {
-                (SysmlFeatureDirection::InOut, rest.trim_start())
-            } else if let Some(rest) = trimmed.strip_prefix("in") {
-                (SysmlFeatureDirection::In, rest.trim_start())
-            } else if let Some(rest) = trimmed.strip_prefix("out") {
-                (SysmlFeatureDirection::Out, rest.trim_start())
-            } else {
-                (SysmlFeatureDirection::None, trimmed)
-            };
-            let name_end = after_direction.find(|character: char| {
-                character == ':'
-                    || character == ';'
-                    || character == '='
-                    || character.is_whitespace()
-            })?;
-            let name = after_direction[..name_end].trim();
-            if name.is_empty() {
-                return None;
-            }
-            let (type_name, type_span) = after_direction.find(':').and_then(|colon| {
+            let (type_name, type_span) = declaration.find(':').and_then(|colon| {
                 let tail_start = colon + 1;
-                let tail = &after_direction[tail_start..];
+                let tail = &declaration[tail_start..];
                 let type_end = tail.find(['=', ';', '{']).unwrap_or(tail.len());
                 let type_source = &tail[..type_end];
                 let type_name = type_source.trim();
@@ -2281,7 +2286,7 @@ fn project_constraint_parameters(
                 owner_handle: Some(constraint.handle),
                 owner,
                 direction,
-                name: name.to_owned(),
+                name,
                 qualified_name: element.qualified_name.clone(),
                 type_name: Some(type_name),
                 declared_type: Some(declared_type),
@@ -3304,14 +3309,13 @@ fn project_requirement_constraints(
 }
 
 fn project_verifications(
+    workspace: &Workspace,
+    project_files: &[usize],
     files: &[SysmlFile],
     elements: &[SysmlElement],
-    references: &[SysmlReference],
+    source_revision: u64,
+    source_fingerprint: u64,
 ) -> Vec<SysmlVerificationRecord> {
-    let elements_by_handle = elements
-        .iter()
-        .map(|element| (element.handle, element))
-        .collect::<HashMap<_, _>>();
     elements
         .iter()
         .filter(|element| {
@@ -3325,32 +3329,25 @@ fn project_verifications(
                 .as_str();
             let block = source.get(element.start as usize..element.end as usize)?;
             let fields = parse_block_fields(block);
-            let verify_names = fields
-                .verifies
+            let semantic_file = project_files
                 .iter()
-                .filter_map(|name| name.rsplit("::").next())
-                .collect::<HashSet<_>>();
-            let mut verified_requirements = Vec::new();
-            for reference in references.iter().filter(|reference| {
-                reference.file == element.file
-                    && reference.start >= element.start
-                    && reference.end <= element.end
-                    && verify_names.contains(reference.name.as_str())
-                    && reference_belongs_to(reference, element.handle, &elements_by_handle)
-                    && elements_by_handle
-                        .get(&reference.from)
-                        .is_some_and(|from| from.kind == "RequirementUsage")
-                    && elements_by_handle
-                        .get(&reference.target)
-                        .is_some_and(|target| {
-                            target.kind == "RequirementUsage"
-                                || target.kind == "RequirementDefinition"
-                        })
-            }) {
-                if !verified_requirements.contains(&reference.target) {
-                    verified_requirements.push(reference.target);
-                }
-            }
+                .copied()
+                .find(|&file| workspace.file_name(file) == element.file)?;
+            let semantic_id = workspace
+                .file_elements(semantic_file)
+                .iter()
+                .copied()
+                .find(|id| id.index() as u32 == element.id)?;
+            let verified_requirements = workspace
+                .model()
+                .verified_requirement(semantic_id)
+                .iter()
+                .map(|target| SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: target.index() as u32,
+                })
+                .collect();
             Some(SysmlVerificationRecord {
                 element: element.clone(),
                 documentation: fields.documentation,
@@ -3361,28 +3358,6 @@ fn project_verifications(
             })
         })
         .collect()
-}
-
-fn reference_belongs_to(
-    reference: &SysmlReference,
-    owner: SysmlElementHandle,
-    elements: &HashMap<SysmlElementHandle, &SysmlElement>,
-) -> bool {
-    let mut current = Some(reference.from_owner.unwrap_or(reference.from));
-    let mut remaining = elements.len();
-    while let Some(handle) = current {
-        if handle == owner {
-            return true;
-        }
-        if remaining == 0 {
-            return false;
-        }
-        remaining -= 1;
-        current = elements
-            .get(&handle)
-            .and_then(|element| element.owner_handle);
-    }
-    false
 }
 
 #[derive(Default)]
