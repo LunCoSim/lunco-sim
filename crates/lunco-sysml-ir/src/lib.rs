@@ -12,12 +12,13 @@
 
 use lunco_hash::Fnv1a;
 use lunco_sysml_ast::{
-    SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlElementHandle, SysmlExpression,
-    SysmlExpressionData, SysmlExpressionOperator, SysmlFeature, SysmlFeatureHandle,
-    SysmlFeaturePath, SysmlMultiplicity, SysmlPrimitiveType, SysmlSourceRef, SysmlType,
-    SysmlTypeCategory, SysmlUnsupportedExpression,
+    SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlConstraintKind, SysmlElementHandle,
+    SysmlExpression, SysmlExpressionData, SysmlExpressionOperator, SysmlFeature,
+    SysmlFeatureDirection, SysmlFeatureHandle, SysmlFeaturePath, SysmlMultiplicity,
+    SysmlPrimitiveType, SysmlSourceRef, SysmlType, SysmlTypeCategory, SysmlUnsupportedExpression,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 const MAX_EXPRESSION_DEPTH: usize = 256;
 
@@ -313,6 +314,12 @@ pub enum IrExpressionKind {
         argument_parameters: Vec<SysmlElementHandle>,
         arguments: Vec<IrExpression>,
     },
+    PredicateInvocation {
+        function_element: SysmlElementHandle,
+        argument_parameters: Vec<SysmlElementHandle>,
+        arguments: Vec<IrExpression>,
+        body: Vec<IrExpression>,
+    },
     Index {
         collection: Box<IrExpression>,
         index: Box<IrExpression>,
@@ -410,6 +417,14 @@ define_ir_diagnostic_codes! {
     DuplicateObservationPath => "SYSML-IR-043",
     ObservationIsNotDependency => "SYSML-IR-044",
     InvalidBindingContract => "SYSML-IR-045",
+    UnsupportedUserFunction => "SYSML-IR-046",
+    PredicateDefinitionNotFound => "SYSML-IR-047",
+    PredicateArgumentArityMismatch => "SYSML-IR-048",
+    PredicateArgumentBindingInvalid => "SYSML-IR-049",
+    PredicateArgumentTypesInvalid => "SYSML-IR-050",
+    PredicateBodyNotBoolean => "SYSML-IR-051",
+    RecursivePredicateInvocation => "SYSML-IR-052",
+    PredicateFormalPathUnsupported => "SYSML-IR-053",
 }
 
 /// A source-linked diagnostic. Diagnostics are part of the contract and are
@@ -468,6 +483,7 @@ pub fn compile_constraint(
     let attributes = analysis.attributes();
     let mut expressions = Vec::with_capacity(constraint.expressions.len());
     let mut dependencies = Vec::new();
+    let mut active_predicates = Vec::new();
     let parameters: Vec<IrParameter> = constraint
         .parameters
         .iter()
@@ -500,6 +516,7 @@ pub fn compile_constraint(
             &mut diagnostics,
             &mut dependencies,
             0,
+            &mut active_predicates,
         ) {
             expressions.push(compiled);
         }
@@ -552,6 +569,7 @@ fn compile_expression(
     diagnostics: &mut Vec<IrDiagnostic>,
     dependencies: &mut Vec<SysmlFeaturePath>,
     depth: usize,
+    active_predicates: &mut Vec<SysmlElementHandle>,
 ) -> Option<IrExpression> {
     if depth > MAX_EXPRESSION_DEPTH {
         diagnostics.push(error(
@@ -664,6 +682,7 @@ fn compile_expression(
                 diagnostics,
                 dependencies,
                 depth + 1,
+                active_predicates,
             )?;
             validate_unary(operator, &operand.result_type, &source, diagnostics);
             IrExpressionKind::Unary {
@@ -685,6 +704,7 @@ fn compile_expression(
                 diagnostics,
                 dependencies,
                 depth + 1,
+                active_predicates,
             )?;
             let right = compile_expression(
                 right,
@@ -694,6 +714,7 @@ fn compile_expression(
                 diagnostics,
                 dependencies,
                 depth + 1,
+                active_predicates,
             )?;
             validate_binary(
                 operator,
@@ -721,6 +742,7 @@ fn compile_expression(
                 diagnostics,
                 dependencies,
                 depth + 1,
+                active_predicates,
             )?;
             let when_true = compile_expression(
                 when_true,
@@ -730,6 +752,7 @@ fn compile_expression(
                 diagnostics,
                 dependencies,
                 depth + 1,
+                active_predicates,
             )?;
             let when_false = compile_expression(
                 when_false,
@@ -739,6 +762,7 @@ fn compile_expression(
                 diagnostics,
                 dependencies,
                 depth + 1,
+                active_predicates,
             )?;
             if !condition.result_type.is_boolean_scalar() {
                 diagnostics.push(error(
@@ -765,12 +789,18 @@ fn compile_expression(
             arguments: invocation_arguments,
         } => {
             let Some(function) = function_reference.standard_function else {
-                diagnostics.push(error(
-                    IrDiagnosticCode::UnsupportedStandardFunction,
+                return compile_predicate_invocation(
+                    function_reference.element,
+                    invocation_arguments,
                     &source,
-                    "resolved function is outside the executable standard-library subset",
-                ));
-                return None;
+                    analysis,
+                    attributes,
+                    parameters,
+                    diagnostics,
+                    dependencies,
+                    depth + 1,
+                    active_predicates,
+                );
             };
             if invocation_arguments.len() != function.arity() {
                 diagnostics.push(error(
@@ -820,6 +850,7 @@ fn compile_expression(
                         diagnostics,
                         dependencies,
                         depth + 1,
+                        active_predicates,
                     )
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -843,6 +874,7 @@ fn compile_expression(
                 diagnostics,
                 dependencies,
                 depth + 1,
+                active_predicates,
             )?;
             let index = compile_expression(
                 index,
@@ -852,6 +884,7 @@ fn compile_expression(
                 diagnostics,
                 dependencies,
                 depth + 1,
+                active_predicates,
             )?;
             if !collection.result_type.multiplicity.is_collection()
                 || index.result_type.multiplicity.is_collection()
@@ -881,6 +914,7 @@ fn compile_expression(
                         diagnostics,
                         dependencies,
                         depth + 1,
+                        active_predicates,
                     )
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -903,6 +937,7 @@ fn compile_expression(
                 diagnostics,
                 dependencies,
                 depth + 1,
+                active_predicates,
             )?;
             IrExpressionKind::Group(Box::new(child))
         }
@@ -923,6 +958,220 @@ fn compile_expression(
         result_type,
         kind,
     })
+}
+
+fn compile_predicate_invocation(
+    function_element: SysmlElementHandle,
+    invocation_arguments: &[lunco_sysml_ast::SysmlInvocationArgument],
+    source: &SysmlSourceRef,
+    analysis: &SysmlAnalysis,
+    attributes: &[SysmlAttribute],
+    caller_parameters: &[SysmlFeature],
+    diagnostics: &mut Vec<IrDiagnostic>,
+    dependencies: &mut Vec<SysmlFeaturePath>,
+    depth: usize,
+    active_predicates: &mut Vec<SysmlElementHandle>,
+) -> Option<IrExpression> {
+    let Some(definition) = analysis.constraints().iter().find(|candidate| {
+        candidate.element.handle == function_element
+            && candidate.kind == SysmlConstraintKind::ConstraintDefinition
+    }) else {
+        diagnostics.push(error(
+            IrDiagnosticCode::UnsupportedUserFunction,
+            source,
+            "only source-projected SysML constraint definitions can be invoked",
+        ));
+        return None;
+    };
+
+    let formal_inputs = definition
+        .parameters
+        .iter()
+        .filter(|parameter| {
+            matches!(
+                parameter.direction,
+                SysmlFeatureDirection::In | SysmlFeatureDirection::InOut
+            )
+        })
+        .collect::<Vec<_>>();
+    if invocation_arguments.len() != formal_inputs.len() {
+        diagnostics.push(error(
+            IrDiagnosticCode::PredicateArgumentArityMismatch,
+            source,
+            &format!(
+                "predicate requires {} input argument(s), found {}",
+                formal_inputs.len(),
+                invocation_arguments.len()
+            ),
+        ));
+        return None;
+    }
+
+    let formal_by_handle = formal_inputs
+        .iter()
+        .map(|formal| (formal.handle.element, *formal))
+        .collect::<HashMap<_, _>>();
+    let mut bound_arguments = HashMap::with_capacity(invocation_arguments.len());
+    for argument in invocation_arguments {
+        let Some(parameter) = argument.parameter else {
+            diagnostics.push(error(
+                IrDiagnosticCode::PredicateArgumentBindingInvalid,
+                source,
+                "predicate argument does not resolve to an input feature of its definition",
+            ));
+            return None;
+        };
+        if !formal_by_handle.contains_key(&parameter)
+            || bound_arguments.insert(parameter, argument).is_some()
+        {
+            diagnostics.push(error(
+                IrDiagnosticCode::PredicateArgumentBindingInvalid,
+                source,
+                "predicate arguments must bind each declared input feature exactly once",
+            ));
+            return None;
+        }
+    }
+    if formal_inputs
+        .iter()
+        .any(|formal| !bound_arguments.contains_key(&formal.handle.element))
+    {
+        diagnostics.push(error(
+            IrDiagnosticCode::PredicateArgumentBindingInvalid,
+            source,
+            "predicate call is missing a binding for a declared input feature",
+        ));
+        return None;
+    }
+
+    let mut argument_parameters = Vec::with_capacity(formal_inputs.len());
+    let mut arguments = Vec::with_capacity(formal_inputs.len());
+    for formal in &formal_inputs {
+        let actual = bound_arguments[&formal.handle.element];
+        let Some(argument) = compile_expression(
+            &actual.value,
+            analysis,
+            attributes,
+            caller_parameters,
+            diagnostics,
+            dependencies,
+            depth + 1,
+            active_predicates,
+        ) else {
+            return None;
+        };
+        let formal_type = formal
+            .declared_type
+            .as_ref()
+            .map(ir_type_from_sysml)
+            .unwrap_or_else(|| IrType::scalar(IrValueType::Unknown));
+        if !predicate_argument_types_compatible(&formal_type, &argument.result_type) {
+            diagnostics.push(error(
+                IrDiagnosticCode::PredicateArgumentTypesInvalid,
+                &actual.value.source,
+                &format!(
+                    "argument bound to `{}` has type {:?}, expected {:?}",
+                    formal.name, argument.result_type, formal_type
+                ),
+            ));
+            return None;
+        }
+        argument_parameters.push(formal.handle.element);
+        arguments.push(argument);
+    }
+
+    if active_predicates.contains(&function_element) {
+        diagnostics.push(error(
+            IrDiagnosticCode::RecursivePredicateInvocation,
+            source,
+            "recursive constraint-definition invocation is not executable",
+        ));
+        return None;
+    }
+    if definition.expressions.is_empty() {
+        diagnostics.push(error(
+            IrDiagnosticCode::PredicateDefinitionNotFound,
+            source,
+            "invoked constraint definition has no executable predicate body",
+        ));
+        return None;
+    }
+
+    active_predicates.push(function_element);
+    let mut body_dependencies = Vec::new();
+    let mut body = Vec::with_capacity(definition.expressions.len());
+    let mut body_failed = false;
+    for expression in &definition.expressions {
+        match compile_expression(
+            expression,
+            analysis,
+            attributes,
+            &definition.parameters,
+            diagnostics,
+            &mut body_dependencies,
+            depth + 1,
+            active_predicates,
+        ) {
+            Some(compiled) if compiled.result_type.is_boolean_scalar() => body.push(compiled),
+            Some(compiled) => {
+                diagnostics.push(error(
+                    IrDiagnosticCode::PredicateBodyNotBoolean,
+                    &compiled.source,
+                    "every expression in a constraint-definition body must be a scalar Boolean",
+                ));
+                body_failed = true;
+            }
+            None => body_failed = true,
+        }
+    }
+    active_predicates.pop();
+    if body_failed {
+        return None;
+    }
+
+    let formal_handles = formal_inputs
+        .iter()
+        .map(|formal| formal.handle)
+        .collect::<HashSet<_>>();
+    for dependency in &body_dependencies {
+        if dependency
+            .features()
+            .first()
+            .is_some_and(|feature| formal_handles.contains(feature))
+            && dependency.features().len() > 1
+        {
+            diagnostics.push(error(
+                IrDiagnosticCode::PredicateFormalPathUnsupported,
+                source,
+                "feature navigation through a bound predicate parameter requires structured-value evaluation",
+            ));
+            return None;
+        }
+    }
+    body_dependencies.retain(|dependency| {
+        !(dependency.features().len() == 1 && formal_handles.contains(&dependency.target()))
+    });
+    dependencies.extend(body_dependencies);
+
+    Some(IrExpression {
+        source: source.clone(),
+        result_type: IrType::scalar(IrValueType::Boolean),
+        kind: IrExpressionKind::PredicateInvocation {
+            function_element,
+            argument_parameters,
+            arguments,
+            body,
+        },
+    })
+}
+
+fn predicate_argument_types_compatible(formal: &IrType, actual: &IrType) -> bool {
+    if formal.value == IrValueType::Unknown || actual.value == IrValueType::Unknown {
+        return false;
+    }
+    formal.multiplicity == actual.multiplicity
+        && formal.unit == actual.unit
+        && formal.value == actual.value
 }
 
 fn feature_is_in_snapshot(analysis: &SysmlAnalysis, feature: SysmlFeatureHandle) -> bool {
@@ -1144,6 +1393,7 @@ fn infer_result_type(
             arguments,
             ..
         } => infer_standard_function_result(*function, arguments),
+        IrExpressionKind::PredicateInvocation { .. } => IrType::scalar(IrValueType::Boolean),
         IrExpressionKind::Index { collection, .. } => {
             let mut result = collection.result_type.clone();
             result.multiplicity = IrMultiplicity::one();
@@ -1502,6 +1752,31 @@ fn fingerprint_expression(hash: &mut Fnv1a, expression: &IrExpression) {
                 fingerprint_expression(hash, argument);
             }
         }
+        IrExpressionKind::PredicateInvocation {
+            function_element,
+            argument_parameters,
+            arguments,
+            body,
+        } => {
+            hash.write_bytes(b"predicate-invocation");
+            hash.write_u64(function_element.source_revision);
+            hash.write_u64(function_element.source_fingerprint);
+            hash.write_u64(function_element.element_id as u64);
+            hash.write_u64(argument_parameters.len() as u64);
+            for parameter in argument_parameters {
+                hash.write_u64(parameter.source_revision);
+                hash.write_u64(parameter.source_fingerprint);
+                hash.write_u64(parameter.element_id as u64);
+            }
+            hash.write_u64(arguments.len() as u64);
+            for argument in arguments {
+                fingerprint_expression(hash, argument);
+            }
+            hash.write_u64(body.len() as u64);
+            for expression in body {
+                fingerprint_expression(hash, expression);
+            }
+        }
         IrExpressionKind::Index { collection, index } => {
             hash.write_bytes(b"index");
             fingerprint_expression(hash, collection);
@@ -1834,8 +2109,33 @@ fn evaluate_expression(
     context: &EvaluationContext,
     options: EvaluationOptions,
 ) -> Result<EvaluationValue, EvaluationFailure> {
+    evaluate_expression_with_bindings(expression, context, options, &HashMap::new())
+}
+
+fn evaluate_expression_with_bindings(
+    expression: &IrExpression,
+    context: &EvaluationContext,
+    options: EvaluationOptions,
+    bindings: &HashMap<SysmlFeatureHandle, EvaluationValue>,
+) -> Result<EvaluationValue, EvaluationFailure> {
     match &expression.kind {
         IrExpressionKind::FeatureReference { path, .. } => {
+            if let Some(root) = path.features().first() {
+                if let Some(value) = bindings.get(root) {
+                    if path.features().len() != 1 {
+                        return Err(EvaluationFailure::Error(
+                            "feature navigation through a bound predicate parameter is unsupported for structured values".to_owned(),
+                        ));
+                    }
+                    return if runtime_value_matches_type(value, &expression.result_type) {
+                        Ok(value.clone())
+                    } else {
+                        Err(EvaluationFailure::Error(
+                            "bound predicate argument does not match its declared type".to_owned(),
+                        ))
+                    };
+                }
+            }
             let Some(observation) = context.observation(path) else {
                 return Err(EvaluationFailure::Inconclusive(
                     "no provider observation exists for a referenced feature".to_owned(),
@@ -1897,7 +2197,7 @@ fn evaluate_expression(
             IrLiteral::Null => EvaluationValue::Null,
         }),
         IrExpressionKind::Unary { operator, operand } => {
-            let value = evaluate_expression(operand, context, options)?;
+            let value = evaluate_expression_with_bindings(operand, context, options, bindings)?;
             evaluate_unary(*operator, value)
         }
         IrExpressionKind::Binary {
@@ -1905,17 +2205,21 @@ fn evaluate_expression(
             left,
             right,
         } => {
-            let left = evaluate_expression(left, context, options)?;
-            let right = evaluate_expression(right, context, options)?;
+            let left = evaluate_expression_with_bindings(left, context, options, bindings)?;
+            let right = evaluate_expression_with_bindings(right, context, options, bindings)?;
             evaluate_binary(*operator, left, right, options)
         }
         IrExpressionKind::Conditional {
             condition,
             when_true,
             when_false,
-        } => match evaluate_expression(condition, context, options)? {
-            EvaluationValue::Boolean(true) => evaluate_expression(when_true, context, options),
-            EvaluationValue::Boolean(false) => evaluate_expression(when_false, context, options),
+        } => match evaluate_expression_with_bindings(condition, context, options, bindings)? {
+            EvaluationValue::Boolean(true) => {
+                evaluate_expression_with_bindings(when_true, context, options, bindings)
+            }
+            EvaluationValue::Boolean(false) => {
+                evaluate_expression_with_bindings(when_false, context, options, bindings)
+            }
             _ => Err(EvaluationFailure::Error(
                 "conditional guard did not evaluate to Boolean".to_owned(),
             )),
@@ -1927,13 +2231,44 @@ fn evaluate_expression(
         } => {
             let values = arguments
                 .iter()
-                .map(|argument| evaluate_expression(argument, context, options))
+                .map(|argument| {
+                    evaluate_expression_with_bindings(argument, context, options, bindings)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             evaluate_standard_function(*function, values, &expression.result_type)
         }
+        IrExpressionKind::PredicateInvocation {
+            argument_parameters,
+            arguments,
+            body,
+            ..
+        } => {
+            let values = arguments
+                .iter()
+                .map(|argument| {
+                    evaluate_expression_with_bindings(argument, context, options, bindings)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if argument_parameters.len() != values.len() {
+                return Err(EvaluationFailure::Error(
+                    "predicate argument bindings do not match evaluated arguments".to_owned(),
+                ));
+            }
+            let mut scope = bindings.clone();
+            for (parameter, value) in argument_parameters.iter().zip(values) {
+                scope.insert(
+                    SysmlFeatureHandle {
+                        element: *parameter,
+                    },
+                    value,
+                );
+            }
+            evaluate_predicate_body(body, context, options, &scope)
+        }
         IrExpressionKind::Index { collection, index } => {
-            let collection = evaluate_expression(collection, context, options)?;
-            let index = evaluate_expression(index, context, options)?;
+            let collection =
+                evaluate_expression_with_bindings(collection, context, options, bindings)?;
+            let index = evaluate_expression_with_bindings(index, context, options, bindings)?;
             let EvaluationValue::Collection(values) = collection else {
                 return Err(EvaluationFailure::Error(
                     "indexing requires a collection value".to_owned(),
@@ -1961,10 +2296,48 @@ fn evaluate_expression(
         }
         IrExpressionKind::Collection(elements) => elements
             .iter()
-            .map(|element| evaluate_expression(element, context, options))
+            .map(|element| evaluate_expression_with_bindings(element, context, options, bindings))
             .collect::<Result<Vec<_>, _>>()
             .map(EvaluationValue::Collection),
-        IrExpressionKind::Group(child) => evaluate_expression(child, context, options),
+        IrExpressionKind::Group(child) => {
+            evaluate_expression_with_bindings(child, context, options, bindings)
+        }
+    }
+}
+
+fn evaluate_predicate_body(
+    body: &[IrExpression],
+    context: &EvaluationContext,
+    options: EvaluationOptions,
+    bindings: &HashMap<SysmlFeatureHandle, EvaluationValue>,
+) -> Result<EvaluationValue, EvaluationFailure> {
+    let mut has_false = false;
+    let mut inconclusive = None;
+    let mut error = None;
+    for expression in body {
+        match evaluate_expression_with_bindings(expression, context, options, bindings) {
+            Ok(EvaluationValue::Boolean(value)) => has_false |= !value,
+            Ok(_) => {
+                error.get_or_insert_with(|| {
+                    "constraint-definition body expression did not evaluate to Boolean".to_owned()
+                });
+            }
+            Err(EvaluationFailure::Inconclusive(detail)) => {
+                inconclusive.get_or_insert(detail);
+            }
+            Err(EvaluationFailure::Error(detail)) => {
+                error.get_or_insert(detail);
+            }
+        }
+    }
+    if let Some(detail) = error {
+        Err(EvaluationFailure::Error(detail))
+    } else if has_false {
+        Ok(EvaluationValue::Boolean(false))
+    } else if let Some(detail) = inconclusive {
+        Err(EvaluationFailure::Inconclusive(detail))
+    } else {
+        Ok(EvaluationValue::Boolean(true))
     }
 }
 

@@ -7,12 +7,12 @@
 use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
 use lunco_sysml_ast::{
-    SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlElementHandle,
-    SysmlEnumValue, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator, SysmlFeature,
-    SysmlFeatureDirection, SysmlFeatureHandle, SysmlFeaturePath, SysmlFunctionReference,
-    SysmlModelicaType, SysmlMultiplicity, SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord,
-    SysmlSourceRef, SysmlStandardConstant, SysmlSubject, SysmlType, SysmlTypeCategory,
-    SysmlTypeRef, SysmlUnsupportedExpression,
+    SysmlAnalysis, SysmlAttribute, SysmlConstraintKind, SysmlDiagnostic, SysmlElement,
+    SysmlElementHandle, SysmlEnumValue, SysmlExpression, SysmlExpressionKind,
+    SysmlExpressionOperator, SysmlFeature, SysmlFeatureDirection, SysmlFeatureHandle,
+    SysmlFeaturePath, SysmlFunctionReference, SysmlModelicaType, SysmlMultiplicity,
+    SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlStandardConstant,
+    SysmlSubject, SysmlType, SysmlTypeCategory, SysmlTypeRef, SysmlUnsupportedExpression,
 };
 use lunco_sysml_ir::{
     BindingContract, BindingProvider, CompiledConstraint, ConstraintIr, DiagnosticSeverity,
@@ -1657,6 +1657,16 @@ fn constraint_dynamic(constraint: &lunco_sysml_ast::SysmlConstraint) -> Dynamic 
     let mut value = Map::new();
     value.insert("element".into(), element_dynamic(&constraint.element));
     value.insert(
+        "kind".into(),
+        Dynamic::from(match constraint.kind {
+            SysmlConstraintKind::Other => "other",
+            SysmlConstraintKind::ConstraintDefinition => "constraint_definition",
+            SysmlConstraintKind::ConstraintUsage => "constraint_usage",
+            SysmlConstraintKind::AssertConstraintUsage => "assert_constraint_usage",
+            SysmlConstraintKind::Invariant => "invariant",
+        }),
+    );
+    value.insert(
         "definition".into(),
         constraint
             .definition
@@ -1883,6 +1893,33 @@ fn ir_expression_dynamic(expression: &IrExpression) -> Dynamic {
             value.insert(
                 "arguments".into(),
                 Dynamic::from_array(arguments.iter().map(ir_expression_dynamic).collect()),
+            );
+        }
+        IrExpressionKind::PredicateInvocation {
+            function_element,
+            argument_parameters,
+            arguments,
+            body,
+        } => {
+            value.insert("kind".into(), Dynamic::from("predicate_invocation"));
+            value.insert("function_element".into(), Dynamic::from(*function_element));
+            value.insert(
+                "argument_parameters".into(),
+                Dynamic::from_array(
+                    argument_parameters
+                        .iter()
+                        .copied()
+                        .map(Dynamic::from)
+                        .collect(),
+                ),
+            );
+            value.insert(
+                "arguments".into(),
+                Dynamic::from_array(arguments.iter().map(ir_expression_dynamic).collect()),
+            );
+            value.insert(
+                "body".into(),
+                Dynamic::from_array(body.iter().map(ir_expression_dynamic).collect()),
             );
         }
         IrExpressionKind::Index { collection, index } => {

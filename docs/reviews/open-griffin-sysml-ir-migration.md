@@ -80,6 +80,25 @@ resolution and provider behavior remain unverified. Optional `?.` access,
 navigation through feature-valued collections, and collection-valued feature
 evaluation remain unsupported.
 
+### 2026-09-25 parameterized constraint-definition update
+
+The AST now projects constraint declaration kinds and resolves function-style
+actual arguments to owned `in`/`inout` feature handles. The neutral IR compiles
+calls to source-projected `ConstraintDefinition`s by binding actual expressions
+to typed formals and compiling the definition body in its own parameter scope.
+The evaluator and Modelica lowerer apply those bindings; Rhai exposes the call
+tree and constraint kind. Type, multiplicity, and unit mismatches, incomplete
+bindings, recursive calls, non-Boolean bodies, and structured member access
+through a formal are rejected with source-linked diagnostics.
+
+The affected crates pass `cargo check`; no tests or Griffin runtime/Editor
+session were run. Griffin currently authors reusable parameterized constraint
+definitions, but the scanned requirement files use `require` membership and do
+not contain function-style calls with actual argument bindings. Therefore this
+generic capability is compile-verified only and is not yet an executed Griffin
+verification path. Defaults, output binding, general user-function execution,
+and execution of requirement membership remain open.
+
 ## Audit of the current Griffin model
 
 The primary Griffin requirement/configuration sources contain many useful
@@ -106,7 +125,7 @@ permanent semantic layer.
 |---|---|---|---|
 | Part usages, feature membership, roles, and multiplicity | Many `part def` and attribute declarations, but no complete lander usage graph with typed component roles and bounds | Arrays and parallel IDs can drift; policy cannot navigate an authored assembly | Resolved feature membership, usage identity, redefinition/subsetting, and multiplicity-preserving handles |
 | Ports, interfaces, connections, and bindings | Values such as `sourceComponent`, `usdPath`, and frame/unit strings | Rhai manually joins endpoints and providers; no typed contract says which observation supplies a feature | Typed endpoint/feature chains and standard binding/connectors with source spans and target identity |
-| Constraint definitions/usages | Relations live in Rhai mechanical calls or prose; no reusable source constraint library | A change to SysML values does not recompile a source-selected constraint plan | Standard-library scalar/collection invocations compile to typed IR, and a usage carries its uniquely resolved predicate type through standard `FeatureTyping`; executing reusable constraint bodies, argument bindings, defaults, and general result binding remains required |
+| Constraint definitions/usages | Reusable parameterized definitions exist and requirement definitions reference them with `require`; the inspected sources contain no function-style calls binding actual values to definition inputs | Requirement membership is not yet an executable, bound verification plan | Source-projected `ConstraintDefinition` calls with explicit typed actual-to-formal bindings compile into the neutral IR, evaluator, and Modelica lowering; membership execution, defaults, output/result binding, and general user-function execution remain required |
 | Feature navigation | Dotted `PATH_EXPR` now projects to typed feature chains and exact dependency paths; compile-checked, not runtime-verified | Griffin source and providers have not yet been migrated to consume full typed paths; optional navigation and collection-valued traversal remain unsupported | Runtime-verified standard feature navigation, collection-aware path typing, and explicit unavailable/invalid propagation |
 | Collections and aggregates | Parallel arrays and index assumptions | Index drift and hand-coded reductions for mass, COM, inertia, envelopes | Homogeneous scalar sequence literals, one-based indexing, typed `sum`/`product`, size predicates, and Boolean aggregates now compile/evaluate; feature-valued, structured/N-dimensional collections and reductions remain required |
 | Quantities and units | Many anonymous `Real` values and naming conventions such as `...M`, `...Kg`, `...Deg`, plus string `frameUnits` | Unit correctness is policy convention rather than a source-checked contract | Standard quantity kinds, unit literals/conversion contracts, dimensional checking, and frame/time metadata |
@@ -171,11 +190,11 @@ invocations. Griffin needs more before it can remove its main workarounds:
 1. Runtime-verified navigation through part/feature usages, optional-access
    semantics, and collection-valued paths (the typed dotted-path representation
    and exact provider identity now compile);
-2. executing reusable constraint definitions/usages, user-defined function-body
-   execution, default expansion, argument binding, direction, and result typing
-   (the current typed `Invocation` supports only recognized standard-library
-   calls with explicit arguments; a uniquely typed usage's predicate handle is
-   now projected from the standard `FeatureTyping` relationship);
+2. executing requirement `require` membership as a bound plan, default
+   expansion, output/result binding, and general user-defined function-body
+   execution (explicitly bound calls to source-projected `ConstraintDefinition`s
+   now compile/evaluate with typed input arguments; a uniquely typed usage's
+   predicate handle is projected from standard `FeatureTyping`);
 3. feature-valued and structured collection construction, multidimensional
    indexing, and reductions for station, leg, engine, mass, COM, inertia, and
    envelope sets (homogeneous scalar sequences and one-based indexing now

@@ -752,6 +752,9 @@ impl SysmlExpression {
 pub struct SysmlConstraint {
     /// Source-backed constraint element.
     pub element: SysmlElement,
+    /// Semantic declaration/usage kind from the upstream metamodel.
+    #[serde(default)]
+    pub kind: SysmlConstraintKind,
     /// Resolved predicate type for a constraint usage, when uniquely typed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<SysmlElementHandle>,
@@ -766,6 +769,17 @@ pub struct SysmlConstraint {
     /// Parsed, resolved body expressions in authored order.
     #[serde(default)]
     pub expressions: Vec<SysmlExpression>,
+}
+
+/// Standard semantic kind of a projected constraint-like element.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlConstraintKind {
+    #[default]
+    Other,
+    ConstraintDefinition,
+    ConstraintUsage,
+    AssertConstraintUsage,
+    Invariant,
 }
 
 /// A finite numeric literal projected from SysML source.
@@ -1990,6 +2004,15 @@ fn project_constraints(
                 .collect();
             constraints.push(SysmlConstraint {
                 element: element.clone(),
+                kind: match kind {
+                    ElementKind::ConstraintDefinition => SysmlConstraintKind::ConstraintDefinition,
+                    ElementKind::ConstraintUsage => SysmlConstraintKind::ConstraintUsage,
+                    ElementKind::AssertConstraintUsage => {
+                        SysmlConstraintKind::AssertConstraintUsage
+                    }
+                    ElementKind::Invariant => SysmlConstraintKind::Invariant,
+                    _ => SysmlConstraintKind::Other,
+                },
                 definition,
                 parameters,
                 expressions,
@@ -1997,6 +2020,17 @@ fn project_constraints(
         }
     }
     constraints
+}
+
+fn function_input_parameters(workspace: &Workspace, function: ElementId) -> Vec<ElementId> {
+    let model = workspace.model();
+    model
+        .owned(function)
+        .iter()
+        .copied()
+        .filter(|&feature| model.kind(feature).is_a(ElementKind::Feature))
+        .filter(|&feature| matches!(model.direction(feature), Some("in" | "inout")))
+        .collect()
 }
 
 fn is_projected_constraint_kind(kind: ElementKind) -> bool {
@@ -2425,7 +2459,7 @@ fn lower_expression(
                     &function_qualified_name,
                 ),
             };
-            let input_parameters = workspace.model().input(function_reference.target);
+            let input_parameters = function_input_parameters(workspace, function_reference.target);
             let argument_list = call_children.find(|child| child.kind() == SyntaxKind::ARG_LIST);
             let mut arguments = Vec::new();
             if let Some(argument_list) = argument_list {

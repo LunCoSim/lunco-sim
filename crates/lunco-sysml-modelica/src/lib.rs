@@ -8,12 +8,12 @@
 //! recovery/validation.
 
 use lunco_modelica_ast::{StoredDefinition, parse_to_ast};
-use lunco_sysml_ast::SysmlFeaturePath;
+use lunco_sysml_ast::{SysmlFeatureHandle, SysmlFeaturePath};
 use lunco_sysml_ir::{
     CompiledConstraint, ConstraintIr, IrExpression, IrExpressionKind, IrLiteral, IrOperator,
     IrStandardConstant, IrStandardFunction, IrType, IrValueType,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 /// A Modelica lowering failure is terminal for this adapter. Callers must not
@@ -197,8 +197,27 @@ fn collect_features(
     expression: &IrExpression,
     features: &mut BTreeMap<SysmlFeaturePath, ModelicaFeatureBinding>,
 ) -> Result<(), ModelicaLoweringError> {
+    collect_features_with_parameters(expression, features, &HashSet::new())
+}
+
+fn collect_features_with_parameters(
+    expression: &IrExpression,
+    features: &mut BTreeMap<SysmlFeaturePath, ModelicaFeatureBinding>,
+    parameters: &HashSet<SysmlFeatureHandle>,
+) -> Result<(), ModelicaLoweringError> {
     match &expression.kind {
         IrExpressionKind::FeatureReference { path } => {
+            if let Some(root) = path.features().first() {
+                if parameters.contains(root) {
+                    return if path.features().len() == 1 {
+                        Ok(())
+                    } else {
+                        Err(ModelicaLoweringError::InvalidExpression(
+                            "Modelica lowering does not support feature navigation through a bound predicate parameter".to_owned(),
+                        ))
+                    };
+                }
+            }
             features
                 .entry(path.clone())
                 .or_insert_with(|| ModelicaFeatureBinding {
@@ -209,33 +228,53 @@ fn collect_features(
         }
         IrExpressionKind::StandardConstant { .. } | IrExpressionKind::Literal(_) => {}
         IrExpressionKind::Unary { operand, .. } | IrExpressionKind::Group(operand) => {
-            collect_features(operand, features)?;
+            collect_features_with_parameters(operand, features, parameters)?;
         }
         IrExpressionKind::Binary { left, right, .. } => {
-            collect_features(left, features)?;
-            collect_features(right, features)?;
+            collect_features_with_parameters(left, features, parameters)?;
+            collect_features_with_parameters(right, features, parameters)?;
         }
         IrExpressionKind::Conditional {
             condition,
             when_true,
             when_false,
         } => {
-            collect_features(condition, features)?;
-            collect_features(when_true, features)?;
-            collect_features(when_false, features)?;
+            collect_features_with_parameters(condition, features, parameters)?;
+            collect_features_with_parameters(when_true, features, parameters)?;
+            collect_features_with_parameters(when_false, features, parameters)?;
         }
         IrExpressionKind::Invocation { arguments, .. } => {
             for argument in arguments {
-                collect_features(argument, features)?;
+                collect_features_with_parameters(argument, features, parameters)?;
+            }
+        }
+        IrExpressionKind::PredicateInvocation {
+            argument_parameters,
+            arguments,
+            body,
+            ..
+        } => {
+            for argument in arguments {
+                collect_features_with_parameters(argument, features, parameters)?;
+            }
+            let mut body_parameters = parameters.clone();
+            body_parameters.extend(
+                argument_parameters
+                    .iter()
+                    .copied()
+                    .map(|element| SysmlFeatureHandle { element }),
+            );
+            for expression in body {
+                collect_features_with_parameters(expression, features, &body_parameters)?;
             }
         }
         IrExpressionKind::Index { collection, index } => {
-            collect_features(collection, features)?;
-            collect_features(index, features)?;
+            collect_features_with_parameters(collection, features, parameters)?;
+            collect_features_with_parameters(index, features, parameters)?;
         }
         IrExpressionKind::Collection(elements) => {
             for element in elements {
-                collect_features(element, features)?;
+                collect_features_with_parameters(element, features, parameters)?;
             }
         }
     }
@@ -320,8 +359,27 @@ fn modelica_expression(
     expression: &IrExpression,
     features: &BTreeMap<SysmlFeaturePath, ModelicaFeatureBinding>,
 ) -> Result<String, ModelicaLoweringError> {
+    modelica_expression_with_parameters(expression, features, &HashMap::new())
+}
+
+fn modelica_expression_with_parameters(
+    expression: &IrExpression,
+    features: &BTreeMap<SysmlFeaturePath, ModelicaFeatureBinding>,
+    parameters: &HashMap<SysmlFeatureHandle, String>,
+) -> Result<String, ModelicaLoweringError> {
     match &expression.kind {
         IrExpressionKind::FeatureReference { path } => {
+            if let Some(root) = path.features().first() {
+                if let Some(value) = parameters.get(root) {
+                    return if path.features().len() == 1 {
+                        Ok(format!("({value})"))
+                    } else {
+                        Err(ModelicaLoweringError::InvalidExpression(
+                            "Modelica lowering does not support feature navigation through a bound predicate parameter".to_owned(),
+                        ))
+                    };
+                }
+            }
             let Some(binding) = features.get(path) else {
                 return Err(ModelicaLoweringError::InvalidExpression(format!(
                     "feature path {path:?} was not declared in the lowered model"
@@ -344,7 +402,7 @@ fn modelica_expression(
             }
         }),
         IrExpressionKind::Unary { operator, operand } => {
-            let operand = modelica_expression(operand, features)?;
+            let operand = modelica_expression_with_parameters(operand, features, parameters)?;
             let operator = match operator {
                 IrOperator::Positive => "+",
                 IrOperator::Negative => "-",
@@ -362,8 +420,8 @@ fn modelica_expression(
             left,
             right,
         } => {
-            let left = modelica_expression(left, features)?;
-            let right = modelica_expression(right, features)?;
+            let left = modelica_expression_with_parameters(left, features, parameters)?;
+            let right = modelica_expression_with_parameters(right, features, parameters)?;
             if *operator == IrOperator::Implies {
                 return Ok(format!("((not {left}) or {right})"));
             }
@@ -400,21 +458,51 @@ fn modelica_expression(
             when_false,
         } => Ok(format!(
             "(if {} then {} else {})",
-            modelica_expression(condition, features)?,
-            modelica_expression(when_true, features)?,
-            modelica_expression(when_false, features)?
+            modelica_expression_with_parameters(condition, features, parameters)?,
+            modelica_expression_with_parameters(when_true, features, parameters)?,
+            modelica_expression_with_parameters(when_false, features, parameters)?
         )),
         IrExpressionKind::Index { collection, index } => Ok(format!(
             "{}[{}]",
-            modelica_expression(collection, features)?,
-            modelica_expression(index, features)?
+            modelica_expression_with_parameters(collection, features, parameters)?,
+            modelica_expression_with_parameters(index, features, parameters)?
         )),
         IrExpressionKind::Collection(elements) => {
             let elements = elements
                 .iter()
-                .map(|element| modelica_expression(element, features))
+                .map(|element| modelica_expression_with_parameters(element, features, parameters))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(format!("{{{}}}", elements.join(", ")))
+        }
+        IrExpressionKind::PredicateInvocation {
+            argument_parameters,
+            arguments,
+            body,
+            ..
+        } => {
+            if argument_parameters.len() != arguments.len() {
+                return Err(ModelicaLoweringError::InvalidExpression(
+                    "predicate argument bindings do not match arguments".to_owned(),
+                ));
+            }
+            let values = arguments
+                .iter()
+                .map(|argument| modelica_expression_with_parameters(argument, features, parameters))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut scope = parameters.clone();
+            for (formal, value) in argument_parameters.iter().zip(values) {
+                scope.insert(SysmlFeatureHandle { element: *formal }, value);
+            }
+            let predicates = body
+                .iter()
+                .map(|expression| modelica_expression_with_parameters(expression, features, &scope))
+                .collect::<Result<Vec<_>, _>>()?;
+            if predicates.is_empty() {
+                return Err(ModelicaLoweringError::InvalidExpression(
+                    "predicate definition has no body".to_owned(),
+                ));
+            }
+            Ok(format!("({})", predicates.join(" and ")))
         }
         IrExpressionKind::Invocation {
             function,
@@ -428,7 +516,7 @@ fn modelica_expression(
             })?;
             let arguments = arguments
                 .iter()
-                .map(|argument| modelica_expression(argument, features))
+                .map(|argument| modelica_expression_with_parameters(argument, features, parameters))
                 .collect::<Result<Vec<_>, _>>()?;
             let unary = || {
                 arguments.first().cloned().ok_or_else(|| {
@@ -489,9 +577,10 @@ fn modelica_expression(
                 ModelicaStandardFunction::Sum => format!("sum({})", unary()?),
             })
         }
-        IrExpressionKind::Group(child) => {
-            Ok(format!("({})", modelica_expression(child, features)?))
-        }
+        IrExpressionKind::Group(child) => Ok(format!(
+            "({})",
+            modelica_expression_with_parameters(child, features, parameters)?
+        )),
     }
 }
 
