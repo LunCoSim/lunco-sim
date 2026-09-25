@@ -82,6 +82,7 @@ fn load_input_bindings_defaults(
     let candidates = std::mem::take(&mut state.candidates);
     let mut pending = Vec::new();
     let mut failed_paths = Vec::new();
+    let mut inspected_assets = Vec::new();
     let mut selected: Option<(String, String)> = None;
 
     for candidate in candidates {
@@ -97,9 +98,15 @@ fn load_input_bindings_defaults(
             continue;
         };
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&asset.text) else {
+            inspected_assets.push(format!("{} (invalid JSON)", candidate.path));
             continue;
         };
-        if value.get("kind").and_then(serde_json::Value::as_str) != Some(INPUT_BINDINGS_KIND) {
+        let kind = value.get("kind").and_then(serde_json::Value::as_str);
+        inspected_assets.push(match kind {
+            Some(kind) => format!("{} ({kind})", candidate.path),
+            None => format!("{} (no kind)", candidate.path),
+        });
+        if kind != Some(INPUT_BINDINGS_KIND) {
             continue;
         }
         if selected.is_some() {
@@ -127,7 +134,7 @@ fn load_input_bindings_defaults(
             &mut commands,
             "input-bindings-defaults-missing",
             format!(
-                "runtime asset listing contains no asset marked {INPUT_BINDINGS_KIND}; discovered {} JSON asset(s), failed: {}",
+                "runtime asset listing contains no asset marked {INPUT_BINDINGS_KIND}; discovered {} JSON asset(s), failed: {}; inspected: {}",
                 catalog
                     .entries()
                     .iter()
@@ -137,7 +144,8 @@ fn load_input_bindings_defaults(
                     "none".to_string()
                 } else {
                     failed_paths.join(", ")
-                }
+                },
+                inspected_assets.join(", ")
             ),
         );
         return;

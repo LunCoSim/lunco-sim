@@ -182,6 +182,12 @@ pub struct EMBRoot;
 #[derive(Component)]
 pub struct EarthRoot;
 
+#[derive(Component)]
+pub(super) struct EarthInertialAnchor;
+
+#[derive(Component)]
+pub(super) struct CelestialObserverCamera;
+
 /// Marker for the Moon's grid. **Rotating**, as [`EarthRoot`].
 #[derive(Component)]
 pub struct MoonRoot;
@@ -207,7 +213,6 @@ pub struct MoonSurfaceRoot;
 pub fn setup_big_space_hierarchy(
     mut commands: Commands,
     registry: Res<CelestialBodyRegistry>,
-    config: Res<crate::CelestialConfig>,
     quality: Res<lunco_render::RenderingQualitySettings>,
     grid_config: Res<lunco_spatial::WorldGridConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -216,7 +221,6 @@ pub fn setup_big_space_hierarchy(
     q_world_grid: Query<Entity, (With<lunco_spatial::WorldGrid>, With<Grid>)>,
     body_looks: Query<(&crate::CelestialBodyDecl, &ShaderLook)>,
     subsystems: Option<ResMut<lunco_core_runtime::subsystems::SubsystemToggles>>,
-    bindings: Res<lunco_input_core::InputBindingsSettings>,
     mut missing_look_reported: Local<bool>,
 ) {
     let Some(earth_look) = body_looks
@@ -246,11 +250,6 @@ pub fn setup_big_space_hierarchy(
         return;
     };
     *missing_look_reported = false;
-
-    let Ok(input_map) = bindings.input_map() else {
-        error!("[celestial] refusing to create the observer from invalid input bindings");
-        return;
-    };
     let sun_profile = match quality.validated_profile() {
         Ok(profile) => profile,
         Err(reason) => {
@@ -494,22 +493,21 @@ pub fn setup_big_space_hierarchy(
     // Observer Camera hangs here so the orbit view is actually star-fixed
     // (parented to the rotating Earth Grid it swung a 19,000 km circle once per
     // sidereal day — the whole point of `ReferenceFrame::EclipticJ2000`).
-    let earth_inertial = commands
-        .spawn((
-            ReferenceFrame::EclipticJ2000 {
-                center: lunco_celestial::ephemeris_id::EARTH,
-            },
-            // Same configured precision contract as every other celestial grid.
-            make_grid(),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-            Visibility::default(),
-            InheritedVisibility::default(),
-            Name::new("Earth Inertial Anchor"),
-            ChildOf(emb_grid),
-        ))
-        .id();
+    commands.spawn((
+        EarthInertialAnchor,
+        ReferenceFrame::EclipticJ2000 {
+            center: lunco_celestial::ephemeris_id::EARTH,
+        },
+        // Same configured precision contract as every other celestial grid.
+        make_grid(),
+        CellCoord::default(),
+        Transform::default(),
+        GlobalTransform::default(),
+        Visibility::default(),
+        InheritedVisibility::default(),
+        Name::new("Earth Inertial Anchor"),
+        ChildOf(emb_grid),
+    ));
 
     // ── Earth Body (visual/physical centre in the rotating body-fixed Grid) ─
     // The body is a direct high-precision child of its body grid and therefore
@@ -675,54 +673,6 @@ pub fn setup_big_space_hierarchy(
         crate::globe_lod::GlobeTiles::default(),
     ));
 
-    // ── Observer Camera (on Earth's INERTIAL ANCHOR, for the orbit view) ───
-    // The camera must sit in a star-fixed frame, and the Earth Grid is NOT one:
-    // it rotates with Earth (`body_rotation_system`). See `ReferenceFrame::EclipticJ2000`.
-    // For surface views the camera uses SurfaceCamera, which recomputes
-    // world-space rotation from LocalGravityField.
-    let earth_radius_m = earth.radius_m;
-    let earth_orbit_distance = earth_radius_m * 3.0;
-    let cam_pos = DVec3::new(0.0, earth_orbit_distance * 0.4, earth_orbit_distance);
-    let (cam_cell, cam_translation) = make_grid().translation_to_grid(cam_pos);
-    let cam_direction = (-cam_pos).normalize().as_vec3();
-
-    // The persistent OriginAnchor owns FloatingOrigin for both the observer
-    // and sandbox cameras. Camera presentation and BigSpace origin ownership
-    // are separate contracts.
-    if config.spawn_observer_camera {
-        commands.spawn((
-            // The scene camera stated as INTENT: `lunco-render-bevy` attaches `Camera3d`,
-            // the tonemapper and MSAA. Systems asking "which entity is the scene camera?"
-            // filter on `With<SceneCamera>` — that question no longer costs a GPU stack.
-            //
-            // Tone mapping, MSAA, and the unauthored bloom look come from the
-            // persisted Graphics profile. An authored LunCoEnvironment bloom value
-            // is applied later as the scene-owned override. SMAA was already
-            // dropped here — it blanks egui-composited viewports (the SMAA black-viewport
-            // fix on main).
-            // Grade + physical exposure from the ONE constructor every scene
-            // camera uses (`lunco_render::scene_camera_look_with_profile`), paired with the
-            // canonical sun illuminance (single source of truth —
-            // lunco_environment::LunarSun).
-            lunco_render::scene_camera_look_with_profile(ls.exposure_ev100, sun_profile),
-            lunco_render::GraphicsCameraDefaults,
-            Projection::Perspective(PerspectiveProjection {
-                near: 1.0,
-                far: 1.0e15,
-                ..default()
-            }),
-            cam_cell,
-            Transform::from_translation(cam_translation).looking_to(cam_direction, Vec3::Y),
-            GlobalTransform::default(),
-            lunco_embodiment_core::roles::Embodiment,
-            lunco_control_core::IntentState::default(),
-            input_map,
-            lunco_control_core::IntentAnalogState::default(),
-            Name::new("Observer Camera"),
-            ChildOf(earth_inertial),
-        )); // Star-fixed frame at Earth — NOT the rotating Earth Grid.
-    } // config.spawn_observer_camera
-
     // ── Other Planets (simple entities on Solar Grid) ──────────────────────
     for body_desc in registry.bodies.iter() {
         if body_desc.ephemeris_id == lunco_celestial::ephemeris_id::SUN
@@ -770,6 +720,91 @@ pub fn setup_big_space_hierarchy(
             ChildOf(solar_grid),
         ));
     }
+}
+
+pub(super) fn observer_camera_needed(
+    config: Res<crate::CelestialConfig>,
+    q_solar_root: Query<(), With<SolarSystemRoot>>,
+    q_camera: Query<(), With<CelestialObserverCamera>>,
+) -> bool {
+    config.spawn_observer_camera && !q_solar_root.is_empty() && q_camera.is_empty()
+}
+
+/// Create the optional interactive orbit camera after the celestial hierarchy
+/// exists. Invalid input bindings withhold only this camera; they do not gate
+/// the finite celestial targets or their environment inputs.
+pub(super) fn setup_observer_camera(
+    mut commands: Commands,
+    config: Res<crate::CelestialConfig>,
+    bindings: Res<lunco_input_core::InputBindingsSettings>,
+    quality: Res<lunco_render::RenderingQualitySettings>,
+    grid_config: Res<lunco_spatial::WorldGridConfig>,
+    sun: Res<lunco_environment::LunarSun>,
+    registry: Res<CelestialBodyRegistry>,
+    q_solar_root: Query<(), With<SolarSystemRoot>>,
+    q_earth_inertial: Query<Entity, With<EarthInertialAnchor>>,
+    q_camera: Query<(), With<CelestialObserverCamera>>,
+    mut invalid_settings_reported: Local<bool>,
+) {
+    if !config.spawn_observer_camera || q_solar_root.is_empty() || !q_camera.is_empty() {
+        return;
+    }
+    let input_map = match bindings.input_map() {
+        Ok(input_map) => {
+            *invalid_settings_reported = false;
+            input_map
+        }
+        Err(reason) => {
+            if !*invalid_settings_reported {
+                error!("[celestial] observer camera is pending valid input bindings: {reason}");
+                *invalid_settings_reported = true;
+            }
+            return;
+        }
+    };
+    let profile = match quality.validated_profile() {
+        Ok(profile) => profile,
+        Err(reason) => {
+            error!("[celestial] observer camera cannot use invalid Graphics quality: {reason}");
+            return;
+        }
+    };
+    let Some(earth) = registry.get(lunco_celestial::ephemeris_id::EARTH) else {
+        error!("[celestial] observer camera requires the registered Earth body");
+        return;
+    };
+    let Ok(earth_inertial) = q_earth_inertial.single() else {
+        error!("[celestial] observer camera requires exactly one Earth inertial anchor");
+        return;
+    };
+
+    // The camera belongs to Earth's star-fixed frame, not the rotating Earth
+    // surface grid. Surface views use SurfaceCamera and LocalGravityField.
+    let earth_orbit_distance = earth.radius_m * 3.0;
+    let cam_pos = DVec3::new(0.0, earth_orbit_distance * 0.4, earth_orbit_distance);
+    let grid = (*grid_config).grid();
+    let (cam_cell, cam_translation) = grid.translation_to_grid(cam_pos);
+    let cam_direction = (-cam_pos).normalize().as_vec3();
+
+    commands.spawn((
+        CelestialObserverCamera,
+        lunco_render::scene_camera_look_with_profile(sun.exposure_ev100, profile),
+        lunco_render::GraphicsCameraDefaults,
+        Projection::Perspective(PerspectiveProjection {
+            near: 1.0,
+            far: 1.0e15,
+            ..default()
+        }),
+        cam_cell,
+        Transform::from_translation(cam_translation).looking_to(cam_direction, Vec3::Y),
+        GlobalTransform::default(),
+        lunco_embodiment_core::roles::Embodiment,
+        lunco_control_core::IntentState::default(),
+        input_map,
+        lunco_control_core::IntentAnalogState::default(),
+        Name::new("Observer Camera"),
+        ChildOf(earth_inertial),
+    ));
 }
 
 /// Select the celestial gravity model for a site scene after the hierarchy is

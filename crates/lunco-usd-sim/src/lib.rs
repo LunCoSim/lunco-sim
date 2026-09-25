@@ -2779,11 +2779,11 @@ fn install_authored_sun_state_seed(app: &mut App) {
     );
 }
 
-/// Select the static authored-light source only for a scene with no celestial
-/// source declaration. A celestial source is authoritative even when its
-/// declaration or ephemeris is invalid; in that case the `sun` direction source stays empty and
-/// the cosim projection reports missing solar data instead of restoring a
-/// stale authored direction.
+/// Select the static authored-light source only after the active scene root's
+/// celestial projection confirms that no celestial source owns it. A celestial
+/// source is authoritative even when its declaration or ephemeris is invalid;
+/// in that case the `sun` direction source stays empty and the cosim projection
+/// reports missing solar data instead of restoring a stale authored direction.
 ///
 /// The static scene contract is one unscoped authored DistantLight below the
 /// active USD scene root. Its composed rotation and illuminance define the
@@ -2791,11 +2791,19 @@ fn install_authored_sun_state_seed(app: &mut App) {
 fn seed_authored_sun_state(
     sun_state: Option<ResMut<lunco_environment::SunState>>,
     directions: Option<ResMut<lunco_environment::EnvironmentDirections>>,
+    mut authored_seed_revision: Local<Option<u64>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     scene_mount: Option<Res<lunco_core::SceneMountState>>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
     q_scene_roots: Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+    q_projected_roots: Query<
+        (),
+        (
+            With<lunco_usd_bevy_scene::UsdSceneRoot>,
+            With<lunco_usd_sim_celestial::CelestialProjected>,
+        ),
+    >,
     q_celestial_roots: Query<
         (),
         (
@@ -2820,16 +2828,27 @@ fn seed_authored_sun_state(
     let Some(mut directions) = directions else {
         return;
     };
+    let Some(active_root) = scene_mount.as_deref().and_then(|mount| mount.active_root()) else {
+        *authored_seed_revision = None;
+        return;
+    };
+    if q_scene_roots.get(active_root).is_err() || q_projected_roots.get(active_root).is_err() {
+        return;
+    }
+    if q_celestial_roots.contains(active_root) {
+        directions.set_named(lunco_environment::SUN_DIRECTION_SOURCE, None);
+        if authored_seed_revision
+            .take()
+            .is_some_and(|revision| sun_state.revision == revision)
+        {
+            sun_state.clear();
+        }
+        return;
+    }
     if directions
         .get_named(lunco_environment::SUN_DIRECTION_SOURCE)
         .is_some()
     {
-        return;
-    }
-    let Some(active_root) = scene_mount.as_deref().and_then(|mount| mount.active_root()) else {
-        return;
-    };
-    if q_scene_roots.get(active_root).is_err() || q_celestial_roots.contains(active_root) {
         return;
     }
 
@@ -2881,6 +2900,7 @@ fn seed_authored_sun_state(
         }),
     );
     sun_state.publish(Some(light.illuminance));
+    *authored_seed_revision = Some(sun_state.revision);
 }
 
 /// Queue prim identity before its render projection becomes available.

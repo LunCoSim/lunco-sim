@@ -249,12 +249,17 @@ impl Plugin for CelestialPlugin {
         // so it fires whenever a scene with bodies loads — including at runtime.
         app.add_systems(
             Update,
-            big_space_setup::setup_big_space_hierarchy.run_if(
-                |q_decl: Query<(), With<CelestialBodyDecl>>,
-                 q: Query<(), With<SolarSystemRoot>>| {
-                    !q_decl.is_empty() && q.is_empty()
-                },
-            ),
+            (
+                big_space_setup::setup_big_space_hierarchy.run_if(
+                    |q_decl: Query<(), With<CelestialBodyDecl>>,
+                     q: Query<(), With<SolarSystemRoot>>| {
+                        !q_decl.is_empty() && q.is_empty()
+                    },
+                ),
+                big_space_setup::setup_observer_camera
+                    .run_if(big_space_setup::observer_camera_needed),
+            )
+                .chain(),
         );
         // A USD PhysicsScene is projected through deferred commands while the
         // scene prims are materialised.  Those commands may land after the

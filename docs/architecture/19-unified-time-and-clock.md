@@ -127,13 +127,23 @@ Every direction input selects a source by wiring a target id to an
 EnvironmentProbe output triplet. Finite targets use their composed position;
 static directional lights supply a framed ray through the same resolver. An
 authored light is a static `sun` source only when no celestial source owns the
-scene. Missing or invalid targets clear their probe samples, publish a
-RuntimeDiagnostic, and fault an already-running consumer rather than feeding
-it a zero vector. `RunLint` checks target identity, cardinality, complete
-double-precision triplets, and provider consistency. At every celestial rate—
+scene, and only after the active composed root has completed celestial-source
+classification. Until that projection is complete, source selection is pending;
+do not seed a static ray that could coexist with a subsequently projected
+finite Sun target. When a celestial source owns the root, withdraw any static
+ray left by an earlier classification pass. Missing or invalid targets clear
+their probe samples, publish a RuntimeDiagnostic, and fault an already-running
+consumer rather than feeding it a zero vector. `RunLint` checks target identity,
+cardinality, complete double-precision triplets, and provider consistency. At
+every celestial rate—
 including the default 1× and maximum 100,000×—Modelica reads the latest sample
 at its ordinary fixed-step communication point; no physical microsteps are
 added.
+
+Celestial source hierarchy creation is independent of the optional observer
+camera's input bindings. Invalid bindings withhold that interactive camera and
+report the settings error; they must not suppress finite Sun/Earth/Moon targets
+or environment inputs used by physics and Modelica.
 
 Celestial target ids come from the existing `lunco:body` NAIF identity: `sun`,
 `earth`, and `moon` for NAIF 10, 399, and 301, with `body_<NAIF>` for other

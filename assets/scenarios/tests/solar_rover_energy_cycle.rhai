@@ -16,12 +16,12 @@
 // Sun vector, or a motor demand.
 
 const PORT_WAIT_S = 30.0;
-const TRACK_S = 12.0;
+const TRACK_TIMEOUT_S = 12.0;
+const TRACK_SETTLE_S = 1.0;
 const DRIVE_S = 5.0;
 const CHARGE_S = 12.0;
 const CELESTIAL_NIGHT_WAIT_S = 36.0;
 const NIGHT_POWER_MAX_W = 0.1;
-const SUN_STEP = 1.0;
 const YAW_DELTA_MIN = 0.2;
 const HINGE_TOL = 0.18;
 const SOC_DROP_MIN = 0.01;
@@ -96,6 +96,10 @@ fn on_start(me, ctx) {
     this.night_clock_before = ();
     this.night_clock_after = ();
     this.night_first_sample_rate = ();
+    this.track_clock_before = ();
+    this.track_first_sample_rate = ();
+    this.track_rate_command_ok = false;
+    this.track_rate_reset_ok = false;
     this.power_before = ();
     this.power_after_step = ();
     this.available_before = ();
@@ -166,15 +170,53 @@ fn on_tick(me, ctx) {
         this.earth_direction_x = get(this.earth_tracker, "target_mount_x");
         this.earth_direction_y = get(this.earth_tracker, "target_mount_y");
         this.earth_direction_z = get(this.earth_tracker, "target_mount_z");
+        this.track_clock_before = clock_snapshot();
+        let track_rate_command = cmd("SetCelestialClock", #{ scale: 100000.0 });
+        this.track_rate_command_ok = track_rate_command != () &&
+                                     track_rate_command.ok == true;
+        if !this.track_rate_command_ok {
+            finish_failure(this, "SetCelestialClock rejected the tracked-Sun response step");
+            return;
+        }
         this.phase = "track_sun";
         this.phase_started = this.t;
-        cmd("SetEnvironmentLight", #{ sun_yaw: SUN_STEP });
-        print("[solar-cycle] ports live; stepping canonical environment sun");
+        print("[solar-cycle] ports live; advancing CelestialTime to move the canonical Sun target");
         return;
     }
 
     if this.phase == "track_sun" {
-        if phase_t < TRACK_S { return; }
+        let clock = clock_snapshot();
+        let world_step = clock.world_sim_s - this.track_clock_before.world_sim_s;
+        if this.track_first_sample_rate == () && world_step > 0.0 {
+            let celestial_step_s = (clock.celestial_epoch_jd -
+                this.track_clock_before.celestial_epoch_jd) * 86400.0;
+            this.track_first_sample_rate = celestial_step_s / world_step;
+        }
+        let current_yaw = get(this.tracker, "yaw");
+        let current_incidence = island_value(this.elec, SOLAR_INCIDENCE);
+        if current_yaw != () && current_incidence != () &&
+           (current_yaw - this.yaw_before).abs() > YAW_DELTA_MIN &&
+           current_incidence > 0.0 {
+            let reset_rate = cmd("SetCelestialClock", #{ scale: 1.0 });
+            this.track_rate_reset_ok = reset_rate != () && reset_rate.ok == true;
+            if !this.track_rate_reset_ok {
+                finish_failure(this, "SetCelestialClock rejected restoring the normal rate after Sun tracking");
+                return;
+            }
+            this.phase = "track_settle";
+            this.phase_started = this.t;
+            print("[solar-cycle] SunTracker responded to the shared CelestialTime sample; restoring 1x");
+            return;
+        }
+        if phase_t >= TRACK_TIMEOUT_S {
+            finish_failure(this, "SunTracker did not respond to CelestialTime while the Sun remained above the horizon within " +
+                TRACK_TIMEOUT_S + "s");
+        }
+        return;
+    }
+
+    if this.phase == "track_settle" {
+        if phase_t < TRACK_SETTLE_S { return; }
         this.power_after_step = island_value(this.elec, SOLAR_POWER);
         this.incidence_after_step = island_value(this.elec, SOLAR_INCIDENCE);
         this.yaw_after_step = get(this.tracker, "yaw");
@@ -296,11 +338,11 @@ fn verdict(s) {
     f.push(t_present(s.night_power, "solar panel power at lunar night"));
     f.push(t_present(s.night_incidence, "solar panel incidence at lunar night"));
     f.push(t_present(s.night_sun_up, "Sun direction up component at lunar night"));
-    f.push(t_present(s.power_before, "panel power before sun step"));
-    f.push(t_present(s.power_after_step, "panel power after sun step"));
+    f.push(t_present(s.power_before, "panel power before CelestialTime Sun tracking"));
+    f.push(t_present(s.power_after_step, "panel power after CelestialTime Sun tracking"));
     f.push(t_present(s.available_before, "panel available power before drive"));
-    f.push(t_present(s.incidence_before, "panel incidence before sun step"));
-    f.push(t_present(s.incidence_after_step, "panel incidence after sun step"));
+    f.push(t_present(s.incidence_before, "panel incidence before CelestialTime Sun tracking"));
+    f.push(t_present(s.incidence_after_step, "panel incidence after CelestialTime Sun tracking"));
     f.push(t_present(s.yaw_after_step, "SunTracker yaw"));
     f.push(t_present(s.hinge_after_step, "panel hinge angle"));
     f.push(t_present(s.earth_direction_x, "Earth direction x at the rover antenna mount"));
@@ -311,7 +353,7 @@ fn verdict(s) {
 
     if s.yaw_before != () && s.yaw_after_step != () {
         f.push(t_true((s.yaw_after_step - s.yaw_before).abs() > YAW_DELTA_MIN,
-            "SunTracker yaw did not respond to the environment sun step"));
+            "SunTracker yaw did not respond to the CelestialTime-driven Sun target"));
     }
     if s.hinge_after_step != () && s.yaw_after_step != () {
         f.push(t_true((s.hinge_after_step - s.yaw_after_step).abs() < HINGE_TOL,
@@ -319,15 +361,16 @@ fn verdict(s) {
     }
     if s.earth_direction_x != () && s.earth_direction_y != () &&
        s.earth_direction_z != () {
-        let earth_norm2 = s.earth_direction_x^2 + s.earth_direction_y^2 +
-                          s.earth_direction_z^2;
+        let earth_norm2 = s.earth_direction_x * s.earth_direction_x +
+                          s.earth_direction_y * s.earth_direction_y +
+                          s.earth_direction_z * s.earth_direction_z;
         f.push(t_true((earth_norm2 - 1.0).abs() < 1.0e-10,
             "Earth direction at the antenna mount must be a normalized f64 target vector; norm²=" +
             earth_norm2));
     }
     if s.power_after_step != () {
         f.push(t_true(s.power_after_step > 0.0,
-            "solar panel reports no generated power after the environment sun step"));
+            "solar panel reports no generated power after CelestialTime Sun tracking"));
     }
     if s.incidence_before != () && s.incidence_after_step != () {
         f.push(t_true(s.incidence_after_step > 0.0,
@@ -369,6 +412,17 @@ fn verdict(s) {
     }
     f.push(t_true(s.night_rate_command_ok,
         "SetCelestialClock must accept the 100000x rate for the night check"));
+    f.push(t_true(s.track_rate_command_ok,
+        "SetCelestialClock must accept the 100000x Sun-tracking step"));
+    f.push(t_true(s.track_rate_reset_ok,
+        "SetCelestialClock must restore the normal rate after the Sun-tracking step"));
+    f.push(t_present(s.track_first_sample_rate,
+        "first CelestialTime sample after the Sun-tracking rate change"));
+    if s.track_first_sample_rate != () {
+        f.push(t_true(s.track_first_sample_rate > 99000.0 &&
+                      s.track_first_sample_rate < 101000.0,
+            "CelestialTime must immediately apply the 100000x Sun-tracking rate"));
+    }
     f.push(t_present(s.night_first_sample_rate,
         "first celestial sample after changing rate"));
     if s.night_first_sample_rate != () {
