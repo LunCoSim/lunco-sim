@@ -21,33 +21,39 @@
 //!         └── SceneEvent ───┘  → UsdOp (SetConnection / RemovePrim) → ApplyUsdOps
 //! ```
 //!
-//! The producer runs on the **main thread** (the stage is `!Send`) and rebuilds
-//! only when the projected topology changes (hash-gated), so pan / zoom / drag
-//! and selection survive between structural edits. Node *positions* are
-//! session-only for v1 — a structural edit re-lays-out; persisting a
+//! The producer runs on the **main thread** (the stage is `!Send`) only while
+//! its workbench panel is visible. Initial admission reads the complete
+//! preview; later typed scene-change batches
+//! refresh only affected prim subtrees. A layout is rebuilt only when the
+//! projected graph changes, so unrelated edits, pan / zoom / drag, and
+//! selection preserve the current canvas. Node *positions* are session-only
+//! for v1 — a structural graph edit re-lays-out; persisting a
 //! `lunco:canvasPos` is a follow-up.
 
 mod projection;
 mod visuals;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::{Canvas, EdgeId, NodeId, PortRef, Scene, SceneEvent, VisualRegistry};
-use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
+use lunco_workbench_core::{
+    Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot, WorkbenchSnapshot,
+};
 
 use lunco_doc::DocumentId;
 use lunco_modelica_ui_core::FocusDocumentByName;
-use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
 use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_document::document::{LayerId, UsdOp};
 use lunco_usd_viewport_core::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 
 use projection::{
     EDGE_KIND, NODE_KIND, PrimNode, UsdPrimNodeData, UsdWireData, Wire, WireKind, build_scene,
-    collect_graph, project_schema, schema_roots,
+    collect_graph, collect_prim, project_schema, replace_affected_projection, schema_roots,
+    wire_owners_affected_by_paths,
 };
 
 pub use lunco_usd_ui::USD_CONNECTION_CANVAS_PANEL_ID as USD_CANVAS_PANEL_ID;
@@ -89,6 +95,8 @@ pub struct UsdCanvasSessionState {
     edit_target: Option<LayerId>,
     /// Document generation captured with the preview projection.
     generation: u64,
+    /// Canonical stage generation represented by the cached path and graph data.
+    canonical_generation: Option<u64>,
     /// Hash of the last projected topology; a rebuild is skipped while it holds
     /// so interaction (pan/zoom/drag/select) isn't stomped every frame.
     topo_hash: u64,
@@ -101,6 +109,11 @@ pub struct UsdCanvasSessionState {
     /// schema root is a presentation operation, not a stage reload.
     source_nodes: Vec<PrimNode>,
     source_wires: Vec<Wire>,
+    /// All entity-backed prim paths, including paths irrelevant to the graph.
+    /// Structural deltas use this index to re-read only the affected subtree.
+    source_prim_paths: BTreeSet<String>,
+    /// Changes received while the preview projection is settling.
+    pending_changes: CanvasStageChanges,
     schema_roots: Vec<String>,
     active_schema_root: Option<String>,
     /// Last rejected graph edit. Keep it next to the graph so an invalid drag
@@ -123,11 +136,14 @@ impl Default for UsdCanvasSessionState {
             doc: None,
             edit_target: None,
             generation: 0,
+            canonical_generation: None,
             topo_hash: 0,
             built: false,
             needs_fit: false,
             source_nodes: Vec::new(),
             source_wires: Vec::new(),
+            source_prim_paths: BTreeSet::new(),
+            pending_changes: CanvasStageChanges::default(),
             schema_roots: Vec::new(),
             active_schema_root: None,
             last_error: None,
@@ -143,11 +159,14 @@ impl UsdCanvasSessionState {
         self.doc = None;
         self.edit_target = None;
         self.generation = 0;
+        self.canonical_generation = None;
         self.topo_hash = 0;
         self.built = false;
         self.needs_fit = false;
         self.source_nodes.clear();
         self.source_wires.clear();
+        self.source_prim_paths.clear();
+        self.pending_changes = CanvasStageChanges::default();
         self.schema_roots.clear();
         self.active_schema_root = None;
         self.last_error = None;
@@ -165,31 +184,92 @@ pub struct UsdCanvasState {
 /// Node positions and selection are intentionally excluded so a drag doesn't
 /// trigger a re-layout.
 fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> u64 {
-    let mut keys: Vec<String> = Vec::with_capacity(nodes.len() + wires.len());
+    let mut h = std::collections::hash_map::DefaultHasher::new();
     for n in nodes {
-        keys.push(format!(
-            "N|{}|{}|{}|{}|{}|{:?}|{:?}|{}|{}",
-            n.path,
-            n.is_body,
-            n.schema_root,
-            n.schema_node,
-            n.display_name.as_deref().unwrap_or_default(),
-            n.schema_column,
-            n.schema_row,
-            n.inputs.join(","),
-            n.outputs.join(",")
-        ));
+        n.path.hash(&mut h);
+        n.type_name.hash(&mut h);
+        n.is_body.hash(&mut h);
+        n.schema_root.hash(&mut h);
+        n.schema_node.hash(&mut h);
+        n.display_name.hash(&mut h);
+        n.schema_column.hash(&mut h);
+        n.schema_row.hash(&mut h);
+        n.inputs.hash(&mut h);
+        n.outputs.hash(&mut h);
     }
     for w in wires {
-        keys.push(format!(
-            "W|{:?}|{}.{}|{}.{}",
-            w.kind, w.source_path, w.source_conn, w.target_path, w.target_conn
-        ));
+        w.kind.hash(&mut h);
+        w.source_path.hash(&mut h);
+        w.source_conn.hash(&mut h);
+        w.target_path.hash(&mut h);
+        w.target_conn.hash(&mut h);
     }
-    keys.sort();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    keys.hash(&mut h);
     h.finish()
+}
+
+#[derive(Clone, Default)]
+struct CanvasStageChanges {
+    stage_generation: Option<u64>,
+    resynced_roots: Vec<String>,
+    info_paths: Vec<String>,
+}
+
+impl CanvasStageChanges {
+    fn merge(&mut self, changes: &Self) {
+        if changes.stage_generation.is_some() {
+            self.stage_generation = changes.stage_generation;
+        }
+        self.resynced_roots
+            .extend(changes.resynced_roots.iter().cloned());
+        self.info_paths.extend(changes.info_paths.iter().cloned());
+        self.resynced_roots.sort_unstable();
+        self.resynced_roots.dedup();
+        self.info_paths.sort_unstable();
+        self.info_paths.dedup();
+    }
+
+    fn has_paths(&self) -> bool {
+        !self.resynced_roots.is_empty() || !self.info_paths.is_empty()
+    }
+}
+
+fn path_is_within(path: &str, root: &str) -> bool {
+    path == root
+        || (root == "/" && path.starts_with('/'))
+        || path
+            .strip_prefix(root)
+            .is_some_and(|remainder| remainder.starts_with('/'))
+}
+
+fn indexed_subtree(paths: &BTreeSet<String>, root: &str) -> Vec<String> {
+    // USD child paths form a contiguous lexical range after their exact root.
+    paths
+        .range(root.to_string()..)
+        .take_while(|path| path_is_within(path, root))
+        .cloned()
+        .collect()
+}
+
+fn sort_graph(nodes: &mut [PrimNode], wires: &mut [Wire]) {
+    nodes.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+    wires.sort_unstable_by(|a, b| {
+        (
+            a.owner_path.as_str(),
+            a.source_path.as_str(),
+            a.source_conn.as_str(),
+            a.target_path.as_str(),
+            a.target_conn.as_str(),
+            matches!(a.kind, WireKind::Joint),
+        )
+            .cmp(&(
+                b.owner_path.as_str(),
+                b.source_path.as_str(),
+                b.source_conn.as_str(),
+                b.target_path.as_str(),
+                b.target_conn.as_str(),
+                matches!(b.kind, WireKind::Joint),
+            ))
+    });
 }
 
 /// View-model producer (WP-8): reads each open preview's composed stage and
@@ -197,11 +277,14 @@ fn topology_hash(nodes: &[projection::PrimNode], wires: &[projection::Wire]) -> 
 /// because `StageView` is `!Send`.
 pub fn produce_usd_canvas(
     q: Query<(Entity, &UsdPrimPath)>,
+    path_changes: Query<(Entity, &UsdPrimPath), Changed<UsdPrimPath>>,
     q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
     mut canonical: NonSendMut<CanonicalStages>,
     viewport_state: Option<Res<UsdViewportState>>,
+    workbench: Option<Res<WorkbenchSnapshot>>,
     mut views: ResMut<UsdCanvasState>,
+    mut scene_change_reader: MessageReader<UsdSceneChangeBatch>,
 ) {
     let Some(viewport) = viewport_state.as_deref() else {
         views.sessions.clear();
@@ -209,19 +292,47 @@ pub fn produce_usd_canvas(
     };
     let open: std::collections::HashSet<_> = viewport.sessions().map(|s| s.id()).collect();
     views.sessions.retain(|preview, _| open.contains(preview));
+    if !workbench
+        .as_deref()
+        .is_some_and(|snapshot| snapshot.is_panel_visible(USD_CANVAS_PANEL_ID))
+    {
+        return;
+    }
+    let mut changes_by_stage: HashMap<AssetId<UsdStageAsset>, CanvasStageChanges> = HashMap::new();
+    for change in scene_change_reader.read() {
+        let changes = changes_by_stage.entry(change.stage_id).or_default();
+        changes.stage_generation = Some(change.stage_generation);
+        changes
+            .resynced_roots
+            .extend(change.resynced_prim_paths.iter().cloned());
+        changes
+            .info_paths
+            .extend(change.info_prim_paths.iter().cloned());
+    }
     for session in viewport.sessions() {
         let state = views.sessions.entry(session.id()).or_default();
-        produce_usd_canvas_session(session, &q, &q_parents, &stages, &mut canonical, state);
+        produce_usd_canvas_session(
+            session,
+            &q,
+            &path_changes,
+            &q_parents,
+            &stages,
+            &mut canonical,
+            state,
+            changes_by_stage.get(&session.stage_handle().id()),
+        );
     }
 }
 
 fn produce_usd_canvas_session(
     session: &UsdPreviewSession,
     q: &Query<(Entity, &UsdPrimPath)>,
+    path_changes: &Query<(Entity, &UsdPrimPath), Changed<UsdPrimPath>>,
     q_parents: &Query<&ChildOf>,
     stages: &Assets<UsdStageAsset>,
     canonical: &mut CanonicalStages,
     state: &mut UsdCanvasSessionState,
+    changes: Option<&CanvasStageChanges>,
 ) {
     let doc = session.doc();
     let handle = session.stage_handle().clone();
@@ -231,16 +342,19 @@ fn produce_usd_canvas_session(
     // A lease replacement invalidates the complete interaction model before a
     // new stage becomes available; a loading document cannot show or edit the
     // previous document's graph.
-    if state.doc != Some(doc) || state.stage_id != Some(stage_id) {
+    let identity_changed = state.doc != Some(doc) || state.stage_id != Some(stage_id);
+    if identity_changed {
         state.clear();
     }
+    let mut accumulated_changes = std::mem::take(&mut state.pending_changes);
+    if let Some(changes) = changes {
+        accumulated_changes.merge(changes);
+    }
     if !session.projection_ready() {
-        state.clear();
+        state.pending_changes = accumulated_changes;
         return;
     }
     state.edit_target = Some(session.edit_target().clone());
-    state.generation = session.projected_generation();
-
     let is_preview_entity =
         |entity: Entity| lunco_usd_bevy_scene::is_preview_entity(entity, preview_root, q_parents);
     if canonical.get(stage_id).is_none() {
@@ -251,14 +365,105 @@ fn produce_usd_canvas_session(
     let Some(cs) = canonical.get(stage_id) else {
         return;
     };
-    let prim_paths: Vec<String> = q
-        .iter()
-        .filter(|(entity, p)| p.stage_handle.id() == stage_id && is_preview_entity(*entity))
-        .map(|(_, p)| p.path.clone())
-        .collect();
+    let canonical_generation = cs.generation();
+    let has_path_changes = accumulated_changes.has_paths();
+    let changes = accumulated_changes
+        .stage_generation
+        .is_some()
+        .then_some(&accumulated_changes);
+    let delta_is_current = changes.is_some_and(|changes| {
+        changes.stage_generation == Some(canonical_generation)
+            && state.canonical_generation
+                == changes
+                    .stage_generation
+                    .map(|generation| generation.wrapping_sub(1))
+    });
+    let full_rebuild = identity_changed
+        || !state.built
+        || (has_path_changes && !delta_is_current)
+        || (!has_path_changes
+            && (state.generation != session.projected_generation()
+                || state.canonical_generation != Some(canonical_generation)));
+    if !full_rebuild && !has_path_changes {
+        return;
+    }
+
     let view = cs.view();
-    let (source_nodes, source_wires) = collect_graph(&view, &prim_paths);
-    let roots = schema_roots(&source_nodes);
+    let prim_paths_for_log;
+    if full_rebuild {
+        let prim_paths: Vec<String> = q
+            .iter()
+            .filter(|(entity, p)| p.stage_handle.id() == stage_id && is_preview_entity(*entity))
+            .map(|(_, p)| p.path.clone())
+            .collect();
+        let (mut source_nodes, mut source_wires) = collect_graph(&view, &prim_paths);
+        sort_graph(&mut source_nodes, &mut source_wires);
+        state.source_nodes = source_nodes;
+        state.source_wires = source_wires;
+        state.source_prim_paths = prim_paths.iter().cloned().collect();
+        prim_paths_for_log = prim_paths.len();
+    } else {
+        let changes = changes.expect("incremental projection has a path change");
+        let mut affected_paths: HashSet<String> = HashSet::new();
+        for root in &changes.resynced_roots {
+            let subtree = indexed_subtree(&state.source_prim_paths, root);
+            for path in subtree {
+                state.source_prim_paths.remove(&path);
+                affected_paths.insert(path);
+            }
+        }
+        affected_paths.extend(changes.resynced_roots.iter().cloned());
+        affected_paths.extend(changes.info_paths.iter().cloned());
+
+        for (entity, path) in path_changes.iter() {
+            if path.stage_handle.id() == stage_id
+                && is_preview_entity(entity)
+                && changes
+                    .resynced_roots
+                    .iter()
+                    .any(|root| path_is_within(&path.path, root))
+            {
+                affected_paths.insert(path.path.clone());
+            }
+        }
+
+        let affected_wire_owners = wire_owners_affected_by_paths(
+            &state.source_wires,
+            &changes.resynced_roots,
+            &changes.info_paths,
+        );
+        let mut paths_to_read: HashSet<String> = affected_paths.clone();
+        paths_to_read.extend(affected_wire_owners.iter().cloned());
+        let mut paths_to_read: Vec<String> = paths_to_read.into_iter().collect();
+        paths_to_read.sort_unstable();
+
+        let mut replacement_nodes = Vec::with_capacity(affected_paths.len());
+        let mut replacement_wires = Vec::new();
+        for path in &paths_to_read {
+            if let Some(mut projection) = collect_prim(&view, path) {
+                if affected_paths.contains(path) {
+                    state.source_prim_paths.insert(path.clone());
+                    if let Some(node) = projection.node {
+                        replacement_nodes.push(node);
+                    }
+                }
+                replacement_wires.append(&mut projection.wires);
+            }
+        }
+        replace_affected_projection(
+            &mut state.source_nodes,
+            &mut state.source_wires,
+            &changes.resynced_roots,
+            &changes.info_paths,
+            &affected_wire_owners,
+            replacement_nodes,
+            replacement_wires,
+        );
+        sort_graph(&mut state.source_nodes, &mut state.source_wires);
+        prim_paths_for_log = state.source_prim_paths.len();
+    }
+
+    let roots = schema_roots(&state.source_nodes);
     let active_root = state
         .active_schema_root
         .as_ref()
@@ -266,15 +471,15 @@ fn produce_usd_canvas_session(
         .cloned();
     let (nodes, wires) = active_root
         .as_deref()
-        .map(|root| project_schema(source_nodes.clone(), source_wires.clone(), root))
+        .map(|root| project_schema(&state.source_nodes, &state.source_wires, root))
         .unwrap_or_default();
     let hash = topology_hash(&nodes, &wires);
 
     if state.built && state.stage_id == Some(stage_id) && state.topo_hash == hash {
-        state.source_nodes = source_nodes;
-        state.source_wires = source_wires;
         state.schema_roots = roots;
         state.active_schema_root = active_root;
+        state.generation = session.projected_generation();
+        state.canonical_generation = Some(canonical_generation);
         return;
     }
 
@@ -283,33 +488,40 @@ fn produce_usd_canvas_session(
     bevy::log::debug!(
         "[usd-canvas] preview {} rebuilt: {} prim entities -> {} nodes, {} edges",
         session.id().0,
-        prim_paths.len(),
+        prim_paths_for_log,
         scene.node_count(),
         scene.edge_count()
     );
     state.canvas.scene = scene;
     state.canvas.selection.clear();
-    state.source_nodes = source_nodes;
-    state.source_wires = source_wires;
     state.schema_roots = roots;
     state.active_schema_root = active_root;
     state.topo_hash = hash;
     state.stage_id = Some(stage_id);
     state.built = true;
     state.doc = Some(doc);
+    state.generation = session.projected_generation();
+    state.canonical_generation = Some(canonical_generation);
     if bounds.is_some() {
         state.needs_fit = true;
     }
 }
 
-/// Wake the Editor connection graph when its explicit preview document or
-/// the composed USD stage changes. A missing preview clears the graph through
-/// the producer instead of leaving the previous document visible.
+/// Wake the connection graph for visible-panel changes and authored stage
+/// updates. Preview lifecycle changes still wake the producer while hidden so
+/// closed preview state is retired without reading the composed stage.
 pub fn editor_canvas_changed(
     viewport: Option<Res<UsdViewportState>>,
     revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
+    workbench: Option<Res<WorkbenchSnapshot>>,
 ) -> bool {
-    viewport.is_some_and(|state| state.is_changed()) || revision.is_changed()
+    let viewport_changed = viewport.is_some_and(|state| state.is_changed());
+    let visible = workbench
+        .as_deref()
+        .is_some_and(|snapshot| snapshot.is_panel_visible(USD_CANVAS_PANEL_ID));
+    viewport_changed
+        || (visible
+            && (revision.is_changed() || workbench.is_some_and(|snapshot| snapshot.is_changed())))
 }
 
 // ─── Write-back: SceneEvent → UsdOp ─────────────────────────────────────────
@@ -465,9 +677,11 @@ impl Panel for UsdCanvasPanel {
         PanelScrollPolicy::SelfManaged
     }
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let focused_preview = ctx
-            .resource::<UsdViewportState>()
-            .and_then(|viewport| viewport.focused_preview_id());
+        let viewport = ctx.resource::<UsdViewportState>();
+        let focused_preview = viewport.and_then(UsdViewportState::focused_preview_id);
+        let projection_ready = focused_preview
+            .and_then(|preview| viewport.and_then(|state| state.session(preview)))
+            .is_some_and(UsdPreviewSession::projection_ready);
         ctx.resource_scope::<UsdCanvasState, ()>(|ctx, views| {
             let Some(preview) = focused_preview else {
                 ui.centered_and_justified(|ui| {
@@ -477,6 +691,12 @@ impl Panel for UsdCanvasPanel {
                 });
                 return;
             };
+            if !projection_ready {
+                ui.centered_and_justified(|ui| {
+                    ui.label("The selected USD preview is settling; connection editing is paused.");
+                });
+                return;
+            }
             let Some(state) = views.sessions.get_mut(&preview) else {
                 ui.centered_and_justified(|ui| {
                     ui.label("The selected USD preview is still being projected.");
@@ -559,8 +779,8 @@ impl Panel for UsdCanvasPanel {
                 && state.active_schema_root.as_deref() != Some(requested_root.as_str())
             {
                 let (nodes, wires) = project_schema(
-                    state.source_nodes.clone(),
-                    state.source_wires.clone(),
+                    &state.source_nodes,
+                    &state.source_wires,
                     &requested_root,
                 );
                 state.canvas.scene = build_scene(nodes.clone(), wires.clone());

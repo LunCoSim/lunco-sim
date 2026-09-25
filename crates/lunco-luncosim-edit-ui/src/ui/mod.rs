@@ -695,16 +695,9 @@ impl Plugin for SceneEditUiPlugin {
         app.add_view_model(ports::populate_port_view, ports::port_view_due);
 
         // USD connection canvas: the scene is derived from the live composed
-        // stage by a main-thread producer (the stage is `!Send`).
-        //
-        // This used to run ungated on the claim that it "early-returns cheaply
-        // when the topology is stable". It does not: the early-return compares a
-        // hash that costs ~20 000 composed-stage lookups and a sorted `Vec<String>`
-        // to compute — 11 ms/frame on `sandbox_scene.usda`, the single largest
-        // item in the frame. A gate derived from the OUTPUT can never be cheaper
-        // than the output. `UsdStageRevision` is stamped by the writers instead.
-        // The internal hash stays, now purely as the idempotence guard it should
-        // always have been (a bumped revision does not imply a changed topology).
+        // stage by a main-thread producer (the stage is `!Send`). Its view-model
+        // runs only while the canvas panel is visible; stage path batches then
+        // keep unrelated authored changes from rebuilding the graph.
         app.init_resource::<connection_canvas::UsdCanvasState>();
         app.add_view_model(
             connection_canvas::produce_usd_canvas,

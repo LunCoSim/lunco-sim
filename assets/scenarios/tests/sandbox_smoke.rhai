@@ -16,7 +16,18 @@
 const WAIT_S = 30.0;
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/SandboxScene/Oscillator")], required_inputs: [] }
+    #{
+        modelica_entities: [
+            find_path("/SandboxScene/Oscillator"),
+            find_path("/SandboxScene/Skid_Raycast_1"),
+            find_path("/SandboxScene/Skid_Raycast_2"),
+            find_path("/SandboxScene/Skid_Physical_1"),
+            find_path("/SandboxScene/Ackermann_Raycast_1"),
+            find_path("/SandboxScene/Ackermann_Physical_1"),
+            find_path("/SandboxScene/Skid_Battery_Thermal_1"),
+        ],
+        required_inputs: [],
+    }
 }
 
 fn query_ok(record) {
@@ -62,21 +73,26 @@ fn rover_contract(path, expected_raycast, expected_physical) {
         && get(entity, "brake") != ()
         && get(entity, "drive_left") != ()
         && get(entity, "drive_right") != ();
-    wheels.raycast == expected_raycast
+    let wheel_match = vessel_wheels_match(entity, expected_raycast, expected_physical,
+        0.4, 0.7, 15000.0, 3000.0, 1.5);
+    let topology_match = rover_topology_ok(path);
+    let counts_match = wheels.raycast == expected_raycast
         && wheels.physical == expected_physical
-        && wheels.wheels == expected_raycast + expected_physical
-        && (if expected_raycast > 0 {
+        && wheels.wheels == expected_raycast + expected_physical;
+    let dimensions_match = if expected_raycast > 0 {
             wheels.raycast_radius != ()
                 && wheels.suspension_rest != ()
                 && wheels.suspension_spring != ()
                 && wheels.suspension_damping != ()
         } else {
             wheels.physical_radius != ()
-        })
-        && vessel_wheels_match(entity, expected_raycast, expected_physical,
-            0.4, 0.7, 15000.0, 3000.0, 1.5)
-        && controls
-        && rover_topology_ok(path)
+        };
+    print("[sandbox-smoke] detail " + path + " wheels=" + wheels.wheels
+        + " raycast=" + wheels.raycast + " physical=" + wheels.physical
+        + " counts=" + counts_match + " dimensions=" + dimensions_match
+        + " match=" + wheel_match + " controls=" + controls
+        + " topology=" + topology_match);
+    counts_match && dimensions_match && wheel_match && controls && topology_match
 }
 
 // Composed USD migration contract. This is intentionally authored beside the
@@ -240,7 +256,7 @@ fn asset_metadata_contract() {
             }
         }
     }
-    metadata.count >= 50 && checked >= 4
+    to_int(metadata.count) >= 50 && checked >= 4
 }
 
 fn scene_contract() {
@@ -278,7 +294,9 @@ fn scene_contract() {
     ];
     let rovers = true;
     for spec in roots {
-        rovers = rovers && rover_contract(spec[0], spec[1], spec[2]);
+        let rover_ok = rover_contract(spec[0], spec[1], spec[2]);
+        print("[sandbox-smoke] rover " + spec[0] + "=" + rover_ok);
+        rovers = rovers && rover_ok;
     }
     let ground_ok = query_ok(ground) && ground.attrs["physics:collisionEnabled"] == true
         && close_vec(ground.attrs["xformOp:scale"], [4000.0, 1.0, 4000.0], 0.001);
@@ -293,9 +311,15 @@ fn scene_contract() {
     let livery_ok = livery_color != () && livery_color.len() == 1
         && close_vec(livery_color[0], [0.85, 0.15, 0.12], 0.001);
     let asset_metadata_ok = asset_metadata_contract();
+    let wiring_ok = wiring_contract();
+    let composition_ok = composition_contract();
     print("[sandbox-smoke] asset_metadata=" + asset_metadata_ok);
+    print("[sandbox-smoke] ground=" + ground_ok + " ramp=" + ramp_ok
+        + " rovers=" + rovers + " suspension_visuals=" + suspension_visuals_ok
+        + " livery=" + livery_ok + " wiring=" + wiring_ok
+        + " composition=" + composition_ok);
     ground_ok && ramp_ok && rovers && suspension_visuals_ok && livery_ok
-        && wiring_contract() && composition_contract() && asset_metadata_ok
+        && wiring_ok && composition_ok && asset_metadata_ok
 }
 
 fn on_start(me, ctx) {

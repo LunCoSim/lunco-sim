@@ -184,6 +184,21 @@ name convention, or ECS-only grouping state is introduced.
   selection is only the focused-session projection; the editor-owned session
   selection stores canonical prim paths and restores fresh ECS projections when
   focus changes or a document is reprojected.
+- The prim tree and connection canvas only derive their composed-stage views
+  while the corresponding workbench panel is visible. The prim tree waits for
+  the preview's projection-ready boundary before its first hierarchy build and
+  does not rebuild for camera-only viewport changes or scene changes belonging
+  to another stage. The connection canvas performs one full read on visible
+  admission, then consumes the shared
+  `UsdSceneChangeBatch` paths to refresh only changed prim subtrees. Its source
+  path index includes non-graph prims, so adding or moving a waypoint does not
+  require rescanning the composed graph; endpoint changes also invalidate the
+  owners of authored wires, including joints whose endpoint path disappeared.
+  During same-document reprojection the previous graph is retained but editing
+  is paused; its path batches are accumulated and applied at the ready boundary.
+  A canvas layout is committed only if the graph's visible topology or
+  presentation facts changed. Stage replacement and first admission retain the
+  full projection path.
 - The primary `UsdPreviewView` is also an instance-backed workbench tab. The
   `OpenUsdPreview`, `FocusUsdPreview`, and `FocusUsdPreviewView` boundaries
   foreground that exact tab; replacing or closing a session closes its view

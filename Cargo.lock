@@ -10332,6 +10332,7 @@ dependencies = [
  "egui",
  "lunco-camera-core",
  "lunco-core",
+ "lunco-doc",
  "lunco-render",
  "lunco-scene-selection",
  "lunco-usd-bevy-scene",

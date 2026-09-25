@@ -51,7 +51,7 @@ const ROW_GAP: f32 = 56.0;
 const MARGIN: f32 = 40.0;
 
 /// Whether a wire is a co-sim dataflow connection or a physics joint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum WireKind {
     /// Authored `inputs:<c>.connect` — a co-sim signal wire.
     Dataflow,
@@ -101,12 +101,23 @@ pub(crate) struct PrimNode {
 #[derive(Clone, Debug)]
 pub(crate) struct Wire {
     pub kind: WireKind,
+    /// Prim whose authored relation produced this wire. This keeps incremental
+    /// projection correct for joints, whose endpoints are not the joint prim.
+    pub owner_path: String,
     pub source_path: String,
     /// Dataflow only — the producing connector leaf. Empty for joints.
     pub source_conn: String,
     pub target_path: String,
     /// Dataflow only — the consuming connector leaf. Empty for joints.
     pub target_conn: String,
+}
+
+/// Collected graph facts for one active scene prim. An active prim with no
+/// graph facts is still represented so the canvas can retain its complete
+/// entity-backed path index.
+pub(crate) struct PrimProjection {
+    pub node: Option<PrimNode>,
+    pub wires: Vec<Wire>,
 }
 
 /// Read every prim in `prim_paths` + its connections out of a composed stage.
@@ -126,83 +137,151 @@ pub(crate) fn collect_graph(
     let mut wires: Vec<Wire> = Vec::new();
 
     for path in prim_paths {
-        let Ok(p) = SdfPath::new(path) else {
+        let Some(mut projection) = collect_prim(view, path) else {
             continue;
         };
-        if !view.is_active(&p) {
-            continue;
+        if let Some(node) = projection.node {
+            nodes.push(node);
         }
-        let path = path.clone();
-
-        // A prim with both bodies is a joint: render it as an edge between the
-        // two bodies, not as a node.
-        let body0 = view.rel_target(&p, "physics:body0");
-        let body1 = view.rel_target(&p, "physics:body1");
-        if let (Some(a), Some(b)) = (body0, body1) {
-            wires.push(Wire {
-                kind: WireKind::Joint,
-                source_path: a,
-                source_conn: String::new(),
-                target_path: b,
-                target_conn: String::new(),
-            });
-            continue;
-        }
-
-        let type_name = view.type_name(&p).unwrap_or_default();
-        let display_name = view
-            .text(&p, "ui:displayName")
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty());
-        let is_body = view.has_api_schema(&p, "PhysicsRigidBodyAPI");
-        let schema_root = view.boolean(&p, "lunco:ui:schemaRoot") == Some(true);
-        let schema_node = view.boolean(&p, "lunco:ui:schemaNode") == Some(true);
-        let schema_column = view.scalar::<i32>(&p, "lunco:ui:schemaColumn");
-        let schema_row = view.scalar::<i32>(&p, "lunco:ui:schemaRow");
-        let mut inputs: Vec<String> = Vec::new();
-        let mut outputs: Vec<String> = Vec::new();
-
-        for attr in view.attr_names(&p) {
-            if let Some(conn) = attr.strip_prefix("inputs:") {
-                inputs.push(conn.to_string());
-                for src in view.connections(&p, &attr) {
-                    // `/A.outputs:netForce` → prim `/A`, connector `netForce`.
-                    let Some((src_prim, leaf)) = src.rsplit_once('.') else {
-                        continue;
-                    };
-                    let src_conn = leaf
-                        .strip_prefix("outputs:")
-                        .or_else(|| leaf.strip_prefix("inputs:"))
-                        .unwrap_or(leaf)
-                        .to_string();
-                    wires.push(Wire {
-                        kind: WireKind::Dataflow,
-                        source_path: src_prim.to_string(),
-                        source_conn: src_conn,
-                        target_path: path.clone(),
-                        target_conn: conn.to_string(),
-                    });
-                }
-            } else if let Some(conn) = attr.strip_prefix("outputs:") {
-                outputs.push(conn.to_string());
-            }
-        }
-
-        nodes.push(PrimNode {
-            path,
-            display_name,
-            type_name,
-            is_body,
-            schema_root,
-            schema_node,
-            schema_column,
-            schema_row,
-            inputs,
-            outputs,
-        });
+        wires.append(&mut projection.wires);
     }
 
     (nodes, wires)
+}
+
+/// Read one changed prim and the wires authored by that prim.
+pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProjection> {
+    let Ok(p) = SdfPath::new(path) else {
+        return None;
+    };
+    if !view.is_active(&p) {
+        return None;
+    }
+    let mut wires = Vec::new();
+
+    // A prim with both bodies is a joint: render it as an edge between the
+    // two bodies, not as a node.
+    let body0 = view.rel_target(&p, "physics:body0");
+    let body1 = view.rel_target(&p, "physics:body1");
+    if let (Some(a), Some(b)) = (body0, body1) {
+        wires.push(Wire {
+            kind: WireKind::Joint,
+            owner_path: path.to_string(),
+            source_path: a,
+            source_conn: String::new(),
+            target_path: b,
+            target_conn: String::new(),
+        });
+        return Some(PrimProjection { node: None, wires });
+    }
+
+    let type_name = view.type_name(&p).unwrap_or_default();
+    let display_name = view
+        .text(&p, "ui:displayName")
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+    let is_body = view.has_api_schema(&p, "PhysicsRigidBodyAPI");
+    let schema_root = view.boolean(&p, "lunco:ui:schemaRoot") == Some(true);
+    let schema_node = view.boolean(&p, "lunco:ui:schemaNode") == Some(true);
+    let schema_column = view.scalar::<i32>(&p, "lunco:ui:schemaColumn");
+    let schema_row = view.scalar::<i32>(&p, "lunco:ui:schemaRow");
+    let mut inputs: Vec<String> = Vec::new();
+    let mut outputs: Vec<String> = Vec::new();
+
+    for attr in view.attr_names(&p) {
+        if let Some(conn) = attr.strip_prefix("inputs:") {
+            inputs.push(conn.to_string());
+            for src in view.connections(&p, &attr) {
+                // `/A.outputs:netForce` → prim `/A`, connector `netForce`.
+                let Some((src_prim, leaf)) = src.rsplit_once('.') else {
+                    continue;
+                };
+                let src_conn = leaf
+                    .strip_prefix("outputs:")
+                    .or_else(|| leaf.strip_prefix("inputs:"))
+                    .unwrap_or(leaf)
+                    .to_string();
+                wires.push(Wire {
+                    kind: WireKind::Dataflow,
+                    owner_path: path.to_string(),
+                    source_path: src_prim.to_string(),
+                    source_conn: src_conn,
+                    target_path: path.to_string(),
+                    target_conn: conn.to_string(),
+                });
+            }
+        } else if let Some(conn) = attr.strip_prefix("outputs:") {
+            outputs.push(conn.to_string());
+        }
+    }
+
+    let node = PrimNode {
+        path: path.to_string(),
+        display_name,
+        type_name,
+        is_body,
+        schema_root,
+        schema_node,
+        schema_column,
+        schema_row,
+        inputs,
+        outputs,
+    };
+    Some(PrimProjection {
+        node: Some(node),
+        wires,
+    })
+}
+
+/// Replace graph facts owned by the affected USD paths, preserving all
+/// unaffected cached facts. Structural roots invalidate their whole subtree;
+/// info-only changes invalidate only the exact prim.
+pub(crate) fn replace_affected_projection(
+    nodes: &mut Vec<PrimNode>,
+    wires: &mut Vec<Wire>,
+    resynced_roots: &[String],
+    info_paths: &[String],
+    invalidated_wire_owners: &BTreeSet<String>,
+    replacement_nodes: Vec<PrimNode>,
+    replacement_wires: Vec<Wire>,
+) {
+    nodes.retain(|node| {
+        !resynced_roots
+            .iter()
+            .any(|root| super::path_is_within(&node.path, root))
+            && !info_paths.iter().any(|path| path == &node.path)
+    });
+    wires.retain(|wire| {
+        !resynced_roots
+            .iter()
+            .any(|root| super::path_is_within(&wire.owner_path, root))
+            && !info_paths.iter().any(|path| path == &wire.owner_path)
+            && !invalidated_wire_owners.contains(&wire.owner_path)
+    });
+    nodes.extend(replacement_nodes);
+    wires.extend(replacement_wires);
+}
+
+/// Find authored relation owners that must be reread after an endpoint changes.
+/// A deleted body, for example, does not structurally change the joint prim
+/// whose relationship still names it.
+pub(crate) fn wire_owners_affected_by_paths(
+    wires: &[Wire],
+    resynced_roots: &[String],
+    info_paths: &[String],
+) -> BTreeSet<String> {
+    wires
+        .iter()
+        .filter(|wire| {
+            resynced_roots.iter().any(|root| {
+                super::path_is_within(&wire.source_path, root)
+                    || super::path_is_within(&wire.target_path, root)
+            }) || info_paths
+                .iter()
+                .any(|path| path == &wire.source_path || path == &wire.target_path)
+        })
+        .map(|wire| wire.owner_path.clone())
+        .collect()
 }
 
 /// Select the authored system boundaries for the Connections view.
@@ -224,8 +303,8 @@ pub(crate) fn schema_roots(nodes: &[PrimNode]) -> Vec<String> {
 }
 
 pub(crate) fn project_schema(
-    mut nodes: Vec<PrimNode>,
-    mut wires: Vec<Wire>,
+    nodes: &[PrimNode],
+    wires: &[Wire],
     schema_root: &str,
 ) -> (Vec<PrimNode>, Vec<Wire>) {
     let marked: BTreeSet<String> = nodes
@@ -241,14 +320,22 @@ pub(crate) fn project_schema(
         .map(|node| node.path.clone())
         .collect();
 
-    nodes.retain(|node| marked.contains(&node.path));
-    wires.retain(|wire| {
-        // A same-prim forwarding binding is valid runtime topology, but not a
-        // connection between two blocks. Hide it only in this presentation.
-        wire.source_path != wire.target_path
-            && marked.contains(&wire.source_path)
-            && marked.contains(&wire.target_path)
-    });
+    let mut nodes: Vec<PrimNode> = nodes
+        .iter()
+        .filter(|node| marked.contains(&node.path))
+        .cloned()
+        .collect();
+    let wires: Vec<Wire> = wires
+        .iter()
+        .filter(|wire| {
+            // A same-prim forwarding binding is valid runtime topology, but not a
+            // connection between two blocks. Hide it only in this presentation.
+            wire.source_path != wire.target_path
+                && marked.contains(&wire.source_path)
+                && marked.contains(&wire.target_path)
+        })
+        .cloned()
+        .collect();
 
     for node in &mut nodes {
         node.inputs.retain(|name| {
@@ -663,6 +750,7 @@ mod tests {
     fn dataflow(src: &str, sc: &str, tgt: &str, tc: &str) -> Wire {
         Wire {
             kind: WireKind::Dataflow,
+            owner_path: tgt.to_string(),
             source_path: src.to_string(),
             source_conn: sc.to_string(),
             target_path: tgt.to_string(),
@@ -766,6 +854,7 @@ mod tests {
         let nodes = vec![prim("/A", &[], &[], true), prim("/B", &[], &[], true)];
         let wires = vec![Wire {
             kind: WireKind::Joint,
+            owner_path: "/Joint".to_string(),
             source_path: "/A".to_string(),
             source_conn: String::new(),
             target_path: "/B".to_string(),
@@ -777,6 +866,120 @@ mod tests {
         for (_, e) in scene.edges() {
             assert!(scene.edge_endpoint_positions(e).is_some());
         }
+    }
+
+    #[test]
+    fn incremental_projection_replaces_only_authored_subtrees_and_wires() {
+        let mut nodes = vec![
+            prim("/Assembly", &[], &[], false),
+            prim("/Assembly/Old", &[], &[], false),
+            prim("/AssemblyTwo", &[], &[], false),
+            prim("/Elsewhere", &[], &[], false),
+            prim("/Elsewhere/Child", &[], &[], false),
+        ];
+        let mut wires = vec![
+            dataflow("/Source", "out", "/Assembly/Old", "in"),
+            Wire {
+                kind: WireKind::Joint,
+                owner_path: "/Assembly/Joint".to_string(),
+                source_path: "/BodyA".to_string(),
+                source_conn: String::new(),
+                target_path: "/BodyB".to_string(),
+                target_conn: String::new(),
+            },
+            Wire {
+                kind: WireKind::Joint,
+                owner_path: "/AssemblyTwo/Joint".to_string(),
+                source_path: "/BodyC".to_string(),
+                source_conn: String::new(),
+                target_path: "/BodyD".to_string(),
+                target_conn: String::new(),
+            },
+            dataflow("/Source", "out", "/Elsewhere", "in"),
+        ];
+
+        replace_affected_projection(
+            &mut nodes,
+            &mut wires,
+            &["/Assembly".to_string()],
+            &["/Elsewhere".to_string()],
+            &BTreeSet::from([
+                "/Assembly/Joint".to_string(),
+                "/Assembly/Old".to_string(),
+                "/Elsewhere".to_string(),
+            ]),
+            vec![
+                prim("/Assembly/New", &["in"], &[], false),
+                prim("/Elsewhere", &["in"], &[], false),
+            ],
+            vec![
+                dataflow("/Source", "out", "/Assembly/New", "in"),
+                dataflow("/Source", "out", "/Elsewhere", "in"),
+            ],
+        );
+
+        let node_paths: BTreeSet<_> = nodes.iter().map(|node| node.path.as_str()).collect();
+        assert_eq!(
+            node_paths,
+            BTreeSet::from([
+                "/Assembly/New",
+                "/AssemblyTwo",
+                "/Elsewhere",
+                "/Elsewhere/Child",
+            ])
+        );
+        assert_eq!(wires.len(), 3);
+        assert!(wires.iter().any(|wire| wire.owner_path == "/Assembly/New"));
+        assert!(wires.iter().any(|wire| wire.owner_path == "/Elsewhere"));
+        assert!(
+            wires
+                .iter()
+                .any(|wire| wire.owner_path == "/AssemblyTwo/Joint")
+        );
+    }
+
+    #[test]
+    fn endpoint_resync_invalidates_authored_wire_owner() {
+        let wires = vec![
+            Wire {
+                kind: WireKind::Joint,
+                owner_path: "/Assembly/Joint".to_string(),
+                source_path: "/Assembly/BodyA".to_string(),
+                source_conn: String::new(),
+                target_path: "/Assembly/BodyB".to_string(),
+                target_conn: String::new(),
+            },
+            Wire {
+                kind: WireKind::Joint,
+                owner_path: "/Elsewhere/Joint".to_string(),
+                source_path: "/Elsewhere/BodyA".to_string(),
+                source_conn: String::new(),
+                target_path: "/Elsewhere/BodyB".to_string(),
+                target_conn: String::new(),
+            },
+        ];
+
+        let affected = wire_owners_affected_by_paths(&wires, &["/Assembly/BodyA".into()], &[]);
+        assert_eq!(affected, BTreeSet::from(["/Assembly/Joint".to_string()]));
+
+        let mut remaining_nodes = Vec::new();
+        let mut remaining_wires = wires.clone();
+        replace_affected_projection(
+            &mut remaining_nodes,
+            &mut remaining_wires,
+            &["/Assembly/BodyA".into()],
+            &[],
+            &affected,
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(remaining_wires.len(), 1);
+        assert_eq!(remaining_wires[0].owner_path, "/Elsewhere/Joint");
+
+        assert_eq!(
+            wire_owners_affected_by_paths(&wires, &[], &["/Elsewhere/BodyB".into()]),
+            BTreeSet::from(["/Elsewhere/Joint".to_string()])
+        );
     }
 
     /// A cycle doesn't hang the layering and every node still gets a bounded rank.
@@ -813,7 +1016,8 @@ mod tests {
             dataflow("/Lander", "state", "/Lander", "state"),
         ];
 
-        let (nodes, wires) = project_schema(vec![root, controller, internal], wires, "/Lander");
+        let source_nodes = vec![root, controller, internal];
+        let (nodes, wires) = project_schema(&source_nodes, &wires, "/Lander");
         assert_eq!(
             nodes
                 .iter()
@@ -840,7 +1044,7 @@ mod tests {
         )];
 
         assert!(schema_roots(&nodes).is_empty());
-        let (projected, projected_wires) = project_schema(nodes, wires, "");
+        let (projected, projected_wires) = project_schema(&nodes, &wires, "");
         assert!(projected.is_empty());
         assert!(projected_wires.is_empty());
     }
@@ -860,7 +1064,7 @@ mod tests {
 
         let nodes = vec![first_root, first_child, second_root, second_child];
         assert_eq!(schema_roots(&nodes), vec!["/First", "/Second"]);
-        let (projected, _) = project_schema(nodes, Vec::new(), "/Second");
+        let (projected, _) = project_schema(&nodes, &[], "/Second");
         assert_eq!(
             projected
                 .iter()
