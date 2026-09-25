@@ -483,6 +483,13 @@ retain ticks and expose lag, and cannot guarantee UI progress through one
 overlong synchronous tick. No FPS acceptance run was started for this audit;
 the existing simulator sessions were left untouched.
 
+The idle one-shot path now has a `PendingWorldScripts` run condition, so an
+empty queue skips the exclusive drain system's execution. Its focused
+`empty_repl_queue_does_not_schedule_its_exclusive_drain` test passed. This does
+not bound active Rhai evaluation or queue depth and has no measured FPS delta;
+it is a narrow idle-path reduction, not the UI-isolation fix. No new simulator
+or FPS profile was started for this change.
+
 ## Remaining blocker
 
 The 400 FPS acceptance target is not met. The maintained BigSpace dependency
