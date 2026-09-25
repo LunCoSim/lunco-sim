@@ -37,6 +37,18 @@ use openusd::usda;
 const DOC_ROOT_ID: &str = "lunco://__lunco_document_root__.usda";
 
 const EMPTY_USDA: &[u8] = b"#usda 1.0\n";
+const HISTORY_SNAPSHOT_PRIM: &str = "__lunco_history_snapshot__";
+
+/// A fully validated local history restore ready to author to one Sdf layer.
+/// Prepare it against the current layer data, then apply it in that layer's
+/// atomic edit so the normal USD change sink observes the exact local delta.
+#[derive(Debug)]
+pub struct SnapshotRestorePlan {
+    parent: SdfPath,
+    child_field: &'static str,
+    restored_order: Vec<String>,
+    specs: Vec<(SdfPath, sdf::SpecType, sdf::SpecData)>,
+}
 
 /// Resolver that routes every external arc (sublayers, references, payloads)
 /// to an empty stub. The document authoring path never traverses the composed
@@ -87,6 +99,388 @@ pub fn data_to_usda(data: &sdf::Data) -> Result<String> {
 /// full-source replacement.
 pub fn usda_to_data(text: &str) -> Result<sdf::Data> {
     parse_usda(text).map_err(|e| anyhow!("{e}"))
+}
+
+/// Capture one authored prim subtree as a self-contained USDA fragment.
+///
+/// The fragment contains only the selected spec subtree, remapped beneath a
+/// reserved wrapper prim. It is suitable for typed document-history payloads:
+/// unlike a layer snapshot, its size follows the edited subtree, and the
+/// standard USDA parser/writer preserves arbitrary authored Sdf fields.
+pub fn snapshot_prim_subtree(data: &dyn AbstractData, path: &SdfPath) -> Result<String> {
+    if data.spec_type(path) != Some(sdf::SpecType::Prim) {
+        return Err(anyhow!(
+            "prim snapshot target {path} is not an authored prim spec"
+        ));
+    }
+    let wrapper = SdfPath::new("/__lunco_history_snapshot__")
+        .map_err(|error| anyhow!("history wrapper path: {error}"))?;
+    let mut snapshot = history_snapshot_root()?;
+    sdf::copy_spec_with(
+        data,
+        path,
+        &mut snapshot,
+        &wrapper,
+        |_| sdf::CopyValue::Copy,
+        sdf::should_copy_children,
+    )
+    .map_err(|error| anyhow!("copy prim subtree {path} into history snapshot: {error}"))?;
+    data_to_usda(&snapshot)
+}
+
+/// Capture one authored attribute and any Sdf child specs below that property.
+pub fn snapshot_attribute_subtree(
+    data: &dyn AbstractData,
+    path: &SdfPath,
+    name: &str,
+) -> Result<String> {
+    let property = path
+        .append_property(name)
+        .map_err(|error| anyhow!("attribute snapshot path {path}.{name}: {error}"))?;
+    if data.spec_type(&property) != Some(sdf::SpecType::Attribute) {
+        return Err(anyhow!(
+            "attribute snapshot target {property} is not an authored attribute"
+        ));
+    }
+    let wrapper = SdfPath::new("/__lunco_history_snapshot__")
+        .map_err(|error| anyhow!("history wrapper path: {error}"))?;
+    let wrapper_property = wrapper
+        .append_property(name)
+        .map_err(|error| anyhow!("history wrapper attribute {name}: {error}"))?;
+    let mut snapshot = history_snapshot_root()?;
+    let mut shell = sdf::SpecData::new(sdf::SpecType::Prim);
+    shell.add("specifier", sdf::Value::Specifier(sdf::Specifier::Def));
+    shell.add("propertyChildren", sdf::Value::token_vec([name]));
+    *snapshot.create_spec(wrapper.clone(), sdf::SpecType::Prim) = shell;
+    sdf::copy_spec_with(
+        data,
+        &property,
+        &mut snapshot,
+        &wrapper_property,
+        |_| sdf::CopyValue::Copy,
+        sdf::should_copy_children,
+    )
+    .map_err(|error| anyhow!("copy attribute subtree {property} into history snapshot: {error}"))?;
+    data_to_usda(&snapshot)
+}
+
+/// Return the authored order of a prim's direct children or properties, and
+/// require the removed name to be present in that order.
+pub fn snapshot_child_order(
+    data: &dyn AbstractData,
+    parent: &SdfPath,
+    field: &str,
+    child: &str,
+) -> Result<Vec<String>> {
+    let value = data
+        .get_field(parent, field)
+        .map_err(|error| anyhow!("read {field} at {parent}: {error}"))?;
+    let order = match value.as_ref() {
+        sdf::Value::TokenVec(values) => values.iter().map(ToString::to_string).collect(),
+        sdf::Value::StringVec(values) => values.clone(),
+        other => return Err(anyhow!("{field} at {parent} has invalid value {other:?}")),
+    };
+    if !order.iter().any(|name| name == child) {
+        return Err(anyhow!("{field} at {parent} does not contain `{child}`"));
+    }
+    Ok(order)
+}
+
+/// Restore a prim subtree captured by [`snapshot_prim_subtree`]. Existing
+/// specs are rejected; unrelated current siblings keep their order and the
+/// restored name is placed relative to the nearest surviving authored sibling.
+pub fn restore_prim_subtree(
+    data: &mut dyn AbstractData,
+    path: &SdfPath,
+    snapshot_usda: &str,
+    sibling_order: &[String],
+) -> Result<()> {
+    let plan = prepare_prim_subtree_restore(data, path, snapshot_usda, sibling_order)?;
+    apply_snapshot_restore(data, plan);
+    Ok(())
+}
+
+/// Validate and prepare a prim-subtree restore without mutating the layer.
+pub fn prepare_prim_subtree_restore(
+    data: &dyn AbstractData,
+    path: &SdfPath,
+    snapshot_usda: &str,
+    sibling_order: &[String],
+) -> Result<SnapshotRestorePlan> {
+    let wrapper = SdfPath::new("/__lunco_history_snapshot__")
+        .map_err(|error| anyhow!("history wrapper path: {error}"))?;
+    if data.spec_type(path).is_some() {
+        return Err(anyhow!(
+            "cannot restore prim {path}: a target-layer spec already exists"
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("prim restore target {path} has no parent"))?;
+    let name = path
+        .name()
+        .ok_or_else(|| anyhow!("prim restore target {path} has no name"))?;
+    validate_snapshot_order(sibling_order, name, "prim")?;
+    let restored_order = merged_child_order(data, &parent, "primChildren", sibling_order, name)?;
+    let source = validate_snapshot(snapshot_usda, &wrapper, sdf::SpecType::Prim)?;
+    let specs = remapped_snapshot_specs(&source, &wrapper, path)?;
+    if specs.iter().all(|(target, _, _)| target != path) {
+        return Err(anyhow!("prim snapshot has no root spec for {path}"));
+    }
+    ensure_destinations_absent(data, &specs)?;
+    ensure_prim_parent(data, &parent, true)?;
+    Ok(SnapshotRestorePlan {
+        parent,
+        child_field: "primChildren",
+        restored_order,
+        specs,
+    })
+}
+
+/// Restore an attribute subtree captured by [`snapshot_attribute_subtree`].
+pub fn restore_attribute_subtree(
+    data: &mut dyn AbstractData,
+    path: &SdfPath,
+    name: &str,
+    snapshot_usda: &str,
+    sibling_order: &[String],
+) -> Result<()> {
+    let plan = prepare_attribute_subtree_restore(data, path, name, snapshot_usda, sibling_order)?;
+    apply_snapshot_restore(data, plan);
+    Ok(())
+}
+
+/// Validate and prepare an attribute-subtree restore without mutating the layer.
+pub fn prepare_attribute_subtree_restore(
+    data: &dyn AbstractData,
+    path: &SdfPath,
+    name: &str,
+    snapshot_usda: &str,
+    sibling_order: &[String],
+) -> Result<SnapshotRestorePlan> {
+    let wrapper = SdfPath::new("/__lunco_history_snapshot__")
+        .map_err(|error| anyhow!("history wrapper path: {error}"))?;
+    let wrapper_property = wrapper
+        .append_property(name)
+        .map_err(|error| anyhow!("history wrapper attribute {name}: {error}"))?;
+    let property = path
+        .append_property(name)
+        .map_err(|error| anyhow!("attribute restore path {path}.{name}: {error}"))?;
+    if data.spec_type(&property).is_some() {
+        return Err(anyhow!(
+            "cannot restore attribute {property}: a target-layer spec already exists"
+        ));
+    }
+    validate_snapshot_order(sibling_order, name, "attribute")?;
+    let restored_order = merged_child_order(data, path, "propertyChildren", sibling_order, name)?;
+    let source = validate_snapshot(snapshot_usda, &wrapper, sdf::SpecType::Prim)?;
+    if source.spec_type(&wrapper_property) != Some(sdf::SpecType::Attribute) {
+        return Err(anyhow!(
+            "attribute snapshot has no attribute spec for {name}"
+        ));
+    }
+    let mut specs = remapped_snapshot_specs(&source, &wrapper, path)?;
+    // The wrapper prim is scaffolding; only the property subtree is restored.
+    specs.retain(|(target, _, _)| target != path);
+    if specs.iter().all(|(target, _, _)| target != &property) {
+        return Err(anyhow!(
+            "attribute snapshot has no property spec for {property}"
+        ));
+    }
+    ensure_destinations_absent(data, &specs)?;
+    ensure_prim_parent(data, path, false)?;
+    Ok(SnapshotRestorePlan {
+        parent: path.clone(),
+        child_field: "propertyChildren",
+        restored_order,
+        specs,
+    })
+}
+
+/// Apply a validated local snapshot inside the caller's atomic Sdf layer edit.
+pub fn apply_snapshot_restore(data: &mut dyn AbstractData, mut plan: SnapshotRestorePlan) {
+    author_snapshot_specs(data, &mut plan.specs);
+    data.set_field(
+        &plan.parent,
+        plan.child_field,
+        sdf::Value::token_vec(plan.restored_order),
+    );
+}
+
+fn history_snapshot_root() -> Result<sdf::Data> {
+    let mut data = sdf::Data::new();
+    let root = SdfPath::abs_root();
+    let mut pseudo_root = sdf::SpecData::new(sdf::SpecType::PseudoRoot);
+    pseudo_root.add(
+        "primChildren",
+        sdf::Value::token_vec([HISTORY_SNAPSHOT_PRIM]),
+    );
+    *data.create_spec(root, sdf::SpecType::PseudoRoot) = pseudo_root;
+    Ok(data)
+}
+
+fn validate_snapshot(
+    snapshot_usda: &str,
+    wrapper: &SdfPath,
+    expected_type: sdf::SpecType,
+) -> Result<sdf::Data> {
+    let source = usda_to_data(snapshot_usda)
+        .map_err(|error| anyhow!("invalid history snapshot: {error}"))?;
+    if source.spec_type(wrapper) != Some(expected_type) {
+        return Err(anyhow!(
+            "history snapshot is missing wrapper spec {wrapper}"
+        ));
+    }
+    let root_order = snapshot_child_order(
+        &source,
+        &SdfPath::abs_root(),
+        "primChildren",
+        HISTORY_SNAPSHOT_PRIM,
+    )?;
+    if root_order.len() != 1 {
+        return Err(anyhow!(
+            "history snapshot must contain exactly one wrapper prim"
+        ));
+    }
+    if source
+        .spec_paths()
+        .into_iter()
+        .any(|path| path != SdfPath::abs_root() && !path.has_prefix(wrapper))
+    {
+        return Err(anyhow!("history snapshot contains specs outside {wrapper}"));
+    }
+    Ok(source)
+}
+
+fn remapped_snapshot_specs(
+    source: &dyn AbstractData,
+    wrapper: &SdfPath,
+    destination: &SdfPath,
+) -> Result<Vec<(SdfPath, sdf::SpecType, sdf::SpecData)>> {
+    let mut specs = Vec::new();
+    for source_path in source
+        .spec_paths()
+        .into_iter()
+        .filter(|path| path != &SdfPath::abs_root() && path.has_prefix(wrapper))
+    {
+        let target_path = source_path
+            .replace_prefix(wrapper, destination)
+            .ok_or_else(|| anyhow!("could not map history spec {source_path} to {destination}"))?;
+        let ty = source
+            .spec_type(&source_path)
+            .ok_or_else(|| anyhow!("history snapshot spec {source_path} is missing"))?;
+        let mut spec = sdf::SpecData::new(ty);
+        if let Some(fields) = source.list_fields(&source_path) {
+            for field in fields {
+                let value = source
+                    .get_field(&source_path, &field)
+                    .map_err(|error| {
+                        anyhow!("read history field {field} at {source_path}: {error}")
+                    })?
+                    .into_owned();
+                spec.add(field, value);
+            }
+        }
+        specs.push((target_path, ty, spec));
+    }
+    Ok(specs)
+}
+
+fn ensure_destinations_absent(
+    data: &dyn AbstractData,
+    specs: &[(SdfPath, sdf::SpecType, sdf::SpecData)],
+) -> Result<()> {
+    if let Some((path, _, _)) = specs.iter().find(|(path, _, _)| data.has_spec(path)) {
+        return Err(anyhow!(
+            "cannot restore history spec {path}: a target-layer spec already exists"
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_prim_parent(
+    data: &dyn AbstractData,
+    parent: &SdfPath,
+    allow_pseudo_root: bool,
+) -> Result<()> {
+    let actual = data.spec_type(parent);
+    if matches!(actual, Some(sdf::SpecType::Prim | sdf::SpecType::Variant))
+        || (allow_pseudo_root && actual == Some(sdf::SpecType::PseudoRoot))
+    {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "history restore parent {parent} has invalid spec type {actual:?}"
+        ))
+    }
+}
+
+fn author_snapshot_specs(
+    destination: &mut dyn AbstractData,
+    specs: &mut [(SdfPath, sdf::SpecType, sdf::SpecData)],
+) {
+    for (path, ty, spec) in specs {
+        destination.create_spec(path.clone(), *ty);
+        for (field, value) in &spec.fields {
+            destination.set_field(path, field, value.clone());
+        }
+    }
+}
+
+fn validate_snapshot_order(order: &[String], child: &str, kind: &str) -> Result<()> {
+    if order.iter().filter(|name| name.as_str() == child).count() == 1 {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "{kind} history order must contain `{child}` exactly once"
+        ))
+    }
+}
+
+fn merged_child_order(
+    data: &dyn AbstractData,
+    parent: &SdfPath,
+    field: &str,
+    saved_order: &[String],
+    restored_name: &str,
+) -> Result<Vec<String>> {
+    let mut current = match data
+        .try_field(parent, field)
+        .map_err(|error| anyhow!("read {field} at {parent}: {error}"))?
+    {
+        None => Vec::new(),
+        Some(value) => match value.as_ref() {
+            sdf::Value::TokenVec(values) => values.iter().map(ToString::to_string).collect(),
+            sdf::Value::StringVec(values) => values.clone(),
+            other => return Err(anyhow!("{field} at {parent} has invalid value {other:?}")),
+        },
+    };
+    if current.iter().any(|name| name == restored_name) {
+        return Err(anyhow!(
+            "cannot restore `{restored_name}` at {parent}: it is already listed in {field}"
+        ));
+    }
+    let position = saved_order
+        .iter()
+        .position(|name| name == restored_name)
+        .ok_or_else(|| anyhow!("saved {field} order does not contain `{restored_name}`"))?;
+    let next = saved_order[position + 1..]
+        .iter()
+        .find_map(|name| current.iter().position(|existing| existing == name));
+    let insert_at = next.unwrap_or_else(|| {
+        saved_order[..position]
+            .iter()
+            .rev()
+            .find_map(|name| {
+                current
+                    .iter()
+                    .position(|existing| existing == name)
+                    .map(|i| i + 1)
+            })
+            .unwrap_or(position.min(current.len()))
+    });
+    current.insert(insert_at, restored_name.to_owned());
+    Ok(current)
 }
 
 /// Open `data` as the root layer of a transient, writable [`Stage`]. Authoring
