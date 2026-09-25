@@ -24,7 +24,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 
-use lunco_time::WorldTime;
+use lunco_time::CelestialTime;
 
 use lunco_celestial::geo::{
     GeodeticAnchor, LocalTangentFrame, SiteAnchor, body_rotation, equatorial_frame,
@@ -256,7 +256,7 @@ pub fn orbital_pin_scene_visibility(
 /// itself and is never moved.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn place_celestial_bound_entities(
-    world_time: Res<WorldTime>,
+    celestial_time: Res<CelestialTime>,
     registry: Res<CelestialBodyRegistry>,
     frame_index: Res<ReferenceFrameIndex>,
     q_grids: Query<&Grid>,
@@ -296,7 +296,7 @@ pub fn place_celestial_bound_entities(
     if q_bound.is_empty() {
         return;
     }
-    let jd = world_time.epoch_jd;
+    let jd = celestial_time.epoch_jd;
     // Temporal cadence is owned by `cadence::tracked_needs_solve` at the
     // registration boundary. A second Local epoch gate here used to place
     // bound entities at a different cadence from the body frames.
@@ -891,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn site_scene_uses_physical_grid_separate_from_globe_presentation() {
+    fn site_scene_and_globe_lod_share_the_body_fixed_surface_grid() {
         let mut app = App::new();
         app.insert_resource(lunco_spatial::WorldGridConfig::default());
         app.add_systems(Update, attach_site_scene_to_surface_grid);
@@ -974,6 +974,7 @@ mod tests {
         assert_eq!(world.get::<ChildOf>(site).unwrap().parent(), surface_grid);
         let lod = world.get::<crate::globe_lod::GlobeLod>(body).unwrap();
         assert_eq!(lod.surface_grid, surface_grid);
+        assert!(world.get::<Grid>(lod.surface_grid).is_some());
         assert!(world.get::<Grid>(site).is_some());
         assert_eq!(world.get::<ChildOf>(rigid_body).unwrap().parent(), site);
         assert_eq!(

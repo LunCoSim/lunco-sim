@@ -58,21 +58,84 @@ const C_M_S = 299792458.0;
 
 fn on_start(me, ctx) {
     this.t = 0.0;
-    // Ephemeris and the CR3BP solve run on the world clock; the graph is built on
-    // its own cadence. A verdict on tick one measures a graph nobody has filled in.
+    // Celestial ephemeris and link geometry follow CelestialTime; the graph is
+    // built on its own cadence. A verdict on tick one measures a graph nobody
+    // has filled in.
     this.settle_s = 3.0;
     this.phase = "settle";
+    this.link_checks = [];
+    this.celestial_clock_before = ();
+    this.celestial_earth_before = ();
+    this.earth_station = -1;
+    this.earth_pose_before = ();
+    this.celestial_earth_up_delta = ();
+    this.celestial_rate_command_ok = false;
     print("[link] ── placement kinds resolve to real geometry ──────────");
 }
 
 fn on_tick(me, ctx) {
-    if this.phase == "done" { return; }
+    if this.phase == "done" || this.phase == "link_geometry" { return; }
     this.t += dt();
+    if this.phase == "celestial_motion" {
+        let clock_after = clock_snapshot();
+        if clock_after.sim_tick <= this.celestial_clock_before.sim_tick { return; }
+        let earth_after = query("BodyPosition", #{ body: 399 });
+        let earth_pose_after = query("SolarPose", #{ entity: this.earth_station });
+        let checks = this.link_checks;
+        checks.push(t_true(this.celestial_rate_command_ok,
+            "SetCelestialClock must accept the 100000x celestial rate"));
+        checks.push(t_true(clock_after.celestial_time_available == true &&
+                           clock_after.celestial_rate == 100000.0 &&
+                           clock_after.celestial_parent == "world_time",
+            "the celestial sample must remain a 100000x child of WorldTime"));
+        checks.push(t_true(clock_after.transport_rate == this.celestial_clock_before.transport_rate &&
+                           clock_after.virtual_rate == this.celestial_clock_before.virtual_rate,
+            "accelerating CelestialTime must leave physical transport unchanged"));
+
+        let world_delta = clock_after.world_sim_s - this.celestial_clock_before.world_sim_s;
+        let celestial_delta_s = (clock_after.celestial_epoch_jd -
+            this.celestial_clock_before.celestial_epoch_jd) * 86400.0;
+        checks.push(t_true(world_delta > 0.0 && world_delta < 0.1,
+            "WorldTime must advance by one ordinary physics step"));
+        checks.push(t_true(world_delta > 0.0 &&
+                           celestial_delta_s / world_delta > 99000.0 &&
+                           celestial_delta_s / world_delta < 101000.0,
+            "CelestialTime must advance from the WorldTime sample at 100000x"));
+
+        if this.celestial_earth_before != () && earth_after != () &&
+           this.celestial_earth_before.found && earth_after.found {
+            let earth_delta = vlen(vsub(earth_after.pos, this.celestial_earth_before.pos));
+            checks.push(t_true(earth_delta > 1.0,
+                "Earth ephemeris position must change from the shared CelestialTime sample"));
+        } else {
+            checks.push(t_true(false, "BodyPosition must provide Earth's celestial position"));
+        }
+
+        if this.earth_pose_before != () && earth_pose_after != () &&
+           this.earth_pose_before.found && earth_pose_after.found &&
+           this.earth_pose_before.up != () && earth_pose_after.up != () {
+            let up_delta = vlen(vsub(earth_pose_after.up, this.earth_pose_before.up));
+            this.celestial_earth_up_delta = up_delta;
+            checks.push(t_true(up_delta > 0.05,
+                "Earth's body-fixed surface frame must rotate at the accelerated CelestialTime"));
+        } else {
+            checks.push(t_true(false, "SolarPose must provide the Earth station's body-fixed up vector"));
+        }
+        this.phase = "done";
+        print("[link] celestial step: WorldTime=" + r4(world_delta) +
+              "s, CelestialTime=" + r2(celestial_delta_s) + "s");
+        if this.celestial_earth_up_delta != () {
+            print("[link] Earth body-fixed up delta=" + r4(this.celestial_earth_up_delta));
+        }
+        report_verdict(checks, "LINK", "LINK");
+        return;
+    }
     if this.t < this.settle_s { return; }
-    this.phase = "done";
+    this.phase = "link_geometry";
 
     let g = links();
     if g == () {
+        this.phase = "done";
         fail_fast("query(\"Links\") answered nothing — the connectivity provider " +
                   "is absent, so nothing below is a measurement", "LINK", "LINK");
         return;
@@ -104,7 +167,7 @@ fn on_tick(me, ctx) {
     // km off, so this list IS the range gate's output.
     let short_edges = [];
     for e in g.edges {
-        if e.a == short || e.b == short { short_edges.push(e.range_m); }
+        if same_gid(e.a, short) || same_gid(e.b, short) { short_edges.push(e.range_m); }
     }
     let short_max = 0.0;
     for r in short_edges {
@@ -139,7 +202,7 @@ fn on_tick(me, ctx) {
         if r > hi { hi = r; }
     }
 
-    verdict(#{
+    this.link_checks = verdict(#{
         n_nodes: g.nodes.len(),
         n_edges: g.edges.len(),
         n_earth: earths.len(),
@@ -155,6 +218,14 @@ fn on_tick(me, ctx) {
         short_to_earth: any_edge(g, short, earths),
         moon_r: if moon == () { () } else { moon.radius },
     });
+    this.celestial_clock_before = clock_snapshot();
+    this.celestial_earth_before = query("BodyPosition", #{ body: 399 });
+    this.earth_station = find("/LinkTest/DSS_Goldstone");
+    this.earth_pose_before = query("SolarPose", #{ entity: this.earth_station });
+    let result = cmd("SetCelestialClock", #{ scale: 100000.0 });
+    this.celestial_rate_command_ok = result != () && result.ok == true;
+    this.phase = "celestial_motion";
+    print("[link] checking Earth ephemeris and body rotation on accelerated CelestialTime");
 }
 
 /// Distance in metres from `body`'s centre to `gid`'s solar-frame position, or `()`
@@ -179,10 +250,15 @@ fn radius_from(gid, body) {
 /// checked.
 fn edge_range(g, a, b) {
     for e in g.edges {
-        if (e.a == a && e.b == b) || (e.a == b && e.b == a) { return e.range_m; }
+        if (same_gid(e.a, a) && same_gid(e.b, b)) ||
+           (same_gid(e.a, b) && same_gid(e.b, a)) {
+            return e.range_m;
+        }
     }
     ()
 }
+
+fn same_gid(a, b) { ("" + a) == ("" + b) }
 
 /// Metres as kilometres for a log line, or "(none)" — NEVER arithmetic on `()`.
 fn km(m) {
@@ -309,5 +385,5 @@ fn verdict(s) {
           km(s.short_max) + " km (reach 1000.0)  ->companion=" + s.short_to_companion +
           "  ->earth=" + s.short_to_earth);
 
-    report_verdict(f, "LINK", "LINK");
+    f
 }

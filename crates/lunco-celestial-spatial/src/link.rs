@@ -58,7 +58,7 @@ use lunco_hooks::HookValue;
 use lunco_spatial::coords::world_pose;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 use lunco_terrain_surface::{DemHeightField, SurfaceOracle};
-use lunco_time::WorldTime;
+use lunco_time::CelestialTime;
 
 use crate::pose::SolarFramePose;
 use lunco_celestial::CelestialBodyRegistry;
@@ -233,17 +233,17 @@ fn link_solve_due_at(current_jd: f64, last_jd: Option<f64>, interval_s: f64) -> 
 /// enter the large pairwise system at all.
 pub(crate) fn link_solve_due(
     config: Option<Res<LinkConfig>>,
-    world_time: Option<Res<WorldTime>>,
+    celestial_time: Option<Res<CelestialTime>>,
     state: Res<LinkSolverState>,
     nodes: Query<(), Or<(With<LinkNode>, With<lunco_celestial_spatial_core::WifiNode>)>>,
 ) -> bool {
     if nodes.iter().take(2).count() < 2 {
         return false;
     }
-    let (Some(config), Some(world_time)) = (config, world_time) else {
+    let (Some(config), Some(celestial_time)) = (config, celestial_time) else {
         return false;
     };
-    link_solve_due_at(world_time.epoch_jd, state.last_jd, config.interval_s)
+    link_solve_due_at(celestial_time.epoch_jd, state.last_jd, config.interval_s)
 }
 
 /// Reset cadence and edge history at the scene replacement boundary. Link
@@ -293,7 +293,7 @@ struct GeometryEndpoint {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_links(
     config: Option<Res<LinkConfig>>,
-    world_time: Option<Res<WorldTime>>,
+    celestial_time: Option<Res<CelestialTime>>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Option<Res<CelestialBodyRegistry>>,
     q_nodes: Query<(
@@ -321,12 +321,12 @@ pub(crate) fn update_links(
     mut commands: Commands,
     mut topology: Option<ResMut<lunco_port_core::ports::PortTopologyRevision>>,
 ) {
-    let (Some(config), Some(world_time)) = (config, world_time) else {
+    let (Some(config), Some(celestial_time)) = (config, celestial_time) else {
         return;
     };
     // `1` (or a fat-fingered `0`) means "flip immediately" — the pre-debounce behaviour.
     let debounce = config.drop_debounce.max(1);
-    let jd = world_time.epoch_jd;
+    let jd = celestial_time.epoch_jd;
     if !link_solve_due_at(jd, state.last_jd, config.interval_s) {
         return;
     }
@@ -1719,7 +1719,7 @@ mod tests {
 
     fn world_at_epoch(interval_s: f64) -> World {
         let mut world = World::new();
-        world.insert_resource(lunco_time::WorldTime {
+        world.insert_resource(lunco_time::CelestialTime {
             epoch_jd: 2_451_545.0,
             ..Default::default()
         });
@@ -2468,7 +2468,7 @@ mod tests {
         );
 
         // Advance the clock past the interval → it recomputes.
-        world.resource_mut::<WorldTime>().epoch_jd += 2.0 / 86_400.0;
+        world.resource_mut::<CelestialTime>().epoch_jd += 2.0 / 86_400.0;
         world.run_system(sys).unwrap();
         assert!(
             !world.get::<LinkState>(a).unwrap().peers.is_empty(),

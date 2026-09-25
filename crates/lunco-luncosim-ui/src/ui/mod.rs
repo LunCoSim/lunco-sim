@@ -19,6 +19,7 @@ use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
 use lunco_workbench_core::{MenuCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
 
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
+mod celestial_time;
 mod code_panel;
 /// Generic consent window for missing Twin datasets.
 mod dataset_provisioning;
@@ -366,6 +367,11 @@ impl Plugin for LunCoSimUiPlugin {
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (
+                    celestial_time::draw_celestial_time
+                        .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
+                        .run_if(not(recording_offline))
+                        .run_if(in_view_perspective)
+                        .run_if(overlays::sky_clock_visible),
                     draw_runtime_ui_dropdowns
                         .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
                         .run_if(not(recording_offline)),
@@ -426,6 +432,12 @@ fn recording_offline(
     recording: Option<Res<lunco_capture::screenshot::OfflineRecordingState>>,
 ) -> bool {
     recording.is_some_and(|recording| recording.active)
+}
+
+fn in_view_perspective(layout: Option<Res<WorkbenchSnapshot>>) -> bool {
+    layout.is_some_and(|layout| {
+        layout.active_perspective() == Some(lunco_workbench_core::PerspectiveId("sandbox_view"))
+    })
 }
 
 fn on_runtime_ui_action(

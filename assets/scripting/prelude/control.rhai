@@ -144,11 +144,16 @@ fn photo()                    { cmd("CaptureFromCamera") }
 // World-time transport — pause/resume the WHOLE simulation (tick + physics) and
 // set its speed. The live transport supports 0.1×–64×, and every listed rate
 // advances causal fixed-step physics. `pause()` freezes that causal world;
-// `set_rate(4.0)` = 4× realtime. Celestial placement, sunlight, and physical
-// models use this same simulation time.
+// `set_rate(4.0)` = 4× realtime. CelestialTime has its own scale within the
+// shared clock tree; it does not change the fixed physics or Modelica cadence.
 fn pause()                     { cmd("SetTimeTransport", #{ playing: false }) }
 fn play()                      { cmd("SetTimeTransport", #{ playing: true }) }
 fn set_rate(r)                 { cmd("SetTimeTransport", #{ rate: r }) }
+
+// CelestialTime is a scaled child of WorldTime. All celestial consumers use
+// this sample while causal models retain their ordinary fixed-step cadence.
+fn celestial_rate(r)           { cmd("SetCelestialClock", #{ scale: r }) }
+fn celestial_seek(epoch_jd)    { cmd("SetCelestialClock", #{ epoch_jd: epoch_jd }) }
 
 fn set_mission_epoch(epoch_jd) {
     cmd("SetMissionEpoch", #{ epoch_jd: epoch_jd })

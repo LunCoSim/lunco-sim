@@ -46,9 +46,9 @@
 //!         └── Other planets (simple entities)
 //! ```
 //!
-//! Streamed globe tiles share each body's physical surface Grid with the site
-//! scene hierarchy. Render-only marker copies keep a separate presentation
-//! branch, but follow the same completed `WorldTime` epoch as physical bodies.
+//! Streamed globe tiles, physical terrain, and surface entities share the same
+//! body-fixed surface grid. One CelestialTime sample moves and rotates the
+//! complete body hierarchy, keeping rendering and physics on the same epoch.
 //!
 //! ## Why an inertial anchor
 //!
@@ -197,27 +197,6 @@ pub struct EarthSurfaceRoot;
 /// Marker for Moon's surface sub-grid. See [`EarthSurfaceRoot`].
 #[derive(Component)]
 pub struct MoonSurfaceRoot;
-
-/// A render-only copy of a celestial frame, updated from [`WorldTime`].
-///
-/// The physical body hierarchy remains authoritative for site terrain, physics,
-/// and the streamed globe tiles. This copy serves render-only body-fixed marker
-/// geometry and follows the same completed physical epoch without camera offsets
-/// or a separate celestial clock. This marker deliberately is *not* a
-/// `ReferenceFrame`, so the causal ephemeris and body-rotation systems cannot
-/// accidentally write it.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct CelestialPresentationGrid {
-    /// NAIF id whose position is relative to this grid's parent.
-    pub body: i32,
-    /// Whether this frame carries the body's IAU rotation.
-    ///
-    /// A body-fixed globe and its co-located inertial camera anchor have the
-    /// same translated origin but different orientation. Keeping that fact on
-    /// the frame contract prevents orbit presentation from accidentally
-    /// inheriting surface rotation.
-    pub body_fixed: bool,
-}
 
 /// Sets up the complete big_space entity hierarchy.
 ///
@@ -573,61 +552,8 @@ pub fn setup_big_space_hierarchy(
         ))
         .id();
 
-    // Render-only marker frames follow the same WorldTime sample as the
-    // physical hierarchy. They preserve the complete ephemeris ancestry: an
-    // Earth child below the EMB must share the EMB epoch used by its parent.
-    let emb_presentation_grid = commands
-        .spawn((
-            CelestialDerived,
-            CelestialPresentationGrid {
-                body: lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER,
-                body_fixed: false,
-            },
-            make_grid(),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-            Visibility::default(),
-            InheritedVisibility::default(),
-            Name::new("EMB Globe Presentation Grid"),
-            ChildOf(solar_grid),
-        ))
-        .id();
-    let _earth_presentation_inertial_grid = commands
-        .spawn((
-            CelestialDerived,
-            CelestialPresentationGrid {
-                body: lunco_celestial::ephemeris_id::EARTH,
-                body_fixed: false,
-            },
-            make_grid(),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-            Visibility::default(),
-            InheritedVisibility::default(),
-            Name::new("Earth Globe Presentation Inertial Anchor"),
-            ChildOf(emb_presentation_grid),
-        ))
-        .id();
-    commands.spawn((
-        CelestialDerived,
-        CelestialPresentationGrid {
-            body: lunco_celestial::ephemeris_id::EARTH,
-            body_fixed: true,
-        },
-        make_grid(),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Earth Globe Presentation Grid"),
-        ChildOf(emb_presentation_grid),
-    ));
-    // Earth terrain: camera-driven cube-sphere LOD. Globe tiles share the
-    // physical Earth Surface Grid with site terrain and use the same `WorldTime`
-    // pose as physics.
+    // Earth terrain: camera-driven cube-sphere LOD (replaces the old fixed 24-tile
+    // shell). `update_globe_lod` streams tiles onto the physical Earth Surface Grid.
     // The authored `UsdShade` look supplies the base globe appearance. An
     // installed body-imagery dataset supplies its albedo map unless the scene
     // authors one, and `adopt_authored_body_look` carries both onto the tiles.
@@ -721,38 +647,6 @@ pub fn setup_big_space_hierarchy(
         ))
         .id();
 
-    commands.spawn((
-        CelestialDerived,
-        CelestialPresentationGrid {
-            body: lunco_celestial::ephemeris_id::MOON,
-            body_fixed: true,
-        },
-        make_grid(),
-        CellCoord::default(),
-        Transform::default(),
-        GlobalTransform::default(),
-        Visibility::default(),
-        InheritedVisibility::default(),
-        Name::new("Moon Globe Presentation Grid"),
-        ChildOf(emb_presentation_grid),
-    ));
-    let _moon_presentation_inertial_grid = commands
-        .spawn((
-            CelestialDerived,
-            CelestialPresentationGrid {
-                body: lunco_celestial::ephemeris_id::MOON,
-                body_fixed: false,
-            },
-            make_grid(),
-            CellCoord::default(),
-            Transform::default(),
-            GlobalTransform::default(),
-            Visibility::default(),
-            InheritedVisibility::default(),
-            Name::new("Moon Globe Presentation Inertial Anchor"),
-            ChildOf(emb_presentation_grid),
-        ))
-        .id();
     // Moon terrain: camera-driven cube-sphere LOD (replaces the fixed 24-tile shell).
     commands.entity(moon_body).try_insert((
         crate::globe_lod::GlobeLod {

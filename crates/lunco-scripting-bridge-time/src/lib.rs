@@ -9,7 +9,8 @@ use bevy::prelude::*;
 use lunco_physics::PhysicsTime;
 use lunco_scripting_bridge_core::{ValueBuilder, execution_context, with_world};
 use lunco_time::{
-    Clocks, MissionClock, ResolvedDomains, SimulationPresentationTime, TimeTransport, WorldTime,
+    CelestialTime, ClockRoot, Clocks, MissionClock, ResolvedDomains, SimulationPresentationTime,
+    TimeDomain, TimeTransport, WorldTime,
 };
 
 /// `sim_tick()` — current admitted FixedUpdate tick. The caller must be inside
@@ -291,7 +292,23 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             .get_resource::<TimeTransport>()
             .copied()
             .unwrap_or_default();
+        let celestial_time = world.get_resource::<CelestialTime>().copied();
         let clocks = world.get_resource::<Clocks>().copied();
+        let celestial_domain = clocks.and_then(|clocks| {
+            world
+                .get::<TimeDomain>(clocks.celestial)
+                .copied()
+                .map(|domain| (clocks, domain))
+        });
+        let celestial_parent = celestial_domain.map(|(clocks, domain)| match domain.parent {
+            Some(parent) if parent == clocks.sim => "world_time",
+            Some(_) => "other",
+            None => match world.get::<ClockRoot>(clocks.celestial) {
+                Some(ClockRoot::Tick) => "tick_root",
+                Some(ClockRoot::Wall) => "real",
+                None => "unknown",
+            },
+        });
         let barrier = world
             .get_resource::<lunco_core_runtime::SimulationBarrier>()
             .copied()
@@ -370,6 +387,26 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             ("world_met_s".to_owned(), b.float(world_time.met_secs)),
             ("epoch_jd".to_owned(), b.float(world_time.epoch_jd)),
             (
+                "celestial_time_available".to_owned(),
+                b.bool(celestial_time.is_some()),
+            ),
+            (
+                "celestial_epoch_jd".to_owned(),
+                celestial_time.map_or_else(|| b.unit(), |time| b.float(time.epoch_jd)),
+            ),
+            (
+                "celestial_delta_s".to_owned(),
+                celestial_time.map_or_else(|| b.unit(), |time| b.float(time.delta_secs)),
+            ),
+            (
+                "celestial_rate".to_owned(),
+                celestial_domain.map_or_else(|| b.unit(), |(_, domain)| b.float(domain.scale)),
+            ),
+            (
+                "celestial_parent".to_owned(),
+                celestial_parent.map_or_else(|| b.unit(), |parent| b.string(parent)),
+            ),
+            (
                 "presentation_time_available".to_owned(),
                 b.bool(presentation_time.is_some()),
             ),
@@ -431,6 +468,7 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                 ("real", clocks.real),
                 ("sim", clocks.sim),
                 ("interaction", clocks.interaction),
+                ("celestial", clocks.celestial),
             ] {
                 if let Some(sample) = resolved.sample(entity) {
                     domains.push(b.map(vec![

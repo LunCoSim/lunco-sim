@@ -351,6 +351,10 @@ fn route_document(me) {
     result.doc_id
 }
 
+fn same_document_id(a, b) {
+    a != () && b != () && ("" + a) == ("" + b)
+}
+
 fn current_point(me, state) {
     let info = current_point_info(me, state);
     info.path
@@ -818,7 +822,7 @@ fn bind_projected_route(me, state, expected_doc) {
     let route = route_path(me);
     let program = program_path(me);
     let doc = route_document(me);
-    if route == () || program == () || doc == () || doc != expected_doc {
+    if route == () || program == () || doc == () || !same_document_id(doc, expected_doc) {
         return #{ ok: false, state: state };
     }
     state.route_path = route;
@@ -850,7 +854,7 @@ fn on_event(me, evt, ctx) {
                 generation: route_revision_for(this),
             });
         }
-        if projected_doc.to_string() != this.route_document.to_string() { return; }
+        if !same_document_id(projected_doc, this.route_document) { return; }
         // Projection is the authoritative invalidation boundary for route
         // presentation. Compare its composed point key here, after the stage
         // is current, rather than polling topology from the control task. The

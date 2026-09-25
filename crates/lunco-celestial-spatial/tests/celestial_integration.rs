@@ -3,11 +3,11 @@ use big_space::plugin::BigSpaceMinimalPlugins;
 use big_space::prelude::*;
 use lunco_celestial::{EphemerisProvider, EphemerisResource};
 use lunco_celestial_spatial::CelestialPlugin;
-use lunco_time::{MissionClock, TimeTransport, TransportMode, WorldTime};
+use lunco_time::{CelestialTime, TimeTransport, TransportMode, WorldTime};
 use std::sync::Arc;
 
 const METRES_PER_AU: f64 = 149_597_870_700.0;
-const TEST_EPOCH_JD: f64 = 2_451_545.0;
+const CELESTIAL_TEST_EPOCH_JD: f64 = 2_451_545.0;
 
 /// Test ephemeris that returns an **epoch-dependent** position, so advancing the
 /// clock provably moves a body. The test installs a real provider explicitly;
@@ -32,15 +32,15 @@ impl EphemerisProvider for StubEphemeris {
     }
 }
 
-/// Deterministic Earth-Moon ephemeris with a visible epoch-dependent pose.
+/// A deterministic Earth-Moon ephemeris for the shared celestial-time path.
 /// The Earth and Moon positions are relative to their declared EMB parent, as
 /// required by `EphemerisProvider::position`.
 #[derive(Debug)]
-struct EarthMoonEphemeris;
+struct CelestialTestEphemeris;
 
-impl EphemerisProvider for EarthMoonEphemeris {
+impl EphemerisProvider for CelestialTestEphemeris {
     fn position(&self, body_id: i32, epoch_jd: f64) -> Option<lunco_celestial::frames::EclipticAu> {
-        let phase = std::f64::consts::TAU * (epoch_jd - TEST_EPOCH_JD) / 27.321_661;
+        let phase = std::f64::consts::TAU * (epoch_jd - CELESTIAL_TEST_EPOCH_JD) / 27.321_661;
         let (radius_m, direction) = match body_id {
             lunco_celestial::ephemeris_id::SUN
             | lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER => {
@@ -75,6 +75,14 @@ impl EphemerisProvider for EarthMoonEphemeris {
     }
 }
 
+#[derive(Resource)]
+struct CelestialEpochOverride(f64);
+
+fn force_celestial_epoch(epoch: Res<CelestialEpochOverride>, mut celestial: ResMut<CelestialTime>) {
+    celestial.epoch_jd = epoch.0;
+    celestial.delta_secs = 0.0;
+}
+
 /// Build the headless celestial app the integration tests share. These tests
 /// exercise the ECS/spatial mechanisms without loading visual assets or a GPU.
 ///
@@ -104,35 +112,45 @@ fn celestial_test_app() -> App {
     app
 }
 
-/// WorldTime must update the Earth's same-epoch pose and spin, then BigSpace
-/// must propagate those local changes to its GlobalTransform.
+/// CelestialTime must update Earth's one authoritative BigSpace body frame and
+/// IAU spin, then propagation must publish those changes to GlobalTransform.
 #[test]
-fn world_time_advances_earth_pose_through_big_space() {
+fn celestial_time_advances_earth_body_frame_through_big_space() {
     let mut app = celestial_test_app();
     app.insert_resource(EphemerisResource {
-        provider: Arc::new(EarthMoonEphemeris),
+        provider: Arc::new(CelestialTestEphemeris),
     });
+    app.insert_resource(CelestialEpochOverride(CELESTIAL_TEST_EPOCH_JD));
     app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Paused;
-    app.insert_resource(MissionClock::anchored(TEST_EPOCH_JD, 0));
+    app.add_systems(
+        PreUpdate,
+        force_celestial_epoch
+            .after(lunco_time::CelestialTimeSet)
+            .before(lunco_celestial_spatial::CelestialEpochSet),
+    );
 
     // Let clock publication and deferred celestial hierarchy creation settle.
     app.update();
     app.update();
     let world_epoch_before = app.world().resource::<WorldTime>().epoch_jd;
-    assert_eq!(world_epoch_before, TEST_EPOCH_JD);
+    let celestial_epoch_before = app.world().resource::<CelestialTime>().epoch_jd;
+    assert_eq!(celestial_epoch_before, CELESTIAL_TEST_EPOCH_JD);
 
     let earth_grid = {
         let world = app.world_mut();
-        let mut query =
-            world.query::<(Entity, &lunco_celestial_spatial::CelestialPresentationGrid)>();
+        let mut query = world.query::<(Entity, &lunco_celestial::ReferenceFrame)>();
         let matches: Vec<Entity> = query
             .iter(world)
             .filter_map(|(entity, frame)| {
-                (frame.body == lunco_celestial::ephemeris_id::EARTH && frame.body_fixed)
-                    .then_some(entity)
+                matches!(
+                    frame,
+                    lunco_celestial::ReferenceFrame::BodyFixed { body }
+                        if *body == lunco_celestial::ephemeris_id::EARTH
+                )
+                .then_some(entity)
             })
             .collect();
-        assert_eq!(matches.len(), 1, "one rotating Earth presentation grid");
+        assert_eq!(matches.len(), 1, "one rotating Earth body grid");
         matches[0]
     };
     let earth_pose = |app: &mut App| {
@@ -155,18 +173,20 @@ fn world_time_advances_earth_pose_through_big_space() {
     let (cell_before, transform_before, global_before, local_position_before) =
         earth_pose(&mut app);
 
-    app.insert_resource(MissionClock::anchored(TEST_EPOCH_JD + 0.25, 0));
-    // WorldTime publishes the new epoch in PostUpdate. The next frame's
-    // celestial solve consumes it, and BigSpace then propagates that pose.
-    app.update();
+    app.world_mut().resource_mut::<CelestialEpochOverride>().0 += 0.25;
     app.update();
 
-    let world_epoch_after = app.world().resource::<WorldTime>().epoch_jd;
-    assert_eq!(world_epoch_after, TEST_EPOCH_JD + 0.25);
+    let celestial_epoch_after = app.world().resource::<CelestialTime>().epoch_jd;
+    assert_eq!(celestial_epoch_after, CELESTIAL_TEST_EPOCH_JD + 0.25);
+    assert_eq!(
+        app.world().resource::<WorldTime>().epoch_jd,
+        world_epoch_before,
+        "scaling celestial time must leave WorldTime paused"
+    );
     let (cell_after, transform_after, global_after, local_position_after) = earth_pose(&mut app);
     assert!(
         cell_after != cell_before || transform_after.translation != transform_before.translation,
-        "the Earth ephemeris pose must advance on WorldTime"
+        "the authoritative Earth ephemeris pose must advance on CelestialTime"
     );
     assert!(
         (local_position_after - local_position_before).length() > 100_000.0,
@@ -178,18 +198,18 @@ fn world_time_advances_earth_pose_through_big_space() {
             .rotation
             .angle_between(transform_before.rotation)
             > 1.0,
-        "Earth must rotate visibly over 0.25 physical day"
+        "Earth must rotate visibly over 0.25 celestial day"
     );
     assert!(
         global_after
             .rotation()
             .angle_between(global_before.rotation())
             > 1.0,
-        "BigSpace must propagate Earth's physical-time rotation into GlobalTransform"
+        "BigSpace must propagate Earth's celestial-time rotation into GlobalTransform"
     );
     assert!(
         (global_after.translation() - global_before.translation()).length() > 100_000.0,
-        "BigSpace must propagate Earth's physical-time position into GlobalTransform"
+        "BigSpace must propagate Earth's celestial-time position into GlobalTransform"
     );
 
     let earth = app
@@ -198,10 +218,10 @@ fn world_time_advances_earth_pose_through_big_space() {
         .get(lunco_celestial::ephemeris_id::EARTH)
         .expect("Earth rotation model");
     let expected_rotation =
-        lunco_celestial::geo::body_rotation(earth, TEST_EPOCH_JD + 0.25).as_quat();
+        lunco_celestial::geo::body_rotation(earth, CELESTIAL_TEST_EPOCH_JD + 0.25).as_quat();
     assert!(
         transform_after.rotation.dot(expected_rotation).abs() > 1.0 - 1.0e-6,
-        "the rendered globe must use the authoritative IAU body rotation: \
+        "the Earth body frame must use the authoritative IAU body rotation: \
          actual={:?}, expected={:?}, delta={}",
         transform_after.rotation,
         expected_rotation,
@@ -470,9 +490,8 @@ fn observer_camera_hangs_in_a_star_fixed_frame() {
     app.update();
     let earth_rot_before = earth_rot_of(&mut app);
 
-    // Advance a third of a sidereal day — a ~119° spin. MissionClock publishes
-    // the new WorldTime in PostUpdate, so the causal body-rotation consumer
-    // sees that sample on the following PreUpdate.
+    // Advance a third of a sidereal day — a ~119° spin. The child CelestialTime
+    // resolves from the new WorldTime epoch on the next frame.
     {
         let mut mission = app.world_mut().resource_mut::<lunco_time::MissionClock>();
         mission.anchor.epoch0_jd += 0.33;
@@ -624,7 +643,7 @@ fn rendered_and_analytical_orbit_use_the_same_typed_frame_transform() {
         app.update();
     }
 
-    let jd = app.world().resource::<WorldTime>().epoch_jd;
+    let jd = app.world().resource::<CelestialTime>().epoch_jd;
     let registry = app
         .world()
         .resource::<lunco_celestial::CelestialBodyRegistry>();
@@ -750,7 +769,7 @@ fn test_celestial_startup_and_movement() {
     app.update();
     app.update();
 
-    let epoch_before = app.world().resource::<WorldTime>().epoch_jd;
+    let epoch_before = app.world().resource::<CelestialTime>().epoch_jd;
 
     // 1. Verify Sun and Earth exist.
     //
@@ -763,9 +782,8 @@ fn test_celestial_startup_and_movement() {
     let earth = query.iter(app.world()).next().expect("No EarthRoot found");
     let earth_pose_1 = (*earth.1, *earth.2);
 
-    // 2. Advance the clock by 10 days. `WorldTime.epoch_jd` is published after
-    //    the fixed loop; celestial consumers process that completed sample on
-    //    the following frame.
+    // 2. Advance the world root by 10 days. CelestialTime resolves as its child
+    //    and the body hierarchy consumes that shared epoch.
     {
         let mut mission = app.world_mut().resource_mut::<lunco_time::MissionClock>();
         mission.anchor.epoch0_jd += 10.0;
@@ -775,8 +793,8 @@ fn test_celestial_startup_and_movement() {
     app.update();
     app.update();
 
-    // Sanity: the seek propagated through the spine to the derived epoch.
-    let epoch_after = app.world().resource::<WorldTime>().epoch_jd;
+    // Sanity: the seek propagated through WorldTime into the celestial child.
+    let epoch_after = app.world().resource::<CelestialTime>().epoch_jd;
     assert!(
         (epoch_after - (epoch_before + 10.0)).abs() < 1e-3,
         "derived epoch should track the MissionClock re-anchor (+10 days)"
@@ -984,7 +1002,7 @@ fn descendant_link_endpoint_uses_nearest_geodetic_anchor() {
         provider: Arc::new(StubEphemeris),
     });
     app.insert_resource(lunco_celestial::registry::CelestialBodyRegistry::default_system());
-    app.insert_resource(WorldTime {
+    app.insert_resource(CelestialTime {
         epoch_jd,
         ..Default::default()
     });

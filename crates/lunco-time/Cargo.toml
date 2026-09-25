@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-hooks = { path = "../lunco-hooks" }

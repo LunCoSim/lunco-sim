@@ -92,13 +92,19 @@ between completed physical ticks and holds while transport is paused. Do not
 introduce a mission-specific trajectory component or independent clock for
 motion already represented by USD animation.
 
-Celestial body ephemerides are not ordinary USD animation: the physical frame
-tree and semantic solar direction read `WorldTime`. Bevy projects that
-direction into the scene `DirectionalLight`; procedural sky disks read the
-finalized light direction in camera space. The celestial cadence captures the
-frame-start `WorldTime` sample and commits it after consumers run, because the
-new fixed tick is published in `PostUpdate`. Do not add an astronomical Sun
-position or a second celestial clock to the render path.
+Celestial body ephemerides are not ordinary USD animation: body frames,
+rotation, the semantic SunState, shadows, and the sky readout share one
+`lunco_time::CelestialTime` sample. It is a child of `WorldTime` and can be
+rate-scaled up to 100,000× without changing Avian's fixed physics cadence.
+Modelica reads celestial-derived environment inputs at its ordinary
+communication points.
+From a lunar surface, Earth stays near one sky position because the Moon is
+tidally locked; expect libration, while Earth's single body-fixed grid
+continues to rotate for the day/night cycle. At 100,000×, a lunar month takes
+about 24 seconds. Test both the parent-relative `CellCoord`/`Transform` and the
+BigSpace-propagated `GlobalTransform`; local transform checks alone do not
+prove a rendered pose reached its consumer. The celestial cadence commits the
+`CelestialTime` sample it gated, and advances body position and spin together.
 
 For the local kinematic avatar, use the existing Avian `MoveAndSlide` query in
 `ActivePhysicsFrame`: convert the source Grid pose, displacement, and up vector
@@ -172,8 +178,9 @@ runtime-only waypoints attach the same `UsdBillboard` data plus the generic
 `BillboardIndex` fact to the shared marker root. Keep both paths on this one
 renderer; do not overwrite `Name` or add a waypoint-specific overlay.
 
-For physics and co-simulation, keep `SunState` on `WorldTime`. The render light
-projects that semantic source; do not create a separate render-time sun source.
+For physics and co-simulation, derive `SunState` from `CelestialTime`. The
+render light and per-probe `LocalSolar` bridge project that semantic source;
+do not create a separate render-time sun source or local solar clock.
 Publish `SunRenderState` from the finalized scene-sun `GlobalTransform` after
 `BigSpaceSystems::PropagateLowPrecision`. Any conversion of that direction
 through a terrain `GlobalTransform` belongs after that phase in `PostUpdate`:

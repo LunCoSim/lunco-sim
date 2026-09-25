@@ -17,7 +17,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 
-use lunco_time::WorldTime;
+use lunco_time::CelestialTime;
 
 use lunco_celestial::CelestialBodyRegistry;
 use lunco_celestial::coords::ecliptic_to_bevy;
@@ -188,10 +188,10 @@ fn placement_offset(
 }
 
 /// Refresh [`SolarFramePose`] for every tracked entity. Headless-safe; a no-op
-/// until `WorldTime` + ephemeris + registry exist.
+/// until `CelestialTime` + ephemeris + registry exist.
 #[allow(clippy::too_many_arguments)]
 pub fn update_solar_poses(
-    world_time: Option<Res<WorldTime>>,
+    celestial_time: Option<Res<CelestialTime>>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Option<Res<CelestialBodyRegistry>>,
     q_tracked: Query<
@@ -218,11 +218,12 @@ pub fn update_solar_poses(
     mut q_pose: Query<&mut SolarFramePose>,
     mut commands: Commands,
 ) {
-    let (Some(world_time), Some(ephemeris), Some(registry)) = (world_time, ephemeris, registry)
+    let (Some(celestial_time), Some(ephemeris), Some(registry)) =
+        (celestial_time, ephemeris, registry)
     else {
         return;
     };
-    let jd = world_time.epoch_jd;
+    let jd = celestial_time.epoch_jd;
     let body_of = |naif: i32| registry.bodies.iter().find(|b| b.ephemeris_id == naif);
 
     // `jd` is fixed for this whole solve and only a handful of distinct bodies

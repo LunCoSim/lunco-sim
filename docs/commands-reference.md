@@ -1464,6 +1464,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  This command restores the standing time shape across scene reloads (doc 19):
 
+ * **celestial** → WorldTime child at identity rate and zero offset;
  * **interaction** → wall-rooted identity (its default);
  * **animation preview** → playhead 0, playing, 1×;
  * **transport** → Playing at 1×, except for an explicit pause requested while
@@ -1488,6 +1489,26 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `epoch_jd` | `f64` |  Absolute epoch, Julian Date (TDB). |
+
+#### `SetCelestialClock`
+
+Rate-scale or seek the one celestial clock, which is always an affine child of
+`WorldTime`. A rate of `100000` advances celestial ephemerides, body rotation,
+lighting, shadows, geometry queries, and environment inputs at 100,000× while
+physics and Modelica keep their ordinary fixed-step cadence. Modelica reads
+those celestial-derived inputs at its normal communication points. The
+command cannot re-parent the clock. Rates above 100,000×, non-finite values,
+conflicting `offset`/`epoch_jd` fields, and results outside the finite epoch
+range are rejected with a terminal `failed` command result and a concise
+warning; the clock state remains unchanged.
+
+- *defined in:* `crates/lunco-time/src/domain.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `scale` | `Option < f64 >` | Rate relative to `WorldTime`, bounded to ±100,000×. |
+| `offset` | `Option < f64 >` | Affine offset in seconds. Do not combine with `epoch_jd`. |
+| `epoch_jd` | `Option < f64 >` | Absolute date (Julian Date, TDB); seeks without changing the parent. |
 
 #### `SetSimulationExecutionMode`
 

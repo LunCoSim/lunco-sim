@@ -32,9 +32,13 @@ WorldRoot
     │   └── spacecraft / inertial trajectories
     └── body-fixed grid
         └── surface grid
-            ├── streamed globe LOD tiles
-            └── site/scene Grid
-                └── authored terrain, rovers, surface camera, trajectories
+            └── terrain, globe tiles, rovers, surface camera, trajectories
+```
+
+Each body has one body-fixed grid that owns its globe tiles, terrain, vehicles,
+physics, and surface cameras. `CelestialTime`, the affine child of `WorldTime`,
+drives the body's position and axial rotation on this shared grid. Globe
+imagery does not have a parallel presentation hierarchy or time sample.
 ```
 
 The body-fixed grid is the object that rotates. The body entity itself stays
@@ -98,10 +102,9 @@ The active surface physics partition is explicitly bound through
 `ActivePhysicsFrame`; the persistent shell does not select it implicitly. Avian receives f64 poses through
 `BigSpacePhysicsBridgePlugin`; celestial parent motion does not become rover
 motion. Terrain colliders and rover roots must share the active body-fixed
-surface hierarchy. Streamed globe tiles and authored site terrain use the same
-body-fixed surface grid; the site terrain footprint is clipped from the globe
-through the source-backed `GlobeHandoff`. Do not use a second render grid or
-per-frame offset to hide a surface seam.
+surface grid. A streamed globe tile is attached once to the globe presentation
+surface, while authored site terrain is attached once to the physical surface
+grid. Neither path is repaired by a per-frame offset.
 
 ## Extension rule
 

@@ -8,65 +8,14 @@ use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::OrbitalViewPin;
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_spatial::coords::world_position_seeded;
-use lunco_time::WorldTime;
-
-use crate::big_space_setup::CelestialPresentationGrid;
-
-pub fn presentation_celestial_frame_system(
-    world: Res<WorldTime>,
-    ephemeris: Option<Res<EphemerisResource>>,
-    registry: Res<CelestialBodyRegistry>,
-    mut presentation: Query<(
-        &CelestialPresentationGrid,
-        &mut CellCoord,
-        &mut Transform,
-        &ChildOf,
-    )>,
-    q_grids: Query<&Grid>,
-) {
-    let Some(ephemeris) = ephemeris else { return };
-
-    for (frame, mut cell, mut tf, child_of) in &mut presentation {
-        let Some(rel_pos_au) = ephemeris.provider.position(frame.body, world.epoch_jd) else {
-            // The causal branch follows the same data contract: no ephemeris
-            // means no new pose. Never substitute the parent's origin.
-            continue;
-        };
-        let Ok(parent_grid) = q_grids.get(child_of.parent()) else {
-            error_once!(
-                "[celestial] presentation frame {} is not directly parented to a Grid",
-                frame.body
-            );
-            continue;
-        };
-
-        let pos_bevy_m = ecliptic_to_bevy(rel_pos_au).raw();
-        let (new_cell, new_translation) = parent_grid.translation_to_grid(pos_bevy_m);
-        if *cell != new_cell {
-            *cell = new_cell;
-        }
-        if tf.translation != new_translation {
-            tf.translation = new_translation;
-        }
-
-        let Some(desc) = registry.get(frame.body) else {
-            continue;
-        };
-        if frame.body_fixed && desc.spins() {
-            let next = lunco_celestial::geo::body_rotation(desc, world.epoch_jd).as_quat();
-            if tf.rotation != next {
-                tf.rotation = next;
-            }
-        }
-    }
-}
+use lunco_time::CelestialTime;
 
 /// Update body and frame positions based on ephemeris data.
 /// The caller applies the shared celestial solve gate. Translation and body
 /// rotation are committed in the same gated chain so no descendant can observe
 /// a half-advanced celestial frame.
 pub fn ephemeris_update_system(
-    world: Res<WorldTime>,
+    celestial_time: Res<CelestialTime>,
     ephemeris: Option<Res<EphemerisResource>>,
     mut q_frames: Query<(&mut CellCoord, &mut Transform, &ReferenceFrame, &ChildOf)>,
     q_grids: Query<&Grid>,
@@ -86,7 +35,10 @@ pub fn ephemeris_update_system(
 
         // EphemerisProvider::position returns position relative to its parent
         // in the body registry hierarchy.
-        let Some(rel_pos_au) = ephemeris.provider.position(ephemeris_id, world.epoch_jd) else {
+        let Some(rel_pos_au) = ephemeris
+            .provider
+            .position(ephemeris_id, celestial_time.epoch_jd)
+        else {
             continue;
         };
         let pos_bevy_m = ecliptic_to_bevy(rel_pos_au).raw();
@@ -118,7 +70,7 @@ pub fn ephemeris_update_system(
 /// in that grid, in high precision."
 /// We rotate the Grid so tiles (and future rovers) automatically inherit rotation.
 pub fn body_rotation_system(
-    world: Res<WorldTime>,
+    celestial_time: Res<CelestialTime>,
     registry: Res<CelestialBodyRegistry>,
     mut q_grids: Query<(&mut Transform, &ReferenceFrame)>,
 ) {
@@ -128,7 +80,8 @@ pub fn body_rotation_system(
                 if desc.spins() {
                     // Shared with the geodesy math (`geo::body_rotation`) so
                     // rendered grids and comms/anchor positions cannot diverge.
-                    let next = lunco_celestial::geo::body_rotation(desc, world.epoch_jd).as_quat();
+                    let next = lunco_celestial::geo::body_rotation(desc, celestial_time.epoch_jd)
+                        .as_quat();
                     // Guarded write: an unconditional `tf.rotation = …` dirties the
                     // Transform every frame even when the value is unchanged (paused
                     // clock), re-running propagation and re-rounding the f32 compose
@@ -183,8 +136,8 @@ pub fn sun_emit_direction(
     (to_sun.is_finite() && to_sun.length_squared() > 0.0).then(|| -to_sun.normalize())
 }
 
-/// Point the scene's primary `DirectionalLight` along the **causal ephemeris**
-/// Sun direction at the current world epoch (architecture doc 19 — T2;
+/// Point the scene's primary `DirectionalLight` along the celestial-time
+/// Sun direction at the current shared epoch (architecture doc 19 — T2;
 /// replaces the old hardcoded `Vec3::NEG_Z`).
 ///
 /// The Sun sits at the heliocentre, so the Moon→Sun direction is just
@@ -195,14 +148,12 @@ pub fn sun_emit_direction(
 /// by excluding Earthshine and scoped preview lights; ambiguity is an authored
 /// contract error, never a brightness-based choice.
 ///
-/// This is the physical-surface lighting provider. It deliberately reads
-/// [`WorldTime`], not the interpolated render sample: physics and surface
-/// lighting remain at the causal tick while render-only celestial poses are
-/// interpolated for display. Without an explicit ephemeris provider the system leaves authored lighting untouched;
-/// manual lighting remains a separate explicit operator command.
+/// This semantic state feeds render lighting and the fixed-step environment
+/// model inputs from the same celestial epoch. Without an explicit ephemeris
+/// provider, authored lighting remains untouched.
 pub fn update_sun_light_system(
     ephemeris: Option<Res<EphemerisResource>>,
-    world: Res<WorldTime>,
+    celestial_time: Res<CelestialTime>,
     registry: Res<CelestialBodyRegistry>,
     sun_cal: Option<Res<lunco_environment::LunarSun>>,
     mut sun_state: ResMut<lunco_environment::SunState>,
@@ -284,10 +235,10 @@ pub fn update_sun_light_system(
     let (Some(p_sun), Some(p_observer)) = (
         ephemeris
             .provider
-            .global_position(lunco_celestial::ephemeris_id::SUN, world.epoch_jd),
+            .global_position(lunco_celestial::ephemeris_id::SUN, celestial_time.epoch_jd),
         ephemeris
             .provider
-            .global_position(observer_body, world.epoch_jd),
+            .global_position(observer_body, celestial_time.epoch_jd),
     ) else {
         sun_state.clear();
         return;
@@ -312,7 +263,7 @@ pub fn update_sun_light_system(
         // irrelevant to the Sun direction, so keep the astronomical observer
         // position out of the local-frame calculation.
         bevy::math::DVec3::ZERO,
-        world.epoch_jd,
+        celestial_time.epoch_jd,
     );
     // The site grid's local axes are ENU (+X east, +Y up, -Z north). The
     // tangent basis is expressed in the inertial ecliptic frame, so this is
@@ -342,7 +293,7 @@ pub fn update_sun_light_system(
         debug!(
             "[celestial] sun aim: elevation {elevation_deg:.2}°, azimuth {azimuth_deg:.1}° \
              @ JD {:.5} (observer {observer_body})",
-            world.epoch_jd,
+            celestial_time.epoch_jd,
         );
     }
     let irradiance = sun_cal.as_deref().and_then(|cal| {
@@ -361,9 +312,10 @@ pub fn update_sun_light_system(
     // flip. `lunco-environment` turns it into az/el and publishes the ports.
     if let (Some(earth_dir_out), Some(p_earth)) = (
         earth_dir_out.as_mut(),
-        ephemeris
-            .provider
-            .global_position(lunco_celestial::ephemeris_id::EARTH, world.epoch_jd),
+        ephemeris.provider.global_position(
+            lunco_celestial::ephemeris_id::EARTH,
+            celestial_time.epoch_jd,
+        ),
     ) {
         let to_earth = lunco_celestial::coords::ecliptic_to_bevy(p_earth - p_observer)
             .raw()

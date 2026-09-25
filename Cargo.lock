@@ -9712,6 +9712,7 @@ dependencies = [
  "bevy",
  "celestial-time",
  "chrono",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-hooks",

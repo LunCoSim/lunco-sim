@@ -63,24 +63,22 @@ LOD approaches, consult the source-linked
 For celestial globes, verify the installed Earth/Moon imagery dataset and the
 composed USD body look. A body shader look may add shader parameters, but it
 must retain the installed dataset albedo unless USD supplies an explicit
-albedo layer or `AuthoredBodyAlbedo`. Globe poses, semantic Sun direction,
-physical stations, terrain, and links use causal `WorldTime` at completed
-ticks. Bevy projects the normalized ephemeris direction into the scene
-`DirectionalLight`; the render path does not place the Sun at astronomical
-coordinates. In surface view, align the render-only marker hierarchy with the
-physical camera pose. A visible surface marker may be copied under the matching
-same-epoch body-fixed grid, but that copy is render-only. Show the causal marker
-on its own body's surface and the copy in orbit or other-body views.
+albedo layer or `AuthoredBodyAlbedo`. Body frames, globe tiles, stations,
+terrain, links, sky, and lighting share `CelestialTime`, a child of `WorldTime`.
+The ordinary render interpolation sample drives unbound USD time-sampled
+animation. Use the body's single physical body-fixed grid for site and globe
+content; do not align a parallel presentation hierarchy or copy a surface
+marker into another frame. Modelica and Avian keep their ordinary fixed-step
+cadence while their celestial-derived inputs change from the shared sample.
 Procedural sky materials opt into the live Sun disc by declaring both
 `sun_dir_view` and `sun_tan_radius` as engine inputs; no shader filename selects
-the behavior. Schema reflection can finish after the sky material is first
-bound, so material asset changes must refresh these engine inputs. The
-direction is in the active camera's view coordinates, the same frame as the
-shader's view rays. Its provider composes the camera's
-`CellCoord` and `Transform` through `lunco_spatial::pose_in_grid`, while
-BigSpace owns `GlobalTransform` propagation. Camera pose changes refresh the
-direction while physical time is paused. Continuous renderer data stays in
-Rust; author the background and material binding in USD.
+the behavior. The direction is in the active camera's view coordinates, the
+same frame as the shader's view rays. `SunRenderState` comes from the
+CelestialTime-driven `SunState` after the scene light is finalized through
+BigSpace. The renderer projects that one semantic direction into camera space;
+do not add a second ephemeris calculation for sky materials. Camera pose changes
+refresh the direction while CelestialTime is paused. Continuous renderer data
+stays in Rust; author the background and material binding in USD.
 
 ## High-profile near detail
 

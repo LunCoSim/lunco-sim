@@ -2,7 +2,7 @@
 
 **Feature Branch**: `002-celestial-visualization`
 **Created**: 2026-03-31
-**Updated**: 2026-04-01
+**Updated**: 2026-09-25
 **Status**: Implemented & Stable
 **Dependencies**: `009-coordinate-frame-tree` (advanced CFT)
 **Input**: User description: "I want to have model of Earth/Moon/Sun system, kind of like kerbal. It has to be simple. I want to use exponential camera. I want to be able to rotate it. Ideally I want to visualise position of Artemis 2 mission there. Earth and Moon should be simple spheres. Position of three bodies must be real based on real data. We should be able to set time when it happens. If we get close we should be able to drive rovers."
@@ -56,8 +56,8 @@ This spec lays the **foundational world architecture** for a solar-scale lunar c
 **Rationale:** The migration system ensures that the floating origin always operates within the target body's local measurement system, eliminating z-fighting and coordinate drift.
 
 ### AD-4: Natural-body positions
-**Decision:** Use `celestial-ephemeris` for the analytic Sun/Earth/Moon model behind `EphemerisProvider`. Author spacecraft movement as standard USD `double3 xformOp:translate` time samples and let the shared USD animation adapter evaluate them from physical presentation time.
-**Rationale:** Celestial bodies and scene-authored spacecraft motion have different owners: the analytic provider evaluates natural-body state, while USD owns a scene object's authored transform.
+**Decision:** Use `celestial-ephemeris` for the analytic Sun/Earth/Moon model behind `EphemerisProvider`, sampled only from `CelestialTime`, the single scaled child of `WorldTime`. Author spacecraft movement as standard USD `double3 xformOp:translate` time samples and let the shared USD animation adapter evaluate them from physical presentation time. Environment inputs derived from celestial geometry use that same `CelestialTime` sample; Avian and Modelica retain their ordinary fixed-step cadence.
+**Rationale:** Celestial bodies and scene-authored spacecraft motion have different owners: the analytic provider evaluates natural-body state from the shared celestial epoch, while USD owns a scene object's authored transform on the physical presentation timeline. Causal models consume the current celestial environment at their normal communication points.
 
 ### AD-5: Scenario System
 **Decision:** Feature flags — `sandbox` vs `celestial` (default). `cargo run` → celestial world. `cargo run --features sandbox` → flat-ground rover world.
@@ -145,8 +145,8 @@ come from 10-minute DE441 vector samples interpolated to those same epochs.
 
 1.  **Given** the mission prim has standard USD `double3` transform samples, **When** the physical clock advances, **Then** its composed transform follows those samples through the shared animation adapter.
 2.  **Given** the physical clock is paused, **When** rendered, **Then** the mission prim remains at the last physical presentation sample.
-3.  **Given** physical transport is paused or running at 64×, **When** the scene is sampled, **Then** natural-body state and authored mission motion follow the same physical time, and presentation never advances beyond a completed physical tick.
-4.  **Given** the celestial presentation clock is re-parented to wall time at up to 100,000×, **When** the sky is rendered, **Then** render-only celestial frames advance while physical body state, physics, and authored mission motion remain on the physical timeline.
+3.  **Given** CelestialTime is at its default 1× rate and physical transport is paused or running at 64×, **When** the scene is sampled, **Then** natural-body state and authored mission motion follow the same physical time, and presentation never advances beyond a completed physical tick.
+4.  **Given** `CelestialTime` is scaled up to 100,000×, **When** one ordinary physical tick completes, **Then** body placement, body rotation, rendered shadows, and environment inputs use the resulting celestial sample while physics, Modelica integration, and authored mission motion retain their normal physical cadence.
 
 ### User Story 4 - Physical Time Transport (Priority: P2)
 

@@ -3,8 +3,8 @@
 //!
 //! ## Why not Hz
 //!
-//! Sim time can be accelerated, so any fixed rate is wrong at different
-//! transport settings.
+//! `CelestialTime` can be accelerated, so any fixed solve rate is wrong at
+//! different celestial settings.
 //! The required epoch step is derived from a certified maximum angular-motion
 //! bound supplied by the active ephemeris provider and authored frame models.
 //! At low rates this avoids solving an unchanged render frame; at high rates the
@@ -32,7 +32,7 @@ use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, KeplerOrbit};
 use lunco_celestial_spatial_core::{CelestialBodyDecl, SolarSystemRoot};
 use lunco_settings::SettingsSection;
-use lunco_time::WorldTime;
+use lunco_time::CelestialTime;
 use serde::{Deserialize, Serialize};
 
 /// How much celestial angular error is acceptable before the tree is re-solved.
@@ -156,7 +156,7 @@ pub fn refresh_motion_bound(
     };
 }
 
-/// The causal epoch last consumed by the celestial tree.
+/// The CelestialTime epoch last consumed by the celestial state transaction.
 ///
 /// One resource, one writer ([`commit_celestial_epoch`]), read by the run
 /// condition every gated system shares — so the whole cluster solves for the
@@ -173,15 +173,6 @@ pub struct CelestialSolvedEpoch {
     pub revision: u64,
 }
 
-/// Start-of-frame causal time sample consumed by the PreUpdate celestial solve.
-/// `WorldTime` publishes a newer completed tick in PostUpdate, so the Last-stage
-/// commit must retain the sample the consumers actually observed.
-#[derive(Resource, Debug, Clone, Copy, Default)]
-pub(crate) struct CelestialWorldTimeSample {
-    /// World epoch captured before any celestial solve in this frame.
-    jd: Option<f64>,
-}
-
 impl Default for CelestialSolvedEpoch {
     fn default() -> Self {
         Self {
@@ -189,16 +180,6 @@ impl Default for CelestialSolvedEpoch {
             revision: 0,
         }
     }
-}
-
-/// Capture the causal epoch before fixed-step work and the later WorldTime
-/// publication can advance it. The solved-epoch writer commits this value only
-/// after every gated consumer has had a chance to run.
-pub(crate) fn capture_celestial_world_time(
-    world: Option<Res<WorldTime>>,
-    mut sample: ResMut<CelestialWorldTimeSample>,
-) {
-    sample.jd = world.map(|world| world.epoch_jd);
 }
 
 /// Structural changes the celestial cluster must re-solve for even when the epoch
@@ -316,10 +297,8 @@ pub fn tracked_needs_solve() -> impl bevy::ecs::schedule::SystemCondition<()> {
     lunco_core_runtime::gate::tracked("celestial_needs_solve", celestial_needs_solve)
 }
 
-/// Decide whether the current celestial inputs are outside the committed
-/// solve. This is deliberately a pure epoch/revision decision: wall-clock
-/// time is not a valid proxy for geometric error when simulation time is
-/// accelerated.
+/// Decide whether the current shared celestial inputs are outside the
+/// committed solve. The scaled epoch delta is the geometric motion input.
 fn epoch_requires_solve(
     current_jd: f64,
     solved_jd: f64,
@@ -331,7 +310,7 @@ fn epoch_requires_solve(
 }
 
 pub(crate) fn celestial_needs_solve(
-    world: Option<Res<WorldTime>>,
+    celestial: Option<Res<CelestialTime>>,
     solved: Res<CelestialSolvedEpoch>,
     settings: Option<Res<CelestialCadenceSettings>>,
     motion: Res<CelestialMotionBound>,
@@ -346,28 +325,32 @@ pub(crate) fn celestial_needs_solve(
         activity.expect_open("celestial_needs_solve", step <= 0.0);
     }
     // No clock yet (bare test app) — never gate; the old behaviour was to run.
-    let Some(world) = world else {
+    let Some(celestial) = celestial else {
         return true;
     };
     // `>=` with a 0.0 step: any epoch, including an unchanged one, re-solves.
     // That is what `EXACT` promises, and it is why the comparison is not `>`.
-    epoch_requires_solve(world.epoch_jd, solved.jd, revision.0, solved.revision, step)
+    epoch_requires_solve(
+        celestial.epoch_jd,
+        solved.jd,
+        revision.0,
+        solved.revision,
+        step,
+    )
 }
 
-/// Record the frame-start epoch and input revision after the gated consumers.
-///
-/// Runs in `Last`, under the same condition as its consumers. This keeps all
-/// gated systems on one solve decision while committing the exact WorldTime
-/// sample they read before PostUpdate publishes the next completed tick.
+/// Record the CelestialTime epoch and input revision after all gated consumers.
+/// One gate and one cursor keep the body hierarchy and solar state on one sample.
 pub(crate) fn commit_celestial_epoch(
-    sample: Res<CelestialWorldTimeSample>,
+    celestial: Option<Res<CelestialTime>>,
     settings: Option<Res<CelestialCadenceSettings>>,
     motion: Res<CelestialMotionBound>,
     revision: Res<CelestialInputsRevision>,
     mut solved: ResMut<CelestialSolvedEpoch>,
     mut solves: Local<u64>,
 ) {
-    if let Some(epoch_jd) = sample.jd {
+    if let Some(celestial) = celestial {
+        let epoch_jd = celestial.epoch_jd;
         // Why the EPOCH branch of `celestial_needs_solve` fires, for when
         // `lunco_core::gate` reports the cluster ungated and the revision
         // attribution stays quiet (i.e. structure is NOT the cause). The delta
@@ -415,10 +398,8 @@ pub(crate) fn commit_celestial_epoch(
         }
         solved.jd = epoch_jd;
     } else {
-        // The gate returns TRUE unconditionally without a clock — worth saying
-        // out loud, because it looks identical to "the epoch moved".
         bevy::log::warn_once!(
-            "[celestial] no `WorldTime`: the cadence gate cannot gate and the \
+            "[celestial] no `CelestialTime`: the cadence gate cannot gate and the \
              whole cluster solves every frame."
         );
     }
@@ -430,7 +411,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn large_epoch_advance_opens_the_gate_each_render_frame() {
+    fn large_celestial_epoch_advance_exceeds_the_error_budget() {
         let motion = std::f64::consts::TAU / 27.321_661;
         let step = CelestialCadenceSettings::default().max_epoch_step_jd(motion);
         // A large epoch advance exceeds the angular-error budget, so the
