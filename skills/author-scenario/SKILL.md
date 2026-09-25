@@ -110,10 +110,13 @@ unvisited colour is bright green and its visited colour is gray in standard
 `primvars:displayColor`; `route_follow` applies the visited colour through
 `waypoint_editor`'s transient USD view operation. Route progress is keyed by USD
 point path and survives autopilot stop/start. At `on_start`, the program reads
-the current Avian contacts through the generic `SensorOccupants` query and
-marks the occupied route points visited before autopilot is enabled. Later
-sensor enters mark visits while disabled and advance an active route. This is
-presentation state, not a vessel component or a second route fact.
+the current Avian contact for only the first unvisited route point through the
+generic `SensorOccupants` query. A simultaneous occupancy snapshot has no visit
+order, so it cannot mark later points. A later sensor enter marks a visit only
+when its zone is the first unvisited point; out-of-order arrivals are ignored
+until that point is entered after its predecessors. Active route progression
+uses the same order. This is presentation state, not a vessel component or a
+second route fact.
 The route context gesture opens its authored menu without selecting the point;
 selection and gizmo activation require the menu's explicit select action. User
 possession is a `ControlLink`/`SessionRegistry` lifecycle, while a route program

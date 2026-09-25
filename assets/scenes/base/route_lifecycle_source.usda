@@ -2,13 +2,9 @@
 (
     defaultPrim = "RouteLifecycleSource"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Test fixture source for the composed-route lifecycle acceptance scene. The
-# wrapper scene references this file, so deleting a source-authored point must
-# use a USD local active=false opinion rather than removing a prim from the
-# referencing document.
 def Xform "RouteLifecycleSource" (
     kind = "assembly"
 )
@@ -17,9 +13,8 @@ def Xform "RouteLifecycleSource" (
     {
         float intensity = 1.0
     }
-
     def Cube "Ground" (
-        prepend apiSchemas = ["PhysicsCollisionAPI"]
+        prepend apiSchemas = "PhysicsCollisionAPI"
     )
     {
         double size = 1.0
@@ -28,38 +23,27 @@ def Xform "RouteLifecycleSource" (
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         bool physics:collisionEnabled = true
     }
-
     def Xform "Subject" (
         prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
     )
     {
         double3 xformOp:translate = (0.0, 1.5, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-        rel programs = [
-            </RouteLifecycleSource/Route/Program>,
-            </RouteLifecycleSource/AlternateRoute/Program>
-        ]
+        rel programs = [</RouteLifecycleSource/Route/Program>, </RouteLifecycleSource/AlternateRoute/Program>]
     }
-
-    # The primary route is a separately authored route-plan asset. Its
-    # composed identity remains /RouteLifecycleSource/Route, so tools edit the
-    # canonical path and never need a scene-root route convention.
     def Scope "Route" (
         prepend references = @lunco://scenes/base/route_plan_lifecycle.usda@</Route>
     )
     {
-        # The reusable plan owns topology; the composed scene owns the
-        # subject binding because the same plan can drive different subjects.
         over "Program"
         {
             rel inputs:subject = </RouteLifecycleSource/Subject>
         }
     }
-
     def Scope "AlternateRoute"
     {
         def Scope "Program" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
+            prepend apiSchemas = "LunCoProgramAPI"
         )
         {
             uniform token info:implementationSource = "sourceAsset"
@@ -67,25 +51,31 @@ def Xform "RouteLifecycleSource" (
             float inputs:enabled = 0.0
             rel inputs:subject = </RouteLifecycleSource/Subject>
         }
-
         def Xform "P0" (
             prepend references = @lunco://markers/route_point.usda@</RoutePoint>
         )
         {
             double3 xformOp:translate = (8.0, 1.0, -8.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            over "Trigger" { token lunco:triggerZone = "alternate_P0" }
+            over "Trigger"
+            {
+                token lunco:triggerZone = "alternate_P0"
+            }
         }
     }
-
     def Scope "Scenario"
     {
         def Scope "Test" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
+            prepend apiSchemas = "LunCoProgramAPI"
         )
         {
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/route_lifecycle.rhai@
         }
+    }
+    def Xform "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
     }
 }

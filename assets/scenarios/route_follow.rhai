@@ -439,6 +439,22 @@ fn route_resume_index(me, state) {
     index
 }
 
+fn next_route_visit_point(me, state) {
+    let points = route_children_for(me, state);
+    if points == () { return (); }
+    let cursor = if state.enabled {
+        current_point_info(me, state)
+    } else {
+        let index = route_resume_index(me, state);
+        let path = if index < points.len() { points[index] } else { () };
+        #{ path: path, index: index }
+    };
+    if cursor.index < 0 || cursor.index >= points.len() {
+        return #{ path: (), index: cursor.index };
+    }
+    #{ path: points[cursor.index], index: cursor.index }
+}
+
 fn mark_route_point_visited(state, point) {
     if state.visited_points[point] == true { return state; }
     state.visited_points[point] = true;
@@ -447,41 +463,40 @@ fn mark_route_point_visited(state, point) {
 }
 
 fn mark_route_zone_visited(me, state, zone) {
-    let points = route_children_for(me, state);
-    if points == () { return state; }
-    for point in points {
-        let record = query("QueryUsdPrim", #{
-            path: point + "/Trigger",
-            attrs: ["lunco:triggerZone"],
-        });
-        if record != () && record.ok != false && record.attrs != ()
-            && record.attrs["lunco:triggerZone"] == zone {
-            state = mark_route_point_visited(state, point);
-        }
+    let next = next_route_visit_point(me, state);
+    if next == () || next.path == () { return state; }
+    let point = next.path;
+    let record = query("QueryUsdPrim", #{
+        path: point + "/Trigger",
+        attrs: ["lunco:triggerZone"],
+    });
+    if record != () && record.ok != false && record.attrs != ()
+        && record.attrs["lunco:triggerZone"] == zone {
+        state = mark_route_point_visited(state, point);
     }
     state
 }
 
 fn mark_initial_route_occupancy(me, state) {
-    let points = route_children_for(me, state);
     let subject = route_subject_for(me, state);
-    if points == () || subject < 0 {
+    let next = next_route_visit_point(me, state);
+    if next == () || subject < 0 {
         return route_failure("the route or its subject has no live projection");
     }
-    for point in points {
-        let sensor = find_path(point + "/Trigger");
-        if sensor < 0 {
-            return route_failure("the route sensor has no live projection: " + point);
-        }
-        let contacts = query("SensorOccupants", #{ sensor: sensor });
-        if contacts == () || contacts.ok == false || contacts.entrants == () {
-            return route_failure("the route sensor occupancy is unavailable: " + point);
-        }
-        for entrant in contacts.entrants {
-            if route_entrant_matches(subject, entrant) {
-                state = mark_route_point_visited(state, point);
-                break;
-            }
+    if next.path == () { return #{ ok: true, state: state }; }
+    let point = next.path;
+    let sensor = find_path(point + "/Trigger");
+    if sensor < 0 {
+        return route_failure("the route sensor has no live projection: " + point);
+    }
+    let contacts = query("SensorOccupants", #{ sensor: sensor });
+    if contacts == () || contacts.ok == false || contacts.entrants == () {
+        return route_failure("the route sensor occupancy is unavailable: " + point);
+    }
+    for entrant in contacts.entrants {
+        if route_entrant_matches(subject, entrant) {
+            state = mark_route_point_visited(state, point);
+            break;
         }
     }
     #{ ok: true, state: state }
@@ -852,7 +867,10 @@ fn bind_projected_route(me, state, expected_doc) {
     state.selected = route_is_selected(me);
     state.route_index = route_resume_index(me, state);
     let occupancy = mark_initial_route_occupancy(me, state);
-    if occupancy.ok == true { state = occupancy.state; }
+    if occupancy.ok == true {
+        state = occupancy.state;
+        state.route_index = route_resume_index(me, state);
+    }
     #{ ok: true, state: state }
 }
 

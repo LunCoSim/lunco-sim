@@ -130,21 +130,26 @@ canonical path is used for selection and menu dispatch.
 The generic sensor emits `enter:<zone>` and `exit:<zone>` events. The route
 program accepts an enter event when its payload is the current subject or a
 registered descendant collider in that subject's generic parent chain, and the
-zone is the current point. It then changes the point's reusable marker to its
-visited colour through the generic transient USD view tool, emits the authored
-route-level `route_point_reached` event for mission policy, and advances its
-local route cursor. Physics reports the sensor event; it does not publish a route-specific
-“target reached” fact and it does not decide mission progression.
+zone is the next unvisited point in authored route order. An out-of-order enter
+does not change visit state or advance the route; the point must be entered
+again after its predecessors. At startup, only the first unvisited point can be
+marked from `SensorOccupants`, because a simultaneous occupancy snapshot does
+not establish arrival order. An accepted visit changes that point's reusable
+marker to its visited colour through the generic transient USD view tool,
+emits the authored route-level `route_point_reached` event for mission policy,
+and advances the local cursor. Physics reports sensor events; it does not
+publish a route-specific “target reached” fact or decide mission progression.
 
 Route progress is keyed by canonical USD point path and survives disabling and
 re-enabling the program. Initial scenario admission waits for all scene
 readiness holds because the route program references a separate subject through
 `inputs:subject`. Avian's `SensorOccupants` query reads current touching moving
-bodies by stable sensor id. At `on_start`, the route checks the occupied sensors
-and marks their points visited before autopilot is enabled. Later `enter:<zone>`
-events mark visits while the program is disabled and advance the active cursor
-when enabled. Each start resumes at the first unvisited point from the recorded
-visits, including contacts established before the script started.
+bodies by stable sensor id. At `on_start`, the route checks the next unvisited
+point and marks it visited if occupied before autopilot is enabled. Later
+`enter:<zone>` events mark only the next unvisited point while the program is
+disabled and advance the active cursor when enabled. Each start resumes at the
+first unvisited point from the ordered visits, including a contact established
+before the script started.
 The transient marker state follows those route visits; no visit is authored to
 the USD asset.
 

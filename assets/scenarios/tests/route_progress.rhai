@@ -1,5 +1,6 @@
-// Production acceptance for Avian-backed initial occupancy, later route
-// arrivals, and preserved progress. This observer never manufactures zone events.
+// Production acceptance for Avian-backed initial occupancy and arrivals,
+// ordered visit policy, and preserved progress. One deliberate out-of-order
+// event exercises the production route consumer; P0 and P1 use real sensors.
 
 const ROOT = "/RouteProgress";
 const ROUTE = ROOT + "/Route";
@@ -182,13 +183,34 @@ fn on_tick(me, ctx) {
         if !occupied || !non_sensor_rejected { finish(this, false); return; }
         this.checks.push(t_true(true,
             "the occupied start point is visited before autopilot is enabled"));
-        let toggled = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
-        if !toggled { finish(this, false); return; }
+        let out_of_order = emit("enter:route_P2", this.subject);
+        if !out_of_order {
+            this.checks.push(t_true(false,
+                "the out-of-order route event is submitted"));
+            finish(this, false);
+            return;
+        }
+        this.transition_elapsed = 0.0;
         this.phase = 2;
         return;
     }
 
     if this.phase == 2 {
+        this.transition_elapsed += dt();
+        if this.transition_elapsed < 0.1 { return; }
+        let points = point_paths(this.doc);
+        let later_point_stays_unvisited = points.len() == 3
+            && color_is(marker_color(this.doc, points[2]), [0.10, 0.95, 0.22]);
+        this.checks.push(t_true(later_point_stays_unvisited,
+            "an out-of-order arrival leaves the later point unvisited"));
+        if !later_point_stays_unvisited { finish(this, false); return; }
+        let toggled = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
+        if !toggled { finish(this, false); return; }
+        this.phase = 3;
+        return;
+    }
+
+    if this.phase == 3 {
         let points = point_paths(this.doc);
         let active = port(this.subject, "program_active");
         if this.started == 0 || points.len() != 3 || active == () || active < 0.5 {
@@ -201,11 +223,11 @@ fn on_tick(me, ctx) {
             "the initially occupied route point is marked visited"));
         this.checks.push(t_true(starts_at_next,
             "autopilot begins at the first route point after the occupied start"));
-        this.phase = 3;
+        this.phase = 4;
         return;
     }
 
-    if this.phase == 3 {
+    if this.phase == 4 {
         if this.point_one_entered == 0 || this.reached.len() != 1
             || this.reached[0] != 1 { return; }
         let points = point_paths(this.doc);
@@ -219,20 +241,20 @@ fn on_tick(me, ctx) {
         let stopped = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         if !stopped { finish(this, false); return; }
         this.transition_elapsed = 0.0;
-        this.phase = 4;
-        return;
-    }
-
-    if this.phase == 4 {
-        let active = port(this.subject, "program_active");
-        if this.stopped == 0 || active == () || active > 0.5 { return; }
-        let started = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
-        if !started { finish(this, false); return; }
         this.phase = 5;
         return;
     }
 
     if this.phase == 5 {
+        let active = port(this.subject, "program_active");
+        if this.stopped == 0 || active == () || active > 0.5 { return; }
+        let started = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
+        if !started { finish(this, false); return; }
+        this.phase = 6;
+        return;
+    }
+
+    if this.phase == 6 {
         this.transition_elapsed += dt();
         let active = port(this.subject, "program_active");
         if this.started < 2 || active == () || active < 0.5
@@ -246,11 +268,11 @@ fn on_tick(me, ctx) {
             "re-enabling skips every previously visited route point"));
         if !resumed_at_next { finish(this, false); return; }
         this.transition_elapsed = 0.0;
-        this.phase = 6;
+        this.phase = 7;
         return;
     }
 
-    if this.phase == 6 {
+    if this.phase == 7 {
         this.transition_elapsed += dt();
         if this.transition_elapsed < 0.5 { return; }
         let points = point_paths(this.doc);
