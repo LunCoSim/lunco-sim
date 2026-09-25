@@ -7,10 +7,8 @@ description = "Rumoca-backed Modelica lowering for the SysML constraint IR"
 
 [dependencies]
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-sysml-ast = { path = "../lunco-sysml-ast" }
 lunco-sysml-ir = { path = "../lunco-sysml-ir" }
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-lunco-sysml-ast = { path = "../lunco-sysml-ast" }

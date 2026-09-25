@@ -9,21 +9,20 @@ use lunco_core::DTransform;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlElementHandle,
     SysmlEnumValue, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator, SysmlFeature,
-    SysmlFeatureDirection, SysmlFeatureHandle, SysmlFunctionReference, SysmlModelicaType,
-    SysmlMultiplicity, SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord, SysmlSourceRef,
-    SysmlStandardConstant, SysmlSubject, SysmlType, SysmlTypeCategory, SysmlTypeRef,
-    SysmlUnsupportedExpression,
+    SysmlFeatureDirection, SysmlFeatureHandle, SysmlFeaturePath, SysmlFunctionReference,
+    SysmlModelicaType, SysmlMultiplicity, SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord,
+    SysmlSourceRef, SysmlStandardConstant, SysmlSubject, SysmlType, SysmlTypeCategory,
+    SysmlTypeRef, SysmlUnsupportedExpression,
 };
 use lunco_sysml_ir::{
-    BindingContract, BindingProvider, CompiledConstraint,
-    CompiledConstraint as IrCompiledConstraint, ConstraintIr, DiagnosticSeverity,
+    BindingContract, BindingProvider, CompiledConstraint, ConstraintIr, DiagnosticSeverity,
     EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
-    IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
+    IrDiagnosticCode, IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
     IrStandardFunction, IrType, IrValue, IrValueType, ObservationState, VerificationVerdict,
     compile_constraint_by_name, evaluate_constraint,
 };
 use lunco_sysml_modelica::{lower_constraint, supports_standard_function_lowering};
-use rhai::{Dynamic, Engine, Map};
+use rhai::{Array, Dynamic, Engine, Map};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -298,6 +297,26 @@ pub fn modelica_constraint_value(model: &mut SysmlModelValue, name: &str) -> Dyn
             value.insert("ok".into(), Dynamic::from_bool(true));
             value.insert("model_name".into(), Dynamic::from(lowered.model_name));
             value.insert("source".into(), Dynamic::from(lowered.source));
+            value.insert(
+                "feature_bindings".into(),
+                Dynamic::from_array(
+                    lowered
+                        .feature_bindings
+                        .into_iter()
+                        .map(|binding| {
+                            let mut feature = Map::new();
+                            feature.insert("path".into(), feature_path_dynamic(&binding.path));
+                            feature.insert("variable".into(), Dynamic::from(binding.variable));
+                            feature.insert(
+                                "qualified_name".into(),
+                                Dynamic::from(binding.qualified_name),
+                            );
+                            feature.insert("type".into(), ir_type_dynamic(&binding.ty));
+                            Dynamic::from_map(feature)
+                        })
+                        .collect(),
+                ),
+            );
         }
         Err(error) => {
             value.insert("ok".into(), Dynamic::from_bool(false));
@@ -308,13 +327,13 @@ pub fn modelica_constraint_value(model: &mut SysmlModelValue, name: &str) -> Dyn
 }
 
 /// Evaluate one compiled constraint through the neutral IR using observation
-/// records supplied by an authored Rhai policy. The script owns provider
-/// selection and binding names; Rust owns conversion into the typed evaluator
-/// contract and the four-state verification result.
+/// records supplied by an authored Rhai policy. Every record identifies its
+/// source feature path with snapshot-scoped handles; Rust owns type checking,
+/// contract validation, and the four-state verification result.
 pub fn evaluate_constraint_value(
     model: &mut SysmlModelValue,
     name: &str,
-    observations: Map,
+    observations: Array,
     absolute_tolerance: f64,
     relative_tolerance: f64,
 ) -> Dynamic {
@@ -322,26 +341,71 @@ pub fn evaluate_constraint_value(
     let mut context = EvaluationContext::default();
     let mut input_diagnostics = Vec::new();
 
-    for (qualified_name, dynamic_observation) in observations {
-        let qualified_name = qualified_name.to_string();
-        let Some(feature) = constraint_feature(&model.analysis, &compiled, &qualified_name) else {
-            input_diagnostics.push(IrDiagnostic {
-                severity: DiagnosticSeverity::Error,
-                code: "SYSML-IR-025".to_owned(),
-                source: None,
-                message: format!("observation names unknown SysML feature `{qualified_name}`"),
-            });
-            continue;
-        };
+    let allowed_paths = compiled
+        .constraint
+        .as_ref()
+        .map(|constraint| constraint.dependencies.as_slice())
+        .unwrap_or_default();
+    let mut observed_paths = HashSet::new();
+    for dynamic_observation in observations {
         let Some(record) = dynamic_observation.try_cast::<Map>() else {
             input_diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
-                code: "SYSML-IR-026".to_owned(),
+                code: IrDiagnosticCode::ObservationIsNotRecord,
                 source: None,
-                message: format!("observation for `{qualified_name}` must be a Rhai map"),
+                message: "provider observation must be a Rhai map".to_owned(),
             });
             continue;
         };
+        let path = record.get("path").and_then(dynamic_feature_path);
+        let Some(path) = path else {
+            input_diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::InvalidObservationPath,
+                source: None,
+                message: "provider observation needs a non-empty typed SysML feature path"
+                    .to_owned(),
+            });
+            continue;
+        };
+        let feature_name = feature_path_label(&model.analysis, &path)
+            .unwrap_or_else(|| format!("feature-path {:?}", path.features()));
+        if !path.belongs_to(
+            model.analysis.source_revision(),
+            model.analysis.source_fingerprint(),
+        ) {
+            input_diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ObservationSnapshotMismatch,
+                source: None,
+                message: format!(
+                    "observation path for `{feature_name}` belongs to another source snapshot"
+                ),
+            });
+            continue;
+        }
+        if !allowed_paths.contains(&path) {
+            input_diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ObservationIsNotDependency,
+                source: None,
+                message: format!(
+                    "observation path for `{feature_name}` is not a dependency of `{name}`"
+                ),
+            });
+            continue;
+        }
+        if !observed_paths.insert(path.clone()) {
+            input_diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::DuplicateObservationPath,
+                source: None,
+                message: format!(
+                    "provider supplied more than one observation for `{feature_name}`"
+                ),
+            });
+            continue;
+        }
         let provider = record
             .get("provider")
             .and_then(|value| value.clone().into_string().ok())
@@ -353,10 +417,10 @@ pub fn evaluate_constraint_value(
         let (Some(provider), Some(state)) = (provider, state) else {
             input_diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
-                code: "SYSML-IR-027".to_owned(),
+                code: IrDiagnosticCode::ObservationProviderOrStateInvalid,
                 source: None,
                 message: format!(
-                    "observation for `{qualified_name}` needs recognized provider and state"
+                    "observation for `{feature_name}` needs recognized provider and state"
                 ),
             });
             continue;
@@ -382,9 +446,9 @@ pub fn evaluate_constraint_value(
             let Some(contract_record) = dynamic_contract.clone().try_cast::<Map>() else {
                 input_diagnostics.push(IrDiagnostic {
                     severity: DiagnosticSeverity::Error,
-                    code: "SYSML-IR-029".to_owned(),
+                    code: IrDiagnosticCode::InvalidBindingContract,
                     source: None,
-                    message: format!("binding contract for `{qualified_name}` must be a Rhai map"),
+                    message: format!("binding contract for `{feature_name}` must be a Rhai map"),
                 });
                 continue;
             };
@@ -395,10 +459,10 @@ pub fn evaluate_constraint_value(
             let Some(contract_provider) = contract_provider else {
                 input_diagnostics.push(IrDiagnostic {
                     severity: DiagnosticSeverity::Error,
-                    code: "SYSML-IR-029".to_owned(),
+                    code: IrDiagnosticCode::InvalidBindingContract,
                     source: None,
                     message: format!(
-                        "binding contract for `{qualified_name}` needs a recognized provider"
+                        "binding contract for `{feature_name}` needs a recognized provider"
                     ),
                 });
                 continue;
@@ -408,8 +472,7 @@ pub fn evaluate_constraint_value(
                 .and_then(|value| value.as_bool().ok())
                 .unwrap_or(true);
             Some(BindingContract {
-                feature,
-                qualified_name: qualified_name.clone(),
+                path: path.clone(),
                 provider: contract_provider,
                 required,
                 unit: contract_record
@@ -427,7 +490,7 @@ pub fn evaluate_constraint_value(
             None
         };
         context.observations.push(FeatureObservation {
-            feature,
+            path,
             provider,
             state,
             value,
@@ -459,27 +522,35 @@ pub fn evaluate_constraint_value(
     evaluation_report_dynamic(&report)
 }
 
-fn constraint_feature(
-    analysis: &SysmlAnalysis,
-    compiled: &IrCompiledConstraint,
-    qualified_name: &str,
-) -> Option<SysmlFeatureHandle> {
-    compiled
-        .constraint
-        .as_ref()
-        .and_then(|constraint| {
-            constraint
-                .parameters
-                .iter()
-                .find(|parameter| parameter.qualified_name == qualified_name)
-                .map(|parameter| parameter.feature)
+fn dynamic_feature_path(value: &Dynamic) -> Option<SysmlFeaturePath> {
+    let segments = value.clone().try_cast::<Array>()?;
+    let features = segments
+        .iter()
+        .map(|segment| {
+            segment
+                .clone()
+                .try_cast::<SysmlFeatureHandle>()
+                .or_else(|| {
+                    dynamic_element_handle(segment).map(|element| SysmlFeatureHandle { element })
+                })
         })
+        .collect::<Option<Vec<_>>>()?;
+    SysmlFeaturePath::new(features)
+}
+
+fn feature_path_label(analysis: &SysmlAnalysis, path: &SysmlFeaturePath) -> Option<String> {
+    let target = path.target();
+    analysis
+        .attributes()
+        .iter()
+        .find(|attribute| attribute.handle == target)
+        .map(|attribute| attribute.qualified_name.clone())
         .or_else(|| {
             analysis
-                .attributes()
+                .elements()
                 .iter()
-                .find(|attribute| attribute.qualified_name == qualified_name)
-                .map(|attribute| attribute.handle)
+                .find(|element| element.feature_handle == Some(target))
+                .map(|element| element.qualified_name.clone())
         })
 }
 
@@ -1636,8 +1707,7 @@ fn constraint_ir_dynamic(constraint: &ConstraintIr) -> Dynamic {
             constraint
                 .dependencies
                 .iter()
-                .copied()
-                .map(Dynamic::from)
+                .map(feature_path_dynamic)
                 .collect(),
         ),
     );
@@ -1689,7 +1759,7 @@ fn ir_diagnostic_dynamic(diagnostic: &IrDiagnostic) -> Dynamic {
             DiagnosticSeverity::Error => "error",
         }),
     );
-    value.insert("code".into(), Dynamic::from(diagnostic.code.clone()));
+    value.insert("code".into(), Dynamic::from(diagnostic.code.as_str()));
     value.insert("message".into(), Dynamic::from(diagnostic.message.clone()));
     value.insert(
         "source".into(),
@@ -1708,11 +1778,11 @@ fn ir_expression_dynamic(expression: &IrExpression) -> Dynamic {
     value.insert("type".into(), ir_type_dynamic(&expression.result_type));
     match &expression.kind {
         IrExpressionKind::FeatureReference {
-            feature,
+            path,
             qualified_name,
         } => {
             value.insert("kind".into(), Dynamic::from("feature_reference"));
-            value.insert("feature".into(), Dynamic::from(*feature));
+            value.insert("path".into(), feature_path_dynamic(path));
             value.insert(
                 "qualified_name".into(),
                 Dynamic::from(qualified_name.clone()),
@@ -1797,6 +1867,10 @@ fn ir_expression_dynamic(expression: &IrExpression) -> Dynamic {
         }
     }
     Dynamic::from_map(value)
+}
+
+fn feature_path_dynamic(path: &SysmlFeaturePath) -> Dynamic {
+    Dynamic::from_array(path.features().iter().copied().map(Dynamic::from).collect())
 }
 
 fn ir_type_dynamic(ty: &IrType) -> Dynamic {

@@ -166,43 +166,46 @@ fn on_tick(me, ctx) {
 
     let sum_name = "ConstraintIrEvaluation::SumEquals";
     let sum = evaluation_model.constraint_ir(sum_name);
-    let left = sum.constraint.parameters[0].qualified_name;
-    let right = sum.constraint.parameters[1].qualified_name;
+    let left = sum.constraint.parameters[0].feature;
+    let right = sum.constraint.parameters[1].feature;
     let unavailable = evaluation_model.evaluate_constraint(
-        sum_name, #{}, 1.0e-9, 1.0e-9);
+        sum_name, [], 1.0e-9, 1.0e-9);
     checks.push(t_true(sum.valid == true && sum.constraint.parameters.len() == 2
         && unavailable.verdict == "inconclusive"
         && unavailable.expression_results[0] == (),
         "missing provider observations are inconclusive, never false"));
 
-    let observations = #{};
-    observations[left] = #{provider: "external", state: "value", value: 1.0};
-    observations[right] = #{provider: "external", state: "value", value: 2.0};
+    let observations = [
+        #{path: [left], provider: "external", state: "value", value: 1.0},
+        #{path: [right], provider: "external", state: "value", value: 2.0}
+    ];
     let passed = evaluation_model.evaluate_constraint(
         sum_name, observations, 1.0e-9, 1.0e-9);
     checks.push(t_true(passed.verdict == "pass"
         && passed.expression_results[0] == true,
         "typed provider observations produce a passing verdict"));
 
-    observations[right].value = 1.0;
+    observations[1].value = 1.0;
     let failed = evaluation_model.evaluate_constraint(
         sum_name, observations, 1.0e-9, 1.0e-9);
     checks.push(t_true(failed.verdict == "fail"
         && failed.expression_results[0] == false,
         "a typed false relation produces a failure verdict"));
 
-    let stale_observations = #{};
-    stale_observations[left] = #{provider: "telemetry", state: "stale", detail: "sample expired"};
-    stale_observations[right] = #{provider: "telemetry", state: "value", value: 2.0};
+    let stale_observations = [
+        #{path: [left], provider: "telemetry", state: "stale", detail: "sample expired"},
+        #{path: [right], provider: "telemetry", state: "value", value: 2.0}
+    ];
     let stale = evaluation_model.evaluate_constraint(
         sum_name, stale_observations, 1.0e-9, 1.0e-9);
     checks.push(t_true(stale.verdict == "inconclusive" && stale.diagnostics.len() > 0,
         "stale telemetry is inconclusive and diagnostically visible"));
 
-    let invalid_observations = #{};
-    invalid_observations[left] = #{provider: "usd", state: "invalid",
-        detail: "non-finite stage value"};
-    invalid_observations[right] = #{provider: "usd", state: "value", value: 2.0};
+    let invalid_observations = [
+        #{path: [left], provider: "usd", state: "invalid",
+            detail: "non-finite stage value"},
+        #{path: [right], provider: "usd", state: "value", value: 2.0}
+    ];
     let invalid_result = evaluation_model.evaluate_constraint(
         sum_name, invalid_observations, 1.0e-9, 1.0e-9);
     checks.push(t_true(invalid_result.verdict == "error"

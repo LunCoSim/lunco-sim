@@ -734,6 +734,7 @@ fn expression_kind_code(kind: SysmlExpressionKind) -> i64 {
         SysmlExpressionKind::Invocation => 13,
         SysmlExpressionKind::Index => 14,
         SysmlExpressionKind::Collection => 15,
+        SysmlExpressionKind::FeatureChain => 16,
         SysmlExpressionKind::IntegerLiteral => 2,
         SysmlExpressionKind::RealLiteral => 3,
         SysmlExpressionKind::BooleanLiteral => 4,

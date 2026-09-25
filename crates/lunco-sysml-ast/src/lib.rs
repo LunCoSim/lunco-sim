@@ -74,7 +74,9 @@ pub struct SysmlSourceRef {
 /// source revision and content fingerprint prevent a handle from one Twin or
 /// document generation being mistaken for a coincidentally equal index in
 /// another analysis.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct SysmlElementHandle {
     /// Caller-owned source generation.
     pub source_revision: u64,
@@ -87,10 +89,93 @@ pub struct SysmlElementHandle {
 /// Identity of a resolved SysML feature, including datum and parameter
 /// features. Construction is restricted to semantic elements whose upstream
 /// metamodel kind specializes `Feature`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct SysmlFeatureHandle {
     /// Snapshot-scoped element identity of this feature.
     pub element: SysmlElementHandle,
+}
+
+/// Ordered feature identities for one resolved SysML navigation path.
+/// Every segment belongs to the same immutable source snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct SysmlFeaturePath {
+    features: Vec<SysmlFeatureHandle>,
+}
+
+impl<'de> Deserialize<'de> for SysmlFeaturePath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct FeaturePathData {
+            features: Vec<SysmlFeatureHandle>,
+        }
+
+        let data = FeaturePathData::deserialize(deserializer)?;
+        Self::new(data.features).ok_or_else(|| {
+            serde::de::Error::custom(
+                "SysML feature paths must be non-empty and stay within one source snapshot",
+            )
+        })
+    }
+}
+
+impl SysmlFeaturePath {
+    /// Construct a non-empty path whose segments all belong to one snapshot.
+    pub fn new(features: Vec<SysmlFeatureHandle>) -> Option<Self> {
+        let first = features.first()?.element;
+        features
+            .iter()
+            .all(|feature| {
+                feature.element.source_revision == first.source_revision
+                    && feature.element.source_fingerprint == first.source_fingerprint
+            })
+            .then_some(Self { features })
+    }
+
+    /// Construct a path for one feature.
+    pub fn single(feature: SysmlFeatureHandle) -> Self {
+        Self {
+            features: vec![feature],
+        }
+    }
+
+    /// Append one feature from the same source snapshot.
+    pub fn followed_by(&self, feature: SysmlFeatureHandle) -> Option<Self> {
+        let first = self.features.first()?.element;
+        if feature.element.source_revision != first.source_revision
+            || feature.element.source_fingerprint != first.source_fingerprint
+        {
+            return None;
+        }
+        let mut features = self.features.clone();
+        features.push(feature);
+        Some(Self { features })
+    }
+
+    /// Ordered semantic feature segments.
+    pub fn features(&self) -> &[SysmlFeatureHandle] {
+        &self.features
+    }
+
+    /// The final feature selected by this path.
+    pub fn target(&self) -> SysmlFeatureHandle {
+        *self
+            .features
+            .last()
+            .expect("SysmlFeaturePath construction rejects empty paths")
+    }
+
+    /// Whether every segment belongs to the requested immutable snapshot.
+    pub fn belongs_to(&self, revision: u64, fingerprint: u64) -> bool {
+        self.features.iter().all(|feature| {
+            feature.element.source_revision == revision
+                && feature.element.source_fingerprint == fingerprint
+        })
+    }
 }
 
 /// Executable standard-library operations recognized by the current
@@ -453,6 +538,7 @@ impl SysmlExpressionOperator {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SysmlExpressionKind {
     FeatureReference,
+    FeatureChain,
     StandardConstant,
     Invocation,
     Index,
@@ -493,6 +579,10 @@ pub enum SysmlUnsupportedExpression {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SysmlExpressionData {
     FeatureReference(SysmlFeatureHandle),
+    FeatureChain {
+        prefix: Box<SysmlExpression>,
+        target: SysmlFeatureHandle,
+    },
     StandardConstant {
         feature: SysmlFeatureHandle,
         constant: SysmlStandardConstant,
@@ -540,6 +630,7 @@ impl SysmlExpression {
     pub fn kind(&self) -> SysmlExpressionKind {
         match &self.data {
             SysmlExpressionData::FeatureReference(_) => SysmlExpressionKind::FeatureReference,
+            SysmlExpressionData::FeatureChain { .. } => SysmlExpressionKind::FeatureChain,
             SysmlExpressionData::StandardConstant { .. } => SysmlExpressionKind::StandardConstant,
             SysmlExpressionData::Invocation { .. } => SysmlExpressionKind::Invocation,
             SysmlExpressionData::Index { .. } => SysmlExpressionKind::Index,
@@ -561,6 +652,7 @@ impl SysmlExpression {
         match &self.data {
             SysmlExpressionData::FeatureReference(feature)
             | SysmlExpressionData::StandardConstant { feature, .. } => Some(*feature),
+            SysmlExpressionData::FeatureChain { target, .. } => Some(*target),
             _ => None,
         }
     }
@@ -634,6 +726,7 @@ impl SysmlExpression {
 
     pub fn children(&self) -> Vec<&SysmlExpression> {
         match &self.data {
+            SysmlExpressionData::FeatureChain { prefix, .. } => vec![prefix],
             SysmlExpressionData::Invocation { arguments, .. } => {
                 arguments.iter().map(|argument| &argument.value).collect()
             }
@@ -2035,31 +2128,15 @@ fn lower_expression(
                 )
             })
             .unwrap_or_else(|| unsupported(SysmlUnsupportedExpression::OtherSyntax)),
-        SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR => {
+        SyntaxKind::NAME_REF => {
             let range_start = u32::from(range.start());
             let range_end = u32::from(range.end());
-            let exact = workspace.references().iter().find(|reference| {
+            let reference = workspace.references().iter().find(|reference| {
                 reference.file == file_index
                     && u32::from(reference.range.start()) == range_start
                     && u32::from(reference.range.end()) == range_end
             });
-            let resolved = exact.or_else(|| {
-                (node.kind() == SyntaxKind::PATH_EXPR)
-                    .then(|| {
-                        workspace
-                            .references()
-                            .iter()
-                            .filter(|reference| {
-                                reference.file == file_index
-                                    && u32::from(reference.range.start()) >= range_start
-                                    && u32::from(reference.range.end()) <= range_end
-                                    && u32::from(reference.range.end()) == range_end
-                            })
-                            .max_by_key(|reference| u32::from(reference.range.start()))
-                    })
-                    .flatten()
-            });
-            let Some(reference) = resolved else {
+            let Some(reference) = reference else {
                 return unsupported(SysmlUnsupportedExpression::UnresolvedReference);
             };
             if !workspace
@@ -2082,6 +2159,65 @@ fn lower_expression(
                 Some(constant) => make(SysmlExpressionData::StandardConstant { feature, constant }),
                 None => make(SysmlExpressionData::FeatureReference(feature)),
             }
+        }
+        SyntaxKind::PATH_EXPR => {
+            let optional_access = node
+                .children_with_tokens()
+                .filter_map(|element| element.into_token())
+                .any(|token| token.kind() == SyntaxKind::DOT_QUESTION);
+            if optional_access {
+                return unsupported(SysmlUnsupportedExpression::OtherSyntax);
+            }
+            let Some(prefix_node) = node.children().next() else {
+                return unsupported(SysmlUnsupportedExpression::OtherSyntax);
+            };
+            let prefix = lower_expression(
+                &prefix_node,
+                workspace,
+                file_index,
+                file_name,
+                source_revision,
+                source_fingerprint,
+                depth + 1,
+            );
+            let range_end = u32::from(range.end());
+            let Some(reference) = workspace
+                .references()
+                .iter()
+                .filter(|reference| {
+                    reference.file == file_index
+                        && u32::from(reference.name_range.end()) == range_end
+                })
+                .max_by_key(|reference| u32::from(reference.name_range.start()))
+            else {
+                return unsupported(SysmlUnsupportedExpression::UnresolvedReference);
+            };
+            if !workspace
+                .model()
+                .kind(reference.target)
+                .is_a(ElementKind::Feature)
+            {
+                return unsupported(SysmlUnsupportedExpression::NonFeatureReference);
+            }
+            let target = SysmlFeatureHandle {
+                element: SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: reference.target.index() as u32,
+                },
+            };
+            if let Some(constant) = SysmlStandardConstant::from_qualified_name(
+                &workspace.qualified_name_of(reference.target),
+            ) {
+                return make(SysmlExpressionData::StandardConstant {
+                    feature: target,
+                    constant,
+                });
+            }
+            make(SysmlExpressionData::FeatureChain {
+                prefix: Box::new(prefix),
+                target,
+            })
         }
         SyntaxKind::LITERAL => {
             let Some(token) = node.first_token() else {

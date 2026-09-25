@@ -542,7 +542,7 @@ fn sysml_modelica_constraint_value(path: &str, name: &str) -> Dynamic {
 fn sysml_evaluate_constraint_value(
     path: &str,
     name: &str,
-    observations: Map,
+    observations: rhai::Array,
     absolute_tolerance: f64,
     relative_tolerance: f64,
 ) -> Dynamic {
@@ -2293,7 +2293,7 @@ fn build_world_engine_base(
         "sysml_evaluate_constraint",
         |path: ImmutableString,
          name: ImmutableString,
-         observations: Map,
+         observations: rhai::Array,
          absolute_tolerance: f64,
          relative_tolerance: f64|
          -> Dynamic {

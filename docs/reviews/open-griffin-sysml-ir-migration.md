@@ -1,7 +1,7 @@
 # Griffin SysML/KerML IR migration review
 
 **Reviewed:** 2026-09-22
-**Update:** 2026-09-23
+**Update:** 2026-09-25
 
 **Input:** `griffin-kerml-architecture-and-implementation-report-2026-09-22.md` and the current `astrobotic-griffin-1` SysML/Rhai sources
 
@@ -58,6 +58,22 @@ requirement checks expressed only in Twin Rhai remain to be migrated. The
 language gaps below still block source-driven topology and aggregate
 constraints.
 
+### 2026-09-25 typed feature-path update
+
+The generic AST now preserves dotted `PATH_EXPR` navigation as an ordered
+`FeatureChain`; the constraint IR carries resolved segments as typed,
+snapshot-scoped handles through dependency collection, provider observations,
+and Modelica input bindings. The Rhai API accepts complete typed paths for
+general observations, and the scalar-parameter helper emits only dependencies
+that the constraint actually uses. Rust diagnostic identities now use
+`IrDiagnosticCode` and serialize with their stable `SYSML-IR-NNN` report names.
+
+The affected crates compile with `cargo check`. This is compile evidence only:
+no Rhai fixture or Griffin Editor/runtime gate has run, so actual path
+resolution and provider behavior remain unverified. Optional `?.` access,
+navigation through feature-valued collections, and collection-valued feature
+evaluation remain unsupported.
+
 ## Audit of the current Griffin model
 
 The primary Griffin requirement/configuration sources contain many useful
@@ -85,7 +101,7 @@ permanent semantic layer.
 | Part usages, feature membership, roles, and multiplicity | Many `part def` and attribute declarations, but no complete lander usage graph with typed component roles and bounds | Arrays and parallel IDs can drift; policy cannot navigate an authored assembly | Resolved feature membership, usage identity, redefinition/subsetting, and multiplicity-preserving handles |
 | Ports, interfaces, connections, and bindings | Values such as `sourceComponent`, `usdPath`, and frame/unit strings | Rhai manually joins endpoints and providers; no typed contract says which observation supplies a feature | Typed endpoint/feature chains and standard binding/connectors with source spans and target identity |
 | Constraint definitions/usages | Relations live in Rhai mechanical calls or prose; no reusable source constraint library | A change to SysML values does not recompile a source-selected constraint plan | Standard-library scalar/collection invocations now compile to typed IR; reusable constraint usage membership, user-function bodies, defaults, and general result binding remain required |
-| Feature navigation | No executable `configuration.tankStations`-style semantic navigation in the IR | `_qualified_attribute` maps and string joins replace the language feature | `FeatureChain` with typed navigation, collection result type, null/invalid propagation, and diagnostics |
+| Feature navigation | Dotted `PATH_EXPR` now projects to typed feature chains and exact dependency paths; compile-checked, not runtime-verified | Griffin source and providers have not yet been migrated to consume full typed paths; optional navigation and collection-valued traversal remain unsupported | Runtime-verified standard feature navigation, collection-aware path typing, and explicit unavailable/invalid propagation |
 | Collections and aggregates | Parallel arrays and index assumptions | Index drift and hand-coded reductions for mass, COM, inertia, envelopes | Homogeneous scalar sequence literals, one-based indexing, typed `sum`/`product`, size predicates, and Boolean aggregates now compile/evaluate; feature-valued, structured/N-dimensional collections and reductions remain required |
 | Quantities and units | Many anonymous `Real` values and naming conventions such as `...M`, `...Kg`, `...Deg`, plus string `frameUnits` | Unit correctness is policy convention rather than a source-checked contract | Standard quantity kinds, unit literals/conversion contracts, dimensional checking, and frame/time metadata |
 | Frames and realization | USD paths, component names, and frame information are strings | A value can be numerically valid but attached to the wrong prim/frame | Provider binding contract: source feature, provider (`usd`, `modelica`, telemetry, derived), target, frame, unit, and time validity |
@@ -143,10 +159,12 @@ inside a provider binding.
 ### P1 — implement the language mechanisms Griffin will immediately need
 
 The current bounded IR handles typed scalar expressions, fixed primitive
-arrays, and a recognized subset of standard-library invocations. Griffin needs
-more before it can remove its main workarounds:
+arrays, dotted feature paths, and a recognized subset of standard-library
+invocations. Griffin needs more before it can remove its main workarounds:
 
-1. `FeatureChain` and typed navigation through part/feature usages;
+1. Runtime-verified navigation through part/feature usages, optional-access
+   semantics, and collection-valued paths (the typed dotted-path representation
+   and exact provider identity now compile);
 2. reusable constraint definitions/usages, user-defined function-body
    execution, default expansion, argument binding, direction, and result typing
    (the current typed `Invocation` supports only recognized standard-library

@@ -8,6 +8,7 @@
 //! recovery/validation.
 
 use lunco_modelica_ast::{StoredDefinition, parse_to_ast};
+use lunco_sysml_ast::SysmlFeaturePath;
 use lunco_sysml_ir::{
     CompiledConstraint, ConstraintIr, IrExpression, IrExpressionKind, IrLiteral, IrOperator,
     IrStandardConstant, IrStandardFunction, IrType, IrValueType,
@@ -110,6 +111,17 @@ pub struct LoweredModelicaConstraint {
     pub model_name: String,
     pub source: String,
     pub ast: StoredDefinition,
+    /// Exact SysML feature path represented by each generated Modelica input.
+    pub feature_bindings: Vec<ModelicaFeatureBinding>,
+}
+
+/// Typed mapping from one resolved SysML feature path to its generated input.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelicaFeatureBinding {
+    pub path: SysmlFeaturePath,
+    pub variable: String,
+    pub qualified_name: String,
+    pub ty: IrType,
 }
 
 /// Lower one valid SysML constraint into a standalone Modelica model.
@@ -152,9 +164,9 @@ fn lower_constraint_ir(
     source.push_str("model ");
     source.push_str(&model_name);
     source.push_str("\n");
-    for (name, (_, ty)) in &features {
+    for binding in features.values() {
         source.push_str("  ");
-        source.push_str(&modelica_declaration(ty, name)?);
+        source.push_str(&modelica_declaration(&binding.ty, &binding.variable)?);
         source.push_str(";\n");
     }
     source.push_str("equation\n");
@@ -178,28 +190,27 @@ fn lower_constraint_ir(
         model_name,
         source,
         ast,
+        feature_bindings: features.into_values().collect(),
     })
 }
 
 fn collect_features(
     expression: &IrExpression,
-    features: &mut BTreeMap<String, (String, IrType)>,
+    features: &mut BTreeMap<SysmlFeaturePath, ModelicaFeatureBinding>,
 ) -> Result<(), ModelicaLoweringError> {
     match &expression.kind {
-        IrExpressionKind::FeatureReference { qualified_name, .. } => {
-            let name = identifier(qualified_name);
-            if let Some((existing, _)) = features.get(&name) {
-                if existing != qualified_name {
-                    return Err(ModelicaLoweringError::InvalidExpression(format!(
-                        "SysML features `{existing}` and `{qualified_name}` collide as Modelica identifier `{name}`"
-                    )));
-                }
-            } else {
-                features.insert(
-                    name,
-                    (qualified_name.clone(), expression.result_type.clone()),
-                );
-            }
+        IrExpressionKind::FeatureReference {
+            path,
+            qualified_name,
+        } => {
+            features
+                .entry(path.clone())
+                .or_insert_with(|| ModelicaFeatureBinding {
+                    path: path.clone(),
+                    variable: feature_path_identifier(path),
+                    qualified_name: qualified_name.clone(),
+                    ty: expression.result_type.clone(),
+                });
         }
         IrExpressionKind::StandardConstant { .. } | IrExpressionKind::Literal(_) => {}
         IrExpressionKind::Unary { operand, .. } | IrExpressionKind::Group(operand) => {
@@ -288,7 +299,7 @@ fn modelica_declaration(ty: &IrType, name: &str) -> Result<String, ModelicaLower
 
 fn modelica_equation(
     expression: &IrExpression,
-    features: &BTreeMap<String, (String, IrType)>,
+    features: &BTreeMap<SysmlFeaturePath, ModelicaFeatureBinding>,
     constraint_name: &str,
 ) -> Result<String, ModelicaLoweringError> {
     if let IrExpressionKind::Binary {
@@ -312,17 +323,19 @@ fn modelica_equation(
 
 fn modelica_expression(
     expression: &IrExpression,
-    features: &BTreeMap<String, (String, IrType)>,
+    features: &BTreeMap<SysmlFeaturePath, ModelicaFeatureBinding>,
 ) -> Result<String, ModelicaLoweringError> {
     match &expression.kind {
-        IrExpressionKind::FeatureReference { qualified_name, .. } => {
-            let name = identifier(qualified_name);
-            if !features.contains_key(&name) {
+        IrExpressionKind::FeatureReference {
+            path,
+            qualified_name,
+        } => {
+            let Some(binding) = features.get(path) else {
                 return Err(ModelicaLoweringError::InvalidExpression(format!(
-                    "feature `{qualified_name}` was not declared in the lowered model"
+                    "feature path for `{qualified_name}` was not declared in the lowered model"
                 )));
-            }
-            Ok(name)
+            };
+            Ok(binding.variable.clone())
         }
         IrExpressionKind::StandardConstant { constant, .. } => Ok(match constant {
             IrStandardConstant::Pi => "Modelica.Constants.pi".to_owned(),
@@ -511,6 +524,23 @@ fn identifier(qualified_name: &str) -> String {
         output.insert(0, '_');
     }
     output
+}
+
+fn feature_path_identifier(path: &SysmlFeaturePath) -> String {
+    let first = path
+        .features()
+        .first()
+        .expect("validated SysML feature paths are non-empty")
+        .element;
+    let mut name = format!(
+        "sysml_r{}_s{:016x}_f{}",
+        first.source_revision, first.source_fingerprint, first.element_id
+    );
+    for feature in path.features().iter().skip(1) {
+        name.push_str("_f");
+        name.push_str(&feature.element.element_id.to_string());
+    }
+    name
 }
 
 fn model_name(constraint: &ConstraintIr) -> String {

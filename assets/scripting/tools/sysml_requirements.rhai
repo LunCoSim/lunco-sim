@@ -558,10 +558,9 @@ fn _expected(report, check) {
 }
 
 /// Create a generic requirement-linked SysML constraint check record.
-/// `bindings` is keyed by declared constraint parameter name or qualified
-/// name. Each value may be a native typed value or an explicit provider
-/// observation map (`provider`, `state`, `value`, and optional `detail`).
-/// Constraint logic remains authored in SysML.
+/// `bindings` can be keyed by declared parameter name for scalar inputs, or be
+/// a list of provider observations carrying their complete typed SysML feature
+/// paths. Constraint logic remains authored in SysML.
 fn constraint_check(id, component, requirement, verification,
                     constraint_name, bindings, provider, tolerance) {
     #{id: id, component: component, requirement: requirement,
@@ -585,7 +584,28 @@ fn _constraint_observations(model, check) {
         return #{ok: false, error: message, ir: ir};
     }
     let bindings = if check.bindings == () { #{} } else { check.bindings };
-    let observations = #{};
+    let observations = [];
+    if type_of(bindings) == "array" {
+        for candidate in bindings {
+            if type_of(candidate) != "map" {
+                return #{ok: false,
+                    error: "typed constraint bindings must contain observation maps",
+                    ir: ir};
+            }
+            let observation = candidate;
+            if observation.provider == () { observation.provider = check.provider; }
+            if observation.state == () {
+                observation.state = if observation.value == () { "unavailable" } else { "value" };
+            }
+            observations.push(observation);
+        }
+        return #{ok: true, observations: observations, ir: ir};
+    }
+    if type_of(bindings) != "map" {
+        return #{ok: false,
+            error: "constraint bindings must be a parameter map or typed observation list",
+            ir: ir};
+    }
     let known_names = #{};
     for parameter in ir.constraint.parameters {
         known_names[parameter.name] = parameter.qualified_name;
@@ -601,22 +621,69 @@ fn _constraint_observations(model, check) {
         }
     }
     for parameter in ir.constraint.parameters {
+        let parameter_dependencies = [];
+        for path in ir.constraint.dependencies {
+            if path.len() > 0 && path[0] == parameter.feature {
+                parameter_dependencies.push(path);
+            }
+        }
+        if parameter_dependencies.len() == 0 { continue; }
+
         let supplied = bindings[parameter.name];
         if supplied == () { supplied = bindings[parameter.qualified_name]; }
-        if supplied == () {
-            observations[parameter.qualified_name] = #{
-                provider: check.provider, state: "unavailable",
-                detail: "No observation was supplied for this SysML constraint parameter"};
-            continue;
-        }
-        if type_of(supplied) == "map" {
-            let observation = supplied;
-            if observation.provider == () { observation.provider = check.provider; }
-            if observation.state == () { observation.state = "value"; }
-            observations[parameter.qualified_name] = observation;
-        } else {
-            observations[parameter.qualified_name] = #{
-                provider: check.provider, state: "value", value: supplied};
+        for path in parameter_dependencies {
+            let observation = ();
+            if supplied != () {
+                if path.len() == 1 {
+                    observation = supplied;
+                } else if type_of(supplied) == "map" {
+                    if supplied.path == path {
+                        observation = supplied;
+                    } else if type_of(supplied.observations) == "array" {
+                        for candidate in supplied.observations {
+                            if type_of(candidate) == "map" && candidate.path == path {
+                                observation = candidate;
+                                break;
+                            }
+                        }
+                    }
+                } else if type_of(supplied) == "array" {
+                    for candidate in supplied {
+                        if type_of(candidate) == "map" && candidate.path == path {
+                            observation = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+            if observation == () {
+                observations.push(#{path: path, provider: check.provider,
+                    state: "unavailable",
+                    detail: if path.len() == 1 {
+                        "No observation was supplied for this SysML constraint parameter"
+                    } else {
+                        "No observation was supplied for this resolved SysML feature path"
+                    }});
+            } else if type_of(observation) == "map" {
+                if observation.path != () && observation.path != path {
+                    return #{ok: false,
+                        error: "binding observation path does not match the resolved SysML dependency",
+                        ir: ir};
+                }
+                if observation.provider == () { observation.provider = check.provider; }
+                if observation.state == () {
+                    observation.state = if observation.value == () { "unavailable" } else { "value" };
+                }
+                observation.path = path;
+                observations.push(observation);
+            } else if path.len() == 1 {
+                observations.push(#{path: path, provider: check.provider,
+                    state: "value", value: observation});
+            } else {
+                observations.push(#{path: path, provider: check.provider,
+                    state: "unavailable",
+                    detail: "A navigated SysML dependency requires an observation record with its full typed path"});
+            }
         }
     }
     #{ok: true, observations: observations, ir: ir}

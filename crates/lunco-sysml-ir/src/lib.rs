@@ -14,8 +14,8 @@ use lunco_hash::Fnv1a;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlElementHandle, SysmlExpression,
     SysmlExpressionData, SysmlExpressionOperator, SysmlFeature, SysmlFeatureHandle,
-    SysmlMultiplicity, SysmlPrimitiveType, SysmlSourceRef, SysmlType, SysmlTypeCategory,
-    SysmlUnsupportedExpression,
+    SysmlFeaturePath, SysmlMultiplicity, SysmlPrimitiveType, SysmlSourceRef, SysmlType,
+    SysmlTypeCategory, SysmlUnsupportedExpression,
 };
 use serde::{Deserialize, Serialize};
 
@@ -286,7 +286,7 @@ pub struct IrExpression {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum IrExpressionKind {
     FeatureReference {
-        feature: SysmlFeatureHandle,
+        path: SysmlFeaturePath,
         qualified_name: String,
     },
     StandardConstant {
@@ -347,7 +347,7 @@ pub struct ConstraintIr {
     pub source: SysmlSourceRef,
     pub parameters: Vec<IrParameter>,
     pub expressions: Vec<IrExpression>,
-    pub dependencies: Vec<SysmlFeatureHandle>,
+    pub dependencies: Vec<SysmlFeaturePath>,
     pub fingerprint: u64,
 }
 
@@ -358,12 +358,65 @@ pub enum DiagnosticSeverity {
     Error,
 }
 
+macro_rules! define_ir_diagnostic_codes {
+    ($($variant:ident => $code:literal,)+) => {
+        /// Stable machine-readable compiler and evaluator diagnostic identity.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        pub enum IrDiagnosticCode {
+            $(#[serde(rename = $code)] $variant,)+
+        }
+
+        impl IrDiagnosticCode {
+            /// Serialized stable code for report consumers.
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $code,)+
+                }
+            }
+        }
+    };
+}
+
+define_ir_diagnostic_codes! {
+    ConstraintNotFound => "SYSML-IR-001",
+    ConstraintHasNoExpressions => "SYSML-IR-002",
+    ExpressionDepthExceeded => "SYSML-IR-003",
+    FeatureNotInSnapshot => "SYSML-IR-005",
+    ConditionalGuardNotBoolean => "SYSML-IR-012",
+    ConditionalBranchesIncompatible => "SYSML-IR-013",
+    UnsupportedExpression => "SYSML-IR-014",
+    ExpressionTypeUnresolved => "SYSML-IR-015",
+    InvalidUnaryOperands => "SYSML-IR-016",
+    InvalidBinaryOperands => "SYSML-IR-017",
+    ConstraintHasNoExecutableBody => "SYSML-IR-021",
+    ConstraintBodyDidNotEvaluateToBoolean => "SYSML-IR-022",
+    ObservationUnavailable => "SYSML-IR-023",
+    ObservationEvaluationFailed => "SYSML-IR-024",
+    InvalidObservationPath => "SYSML-IR-025",
+    ObservationIsNotRecord => "SYSML-IR-026",
+    ObservationProviderOrStateInvalid => "SYSML-IR-027",
+    InvalidComparisonTolerance => "SYSML-IR-028",
+    UnsupportedStandardFunction => "SYSML-IR-029",
+    StandardFunctionArityMismatch => "SYSML-IR-030",
+    StandardFunctionArgumentBindingInvalid => "SYSML-IR-031",
+    StandardFunctionArgumentTypesInvalid => "SYSML-IR-032",
+    InvalidCollectionIndex => "SYSML-IR-034",
+    CollectionElementTypesIncompatible => "SYSML-IR-035",
+    UnsupportedPrimitiveType => "SYSML-IR-038",
+    FeatureChainSourceInvalid => "SYSML-IR-040",
+    FeatureChainSnapshotMismatch => "SYSML-IR-041",
+    ObservationSnapshotMismatch => "SYSML-IR-042",
+    DuplicateObservationPath => "SYSML-IR-043",
+    ObservationIsNotDependency => "SYSML-IR-044",
+    InvalidBindingContract => "SYSML-IR-045",
+}
+
 /// A source-linked diagnostic. Diagnostics are part of the contract and are
 /// never reduced to a boolean success flag.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IrDiagnostic {
     pub severity: DiagnosticSeverity,
-    pub code: String,
+    pub code: IrDiagnosticCode,
     pub source: Option<SysmlSourceRef>,
     pub message: String,
 }
@@ -397,7 +450,7 @@ pub fn compile_constraint_by_name(analysis: &SysmlAnalysis, name: &str) -> Compi
             constraint: None,
             diagnostics: vec![IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
-                code: "SYSML-IR-001".to_owned(),
+                code: IrDiagnosticCode::ConstraintNotFound,
                 source: None,
                 message: format!("constraint `{name}` was not found in the semantic snapshot"),
             }],
@@ -440,6 +493,7 @@ pub fn compile_constraint(
     for expression in &constraint.expressions {
         if let Some(compiled) = compile_expression(
             expression,
+            analysis,
             attributes,
             &constraint.parameters,
             &mut diagnostics,
@@ -453,7 +507,7 @@ pub fn compile_constraint(
     if constraint.expressions.is_empty() {
         diagnostics.push(IrDiagnostic {
             severity: DiagnosticSeverity::Warning,
-            code: "SYSML-IR-002".to_owned(),
+            code: IrDiagnosticCode::ConstraintHasNoExpressions,
             source: Some(source_of(&constraint.element, analysis.source_revision())),
             message: "constraint has no executable expression statements".to_owned(),
         });
@@ -485,15 +539,16 @@ pub fn compile_constraint(
 
 fn compile_expression(
     expression: &SysmlExpression,
+    analysis: &SysmlAnalysis,
     attributes: &[SysmlAttribute],
     parameters: &[SysmlFeature],
     diagnostics: &mut Vec<IrDiagnostic>,
-    dependencies: &mut Vec<SysmlFeatureHandle>,
+    dependencies: &mut Vec<SysmlFeaturePath>,
     depth: usize,
 ) -> Option<IrExpression> {
     if depth > MAX_EXPRESSION_DEPTH {
         diagnostics.push(error(
-            "SYSML-IR-003",
+            IrDiagnosticCode::ExpressionDepthExceeded,
             &expression.source,
             "expression nesting exceeds the compiler safety limit",
         ));
@@ -503,46 +558,24 @@ fn compile_expression(
     let source = expression.source.clone();
     let kind = match &expression.data {
         SysmlExpressionData::FeatureReference(feature) => {
-            let feature_name = attributes
-                .iter()
-                .find(|attribute| attribute.handle == *feature)
-                .map(|attribute| attribute.qualified_name.clone())
-                .or_else(|| {
-                    parameters
-                        .iter()
-                        .find(|parameter| parameter.handle == *feature)
-                        .map(|parameter| parameter.qualified_name.clone())
-                });
-            let feature_name = match feature_name {
-                Some(feature_name) => feature_name,
-                None => {
-                    diagnostics.push(error(
-                        "SYSML-IR-005",
-                        &source,
-                        "feature reference does not resolve to a projected attribute",
-                    ));
-                    return None;
-                }
+            let path = SysmlFeaturePath::single(*feature);
+            let Some(feature_name) = feature_name(analysis, attributes, parameters, *feature)
+            else {
+                diagnostics.push(error(
+                    IrDiagnosticCode::FeatureNotInSnapshot,
+                    &source,
+                    "feature reference is not present in the resolved source snapshot",
+                ));
+                return None;
             };
-            let declared_type = attributes
-                .iter()
-                .find(|attribute| attribute.handle == *feature)
-                .and_then(|attribute| attribute.declared_type.as_ref())
-                .or_else(|| {
-                    parameters
-                        .iter()
-                        .find(|parameter| parameter.handle == *feature)
-                        .and_then(|parameter| parameter.declared_type.as_ref())
-                })
-                .map(ir_type_from_sysml);
+            let declared_type = feature_declared_type(attributes, parameters, *feature);
             let unsupported_primitive = declared_type.as_ref().and_then(|ty| match &ty.value {
                 IrValueType::Rational => Some("Rational"),
                 IrValueType::Complex => Some("Complex"),
                 _ => None,
             });
             if let Some(primitive) = unsupported_primitive {
-                diagnostics.push(error(
-                    "SYSML-IR-038",
+                diagnostics.push(error(IrDiagnosticCode::UnsupportedPrimitiveType,
                     &source,
                     &format!(
                         "SysML primitive `{primitive}` is preserved in the type graph but is not executable in the scalar evaluator"
@@ -550,9 +583,55 @@ fn compile_expression(
                 ));
                 return None;
             }
-            dependencies.push(*feature);
+            dependencies.push(path.clone());
             IrExpressionKind::FeatureReference {
-                feature: *feature,
+                path,
+                qualified_name: feature_name,
+            }
+        }
+        SysmlExpressionData::FeatureChain { prefix, target } => {
+            let Some(prefix_path) = sysml_feature_path(prefix) else {
+                diagnostics.push(error(
+                    IrDiagnosticCode::FeatureChainSourceInvalid,
+                    &source,
+                    "feature-chain source must resolve to a feature path",
+                ));
+                return None;
+            };
+            let Some(path) = prefix_path.followed_by(*target) else {
+                diagnostics.push(error(
+                    IrDiagnosticCode::FeatureChainSnapshotMismatch,
+                    &source,
+                    "feature-chain segments belong to different SysML source snapshots",
+                ));
+                return None;
+            };
+            let Some(feature_name) = feature_name(analysis, attributes, parameters, *target) else {
+                diagnostics.push(error(
+                    IrDiagnosticCode::FeatureNotInSnapshot,
+                    &source,
+                    "feature-chain target is not present in the resolved source snapshot",
+                ));
+                return None;
+            };
+            let declared_type = feature_declared_type(attributes, parameters, *target);
+            let unsupported_primitive = declared_type.as_ref().and_then(|ty| match &ty.value {
+                IrValueType::Rational => Some("Rational"),
+                IrValueType::Complex => Some("Complex"),
+                _ => None,
+            });
+            if let Some(primitive) = unsupported_primitive {
+                diagnostics.push(error(IrDiagnosticCode::UnsupportedPrimitiveType,
+                    &source,
+                    &format!(
+                        "SysML primitive `{primitive}` is preserved in the type graph but is not executable in the scalar evaluator"
+                    ),
+                ));
+                return None;
+            }
+            dependencies.push(path.clone());
+            IrExpressionKind::FeatureReference {
+                path,
                 qualified_name: feature_name,
             }
         }
@@ -579,6 +658,7 @@ fn compile_expression(
             let operator = IrOperator::from(*operator);
             let operand = compile_expression(
                 operand,
+                analysis,
                 attributes,
                 parameters,
                 diagnostics,
@@ -599,6 +679,7 @@ fn compile_expression(
             let operator = IrOperator::from(*operator);
             let left = compile_expression(
                 left,
+                analysis,
                 attributes,
                 parameters,
                 diagnostics,
@@ -607,6 +688,7 @@ fn compile_expression(
             )?;
             let right = compile_expression(
                 right,
+                analysis,
                 attributes,
                 parameters,
                 diagnostics,
@@ -633,6 +715,7 @@ fn compile_expression(
         } => {
             let condition = compile_expression(
                 condition,
+                analysis,
                 attributes,
                 parameters,
                 diagnostics,
@@ -641,6 +724,7 @@ fn compile_expression(
             )?;
             let when_true = compile_expression(
                 when_true,
+                analysis,
                 attributes,
                 parameters,
                 diagnostics,
@@ -649,6 +733,7 @@ fn compile_expression(
             )?;
             let when_false = compile_expression(
                 when_false,
+                analysis,
                 attributes,
                 parameters,
                 diagnostics,
@@ -657,14 +742,14 @@ fn compile_expression(
             )?;
             if !condition.result_type.is_boolean_scalar() {
                 diagnostics.push(error(
-                    "SYSML-IR-012",
+                    IrDiagnosticCode::ConditionalGuardNotBoolean,
                     &condition.source,
                     "conditional guard must be a scalar Boolean",
                 ));
             }
             if !condition_types_compatible(&when_true.result_type, &when_false.result_type) {
                 diagnostics.push(error(
-                    "SYSML-IR-013",
+                    IrDiagnosticCode::ConditionalBranchesIncompatible,
                     &source,
                     "conditional branches have incompatible value types",
                 ));
@@ -681,7 +766,7 @@ fn compile_expression(
         } => {
             let Some(function) = function_reference.standard_function else {
                 diagnostics.push(error(
-                    "SYSML-IR-029",
+                    IrDiagnosticCode::UnsupportedStandardFunction,
                     &source,
                     "resolved function is outside the executable standard-library subset",
                 ));
@@ -689,7 +774,7 @@ fn compile_expression(
             };
             if invocation_arguments.len() != function.arity() {
                 diagnostics.push(error(
-                    "SYSML-IR-030",
+                    IrDiagnosticCode::StandardFunctionArityMismatch,
                     &source,
                     &format!(
                         "standard function `{}` requires {} argument(s), found {}",
@@ -705,7 +790,7 @@ fn compile_expression(
                 .any(|argument| argument.parameter.is_none())
             {
                 diagnostics.push(error(
-                    "SYSML-IR-031",
+                    IrDiagnosticCode::StandardFunctionArgumentBindingInvalid,
                     &source,
                     "function arguments could not all be bound to resolved input parameters",
                 ));
@@ -718,7 +803,7 @@ fn compile_expression(
             bound_parameters.sort_unstable_by_key(|parameter| parameter.element_id);
             if bound_parameters.windows(2).any(|pair| pair[0] == pair[1]) {
                 diagnostics.push(error(
-                    "SYSML-IR-031",
+                    IrDiagnosticCode::StandardFunctionArgumentBindingInvalid,
                     &source,
                     "more than one invocation argument is bound to the same input parameter",
                 ));
@@ -729,6 +814,7 @@ fn compile_expression(
                 .map(|argument| {
                     compile_expression(
                         &argument.value,
+                        analysis,
                         attributes,
                         parameters,
                         diagnostics,
@@ -751,6 +837,7 @@ fn compile_expression(
         SysmlExpressionData::Index { collection, index } => {
             let collection = compile_expression(
                 collection,
+                analysis,
                 attributes,
                 parameters,
                 diagnostics,
@@ -759,6 +846,7 @@ fn compile_expression(
             )?;
             let index = compile_expression(
                 index,
+                analysis,
                 attributes,
                 parameters,
                 diagnostics,
@@ -770,7 +858,7 @@ fn compile_expression(
                 || !matches!(index.result_type.value, IrValueType::Integer)
             {
                 diagnostics.push(error(
-                    "SYSML-IR-034",
+                    IrDiagnosticCode::InvalidCollectionIndex,
                     &source,
                     "indexing requires a collection and a scalar Integer index",
                 ));
@@ -787,6 +875,7 @@ fn compile_expression(
                 .map(|child| {
                     compile_expression(
                         child,
+                        analysis,
                         attributes,
                         parameters,
                         diagnostics,
@@ -797,7 +886,7 @@ fn compile_expression(
                 .collect::<Option<Vec<_>>>()?;
             if collection_result_type(&values).is_none() {
                 diagnostics.push(error(
-                    "SYSML-IR-035",
+                    IrDiagnosticCode::CollectionElementTypesIncompatible,
                     &source,
                     "collection literal elements must have compatible scalar types and units",
                 ));
@@ -808,6 +897,7 @@ fn compile_expression(
         SysmlExpressionData::Group(child) => {
             let child = compile_expression(
                 child,
+                analysis,
                 attributes,
                 parameters,
                 diagnostics,
@@ -819,7 +909,7 @@ fn compile_expression(
         SysmlExpressionData::Unsupported(reason) => {
             let reason = unsupported_name(*reason);
             diagnostics.push(error(
-                "SYSML-IR-014",
+                IrDiagnosticCode::UnsupportedExpression,
                 &source,
                 &format!("expression cannot be compiled: {reason}"),
             ));
@@ -833,6 +923,60 @@ fn compile_expression(
         result_type,
         kind,
     })
+}
+
+fn feature_name(
+    analysis: &SysmlAnalysis,
+    attributes: &[SysmlAttribute],
+    parameters: &[SysmlFeature],
+    feature: SysmlFeatureHandle,
+) -> Option<String> {
+    attributes
+        .iter()
+        .find(|attribute| attribute.handle == feature)
+        .map(|attribute| attribute.qualified_name.clone())
+        .or_else(|| {
+            parameters
+                .iter()
+                .find(|parameter| parameter.handle == feature)
+                .map(|parameter| parameter.qualified_name.clone())
+        })
+        .or_else(|| {
+            analysis
+                .elements()
+                .iter()
+                .find(|element| element.feature_handle == Some(feature))
+                .map(|element| element.qualified_name.clone())
+        })
+}
+
+fn feature_declared_type(
+    attributes: &[SysmlAttribute],
+    parameters: &[SysmlFeature],
+    feature: SysmlFeatureHandle,
+) -> Option<IrType> {
+    attributes
+        .iter()
+        .find(|attribute| attribute.handle == feature)
+        .and_then(|attribute| attribute.declared_type.as_ref())
+        .or_else(|| {
+            parameters
+                .iter()
+                .find(|parameter| parameter.handle == feature)
+                .and_then(|parameter| parameter.declared_type.as_ref())
+        })
+        .map(ir_type_from_sysml)
+}
+
+fn sysml_feature_path(expression: &SysmlExpression) -> Option<SysmlFeaturePath> {
+    match &expression.data {
+        SysmlExpressionData::FeatureReference(feature) => Some(SysmlFeaturePath::single(*feature)),
+        SysmlExpressionData::FeatureChain { prefix, target } => {
+            sysml_feature_path(prefix)?.followed_by(*target)
+        }
+        SysmlExpressionData::Group(child) => sysml_feature_path(child),
+        _ => None,
+    }
 }
 
 fn validate_standard_function(
@@ -911,8 +1055,7 @@ fn validate_standard_function(
         }),
     };
     if !valid {
-        diagnostics.push(error(
-            "SYSML-IR-032",
+        diagnostics.push(error(IrDiagnosticCode::StandardFunctionArgumentTypesInvalid,
             source,
             &format!(
                 "standard function {function:?} received argument types outside its supported typed subset"
@@ -957,14 +1100,14 @@ fn infer_result_type(
     diagnostics: &mut Vec<IrDiagnostic>,
 ) -> IrType {
     match kind {
-        IrExpressionKind::FeatureReference { feature, .. } => attributes
+        IrExpressionKind::FeatureReference { path, .. } => attributes
             .iter()
-            .find(|attribute| attribute.handle == *feature)
+            .find(|attribute| attribute.handle == path.target())
             .and_then(|attribute| attribute.declared_type.as_ref())
             .or_else(|| {
                 parameters
                     .iter()
-                    .find(|parameter| parameter.handle == *feature)
+                    .find(|parameter| parameter.handle == path.target())
                     .and_then(|parameter| parameter.declared_type.as_ref())
             })
             .map(ir_type_from_sysml)
@@ -1097,7 +1240,7 @@ impl IrTypeDiagnosticExt for IrType {
         if matches!(self.value, IrValueType::Unknown) {
             diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Warning,
-                code: "SYSML-IR-015".to_owned(),
+                code: IrDiagnosticCode::ExpressionTypeUnresolved,
                 source: Some(source.source.clone()),
                 message: "expression result type is unresolved; downstream execution must not assume a scalar type".to_owned(),
             });
@@ -1190,7 +1333,7 @@ fn validate_unary(
     };
     if !valid {
         diagnostics.push(error(
-            "SYSML-IR-016",
+            IrDiagnosticCode::InvalidUnaryOperands,
             source,
             "operator is not defined for the operand's resolved type and multiplicity",
         ));
@@ -1227,7 +1370,7 @@ fn validate_binary(
     };
     if !valid {
         diagnostics.push(error(
-            "SYSML-IR-017",
+            IrDiagnosticCode::InvalidBinaryOperands,
             source,
             "operator is not defined for the operand types, units, or multiplicities",
         ));
@@ -1259,10 +1402,10 @@ fn source_of(element: &lunco_sysml_ast::SysmlElement, revision: u64) -> SysmlSou
     }
 }
 
-fn error(code: &str, source: &SysmlSourceRef, message: &str) -> IrDiagnostic {
+fn error(code: IrDiagnosticCode, source: &SysmlSourceRef, message: &str) -> IrDiagnostic {
     IrDiagnostic {
         severity: DiagnosticSeverity::Error,
-        code: code.to_owned(),
+        code,
         source: Some(source.clone()),
         message: message.to_owned(),
     }
@@ -1296,9 +1439,13 @@ fn fingerprint_expression(hash: &mut Fnv1a, expression: &IrExpression) {
     hash.write_u64(expression.source.start as u64);
     hash.write_u64(expression.source.end as u64);
     match &expression.kind {
-        IrExpressionKind::FeatureReference { feature, .. } => {
+        IrExpressionKind::FeatureReference { path, .. } => {
             hash.write_bytes(b"feature");
-            hash.write_u64(feature.element.element_id as u64);
+            for feature in path.features() {
+                hash.write_u64(feature.element.source_revision);
+                hash.write_u64(feature.element.source_fingerprint);
+                hash.write_u64(feature.element.element_id as u64);
+            }
         }
         IrExpressionKind::StandardConstant {
             constant,
@@ -1420,8 +1567,7 @@ pub enum BindingProvider {
 /// false.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BindingContract {
-    pub feature: SysmlFeatureHandle,
-    pub qualified_name: String,
+    pub path: SysmlFeaturePath,
     pub provider: BindingProvider,
     pub required: bool,
     pub unit: Option<String>,
@@ -1444,7 +1590,7 @@ pub enum ObservationState {
 /// One observation with its provider state and optional typed value.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FeatureObservation {
-    pub feature: SysmlFeatureHandle,
+    pub path: SysmlFeaturePath,
     pub provider: BindingProvider,
     pub state: ObservationState,
     pub value: Option<IrValue>,
@@ -1469,10 +1615,13 @@ pub struct EvaluationContext {
 }
 
 impl EvaluationContext {
-    pub fn observation(&self, feature: SysmlFeatureHandle) -> Option<&FeatureObservation> {
-        self.observations
+    pub fn observation(&self, path: &SysmlFeaturePath) -> Option<&FeatureObservation> {
+        let mut matches = self
+            .observations
             .iter()
-            .find(|observation| observation.feature == feature)
+            .filter(|observation| &observation.path == path);
+        let observation = matches.next()?;
+        matches.next().is_none().then_some(observation)
     }
 }
 
@@ -1528,7 +1677,7 @@ pub fn evaluate_constraint(
             expression_results: Vec::new(),
             diagnostics: vec![IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
-                code: "SYSML-IR-028".to_owned(),
+                code: IrDiagnosticCode::InvalidComparisonTolerance,
                 source: None,
                 message: "comparison tolerances must be finite and non-negative".to_owned(),
             }],
@@ -1548,13 +1697,23 @@ pub fn evaluate_constraint(
             diagnostics: compiled.diagnostics.clone(),
         };
     }
+    let context_diagnostics = validate_evaluation_context(constraint, context);
+    if !context_diagnostics.is_empty() {
+        let mut diagnostics = compiled.diagnostics.clone();
+        diagnostics.extend(context_diagnostics);
+        return EvaluationReport {
+            verdict: VerificationVerdict::Error,
+            expression_results: vec![None; constraint.expressions.len()],
+            diagnostics,
+        };
+    }
     if constraint.expressions.is_empty() {
         return EvaluationReport {
             verdict: VerificationVerdict::Inconclusive,
             expression_results: Vec::new(),
             diagnostics: vec![IrDiagnostic {
                 severity: DiagnosticSeverity::Warning,
-                code: "SYSML-IR-021".to_owned(),
+                code: IrDiagnosticCode::ConstraintHasNoExecutableBody,
                 source: Some(constraint.source.clone()),
                 message: "constraint has no executable body".to_owned(),
             }],
@@ -1577,7 +1736,7 @@ pub fn evaluate_constraint(
                 has_error = true;
                 results.push(None);
                 diagnostics.push(error(
-                    "SYSML-IR-022",
+                    IrDiagnosticCode::ConstraintBodyDidNotEvaluateToBoolean,
                     &expression.source,
                     "constraint body expression did not evaluate to Boolean",
                 ));
@@ -1587,7 +1746,7 @@ pub fn evaluate_constraint(
                 results.push(None);
                 diagnostics.push(IrDiagnostic {
                     severity: DiagnosticSeverity::Warning,
-                    code: "SYSML-IR-023".to_owned(),
+                    code: IrDiagnosticCode::ObservationUnavailable,
                     source: Some(expression.source.clone()),
                     message: detail,
                 });
@@ -1595,7 +1754,11 @@ pub fn evaluate_constraint(
             Err(EvaluationFailure::Error(detail)) => {
                 has_error = true;
                 results.push(None);
-                diagnostics.push(error("SYSML-IR-024", &expression.source, &detail));
+                diagnostics.push(error(
+                    IrDiagnosticCode::ObservationEvaluationFailed,
+                    &expression.source,
+                    &detail,
+                ));
             }
         }
     }
@@ -1614,6 +1777,40 @@ pub fn evaluate_constraint(
         expression_results: results,
         diagnostics,
     }
+}
+
+fn validate_evaluation_context(
+    constraint: &ConstraintIr,
+    context: &EvaluationContext,
+) -> Vec<IrDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut seen = Vec::with_capacity(context.observations.len());
+    for observation in &context.observations {
+        if !observation.path.belongs_to(
+            constraint.element.source_revision,
+            constraint.element.source_fingerprint,
+        ) {
+            diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ObservationSnapshotMismatch,
+                source: None,
+                message: "provider observation belongs to a different SysML source snapshot"
+                    .to_owned(),
+            });
+        }
+        if seen.contains(&observation.path) {
+            diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::DuplicateObservationPath,
+                source: None,
+                message: "provider supplied duplicate observations for one SysML feature path"
+                    .to_owned(),
+            });
+        } else {
+            seen.push(observation.path.clone());
+        }
+    }
+    diagnostics
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1647,13 +1844,13 @@ fn evaluate_expression(
     options: EvaluationOptions,
 ) -> Result<EvaluationValue, EvaluationFailure> {
     match &expression.kind {
-        IrExpressionKind::FeatureReference { feature, .. } => {
-            let Some(observation) = context.observation(*feature) else {
+        IrExpressionKind::FeatureReference { path, .. } => {
+            let Some(observation) = context.observation(path) else {
                 return Err(EvaluationFailure::Inconclusive(
                     "no provider observation exists for a referenced feature".to_owned(),
                 ));
             };
-            validate_observation_contract(observation, *feature)?;
+            validate_observation_contract(observation, path)?;
             match observation.state {
                 ObservationState::Value => observation
                     .value
@@ -1666,7 +1863,7 @@ fn evaluate_expression(
                     })
                 .and_then(|value| {
                     if runtime_value_matches_type(&value, &expression.result_type) {
-                            if runtime_references_match_snapshot(&value, *feature) {
+                            if runtime_references_match_snapshot(&value, path) {
                                 Ok(value)
                             } else {
                                 Err(EvaluationFailure::Error(
@@ -2094,14 +2291,14 @@ fn checked_integer(value: f64, function: &str) -> Result<EvaluationValue, Evalua
 
 fn validate_observation_contract(
     observation: &FeatureObservation,
-    feature: SysmlFeatureHandle,
+    path: &SysmlFeaturePath,
 ) -> Result<(), EvaluationFailure> {
     let Some(contract) = &observation.contract else {
         return Ok(());
     };
-    if contract.feature != feature {
+    if contract.path != *path {
         return Err(EvaluationFailure::Error(
-            "binding contract refers to a different SysML feature".to_owned(),
+            "binding contract refers to a different SysML feature path".to_owned(),
         ));
     }
     if contract.provider != observation.provider {
@@ -2229,15 +2426,16 @@ fn runtime_value_matches_scalar_type(
     }
 }
 
-fn runtime_references_match_snapshot(value: &EvaluationValue, feature: SysmlFeatureHandle) -> bool {
+fn runtime_references_match_snapshot(value: &EvaluationValue, path: &SysmlFeaturePath) -> bool {
+    let snapshot = path.features()[0].element;
     match value {
         EvaluationValue::Reference(target) => {
-            target.source_revision == feature.element.source_revision
-                && target.source_fingerprint == feature.element.source_fingerprint
+            target.source_revision == snapshot.source_revision
+                && target.source_fingerprint == snapshot.source_fingerprint
         }
         EvaluationValue::Collection(values) => values
             .iter()
-            .all(|value| runtime_references_match_snapshot(value, feature)),
+            .all(|value| runtime_references_match_snapshot(value, path)),
         _ => true,
     }
 }
