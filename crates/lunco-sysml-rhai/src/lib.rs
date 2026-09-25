@@ -18,8 +18,9 @@ use lunco_sysml_ir::{
     BindingContract, BindingProvider, CompiledConstraint, ConstraintIr, DiagnosticSeverity,
     EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
     IrDiagnosticCode, IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
-    IrStandardFunction, IrType, IrValue, IrValueType, ObservationState, VerificationVerdict,
-    compile_constraint_by_name, evaluate_constraint,
+    IrStandardFunction, IrType, IrValue, IrValueType, ObservationState,
+    RequiredConstraintEvaluation, RequirementEvaluationReport, VerificationVerdict,
+    compile_constraint_by_name, evaluate_constraint, evaluate_requirement,
 };
 use lunco_sysml_modelica::{lower_constraint, supports_standard_function_lowering};
 use rhai::{Array, Dynamic, Engine, Map};
@@ -340,53 +341,142 @@ pub fn evaluate_constraint_value(
     relative_tolerance: f64,
 ) -> Dynamic {
     let compiled = compile_constraint_by_name(&model.analysis, name);
-    let mut context = EvaluationContext::default();
-    let mut input_diagnostics = Vec::new();
     let constraint_source = compiled
         .constraint
         .as_ref()
         .map(|constraint| constraint.source.clone());
-
     let allowed_paths = compiled
         .constraint
         .as_ref()
-        .map(|constraint| constraint.dependencies.as_slice())
-        .unwrap_or_default();
+        .map(|constraint| constraint.dependencies.as_slice());
+    let (context, input_diagnostics) = evaluation_context_from_dynamic(
+        &model.analysis,
+        observations,
+        allowed_paths,
+        constraint_source,
+        name,
+    );
+
+    let mut report = evaluate_constraint(
+        &compiled,
+        &context,
+        EvaluationOptions {
+            absolute_tolerance,
+            relative_tolerance,
+        },
+    );
+    report.diagnostics.extend(input_diagnostics);
+    if report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+    {
+        report.verdict = VerificationVerdict::Error;
+    }
+    evaluation_report_dynamic(&report)
+}
+
+/// Evaluate all standard `require` constraint memberships on one typed
+/// requirement, checking the typed verification case's `verify` relationship.
+pub fn evaluate_requirement_value(
+    model: &mut SysmlModelValue,
+    requirement: SysmlRequirementValue,
+    verification: SysmlVerificationValue,
+    observations: Array,
+    tolerances: Dynamic,
+) -> Dynamic {
+    let tolerances = tolerances.try_cast::<Map>().unwrap_or_default();
+    let source = Some(SysmlSourceRef {
+        file: requirement.inner.element.file.clone(),
+        start: requirement.inner.element.start,
+        end: requirement.inner.element.end,
+        revision: model.analysis.source_revision(),
+    });
+    let (context, input_diagnostics) = evaluation_context_from_dynamic(
+        &model.analysis,
+        observations,
+        None,
+        source,
+        &requirement.inner.element.qualified_name,
+    );
+    let mut report = evaluate_requirement(
+        &model.analysis,
+        requirement.inner.element.handle,
+        Some(verification.inner.element.handle),
+        &context,
+        evaluation_options_from_map(&tolerances),
+    );
+    report.diagnostics.extend(input_diagnostics);
+    if report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+    {
+        report.verdict = VerificationVerdict::Error;
+    }
+    requirement_evaluation_dynamic(&report)
+}
+
+fn evaluation_options_from_map(tolerances: &Map) -> EvaluationOptions {
+    fn read(tolerances: &Map, key: &str) -> f64 {
+        tolerances
+            .get(key)
+            .and_then(|value| {
+                value
+                    .as_float()
+                    .ok()
+                    .or_else(|| value.as_int().ok().map(|integer| integer as f64))
+            })
+            .unwrap_or(f64::NAN)
+    }
+    EvaluationOptions {
+        absolute_tolerance: read(tolerances, "absolute_tolerance"),
+        relative_tolerance: read(tolerances, "relative_tolerance"),
+    }
+}
+
+fn evaluation_context_from_dynamic(
+    analysis: &SysmlAnalysis,
+    observations: Array,
+    allowed_paths: Option<&[SysmlFeaturePath]>,
+    fallback_source: Option<SysmlSourceRef>,
+    dependency_label: &str,
+) -> (EvaluationContext, Vec<IrDiagnostic>) {
+    let mut context = EvaluationContext::default();
+    let mut diagnostics = Vec::new();
     let mut observed_paths = HashSet::new();
     for dynamic_observation in observations {
         let Some(record) = dynamic_observation.try_cast::<Map>() else {
-            input_diagnostics.push(IrDiagnostic {
+            diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::ObservationIsNotRecord,
-                source: constraint_source.clone(),
+                source: fallback_source.clone(),
                 message: "provider observation must be a Rhai map".to_owned(),
             });
             continue;
         };
         let path = record.get("path").and_then(dynamic_feature_path);
         let Some(path) = path else {
-            input_diagnostics.push(IrDiagnostic {
+            diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::InvalidObservationPath,
-                source: constraint_source.clone(),
+                source: fallback_source.clone(),
                 message: "provider observation needs a non-empty typed SysML feature path"
                     .to_owned(),
             });
             continue;
         };
-        let feature_name = feature_path_label(&model.analysis, &path)
+        let feature_name = feature_path_label(analysis, &path)
             .unwrap_or_else(|| format!("feature-path {:?}", path.features()));
-        let path_is_current = path.belongs_to(
-            model.analysis.source_revision(),
-            model.analysis.source_fingerprint(),
-        );
+        let path_is_current =
+            path.belongs_to(analysis.source_revision(), analysis.source_fingerprint());
         let source = if path_is_current {
-            feature_path_source(&model.analysis, &path).or_else(|| constraint_source.clone())
+            feature_path_source(analysis, &path).or_else(|| fallback_source.clone())
         } else {
-            constraint_source.clone()
+            fallback_source.clone()
         };
         if !path_is_current {
-            input_diagnostics.push(IrDiagnostic {
+            diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::ObservationSnapshotMismatch,
                 source,
@@ -396,19 +486,19 @@ pub fn evaluate_constraint_value(
             });
             continue;
         }
-        if !allowed_paths.contains(&path) {
-            input_diagnostics.push(IrDiagnostic {
+        if allowed_paths.is_some_and(|paths| !paths.contains(&path)) {
+            diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::ObservationIsNotDependency,
                 source: source.clone(),
                 message: format!(
-                    "observation path for `{feature_name}` is not a dependency of `{name}`"
+                    "observation path for `{feature_name}` is not a dependency of `{dependency_label}`"
                 ),
             });
             continue;
         }
         if !observed_paths.insert(path.clone()) {
-            input_diagnostics.push(IrDiagnostic {
+            diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::DuplicateObservationPath,
                 source: source.clone(),
@@ -427,7 +517,7 @@ pub fn evaluate_constraint_value(
             .and_then(|value| value.clone().into_string().ok())
             .and_then(|value| parse_observation_state(&value));
         let (Some(provider), Some(state)) = (provider, state) else {
-            input_diagnostics.push(IrDiagnostic {
+            diagnostics.push(IrDiagnostic {
                 severity: DiagnosticSeverity::Error,
                 code: IrDiagnosticCode::ObservationProviderOrStateInvalid,
                 source: source.clone(),
@@ -456,7 +546,7 @@ pub fn evaluate_constraint_value(
         let source_revision = record.get("source_revision").and_then(dynamic_u64);
         let contract = if let Some(dynamic_contract) = record.get("contract") {
             let Some(contract_record) = dynamic_contract.clone().try_cast::<Map>() else {
-                input_diagnostics.push(IrDiagnostic {
+                diagnostics.push(IrDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     code: IrDiagnosticCode::InvalidBindingContract,
                     source: source.clone(),
@@ -469,7 +559,7 @@ pub fn evaluate_constraint_value(
                 .and_then(|value| value.clone().into_string().ok())
                 .and_then(|value| parse_binding_provider(&value));
             let Some(contract_provider) = contract_provider else {
-                input_diagnostics.push(IrDiagnostic {
+                diagnostics.push(IrDiagnostic {
                     severity: DiagnosticSeverity::Error,
                     code: IrDiagnosticCode::InvalidBindingContract,
                     source: source.clone(),
@@ -479,14 +569,13 @@ pub fn evaluate_constraint_value(
                 });
                 continue;
             };
-            let required = contract_record
-                .get("required")
-                .and_then(|value| value.as_bool().ok())
-                .unwrap_or(true);
             Some(BindingContract {
                 path: path.clone(),
                 provider: contract_provider,
-                required,
+                required: contract_record
+                    .get("required")
+                    .and_then(|value| value.as_bool().ok())
+                    .unwrap_or(true),
                 unit: contract_record
                     .get("unit")
                     .and_then(|value| value.clone().into_string().ok()),
@@ -514,24 +603,7 @@ pub fn evaluate_constraint_value(
             contract,
         });
     }
-
-    let mut report = evaluate_constraint(
-        &compiled,
-        &context,
-        EvaluationOptions {
-            absolute_tolerance,
-            relative_tolerance,
-        },
-    );
-    report.diagnostics.extend(input_diagnostics);
-    if report
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
-    {
-        report.verdict = VerificationVerdict::Error;
-    }
-    evaluation_report_dynamic(&report)
+    (context, diagnostics)
 }
 
 fn dynamic_feature_path(value: &Dynamic) -> Option<SysmlFeaturePath> {
@@ -693,6 +765,69 @@ fn evaluation_report_dynamic(report: &EvaluationReport) -> Dynamic {
                 .map(ir_diagnostic_dynamic)
                 .collect(),
         ),
+    );
+    Dynamic::from_map(value)
+}
+
+fn requirement_evaluation_dynamic(report: &RequirementEvaluationReport) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("requirement".into(), Dynamic::from(report.requirement));
+    value.insert(
+        "verification".into(),
+        report
+            .verification
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "verdict".into(),
+        Dynamic::from(match report.verdict {
+            VerificationVerdict::Pass => "pass",
+            VerificationVerdict::Fail => "fail",
+            VerificationVerdict::Inconclusive => "inconclusive",
+            VerificationVerdict::Error => "error",
+        }),
+    );
+    value.insert(
+        "ok".into(),
+        Dynamic::from_bool(report.verdict == VerificationVerdict::Pass),
+    );
+    value.insert(
+        "constraints".into(),
+        Dynamic::from_array(
+            report
+                .constraints
+                .iter()
+                .map(required_constraint_evaluation_dynamic)
+                .collect(),
+        ),
+    );
+    value.insert(
+        "diagnostics".into(),
+        Dynamic::from_array(
+            report
+                .diagnostics
+                .iter()
+                .map(ir_diagnostic_dynamic)
+                .collect(),
+        ),
+    );
+    Dynamic::from_map(value)
+}
+
+fn required_constraint_evaluation_dynamic(evaluation: &RequiredConstraintEvaluation) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("membership".into(), Dynamic::from(evaluation.membership));
+    value.insert(
+        "definition".into(),
+        evaluation
+            .definition
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "result".into(),
+        evaluation_report_dynamic(&evaluation.evaluation),
     );
     Dynamic::from_map(value)
 }
@@ -1239,6 +1374,7 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_fn("constraint_ir", constraint_ir_value)
         .register_fn("modelica_constraint", modelica_constraint_value)
         .register_fn("evaluate_constraint", evaluate_constraint_value)
+        .register_fn("evaluate_requirement", evaluate_requirement_value)
         .register_fn("sysml_standard_functions", standard_functions_dynamic)
         .register_fn("sysml_standard_constants", standard_constants_dynamic)
         .register_fn("sysml_constraint_operators", standard_operators_dynamic)
@@ -2104,7 +2240,7 @@ fn requirement_dynamic(record: &lunco_sysml_ast::SysmlRequirementRecord, revisio
                 .iter()
                 .map(|constraint| {
                     let mut item = Map::new();
-                    item.insert("kind".into(), Dynamic::from(constraint.kind.clone()));
+                    item.insert("kind".into(), Dynamic::from(constraint.kind.as_str()));
                     item.insert(
                         "qualified_name".into(),
                         Dynamic::from(constraint.usage.qualified_name.clone()),

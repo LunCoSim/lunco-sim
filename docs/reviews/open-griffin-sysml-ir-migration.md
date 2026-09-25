@@ -96,8 +96,27 @@ session were run. Griffin currently authors reusable parameterized constraint
 definitions, but the scanned requirement files use `require` membership and do
 not contain function-style calls with actual argument bindings. Therefore this
 generic capability is compile-verified only and is not yet an executed Griffin
-verification path. Defaults, output binding, general user-function execution,
-and execution of requirement membership remain open.
+verification path. Defaults, output binding, and general user-function
+execution remain open.
+
+### 2026-09-25 standard requirement-evaluation update
+
+Requirement constraint membership is now projected with a Rust enum that
+distinguishes standard `require` from `assume`. The neutral IR can compile a
+constraint by its snapshot-scoped semantic handle and evaluate all `require`
+memberships on one requirement, aggregating their four-state results. An
+optional verification-case handle must resolve a `verify` relationship to the
+same requirement. Rhai exposes this as `SysmlModel.evaluate_requirement`.
+Griffin's solar observer now uses this grouped path for its three formal
+geometry constraints (GSA-005, GSA-006, and GSA-009).
+
+This closes generic membership selection and aggregate evaluation, not the
+complete SysML binding semantics. The solar observer still selects a
+constraint to prepare provider values by qualified name and supplies values by
+parameter name. Usage-site argument bindings, defaults, output binding, and
+general binding relationships remain unsupported. The affected Rust crates
+pass `cargo check`; no tests or Griffin Editor/runtime verification were run
+in this batch.
 
 ## Audit of the current Griffin model
 
@@ -125,12 +144,12 @@ permanent semantic layer.
 |---|---|---|---|
 | Part usages, feature membership, roles, and multiplicity | Many `part def` and attribute declarations, but no complete lander usage graph with typed component roles and bounds | Arrays and parallel IDs can drift; policy cannot navigate an authored assembly | Resolved feature membership, usage identity, redefinition/subsetting, and multiplicity-preserving handles |
 | Ports, interfaces, connections, and bindings | Values such as `sourceComponent`, `usdPath`, and frame/unit strings | Rhai manually joins endpoints and providers; no typed contract says which observation supplies a feature | Typed endpoint/feature chains and standard binding/connectors with source spans and target identity |
-| Constraint definitions/usages | Reusable parameterized definitions exist and requirement definitions reference them with `require`; the inspected sources contain no function-style calls binding actual values to definition inputs | Requirement membership is not yet an executable, bound verification plan | Source-projected `ConstraintDefinition` calls with explicit typed actual-to-formal bindings compile into the neutral IR, evaluator, and Modelica lowering; membership execution, defaults, output/result binding, and general user-function execution remain required |
+| Constraint definitions/usages | Reusable parameterized definitions exist; source projection distinguishes `require`/`assume`, the IR executes requirement-owned `require` memberships by typed handle, and Griffin solar geometry uses grouped evaluation | Provider values are still selected per constraint by qualified name and parameter name; usage-site argument bindings are not projected | Complete usage-level argument/default/output bindings, general binding relationships, and result typing; migrate remaining Griffin checks to exact membership handles |
 | Feature navigation | Dotted `PATH_EXPR` now projects to typed feature chains and exact dependency paths; compile-checked, not runtime-verified | Griffin source and providers have not yet been migrated to consume full typed paths; optional navigation and collection-valued traversal remain unsupported | Runtime-verified standard feature navigation, collection-aware path typing, and explicit unavailable/invalid propagation |
 | Collections and aggregates | Parallel arrays and index assumptions | Index drift and hand-coded reductions for mass, COM, inertia, envelopes | Homogeneous scalar sequence literals, one-based indexing, typed `sum`/`product`, size predicates, and Boolean aggregates now compile/evaluate; feature-valued, structured/N-dimensional collections and reductions remain required |
 | Quantities and units | Many anonymous `Real` values and naming conventions such as `...M`, `...Kg`, `...Deg`, plus string `frameUnits` | Unit correctness is policy convention rather than a source-checked contract | Standard quantity kinds, unit literals/conversion contracts, dimensional checking, and frame/time metadata |
 | Frames and realization | USD paths, component names, and frame information are strings | A value can be numerically valid but attached to the wrong prim/frame | Provider binding contract: source feature, provider (`usd`, `modelica`, telemetry, derived), target, frame, unit, and time validity |
-| Requirement/verification membership | Requirement text and verification IDs are present; checks are manually registered | Evidence cannot be derived from the constraint's standard membership/provenance | Requirement/constraint/verification graph with `satisfy`/`verify`/`assume`/`assert` provenance |
+| Requirement/verification membership | Required/assumed memberships and verify targets are represented by source-linked typed handles; grouped evaluation validates verification coverage | Assert/invariant/satisfy provenance and full source-to-provider evidence identity are incomplete; most Twin observers still use authored names | Complete the generic relationship graph and derive evidence from source identities rather than duplicated status catalogs |
 | Applicability and behavior | Mission scenarios orchestrate states and timers in Rhai | Geometry/requirements cannot state when a constraint applies | Generic configuration/mode/phase/interval predicates, then standard action/state/transition semantics |
 | Continuous realization | Modelica is generated/selected by Rhai without a source-level realization link | SysML intent, Modelica class, and result provenance can diverge | Typed realization/exhibit links and a result contract carrying source/model revisions |
 | Reactivity | A source change does not identify all affected geometry, verification, and USD consumers | Stale manually assembled plans can survive a source edit | Dependency graph from source revision/fingerprint to compiled IR, provider plan, result, and evidence |

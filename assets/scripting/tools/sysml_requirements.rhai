@@ -571,6 +571,17 @@ fn constraint_check(id, component, requirement, verification,
       tolerance: if tolerance == () { 0.0 } else { tolerance }}
 }
 
+/// Evaluate the complete standard `require` set on a requirement. The named
+/// constraint selects which provider bindings are supplied; Rust resolves
+/// and evaluates the full membership set from typed SysML handles.
+fn required_constraints_check(id, component, requirement, verification,
+                              constraint_name, bindings, provider, tolerance) {
+    let check = constraint_check(id, component, requirement, verification,
+        constraint_name, bindings, provider, tolerance);
+    check.kind = "required_constraints";
+    check
+}
+
 fn _constraint_observations(model, check) {
     if check.constraint == () || check.constraint == "" {
         return #{ok: false, error: "SysML constraint identity is missing"};
@@ -710,7 +721,7 @@ fn _constraint_is_required(report, requirement, constraint_name) {
             error: "SysML requirement has no projected require/assume memberships: " + identity.name};
     }
     for membership in record.constraints {
-        if membership.kind != "requirement" { continue; }
+        if membership.kind != "require" { continue; }
         if membership.qualified_name == constraint_name
             || membership.definition_name == constraint_name {
             return #{ok: true, requirement: identity.name,
@@ -761,8 +772,32 @@ fn _check_constraint(report, check, model) {
             kind: check.kind, constraint: check.constraint, verdict: "error",
             error: "constraint comparison tolerance must be a finite non-negative number"};
     }
-    let evaluation = model.evaluate_constraint(check.constraint,
-        bound.observations, tolerance, tolerance);
+    let evaluation = ();
+    if check.kind == "required_constraints" {
+        let verification_identity = verification_name(report, check.verification);
+        if verification_identity.ok != true {
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement, verification: check.verification,
+                kind: check.kind, constraint: check.constraint, verdict: "error",
+                error: verification_identity.error,
+                source_revision: report.source_revision};
+        }
+        let typed_requirement = model.requirement(membership.requirement);
+        let typed_verification = model.verification(verification_identity.name);
+        if typed_requirement == () || typed_verification == () {
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement, verification: check.verification,
+                kind: check.kind, constraint: check.constraint, verdict: "error",
+                error: "typed requirement or verification record is unavailable",
+                source_revision: report.source_revision};
+        }
+        evaluation = model.evaluate_requirement(typed_requirement,
+            typed_verification, bound.observations,
+            #{absolute_tolerance: tolerance, relative_tolerance: tolerance});
+    } else {
+        evaluation = model.evaluate_constraint(check.constraint,
+            bound.observations, tolerance, tolerance);
+    }
     if evaluation == () || evaluation.verdict == () {
         return #{ok: false, id: check.id, component: check.component,
             requirement: check.requirement, verification: check.verification,
@@ -780,7 +815,10 @@ fn _check_constraint(report, check, model) {
       constraint_source: bound.ir.constraint.source,
       required_constraint_usage: membership.usage,
       required_constraint_definition: membership.definition,
-      expression_results: evaluation.expression_results,
+      expression_results: if evaluation.expression_results == () { [] }
+        else { evaluation.expression_results },
+      required_constraint_results: if evaluation.constraints == () { [] }
+        else { evaluation.constraints },
       diagnostics: evaluation.diagnostics,
       observations: bound.observations,
       source_revision: report.source_revision,
@@ -805,7 +843,7 @@ fn _check_one(report, check, indexes, model) {
     if !_indexed_coverage(indexes, check.requirement, check.verification) {
         return _failure(check, "no SysML verification case covers this requirement");
     }
-    if check.kind == "constraint" {
+    if check.kind == "constraint" || check.kind == "required_constraints" {
         return _check_constraint(report, check, model);
     }
 
@@ -1098,7 +1136,9 @@ fn evaluate(source_report, checks) {
     }
     let needs_model = false;
     for check in checks {
-        if check.kind == "constraint" { needs_model = true; }
+        if check.kind == "constraint" || check.kind == "required_constraints" {
+            needs_model = true;
+        }
     }
     let model = ();
     if needs_model {

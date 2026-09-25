@@ -1022,7 +1022,7 @@ fn requirement(value: &SysmlRequirementRecord) -> H {
                     .iter()
                     .map(|constraint| {
                         let mut fields = vec![
-                            ("kind", H::str(constraint.kind.clone())),
+                            ("kind", H::str(constraint.kind.as_str())),
                             (
                                 "qualified_name",
                                 H::str(constraint.usage.qualified_name.clone()),

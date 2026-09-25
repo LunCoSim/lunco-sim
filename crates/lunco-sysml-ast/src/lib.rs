@@ -1385,13 +1385,32 @@ pub struct SysmlSubject {
 /// allowing consumers to compile the reusable definition with provider data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlRequirementConstraint {
-    /// `require` or `assume` membership kind.
-    pub kind: String,
+    /// Standard SysML requirement-constraint membership role.
+    pub kind: SysmlRequirementConstraintKind,
     /// Contextual constraint usage owned by the requirement membership.
     pub usage: SysmlElement,
     /// Reusable definition typed by the usage, if one is declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<SysmlElement>,
+}
+
+/// The standard membership role of a constraint owned by a requirement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SysmlRequirementConstraintKind {
+    #[serde(rename = "require")]
+    Require,
+    #[serde(rename = "assume")]
+    Assume,
+}
+
+impl SysmlRequirementConstraintKind {
+    /// Stable authored-role label for language adapters and reports.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Require => "require",
+            Self::Assume => "assume",
+        }
+    }
 }
 
 /// A structured requirement declaration or usage.
@@ -3139,8 +3158,8 @@ fn project_requirement_constraints(
                 continue;
             }
             let kind = match model.member_role(constraint_usage) {
-                Some(Role::Require) => "requirement",
-                Some(Role::Assume) => "assumption",
+                Some(Role::Require) => SysmlRequirementConstraintKind::Require,
+                Some(Role::Assume) => SysmlRequirementConstraintKind::Assume,
                 _ => continue,
             };
             let Some(usage_element) = elements
@@ -3391,7 +3410,10 @@ mod tests {
             })
             .expect("requirement usage is projected");
         assert_eq!(requirement.constraints.len(), 1);
-        assert_eq!(requirement.constraints[0].kind, "requirement");
+        assert_eq!(
+            requirement.constraints[0].kind,
+            SysmlRequirementConstraintKind::Require
+        );
         assert_eq!(
             requirement.constraints[0]
                 .definition

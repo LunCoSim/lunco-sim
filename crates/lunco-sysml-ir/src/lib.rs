@@ -15,7 +15,8 @@ use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlConstraintKind, SysmlElementHandle,
     SysmlExpression, SysmlExpressionData, SysmlExpressionOperator, SysmlFeature,
     SysmlFeatureDirection, SysmlFeatureHandle, SysmlFeaturePath, SysmlMultiplicity,
-    SysmlPrimitiveType, SysmlSourceRef, SysmlType, SysmlTypeCategory, SysmlUnsupportedExpression,
+    SysmlPrimitiveType, SysmlRequirementConstraintKind, SysmlSourceRef, SysmlType,
+    SysmlTypeCategory, SysmlUnsupportedExpression,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -425,6 +426,10 @@ define_ir_diagnostic_codes! {
     PredicateBodyNotBoolean => "SYSML-IR-051",
     RecursivePredicateInvocation => "SYSML-IR-052",
     PredicateFormalPathUnsupported => "SYSML-IR-053",
+    RequirementNotFound => "SYSML-IR-054",
+    VerificationNotFound => "SYSML-IR-055",
+    VerificationDoesNotCoverRequirement => "SYSML-IR-056",
+    RequirementHasNoRequiredConstraints => "SYSML-IR-057",
 }
 
 /// A source-linked diagnostic. Diagnostics are part of the contract and are
@@ -469,6 +474,48 @@ pub fn compile_constraint_by_name(analysis: &SysmlAnalysis, name: &str) -> Compi
                 code: IrDiagnosticCode::ConstraintNotFound,
                 source: None,
                 message: format!("constraint `{name}` was not found in the semantic snapshot"),
+            }],
+        },
+    }
+}
+
+/// Compile a constraint by its exact snapshot-scoped semantic identity.
+///
+/// Requirement memberships use this entry point so execution follows the
+/// resolved `require` relationship instead of recovering a definition from a
+/// display name.
+pub fn compile_constraint_by_handle(
+    analysis: &SysmlAnalysis,
+    handle: SysmlElementHandle,
+) -> CompiledConstraint {
+    if handle.source_revision != analysis.source_revision()
+        || handle.source_fingerprint != analysis.source_fingerprint()
+    {
+        return CompiledConstraint {
+            constraint: None,
+            diagnostics: vec![IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ConstraintNotFound,
+                source: None,
+                message: "constraint handle belongs to a different SysML source snapshot"
+                    .to_owned(),
+            }],
+        };
+    }
+    match analysis
+        .constraints()
+        .iter()
+        .find(|constraint| constraint.element.handle == handle)
+    {
+        Some(constraint) => compile_constraint(analysis, constraint),
+        None => CompiledConstraint {
+            constraint: None,
+            diagnostics: vec![IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ConstraintNotFound,
+                source: None,
+                message: "constraint handle is not present in the SysML semantic snapshot"
+                    .to_owned(),
             }],
         },
     }
@@ -1908,6 +1955,30 @@ pub struct EvaluationReport {
     pub diagnostics: Vec<IrDiagnostic>,
 }
 
+/// Result for one requirement-owned `require` membership.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RequiredConstraintEvaluation {
+    /// Snapshot-scoped identity of the membership usage.
+    pub membership: SysmlElementHandle,
+    /// Resolved reusable definition when the usage names one.
+    pub definition: Option<SysmlElementHandle>,
+    /// Constraint compiler/evaluator result for this membership.
+    pub evaluation: EvaluationReport,
+}
+
+/// Aggregate result of evaluating a requirement's standard `require`
+/// memberships against one provider observation snapshot.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RequirementEvaluationReport {
+    pub requirement: SysmlElementHandle,
+    pub verification: Option<SysmlElementHandle>,
+    pub verdict: VerificationVerdict,
+    pub constraints: Vec<RequiredConstraintEvaluation>,
+    /// Selection and observation-contract diagnostics. Constraint-local
+    /// diagnostics remain attached to their corresponding result above.
+    pub diagnostics: Vec<IrDiagnostic>,
+}
+
 /// Numerical comparison policy used by the evaluator. Exact equality is not
 /// a safe default for measured or solver-produced real values.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -2042,6 +2113,219 @@ pub fn evaluate_constraint(
         verdict,
         expression_results: results,
         diagnostics,
+    }
+}
+
+/// Evaluate every required constraint owned or inherited by one requirement.
+///
+/// Constraint selection is driven by the resolved SysML membership and its
+/// semantic handles. Optional verification identity is checked against the
+/// typed `verify` relationship in the same source snapshot. Assumptions are
+/// not acceptance predicates and are therefore not included in the aggregate.
+pub fn evaluate_requirement(
+    analysis: &SysmlAnalysis,
+    requirement: SysmlElementHandle,
+    verification: Option<SysmlElementHandle>,
+    context: &EvaluationContext,
+    options: EvaluationOptions,
+) -> RequirementEvaluationReport {
+    let mut report = RequirementEvaluationReport {
+        requirement,
+        verification,
+        verdict: VerificationVerdict::Error,
+        constraints: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    if !handle_belongs_to_analysis(analysis, requirement) {
+        report.diagnostics.push(IrDiagnostic {
+            severity: DiagnosticSeverity::Error,
+            code: IrDiagnosticCode::RequirementNotFound,
+            source: None,
+            message: "requirement handle is not present in this SysML source snapshot".to_owned(),
+        });
+        return report;
+    }
+    let Some(requirement_record) = analysis
+        .requirements()
+        .iter()
+        .find(|record| record.element.handle == requirement)
+    else {
+        report.diagnostics.push(IrDiagnostic {
+            severity: DiagnosticSeverity::Error,
+            code: IrDiagnosticCode::RequirementNotFound,
+            source: None,
+            message: "element handle does not identify a requirement record".to_owned(),
+        });
+        return report;
+    };
+
+    if let Some(verification_handle) = verification {
+        let Some(verification_record) = analysis
+            .verifications()
+            .iter()
+            .find(|record| record.element.handle == verification_handle)
+        else {
+            report.diagnostics.push(error(
+                IrDiagnosticCode::VerificationNotFound,
+                &element_source(&requirement_record.element),
+                "verification handle is not present in this SysML source snapshot",
+            ));
+            return report;
+        };
+        if !verification_record
+            .verified_requirements
+            .contains(&requirement)
+        {
+            report.diagnostics.push(error(
+                IrDiagnosticCode::VerificationDoesNotCoverRequirement,
+                &element_source(&verification_record.element),
+                "verification case does not resolve a verify membership to this requirement",
+            ));
+            return report;
+        }
+    }
+
+    let required = requirement_record
+        .constraints
+        .iter()
+        .filter(|membership| membership.kind == SysmlRequirementConstraintKind::Require)
+        .collect::<Vec<_>>();
+    if required.is_empty() {
+        report.verdict = VerificationVerdict::Inconclusive;
+        report.diagnostics.push(IrDiagnostic {
+            severity: DiagnosticSeverity::Warning,
+            code: IrDiagnosticCode::RequirementHasNoRequiredConstraints,
+            source: Some(element_source(&requirement_record.element)),
+            message: "requirement has no executable require membership".to_owned(),
+        });
+        return report;
+    }
+
+    let compiled = required
+        .iter()
+        .map(|membership| {
+            let target = membership
+                .definition
+                .as_ref()
+                .map(|definition| definition.handle)
+                .unwrap_or(membership.usage.handle);
+            (
+                *membership,
+                target,
+                compile_constraint_by_handle(analysis, target),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut observed = HashSet::new();
+    let allowed_paths = compiled
+        .iter()
+        .filter_map(|(_, _, compiled)| compiled.constraint.as_ref())
+        .flat_map(|constraint| constraint.dependencies.iter())
+        .collect::<HashSet<_>>();
+    for observation in &context.observations {
+        if !observation
+            .path
+            .belongs_to(analysis.source_revision(), analysis.source_fingerprint())
+        {
+            report.diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ObservationSnapshotMismatch,
+                source: Some(element_source(&requirement_record.element)),
+                message: "provider observation belongs to a different SysML source snapshot"
+                    .to_owned(),
+            });
+        }
+        if !observed.insert(observation.path.clone()) {
+            report.diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::DuplicateObservationPath,
+                source: Some(element_source(&requirement_record.element)),
+                message: "provider supplied duplicate observations for one SysML feature path"
+                    .to_owned(),
+            });
+        }
+        if !allowed_paths.contains(&observation.path) {
+            report.diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ObservationIsNotDependency,
+                source: Some(element_source(&requirement_record.element)),
+                message: "provider observation is not a dependency of a required constraint"
+                    .to_owned(),
+            });
+        }
+    }
+
+    for (membership, _, compiled_constraint) in compiled {
+        let scoped_context = compiled_constraint
+            .constraint
+            .as_ref()
+            .map(|constraint| EvaluationContext {
+                observations: context
+                    .observations
+                    .iter()
+                    .filter(|observation| constraint.dependencies.contains(&observation.path))
+                    .cloned()
+                    .collect(),
+            })
+            .unwrap_or_default();
+        report.constraints.push(RequiredConstraintEvaluation {
+            membership: membership.usage.handle,
+            definition: membership
+                .definition
+                .as_ref()
+                .map(|definition| definition.handle),
+            evaluation: evaluate_constraint(&compiled_constraint, &scoped_context, options),
+        });
+    }
+
+    report.verdict = aggregate_verdict(
+        report
+            .constraints
+            .iter()
+            .map(|constraint| constraint.evaluation.verdict)
+            .chain(report.diagnostics.iter().filter_map(|diagnostic| {
+                (diagnostic.severity == DiagnosticSeverity::Error)
+                    .then_some(VerificationVerdict::Error)
+            })),
+    );
+    report
+}
+
+fn handle_belongs_to_analysis(analysis: &SysmlAnalysis, handle: SysmlElementHandle) -> bool {
+    handle.source_revision == analysis.source_revision()
+        && handle.source_fingerprint == analysis.source_fingerprint()
+}
+
+fn element_source(element: &lunco_sysml_ast::SysmlElement) -> SysmlSourceRef {
+    SysmlSourceRef {
+        file: element.file.clone(),
+        start: element.start,
+        end: element.end,
+        revision: element.handle.source_revision,
+    }
+}
+
+fn aggregate_verdict(
+    verdicts: impl IntoIterator<Item = VerificationVerdict>,
+) -> VerificationVerdict {
+    let mut verdict = VerificationVerdict::Pass;
+    let mut any = false;
+    for next in verdicts {
+        any = true;
+        match next {
+            VerificationVerdict::Error => return VerificationVerdict::Error,
+            VerificationVerdict::Fail => verdict = VerificationVerdict::Fail,
+            VerificationVerdict::Inconclusive if verdict == VerificationVerdict::Pass => {
+                verdict = VerificationVerdict::Inconclusive;
+            }
+            VerificationVerdict::Pass | VerificationVerdict::Inconclusive => {}
+        }
+    }
+    if any {
+        verdict
+    } else {
+        VerificationVerdict::Inconclusive
     }
 }
 

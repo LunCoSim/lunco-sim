@@ -33,7 +33,7 @@ for requirement in source.requirement_records {
 }
 checks.push(t_true(linked_requirement != ()
     && linked_requirement.constraints.len() == 1
-    && linked_requirement.constraints[0].kind == "requirement"
+    && linked_requirement.constraints[0].kind == "require"
     && linked_requirement.constraints[0].definition_name == CONSTRAINT,
     "analysis preserves the formal requirement-to-constraint membership"));
 
