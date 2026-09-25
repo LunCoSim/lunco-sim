@@ -1464,7 +1464,6 @@ actually call, with the fields the deserializer actually accepts. See the
 
  This command restores the standing time shape across scene reloads (doc 19):
 
- * **celestial** → mission-epoch root at identity rate;
  * **interaction** → wall-rooted identity (its default);
  * **animation preview** → playhead 0, playing, 1×;
  * **transport** → Playing at 1×, except for an explicit pause requested while
@@ -1489,25 +1488,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `epoch_jd` | `f64` |  Absolute epoch, Julian Date (TDB). |
-
-#### `SetClock`
-
-Control a kinematic clock independently of the causal simulation transport.
-The celestial clock defaults to the mission-epoch projection. Re-parenting it
-to `Real` and setting `scale: 100000` runs celestial presentation at 100,000×
-wall time while physics, co-simulation, and ordinary scene animation retain
-their current clocks. Rates above 100,000× or non-finite values are rejected.
-Seeking `epoch_jd` applies only to the celestial clock.
-
-- *defined in:* `crates/lunco-time/src/domain.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `clock` | `ClockId` | `Celestial` or `Interaction`; defaults to `Celestial`. |
-| `parent` | `Option<ClockParent>` | `Sim` follows the deterministic tick; `Real` follows wall time. |
-| `scale` | `Option < f64 >` | Rate relative to the parent, bounded to ±100,000×. |
-| `offset` | `Option < f64 >` | Affine offset in seconds. |
-| `epoch_jd` | `Option < f64 >` | Absolute date (Julian Date, TDB), only valid for `Celestial`. |
 
 #### `SetSimulationExecutionMode`
 

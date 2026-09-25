@@ -144,17 +144,11 @@ fn photo()                    { cmd("CaptureFromCamera") }
 // World-time transport — pause/resume the WHOLE simulation (tick + physics) and
 // set its speed. The live transport supports 0.1×–64×, and every listed rate
 // advances causal fixed-step physics. `pause()` freezes that causal world;
-// `set_rate(4.0)` = 4× realtime. The celestial presentation clock has separate
-// controls and never changes physics or authored scene animation.
+// `set_rate(4.0)` = 4× realtime. Celestial placement, sunlight, and physical
+// models use this same simulation time.
 fn pause()                     { cmd("SetTimeTransport", #{ playing: false }) }
 fn play()                      { cmd("SetTimeTransport", #{ playing: true }) }
 fn set_rate(r)                 { cmd("SetTimeTransport", #{ rate: r }) }
-
-// Presentation-only celestial clock. Follow the deterministic mission time,
-// select a wall-driven rate up to 100,000×, or seek to a TDB Julian Date.
-fn celestial_follow_sim()      { cmd("SetClock", #{ clock: "Celestial", parent: "Sim", scale: 1.0 }) }
-fn celestial_rate(r)           { cmd("SetClock", #{ clock: "Celestial", parent: "Real", scale: r }) }
-fn celestial_seek(epoch_jd)    { cmd("SetClock", #{ clock: "Celestial", epoch_jd: epoch_jd }) }
 
 fn set_mission_epoch(epoch_jd) {
     cmd("SetMissionEpoch", #{ epoch_jd: epoch_jd })

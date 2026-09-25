@@ -730,18 +730,8 @@ pub(super) fn render_layout(
             });
             anchor_rects.push(("menu.help".to_owned(), r_help.response.rect));
 
-            // Time — every clock control that is not pause/resume.
-            //
-            // The sim RATE used to sit on the toolbar beside the pause button and
-            // the sky clock floated permanently over the viewport. Both are time
-            // controls, neither is needed on every frame of every session, and
-            // between them they made "what time is it" a two-place question. One
-            // menu answers it; the toolbar keeps only the verb you actually reach
-            // for mid-drive.
-            //
-            // Domain plugins contribute rows via the core
-            // `WorkbenchMenuRegistry` (the celestial-time readout),
-            // so nothing about the sky is hardcoded here.
+            // Time — causal simulation-rate controls and any registered
+            // application-level time actions. Pause/resume stays on the toolbar.
             let r_time = ui.menu_button("Time", |ui| {
                 render_time_menu(ui, world, menus);
             });

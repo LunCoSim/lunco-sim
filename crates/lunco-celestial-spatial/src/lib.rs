@@ -9,10 +9,9 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame};
 use lunco_celestial_spatial_core::{
-    AuthoredBodyAlbedo, CelestialBodyDecl, CelestialSunPresentation, LocalGravityField,
-    OrbitalViewPin, ReferenceFrameIndex, SolarSystemRoot, update_reference_frame_index,
+    AuthoredBodyAlbedo, CelestialBodyDecl, LocalGravityField, OrbitalViewPin, ReferenceFrameIndex,
+    SolarSystemRoot, update_reference_frame_index,
 };
-use lunco_render::SceneCamera;
 // Gravity *types* now live in lunco-environment; celestial owns only the
 // gravity systems + `PointMassGravity` model (see `gravity.rs`).
 use lunco_environment::{Gravity, GravityBody};
@@ -114,50 +113,6 @@ fn tag_existing_world_reference_frame(
     }
 }
 
-fn clear_celestial_presentation(mut sun: ResMut<CelestialSunPresentation>) {
-    sun.clear();
-}
-
-#[derive(Resource, Default)]
-struct CelestialPresentationPacing {
-    requested: bool,
-}
-
-fn refresh_celestial_presentation_pacing(
-    celestial: Option<Res<lunco_time::CelestialTime>>,
-    frames: Query<(), With<CelestialPresentationGrid>>,
-    cameras: Query<&Camera, With<SceneCamera>>,
-    demand: Option<ResMut<lunco_core_runtime::FramePacingDemand>>,
-    mut pacing: ResMut<CelestialPresentationPacing>,
-) {
-    let Some(mut demand) = demand else { return };
-    let moving =
-        celestial.is_some_and(|clock| clock.delta_secs.is_finite() && clock.delta_secs != 0.0);
-    let has_active_camera = cameras.iter().any(|camera| camera.is_active);
-    let requested = moving && !frames.is_empty() && has_active_camera;
-    if requested == pacing.requested {
-        return;
-    }
-    if requested {
-        demand.acquire_realtime();
-    } else {
-        demand.release_realtime();
-    }
-    pacing.requested = requested;
-}
-
-fn release_celestial_presentation_pacing(
-    mut demand: Option<ResMut<lunco_core_runtime::FramePacingDemand>>,
-    mut pacing: ResMut<CelestialPresentationPacing>,
-) {
-    if pacing.requested {
-        if let Some(demand) = demand.as_deref_mut() {
-            demand.release_realtime();
-        }
-        pacing.requested = false;
-    }
-}
-
 impl Plugin for CelestialPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
@@ -175,23 +130,11 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<CelestialConfig>();
-        app.init_resource::<CelestialSunPresentation>();
-        app.add_systems(lunco_core::SceneTeardown, clear_celestial_presentation);
-        app.init_resource::<CelestialPresentationPacing>()
-            .init_resource::<lunco_core_runtime::FramePacingDemand>()
-            .add_systems(
-                PreUpdate,
-                refresh_celestial_presentation_pacing.after(lunco_time::CelestialTimeSet),
-            )
-            .add_systems(
-                lunco_core::SceneTeardown,
-                release_celestial_presentation_pacing,
-            );
         app.init_resource::<lunco_port_core::ports::PortTopologyRevision>()
             .init_resource::<lunco_port_core::ports::PortTopologyState>();
-        // Globe LOD consumes the shared presentation binding, not Bevy's
-        // render activation flag. Keep the binding substrate available in
-        // standalone celestial hosts as well as the full USD application.
+        // Globe LOD resolves its active scene camera through the shared
+        // viewport binding. Keep that substrate available in standalone
+        // celestial hosts as well as the full USD application.
         app.init_resource::<lunco_viewport_core::SceneViewport>();
         // Celestial shell geometry uses the same authoritative graphics
         // settings as USD projection. Initialise the documented default here
@@ -357,9 +300,8 @@ impl Plugin for CelestialPlugin {
         // 2. Our systems run AFTER to override GlobalTransform with body rotation
         // The prior fixed loop publishes its completed tick as `WorldTime`; the
         // PreUpdate transport projection admits this frame's fixed work. The
-        // causal celestial hierarchy consumes `WorldTime.epoch_jd`. Render-only
-        // celestial frames and the sky light consume `CelestialTime`, which can
-        // follow that mission epoch or a rate-scaled wall clock.
+        // physical hierarchy, globe tiles, rendered Sun, and environment models
+        // all follow that same epoch.
         // Orbital view MODE state (scene-hide, gravity hold, camera
         // park/restore) — the camera itself flies to the focused body; the
         // world is never re-posed for viewing (see `OrbitalViewPin`).
@@ -382,7 +324,6 @@ impl Plugin for CelestialPlugin {
         // hierarchy changes; no per-frame dirtying is allowed to manufacture a
         // change signal or hide an invalid low-precision subtree.
         app.init_resource::<cadence::CelestialSolvedEpoch>();
-        app.init_resource::<cadence::CelestialPresentationSolvedEpoch>();
         app.init_resource::<cadence::CelestialWorldTimeSample>();
         app.init_resource::<cadence::CelestialMotionBound>();
         lunco_settings::AppSettingsExt::register_settings_section::<
@@ -418,13 +359,6 @@ impl Plugin for CelestialPlugin {
                 .run_if(lunco_time::scene_time_ready),
         );
         app.add_systems(
-            Last,
-            cadence::commit_celestial_presentation_epoch
-                .run_if(cadence::presentation_needs_solve())
-                .run_if(lunco_time::scene_time_ready),
-        );
-
-        app.add_systems(
             PreUpdate,
             (
                 ephemeris_update_system.run_if(cadence::tracked_needs_solve()),
@@ -444,22 +378,11 @@ impl Plugin for CelestialPlugin {
 
         app.add_systems(
             PostUpdate,
-            (
-                presentation_celestial_frame_system.run_if(
-                    cadence::presentation_needs_solve()
-                        .or_else(cadence::tracked_needs_solve())
-                        .or_else(presentation_observer_needs_sync()),
-                ),
-                presentation_sun_system.run_if(
-                    cadence::presentation_needs_solve()
-                        .or_else(presentation_sun_observer_needs_sync()),
-                ),
-            )
-                .chain()
+            presentation_celestial_frame_system
+                .run_if(cadence::tracked_needs_solve())
                 .run_if(lunco_time::scene_time_ready)
                 .after(lunco_time::WorldTimeSet)
                 .after(lunco_time::InteractionRenderSet)
-                .before(lunco_environment::SunRenderProjectionSet)
                 .before(TransformSystems::Propagate),
         );
 
@@ -522,12 +445,12 @@ impl Plugin for CelestialPlugin {
         // Terrain spawning is now handled by lunco-terrain plugin
         // Systems like terrain_spawn_system run in that crate
 
-        // Ephemeris-driven physical-surface SunState (doc 19 — T2). The system
+        // Ephemeris-driven physical SunState (doc 19 — T2). The system
         // returns early when no ephemeris provider or site frame is available,
         // so manual `SetEnvironmentLight` (yaw/pitch) remains an explicit
-        // operator command in non-orbital contexts. SunState tracks WorldTime;
-        // render-only celestial frames and the detached surface light follow
-        // CelestialTime:
+        // operator command in non-orbital contexts. Physical bodies, the
+        // semantic Sun direction, and rendered celestial frames all track
+        // WorldTime. Bevy projects that direction into the scene light:
         // required since the celestial sun light is a TOP-LEVEL entity (it
         // must not ride the Solar Grid — heliocentric-magnitude translations
         // corrupt the f32 cascade-shadow matrices) and therefore inherits no
@@ -536,7 +459,8 @@ impl Plugin for CelestialPlugin {
             Update,
             update_sun_light_system
                 .run_if(cadence::tracked_needs_solve())
-                .run_if(lunco_time::scene_time_ready),
+                .run_if(lunco_time::scene_time_ready)
+                .before(lunco_environment::project_sun_state_to_light),
         );
     }
 }

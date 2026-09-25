@@ -63,8 +63,7 @@ pub fn utc_now_tdb_jd() -> f64 {
 }
 
 /// Parse a civil **UTC** datetime into a master **TDB** Julian Date — the inverse
-/// of [`tdb_jd_to_utc_string`], so what the sky clock PRINTS can be pasted back in
-/// to seek to it.
+/// of [`tdb_jd_to_utc_string`] for callers that accept an editable UTC date.
 ///
 /// Accepts `YYYY-MM-DD HH:MM:SS`, the same with a `T` separator, `YYYY-MM-DD HH:MM`,
 /// and a bare `YYYY-MM-DD` (midnight). A trailing `UTC` is tolerated because the
@@ -233,9 +232,8 @@ mod tests {
 mod seek_parse_tests {
     use super::*;
 
-    /// **Round trip.** The string the sky clock prints must parse back to the
-    /// epoch it was printed from — that is the whole contract of a seek field
-    /// that shows you the current time and lets you edit it.
+    /// **Round trip.** The formatted UTC value parses back to the epoch it was
+    /// formatted from, with the precision represented by the output string.
     #[test]
     fn a_printed_utc_string_parses_back_to_its_own_epoch() {
         let tdb = 2_461_010.5_f64;

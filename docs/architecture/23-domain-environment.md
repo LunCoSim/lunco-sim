@@ -125,19 +125,16 @@ its own driver on the next frame. There is correspondingly no slider — the ins
 a readout, and what moves it is the sim clock.
 
 The Sun's shipped values are the documented calibration for scenes without a live solar
-distance model. `SunState` remains the `WorldTime` provider for physical direction,
-irradiance, and co-simulation. When a surface scene detaches `CelestialTime` from
-`WorldTime`, the celestial presentation producer supplies a typed `f64` direction
-to `SunRenderPresentation`. The environment projects that direction into the render
-light in the same frame, before transform propagation. This changes rendered
-Sun direction and shadows while physical state and Modelica inputs stay on `WorldTime`.
+distance model. `SunState` is the `WorldTime` provider for physical direction,
+irradiance, and co-simulation. The render path projects the normalized Sun
+direction into the scene `DirectionalLight` before transform propagation. It
+does not place a solar entity at ephemeris coordinates or pass astronomical
+positions and distances to Bevy. Physical irradiance remains a scalar input to
+the light and to solar models.
 
 ```
 WorldTime ephemeris + site frame → SunState → LocalSolar → EnvironmentProbe → Modelica controller
-                                      └── semantic render selection ──┐
-CelestialTime ephemeris + site pose → SunRenderPresentation ──────────┤
-                                                                     ↓
-                                              DirectionalLight → SunRenderState → shadows
+                                      └── normalized direction → DirectionalLight → shadows
 ```
 
 `SunRenderState` is published from the finalized light direction and feeds
@@ -145,6 +142,13 @@ terrain shadow projection and the asynchronous horizon cache; Bevy's shadow
 extractor uses that same finalized light transform. The render light is not a
 provider endpoint, and a Modelica source does not drive it. Controllers such as
 `SunTracker` consume the environment-probe outputs and drive their actuators.
+
+The procedural sky disk receives only that finalized direction transformed into
+the active Bevy camera's view frame. It uses a fixed apparent solar size at the
+shader boundary; ephemeris positions and astronomical distances never enter the
+sky material. Light orientation and sky wiring are change-gated by the physical
+sun sample and their spatial inputs, so stable frames do not repeat the
+projection work.
 
 For a scene without a celestial site, the composed USD `DistantLight` is still
 the authored source of its fixed sun direction. `lunco-usd-sim` seeds that

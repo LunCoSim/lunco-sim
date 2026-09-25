@@ -33,7 +33,7 @@
 //   sim_tick() -> i64             time:  current fixed tick (integer)
 //   dt() -> f64                   time:  fixed-step delta in seconds (1/60)
 //   elapsed_seconds() -> f64      time:  admitted sim seconds derived from SimTick
-//   clock_snapshot() -> map       time:  physical and celestial clocks, their
+//   clock_snapshot() -> map       time:  simulation and interaction clocks,
 //                                        render samples, and physics admission status
 //   emit(name, value)             event: fire a TelemetryEvent
 //   input_key/input_click/...     UI automation: enqueue native Bevy window

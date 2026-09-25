@@ -5,7 +5,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
 use lunco_materials::ATTRIBUTE_GLOBE_DIRECTION;
-use lunco_terrain_core::HeightSource;
+use lunco_terrain_core::{HeightSource, square_boundary_posting_spacing};
 
 /// The exact local DEM footprint in the body's tangent-plane coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -284,7 +284,9 @@ fn surface_vertex(
         globe_z_body_north,
         t,
     );
-    let epsilon = (radius * 1.0e-6).max(1.0);
+    let epsilon =
+        square_boundary_posting_spacing(patch.handoff.half_extent, patch.boundary_grid_resolution)
+            .unwrap_or_else(|| (radius * 1.0e-6).max(1.0));
     let normal = surface_normal(
         &patch.handoff,
         patch.source,

@@ -163,13 +163,12 @@ body projection and cadence belong to `lunco-celestial-spatial`; ordinary
 moving scene objects use standard USD `timeSamples` through
 `lunco-usd-bevy-animation`. Do not create a mission-only trajectory component
 or clock when composed USD animation expresses the motion.
-Celestial ephemeris presentation uses the shared `lunco-time::CelestialTime`
-domain, which may be rate-scaled up to 100,000× without advancing causal world
-state. From lunar ground, Earth stays near one sky position because the Moon is
-tidally locked; its axial spin still advances the day/night pattern. BigSpace
-must propagate both the changed Earth grid pose and rotation to
-`GlobalTransform`. Causal cadence commits the frame-start `WorldTime` sample,
-since the completed fixed tick is published later in `PostUpdate`.
+Celestial ephemeris and solar direction use `lunco-time::WorldTime`, the same
+causal timeline that advances physics and co-simulation. Bevy consumes the
+finalized scene `DirectionalLight` direction for rendering; celestial rendering
+does not keep a separate clock or astronomical Sun position. Cadence commits the
+frame-start `WorldTime` sample only after its consumers run, because `PostUpdate`
+publishes the newly completed fixed tick later in that frame.
 
 ### Runtime scopes, cycles, and publication boundaries
 
@@ -432,13 +431,13 @@ easing, mounted USD followers, cinematic path followers, and the persistent
 camera origin. Camera selection/mode policy stays in the application; BigSpace
 owns only precision representation and derived transform propagation.
 
-Celestial render frames and the sky-time readout use `CelestialTime`, which
-normally tracks the physical timeline and may be independently rate-scaled.
-Unbound USD animation uses the interpolated physical-time sample. Physical
-bodies, terrain, stations, and links use causal `WorldTime` at completed ticks.
-A body-fixed station that needs a render marker on a globe uses a render-only
-copy beneath the matching presentation grid; never reparent the station or use
-presentation coordinates for physics or link calculations.
+Unbound USD animation uses the interpolated physical-time sample. Celestial
+body poses, terrain, stations, links, semantic solar direction, and co-simulation
+use causal `WorldTime` at completed ticks. Bevy renders the sun from the
+finalized `DirectionalLight` direction. A body-fixed station that needs a
+render marker on a globe uses a render-only copy beneath the matching
+same-epoch presentation grid; never reparent the station or use presentation
+coordinates for physics or link calculations.
 
 Scenario telemetry is collected only while `ScenarioExecutionGate` is open.
 That gate waits for all initial scene readiness holds because scenarios may

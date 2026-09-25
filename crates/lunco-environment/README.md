@@ -115,6 +115,10 @@ values, and `inject_local_solar_into_cosim` publishes them through authored
 `EnvironmentProbe` outputs. A sun-tracking model consumes those outputs through
 an ordinary USD output→input wire. No render transform is read back as an
 environment input, and no Modelica model drives the physical scene sun.
+Bevy projects the semantic direction onto the scene `DirectionalLight` and
+publishes its finalized direction for render consumers. That projection is
+change-gated by the sun sample and its BigSpace ancestry; stable frames do not
+repeat the pose conversion.
 
 ### Lighting parameters: `LunarSun`, `FULL_EARTH_EARTHSHINE_LUX` (`render` feature)
 

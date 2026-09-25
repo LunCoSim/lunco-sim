@@ -105,6 +105,9 @@ composed from `ActivePhysicsFrame` and mount poses through
 They do not read `GlobalTransform` during `Update`, because BigSpace finalizes
 that camera-relative projection in `PostUpdate` and a rotating high-rate frame
 would otherwise be sampled one frame late.
+Celestial cadence captures the frame-start `WorldTime` sample and commits it
+after the gated consumers run, because the newly completed tick is published in
+`PostUpdate`.
 
 Presentation systems that solve a pose repeatedly must compare each derived
 `Transform` and `CellCoord` value before mutating it. Bevy change detection is
@@ -284,64 +287,31 @@ terrain contract; the globe LOD clips that authored footprint through
 `GlobeHandoff`. No cell-size increase, depth bias, or camera-relative offset can
 resolve two coincident render surfaces honestly.
 
-### Physical surface and globe presentation ownership
+### Physical surface and globe ownership
 
-The body hierarchy has two intentionally separate surface-grid identities:
+`GlobeLod.surface_grid` is the body-fixed grid for authored site terrain,
+physics, cameras, and streamed globe tiles. The LOD selector resolves the
+camera through that same grid, and spawned tile transforms are split once with
+its `Grid`. `GlobeHandoff` removes the exact finite site footprint from the
+globe mesh and composes the terrain oracle through the surrounding collar. The
+surface and globe therefore meet on one body-fixed geometry source and frame;
+neither needs a camera-specific grid or a per-frame correction.
 
-- `GlobeLod.surface_grid` is the body-fixed physical grid. Site placement uses
-  it for authored terrain, vehicles, physics, and surface cameras.
-- `GlobeLod.globe_grid` is the render presentation grid. The globe LOD
-  selector, streamed tile parents, and presentation-time camera projection use
-  it for derived planetary imagery.
+Render-only station marker copies remain under their presentation grids for
+views that cannot see the physical station hierarchy. Those copies use the
+same `WorldTime` epoch as physical bodies. The physical marker remains the
+source of truth, and surface views use that marker without a duplicate.
+Celestial body shader looks retain installed dataset albedo unless USD authors
+an explicit albedo map.
 
-The presentation grid samples `CelestialTime`, which normally tracks the
-physical mission timeline and can be detached for accelerated celestial
-motion. It must never be used as the physical site parent, and physical content
-must never be reparented into it as a way to make a view look aligned. Keeping
-the ownership split in the component contract makes invalid wiring a
-compile-time field initialization error rather than a runtime timing symptom.
+The procedural Sun disk uses the finalized Bevy scene `DirectionalLight`
+direction transformed into active camera view coordinates. It consumes no
+astronomical Sun position or distance; the light and physical solar models both
+follow `WorldTime`.
 
-From a lunar surface, Earth stays near one sky position because the Moon is
-tidally locked; the center moves mainly through lunar libration. At 100,000×,
-the 27.3-day lunar month takes about 24 seconds, so that smaller motion becomes
-visible over time. Earth's day/night motion is a separate change: its
-body-fixed presentation grid applies the IAU rotation at `CelestialTime`, and
-BigSpace propagates the changed cell/transform into `GlobalTransform` before
-the globe tiles render. Do not force the Earth center to sweep across a lunar
-sky to make its day/night cycle visible.
-
-The causal cadence uses the `WorldTime` sample captured at frame start. Since
-`WorldTime` publishes a completed fixed tick in `PostUpdate`, the `Last`-stage
-cadence commit must retain the sample the `PreUpdate` celestial systems saw;
-committing the later publication would mark an unprocessed epoch solved.
-
-The presentation sample drives globe pose. A surface station remains a causal
-entity on the physical body-fixed grid; its screen marker is mirrored as
-render-only geometry under the matching presentation grid, so the marker
-follows the fast globe without changing station, terrain, physics, or link
-coordinates. The physical marker is shown from its own body's surface view;
-orbit and other-body views use the moving copy, avoiding a stationary
-duplicate. Celestial body shader looks retain installed dataset albedo unless
-USD authors an explicit albedo map. The solar presentation hierarchy is aligned
-at the active body-fixed camera pose so interpolated Earth, Moon, and Sun
-directions stay in the local sky without reposing the causal body or site. When
-`CelestialTime` is detached at a surface observer, its Sun direction also
-selects the render light; Bevy's shadow map, terrain shadows, and horizon cache
-consume that same finalized light direction.
-
-The procedural Sun disc uniform uses the active camera's view coordinates,
-matching the shader's view-space rays. The celestial projection composes the
-camera's `CellCoord` and `Transform` through the canonical
-`lunco_spatial::pose_in_grid` helper before publishing it; it never compares a
-floating-origin world vector with camera-relative rays. BigSpace still owns
-`GlobalTransform` propagation to the rendered camera and presentation grids.
-Camera pose changes reopen this projection while physical time is paused.
-
-Focused regression coverage includes
-`lunco-celestial-spatial/tests/celestial_integration.rs`, which exercises the
-detached Earth presentation pose, IAU spin, and BigSpace global propagation.
-Other frame/placement, bridge, and lifecycle coverage lives beside its owner.
-The production check is:
+Focused regression coverage lives beside the owning crates, notably
+`lunco-celestial` frame/placement tests, `lunco-usd-avian` bridge tests, and
+`lunco-core` world/lifecycle tests. The production check is:
 
 ```sh
 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4

@@ -922,15 +922,6 @@ mod tests {
                 ChildOf(body_fixed_grid),
             ))
             .id();
-        let globe_grid = app
-            .world_mut()
-            .spawn((
-                lunco_spatial::WorldGridConfig::default().grid(),
-                CellCoord::ZERO,
-                Transform::default(),
-                ChildOf(world_grid),
-            ))
-            .id();
         let body = app
             .world_mut()
             .spawn((
@@ -942,7 +933,6 @@ mod tests {
                 crate::globe_lod::GlobeLod {
                     radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                     surface_grid,
-                    globe_grid,
                     look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                     res: 8,
                     max_lod: 1,
@@ -984,8 +974,6 @@ mod tests {
         assert_eq!(world.get::<ChildOf>(site).unwrap().parent(), surface_grid);
         let lod = world.get::<crate::globe_lod::GlobeLod>(body).unwrap();
         assert_eq!(lod.surface_grid, surface_grid);
-        assert_eq!(lod.globe_grid, globe_grid);
-        assert_ne!(lod.surface_grid, lod.globe_grid);
         assert!(world.get::<Grid>(site).is_some());
         assert_eq!(world.get::<ChildOf>(rigid_body).unwrap().parent(), site);
         assert_eq!(
@@ -1082,7 +1070,6 @@ mod tests {
             crate::globe_lod::GlobeLod {
                 radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 surface_grid,
-                globe_grid: surface_grid,
                 look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                 res: 8,
                 max_lod: 1,
@@ -1142,7 +1129,6 @@ mod tests {
             crate::globe_lod::GlobeLod {
                 radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 surface_grid,
-                globe_grid: surface_grid,
                 look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                 res: 8,
                 max_lod: 1,
@@ -1219,7 +1205,6 @@ mod tests {
                 crate::globe_lod::GlobeLod {
                     radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                     surface_grid,
-                    globe_grid: surface_grid,
                     look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                     res: 8,
                     max_lod: 1,

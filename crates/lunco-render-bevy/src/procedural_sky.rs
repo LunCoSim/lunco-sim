@@ -45,9 +45,9 @@ use bevy::render::{
 use bevy::shader::Shader;
 use bevy::shader::ShaderDefVal;
 use bevy::utils::default;
-use lunco_celestial_spatial_core::CelestialSunPresentation;
+use lunco_environment::SunRenderState;
 use lunco_materials::ParamValue;
-use lunco_render::ProceduralSkybox;
+use lunco_render::{ProceduralSkybox, SceneCamera};
 use std::any::TypeId;
 use std::collections::HashMap;
 
@@ -156,7 +156,12 @@ impl SpecializedRenderPipeline for ProceduralSkyboxPipeline {
 pub(crate) fn build(app: &mut App) {
     app.add_plugins(ExtractComponentPlugin::<ProceduralSkyboxMaterial>::default())
         .add_observer(remove_skybox_material)
-        .add_systems(Update, wire_celestial_sun_inputs);
+        .add_systems(
+            PostUpdate,
+            wire_directional_sun_inputs
+                .after(lunco_environment::finalize_sun_render_state)
+                .run_if(directional_sun_inputs_changed),
+        );
 
     let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
         return;
@@ -176,42 +181,70 @@ pub(crate) fn build(app: &mut App) {
     render_app.add_render_command::<Opaque3d, DrawProceduralSkyboxCommands>();
 }
 
-/// Feed the current celestial Sun state to procedural backgrounds that declare
-/// the matching engine parameters. The conversion to f32 happens at this
-/// shader-uniform boundary; shader asset identity is not part of the contract.
-fn wire_celestial_sun_inputs(
-    sun: Option<Res<CelestialSunPresentation>>,
+const SUN_TAN_ANGULAR_RADIUS: f32 = 0.004_65;
+
+fn sun_direction_in_view(world_direction: Vec3, camera_rotation: Quat) -> Option<Vec3> {
+    if !world_direction.is_finite() || world_direction.length_squared() <= 0.0 {
+        return None;
+    }
+    let view_direction = camera_rotation.inverse() * world_direction.normalize();
+    (view_direction.is_finite() && view_direction.length_squared() > 0.0)
+        .then(|| view_direction.normalize())
+}
+
+fn directional_sun_inputs_changed(
+    sun: Option<Res<SunRenderState>>,
+    cameras: Query<
+        (),
+        (
+            With<SceneCamera>,
+            With<Camera3d>,
+            Or<(Added<Camera>, Changed<Camera>, Changed<GlobalTransform>)>,
+        ),
+    >,
+    skyboxes: Query<
+        (),
+        Or<(
+            Added<ProceduralSkyboxMaterial>,
+            Changed<ProceduralSkyboxMaterial>,
+        )>,
+    >,
+) -> bool {
+    sun.is_some_and(|state| state.is_changed()) || !cameras.is_empty() || !skyboxes.is_empty()
+}
+
+/// Project Bevy's finalized scene-light direction into the active camera for
+/// procedural sky disks. The disk uses a small fixed apparent radius; no solar
+/// position or astronomical-distance value crosses the render boundary.
+fn wire_directional_sun_inputs(
+    sun: Option<Res<SunRenderState>>,
+    cameras: Query<(&Camera, &GlobalTransform), (With<SceneCamera>, With<Camera3d>)>,
     skyboxes: Query<&ProceduralSkyboxMaterial>,
     materials: Option<ResMut<Assets<super::ShaderMaterial>>>,
 ) {
     let Some(mut materials) = materials else {
         return;
     };
-    let (direction, tan_radius) = match sun.as_deref() {
-        Some(state) => match (state.direction_to_sun_view, state.tan_angular_radius) {
-            (Some(direction), Some(tan_radius))
-                if direction.is_finite()
-                    && tan_radius.is_finite()
-                    && tan_radius > 0.0
-                    && direction.length_squared() > 0.0 =>
-            {
-                let direction = direction.normalize().as_vec3();
-                let tan_radius = tan_radius as f32;
-                if !direction.is_finite() || !tan_radius.is_finite() || tan_radius <= 0.0 {
-                    (Vec3::NEG_Z, 0.0)
-                } else {
-                    (direction, tan_radius)
-                }
-            }
-            (None, None) => (Vec3::NEG_Z, 0.0),
-            _ => {
-                warn_once!(
-                    "[render] incomplete celestial Sun presentation state; background disc is disabled"
-                );
-                (Vec3::NEG_Z, 0.0)
-            }
-        },
-        None => (Vec3::NEG_Z, 0.0),
+    let state = sun.and_then(|state| state.direction_to_sun_world);
+    let mut active_cameras = cameras.iter().filter(|(camera, _)| camera.is_active);
+    let camera_rotation = active_cameras
+        .next()
+        .map(|(_, transform)| transform.rotation());
+    let direction = match (state, camera_rotation, active_cameras.next()) {
+        (Some(world_direction), Some(rotation), None) => {
+            sun_direction_in_view(world_direction, rotation).unwrap_or(Vec3::ZERO)
+        }
+        (None, _, _) => Vec3::ZERO,
+        (Some(_), None, _) => Vec3::ZERO,
+        (Some(_), Some(_), Some(_)) => {
+            warn_once!("[render] multiple active scene cameras; procedural Sun disk is disabled");
+            Vec3::ZERO
+        }
+    };
+    let tan_radius = if direction.length_squared() > 0.0 {
+        SUN_TAN_ANGULAR_RADIUS
+    } else {
+        0.0
     };
 
     for skybox in &skyboxes {
@@ -450,6 +483,23 @@ fn remove_skybox_material(remove: On<Remove, ProceduralSkybox>, mut commands: Co
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sky_disk_uses_the_directional_light_in_camera_space() {
+        let world_direction = Vec3::NEG_Z;
+        let camera_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+
+        let view_direction = sun_direction_in_view(world_direction, camera_rotation)
+            .expect("finite scene sun direction");
+
+        assert!(view_direction.abs_diff_eq(Vec3::X, 1.0e-6));
+    }
+
+    #[test]
+    fn sky_disk_rejects_an_invalid_direction() {
+        assert!(sun_direction_in_view(Vec3::ZERO, Quat::IDENTITY).is_none());
+        assert!(sun_direction_in_view(Vec3::splat(f32::NAN), Quat::IDENTITY).is_none());
+    }
 
     fn key(target_format: TextureFormat) -> ProceduralSkyboxPipelineKey {
         ProceduralSkyboxPipelineKey {

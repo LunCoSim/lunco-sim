@@ -3,11 +3,11 @@ use big_space::plugin::BigSpaceMinimalPlugins;
 use big_space::prelude::*;
 use lunco_celestial::{EphemerisProvider, EphemerisResource};
 use lunco_celestial_spatial::CelestialPlugin;
-use lunco_time::{CelestialTime, TimeTransport, TransportMode, WorldTime};
+use lunco_time::{MissionClock, TimeTransport, TransportMode, WorldTime};
 use std::sync::Arc;
 
 const METRES_PER_AU: f64 = 149_597_870_700.0;
-const PRESENTATION_TEST_EPOCH_JD: f64 = 2_451_545.0;
+const TEST_EPOCH_JD: f64 = 2_451_545.0;
 
 /// Test ephemeris that returns an **epoch-dependent** position, so advancing the
 /// clock provably moves a body. The test installs a real provider explicitly;
@@ -32,15 +32,15 @@ impl EphemerisProvider for StubEphemeris {
     }
 }
 
-/// A deterministic Earth-Moon ephemeris for the detached presentation path.
+/// Deterministic Earth-Moon ephemeris with a visible epoch-dependent pose.
 /// The Earth and Moon positions are relative to their declared EMB parent, as
 /// required by `EphemerisProvider::position`.
 #[derive(Debug)]
-struct PresentationEphemeris;
+struct EarthMoonEphemeris;
 
-impl EphemerisProvider for PresentationEphemeris {
+impl EphemerisProvider for EarthMoonEphemeris {
     fn position(&self, body_id: i32, epoch_jd: f64) -> Option<lunco_celestial::frames::EclipticAu> {
-        let phase = std::f64::consts::TAU * (epoch_jd - PRESENTATION_TEST_EPOCH_JD) / 27.321_661;
+        let phase = std::f64::consts::TAU * (epoch_jd - TEST_EPOCH_JD) / 27.321_661;
         let (radius_m, direction) = match body_id {
             lunco_celestial::ephemeris_id::SUN
             | lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER => {
@@ -75,17 +75,6 @@ impl EphemerisProvider for PresentationEphemeris {
     }
 }
 
-#[derive(Resource)]
-struct PresentationEpochOverride(f64);
-
-fn force_presentation_epoch(
-    epoch: Res<PresentationEpochOverride>,
-    mut celestial: ResMut<CelestialTime>,
-) {
-    celestial.epoch_jd = epoch.0;
-    celestial.delta_secs = 0.0;
-}
-
 /// Build the headless celestial app the integration tests share. These tests
 /// exercise the ECS/spatial mechanisms without loading visual assets or a GPU.
 ///
@@ -115,27 +104,22 @@ fn celestial_test_app() -> App {
     app
 }
 
-/// Detached celestial time must update the render-only Earth's pose and spin,
-/// then BigSpace must propagate those local changes to its GlobalTransform.
+/// WorldTime must update the Earth's same-epoch pose and spin, then BigSpace
+/// must propagate those local changes to its GlobalTransform.
 #[test]
-fn detached_celestial_time_advances_earth_presentation_through_big_space() {
+fn world_time_advances_earth_pose_through_big_space() {
     let mut app = celestial_test_app();
     app.insert_resource(EphemerisResource {
-        provider: Arc::new(PresentationEphemeris),
+        provider: Arc::new(EarthMoonEphemeris),
     });
-    app.insert_resource(PresentationEpochOverride(PRESENTATION_TEST_EPOCH_JD));
     app.world_mut().resource_mut::<TimeTransport>().mode = TransportMode::Paused;
-    app.add_systems(
-        PreUpdate,
-        force_presentation_epoch.after(lunco_time::CelestialTimeSet),
-    );
+    app.insert_resource(MissionClock::anchored(TEST_EPOCH_JD, 0));
 
     // Let clock publication and deferred celestial hierarchy creation settle.
     app.update();
     app.update();
     let world_epoch_before = app.world().resource::<WorldTime>().epoch_jd;
-    let celestial_epoch_before = app.world().resource::<CelestialTime>().epoch_jd;
-    assert_eq!(celestial_epoch_before, PRESENTATION_TEST_EPOCH_JD);
+    assert_eq!(world_epoch_before, TEST_EPOCH_JD);
 
     let earth_grid = {
         let world = app.world_mut();
@@ -171,22 +155,18 @@ fn detached_celestial_time_advances_earth_presentation_through_big_space() {
     let (cell_before, transform_before, global_before, local_position_before) =
         earth_pose(&mut app);
 
-    app.world_mut()
-        .resource_mut::<PresentationEpochOverride>()
-        .0 += 0.25;
+    app.insert_resource(MissionClock::anchored(TEST_EPOCH_JD + 0.25, 0));
+    // WorldTime publishes the new epoch in PostUpdate. The next frame's
+    // celestial solve consumes it, and BigSpace then propagates that pose.
+    app.update();
     app.update();
 
-    let celestial_epoch_after = app.world().resource::<CelestialTime>().epoch_jd;
-    assert_eq!(celestial_epoch_after, PRESENTATION_TEST_EPOCH_JD + 0.25);
-    assert_eq!(
-        app.world().resource::<WorldTime>().epoch_jd,
-        world_epoch_before,
-        "the detached presentation clock must leave physical WorldTime paused"
-    );
+    let world_epoch_after = app.world().resource::<WorldTime>().epoch_jd;
+    assert_eq!(world_epoch_after, TEST_EPOCH_JD + 0.25);
     let (cell_after, transform_after, global_after, local_position_after) = earth_pose(&mut app);
     assert!(
         cell_after != cell_before || transform_after.translation != transform_before.translation,
-        "the Earth ephemeris pose must advance on CelestialTime"
+        "the Earth ephemeris pose must advance on WorldTime"
     );
     assert!(
         (local_position_after - local_position_before).length() > 100_000.0,
@@ -198,18 +178,18 @@ fn detached_celestial_time_advances_earth_presentation_through_big_space() {
             .rotation
             .angle_between(transform_before.rotation)
             > 1.0,
-        "Earth must rotate visibly over 0.25 celestial day"
+        "Earth must rotate visibly over 0.25 physical day"
     );
     assert!(
         global_after
             .rotation()
             .angle_between(global_before.rotation())
             > 1.0,
-        "BigSpace must propagate Earth's celestial-time rotation into GlobalTransform"
+        "BigSpace must propagate Earth's physical-time rotation into GlobalTransform"
     );
     assert!(
         (global_after.translation() - global_before.translation()).length() > 100_000.0,
-        "BigSpace must propagate Earth's celestial-time position into GlobalTransform"
+        "BigSpace must propagate Earth's physical-time position into GlobalTransform"
     );
 
     let earth = app
@@ -218,10 +198,10 @@ fn detached_celestial_time_advances_earth_presentation_through_big_space() {
         .get(lunco_celestial::ephemeris_id::EARTH)
         .expect("Earth rotation model");
     let expected_rotation =
-        lunco_celestial::geo::body_rotation(earth, PRESENTATION_TEST_EPOCH_JD + 0.25).as_quat();
+        lunco_celestial::geo::body_rotation(earth, TEST_EPOCH_JD + 0.25).as_quat();
     assert!(
         transform_after.rotation.dot(expected_rotation).abs() > 1.0 - 1.0e-6,
-        "the presentation globe must use the authoritative IAU body rotation: \
+        "the rendered globe must use the authoritative IAU body rotation: \
          actual={:?}, expected={:?}, delta={}",
         transform_after.rotation,
         expected_rotation,

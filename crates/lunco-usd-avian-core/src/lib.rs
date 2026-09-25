@@ -1125,9 +1125,8 @@ fn pose_to_position(
         // conversion or the solver receives a mixed-frame state.  This is a
         // frame rebase, not an impulse: preserve sleeping/contact/joint state
         // and do not manufacture a velocity from the frame's astronomical
-        // translation.  Motion above the selected frame remains render-only;
-        // its transport belongs to the inertial celestial presentation, not
-        // to this local Avian world.
+        // translation. Motion above the selected frame belongs to the
+        // celestial hierarchy; it is not a local Avian displacement.
         let hierarchy_reanchored = handoff.is_some()
             && frame_reanchored
             && is_below_active_frame(e, active_frame, &q_parents);
@@ -1204,9 +1203,9 @@ fn pose_to_position(
 }
 
 /// Return whether `body` has a changed local pose or a changed ancestor whose
-/// motion belongs to the body's physics frame. Render-only ancestors above the
-/// active frame are intentionally excluded: celestial presentation movement
-/// must not transport local Avian state.
+/// motion belongs to the body's physics frame. Celestial ancestors above the
+/// active frame are intentionally excluded: moving the reference frame must
+/// not become a local Avian displacement.
 fn body_needs_pose_refresh(
     body: Entity,
     moved: &EntityHashSet,
