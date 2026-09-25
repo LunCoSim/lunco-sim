@@ -36,7 +36,6 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-execution = { path = "../lunco-modelica-execution" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
-lunco-sysml = { path = "../lunco-sysml", optional = true }
 lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
 serde_json = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
@@ -48,6 +47,7 @@ lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial" }
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }
+lunco-time = { path = "../lunco-time" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-scene-camera = { path = "../lunco-scene-camera" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
@@ -65,7 +65,7 @@ networking = ["lunco-luncosim-exposures/networking"]
 api-transport = ["lunco-usd-bevy-runtime/api"]
 net-diag = ["networking"]
 python = ["lunco-usd-bevy-runtime/python"]
-sysml = ["dep:lunco-sysml"]
+sysml = ["lunco-scene-validation/sysml-runtime"]
 
 [lints]
 workspace = true

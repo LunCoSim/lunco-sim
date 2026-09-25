@@ -104,6 +104,16 @@ bundle installs the implementation plugins explicitly, so vehicle changes do
 not make the vehicle package depend on shader implementation or the 6.5k-line
 cosim implementation.
 
+Default Twin scene admission uses `AsyncWorkAdmission` to parse the exact
+`UsdSourceText` revision and serialize the restored persistent document
+snapshot off the main schedule. The file-backed registry still owns path
+identity, clean reload, dirty preservation, and lifecycle events through
+`PreparedFileBacked`. Parse results are checked against the current source text;
+serialized results are committed only for their captured document generation.
+The live `Stage` remains in its thread-affine owner. Runtime sidecar read/parse
+and editor-preview initial serialization are still synchronous, and the native
+admission queue reports its missing wasm worker transport visibly.
+
 Core USD schema assets register incrementally through
 `lunco-usd-bevy-runtime-core`. `lunco-usd-authoring` applies matching linear-unit
 facts as declarations arrive and validates missing entries only after all
@@ -254,11 +264,16 @@ UsdOp ─apply→ UsdDocument (base⊕runtime, op_log, generation++)
                          · Resync → spawn added / despawn removed subtree
 ```
 
-Invariant: **every generation bump records exactly one op-log entry**. `ops_since`
-returns `None` when the op ring is shorter than the generation delta, degrading safely
-to a full rebuild (`rebuild_scene_from_composed`) rather than a silent projection lie.
-Coarse ops (`ReplaceSource`, `MovePrim`, `RemoveTimeSample`, `SetRelationship`) rebuild;
-the common interactive ops replay incrementally (`apply_incremental_op_to_stage`).
+Authored operations and projection generations are separate contracts. A successful
+authored operation records exactly one typed op. A full reload advances the
+generation and records `UsdChange::FullReload`, but does not invent an authored
+operation. `ops_since` returns `None` when the cursor crosses a full reload or the
+op window expires; document sync then sends a layer snapshot, and the stage
+projector rebuilds from composed source. Coarse authored ops (`ReplaceSource`,
+`MovePrim`, `RemoveTimeSample`, `SetRelationship`) rebuild; common interactive ops
+replay incrementally (`apply_incremental_op_to_stage`). A reload whose parsed layer
+source string is identical is an idempotent no-op and does not advance the
+projection generation.
 
 An authored standard `inputs:*` edit on a live model instance also advances the
 backend-neutral `lunco_core::ModelStateRevision`. This is only an invalidation
@@ -901,7 +916,7 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms
 - `crates/lunco-usd-bevy-animation/src/lib.rs` — production animation planning, time-domain binding, and ECS sampling systems
 - `assets/scenes/tests/usd_query_api.usda` + `assets/scenarios/tests/usd_query_api.rhai` — production inspection, reference-target resolution, and document-sync contracts
-- `assets/scenes/tests/usd_material_edit_projection.usda` + `assets/scenarios/tests/usd_material_edit_projection.rhai` — production typed material edits, source replacement, and preview-generation lifecycle
+- `assets/scenes/tests/editor/usd_material_edit_projection/usd_material_edit_projection.usda` + `assets/scenarios/tests/usd_material_edit_projection.rhai` — production typed material edits, source replacement, and preview-generation lifecycle
 - `crates/lunco-usd-viewport-runtime/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-avian-core/src/lib.rs` — Avian/BigSpace frame bridge and low-level bridge tests

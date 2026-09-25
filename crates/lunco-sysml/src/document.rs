@@ -1,13 +1,11 @@
 //! The canonical Document representation of one SysML source buffer.
 
-use std::ops::Range;
-use std::sync::Arc;
-
 use lunco_doc::{
     Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin, FileBacked, ForkableDocument,
 };
-use lunco_sysml_ast::SysmlAnalysis;
 use lunco_twin_journal::{DomainKind, OpPayload};
+use std::ops::Range;
+use std::sync::Arc;
 
 /// Reversible source-level edits for a SysML document.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -34,19 +32,18 @@ impl OpPayload for SysmlOp {
     }
 }
 
-/// A source-backed SysML document with an eagerly refreshed semantic snapshot.
+/// A source-backed SysML document with revisioned, asynchronous analysis.
 #[derive(Clone)]
 pub struct SysmlDocument {
     id: DocumentId,
-    source: String,
+    source: Arc<str>,
     origin: DocumentOrigin,
     generation: u64,
     last_saved_generation: Option<u64>,
-    analysis: Arc<SysmlAnalysis>,
 }
 
 impl SysmlDocument {
-    /// Create an untitled document with a fresh semantic snapshot.
+    /// Create an untitled source document.
     pub fn new(id: DocumentId, source: impl Into<String>) -> Self {
         Self::with_origin(
             id,
@@ -55,10 +52,12 @@ impl SysmlDocument {
         )
     }
 
-    /// Build a document from source and an explicit origin.
+    /// Build a document from source and an explicit origin without parsing it.
     pub fn with_origin(id: DocumentId, source: impl Into<String>, origin: DocumentOrigin) -> Self {
-        let source = source.into();
-        let analysis = Arc::new(build_analysis(&origin, &source, 0));
+        Self::with_source_snapshot(id, Arc::from(source.into()), origin)
+    }
+
+    fn with_source_snapshot(id: DocumentId, source: Arc<str>, origin: DocumentOrigin) -> Self {
         let saved = (!origin.is_untitled()).then_some(0);
         Self {
             id,
@@ -66,7 +65,6 @@ impl SysmlDocument {
             origin,
             generation: 0,
             last_saved_generation: saved,
-            analysis,
         }
     }
 
@@ -75,14 +73,8 @@ impl SysmlDocument {
         &self.source
     }
 
-    /// Shared semantic snapshot for read-side consumers.
-    pub fn analysis(&self) -> &SysmlAnalysis {
-        &self.analysis
-    }
-
-    /// Shared semantic snapshot for worker/UI handoff.
-    pub fn analysis_arc(&self) -> Arc<SysmlAnalysis> {
-        Arc::clone(&self.analysis)
+    pub(crate) fn source_snapshot(&self) -> Arc<str> {
+        Arc::clone(&self.source)
     }
 
     /// Current document origin.
@@ -93,32 +85,18 @@ impl SysmlDocument {
     /// Rebind this document to a new origin after a successful Save-As.
     pub fn set_origin(&mut self, origin: DocumentOrigin) {
         self.origin = origin;
-        self.refresh_analysis();
     }
 
     /// Mark the current generation as persisted.
     pub fn mark_saved(&mut self) {
         self.last_saved_generation = Some(self.generation);
     }
-    /// Whether this source has semantic/parser diagnostics.
-    pub fn has_diagnostics(&self) -> bool {
-        self.analysis.has_errors()
-    }
-
-    fn refresh_analysis(&mut self) {
-        let name = source_name(&self.origin);
-        self.analysis = Arc::new(SysmlAnalysis::build(
-            [(name, self.source.clone())],
-            true,
-            self.generation,
-        ));
-    }
-
     fn replace_source(&mut self, source: String) -> Result<SysmlOp, DocumentError> {
-        let old = std::mem::replace(&mut self.source, source);
+        let old = std::mem::replace(&mut self.source, Arc::from(source));
         self.generation = self.generation.saturating_add(1);
-        self.refresh_analysis();
-        Ok(SysmlOp::ReplaceSource { new: old })
+        Ok(SysmlOp::ReplaceSource {
+            new: old.to_string(),
+        })
     }
 
     fn edit_text(
@@ -140,10 +118,11 @@ impl SysmlDocument {
                 range.start, range.end
             )));
         }
-        let old = self.source[range.clone()].to_owned();
-        self.source.replace_range(range.clone(), &replacement);
+        let mut source = self.source.to_string();
+        let old = source[range.clone()].to_owned();
+        source.replace_range(range.clone(), &replacement);
+        self.source = Arc::from(source);
         self.generation = self.generation.saturating_add(1);
-        self.refresh_analysis();
         Ok(SysmlOp::EditText {
             range: range.start..range.start + replacement.len(),
             replacement: old,
@@ -194,11 +173,9 @@ impl FileBacked for SysmlDocument {
     }
 
     fn reload_base(&mut self, source: &str) -> bool {
-        if self.source != source {
-            self.source.clear();
-            self.source.push_str(source);
+        if self.source.as_ref() != source {
+            self.source = Arc::from(source);
             self.generation = self.generation.saturating_add(1);
-            self.refresh_analysis();
         }
         self.last_saved_generation = Some(self.generation);
         true
@@ -211,15 +188,15 @@ impl FileBacked for SysmlDocument {
 
 impl ForkableDocument for SysmlDocument {
     fn fork(&self, id: DocumentId, name: String) -> Result<Self, DocumentError> {
-        Ok(Self::with_origin(
+        Ok(Self::with_source_snapshot(
             id,
-            self.source.clone(),
+            Arc::clone(&self.source),
             DocumentOrigin::untitled(name),
         ))
     }
 }
 
-fn source_name(origin: &DocumentOrigin) -> String {
+pub(crate) fn source_name(origin: &DocumentOrigin) -> String {
     let name = origin.session_uri();
     if name.ends_with(".sysml") || name.ends_with(".kerml") {
         name
@@ -228,8 +205,16 @@ fn source_name(origin: &DocumentOrigin) -> String {
     }
 }
 
-fn build_analysis(origin: &DocumentOrigin, source: &str, generation: u64) -> SysmlAnalysis {
-    SysmlAnalysis::build([(source_name(origin), source.to_owned())], true, generation)
+pub(crate) fn build_analysis(
+    origin: &DocumentOrigin,
+    source: &str,
+    generation: u64,
+) -> lunco_sysml_ast::SysmlAnalysis {
+    lunco_sysml_ast::SysmlAnalysis::build(
+        [(source_name(origin), source.to_owned())],
+        true,
+        generation,
+    )
 }
 
 #[cfg(test)]
@@ -237,7 +222,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn edits_refresh_semantics_and_inverse() {
+    fn source_edits_advance_generation_and_preserve_inverse() {
         let mut document = SysmlDocument::new(DocumentId::new(7), "part def Rover {}");
         let inverse = document
             .apply(SysmlOp::EditText {
@@ -247,15 +232,22 @@ mod tests {
             .unwrap();
         assert_eq!(document.source(), "part def Example {}");
         assert_eq!(document.generation(), 1);
-        assert!(
-            document
-                .analysis()
-                .elements()
-                .iter()
-                .any(|element| element.qualified_name == "Example")
-        );
         document.apply(inverse).unwrap();
         assert_eq!(document.source(), "part def Rover {}");
+    }
+
+    #[test]
+    fn source_snapshot_remains_immutable_after_an_edit() {
+        let mut document = SysmlDocument::new(DocumentId::new(8), "part def Rover {}");
+        let snapshot = document.source_snapshot();
+        document
+            .apply(SysmlOp::ReplaceSource {
+                new: "part def Lander {}".to_owned(),
+            })
+            .unwrap();
+
+        assert_eq!(snapshot.as_ref(), "part def Rover {}");
+        assert_eq!(document.source(), "part def Lander {}");
     }
 
     #[test]

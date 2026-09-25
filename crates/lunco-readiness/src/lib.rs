@@ -51,6 +51,10 @@
 //! raises a runtime fault and keeps the hold in force instead of releasing an
 //! unresolved world.
 //!
+//! The scheduled policy call carries `Core/Simulation/Behavior`, sampled from
+//! `Time<Fixed>` and sequenced by `SimTick`. Rhai policies can reject direct calls
+//! from lifecycle, UI, or REPL cycles instead of treating them as readiness work.
+//!
 //! With no hook registered, [`Action::builtin`] decides — the same rule the
 //! shipped policy states, so an app with no scripting behaves identically.
 //!
@@ -65,6 +69,7 @@
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
+use lunco_core::{RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeRoute};
 use lunco_hooks::HookValue as H;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use serde::{Deserialize, Serialize};
@@ -73,7 +78,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// Authored in `assets/scripting/policy/readiness.rhai`, entry `readiness_action`.
 /// Its `elapsed_s` / `elapsed_ticks` inputs are counted on the **fixed** clock, so
-/// the same run reaches the same verdict at the same tick on every machine.
+/// the same run reaches the same verdict at the same tick on every machine. The
+/// scheduled invocation carries the core simulation route and fixed-clock sample.
 pub const READINESS_HOOK: &str = "readiness.action";
 
 lunco_hooks::declare_hook! {
@@ -354,6 +360,7 @@ fn decide(
     elapsed_ticks: u64,
     elapsed_s: f64,
     settings: &ReadinessSettings,
+    runtime_context: RuntimeExecutionContext,
 ) -> Action {
     let entity_bits = match subject {
         Subject::Entity(e) => e.to_bits() as i64,
@@ -397,7 +404,8 @@ fn decide(
     ]);
 
     let fallback = || default_action;
-    let Some(result) = lunco_hooks::invoke(READINESS_HOOK, &[ctx]) else {
+    let Some(result) = lunco_hooks::invoke_with_context(READINESS_HOOK, &[ctx], runtime_context)
+    else {
         return fallback();
     };
     match result {
@@ -439,6 +447,7 @@ fn decide(
 /// elapsed since it last ran.
 pub fn evaluate_readiness(
     time: Res<Time<Fixed>>,
+    sim_tick: Res<lunco_core_runtime::SimTick>,
     entities: &bevy::ecs::entity::Entities,
     mut registry: ResMut<ReadinessRegistry>,
     mut state: ResMut<ReadinessState>,
@@ -457,6 +466,15 @@ pub fn evaluate_readiness(
         0
     };
     *last_fixed_s = now_fixed_s;
+    let runtime_context = RuntimeExecutionContext {
+        route: Some(RuntimeRoute::core(RuntimeCycle::Simulation)),
+        phase: RuntimePhase::Behavior,
+        clock: RuntimeClock::Simulation,
+        time_seconds: Some(now_fixed_s),
+        delta_seconds: Some(steps as f64 * timestep),
+        sequence: Some(sim_tick.0),
+        producer: None,
+    };
     let mut world_hold = false;
     let mut held: Vec<Entity> = Vec::new();
 
@@ -499,6 +517,7 @@ pub fn evaluate_readiness(
                 item.elapsed_ticks,
                 item.elapsed_s,
                 &settings,
+                runtime_context,
             );
         }
 
@@ -590,6 +609,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_plugins(ReadinessPlugin);
         app.init_resource::<Time<Fixed>>();
+        app.init_resource::<lunco_core_runtime::SimTick>();
         app
     }
 
@@ -806,7 +826,7 @@ mod tests {
 
         struct Fixed(&'static str);
         impl ScriptHook for Fixed {
-            fn invoke(&self, _args: &[H]) -> HookResult {
+            fn invoke(&self, _invocation: &lunco_hooks::HookInvocation<'_>) -> HookResult {
                 Ok(H::str(self.0))
             }
         }
@@ -850,7 +870,7 @@ mod tests {
 
         struct Nonsense;
         impl ScriptHook for Nonsense {
-            fn invoke(&self, _args: &[H]) -> HookResult {
+            fn invoke(&self, _invocation: &lunco_hooks::HookInvocation<'_>) -> HookResult {
                 Ok(H::str("melt_the_reactor"))
             }
         }
@@ -886,7 +906,7 @@ mod tests {
 
         struct HoldEntityAlways;
         impl ScriptHook for HoldEntityAlways {
-            fn invoke(&self, _args: &[H]) -> HookResult {
+            fn invoke(&self, _invocation: &lunco_hooks::HookInvocation<'_>) -> HookResult {
                 Ok(H::str("hold_entity"))
             }
         }

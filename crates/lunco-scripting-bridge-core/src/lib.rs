@@ -1622,6 +1622,7 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
     match v {
         TelemetryValue::F64(x) => b.float(*x),
         TelemetryValue::I64(x) => b.int(*x),
+        TelemetryValue::U64(x) => b.uint(*x),
         TelemetryValue::Bool(x) => b.bool(*x),
         TelemetryValue::String(x) => b.string(x),
         TelemetryValue::Array(items) => {
@@ -1640,6 +1641,12 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
 mod tests {
     use super::*;
     use lunco_core_session::{AuthorityRole, CommandPolicy, UserSession};
+
+    #[test]
+    fn telemetry_unsigned_values_keep_their_unsigned_type() {
+        let value = telemetry_value(&ApiValueBuilder, &TelemetryValue::U64(u64::MAX));
+        assert_eq!(value, HookValue::UInt(u64::MAX));
+    }
 
     #[test]
     fn api_value_boundary_lowers_reflected_geometry_to_ordered_arrays() {

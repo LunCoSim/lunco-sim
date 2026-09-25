@@ -15,7 +15,124 @@
 
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+/// Stable, owner-neutral key for data that a scenario needs before activation.
+/// The producer namespace and identity are authored by the domain owner; the
+/// runtime only tracks the state published for that exact key.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SimulationDependencyKey {
+    pub owner: String,
+    pub identity: String,
+}
+
+impl SimulationDependencyKey {
+    /// Construct one dependency key, rejecting names that cannot identify an
+    /// owner or an owner-scoped input.
+    pub fn new(owner: impl Into<String>, identity: impl Into<String>) -> Result<Self, String> {
+        let owner = owner.into();
+        let identity = identity.into();
+        if owner.trim().is_empty() || owner.trim() != owner {
+            return Err(
+                "simulation dependency owner must be non-empty and have no surrounding whitespace"
+                    .to_owned(),
+            );
+        }
+        if identity.trim().is_empty() || identity.trim() != identity {
+            return Err(
+                "simulation dependency identity must be non-empty and have no surrounding whitespace"
+                    .to_owned(),
+            );
+        }
+        Ok(Self { owner, identity })
+    }
+}
+
+/// Readiness of one owner-published input required by a scenario plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SimulationDependencyStatus {
+    /// The current owner operation is preparing the requested input.
+    Pending { operation_id: u64 },
+    /// The owner committed the immutable source revision for this input.
+    Ready { source_revision: u64 },
+    /// The current owner operation reached a terminal failure.
+    Failed {
+        operation_id: u64,
+        errors: Vec<String>,
+    },
+}
+
+/// Current readiness facts published by domain owners for scenario admission.
+/// This is not a work queue: producers keep their typed jobs and fence results
+/// before publishing a terminal state, while scenarios hold their existing
+/// preparation boundary until every declared key is ready.
+#[derive(Resource, Debug, Default)]
+pub struct SimulationDependencyStates {
+    owners: BTreeSet<String>,
+    states: BTreeMap<SimulationDependencyKey, SimulationDependencyStatus>,
+    revision: u64,
+}
+
+impl SimulationDependencyStates {
+    /// Register a producer namespace. Repeated registration is idempotent.
+    pub fn register_owner(&mut self, owner: impl Into<String>) -> Result<bool, String> {
+        let owner = owner.into();
+        if owner.trim().is_empty() {
+            return Err("simulation dependency owner must not be empty".to_owned());
+        }
+        let inserted = self.owners.insert(owner);
+        if inserted {
+            self.revision = self.revision.wrapping_add(1);
+        }
+        Ok(inserted)
+    }
+
+    /// Whether an owner namespace has a producer in this application.
+    pub fn owner_is_registered(&self, owner: &str) -> bool {
+        self.owners.contains(owner)
+    }
+
+    /// Publish a state transition. The revision changes only when the visible
+    /// state changes, so waiting owners can resume from owner commits without
+    /// polling on every simulation tick.
+    pub fn publish(
+        &mut self,
+        key: SimulationDependencyKey,
+        status: SimulationDependencyStatus,
+    ) -> Result<bool, String> {
+        if !self.owners.contains(&key.owner) {
+            return Err(format!(
+                "simulation dependency owner `{}` is not registered",
+                key.owner
+            ));
+        }
+        if self.states.get(&key) == Some(&status) {
+            return Ok(false);
+        }
+        self.states.insert(key, status);
+        self.revision = self.revision.wrapping_add(1);
+        Ok(true)
+    }
+
+    /// Retire one dependency after its producer's identity leaves scope.
+    pub fn retire(&mut self, key: &SimulationDependencyKey) -> bool {
+        if self.states.remove(key).is_none() {
+            return false;
+        }
+        self.revision = self.revision.wrapping_add(1);
+        true
+    }
+
+    /// Read the currently committed state for an exact owner key.
+    pub fn status(&self, key: &SimulationDependencyKey) -> Option<&SimulationDependencyStatus> {
+        self.states.get(key)
+    }
+
+    /// Revision incremented by every visible state publication or retirement.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+}
 
 /// How the host drives the simulation application.
 ///
@@ -91,7 +208,10 @@ impl FramePacingDemand {
 
 #[cfg(test)]
 mod tests {
-    use super::{FramePacingDemand, SimulationBarrierParticipants};
+    use super::{
+        FramePacingDemand, SimulationBarrierParticipants, SimulationDependencyKey,
+        SimulationDependencyStates, SimulationDependencyStatus,
+    };
     use bevy::prelude::Entity;
 
     #[test]
@@ -152,6 +272,80 @@ mod tests {
         participants.replace_scenario_dependencies(scenario, [modelica_b]);
         assert!(!participants.requires_barrier(modelica_a));
         assert!(participants.requires_barrier(modelica_b));
+    }
+
+    #[test]
+    fn scenario_dependency_revisions_follow_owner_state_changes() {
+        let key = SimulationDependencyKey::new("sysml.twin-analysis", "twin://school")
+            .expect("stable owner key");
+        let other = SimulationDependencyKey::new("sysml.twin-analysis", "twin://other")
+            .expect("distinct Twin key");
+        let mut states = SimulationDependencyStates::default();
+
+        assert!(states.register_owner("sysml.twin-analysis").unwrap());
+        assert!(
+            states
+                .publish(
+                    key.clone(),
+                    SimulationDependencyStatus::Pending { operation_id: 7 },
+                )
+                .unwrap()
+        );
+        let pending_revision = states.revision();
+        assert!(
+            !states
+                .publish(
+                    key.clone(),
+                    SimulationDependencyStatus::Pending { operation_id: 7 },
+                )
+                .unwrap()
+        );
+        assert_eq!(states.revision(), pending_revision);
+        assert!(
+            states
+                .publish(
+                    other.clone(),
+                    SimulationDependencyStatus::Ready { source_revision: 9 },
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            states.status(&key),
+            Some(&SimulationDependencyStatus::Pending { operation_id: 7 })
+        );
+        assert!(
+            states
+                .publish(
+                    key.clone(),
+                    SimulationDependencyStatus::Ready {
+                        source_revision: 12
+                    },
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            states.status(&key),
+            Some(&SimulationDependencyStatus::Ready {
+                source_revision: 12
+            })
+        );
+        assert!(states.retire(&key));
+        assert_eq!(states.status(&key), None);
+        assert!(states.status(&other).is_some());
+    }
+
+    #[test]
+    fn dependency_owner_registration_is_idempotent_and_revisioned() {
+        let mut states = SimulationDependencyStates::default();
+        assert!(states.register_owner("sysml.twin-analysis").unwrap());
+        let registered_revision = states.revision();
+        assert!(!states.register_owner("sysml.twin-analysis").unwrap());
+        assert_eq!(states.revision(), registered_revision);
+        assert!(states.owner_is_registered("sysml.twin-analysis"));
+        assert!(!states.owner_is_registered("sysml.doc-analysis"));
+        assert!(states.register_owner("").is_err());
+        assert!(SimulationDependencyKey::new(" sysml.twin-analysis", "school").is_err());
+        assert!(SimulationDependencyKey::new("sysml.twin-analysis", " ").is_err());
     }
 }
 
@@ -227,14 +421,14 @@ pub enum SimulationProgressOwner {
     SceneLifecycle,
     /// Runtime USD reference topology admission.
     SceneReferences,
+    /// Authored terrain data and collider preparation.
+    TerrainPreparation,
     /// USD document source preparation and revision admission.
     DocumentPreparation,
     /// Modelica source/interface preparation.
     ModelicaPreparation,
     /// Rhai parse/import preparation.
     ScriptPreparation,
-    /// SysML source-set analysis and revision admission.
-    SysmlAnalysis,
 }
 
 /// Stable owner and operation identity for one simulation-progress hold.
@@ -250,6 +444,33 @@ impl SimulationProgressKey {
         Self {
             owner: SimulationProgressOwner::SceneLifecycle,
             operation_id: id.get(),
+        }
+    }
+
+    /// Key Modelica preparation to the exact live participant entity.
+    ///
+    /// A participant has at most one active preparation at a time; worker
+    /// results are independently fenced by its `session_id` before this hold
+    /// can be released. `Entity::to_bits` includes the generation, so a later
+    /// entity reusing the same index cannot release this operation.
+    pub fn modelica_participant(entity: Entity) -> Self {
+        Self {
+            owner: SimulationProgressOwner::ModelicaPreparation,
+            operation_id: entity.to_bits(),
+        }
+    }
+
+    /// Key terrain preparation to the exact live terrain entity.
+    ///
+    /// The terrain owner keeps this hold through asynchronous DEM preparation
+    /// and releases it only after the authoritative height field/collider is
+    /// committed or the operation reaches a terminal failure. Entity
+    /// generation prevents a stale result from releasing a later entity that
+    /// reused the same index.
+    pub fn terrain_preparation(entity: Entity) -> Self {
+        Self {
+            owner: SimulationProgressOwner::TerrainPreparation,
+            operation_id: entity.to_bits(),
         }
     }
 }
@@ -295,6 +516,24 @@ impl SimulationProgress {
     /// Release only the exact operation that reached its terminal result.
     pub fn release(&mut self, key: SimulationProgressKey) -> bool {
         self.blockers.remove(&key).is_some()
+    }
+
+    /// Whether the exact operation currently owns a simulation-progress hold.
+    pub fn contains(&self, key: SimulationProgressKey) -> bool {
+        self.blockers.contains_key(&key)
+    }
+
+    /// Update the visible reason while the same operation remains held.
+    pub fn update_reason(&mut self, key: SimulationProgressKey, reason: impl Into<String>) -> bool {
+        let Some(blocker) = self.blockers.get_mut(&key) else {
+            return false;
+        };
+        let reason = reason.into();
+        if blocker.reason == reason {
+            return false;
+        }
+        blocker.reason = reason;
+        true
     }
 
     /// Whether an admitted operation currently prevents authoritative ticks.

@@ -3,7 +3,10 @@
 // dynamics are physics — they run without any cinematic involvement.
 
 fn simulation_dependencies(me, ctx) {
-    [find("/SolarRoverTest/SolarRover")]
+    #{
+        modelica_entities: [find("/SolarRoverTest/SolarRover")],
+        required_inputs: [],
+    }
 }
 
 fn on_event(me, evt, ctx) {

@@ -346,8 +346,7 @@ impl Plugin for CoSimPlugin {
         app.add_systems(
             lunco_core_runtime::RollbackReplay,
             systems::propagate::propagate_connections
-                .in_set(lunco_cosim_core::schedule::CosimSet::Propagate)
-                .run_if(lunco_time::simulation_is_running),
+                .in_set(lunco_cosim_core::schedule::CosimSet::Propagate),
         );
         app.add_systems(
             lunco_core_runtime::RollbackReplay,

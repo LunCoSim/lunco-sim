@@ -21,9 +21,9 @@
 //! workspace folder becomes a data change, not new plumbing.
 
 use bevy::prelude::*;
-use lunco_modelica_runtime::{
-    LoadSourceRootPayload, ModelicaChannels, ModelicaCommand, source_asset::read_text_sync,
-};
+#[cfg(target_arch = "wasm32")]
+use lunco_modelica_runtime::source_asset::read_text_sync;
+use lunco_modelica_runtime::{LoadSourceRootPayload, ModelicaChannels, ModelicaCommand};
 use rumoca_compile::parsing::ast::StoredDefinition;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -109,7 +109,7 @@ pub struct SourceRoot {
 
 /// Process-wide registry of every named source root. Owned by the
 /// Modelica host/application; populated at host start by inventorying:
-///  - Bundled examples via [`lunco_assets_runtime::models::model_files`].
+///  - Bundled examples via [`lunco_assets_runtime::models::model_filenames`].
 ///  - Structured packages via [`lunco_assets_runtime::models::package_roots_live`].
 ///
 /// Loading remains demand-driven: inventory is cheap, and a root is installed
@@ -133,14 +133,14 @@ impl SourceRootRegistry {
         // every bundled `.mo` follows: `<Root>.mo` contains `package <Root>`
         // or `model <Root>`). The dep-scanner extracts the root from a
         // `Foo.X` reference and looks it up here.
-        let bundled_models = match lunco_assets_runtime::models::model_files() {
-            Ok(models) => models,
+        let bundled_models = match lunco_assets_runtime::models::model_filenames() {
+            Ok(filenames) => filenames,
             Err(error) => {
                 bevy::log::error!("[source-roots] Modelica example inventory failed: {error}");
                 Vec::new()
             }
         };
-        for (filename, _) in bundled_models {
+        for filename in bundled_models {
             let Some(id) = filename.strip_suffix(".mo") else {
                 continue;
             };
@@ -269,6 +269,44 @@ impl SourceRootRegistry {
     /// Borrow an entry's load state.
     pub fn state(&self, id: &str) -> Option<&LoadState> {
         self.roots.get(id).map(|r| &r.state)
+    }
+}
+
+/// Installs source-root inventory and document discovery for every Modelica
+/// host, including headless execution. The inventory is application state;
+/// editor panels only present its load lifecycle.
+pub struct ModelicaSourceRootsPlugin;
+
+impl Plugin for ModelicaSourceRootsPlugin {
+    fn build(&self, app: &mut App) {
+        if !app.world().contains_resource::<SourceRootRegistry>() {
+            app.insert_resource(SourceRootRegistry::build());
+        }
+        app.add_observer(register_open_document_source_root);
+        register_twin_modelica_commands(app);
+    }
+}
+
+/// Whether a document is already represented in a loaded source library and
+/// must therefore be compiled by its canonical class name without overlaying
+/// its source a second time.
+pub fn is_library_document(document: &lunco_modelica_document::ModelicaDocument) -> bool {
+    match document.origin() {
+        lunco_doc::DocumentOrigin::File { path, writable } => {
+            !writable || lunco_assets_runtime::library::owns_filesystem_path(path)
+        }
+        _ => false,
+    }
+}
+
+/// Source text to overlay for a document compile. Library documents are
+/// already installed in the compiler session; ordinary documents need their
+/// exact source snapshot overlaid.
+pub fn compile_overlay_source(document: &lunco_modelica_document::ModelicaDocument) -> String {
+    if is_library_document(document) {
+        String::new()
+    } else {
+        document.source().to_string()
     }
 }
 
@@ -498,9 +536,9 @@ pub fn ensure_loaded(
         LoadState::Failed(_) => return false,
         LoadState::NotLoaded => {}
     }
-    // Build the payload + the human-readable summary for logging.
-    // Each branch can fail early (e.g. missing bundled blob, unreadable
-    // workspace file); on failure mark `Failed` and bail.
+    // Native workers resolve/read source files during immutable preparation.
+    // The browser keeps its storage reads on the host that owns WebStorage and
+    // sends the resulting text to the Modelica Web Worker.
     let (payload, summary) = match &entry.kind {
         SourceRootKind::Disk { root_dir } => {
             let summary = format!("disk {}", root_dir.display());
@@ -512,83 +550,110 @@ pub fn ensure_loaded(
             )
         }
         SourceRootKind::Bundled { filename } => {
-            let source = match lunco_assets_runtime::models::model_source(filename) {
-                Ok(Some(source)) => source,
-                Ok(None) => {
-                    let error = format!("Modelica asset `{filename}` was not found");
-                    bevy::log::warn!("[source-roots] {error}");
-                    entry.state = LoadState::Failed(error);
-                    return false;
-                }
-                Err(error) => {
-                    bevy::log::warn!("[source-roots] cannot load `{filename}`: {error}");
-                    entry.state = LoadState::Failed(error);
-                    return false;
-                }
-            };
-            let summary = format!("bundled {}, {}B", filename, source.len());
-            (
-                LoadSourceRootPayload::InMemory {
-                    label: format!("bundled:{filename}"),
-                    files: vec![(filename.clone(), source.to_string())],
-                },
-                summary,
-            )
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                (
+                    LoadSourceRootPayload::BundledModel {
+                        filename: filename.clone(),
+                    },
+                    format!("bundled {filename}"),
+                )
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let source = match lunco_assets_runtime::models::model_source(filename) {
+                    Ok(Some(source)) => source,
+                    Ok(None) => {
+                        let error = format!("Modelica asset `{filename}` was not found");
+                        bevy::log::warn!("[source-roots] {error}");
+                        entry.state = LoadState::Failed(error);
+                        return false;
+                    }
+                    Err(error) => {
+                        bevy::log::warn!("[source-roots] cannot load `{filename}`: {error}");
+                        entry.state = LoadState::Failed(error);
+                        return false;
+                    }
+                };
+                (
+                    LoadSourceRootPayload::InMemory {
+                        label: format!("bundled:{filename}"),
+                        files: vec![(filename.clone(), source.to_string())],
+                    },
+                    format!("bundled {filename}, {}B", source.len()),
+                )
+            }
         }
         SourceRootKind::BundledPackage { root } => {
-            let files = match lunco_assets_runtime::models::package_files_live(root) {
-                Ok(files) if !files.is_empty() => files,
-                Ok(_) => {
-                    let error = format!("Modelica package `{root}` has no source files");
-                    bevy::log::warn!("[source-roots] {error}");
-                    entry.state = LoadState::Failed(error);
-                    return false;
-                }
-                Err(error) => {
-                    bevy::log::warn!("[source-roots] cannot load package `{root}`: {error}");
-                    entry.state = LoadState::Failed(error);
-                    return false;
-                }
-            };
-            let summary = format!("bundled package {root}, {} files", files.len());
-            (
-                LoadSourceRootPayload::InMemory {
-                    label: format!("bundled:{root}"),
-                    files,
-                },
-                summary,
-            )
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                (
+                    LoadSourceRootPayload::BundledPackage { root: root.clone() },
+                    format!("bundled package {root}"),
+                )
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let files = match lunco_assets_runtime::models::package_files_live(root) {
+                    Ok(files) if !files.is_empty() => files,
+                    Ok(_) => {
+                        let error = format!("Modelica package `{root}` has no source files");
+                        bevy::log::warn!("[source-roots] {error}");
+                        entry.state = LoadState::Failed(error);
+                        return false;
+                    }
+                    Err(error) => {
+                        bevy::log::warn!("[source-roots] cannot load package `{root}`: {error}");
+                        entry.state = LoadState::Failed(error);
+                        return false;
+                    }
+                };
+                let file_count = files.len();
+                (
+                    LoadSourceRootPayload::InMemory {
+                        label: format!("bundled:{root}"),
+                        files,
+                    },
+                    format!("bundled package {root}, {file_count} files"),
+                )
+            }
         }
         SourceRootKind::WorkspaceFile { path } => {
-            // Through `lunco-storage` (FileStorage native / WebStorage on wasm),
-            // not `std::fs`: a workspace dependency can be opened in the web
-            // build too, where the picked file's text lives in browser storage.
-            let source = match read_text_sync(path) {
-                Ok(s) => s,
-                Err(e) => {
-                    bevy::log::warn!(
-                        "[source-roots] workspace file dep `{}` (path {}): \
-                         read failed: {e} — leaving Failed",
-                        id,
-                        path.display(),
-                    );
-                    entry.state = LoadState::Failed(format!("workspace file read failed: {e}"));
-                    return false;
-                }
-            };
-            let uri = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("workspace.mo")
-                .to_string();
-            let summary = format!("workspace {}, {}B", path.display(), source.len());
-            (
-                LoadSourceRootPayload::InMemory {
-                    label: format!("workspace:{}", path.display()),
-                    files: vec![(uri, source)],
-                },
-                summary,
-            )
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                (
+                    LoadSourceRootPayload::WorkspaceFile { path: path.clone() },
+                    format!("workspace {}", path.display()),
+                )
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let source = match read_text_sync(path) {
+                    Ok(source) => source,
+                    Err(error) => {
+                        let detail = format!(
+                            "workspace file dep `{}` (path {}) read failed: {error}",
+                            id,
+                            path.display(),
+                        );
+                        bevy::log::warn!("[source-roots] {detail}");
+                        entry.state = LoadState::Failed(detail);
+                        return false;
+                    }
+                };
+                let uri = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("workspace.mo")
+                    .to_string();
+                (
+                    LoadSourceRootPayload::InMemory {
+                        label: format!("workspace:{}", path.display()),
+                        files: vec![(uri, source.clone())],
+                    },
+                    format!("workspace {}, {}B", path.display(), source.len()),
+                )
+            }
         }
         SourceRootKind::SessionDocument { id: document_id } => {
             let message =
@@ -599,12 +664,10 @@ pub fn ensure_loaded(
         }
     };
 
-    // Dispatch + mark Loading. The worker's COMPILE lane is FIFO
-    // (Steps of other live entities may jump ahead, but LoadSourceRoot /
-    // Compile / Reset / UpdateParameters never reorder among themselves —
-    // see the worker scheduling module, so a Compile sent immediately after
-    // this is guaranteed to see the loaded session. Worker results transition
-    // Loading → Ready or Failed based on the actual load outcome.
+    // The native worker prepares file-backed roots on its bounded pool, then
+    // commits them to the session in command order. Dependent compile commands
+    // remain queued until those commits return. The Web Worker owns its parse
+    // and session-install path after receiving the in-memory payload.
     let cmd = ModelicaCommand::LoadSourceRoot {
         id: id.to_string(),
         payload,
@@ -631,6 +694,47 @@ pub fn ensure_loaded(
     // UI observer `ui::core_observers::mirror_source_roots_to_status_bus`. Core
     // sets the state; it no longer touches the status bus.
     true
+}
+
+/// Admit the known source roots required by a compile before that compile is
+/// sent to the worker. Root requests and compile requests share one ordered
+/// channel; the worker holds compilation until all admitted root preparations
+/// have committed. Unknown or failed roots are terminal here instead of
+/// falling through to synchronous compiler-side discovery.
+pub fn admit_compile_roots(
+    registry: &mut SourceRootRegistry,
+    roots: impl IntoIterator<Item = String>,
+    channels: &ModelicaChannels,
+) -> Result<(), String> {
+    let roots = roots.into_iter().collect::<std::collections::BTreeSet<_>>();
+    for id in &roots {
+        let Some(state) = registry.state(id) else {
+            return Err(format!("Modelica source root `{id}` is not registered"));
+        };
+        if let LoadState::Failed(error) = state {
+            return Err(format!("Modelica source root `{id}` failed: {error}"));
+        }
+    }
+    for id in roots {
+        ensure_loaded(registry, &id, channels);
+        match registry.state(&id) {
+            Some(LoadState::Ready | LoadState::Loading { .. }) => {}
+            Some(LoadState::Failed(error)) => {
+                return Err(format!("Modelica source root `{id}` failed: {error}"));
+            }
+            Some(LoadState::NotLoaded) => {
+                return Err(format!(
+                    "Modelica source root `{id}` could not be queued for loading"
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "Modelica source root `{id}` was removed during admission"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Diagnostic log: walk the given AST, find every source-root

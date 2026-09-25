@@ -26,6 +26,7 @@ use rhai::{Engine, EvalAltResult, Module, ModuleResolver, Position, Scope, Share
 pub struct RhaiTool {
     name: String,
     source: String,
+    prepared_ast: Option<rhai::AST>,
 }
 
 impl RhaiTool {
@@ -33,6 +34,21 @@ impl RhaiTool {
         Self {
             name: name.into(),
             source: source.into(),
+            prepared_ast: None,
+        }
+    }
+
+    /// Construct a tool from the AST committed by its asynchronous asset
+    /// preparation owner.
+    pub fn from_prepared(
+        name: impl Into<String>,
+        source: impl Into<String>,
+        prepared_ast: rhai::AST,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            source: source.into(),
+            prepared_ast: Some(prepared_ast),
         }
     }
 }
@@ -51,9 +67,9 @@ impl Tool for RhaiTool {
         // them.
         let mut engine = Engine::new();
         lunco_hooks_rhai::rhai_limits::apply(&mut engine);
-        engine
-            .compile(&self.source)
-            .ok()
+        self.prepared_ast
+            .clone()
+            .or_else(|| engine.compile(&self.source).ok())
             .map(|ast| {
                 ast.iter_functions()
                     .map(|f| format!("{}/{}", f.name, f.params.len()))
@@ -139,9 +155,15 @@ fn build_module(tool: &Arc<dyn Tool>, engine: &Engine) -> Result<Option<Module>,
         return (native.build)(engine).map(Some);
     }
     if let Some(src) = tool.source() {
-        let ast = engine
-            .compile(src)
-            .map_err(|e| format!("compile error: {e}"))?;
+        let ast = if let Some(tool) = tool.as_any().downcast_ref::<RhaiTool>() {
+            tool.prepared_ast
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| engine.compile(src))
+        } else {
+            engine.compile(src)
+        }
+        .map_err(|e| format!("compile error: {e}"))?;
         return Module::eval_ast_as_new(Scope::new(), &ast, engine)
             .map(Some)
             .map_err(|e| format!("build error: {e}"));
@@ -306,6 +328,22 @@ pub fn validate_rhai_tool_with_engine(
     Ok(functions)
 }
 
+/// Validate a tool source using the AST prepared by its asset owner.
+pub fn validate_prepared_rhai_tool_with_engine(
+    name: &str,
+    source: &str,
+    prepared_ast: rhai::AST,
+    engine: &Engine,
+) -> Result<Vec<String>, String> {
+    let tool = RhaiTool::from_prepared(name, source, prepared_ast);
+    let functions = tool.functions();
+    let tool: Arc<dyn Tool> = Arc::new(tool);
+    let module = build_module(&tool, engine)?
+        .ok_or_else(|| format!("tool '{name}' does not expose a Rhai module"))?;
+    let _ = module;
+    Ok(functions)
+}
+
 /// Bind every tool in the global registry into `engine` as a static module
 /// (`name::fn(...)`). Returns `(tool_name, error)` for any tool that failed to
 /// bind — one bad tool never blocks the others. Call AFTER the prelude global
@@ -334,6 +372,20 @@ pub fn register_rhai_tool(name: &str, source: &str) {
 /// Register a Rhai-source tool in an explicit lifecycle layer.
 pub fn register_rhai_tool_in_scope(scope: lunco_tools::ToolScope, name: &str, source: &str) {
     lunco_tools::register_scoped(scope, Arc::new(RhaiTool::new(name, source)));
+}
+
+/// Register a source tool whose immutable AST was prepared by the source
+/// asset owner before the tool became visible to runtime engines.
+pub fn register_prepared_rhai_tool_in_scope(
+    scope: lunco_tools::ToolScope,
+    name: &str,
+    source: &str,
+    prepared_ast: rhai::AST,
+) {
+    lunco_tools::register_scoped(
+        scope,
+        Arc::new(RhaiTool::from_prepared(name, source, prepared_ast)),
+    );
 }
 
 /// Convenience: register a native (Rust) tool whose `build` closure populates a

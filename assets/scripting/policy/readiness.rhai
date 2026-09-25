@@ -46,7 +46,22 @@
 /// Deliberately mirrors `lunco_readiness::Action::builtin`. The two must agree:
 /// an app with no scripting runs the Rust rule, and a scene should not behave
 /// differently just because scripting is loaded.
+fn valid_readiness_context(context) {
+    context.scope == "core"
+        && context.cycle == "simulation"
+        && context.phase == "behavior"
+        && context.clock == "simulation"
+        && context.time_seconds != ()
+        && context.delta_seconds != ()
+        && context.sequence != ()
+        && context.producer == ()
+}
+
 fn readiness_action(ctx) {
+    if !valid_readiness_context(runtime_context) {
+        throw("readiness.action requires its core fixed-simulation behavior context");
+    }
+
     // A failure is not a slow compile. The default is fail-closed: no physics
     // runs against a vehicle whose controller or generated island failed. The
     // persisted best-effort setting deliberately changes the default to

@@ -2,16 +2,23 @@
 const TEST_KIND = "editor";
 const ROOT = "/PreviewDomainIsolation";
 const DORMANT = "/DormantPreviewNetwork";
+const LIVE_PREVIEW = 15501;
+const FORK_PREVIEW = 15502;
+
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find(ROOT + "/Network")], required_inputs: [] }
+}
 
 fn on_start(me, ctx) {
     this.phase = 0; this.elapsed = 0.0; this.observed = 0.0;
-    this.done = false; this.doc = -1; this.fork = -1;
-    this.ids = []; this.checks = []; this.leaked = false; this.rejection_id = -1;
+    this.done = false; this.doc = (); this.fork = ();
+    this.ids = []; this.checks = []; this.leaked = false; this.rejection_id = ();
 }
 fn ready(preview, doc) {
     let generation = assembly_edit::describe(doc).generation;
     for p in assembly_edit::viewport().previews {
-        if p.preview == preview && p.doc == doc && p.projection_ready
+        if p.preview.to_string() == preview.to_string()
+            && p.doc_id == doc && p.projection_ready
             && p.projected_generation == generation { return true; }
     }
     false
@@ -21,7 +28,7 @@ fn preview_has_solver() {
         if d.kind == "modelica" && d.title.contains("DormantPreviewNetwork") { return true; }
     }
     let entity = find(DORMANT + "/Network");
-    entity >= 0 && get(entity, "voltage") != ()
+    entity >= 0
 }
 fn on_tick(me, ctx) {
     if this.done { return; }
@@ -44,40 +51,40 @@ fn on_tick(me, ctx) {
                 if prim != () && prim.exists { this.doc = d.doc_id; }
             }
         }
-        if this.doc < 0 { return; }
-        assembly_ui::open_session(15501, this.doc, "@root@");
+        if this.doc == () { return; }
+        assembly_ui::open_session(LIVE_PREVIEW, this.doc, "@root@");
         assembly_edit::fork_document(this.doc, "Dormant network preview");
         this.phase = 1;
         return;
     }
     if this.phase == 1 {
-        if !ready(15501, this.doc) { return; }
+        if !ready(LIVE_PREVIEW, this.doc) { return; }
         for d in query("ListOpenDocuments").open_documents {
             if d.kind == "usd" && !this.ids.contains(d.doc_id) { this.fork = d.doc_id; }
         }
-        if this.fork < 0 { return; }
+        if this.fork == () { return; }
         let g = assembly_edit::describe(this.fork).generation;
         let ack = assembly_edit::batch(this.fork, "Distinct preview-only network",
             [#{ MovePrim: #{ edit_target: "@root@", from_path: ROOT, to_path: DORMANT } }], g);
         if ack.ok == false { this.elapsed = 41.0; return; }
-        assembly_ui::open_session(15502, this.fork, "@root@");
+        assembly_ui::open_session(FORK_PREVIEW, this.fork, "@root@");
         this.phase = 2;
         return;
     }
-    if this.phase == 3 && this.rejection_id >= 0 {
+    if this.phase == 3 && this.rejection_id != () {
         let result = command_result(this.rejection_id);
         if result.status == "pending" { return; }
         this.checks.push(t_true(result.status == "failed" || result.status == "rejected",
             "a connection to a missing source must be rejected before authoring"));
-        this.checks.push(t_true(result.error.contains("missing prim")
-            || result.error.contains("source"),
+        this.checks.push(t_true(result.error != () && (result.error.contains("missing prim")
+            || result.error.contains("source")),
             "the rejected connection must expose its source failure"));
-        this.rejection_id = -1;
+        this.rejection_id = ();
         this.observed = 0.0; this.leaked = false;
         return;
     }
     if this.phase == 2 || this.phase == 3 {
-        if !ready(15502, this.fork) { return; }
+        if !ready(FORK_PREVIEW, this.fork) { return; }
         this.leaked = this.leaked || preview_has_solver();
         this.observed += dt();
         if this.observed < 3.0 { return; }
@@ -89,15 +96,30 @@ fn on_tick(me, ctx) {
             let ack = assembly_edit::batch(this.fork, "Invalid preview connection remains inert",
                 [#{ SetConnection: #{ edit_target: "@root@", path: DORMANT + "/Network/Panel",
                     name: "inputs:sun_mount_x", type_name: "float", sources: ["/Absent.outputs:sun_x"] } }], g);
-            this.rejection_id = ack.id;
+            if ack == () || ack.id == () {
+                this.checks.push(t_true(false, "invalid preview connection did not produce a deferred result id"));
+                this.done = true;
+                report_verdict(this.checks, "PREVIEW DOMAIN ISOLATION", "PREVIEW_DOMAIN_ISOLATION");
+                return;
+            }
+            if ack.status == "failed" || ack.status == "rejected" {
+                this.checks.push(t_true(ack.ok == false,
+                    "a connection to a missing source must be rejected before authoring"));
+                this.checks.push(t_true(ack.error != () && (ack.error.contains("missing prim")
+                    || ack.error.contains("source")),
+                    "the rejected connection must expose its source failure"));
+                this.rejection_id = ();
+            } else {
+                this.rejection_id = ack.id;
+            }
             this.observed = 0.0; this.leaked = false; this.phase = 3;
             return;
         }
         let inspected = assembly_edit::inspect(this.fork, DORMANT + "/Network/Panel");
         this.checks.push(t_true(inspected.prim.exists, "invalid preview remains inspectable"));
-        assembly_edit::preview_close(15502);
+        assembly_edit::preview_close(FORK_PREVIEW);
         assembly_edit::close_document(this.fork);
-        assembly_edit::preview_close(15501);
+        assembly_edit::preview_close(LIVE_PREVIEW);
         this.done = true;
         report_verdict(this.checks, "PREVIEW DOMAIN ISOLATION", "PREVIEW_DOMAIN_ISOLATION");
     }

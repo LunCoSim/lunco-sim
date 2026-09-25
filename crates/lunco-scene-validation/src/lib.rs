@@ -27,6 +27,10 @@ impl bevy::prelude::Plugin for SceneValidationPlugin {
     fn build(&self, app: &mut bevy::prelude::App) {
         validate::register(app);
         sysml_analysis::register(app);
+        #[cfg(feature = "sysml-runtime")]
+        if !app.is_plugin_added::<lunco_sysml::SysmlPlugin>() {
+            app.add_plugins(lunco_sysml::SysmlPlugin);
+        }
         lint_command::register_all_commands(app);
         lint_command::register(app);
     }

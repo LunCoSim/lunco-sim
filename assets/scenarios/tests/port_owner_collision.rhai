@@ -14,7 +14,7 @@ fn by_rule(findings, rule) {
 
 fn find_document() {
     let documents = query("ListOpenDocuments");
-    if documents == () || documents.open_documents == () { return -1; }
+    if documents == () || documents.open_documents == () { return (); }
     for item in documents.open_documents {
         if item.kind != "usd" { continue; }
         let root = query("QueryUsdPrim", #{
@@ -24,7 +24,7 @@ fn find_document() {
         });
         if root != () && root.ok != false { return item.doc_id; }
     }
-    -1
+    ()
 }
 
 fn has_subject(findings, subject) {
@@ -37,7 +37,7 @@ fn has_subject(findings, subject) {
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
-    this.doc = -1;
+    this.doc = ();
     this.phase = 0;
 }
 
@@ -47,7 +47,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 0 {
         this.doc = find_document();
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 10.0 {
                 fail_fast("port-owner collision fixture was not discoverable",
                     "PORT OWNER COLLISION", "PORT_OWNER_COLLISION");

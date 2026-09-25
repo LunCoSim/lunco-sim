@@ -1,0 +1,117 @@
+#usda 1.0
+(
+    defaultPrim = "SandboxScene"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "SandboxScene" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    documentation = "A box resting on the ground carrying simple sensors: one that feels motion, one that measures distance to the ground, and one that feels touch. Checks that each reports sensible numbers."
+    prepend apiSchemas = "LunCoCatalogAPI"
+)
+{
+    uniform bool lunco:spawnable = false
+    def Cube "Ground" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
+        double3 xformOp:scale = (200.0, 1.0, 200.0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.4000000059604645, 0.44999998807907104)]
+        bool physics:collisionEnabled = true
+        rel material:binding:physics = </SandboxScene/PhysicsMaterials/Friction_1_0>
+    }
+    def Camera "Avatar" (
+        prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
+    )
+    {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (0.0, 0.5, 0.0)
+        double3 xformOp:translate = (0.0, 4.0, 9.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def "Controls" (
+            prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
+        )
+        {
+        }
+    }
+    def Cube "Box" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (0.0, 0.5, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.8999999761581421, 0.699999988079071, 0.20000000298023224)]
+        float physics:mass = 100.0
+        bool physics:collisionEnabled = true
+        def "IMU" (
+            prepend references = @lunco://vessels/sensors/imu.usda@</Imu>
+        )
+        {
+            float inputs:raw_acceleration_x
+            float inputs:raw_acceleration_x.connect = </SandboxScene/Box.outputs:acceleration_x>
+            float inputs:raw_acceleration_y
+            float inputs:raw_acceleration_y.connect = </SandboxScene/Box.outputs:acceleration_y>
+            float inputs:raw_acceleration_z
+            float inputs:raw_acceleration_z.connect = </SandboxScene/Box.outputs:acceleration_z>
+            float inputs:raw_sample_valid
+            float inputs:raw_sample_valid.connect = </SandboxScene/Box.outputs:acceleration_valid>
+            float inputs:raw_angvel_x
+            float inputs:raw_angvel_x.connect = </SandboxScene/Box.outputs:angvel_x>
+            float inputs:raw_angvel_y
+            float inputs:raw_angvel_y.connect = </SandboxScene/Box.outputs:angvel_y>
+            float inputs:raw_angvel_z
+            float inputs:raw_angvel_z.connect = </SandboxScene/Box.outputs:angvel_z>
+            float inputs:raw_quat_w
+            float inputs:raw_quat_w.connect = </SandboxScene/Box.outputs:quat_w>
+            float inputs:raw_quat_x
+            float inputs:raw_quat_x.connect = </SandboxScene/Box.outputs:quat_x>
+            float inputs:raw_quat_y
+            float inputs:raw_quat_y.connect = </SandboxScene/Box.outputs:quat_y>
+            float inputs:raw_quat_z
+            float inputs:raw_quat_z.connect = </SandboxScene/Box.outputs:quat_z>
+            float inputs:gravity_world_y
+            float inputs:gravity_world_y.connect = </SandboxScene/Box/Environment.outputs:gravity_y>
+        }
+        def "Environment" (
+            prepend references = @lunco://components/environment/probe.usda@</EnvironmentProbe>
+        )
+        {
+        }
+        def "Altimeter" (
+            prepend references = @lunco://vessels/sensors/altimeter.usda@</Altimeter>
+        )
+        {
+            double3 xformOp:translate = (0.0, 0.3, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float lunco:raycast:maxDistance = 10.0
+        }
+    }
+    def Cube "Box50" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        double3 xformOp:translate = (6.0, 0.5, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        color3f[] primvars:displayColor = [(0.20000000298023224, 0.800000011920929, 0.8999999761581421)]
+        float physics:mass = 50.0
+        bool physics:collisionEnabled = true
+    }
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "sensors"
+        def Scope "Test" (
+            prepend apiSchemas = "LunCoProgramAPI"
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/scene_transition_generation.rhai@
+        }
+    }
+}

@@ -49,12 +49,21 @@ a late terminal edge cannot finish or unpause its successor. All three scene com
 `RestartScene`—use this boundary, so tutorial/runtime owners cannot miss a
 transition merely because it entered through a different command.
 
+The coordinator advances `completed_generation` only when the active matching
+transaction reaches `SceneTransitionCompleted`. It then emits
+`SceneTransitionCommitted`; stale completions and failures cannot advance the
+scene generation or arm runtime work. Cycle owners use this shared generation
+for Twin-scoped execution context instead of maintaining subsystem-local
+counters.
+
 `lunco-core-runtime::SimulationProgress` holds the causal clock from the start
-edge through the asset and visual-projection terminal edge. The presentation
-status bus shows the active wait reason. `TimeTransport` keeps the user's play
-and rate intent while the gate pauses `Time<Virtual>`. Physics readiness stays
-in its existing owner and continues to control physics admission; the scene
-progress gate covers lifecycle work that must not consume simulation ticks.
+edge through the asset and structural-projection terminal edge. CPU mesh builds
+and other presentation streaming continue independently; the presentation
+status bus reports them after scene admission. `TimeTransport` keeps the user's
+play and rate intent while the gate pauses `Time<Virtual>`. Physics readiness
+stays in its existing owner and continues to control physics admission; the
+scene progress gate covers lifecycle work that must not consume simulation
+ticks.
 
 Consumers that own transient execution must wind down at `Started` and attach
 again only from `Completed`. The tutorial launcher preserves the active
@@ -63,12 +72,14 @@ on the restarted scene; a failed restart clears that lesson and reports the
 typed failure.
 
 Scene-time selection runs once at the completed load/restart edge, after the
-stage dependency load and queued visual/mesh projection work have drained. A
+stage dependency load and queued structural projection have drained. A
 completion notification without a matching loading phase is ignored; reloading
 the already-active stage therefore leaves its selected time unchanged. The time
 owner holds the physical loop, USD animation sampling, celestial
 placement, and USD DEM construction until the composed root policy result is
-installed. A clear or failed load leaves the scene-time gate closed.
+installed. CPU-generated render meshes may still be streaming at this point;
+they are not inputs to the scene-time decision. A clear or failed load leaves
+the scene-time gate closed.
 
 ## Everything else — the `SceneTeardown` schedule
 
@@ -124,8 +135,9 @@ request, followed by an explicit deferred-command flush before normal projection
 schedules run. Public command handlers therefore have one role—submission—and
 contain no execution-mode marker, retry branch, or mid-frame mutation path.
 
-Loading closes from the authoritative asset/projection outcome in `Last`, after
-normal projection schedules have finished. `Last`'s deferred-command flush
+Loading closes from the authoritative asset/structural-projection outcome in
+`Last`, after normal projection schedules have finished. Async CPU mesh builds
+are presentation work and do not extend this transaction. `Last`'s deferred-command flush
 publishes `SceneTransitionCompleted` or `SceneTransitionFailed` and admits any
 pending request; only the following frame's `First` lifecycle phase can execute
 it. A second request therefore cannot replace an in-flight stage, and consumers

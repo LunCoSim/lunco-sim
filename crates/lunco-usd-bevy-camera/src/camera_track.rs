@@ -217,7 +217,21 @@ pub fn sample_camera_tracks(
         if plan.keys.is_empty() {
             continue;
         }
-        let secs = lunco_time::domain_time(&resolved, binding, &world);
+        let Some(secs) = lunco_time::domain_time(&resolved, binding, &world) else {
+            let domain = binding
+                .expect("unbound tracks always resolve to WorldTime")
+                .domain;
+            let message = format!(
+                "camera track '{}' is bound to unresolved time domain {domain:?}",
+                prim.path
+            );
+            if plan.last_error.as_deref() != Some(message.as_str()) {
+                warn!("[camera] {message}");
+                status.last_error = Some(message.clone());
+                plan.last_error = Some(message);
+            }
+            continue;
+        };
         let t = secs * plan.time_codes_per_second;
         let Some(want) = held_camera(&plan.keys, t) else {
             continue;

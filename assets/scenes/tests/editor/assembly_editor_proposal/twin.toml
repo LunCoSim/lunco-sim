@@ -1,0 +1,10 @@
+name = "Assembly Editor Proposal Test"
+version = "0.1.0"
+
+[usd]
+default_scene = "assembly_editor_proposal.usda"
+
+[settings]
+"numerics.comparison.scalar_abs" = 1.0e-9
+"numerics.comparison.angle_abs_rad" = 1.0e-9
+"numerics.solver.residual_abs" = 1.0e-9

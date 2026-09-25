@@ -94,6 +94,9 @@ pub struct PolicyLoadReport {
     pub installed: Vec<String>,
     /// Hook ids whose source was present but failed to compile or activate.
     pub failed: Vec<String>,
+    /// Hook ids skipped because their optional owner is absent from this
+    /// feature-selected runtime composition.
+    pub unavailable: Vec<String>,
     /// Required policy failures. The shipped application set keeps this empty;
     /// Twin authors may opt a seam into a strict gate with `required = true`.
     pub required_failures: Vec<String>,
@@ -106,6 +109,8 @@ pub struct PolicyLoadReport {
 pub struct LifecyclePolicyReport {
     /// Lifecycle event delivered to the policy.
     pub event: String,
+    /// Owner-supplied cycle and generation for the lifecycle invocation.
+    pub runtime_context: Option<lunco_core::RuntimeExecutionContext>,
     /// `ok`, `unavailable`, or `fault`.
     pub status: String,
     /// Typed policy result when the hook returned one.
@@ -295,6 +300,7 @@ fn invoke_twin_lifecycle(
     twin_id: lunco_workspace::TwinId,
     root: &Path,
     report: &PolicyLoadReport,
+    phase: lunco_core::RuntimePhase,
 ) -> LifecyclePolicyReport {
     let context = HookValue::map([
         ("twin_id", HookValue::str(twin_id.raw().to_string())),
@@ -321,20 +327,53 @@ fn invoke_twin_lifecycle(
             ),
         ),
     ]);
-    invoke_twin_lifecycle_context(event, context)
+    invoke_twin_lifecycle_context(event, twin_id, context, phase)
 }
 
-fn invoke_twin_lifecycle_context(event: &str, context: HookValue) -> LifecyclePolicyReport {
-    match lunco_hooks::invoke(TWIN_LIFECYCLE_HOOK, &[HookValue::str(event), context]) {
+fn invoke_twin_lifecycle_context(
+    event: &str,
+    twin_id: lunco_workspace::TwinId,
+    context: HookValue,
+    phase: lunco_core::RuntimePhase,
+) -> LifecyclePolicyReport {
+    if twin_id.is_unassigned() {
+        let error = "Twin lifecycle invocation requires an assigned Twin identity";
+        warn!("[policy] {error}");
+        return LifecyclePolicyReport {
+            event: event.to_owned(),
+            status: "fault".into(),
+            error: Some(error.into()),
+            ..Default::default()
+        };
+    }
+    let runtime_context = lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::twin(
+            lunco_core::RuntimeCycle::Lifecycle,
+            twin_id.raw(),
+        )),
+        phase,
+        clock: lunco_core::RuntimeClock::None,
+        time_seconds: None,
+        delta_seconds: None,
+        sequence: None,
+        producer: None,
+    };
+    match lunco_hooks::invoke_with_context(
+        TWIN_LIFECYCLE_HOOK,
+        &[HookValue::str(event), context],
+        runtime_context,
+    ) {
         None => LifecyclePolicyReport {
             event: event.to_owned(),
             status: "unavailable".into(),
+            runtime_context: Some(runtime_context),
             ..Default::default()
         },
         Some(Ok(value @ HookValue::Map(_))) => LifecyclePolicyReport {
             event: event.to_owned(),
             status: "ok".into(),
             result: Some(value),
+            runtime_context: Some(runtime_context),
             ..Default::default()
         },
         Some(Ok(value)) => {
@@ -347,6 +386,7 @@ fn invoke_twin_lifecycle_context(event: &str, context: HookValue) -> LifecyclePo
                 event: event.to_owned(),
                 status: "fault".into(),
                 error: Some(error),
+                runtime_context: Some(runtime_context),
                 ..Default::default()
             }
         }
@@ -356,6 +396,7 @@ fn invoke_twin_lifecycle_context(event: &str, context: HookValue) -> LifecyclePo
                 event: event.to_owned(),
                 status: "fault".into(),
                 error: Some(error.to_string()),
+                runtime_context: Some(runtime_context),
                 ..Default::default()
             }
         }
@@ -511,7 +552,7 @@ fn apply_application_asset_policy(
         ("asset_root_uri", HookValue::str(asset_root_uri)),
         ("payload", payload),
     ]);
-    let result = lunco_hooks::invoke(
+    let result = lunco_hooks::invoke_unclassified(
         APPLICATION_ASSET_HOOK,
         &[HookValue::str(event.to_owned()), context],
     );
@@ -860,7 +901,12 @@ pub fn plan_twin_asset_loading(
         ("manifest", manifest),
         ("files", files),
     ]);
-    let report = invoke_twin_lifecycle_context("assets_mounted", context);
+    let report = invoke_twin_lifecycle_context(
+        "assets_mounted",
+        twin_id,
+        context,
+        lunco_core::RuntimePhase::Event,
+    );
     let Some(result) = report.result.as_ref() else {
         registry.lifecycle = report;
         return;
@@ -1190,7 +1236,7 @@ fn run_startup_policy(
     )?;
     let policies = HookValue::Array(loaded.iter().map(policy_value).collect());
     let result = startup_hook
-        .invoke(&[policies])
+        .invoke(&lunco_hooks::HookInvocation::unclassified(&[policies]))
         .map_err(|error| error.to_string());
     drop(startup_hook);
     let state = Arc::try_unwrap(state)
@@ -1362,6 +1408,26 @@ fn clear_active_policies(registry: &mut ScriptedPolicyRegistry, journal: Option<
     rebuild_active_policy_registry(registry, journal);
 }
 
+fn retain_runtime_policies(
+    policies: Vec<lunco_assets_runtime::scripting::LoadedPolicy>,
+) -> (
+    Vec<lunco_assets_runtime::scripting::LoadedPolicy>,
+    Vec<String>,
+) {
+    let mut available = Vec::with_capacity(policies.len());
+    let mut unavailable = Vec::new();
+    for policy in policies {
+        if policy.spec.skip_when_hook_unavailable
+            && lunco_hooks::descriptor(&policy.spec.hook).is_none()
+        {
+            unavailable.push(policy.spec.hook);
+        } else {
+            available.push(policy);
+        }
+    }
+    (available, unavailable)
+}
+
 fn report_for_application_policies(
     scope: impl Into<String>,
     application: lunco_assets_runtime::scripting::LoadedPolicyBundle,
@@ -1380,7 +1446,7 @@ fn report_for_application_policies(
         registry.status = report.clone();
         return report;
     };
-    let application_loaded = application.policies;
+    let (application_loaded, unavailable) = retain_runtime_policies(application.policies);
     let required = application_loaded
         .iter()
         .filter(|policy| policy.spec.required)
@@ -1396,6 +1462,7 @@ fn report_for_application_policies(
         Err(error) => {
             let report = PolicyLoadReport {
                 scope,
+                unavailable,
                 error: Some(error),
                 ..Default::default()
             };
@@ -1451,6 +1518,7 @@ fn report_for_application_policies(
         scope,
         installed,
         failed,
+        unavailable,
         required_failures,
         error: None,
     };
@@ -1475,18 +1543,24 @@ fn report_for_twin_policies(
                 .iter()
                 .map(|definition| definition.seam.clone())
                 .collect(),
+            unavailable: registry.application_status.unavailable.clone(),
             ..Default::default()
         };
         registry.status = report.clone();
         return report;
     };
-    let twin_ids = twin
-        .policies
+    let (twin_policies, twin_unavailable) = retain_runtime_policies(twin.policies);
+    let mut unavailable = registry.application_status.unavailable.clone();
+    for hook in twin_unavailable {
+        if !unavailable.contains(&hook) {
+            unavailable.push(hook);
+        }
+    }
+    let twin_ids = twin_policies
         .iter()
         .map(|policy| policy.spec.hook.clone())
         .collect::<HashSet<_>>();
-    let required = twin
-        .policies
+    let required = twin_policies
         .iter()
         .filter(|policy| policy.spec.required)
         .map(|policy| policy.spec.hook.clone())
@@ -1496,6 +1570,7 @@ fn report_for_twin_policies(
         rebuild_active_policy_registry(registry, journal);
         let report = PolicyLoadReport {
             scope,
+            unavailable,
             error: Some("Twin policy set has policies but no startup entry".into()),
             ..Default::default()
         };
@@ -1507,7 +1582,7 @@ fn report_for_twin_policies(
         .iter()
         .map(|definition| (definition.seam.clone(), definition.clone()))
         .collect::<HashMap<_, _>>();
-    let run = run_startup_policy(startup, &twin.policies, journal, &reusable);
+    let run = run_startup_policy(startup, &twin_policies, journal, &reusable);
     let (installed, failed, error, definitions) = match run {
         Ok(run) => {
             registry.twin_hooks = run
@@ -1515,8 +1590,7 @@ fn report_for_twin_policies(
                 .iter()
                 .filter_map(|id| lunco_hooks::get(id).map(|hook| (id.clone(), hook)))
                 .collect();
-            registry.twin_bindings = twin
-                .policies
+            registry.twin_bindings = twin_policies
                 .iter()
                 .filter(|policy| run.installed.contains(&policy.spec.hook))
                 .map(|policy| {
@@ -1553,6 +1627,7 @@ fn report_for_twin_policies(
         scope,
         installed,
         failed,
+        unavailable,
         required_failures,
         error,
     };
@@ -1590,6 +1665,13 @@ fn log_report(report: &PolicyLoadReport) {
     }
     for failure in &report.failed {
         warn!("[policy] {} unavailable: {failure}", report.scope);
+    }
+    if !report.unavailable.is_empty() {
+        info!(
+            "[policy] {} skipped optional hooks without a linked owner: {}",
+            report.scope,
+            report.unavailable.join(", ")
+        );
     }
     if !report.installed.is_empty() {
         info!(
@@ -1695,8 +1777,13 @@ pub fn sync_policies_on_twin_added(
     } else {
         if let Some(previous_id) = registry.active_twin {
             if let Some(previous) = workspace.twin(previous_id) {
-                registry.lifecycle =
-                    invoke_twin_lifecycle("close", previous_id, &previous.root, &registry.status);
+                registry.lifecycle = invoke_twin_lifecycle(
+                    "close",
+                    previous_id,
+                    &previous.root,
+                    &registry.status,
+                    lunco_core::RuntimePhase::Stop,
+                );
             }
         }
         #[cfg(feature = "native-plugins")]
@@ -1707,7 +1794,13 @@ pub fn sync_policies_on_twin_added(
     log_native_plugin_report(native_plugins.load_for_twin(twin_id, twin));
     let report = load_twin_policies(&twin.root, &mut registry, journal.as_deref());
     registry.active_twin = Some(twin_id);
-    registry.lifecycle = invoke_twin_lifecycle(event, twin_id, &twin.root, &report);
+    registry.lifecycle = invoke_twin_lifecycle(
+        event,
+        twin_id,
+        &twin.root,
+        &report,
+        lunco_core::RuntimePhase::Start,
+    );
     log_report(&report);
 }
 
@@ -1727,8 +1820,13 @@ pub fn wind_down_policies_on_twin_closed(
         return;
     }
     let twin_id = trigger.event().twin;
-    registry.lifecycle =
-        invoke_twin_lifecycle("close", twin_id, &trigger.event().root, &registry.status);
+    registry.lifecycle = invoke_twin_lifecycle(
+        "close",
+        twin_id,
+        &trigger.event().root,
+        &registry.status,
+        lunco_core::RuntimePhase::Stop,
+    );
     #[cfg(feature = "native-plugins")]
     native_plugins.unload();
     wind_down_twin_policies(&mut registry, journal.as_deref());
@@ -1751,7 +1849,13 @@ pub fn wind_down_policies_on_twin_closed(
         }
         let report = load_twin_policies(&root, &mut registry, journal.as_deref());
         registry.active_twin = Some(twin_id);
-        registry.lifecycle = invoke_twin_lifecycle("startup", twin_id, &root, &report);
+        registry.lifecycle = invoke_twin_lifecycle(
+            "startup",
+            twin_id,
+            &root,
+            &report,
+            lunco_core::RuntimePhase::Start,
+        );
         log_report(&report);
         if let Some(name) = roots
             .as_deref()

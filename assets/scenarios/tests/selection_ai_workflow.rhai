@@ -2,6 +2,8 @@
 const TEST_KIND = "editor";
 const PART = "/SelectionAiWorkflow/Part";
 const OTHER = "/SelectionAiWorkflow/Other";
+const ORIGINAL_PREVIEW = 12201;
+const FORK_PREVIEW = 12202;
 
 fn has_operation(operations, name) {
     for operation in operations {
@@ -14,20 +16,21 @@ fn on_start(me, ctx) {
     this.phase = 0;
     this.elapsed = 0.0;
     this.done = false;
-    this.original = -1;
-    this.fork = -1;
+    this.original = ();
+    this.fork = ();
     this.initial_ids = [];
     this.checks = [];
     this.inspection_preset = "selection-workflow";
     this.preset_checked = false;
-    this.view = -1;
+    this.view = ();
 }
 
 fn ready(preview, doc) {
     let generation = assembly_edit::describe(doc).generation;
     let viewport = assembly_edit::viewport();
     for p in viewport.previews {
-        if p.preview == preview && p.doc_id == doc && p.projection_ready
+        if p.preview.to_string() == preview.to_string()
+            && p.doc_id == doc && p.projection_ready
             && p.projected_generation == generation { return true; }
     }
     false
@@ -40,11 +43,12 @@ fn selection_doc(selection) {
 fn primary_view(preview, doc) {
     let viewport = assembly_edit::viewport();
     for p in viewport.previews {
-        if p.preview == preview && p.doc_id == doc && p.views != () && p.views.len() > 0 {
+        if p.preview.to_string() == preview.to_string()
+            && p.doc_id == doc && p.views != () && p.views.len() > 0 {
             return p.views[0].view;
         }
     }
-    -1
+    ()
 }
 
 fn correction(context, generation) {
@@ -71,7 +75,7 @@ fn on_tick(me, ctx) {
                 if inspected.prim != () && inspected.prim.exists { this.original = record.doc_id; }
             }
         }
-        if this.original < 0 { return; }
+        if this.original == () { return; }
         assembly_edit::fork_document(this.original, "Selection workflow disposable fork");
         this.phase = 1;
         return;
@@ -82,16 +86,16 @@ fn on_tick(me, ctx) {
                 this.fork = record.doc_id;
             }
         }
-        if this.fork < 0 { return; }
-        assembly_ui::open_session(12201, this.original, "@root@");
-        assembly_ui::open_session(12202, this.fork, "@root@");
+        if this.fork == () { return; }
+        assembly_ui::open_session(ORIGINAL_PREVIEW, this.original, "@root@");
+        assembly_ui::open_session(FORK_PREVIEW, this.fork, "@root@");
         this.phase = 2;
         return;
     }
     if this.phase == 2 {
-        if !ready(12201, this.original) || !ready(12202, this.fork) { return; }
-        this.view = primary_view(12202, this.fork);
-        if this.view < 0 { return; }
+        if !ready(ORIGINAL_PREVIEW, this.original) || !ready(FORK_PREVIEW, this.fork) { return; }
+        this.view = primary_view(FORK_PREVIEW, this.fork);
+        if this.view == () { return; }
         this.original_generation = assembly_edit::describe(this.original).generation;
         this.fork_generation = assembly_edit::describe(this.fork).generation;
         let saved = assembly_edit::save_inspection_preset(this.view, this.inspection_preset);
@@ -103,7 +107,7 @@ fn on_tick(me, ctx) {
         let empty_authoring = assembly_builder::selected_authoring_context(());
         this.checks.push(t_true(!empty_authoring.ok,
             "selected authoring context rejects no selection"));
-        assembly_ui::select_prim(12202, PART, false, false);
+        assembly_ui::select_prim(FORK_PREVIEW, PART, false, false);
         this.phase = 3;
         return;
     }
@@ -120,11 +124,13 @@ fn on_tick(me, ctx) {
         let applied = assembly_edit::apply_inspection_preset(this.view, this.inspection_preset);
         this.checks.push(t_true(applied.ok != false,
             "inspection camera preset applies to the addressed preview view"));
-        this.checks.push(t_true(selection_doc(selected) == this.fork && selected.preview == 12202
+        this.checks.push(t_true(selection_doc(selected) == this.fork
+            && selected.preview.to_string() == FORK_PREVIEW.to_string()
             && selected.selection_mode == "single" && !selected.requires_single_target,
             "selected part has exact fork and preview identity"));
-        let hidden = assembly_edit::selection_context_for(12201);
-        this.checks.push(t_true(selection_doc(hidden) == this.original && !hidden.focused
+        let hidden = assembly_edit::selection_context_for(ORIGINAL_PREVIEW);
+        this.checks.push(t_true(selection_doc(hidden) == this.original
+            && hidden.preview.to_string() == ORIGINAL_PREVIEW.to_string() && !hidden.focused
             && hidden.selection_state == "no_selection", "hidden same-name document stays isolated"));
         let selected_authoring = assembly_builder::selected_authoring_context(12202);
         let selected_authoring_message = if selected_authoring.ok {

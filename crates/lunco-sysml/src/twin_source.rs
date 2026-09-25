@@ -247,7 +247,7 @@ pub(crate) fn drain_pending_sysml_sources(
         };
 
         let (document, outcome) =
-            registry.open_file(item.absolute_path.clone(), source.text.clone());
+            registry.open_file(item.absolute_path.clone(), source.text.to_string());
         info!(
             "[sysml] opened Twin source `{}/{}` as document {:?} ({outcome:?})",
             item.twin_name, item.relative_path, document

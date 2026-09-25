@@ -1605,7 +1605,7 @@ impl ScriptedMergePolicy {
 impl MergePolicy for ScriptedMergePolicy {
     fn concurrent_cmp(&self, a: &JournalEntry, b: &JournalEntry) -> std::cmp::Ordering {
         let args = [entry_to_hookvalue(a), entry_to_hookvalue(b)];
-        match lunco_hooks::invoke(&self.hook_id, &args) {
+        match lunco_hooks::invoke_unclassified(&self.hook_id, &args) {
             Some(Ok(v)) => match v.as_i64() {
                 Some(n) => n.cmp(&0),
                 // Wrong-shaped return → fall back rather than pick arbitrarily.
@@ -2456,14 +2456,14 @@ mod tests {
         // desc) sorts first among concurrent entries.
         struct AuthorDescHook;
         impl ScriptHook for AuthorDescHook {
-            fn invoke(&self, args: &[HookValue]) -> HookResult {
+            fn invoke(&self, invocation: &lunco_hooks::HookInvocation<'_>) -> HookResult {
                 let author = |v: &HookValue| {
                     v.get("author")
                         .and_then(|s| s.as_str().map(str::to_owned))
                         .unwrap_or_default()
                 };
-                let a = author(&args[0]);
-                let b = author(&args[1]);
+                let a = author(&invocation.args[0]);
+                let b = author(&invocation.args[1]);
                 // memcmp convention: negative ⇒ a before b. Author DESC ⇒ reverse.
                 Ok(HookValue::Int(match b.cmp(&a) {
                     std::cmp::Ordering::Less => -1,

@@ -15,6 +15,21 @@ use lunco_usd_sim_domain::synthesis::{
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 
+fn synthesis_test_context() -> lunco_core::RuntimeExecutionContext {
+    lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::twin(
+            lunco_core::RuntimeCycle::Lifecycle,
+            1,
+        )),
+        phase: lunco_core::RuntimePhase::Preparation,
+        clock: lunco_core::RuntimeClock::None,
+        time_seconds: None,
+        delta_seconds: None,
+        sequence: None,
+        producer: None,
+    }
+}
+
 const POLICY: &str = r#"
 fn emit(net) {
     let src = "model " + net.model_name + "\n";
@@ -128,7 +143,10 @@ fn a_rhai_policy_can_be_the_synthesizer() {
     let view = stage.view();
     let root = SdfPath::new("/Rig").unwrap();
     let classes = fixture_classes();
-    let ctx = SynthContext { classes: &classes };
+    let ctx = SynthContext {
+        classes: &classes,
+        runtime_context: synthesis_test_context(),
+    };
 
     let outcome = synthesizer
         .synthesize(&view, &root, "Rig_System", &ctx)
@@ -162,7 +180,10 @@ fn a_rhai_policy_can_replace_the_merge_partition_and_layout() {
     let view = stage.view();
     let root = SdfPath::new("/Rig").unwrap();
     let classes = fixture_classes();
-    let ctx = SynthContext { classes: &classes };
+    let ctx = SynthContext {
+        classes: &classes,
+        runtime_context: synthesis_test_context(),
+    };
 
     let outcome = synthesizer
         .synthesize(&view, &root, "Rig_System", &ctx)
@@ -197,7 +218,10 @@ fn a_policy_that_returns_the_wrong_shape_is_an_authoring_error() {
     let view = stage.view();
     let root = SdfPath::new("/Rig").unwrap();
     let classes = fixture_classes();
-    let ctx = SynthContext { classes: &classes };
+    let ctx = SynthContext {
+        classes: &classes,
+        runtime_context: synthesis_test_context(),
+    };
 
     let errors = synthesizer
         .synthesize(&view, &root, "Rig_System", &ctx)
@@ -230,6 +254,7 @@ fn a_policy_must_return_the_complete_synthesis_schema() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                runtime_context: synthesis_test_context(),
             },
         )
         .expect_err("omitted policy schema fields must be rejected");
@@ -258,6 +283,7 @@ fn a_policy_with_syntactically_valid_but_incomplete_source_is_rejected() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                runtime_context: synthesis_test_context(),
             },
         )
         .expect_err("an empty wrapper must not be admitted as a generated network");
@@ -289,6 +315,7 @@ fn a_policy_cannot_extend_the_authored_boundary_surface() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                runtime_context: synthesis_test_context(),
             },
         )
         .expect_err("a policy cannot invent a root boundary output");
@@ -323,6 +350,7 @@ fn a_policy_cannot_promote_an_output_missing_from_the_loaded_class() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                runtime_context: synthesis_test_context(),
             },
         )
         .expect_err("a policy cannot promote an undeclared Modelica output");
@@ -347,6 +375,7 @@ fn a_policy_cannot_overlap_generated_member_layout_positions() {
             "Rig_System",
             &SynthContext {
                 classes: &fixture_classes(),
+                runtime_context: synthesis_test_context(),
             },
         )
         .expect_err("overlapping member nodes are not a usable generated diagram");

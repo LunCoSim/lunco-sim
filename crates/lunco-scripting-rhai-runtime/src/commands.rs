@@ -31,18 +31,20 @@ use lunco_scripting::doc::{
 #[cfg(feature = "rhai")]
 use lunco_scripting_bridge_core as bridge_core;
 #[cfg(feature = "rhai")]
-use lunco_scripting_rhai_world::world_bridge::{PendingWorldScript, PendingWorldScripts};
+use lunco_scripting_rhai_world::world_bridge::{
+    PendingWorldScript, PendingWorldScripts, WorldScriptExecutionLimits,
+};
 #[cfg(feature = "rhai")]
 use lunco_telemetry_core::TelemetryValue;
 
 /// Run a rhai snippet against the live world — the scripting escape hatch when
 /// no typed command covers what you need.
 ///
-/// The result arrives on the next `Update`: rhai needs full `World` access,
-/// which an observer cannot hold, so the handler enqueues the snippet and the
-/// exclusive `drain_world_scripts` system runs it before answering the
-/// deferred API request with the real stdout. `Update` is intentional because
-/// kinematic celestial warp freezes `FixedUpdate`.
+/// The result arrives through the bounded FIFO `Repl` cycle: Rhai needs full
+/// `World` access, which an observer cannot hold, so the handler enqueues the
+/// snippet and the exclusive `drain_world_scripts` system evaluates at most
+/// one request per `Update`. `Update` is intentional because kinematic
+/// celestial warp freezes `FixedUpdate`.
 #[cfg(feature = "rhai")]
 #[Command(default)]
 pub struct RunRhai {
@@ -55,8 +57,9 @@ pub struct RunRhai {
 /// This is the structured counterpart to [`RunRhai`]. It is intended for
 /// engine adapters such as scene click tools: the payload crosses the Bevy
 /// command queue as the shared [`TelemetryValue`] model and becomes a native
-/// Rhai value inside the scripting backend. No source snippet or JSON literal
-/// is used to carry the payload.
+/// Rhai value inside the scripting backend. It uses the same bounded FIFO and
+/// per-invocation operation ceiling as [`RunRhai`]. No source snippet or JSON
+/// literal is used to carry the payload.
 #[cfg(feature = "rhai")]
 #[Command(default)]
 pub struct RunRhaiTool {
@@ -203,6 +206,7 @@ fn on_run_rhai(
     active: Res<ActiveCommandId>,
     pending_request: Res<PendingApiRequest>,
     mut pending: ResMut<PendingWorldScripts>,
+    limits: Res<WorldScriptExecutionLimits>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let id = active.get().unwrap_or(0);
@@ -212,12 +216,15 @@ fn on_run_rhai(
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
-    pending.queue.push(PendingWorldScript::Code {
-        id,
-        code: cmd.code.clone(),
-        authority,
-        correlation_id,
-    });
+    pending.enqueue(
+        PendingWorldScript::Code {
+            id,
+            code: cmd.code.clone(),
+            authority,
+            correlation_id,
+        },
+        *limits,
+    )?;
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({ "status": "queued" }),
@@ -231,6 +238,7 @@ fn on_run_rhai_tool(
     active: Res<ActiveCommandId>,
     pending_request: Res<PendingApiRequest>,
     mut pending: ResMut<PendingWorldScripts>,
+    limits: Res<WorldScriptExecutionLimits>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
@@ -244,14 +252,17 @@ fn on_run_rhai_tool(
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
-    pending.queue.push(PendingWorldScript::Tool {
-        id,
-        tool: cmd.tool.clone(),
-        hook: "on_click".to_string(),
-        args: cmd.args.clone(),
-        authority,
-        correlation_id,
-    });
+    pending.enqueue(
+        PendingWorldScript::Tool {
+            id,
+            tool: cmd.tool.clone(),
+            hook: "on_click".to_string(),
+            args: cmd.args.clone(),
+            authority,
+            correlation_id,
+        },
+        *limits,
+    )?;
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({ "status": "queued" }),
@@ -265,6 +276,7 @@ fn on_run_rhai_tool_hook(
     active: Res<ActiveCommandId>,
     pending_request: Res<PendingApiRequest>,
     mut pending: ResMut<PendingWorldScripts>,
+    limits: Res<WorldScriptExecutionLimits>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
@@ -290,14 +302,17 @@ fn on_run_rhai_tool_hook(
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
-    pending.queue.push(PendingWorldScript::Tool {
-        id,
-        tool: cmd.tool.clone(),
-        hook: cmd.hook.clone(),
-        args: cmd.args.clone(),
-        authority,
-        correlation_id,
-    });
+    pending.enqueue(
+        PendingWorldScript::Tool {
+            id,
+            tool: cmd.tool.clone(),
+            hook: cmd.hook.clone(),
+            args: cmd.args.clone(),
+            authority,
+            correlation_id,
+        },
+        *limits,
+    )?;
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({ "status": "queued" }),
@@ -625,6 +640,11 @@ pub fn attach_requested_scenarios(
     q: Query<(Entity, &PendingScenarioAsset)>,
     assets: Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>,
     asset_server: Res<AssetServer>,
+    mut driver: ResMut<
+        lunco_scripting::scenario::ScenarioDriver<
+            lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+        >,
+    >,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     mut commands: Commands,
@@ -650,12 +670,23 @@ pub fn attach_requested_scenarios(
         };
         let Some(asset_id) = asset_server
             .get_path(&request.handle)
-            .map(|path| lunco_assets_core::asset_path::anchor_of(&path))
+            .map(|path| lunco_scripting_rhai_world::source_asset::canonical_asset_id(&path))
         else {
             error!("[rhai] requested scenario asset for {entity:?} has no resolved identity");
             commands.entity(entity).remove::<PendingScenarioAsset>();
             continue;
         };
+        if let Err(error) =
+            driver
+                .runtime
+                .commit_asset_dependency_closure(&request.handle, &assets, &asset_server)
+        {
+            error!(
+                "[rhai] requested scenario asset for {entity:?} has an invalid import closure: {error}"
+            );
+            commands.entity(entity).remove::<PendingScenarioAsset>();
+            continue;
+        }
         let request = request.clone();
         match attach_rhai_scenario(
             entity,
@@ -787,6 +818,11 @@ pub fn resolve_embedded_scenario_paths(
     >,
     sources: Res<Assets<lunco_scripting_rhai_world::source_asset::RhaiSource>>,
     asset_server: Res<AssetServer>,
+    mut driver: ResMut<
+        lunco_scripting::scenario::ScenarioDriver<
+            lunco_scripting_rhai_world::world_bridge::RhaiScenarioRuntime,
+        >,
+    >,
     mut pending: Local<
         std::collections::HashMap<
             Entity,
@@ -810,8 +846,8 @@ pub fn resolve_embedded_scenario_paths(
             // a Twin-owned script resolves against the Twin.
             let uri = lunco_assets_core::engine_asset_uri(&path.0);
             info!(
-                "[scripting] loading scenario script `{}` as `{uri}`",
-                path.0
+                "[scripting] loading scenario script `{}` for {entity:?} as `{uri}`",
+                path.0,
             );
             asset_server.load(uri)
         });
@@ -842,8 +878,8 @@ pub fn resolve_embedded_scenario_paths(
         }
         if let Some(src) = sources.get(&*handle) {
             // Carry the script's IDENTITY alongside its text. Taken from the
-            // handle's resolved `AssetPath` via `anchor_of` — the same function
-            // `publish_rhai_sources` keys the import registry by — so the id a
+            // handle's resolved `AssetPath` via the source asset owner's
+            // canonicalizer — the same function `publish_rhai_sources` uses — so the id a
             // scenario is compiled under is byte-identical to the id it (and its
             // siblings) are registered under. Deriving it from `path.0` by hand
             // instead would be a second canonicalization that can disagree.
@@ -856,7 +892,7 @@ pub fn resolve_embedded_scenario_paths(
             // engine invariant break, not a case to paper over: say so and skip.
             let Some(id) = asset_server
                 .get_path(&*handle)
-                .map(|p| lunco_assets_core::asset_path::anchor_of(&p))
+                .map(|path| lunco_scripting_rhai_world::source_asset::canonical_asset_id(&path))
             else {
                 error!(
                     "[rhai] loaded script asset {:?} has no resolved AssetPath — cannot \
@@ -872,6 +908,22 @@ pub fn resolve_embedded_scenario_paths(
                     .remove::<ScenarioAssetHandle>();
                 continue;
             };
+            if let Err(error) =
+                driver
+                    .runtime
+                    .commit_asset_dependency_closure(handle, &sources, &asset_server)
+            {
+                error!(
+                    "[rhai] loaded script asset `{}` has an invalid import closure: {error}",
+                    path.0
+                );
+                pending.remove(&entity);
+                commands
+                    .entity(entity)
+                    .remove::<lunco_core::EmbeddedScenarioPath>()
+                    .remove::<ScenarioAssetHandle>();
+                continue;
+            }
             // Transfer the root handle to the scenario entity. Keeping the
             // exact resolved id is important: a guessed root spelling can
             // disagree with the AssetServer path and make relative imports bind

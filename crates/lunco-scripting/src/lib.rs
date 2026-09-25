@@ -186,7 +186,6 @@ impl Plugin for LunCoScriptingPlugin {
         #[cfg(any(feature = "rhai", feature = "python"))]
         app.init_resource::<scenario::ScenarioExecutionGate>()
             .init_resource::<scenario::ScenarioReadinessArm>()
-            .init_resource::<scenario::ScenarioSceneGeneration>()
             .add_observer(scenario::close_scenarios_for_scene_transition)
             .add_observer(scenario::arm_scenarios_after_scene_composition)
             .add_systems(

@@ -96,7 +96,9 @@ use avian3d::math::{Scalar, Vector};
 use avian3d::prelude::*;
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
-use lunco_core::GlobalEntityId;
+use lunco_core::{
+    GlobalEntityId, RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeRoute,
+};
 use lunco_hooks::HookValue;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 
@@ -180,6 +182,7 @@ fn escape_policy_action(
     position: Vector,
     velocity: Vector,
     bounds: WorldBounds,
+    runtime_context: RuntimeExecutionContext,
 ) -> Result<EscapePolicyAction, String> {
     let (world_min, world_max) = match bounds {
         WorldBounds::Some { min, max } => (hook_vector(min), hook_vector(max)),
@@ -205,7 +208,9 @@ fn escape_policy_action(
         ("world_min_m", world_min),
         ("world_max_m", world_max),
     ]);
-    let Some(result) = lunco_hooks::invoke(BODY_ESCAPE_POLICY_HOOK, &[context]) else {
+    let Some(result) =
+        lunco_hooks::invoke_with_context(BODY_ESCAPE_POLICY_HOOK, &[context], runtime_context)
+    else {
         return Err(format!(
             "required `{BODY_ESCAPE_POLICY_HOOK}` policy is not installed"
         ));
@@ -222,6 +227,31 @@ fn escape_policy_action(
             "`{BODY_ESCAPE_POLICY_HOOK}` returned {other:?}; expected a string action"
         )),
     }
+}
+
+/// Classify the post-solver safety decision from the authoritative fixed tick.
+/// Missing cycle inputs are a runtime contract error; this owner never invents
+/// a zero tick or derives simulation time from wall time.
+fn escape_runtime_context(
+    sim_tick: Option<&lunco_core_runtime::SimTick>,
+    fixed_time: Option<&Time<Fixed>>,
+) -> Result<RuntimeExecutionContext, String> {
+    let sim_tick = sim_tick.ok_or_else(|| {
+        format!("required `{BODY_ESCAPE_POLICY_HOOK}` invocation has no authoritative SimTick")
+    })?;
+    let fixed_time = fixed_time.ok_or_else(|| {
+        format!("required `{BODY_ESCAPE_POLICY_HOOK}` invocation has no fixed simulation clock")
+    })?;
+    let delta_seconds = fixed_time.timestep().as_secs_f64();
+    Ok(RuntimeExecutionContext {
+        route: Some(RuntimeRoute::core(RuntimeCycle::Simulation)),
+        phase: RuntimePhase::Behavior,
+        clock: RuntimeClock::Simulation,
+        time_seconds: Some(sim_tick.0 as f64 * delta_seconds),
+        delta_seconds: Some(delta_seconds),
+        sequence: Some(sim_tick.0),
+        producer: None,
+    })
 }
 
 /// Find the live dynamic bodies joined to `seed`. Static and kinematic anchors
@@ -423,6 +453,8 @@ fn report_escaped_bodies(
     mut holds: ResMut<crate::PhysicsHolds>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     world_time: Option<Res<lunco_time::WorldTime>>,
+    sim_tick: Option<Res<lunco_core_runtime::SimTick>>,
+    fixed_time: Option<Res<Time<Fixed>>>,
     mut commands: Commands,
     body_modes: Query<&RigidBody>,
     joint_links: Query<(Entity, &crate::PhysicsJointLink), Without<JointDisabled>>,
@@ -491,7 +523,20 @@ fn report_escaped_bodies(
         );
         let action_name;
         let mut paused_bodies = 0;
-        match escape_policy_action(escape_kind, name, global_id_value, pos.0, vel.0, *bounds) {
+        let action = escape_runtime_context(sim_tick.as_deref(), fixed_time.as_deref()).and_then(
+            |context| {
+                escape_policy_action(
+                    escape_kind,
+                    name,
+                    global_id_value,
+                    pos.0,
+                    vel.0,
+                    *bounds,
+                    context,
+                )
+            },
+        );
+        match action {
             Ok(EscapePolicyAction::PauseObject) => {
                 paused_bodies = pause_dynamic_object(
                     entity,
@@ -861,6 +906,8 @@ mod tests {
         world.insert_resource(ReportedEscapes::default());
         world.insert_resource(PhysicsHolds::default());
         world.insert_resource(lunco_core::RuntimeFaults::default());
+        world.insert_resource(lunco_core_runtime::SimTick(1));
+        world.insert_resource(Time::<Fixed>::from_hz(lunco_core_runtime::FIXED_HZ));
 
         let position = Vector::new(0.0, -1510.0, 0.0);
         let velocity = Vector::new(0.0, -100.0, 0.0);
@@ -887,6 +934,24 @@ mod tests {
             fault.first.as_ref().map(|fault| fault.kind),
             Some("physics-escape-policy-failed")
         );
+    }
+
+    #[test]
+    fn escape_policy_context_uses_the_fixed_simulation_tick() {
+        let tick = lunco_core_runtime::SimTick(10);
+        let fixed_time = Time::<Fixed>::from_hz(4.0);
+        let context = escape_runtime_context(Some(&tick), Some(&fixed_time)).unwrap();
+
+        assert_eq!(
+            context.route,
+            Some(RuntimeRoute::core(RuntimeCycle::Simulation))
+        );
+        assert_eq!(context.phase, RuntimePhase::Behavior);
+        assert_eq!(context.clock, RuntimeClock::Simulation);
+        assert_eq!(context.time_seconds, Some(2.5));
+        assert_eq!(context.delta_seconds, Some(0.25));
+        assert_eq!(context.sequence, Some(10));
+        assert!(context.producer.is_none());
     }
 
     /// The escape boundary emits the same one-shot observation that the

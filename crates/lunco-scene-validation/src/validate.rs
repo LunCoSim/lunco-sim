@@ -803,11 +803,45 @@ fn validate_sysml_twin(
                 .error(format!("cannot resolve {reference}: {error}"));
         }
     };
-    let Some((_, twin)) = workspace.twins().find(|(_, twin)| twin.root == root) else {
+    let Some((_twin_id, twin)) = workspace.twins().find(|(_, twin)| twin.root == root) else {
         return ValidationReport::new(reference, "sysml").error(format!(
             "Twin `{name}` is mounted in TwinRoots but has no matching Workspace entry; reopen it through the Workspace",
         ));
     };
+
+    #[cfg(feature = "sysml-runtime")]
+    if let Some(analyses) = world.get_resource::<lunco_sysml::TwinSysmlAnalyses>() {
+        return match analyses.state_for(name, _twin_id, &twin.root) {
+            Some(lunco_sysml::TwinSysmlAnalysisState::Ready(analysis)) => {
+                let policy_source = analysis
+                    .files()
+                    .iter()
+                    .map(|file| file.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let report = finish_sysml_report(reference, analysis);
+                if apply_structural_policy {
+                    apply_lint_policy(report, &policy_source)
+                } else {
+                    report
+                }
+            }
+            Some(lunco_sysml::TwinSysmlAnalysisState::Pending) => {
+                ValidationReport::new(reference, "sysml").error(format!(
+                    "Twin `{name}` SysML analysis is preparing asynchronously"
+                ))
+            }
+            Some(lunco_sysml::TwinSysmlAnalysisState::Failed(errors)) => {
+                let mut report = ValidationReport::new(reference, "sysml");
+                report.errors.extend(errors);
+                report.finish()
+            }
+            None => ValidationReport::new(reference, "sysml").error(format!(
+                "Twin `{name}` SysML source set has not been prepared for the current Twin identity"
+            )),
+        };
+    }
+
     let relative_sources = match twin.discover_sysml_sources_checked() {
         Ok(sources) => sources,
         Err(errors) => {

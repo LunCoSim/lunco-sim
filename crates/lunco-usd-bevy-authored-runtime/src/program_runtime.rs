@@ -57,6 +57,10 @@ pub(crate) fn refresh_program_owner_with_network_members(
     owner: Entity,
     network_members: &HashSet<String>,
 ) {
+    let preview_only = lunco_usd_bevy_scene::is_preview_only_entity(world, owner);
+    if preview_only {
+        return;
+    }
     let Some(owner_path) = world
         .get::<UsdPrimPath>(owner)
         .map(|path| path.path.clone())

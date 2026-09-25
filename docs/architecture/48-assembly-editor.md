@@ -264,6 +264,13 @@ canonical scalar/vector type for their reflected value. This is the same
 resolver used by `SetObjectProperty`, so interactive and agent edits have one
 USD destination and one type contract.
 
+When an authored `UsdPreviewSurface` input changes, `UsdSceneChangeBatch`
+carries the affected shader prim path to the visual owner after the live stage
+has been reconciled. The visual owner re-reads `PbrLook` for geometry bound to
+that material, and the renderer rebinds the material in place. The live scene
+entities and their unrelated scenario and simulation projections remain active
+during the edit.
+
 ### Component parameter edits
 
 The Inspector's USD parameter section is a draft surface, not a per-field
@@ -915,11 +922,12 @@ component schema; run it before regeneration and before committing an external
 edit.
 
 Preview-only visual projection does not attach generic Rhai or builtin programs.
-The `UsdPreviewOnly` scope guards the program attachment owner as well as the
-domain projector; composing a document containing executable program prims must
-not start their behavior in an Editor preview. The `assembly_document_audit`
-fixture deliberately previews its own program-bearing document to exercise
-this boundary alongside independent same-path query results.
+The authored runtime queue checks the full `UsdPreviewOnly` ancestry before it
+projects a program from a prim; the domain projectors apply the same fence.
+Composing a document containing executable program prims must not start their
+behavior in an Editor preview. The `assembly_document_audit` fixture deliberately
+previews its own program-bearing document to exercise this boundary alongside
+independent same-path query results.
 
 Joint diagnostics recognize the standard USD joint types explicitly. Only
 revolute, prismatic and spherical joints have a primary axis; an omitted axis
@@ -1088,7 +1096,7 @@ mount validators, and explicit `SaveDocument`/`SaveAsDocument` commands remain
 the only owners.
 
 The production acceptance fixture is
-`assets/scenes/tests/assembly_editor_proposal.usda`; its Rhai observer drives
+`assets/scenes/tests/editor/assembly_editor_proposal/assembly_editor_proposal.usda`; its Rhai observer drives
 the same proposal/query/commit surface and verifies non-mutating review,
 journal undo/redo, and stale-conflict rejection. The existing
 `assembly_workflow` fixture remains the catalog attach/save/reload regression.

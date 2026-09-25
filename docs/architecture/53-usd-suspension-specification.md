@@ -259,6 +259,17 @@ creates the footprint, `Apply` flushes its deferred ECS insertion, and `Consume`
 performs support-cache projection and one-time initial placement. This is a runtime
 transaction, not a per-frame reseat or an overturn recovery mechanism.
 
+The mobility publisher rebuilds the whole vehicle footprint when a raycast wheel
+is projected or its authored wheel parameters are resynchronized. It consumes a
+`RaycastSupportGeometryDirty` source marker only after resolving the owning
+`MobilityRoot`, so later wheel projections replace an earlier partial footprint.
+When projection switches a wheel to the collider-backed realization, the same
+invalidation removes the obsolete raycast footprint; terrain then uses the
+collider AABBs. Geometry contacts are sorted by their body-local values before
+publication, so support consumers see a stable sequence independent of ECS
+query iteration order. Partial object/reference reload is not supported; a full
+scene transition tears down the source and its footprint together.
+
 The physical wheel is the opposite realization: its wheel prim must author both
 `PhysicsRigidBodyAPI` and `PhysicsCollisionAPI` on explicit USD collision geometry.
 The USD-to-Avian projection lowers that authored geometry into the backend collider;

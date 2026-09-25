@@ -131,7 +131,10 @@ fn select_scene_time_on_transition_completed(
     mut transport: ResMut<lunco_time::TimeTransport>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
 ) {
-    if scene_time.phase != lunco_time::SceneTimePhase::Loading {
+    let transition_id = trigger.event().id;
+    if scene_time.phase != lunco_time::SceneTimePhase::Loading
+        || scene_time.transition_id != Some(transition_id)
+    {
         return;
     }
     let (scene_path, transition_kind) = match &trigger.event().transition {
@@ -210,7 +213,19 @@ fn select_scene_time_on_transition_completed(
         Some(&reader),
         Some(&root_path_sdf),
     );
-    let selection = match lunco_time::select_scene_time(&facts) {
+    let context = lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::twin(
+            lunco_core::RuntimeCycle::Lifecycle,
+            transition_id.get(),
+        )),
+        phase: lunco_core::RuntimePhase::Preparation,
+        clock: lunco_core::RuntimeClock::None,
+        time_seconds: None,
+        delta_seconds: None,
+        sequence: None,
+        producer: None,
+    };
+    let selection = match lunco_time::select_scene_time(&facts, transition_id, context) {
         Ok(selection) => selection,
         Err(error) => {
             transport.mode = lunco_time::TransportMode::Paused;

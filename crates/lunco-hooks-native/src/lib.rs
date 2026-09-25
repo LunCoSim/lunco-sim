@@ -12,7 +12,7 @@
 //! dependency; application composition owns manifest approval and lifecycle.
 
 use libloading::{Library, Symbol};
-use lunco_hooks::{HookError, HookResult, HookValue, RegisteredHook, ScriptHook};
+use lunco_hooks::{HookError, HookResult, RegisteredHook, ScriptHook};
 use lunco_hooks_plugin_api::{
     ABI_MAJOR, ABI_MINOR, DESCRIPTOR_MAGIC, ENTRY_SYMBOL, HookCallResult, HookInvokeFn,
     PluginDescriptor, PluginEntryFn, STATUS_BUFFER_TOO_SMALL, STATUS_FAILED, STATUS_OK,
@@ -242,8 +242,8 @@ struct NativeHook {
 }
 
 impl ScriptHook for NativeHook {
-    fn invoke(&self, args: &[HookValue]) -> HookResult {
-        let input = lunco_hooks::wire::encode_arguments(args)
+    fn invoke(&self, invocation: &lunco_hooks::HookInvocation<'_>) -> HookResult {
+        let input = lunco_hooks::wire::encode(&invocation.to_hook_value())
             .map_err(|error| HookError(format!("native hook input: {error}")))?;
         let _guard = self
             .call_lock

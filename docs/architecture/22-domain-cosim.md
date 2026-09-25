@@ -107,6 +107,13 @@ rollback replay schedule invoke this same function and share that cache, so
 replay does not introduce a second wiring table or a second source-reader
 implementation.
 
+`RollbackReplay` is an instantaneous simulation invocation driven by recorded
+input frames. Its systems must not use the live `Time<Virtual>` running guard:
+rollback can be requested while transport is paused, and propagation still has
+to rebuild the inputs for each replayed tick. The current networking path
+re-simulates an owned body assembly and freezes unrelated dynamic bodies; this
+schedule is not a whole-session command, Rhai, or Modelica replay log.
+
 Participant adapters have explicit edges around this transaction: they publish
 their outputs before propagation and consume their inputs after propagation.
 `PortRegistry` is the only scalar endpoint reader/writer; API, inspector,

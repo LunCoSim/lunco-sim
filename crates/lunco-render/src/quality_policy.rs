@@ -39,8 +39,10 @@ fn load_authored_render_quality_profiles(
     mut settings: ResMut<RenderingQualitySettings>,
 ) {
     let previous_preset = settings.preset(&profiles);
-    let default_quality = match lunco_hooks::invoke(crate::RENDER_DEFAULT_QUALITY_PROFILE_HOOK, &[])
-    {
+    let default_quality = match lunco_hooks::invoke_unclassified(
+        crate::RENDER_DEFAULT_QUALITY_PROFILE_HOOK,
+        &[],
+    ) {
         Some(Ok(lunco_hooks::HookValue::Str(id))) => match RenderingQuality::parse_id(&id) {
             Some(quality) => quality,
             None => {
@@ -77,7 +79,7 @@ fn load_authored_render_quality_profiles(
 
     let mut loaded = Vec::with_capacity(RenderingQuality::all().len());
     for quality in RenderingQuality::all() {
-        let value = match lunco_hooks::invoke(
+        let value = match lunco_hooks::invoke_unclassified(
             crate::RENDER_QUALITY_PROFILE_HOOK,
             &[lunco_hooks::HookValue::str(quality.id())],
         ) {

@@ -124,9 +124,9 @@ impl TerrainSchemaStatus {
 
 /// Ordered phases of the USD terrain projection.
 ///
-/// Consumers that admit dynamic bodies must run after [`UsdTerrainSet::Bridge`]:
-/// before that point a just-spawned terrain prim has not yet declared whether it
-/// needs a DEM collider, so admitting a rover is a one-frame free-fall race.
+/// The terrain scan runs in `PreUpdate` before [`lunco_time::TimeSpineSet`]. A
+/// newly composed DEM therefore declares its exact simulation hold before the
+/// next fixed loop can advance.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UsdTerrainSet {
     /// Wait for and validate the asynchronously loaded LunCo USD schema.
@@ -138,28 +138,36 @@ pub enum UsdTerrainSet {
 impl Plugin for UsdTerrainPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(
-            Update,
+            PreUpdate,
             UsdTerrainSet::Schema
-                .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
+                .after(lunco_core::RuntimeCycleSet::Lifecycle)
                 .before(UsdTerrainSet::Bridge),
+        )
+        .configure_sets(
+            PreUpdate,
+            UsdTerrainSet::Bridge.before(lunco_time::TimeSpineSet),
         );
         app.init_resource::<TerrainSchemaStatus>();
         app.add_systems(
-            Update,
+            PreUpdate,
             (validate_terrain_schema, publish_terrain_schema_status)
                 .chain()
                 .in_set(UsdTerrainSet::Schema),
         );
         app.add_systems(
-            Update,
+            PreUpdate,
             (
-                release_pending_dem_datasets
-                    .run_if(lunco_time::scene_time_ready)
-                    .before(UsdTerrainSet::Bridge),
+                release_pending_dem_datasets,
                 bridge_usd_dem_terrain
-                    .in_set(UsdTerrainSet::Bridge)
                     .run_if(lunco_time::scene_time_ready)
                     .run_if(terrain_schema_is_valid),
+            )
+                .chain()
+                .in_set(UsdTerrainSet::Bridge),
+        );
+        app.add_systems(
+            Update,
+            (
                 refresh_layered_terrain_layers
                     .run_if(lunco_time::scene_time_ready)
                     .run_if(terrain_schema_is_valid),
@@ -234,6 +242,21 @@ struct DemBridged;
 #[derive(Component)]
 pub struct DemDatasetPending {
     dataset_id: String,
+}
+
+/// A DEM terrain belongs to a Twin whose dataset manifest scan has not
+/// finished. Keep the authored prim eligible for the bridge and its simulation
+/// admission hold until the exact scope is known.
+#[derive(Component, Debug, Clone)]
+pub struct DemDatasetScanPending {
+    scope: lunco_assets_datasets::DatasetScope,
+}
+
+impl DemDatasetScanPending {
+    /// Mark a composed DEM whose Twin manifest scope has not finished scanning.
+    pub fn new(scope: lunco_assets_datasets::DatasetScope) -> Self {
+        Self { scope }
+    }
 }
 
 impl DemDatasetPending {
@@ -1634,7 +1657,11 @@ fn on_obstacle_spec_authored(
 fn bridge_usd_dem_terrain(
     q: Query<
         (Entity, &lunco_usd_bevy_scene::UsdPrimPath),
-        (Without<DemBridged>, Without<DemDatasetPending>),
+        (
+            Without<DemBridged>,
+            Without<DemDatasetPending>,
+            Without<DemDatasetScanPending>,
+        ),
     >,
     // Live terrains already realized from a PRIOR instantiation pass. A stage
     // recompose (runtime-overlay restore, doc-backing) hands every prim a fresh
@@ -1886,6 +1913,9 @@ fn bridge_dem_prim_read(
         };
         if !datasets.is_scope_scanned(&scope) {
             commands.entity(entity).try_remove::<DemBridged>();
+            commands
+                .entity(entity)
+                .try_insert(DemDatasetScanPending::new(scope));
             return;
         }
         if let Some(entry) = datasets.declared_artifact(&scope, std::path::Path::new(&rel)) {
@@ -2239,8 +2269,16 @@ fn project_flat_site_surface(
 fn release_pending_dem_datasets(
     datasets: Res<lunco_assets_datasets::DatasetRegistry>,
     pending: Query<(Entity, &DemDatasetPending)>,
+    scan_pending: Query<(Entity, &DemDatasetScanPending)>,
     mut commands: Commands,
 ) {
+    for (entity, pending) in &scan_pending {
+        if datasets.is_scope_scanned(&pending.scope) {
+            commands
+                .entity(entity)
+                .try_remove::<(DemDatasetScanPending, DemBridged)>();
+        }
+    }
     for (entity, pending) in &pending {
         if datasets.installed(&pending.dataset_id).is_some() {
             commands
@@ -2259,7 +2297,10 @@ mod dem_bridge_tests {
     //! real `World`, and the assertions read back the components the projection
     //! actually attached — not intermediate parse values.
 
-    use super::{bridge_dem_prim_read, ensure_document_parent_chain_ops, push_layer_attr};
+    use super::{
+        DemDatasetScanPending, bridge_dem_prim_read, ensure_document_parent_chain_ops,
+        push_layer_attr,
+    };
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
     use lunco_doc_bevy::DocumentRegistry;
@@ -2472,6 +2513,53 @@ def Xform \"Traverse\"\n{\n}\n"
         }
         queue.apply(&mut world);
         (world, entity, spec)
+    }
+
+    #[test]
+    fn twin_dem_remains_scan_pending_until_its_manifest_scope_is_ready() {
+        let scene = dem_scene("", "");
+        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", &scene))
+            .expect("stage builds");
+        let view = cs.view();
+        let twin_roots = lunco_assets_core::twin_source::TwinRoots::default();
+        let twin_name = twin_roots
+            .register("manifest-scan-fixture", std::env::temp_dir())
+            .expect("temporary root is available");
+        let datasets = lunco_assets_datasets::DatasetRegistry::default();
+        let registry = lunco_terrain_surface::TerrainLayerParserRegistry::default();
+        let mut spec = lunco_obstacle_field::spec::ObstacleFieldSpec::default();
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let prim_path = lunco_usd_bevy_scene::UsdPrimPath {
+            path: "/Terrain".to_string(),
+            ..Default::default()
+        };
+        let sdf = SdfPath::new("/Terrain").unwrap();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            bridge_dem_prim_read(
+                &view,
+                entity,
+                &prim_path,
+                &sdf,
+                Some(&std::env::temp_dir()),
+                Some(&twin_name),
+                &twin_roots,
+                &datasets,
+                &registry,
+                &mut spec,
+                &mut commands,
+            );
+        }
+        queue.apply(&mut world);
+
+        assert!(world.get::<DemDatasetScanPending>(entity).is_some());
+        assert!(
+            world
+                .get::<lunco_terrain_surface::DemTerrainRequest>(entity)
+                .is_none()
+        );
     }
 
     #[test]

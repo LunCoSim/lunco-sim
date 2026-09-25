@@ -7564,6 +7564,7 @@ dependencies = [
  "lunco-command-macro",
  "lunco-hash",
  "lunco-id",
+ "lunco-runtime-context",
  "serde",
 ]
 
@@ -7731,6 +7732,7 @@ name = "lunco-hooks"
 version = "0.1.0"
 dependencies = [
  "inventory",
+ "lunco-runtime-context",
  "serde",
 ]
 
@@ -8206,11 +8208,11 @@ dependencies = [
  "lunco-scene-selection",
  "lunco-scene-validation",
  "lunco-spatial",
- "lunco-sysml",
  "lunco-telemetry",
  "lunco-telemetry-core",
  "lunco-terrain-globe",
  "lunco-terrain-surface",
+ "lunco-time",
  "lunco-usd-avian-core",
  "lunco-usd-avian-filters",
  "lunco-usd-bevy-runtime",
@@ -8466,6 +8468,7 @@ dependencies = [
  "lunco-modelica-index",
  "lunco-modelica-library",
  "lunco-modelica-runtime",
+ "lunco-modelica-source-roots",
  "lunco-port-core",
  "lunco-twin-journal",
  "lunco-workspace",
@@ -8512,6 +8515,7 @@ dependencies = [
  "crossbeam-channel",
  "js-sys",
  "lunco-assets-core",
+ "lunco-core",
  "lunco-core-runtime",
  "lunco-doc",
  "lunco-experiments",
@@ -8778,6 +8782,7 @@ dependencies = [
  "crossbeam-channel",
  "log",
  "lunco-assets-core",
+ "lunco-assets-runtime",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-doc",
@@ -8785,13 +8790,16 @@ dependencies = [
  "lunco-experiments",
  "lunco-modelica-ast",
  "lunco-modelica-compiler",
+ "lunco-modelica-core",
  "lunco-modelica-document",
+ "lunco-modelica-index",
  "lunco-modelica-runner",
  "lunco-modelica-runtime",
  "lunco-modelica-solver",
  "lunco-modelica-source-roots",
  "lunco-signal",
  "lunco-storage",
+ "lunco-telemetry-core",
  "lunco-time",
  "rayon",
  "rumoca-compile",
@@ -9038,6 +9046,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-runtime-context"
+version = "0.1.0"
+dependencies = [
+ "bevy_reflect",
+ "serde",
+]
+
+[[package]]
 name = "lunco-scene-authoring"
 version = "0.1.0"
 dependencies = [
@@ -9234,6 +9250,7 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-control-core",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-hash",
@@ -9244,6 +9261,7 @@ dependencies = [
  "lunco-modelica-ast",
  "lunco-port-core",
  "lunco-storage",
+ "lunco-sysml",
  "lunco-sysml-ast",
  "lunco-tools",
  "lunco-twin",
@@ -9534,8 +9552,10 @@ dependencies = [
  "lunco-assets-runtime",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-hash",
  "lunco-storage",
  "lunco-sysml-ast",
  "lunco-twin-journal",
@@ -9896,9 +9916,11 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
+ "lunco-core",
  "lunco-physics",
  "lunco-usd-avian-contracts",
  "lunco-usd-avian-filters",
+ "lunco-usd-bevy-scene",
 ]
 
 [[package]]
@@ -10115,6 +10137,7 @@ dependencies = [
  "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-hash",
  "lunco-hooks",
  "lunco-spatial",
  "lunco-storage",
@@ -10423,6 +10446,7 @@ dependencies = [
  "lunco-modelica-ast",
  "lunco-modelica-document",
  "lunco-modelica-runtime",
+ "lunco-modelica-source-roots",
  "lunco-physics",
  "lunco-port-core",
  "lunco-readiness",
@@ -10487,6 +10511,7 @@ dependencies = [
  "lunco-modelica-document",
  "lunco-modelica-index",
  "lunco-modelica-runtime",
+ "lunco-modelica-source-roots",
  "lunco-port-core",
  "lunco-signal",
  "lunco-usd-actuation",
@@ -10551,6 +10576,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-assets-datasets",
  "lunco-assets-path",
+ "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-obstacle-field",

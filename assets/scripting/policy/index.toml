@@ -3,7 +3,9 @@
 #
 # Entries default to optional. A hook owner decides whether an absent policy is
 # a valid unconfigured state; `required = true` marks seams that need an authored
-# implementation before they can operate safely.
+# implementation before they can operate safely. Policies owned by optional
+# application features can set `skip_when_hook_unavailable = true`; the runtime
+# then reports them as unavailable when that owner is not linked.
 
 kind = "lunco.policy.v1"
 
@@ -45,6 +47,7 @@ entry = "dataset_provisioning"
 hook = "assets.download.prepare"
 source = "asset_download_prepare.rhai"
 entry = "asset_download_prepare"
+skip_when_hook_unavailable = true
 
 [[policies]]
 hook = "render.quality_profile"
@@ -64,6 +67,7 @@ required = true
 hook = "render.shadow_quality"
 source = "render_shadow_quality.rhai"
 entry = "shadow_quality"
+skip_when_hook_unavailable = true
 
 [[policies]]
 hook = "runtime.ui.visibility"
@@ -79,6 +83,7 @@ entry = "runtime_ui_properties"
 hook = "runtime.ui.recording"
 source = "runtime_ui_recording.rhai"
 entry = "runtime_ui_recording"
+skip_when_hook_unavailable = true
 
 [[policies]]
 hook = "camera.default_presentation"

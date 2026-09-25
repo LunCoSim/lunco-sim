@@ -7,9 +7,10 @@ description = "Backend-agnostic internal HOOK registry — the extension-point s
 
 [dependencies]
 # `inventory` makes owner-side `declare_hook!` invocations link into one catalog
-# automatically. `serde` serializes the shared typed value in command contracts;
-# neither dependency brings a runtime engine, Bevy, or scripting closure.
+# automatically. The shared context crate uses `bevy_reflect` but no Bevy ECS
+# runtime; this registry remains independent of scripting engines and worlds.
 inventory = "0.3"
+lunco-runtime-context = { path = "../lunco-runtime-context" }
 serde = { workspace = true }
 
 [lints]

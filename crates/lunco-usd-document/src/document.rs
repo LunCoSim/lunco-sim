@@ -64,26 +64,18 @@
 //! journal, and net-sync touch the small serializable layer; composition (the
 //! expensive, stateful, resolver-driven work) is isolated to the one stage owner.
 //!
-//! ## Author-once coherence invariant
+//! ## Authored operations and projection generations
 //!
-//! Two representations of the same edit can drift, so the **op itself** — not a
-//! diff re-derived by reading the stage back — is the single description of each
-//! delta, applied to *both* sides: [`apply`](Document::apply) mutates these layers
-//! and records the typed op in the private `op_log`; the live-stage projector
-//! replays that same op onto the stage. The invariant that keeps them honest:
-//!
-//! > **every generation bump records exactly one op-log entry.**
-//!
-//! The private `commit` is the only mutator, and both its callers maintain it:
-//! `apply` records the real op on success; [`UsdDocument::restore_runtime`]
-//! (a non-op state load) pushes a synthetic `ReplaceSource` marker. Crucially the
-//! invariant is **fail-safe, not merely by-convention**: [`UsdDocument::ops_since`]
-//! returns `None` whenever the op ring is shorter than the generation delta, so a
-//! future `commit` caller that forgets to record degrades to a full rebuild
-//! (correct, just slower) — never a silent projection lie. That fail-safe is the
-//! reason `restore_runtime` needs the synthetic marker at all: without it, a
-//! restore would bump the generation with no op, and every subsequent
-//! `ops_since` would under-count and force needless rebuilds.
+//! Two representations of an authored edit can drift, so the **op itself** —
+//! not a diff re-derived by reading the stage back — describes each authored
+//! delta. [`apply`](Document::apply) mutates these layers and records that typed
+//! op in the private `op_log`; the live-stage projector replays the same op onto
+//! the stage. Lifecycle reloads have a different contract: they advance the
+//! projection generation and record [`UsdChange::FullReload`], but they do not
+//! invent an authored op. [`UsdDocument::ops_since`] returns `None` whenever a
+//! cursor spans a reload or an expired journal window. Callers then request a
+//! complete snapshot/rebuild. This keeps authored sync payloads truthful and
+//! gives the stage projector one explicit recovery path.
 
 use std::collections::VecDeque;
 
@@ -113,6 +105,69 @@ const CHANGE_HISTORY_CAPACITY: usize = 256;
 /// Internal layers carry no stage metadata, so they cannot override the authored
 /// root layer's coordinate or time contract.
 const EMPTY_USDA: &str = "#usda 1.0\n";
+
+/// Immutable result of preparing one exact USDA source revision.
+///
+/// USDA text parsing is independent of document identity and editor state, so
+/// hosts can do that work on a worker and let the document registry decide
+/// whether the result is still eligible to open or refresh.
+#[derive(Debug, Clone)]
+pub struct PreparedUsdSource {
+    source: String,
+    parsed: Result<sdf::Data, String>,
+}
+
+impl PreparedUsdSource {
+    /// Parse a source revision into the send-safe authored layer data used by
+    /// `UsdDocument`.
+    pub fn parse(source: String) -> Self {
+        let parsed = usda_to_data(&source).map_err(|error| error.to_string());
+        Self { source, parsed }
+    }
+
+    /// Exact source bytes represented by this preparation result.
+    pub fn source_text(&self) -> &str {
+        &self.source
+    }
+}
+
+/// Compare parsed layer content independently of hash-map and authored field
+/// order. Reloading text with the same USD opinions must not advance the live
+/// projection generation.
+fn same_layer_data(left: &sdf::Data, right: &sdf::Data) -> bool {
+    let left_paths = left.spec_paths();
+    if left_paths != right.spec_paths() {
+        return false;
+    }
+
+    for path in left_paths {
+        if left.spec_type(&path) != right.spec_type(&path) {
+            return false;
+        }
+        let (Some(mut left_fields), Some(mut right_fields)) =
+            (left.list_fields(&path), right.list_fields(&path))
+        else {
+            return false;
+        };
+        left_fields.sort_unstable();
+        right_fields.sort_unstable();
+        if left_fields != right_fields {
+            return false;
+        }
+        for field in left_fields {
+            let (Ok(left_value), Ok(right_value)) = (
+                left.get_field(&path, &field),
+                right.get_field(&path, &field),
+            ) else {
+                return false;
+            };
+            if left_value.as_ref() != right_value.as_ref() {
+                return false;
+            }
+        }
+    }
+    true
+}
 
 #[derive(Clone, Copy)]
 enum UsdaTokenKind {
@@ -1452,18 +1507,26 @@ impl UsdDocument {
     /// [`parse_error`](Self::parse_error)) — but structural edits are blocked
     /// until a [`UsdOp::ReplaceSource`] supplies valid source.
     pub fn with_origin(id: DocumentId, source: impl Into<String>, origin: DocumentOrigin) -> Self {
-        let source = source.into();
-        let (base, parse_error, authored_source) = match usda_to_data(&source) {
-            Ok(data) => (data, None, Some(source.clone())),
-            Err(e) => {
+        let prepared = PreparedUsdSource::parse(source.into());
+        Self::with_prepared_origin(id, &prepared, origin)
+    }
+
+    fn with_prepared_origin(
+        id: DocumentId,
+        source: &PreparedUsdSource,
+        origin: DocumentOrigin,
+    ) -> Self {
+        let (base, parse_error, authored_source) = match &source.parsed {
+            Ok(data) => (data.clone(), None, Some(source.source.clone())),
+            Err(error) => {
                 warn!(
-                    "[usd] document {} source did not parse as USDA ({e}); \
+                    "[usd] document {} source did not parse as USDA ({error}); \
                      keeping raw text, edits disabled until replaced",
                     id.raw()
                 );
                 (
                     usda_to_data(EMPTY_USDA).unwrap_or_default(),
-                    Some(source),
+                    Some(source.source.clone()),
                     None,
                 )
             }
@@ -1489,6 +1552,31 @@ impl UsdDocument {
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             composed_cache: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn reload_prepared_base(&mut self, source: &PreparedUsdSource) -> bool {
+        match &source.parsed {
+            Ok(data) => {
+                if self.parse_error.is_none()
+                    && self.authored_source.as_deref() == Some(&source.source)
+                {
+                    return true;
+                }
+                self.commit(TargetLayer::Base, data.clone(), UsdChange::FullReload);
+                self.parse_error = None;
+                self.authored_source = Some(source.source.clone());
+                self.last_saved_base_revision = Some(self.base_revision);
+                true
+            }
+            Err(error) => {
+                warn!(
+                    "[usd] document {} re-read from disk did not parse as USDA ({error}); \
+                     keeping the resident base layer",
+                    self.id.raw()
+                );
+                false
+            }
         }
     }
 
@@ -1559,18 +1647,12 @@ impl UsdDocument {
         .map_err(author_err)?;
         let prim = stage.prim(prim_path.clone());
         if !prim.is_valid().map_err(author_err)? {
-            // A composed child below a reference/payload may have no local
-            // prim spec in this document.  It is still a valid USD local
-            // override target: the stronger layer authors an `over` at the
-            // canonical composed path, then writes the transform opinion.
-            // The live canonical stage remains the authority for resolving
-            // the composed child; the document layer only needs the path and
-            // a fresh local xform order in this case.
-            if self.path_is_under_composed_arc_path(&prim_path) {
-                return Ok((prim_path, Vec::new(), true));
-            }
+            // A referenced descendant is editable only when the loaded
+            // composition resolves that exact prim.  An arc ancestor grants
+            // permission to author opinions below it; it does not establish
+            // that the requested child exists.
             return Err(DocumentError::ValidationFailed(format!(
-                "composed transform target `{path}` not found"
+                "composed transform target `{path}` not found in the loaded stage"
             )));
         }
         let order = match prim
@@ -1760,27 +1842,23 @@ impl UsdDocument {
     }
 
     /// Replace the entire **runtime** layer with `data` — a session-restore
-    /// load (the persisted `.lunco` runtime overlay), NOT an edit. Bumps the
-    /// generation and records a [`UsdChange::FullReload`] so the viewport
-    /// rebuilds, but routes through neither the op layer nor the journal: it
-    /// *reconstructs* runtime state that was authored (and journaled) in a prior
-    /// session, rather than authoring it anew. Runtime state does not affect the
-    /// authored dirty flag because that flag tracks the base layer only.
+    /// load (the persisted `.lunco` runtime overlay), not an edit. Changed
+    /// content advances the generation and records [`UsdChange::FullReload`]
+    /// without adding an authored operation. A projection cursor that spans
+    /// this boundary must request a complete snapshot. Runtime state does not
+    /// affect the authored dirty flag because that flag tracks the base layer.
     pub fn restore_runtime(&mut self, data: sdf::Data) {
+        if same_layer_data(&self.runtime, &data) {
+            return;
+        }
         self.commit(TargetLayer::Runtime, data, UsdChange::FullReload);
-        // Not a typed op, but it did bump the generation — push a synthetic
-        // whole-source marker so the op-replay projector accounts for this
-        // generation (a full rebuild) instead of treating the op ring as short.
-        self.record_op(UsdOp::ReplaceSource {
-            edit_target: LayerId::runtime(),
-            text: String::new(),
-        });
     }
 
     /// Replace the **base** layer with `source` re-read from disk — a RE-OPEN of
-    /// a document that is still resident, NOT an edit. The runtime layer is kept
-    /// (the caller restores it separately), the generation bumps and a
-    /// [`UsdChange::FullReload`] is recorded so the viewport rebuilds.
+    /// a document that is still resident, not an edit. The runtime layer is kept
+    /// (the caller restores it separately). Changed content advances the
+    /// generation and records [`UsdChange::FullReload`] so the viewport
+    /// rebuilds. An identical source string is an idempotent no-op.
     ///
     /// WHY THIS EXISTS. Opening a Twin whose document is already resident used to
     /// reuse the in-memory document as-is, so a `.usda` edited on disk between
@@ -1798,34 +1876,8 @@ impl UsdDocument {
     /// This silently discards unsaved base edits and undo cannot bring them
     /// back, so the `is_dirty` check must not be a thing a caller can forget.
     pub(crate) fn reload_base(&mut self, source: &str) -> bool {
-        match usda_to_data(source) {
-            Ok(data) => {
-                self.commit(TargetLayer::Base, data, UsdChange::FullReload);
-                // The commit bumped the generation WITHOUT going through a typed
-                // op, so record a synthetic whole-source marker. The op-replay
-                // projector accounts for generations via the op ring; a
-                // generation with no op makes the ring look SHORT and it replays
-                // from the wrong point. Same reason and same shape as
-                // `restore_runtime` — the base layer is `LayerId::root()`.
-                self.record_op(UsdOp::ReplaceSource {
-                    edit_target: LayerId::root(),
-                    text: String::new(),
-                });
-                self.parse_error = None;
-                self.authored_source = Some(source.to_owned());
-                // Matches disk as of this generation ⇒ clean.
-                self.last_saved_base_revision = Some(self.base_revision);
-                true
-            }
-            Err(e) => {
-                warn!(
-                    "[usd] document {} re-read from disk did not parse as USDA ({e}); \
-                     keeping the resident base layer",
-                    self.id.raw()
-                );
-                false
-            }
-        }
+        let prepared = PreparedUsdSource::parse(source.to_owned());
+        self.reload_prepared_base(&prepared)
     }
 
     /// Replace the authored base and generated runtime layers from the file
@@ -1852,10 +1904,6 @@ impl UsdDocument {
         }
         self.changes
             .push_back((self.generation, UsdChange::FullReload));
-        self.record_op(UsdOp::ReplaceSource {
-            edit_target: LayerId::root(),
-            text: String::new(),
-        });
         self.parse_error = None;
         self.authored_source = Some(source.to_owned());
         self.last_saved_base_revision = Some(self.base_revision);
@@ -1914,15 +1962,15 @@ impl UsdDocument {
             .filter(|(g, _)| *g > since_generation)
             .map(|(_, op)| op.clone())
             .collect();
-        // Exact match: each generation records exactly one op, so a surplus
-        // means a double-recorded generation — surface it (full rebuild)
-        // rather than replay an op twice.
+        // The authored-operation journal is usable only when it covers every
+        // generation. A full reload advances generation without fabricating an
+        // authored operation, so cursors that span one request a snapshot.
         (ops.len() as u64 == expected).then_some(ops)
     }
 
-    /// Record the typed op that produced the current generation, for
-    /// [`ops_since`](Self::ops_since). Called right after a successful
-    /// [`commit`](Self::commit). Non-op state changes push a synthetic marker.
+    /// Record the authored operation that produced the current generation,
+    /// for [`ops_since`](Self::ops_since). Full reloads intentionally have no
+    /// authored operation; a cursor spanning one gets a complete snapshot.
     fn record_op(&mut self, op: UsdOp) {
         if self.op_log.len() == CHANGE_HISTORY_CAPACITY {
             self.op_log.pop_front();
@@ -2426,6 +2474,22 @@ impl lunco_doc::FileBacked for UsdDocument {
 
     fn reset_to_source(&mut self, source: &str) -> bool {
         UsdDocument::reset_to_source(self, source)
+    }
+}
+
+impl lunco_doc::PreparedFileBacked for UsdDocument {
+    type PreparedSource = PreparedUsdSource;
+
+    fn with_prepared_origin(
+        id: DocumentId,
+        source: &Self::PreparedSource,
+        origin: DocumentOrigin,
+    ) -> Self {
+        UsdDocument::with_prepared_origin(id, source, origin)
+    }
+
+    fn reload_prepared_source(&mut self, source: &Self::PreparedSource) -> bool {
+        self.reload_prepared_base(source)
     }
 }
 

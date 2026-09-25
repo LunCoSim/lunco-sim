@@ -116,7 +116,7 @@ fn save_as(domain, doc, path) {
 fn inspect(domain, doc) {
     let valid = _domain(domain);
     if !valid.ok { return valid; }
-    if doc == () || doc == 0 {
+    if doc == () || doc.to_string() == "0" {
         return _error("inspect", "an explicit document id is required");
     }
     if domain == "usd" { return usd::describe(doc); }

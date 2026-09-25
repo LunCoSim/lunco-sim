@@ -133,6 +133,17 @@ import "lunco://scripting/lib/shots" as shots; // engine-library URI
 import "helpers" as helpers;                  // relative to this script
 ```
 
+The `RhaiSource` owner converts a resolved default Bevy `AssetPath` to its
+explicit `lunco://` identity before publishing source text or its prepared AST.
+Named sources keep their scheme, including `twin://`. Scenario roots, imports,
+the source registry, prepared AST cache, and unload events all use this same
+identity, so the text and AST for one file cannot be published under different
+keys. Startup tools, Twin tools, and file-backed scenarios commit this complete
+loaded graph at their owner boundary before binding or lifecycle activation;
+they do not depend on `AssetEvent::Added` being consumed in the same update as
+the asset server reports readiness. Later asset events publish revisions and
+hot reload through the same cache.
+
 There is no global Rhai preload. An unused scenario or library does no I/O, and a
 Twin mount does not trigger a project-wide script scan. Scenario preparation
 captures the loaded transitive source closure and compiles its ASTs off-thread;

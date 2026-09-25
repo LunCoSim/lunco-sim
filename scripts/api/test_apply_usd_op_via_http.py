@@ -17,44 +17,43 @@ def require_success(response: dict, operation: str) -> dict:
     return response
 
 
-def wait_for_document(session: ProductionSession, title: str) -> int:
+def wait_for_new_usd_document(session: ProductionSession) -> int:
     timeout_s = float(os.environ.get("LUNCOSIM_DOCUMENT_TIMEOUT_S", "30"))
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         response = require_success(
-            session.post({"type": "ListOpenDocuments"}), "ListOpenDocuments"
+            session.post(
+                {"type": "ExecuteCommand", "command": "ListOpenDocuments", "params": {}}
+            ),
+            "ListOpenDocuments",
         )
         for document in response.get("data", {}).get("open_documents", []):
-            if document.get("title") == title:
+            origin = document.get("origin", {})
+            if document.get("kind") == "usd" and origin.get("kind") == "untitled":
                 return int(document["doc_id"])
         time.sleep(0.25)
-    raise RuntimeError(f"document {title!r} was not opened within {timeout_s:g}s")
+    raise RuntimeError(f"new untitled USD document was not created within {timeout_s:g}s")
 
 
 def main() -> None:
-    scaffold = """#usda 1.0
-(
-    defaultPrim = "World"
-)
-
-def Xform "World"
-{
-}
-"""
-
     with tempfile.TemporaryDirectory(prefix="luncosim-api-") as directory:
         path = Path(directory) / "test_http_usd.usda"
-        path.write_text(scaffold, encoding="utf-8")
         port = int(os.environ.get("LUNCOSIM_API_PORT", "4101"))
 
-        print(f"📝 Created USDA scaffold at {path}")
         print(f"🚀 Starting production luncosim with API on port {port}...")
         with ProductionSession(port) as session:
             require_success(
-                session.post({"type": "OpenFile", "path": str(path)}), "OpenFile"
+                session.post(
+                    {
+                        "type": "ExecuteCommand",
+                        "command": "NewDocument",
+                        "params": {"kind": "usd"},
+                    }
+                ),
+                "NewDocument(usd)",
             )
-            doc_id = wait_for_document(session, path.name)
-            print(f"✅ Opened document {doc_id} through the API.")
+            doc_id = wait_for_new_usd_document(session)
+            print(f"✅ Created untitled USD document {doc_id} through the API.")
 
             require_success(
                 session.post(
@@ -63,12 +62,15 @@ def Xform "World"
                         "command": "ApplyUsdOp",
                         "params": {
                             "doc_id": doc_id,
+                            "parent_gen": 0,
                             "op": {
                                 "AddPrim": {
                                     "edit_target": "@root@",
                                     "parent_path": "/World",
                                     "name": "TestCube",
                                     "type_name": "Cube",
+                                    "reference": None,
+                                    "reference_prim_path": None,
                                 }
                             },
                         },
@@ -101,17 +103,17 @@ def Xform "World"
                 session.post(
                     {
                         "type": "ExecuteCommand",
-                        "command": "SaveDocument",
-                        "params": {"doc_id": doc_id},
+                        "command": "SaveAsDocument",
+                        "params": {"doc_id": doc_id, "path": str(path)},
                     }
                 ),
-                "SaveDocument",
+                "SaveAsDocument",
             )
 
         content = path.read_text(encoding="utf-8")
         if 'def Cube "TestCube"' not in content or "double size = 7.5" not in content:
             raise RuntimeError(f"saved USDA did not contain the authored cube: {content}")
-        print("✅ ApplyUsdOp and SaveDocument persisted the authored USD change.")
+        print("✅ ApplyUsdOp and SaveAsDocument persisted the authored USD change.")
 
 
 if __name__ == "__main__":

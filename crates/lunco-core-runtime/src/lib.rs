@@ -22,7 +22,8 @@ pub use async_work::{
 pub use cadence::{ApplicationCadence, CadenceClock};
 pub use health::{ENGINE_HEALTH_HISTORY_LEN, EngineHealthSnapshot, PhysicsHealthSnapshot};
 pub use pacing::{
-    FramePacingDemand, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
+    FramePacingDemand, SimulationBarrier, SimulationBarrierParticipants, SimulationDependencyKey,
+    SimulationDependencyStates, SimulationDependencyStatus, SimulationExecutionMode,
     SimulationProgress, SimulationProgressBlocker, SimulationProgressKey, SimulationProgressOwner,
 };
 pub use sync::LockExt;
@@ -169,6 +170,7 @@ fn register_core_resources(app: &mut App) {
         .init_resource::<SimulationBarrier>()
         .init_resource::<SimulationBarrierParticipants>()
         .init_resource::<SimulationProgress>()
+        .init_resource::<SimulationDependencyStates>()
         .init_resource::<health::EngineHealthSnapshot>()
         .init_resource::<health::PhysicsHealthSnapshot>()
         .init_resource::<ApplicationCadence>();
@@ -291,7 +293,7 @@ mod tests {
             1
         );
 
-        assert!(coordinator.finish(first_id));
+        assert!(coordinator.complete(first_id));
         let second = SceneTransition::load("same.usda", "/World");
         let second_id = coordinator.start(second.clone());
         app.world_mut().trigger(SceneTransitionStarted {

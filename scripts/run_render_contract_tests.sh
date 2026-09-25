@@ -21,6 +21,8 @@ BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 CONTRACT_TIMEOUT="${RENDER_CONTRACT_TIMEOUT:-120}"
 API_PORT="${RENDER_CONTRACT_API_PORT:-4800}"
 LOG_DIR="target/scene-tests"
+RUN_ID="$(date +%Y%m%dT%H%M%S)-$$"
+export LUNCOSIM_CONFIG="$REPO_ROOT/$LOG_DIR/config-contract-suite-$RUN_ID"
 
 if [[ ! -x "$BIN" ]]; then
     echo "render-contract gate: production binary is missing or not executable: $BIN" >&2
@@ -94,7 +96,8 @@ for scene in "${SCENES[@]}"; do
     index=$((index + 1))
     echo "==> render-contract $name"
 
-    "$BIN" --api "$port" --offscreen --render-quality high --scene "$scene" </dev/null >"$log" 2>&1 &
+    LUNCOSIM_CONFIG="$REPO_ROOT/$LOG_DIR/config-${name}-${RUN_ID}" \
+        "$BIN" --api "$port" --offscreen --render-quality high --scene "$scene" </dev/null >"$log" 2>&1 &
     pid=$!
     started_at="$(date +%s)"
     verdict=""

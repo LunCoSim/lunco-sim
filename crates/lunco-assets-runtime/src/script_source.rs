@@ -103,6 +103,20 @@ impl ScriptSources {
         state.source_revisions.insert(id, revision);
     }
 
+    /// Register or replace borrowed source text without allocating when the
+    /// canonical id already carries the same bytes.
+    pub fn insert_if_changed(&self, id: &str, text: &str) -> bool {
+        let mut state = self.sources.write().unwrap_or_else(PoisonError::into_inner);
+        if state.sources.get(id).is_some_and(|current| current == text) {
+            return false;
+        }
+        state.sources.insert(id.to_owned(), text.to_owned());
+        state.revision = state.revision.wrapping_add(1);
+        let revision = state.revision;
+        state.source_revisions.insert(id.to_owned(), revision);
+        true
+    }
+
     /// Remove a source whose Bevy asset has reached the end of its lifecycle.
     ///
     /// This registry is a synchronous view of Bevy's asset graph, not an

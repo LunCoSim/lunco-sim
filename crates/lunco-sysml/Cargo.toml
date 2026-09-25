@@ -19,6 +19,8 @@ lunco-sysml-ast = { path = "../lunco-sysml-ast" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-hash = { path = "../lunco-hash" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }

@@ -108,7 +108,23 @@ fn matrix_literal(matrix) {
     result + "]"
 }
 
+fn valid_synthesis_context(context) {
+    context.scope == "twin"
+        && context.cycle == "lifecycle"
+        && context.phase == "preparation"
+        && context.clock == "none"
+        && context.generation != ()
+        && context.time_seconds == ()
+        && context.delta_seconds == ()
+        && context.sequence == ()
+        && context.producer == ()
+}
+
 fn synthesize(net) {
+    if !valid_synthesis_context(runtime_context) {
+        throw("synth.actuator-wrench requires its Twin lifecycle preparation context");
+    }
+
     let source = "model " + net.model_name + "\n";
     let mutable = source;
     for input in net.inputs { mutable += "  input Real " + input + ";\n"; }

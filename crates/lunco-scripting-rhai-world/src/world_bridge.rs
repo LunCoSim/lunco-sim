@@ -74,6 +74,7 @@ use lunco_scripting_bridge_core::ValueBuilder;
 use lunco_scripting_bridge_spatial as spatial_bridge;
 use lunco_scripting_bridge_time as time_bridge;
 use lunco_scripting_bridge_usd as usd_bridge;
+use lunco_scripting_rhai_core::compile_with_script_consts;
 use lunco_scripting_rhai_core::values::{
     apply_dynamic, apply_dynamic_fields, dynamic_to_hook_value, value_boundary_error,
 };
@@ -206,6 +207,14 @@ fn lifecycle_status_dynamic(status: &crate::policy::LifecyclePolicyReport) -> Dy
         ("event".into(), Dynamic::from(status.event.clone())),
         ("status".into(), Dynamic::from(status.status.clone())),
         (
+            "runtime_context".into(),
+            status
+                .runtime_context
+                .map(lunco_hooks::runtime_context_hook_value)
+                .map(|context| lunco_hooks_rhai::hook_to_dynamic(&context))
+                .unwrap_or(Dynamic::UNIT),
+        ),
+        (
             "result".into(),
             status
                 .result
@@ -242,6 +251,7 @@ fn policy_status_dynamic(
         ("scope".into(), Dynamic::from(status.scope.clone())),
         ("installed".into(), strings(&status.installed)),
         ("failed".into(), strings(&status.failed)),
+        ("unavailable".into(), strings(&status.unavailable)),
         (
             "required_failures".into(),
             strings(&status.required_failures),
@@ -298,6 +308,13 @@ fn lifecycle_status_value(status: &crate::policy::LifecyclePolicyReport) -> Hook
     HookValue::map([
         ("event", HookValue::Str(status.event.clone())),
         ("status", HookValue::Str(status.status.clone())),
+        (
+            "runtime_context",
+            status
+                .runtime_context
+                .map(lunco_hooks::runtime_context_hook_value)
+                .unwrap_or(HookValue::Unit),
+        ),
         ("result", status.result.clone().unwrap_or(HookValue::Unit)),
         (
             "error",
@@ -357,6 +374,7 @@ pub fn policy_status_value(world: &World) -> HookValue {
             ("scope", HookValue::Str(String::new())),
             ("installed", HookValue::Array(Vec::new())),
             ("failed", HookValue::Array(Vec::new())),
+            ("unavailable", HookValue::Array(Vec::new())),
             ("required_failures", HookValue::Array(Vec::new())),
             ("error", HookValue::Unit),
             ("lifecycle", lifecycle_status_value(&Default::default())),
@@ -380,6 +398,17 @@ pub fn policy_status_value(world: &World) -> HookValue {
         (
             "failed",
             HookValue::Array(status.failed.iter().cloned().map(HookValue::Str).collect()),
+        ),
+        (
+            "unavailable",
+            HookValue::Array(
+                status
+                    .unavailable
+                    .iter()
+                    .cloned()
+                    .map(HookValue::Str)
+                    .collect(),
+            ),
         ),
         (
             "required_failures",
@@ -864,24 +893,6 @@ pub fn compile_prelude_set_for_runtime(
 /// is not a literal and is silently skipped, retaining today's behaviour. Folding
 /// clones the value into every use site, which is why this is right for scalars
 /// and why authors should keep large arrays/maps out of `const`.
-fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai::ParseError> {
-    let first = engine.compile(source)?;
-
-    let mut consts = rhai::Scope::new();
-    for (name, is_const, value) in first.iter_literal_variables(true, false) {
-        if is_const {
-            consts.push_constant_dynamic(name.to_string(), value);
-        }
-    }
-    // Nothing to fold — hand back the AST we already have rather than paying for
-    // an identical second parse.
-    if consts.is_empty() {
-        return Ok(first);
-    }
-
-    engine.compile_with_scope(&consts, source)
-}
-
 /// Extract the script's TOP-LEVEL `import` statements as compilable source, or
 /// `None` if it has none.
 ///
@@ -1042,9 +1053,13 @@ fn prepare_compiled_program(
     prelude_ast: &AST,
     source: &str,
     asset_id: Option<&str>,
+    prepared_ast: Option<AST>,
 ) -> Result<Arc<CompiledProgram>, Diagnostic> {
-    let mut ast = compile_with_script_consts(engine, source)
-        .map_err(|error| rhai_diagnostic(error.to_string(), error.position()))?;
+    let mut ast = match prepared_ast {
+        Some(ast) => ast,
+        None => compile_with_script_consts(engine, source)
+            .map_err(|error| rhai_diagnostic(error.to_string(), error.position()))?,
+    };
     if let Some(id) = asset_id {
         ast.set_source(id);
     }
@@ -1068,6 +1083,7 @@ fn prepare_rhai_artifact(
     asset_id: Option<&str>,
     cached_program: Option<Arc<CompiledProgram>>,
     sources: &lunco_assets_runtime::script_source::ScriptSources,
+    prepared_modules: &lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts,
 ) -> PreparedRhaiWorkerResult {
     let (source_revision, snapshot) = sources.snapshot();
     let source_map = snapshot
@@ -1089,9 +1105,10 @@ fn prepare_rhai_artifact(
         }
     };
     let dependencies = closure.dependencies;
+    let prepared_root = asset_id.and_then(|id| prepared_modules.get(id, source));
     let program = match cached_program {
         Some(program) => Ok(program),
-        None => prepare_compiled_program(engine, prelude_ast, source, asset_id),
+        None => prepare_compiled_program(engine, prelude_ast, source, asset_id, prepared_root),
     };
     let program = match program {
         Ok(program) => program,
@@ -1109,13 +1126,16 @@ fn prepare_rhai_artifact(
         .modules
         .into_iter()
         .map(|(id, text)| {
-            let mut ast = compile_with_script_consts(engine, &text).map_err(|error| {
-                Diagnostic::error(
-                    format!("imported Rhai module {id} failed to compile: {error}"),
-                    None,
-                    None,
-                )
-            })?;
+            let mut ast = match prepared_modules.get(&id, &text) {
+                Some(ast) => ast,
+                None => compile_with_script_consts(engine, &text).map_err(|error| {
+                    Diagnostic::error(
+                        format!("imported Rhai module {id} failed to compile: {error}"),
+                        None,
+                        None,
+                    )
+                })?,
+            };
             ast.set_source(&id);
             Ok((id, text, ast))
         })
@@ -1147,9 +1167,9 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
     acc.ok_or_else(|| "active Rhai prelude is empty".to_string())
 }
 
-/// Build the base rhai [`Engine`] with the World-bridge verbs registered and the
-/// same sandbox caps as the one-shot
-/// backend.
+/// Build the base rhai [`Engine`] with the World-bridge verbs and shared sandbox
+/// caps. The prepared one-shot engine applies its lower operation ceiling after
+/// authored prelude installation.
 ///
 /// `sources` backs `import`. Passing it is not optional in practice: a bare
 /// `Engine::new()` ships rhai's `FileModuleResolver`, which reads arbitrary files
@@ -1533,7 +1553,11 @@ fn build_world_engine_base(
     engine.register_fn(
         "invoke_hook",
         |id: ImmutableString, args: rhai::Array| -> Dynamic {
-            match lunco_hooks_rhai::invoke_rhai_hook(id.as_str(), args) {
+            match lunco_hooks_rhai::invoke_rhai_hook(
+                id.as_str(),
+                args,
+                bridge_core::execution_context(),
+            ) {
                 Ok(Some(value)) => {
                     hook_operation_result(id.as_str(), true, "ok", true, value, None)
                 }
@@ -1604,7 +1628,7 @@ fn build_world_engine_base(
         RhaiBuilder.array(rows)
     });
 
-    // policy_status() -> #{scope, installed, failed, required_failures, error,
+    // policy_status() -> #{scope, installed, failed, unavailable, required_failures, error,
     // lifecycle, native_plugins}.
     // Loading errors belong to the policy loader, not to an individual hook
     // row, so expose the last startup/Twin transition report separately.
@@ -2330,6 +2354,11 @@ fn build_world_engine_base(
             .map(Dynamic::from)
             .unwrap_or(Dynamic::UNIT)
     });
+    engine.register_fn("name", |id: u64| -> Dynamic {
+        bridge_core::name_of(id)
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT)
+    });
 
     // parent(id) -> parent entity id (i64), or () if it has no parent or the
     // parent isn't a registered (script-visible) entity. Hierarchy traversal up.
@@ -2576,6 +2605,10 @@ fn install_prelude_on_engine(
     files: Vec<(String, String)>,
 ) -> Result<AST, String> {
     let prelude = compile_prelude_set(engine, files)?;
+    install_prepared_prelude_on_engine(engine, prelude)
+}
+
+fn install_prepared_prelude_on_engine(engine: &mut Engine, prelude: AST) -> Result<AST, String> {
     let module = rhai::Module::eval_ast_as_new(rhai::Scope::new(), &prelude, engine)
         .map_err(|error| format!("Rhai prelude module failed to build: {error}"))?;
     engine.register_global_module(module.into());
@@ -2918,6 +2951,10 @@ pub struct RhaiScenarioRuntime {
     /// normally mutates this uniquely-owned engine; if a task context still
     /// holds a clone, maintenance defers the rebuild until the next tick.
     engine: std::sync::Arc<Engine>,
+    /// One-shot applications share the runtime's prepared modules and authored
+    /// prelude, with an execution ceiling tuned for bounded application Updates.
+    one_shot_engine: std::sync::Arc<Engine>,
+    one_shot_max_operations: u64,
     /// Changes whenever the engine, prelude, or tool binding snapshot changes.
     preparation_revision: u64,
     states: std::collections::HashMap<Entity, RhaiScenarioState>,
@@ -2983,8 +3020,14 @@ impl Default for RhaiScenarioRuntime {
         let prepared_modules =
             lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts::required();
         let engine = build_world_engine_base(sources.clone(), prepared_modules.clone());
+        let one_shot_max_operations = WorldScriptExecutionLimits::default().max_operations();
+        let mut one_shot_engine =
+            build_world_engine_base(sources.clone(), prepared_modules.clone());
+        one_shot_engine.set_max_operations(one_shot_max_operations);
         Self {
             engine: std::sync::Arc::new(engine),
+            one_shot_engine: std::sync::Arc::new(one_shot_engine),
+            one_shot_max_operations,
             preparation_revision: 0,
             states: std::collections::HashMap::new(),
             compiled: std::collections::HashMap::new(),
@@ -3012,24 +3055,166 @@ impl RhaiScenarioRuntime {
         self.sources.clone()
     }
 
+    pub(crate) fn commit_source_asset(
+        &mut self,
+        id: &str,
+        source: &crate::source_asset::RhaiSource,
+    ) {
+        self.prepared_modules
+            .insert_if_changed(id, &source.text, &source.ast);
+    }
+
+    /// Commit one Bevy-loaded source and its complete literal import graph
+    /// before a runtime owner validates or activates that source.
+    pub fn commit_asset_dependency_closure(
+        &mut self,
+        root: &Handle<crate::source_asset::RhaiSource>,
+        assets: &Assets<crate::source_asset::RhaiSource>,
+        asset_server: &AssetServer,
+    ) -> Result<(), String> {
+        fn visit(
+            runtime: &mut RhaiScenarioRuntime,
+            handle: &Handle<crate::source_asset::RhaiSource>,
+            assets: &Assets<crate::source_asset::RhaiSource>,
+            asset_server: &AssetServer,
+            visiting: &mut std::collections::BTreeSet<String>,
+            committed: &mut std::collections::BTreeSet<String>,
+        ) -> Result<(), String> {
+            let path = asset_server.get_path(handle.id()).ok_or_else(|| {
+                format!(
+                    "loaded Rhai source {:?} has no resolved AssetPath",
+                    handle.id()
+                )
+            })?;
+            let id = crate::source_asset::canonical_asset_id(&path);
+            if committed.contains(&id) {
+                return Ok(());
+            }
+            if !visiting.insert(id.clone()) {
+                return Err(format!("Rhai import dependency cycle detected at {id}"));
+            }
+            let source = assets
+                .get(handle.id())
+                .ok_or_else(|| format!("loaded Rhai source {id} has no source asset"))?;
+            let mut dependencies = source
+                .dependencies
+                .iter()
+                .cloned()
+                .map(|dependency| {
+                    let path = asset_server.get_path(dependency.id()).ok_or_else(|| {
+                        format!(
+                            "loaded Rhai dependency {:?} has no resolved AssetPath",
+                            dependency.id()
+                        )
+                    })?;
+                    Ok((crate::source_asset::canonical_asset_id(&path), dependency))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            dependencies.sort_by(|left, right| left.0.cmp(&right.0));
+            for (_, dependency) in dependencies {
+                if !asset_server.is_loaded_with_dependencies(&dependency) {
+                    return Err(format!(
+                        "Rhai dependency closure for {id} is not fully loaded"
+                    ));
+                }
+                visit(
+                    runtime,
+                    &dependency,
+                    assets,
+                    asset_server,
+                    visiting,
+                    committed,
+                )?;
+            }
+            runtime.sources.insert_if_changed(&id, &source.text);
+            runtime.commit_source_asset(&id, &source);
+            visiting.remove(&id);
+            committed.insert(id);
+            Ok(())
+        }
+
+        if !asset_server.is_loaded_with_dependencies(root) {
+            return Err("Rhai source dependency closure is not fully loaded".to_owned());
+        }
+        visit(
+            self,
+            root,
+            assets,
+            asset_server,
+            &mut std::collections::BTreeSet::new(),
+            &mut std::collections::BTreeSet::new(),
+        )
+    }
+
+    pub(crate) fn validate_prepared_tool_library(
+        &self,
+        name: &str,
+        source: &str,
+        ast: AST,
+    ) -> Result<Vec<String>, String> {
+        lunco_tools_rhai::validate_prepared_rhai_tool_with_engine(name, source, ast, &self.engine)
+    }
+
     /// Whether the installed prelude is byte-for-byte the candidate assembled
     /// from the current asset generation.
     pub(crate) fn prelude_matches(&self, files: &[(String, String)]) -> bool {
         self.prelude_ready && self.prelude_files == files
     }
 
-    /// Install the externally loaded prelude as the runtime's global module and
-    /// merge source functions into future scenario ASTs.
-    pub(crate) fn install_prelude(&mut self, files: Vec<(String, String)>) -> Result<(), String> {
+    /// Install source-matched ASTs as the global module and merge them into
+    /// future scenario ASTs.
+    pub(crate) fn install_prepared_prelude(
+        &mut self,
+        files: Vec<(String, String)>,
+        asts: Vec<AST>,
+    ) -> Result<(), String> {
+        let mut asts = asts.into_iter();
+        let Some(mut prelude_ast) = asts.next() else {
+            return Err("authored Rhai prelude has no prepared source ASTs".to_owned());
+        };
+        for ast in asts {
+            prelude_ast = prelude_ast.merge(&ast);
+        }
         let mut rebuilt =
             build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
-        let prelude_ast = install_prelude_on_engine(&mut rebuilt, files.clone())?;
+        let prelude_ast = install_prepared_prelude_on_engine(&mut rebuilt, prelude_ast)?;
+        let mut one_shot_rebuilt =
+            build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
+        install_prepared_prelude_on_engine(&mut one_shot_rebuilt, prelude_ast.clone())?;
+        one_shot_rebuilt.set_max_operations(self.one_shot_max_operations);
+        self.commit_prelude_engine(rebuilt, one_shot_rebuilt, prelude_ast, files);
+        Ok(())
+    }
+
+    fn commit_prelude_engine(
+        &mut self,
+        rebuilt: Engine,
+        one_shot_rebuilt: Engine,
+        prelude_ast: AST,
+        files: Vec<(String, String)>,
+    ) {
         self.engine = std::sync::Arc::new(rebuilt);
+        self.one_shot_engine = std::sync::Arc::new(one_shot_rebuilt);
         self.preparation_revision = self.preparation_revision.wrapping_add(1);
         self.prelude_ast = prelude_ast;
         self.prelude_files = files;
         self.prelude_ready = true;
         self.tool_gen = crate::tool_libs::generation();
+    }
+
+    fn set_one_shot_operation_limit(&mut self, max_operations: u64) -> Result<(), String> {
+        if self.one_shot_max_operations == max_operations {
+            return Ok(());
+        }
+
+        let mut rebuilt =
+            build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
+        if self.prelude_ready {
+            install_prepared_prelude_on_engine(&mut rebuilt, self.prelude_ast.clone())?;
+        }
+        rebuilt.set_max_operations(max_operations);
+        self.one_shot_engine = std::sync::Arc::new(rebuilt);
+        self.one_shot_max_operations = max_operations;
         Ok(())
     }
 }
@@ -3054,6 +3239,9 @@ pub fn rhai_runtime_ready(status: Option<Res<RhaiRuntimeStatus>>) -> bool {
 /// walk. The asset handles are retained by [`source_asset::BuiltinRhaiAssets`];
 /// edits arrive through Bevy's normal asset events and are visible to the next
 /// engine generation.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RhaiBuiltinPreparationSet;
+
 pub fn prepare_builtin_rhai_assets(
     manifest: Option<Res<lunco_assets_runtime::discovery::AssetManifest>>,
     builtins: Option<ResMut<crate::source_asset::BuiltinRhaiAssets>>,
@@ -3173,10 +3361,36 @@ pub fn prepare_builtin_rhai_assets(
             }
             continue;
         };
-        sources.insert(
-            lunco_assets_core::engine_asset_uri(&rel),
-            source.text.clone(),
+        let dependencies_ready = asset_server.is_loaded_with_dependencies(&handle);
+        let is_tool = matches!(&role, Some(crate::tool_libs::ScriptSourceRole::Tool(_)));
+        let needs_imports = matches!(
+            &role,
+            Some(
+                crate::tool_libs::ScriptSourceRole::Tool(_)
+                    | crate::tool_libs::ScriptSourceRole::Prelude
+            )
         );
+        if is_tool && !dependencies_ready {
+            if asset_server
+                .recursive_dependency_load_state(handle.id())
+                .is_failed()
+            {
+                error!("[rhai] failed to load dependencies for built-in tool {rel}");
+            }
+            continue;
+        }
+        if needs_imports && dependencies_ready {
+            if let Err(error) =
+                driver
+                    .runtime
+                    .commit_asset_dependency_closure(&handle, &assets, &asset_server)
+            {
+                error!("[rhai] cannot prepare imports for built-in source {rel}: {error}");
+                continue;
+            }
+        } else if !needs_imports {
+            sources.insert_if_changed(&lunco_assets_core::engine_asset_uri(&rel), &source.text);
+        }
         if builtins
             .processed
             .get(&rel)
@@ -3186,7 +3400,11 @@ pub fn prepare_builtin_rhai_assets(
         }
         match &role {
             Some(crate::tool_libs::ScriptSourceRole::Tool(name)) => {
-                crate::tool_libs::register_standard_tool_library(&name, &source.text);
+                crate::tool_libs::register_standard_tool_library(
+                    &name,
+                    &source.text,
+                    source.ast.clone(),
+                );
                 info!("[rhai] activated tool library '{name}' from {rel}");
             }
             Some(crate::tool_libs::ScriptSourceRole::Prelude) | None => {}
@@ -3219,6 +3437,7 @@ pub fn prepare_builtin_rhai_assets(
     }
 
     let mut prelude = Vec::with_capacity(prelude_handles.len());
+    let mut prelude_asts = Vec::with_capacity(prelude_handles.len());
     for (rel, handle) in prelude_handles {
         if asset_server
             .recursive_dependency_load_state(handle.id())
@@ -3250,10 +3469,12 @@ pub fn prepare_builtin_rhai_assets(
             status.error = Some(message);
             return;
         };
-        prelude.push((rel, source.text.clone()));
+        prelude.push((rel.clone(), source.text.clone()));
+        prelude_asts.push((rel, source.ast.clone()));
     }
 
     prelude.sort_by(|left, right| left.0.cmp(&right.0));
+    prelude_asts.sort_by(|left, right| left.0.cmp(&right.0));
     if driver.runtime.prelude_matches(&prelude) {
         status.ready = true;
         status.error = None;
@@ -3261,7 +3482,10 @@ pub fn prepare_builtin_rhai_assets(
     }
 
     status.ready = false;
-    match driver.runtime.install_prelude(prelude) {
+    match driver.runtime.install_prepared_prelude(
+        prelude,
+        prelude_asts.into_iter().map(|(_, ast)| ast).collect(),
+    ) {
         Ok(()) => {
             let invalidated = driver.invalidate(&mut admission, &mut progress);
             if let Some(mut participants) = barrier_participants {
@@ -3349,6 +3573,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         let engine = self.engine.clone();
         let prelude_ast = self.prelude_ast.clone();
         let sources = self.sources.clone();
+        let prepared_modules = self.prepared_modules.clone();
         let cached_program = match cached {
             Some(CacheEntry::Ok(program)) => Some(program),
             Some(CacheEntry::Err(_)) | None => None,
@@ -3377,6 +3602,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                             asset_id.as_deref(),
                             cached_program,
                             &sources,
+                            &prepared_modules,
                         )
                     }))
                     .unwrap_or_else(|_| PreparedRhaiWorkerResult {
@@ -3641,7 +3867,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         &mut self,
         entity: Entity,
         self_gid: i64,
-    ) -> Result<Vec<i64>, Diagnostic> {
+    ) -> Result<lunco_scripting::scenario::ScenarioDependencyPlan, Diagnostic> {
         let st = self.states.get_mut(&entity).ok_or_else(|| {
             Diagnostic::error(
                 "scenario dependency plan requested without a compiled program",
@@ -3650,7 +3876,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             )
         })?;
         if !st.program.mask.simulation_dependencies {
-            return Ok(Vec::new());
+            return Ok(lunco_scripting::scenario::ScenarioDependencyPlan::default());
         }
         bridge_core::rng_begin(self_gid as u64, time_bridge::logical_sequence(), 4);
         let (hook_ast, eval_ast) = st.program.hook_target();
@@ -3669,27 +3895,138 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 args,
             )
             .map_err(|error| rhai_diagnostic(error.to_string(), error.position()))?;
-        let values = value.into_array().map_err(|error| {
+        let mut plan = value.try_cast::<rhai::Map>().ok_or_else(|| {
             Diagnostic::error(
-                format!("simulation_dependencies must return an array of entity ids: {error}"),
+                "simulation_dependencies must return a dependency plan map",
                 None,
                 None,
             )
         })?;
-        values
+        let modelica_values = plan.remove("modelica_entities").ok_or_else(|| {
+            Diagnostic::error(
+                "simulation_dependencies must include `modelica_entities`",
+                None,
+                None,
+            )
+        })?;
+        let required_values = plan.remove("required_inputs").ok_or_else(|| {
+            Diagnostic::error(
+                "simulation_dependencies must include `required_inputs`",
+                None,
+                None,
+            )
+        })?;
+        if !plan.is_empty() {
+            return Err(Diagnostic::error(
+                format!(
+                    "simulation_dependencies returned unknown plan fields: {}",
+                    plan.keys()
+                        .map(|key| key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                None,
+                None,
+            ));
+        }
+        let modelica_values = modelica_values.into_array().map_err(|error| {
+            Diagnostic::error(
+                format!("simulation_dependencies `modelica_entities` must be an array: {error}"),
+                None,
+                None,
+            )
+        })?;
+        let modelica_entities = modelica_values
             .into_iter()
             .map(|value| {
                 value.as_int().map_err(|error| {
                     Diagnostic::error(
                         format!(
-                            "simulation_dependencies entries must be integer entity ids: {error}"
+                            "simulation_dependencies `modelica_entities` entries must be integer entity ids: {error}"
                         ),
                         None,
                         None,
                     )
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        let required_values = required_values.into_array().map_err(|error| {
+            Diagnostic::error(
+                format!("simulation_dependencies `required_inputs` must be an array: {error}"),
+                None,
+                None,
+            )
+        })?;
+        let mut required_inputs = Vec::with_capacity(required_values.len());
+        for (index, value) in required_values.into_iter().enumerate() {
+            let mut dependency = value.try_cast::<rhai::Map>().ok_or_else(|| {
+                Diagnostic::error(
+                    format!("simulation_dependencies `required_inputs[{index}]` must be a map"),
+                    None,
+                    None,
+                )
+            })?;
+            let owner = dependency
+                .remove("owner")
+                .ok_or_else(|| {
+                    Diagnostic::error(
+                        format!("simulation_dependencies `required_inputs[{index}]` needs `owner`"),
+                        None,
+                        None,
+                    )
+                })?
+                .into_immutable_string()
+                .map_err(|error| {
+                    Diagnostic::error(
+                        format!("simulation_dependencies `required_inputs[{index}].owner` must be a string: {error}"),
+                        None,
+                        None,
+                    )
+                })?;
+            let identity = dependency
+                .remove("identity")
+                .ok_or_else(|| {
+                    Diagnostic::error(
+                        format!("simulation_dependencies `required_inputs[{index}]` needs `identity`"),
+                        None,
+                        None,
+                    )
+                })?
+                .into_immutable_string()
+                .map_err(|error| {
+                    Diagnostic::error(
+                        format!("simulation_dependencies `required_inputs[{index}].identity` must be a string: {error}"),
+                        None,
+                        None,
+                    )
+                })?;
+            if !dependency.is_empty() {
+                return Err(Diagnostic::error(
+                    format!(
+                        "simulation_dependencies `required_inputs[{index}]` has unknown fields: {}",
+                        dependency
+                            .keys()
+                            .map(|key| key.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    None,
+                    None,
+                ));
+            }
+            let key = lunco_core_runtime::SimulationDependencyKey::new(
+                owner.to_string(),
+                identity.to_string(),
+            )
+            .map_err(|message| Diagnostic::error(message, None, None))?;
+            required_inputs.push(key);
+        }
+        required_inputs.sort_unstable();
+        required_inputs.dedup();
+        Ok(lunco_scripting::scenario::ScenarioDependencyPlan {
+            modelica_entities,
+            required_inputs,
+        })
     }
 
     fn deliver_event(
@@ -3769,47 +4106,54 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         if self.tool_gen == cur {
             return;
         }
-        // The engine handle is normally unique here (no task ctx outlives its
-        // tick), but "normally" is not "always": a `RhaiTaskCtx` — or any
-        // re-entrant call back into the bridge from script/RunRhai input — holds an
-        // `Arc` clone, and script input is untrusted. This used to
-        // `.expect("engine Arc must be unique outside a task tick")`, i.e. a
-        // script could **take down the whole application**. It must not: a
-        // contended rebuild is deferred, never fatal.
-        match std::sync::Arc::get_mut(&mut self.engine) {
-            Some(engine) => {
-                let mut rebuilt =
-                    build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
-                // A runtime may receive tool changes before its asynchronous
-                // prelude asset has arrived. Rebuild the base engine in that
-                // state; scenario execution remains gated by
-                // `RhaiRuntimeStatus` until a real prelude is installed.
-                let prelude = if self.prelude_files.is_empty() {
-                    Ok(AST::empty())
-                } else {
-                    install_prelude_on_engine(&mut rebuilt, self.prelude_files.clone())
+        // Reentrant task calls can retain either engine. Defer the paired rebuild
+        // until both immutable handles are released so both execution profiles
+        // observe one tool-library generation.
+        if std::sync::Arc::strong_count(&self.engine) != 1
+            || std::sync::Arc::strong_count(&self.one_shot_engine) != 1
+        {
+            bevy::log::warn_once!(
+                "[rhai] tool-library rebuild deferred: a runtime engine is still in use. \
+                 Retrying next tick."
+            );
+            return;
+        }
+
+        let mut rebuilt =
+            build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
+        let mut one_shot_rebuilt =
+            build_world_engine_base(self.sources.clone(), self.prepared_modules.clone());
+        // A runtime may receive tool changes before its asynchronous prelude
+        // asset arrives. Keep both base engines gated until the real prelude is
+        // installed.
+        let prelude = if self.prelude_files.is_empty() {
+            Ok(AST::empty())
+        } else {
+            install_prepared_prelude_on_engine(&mut rebuilt, self.prelude_ast.clone()).and_then(
+                |prelude_ast| {
+                    install_prepared_prelude_on_engine(&mut one_shot_rebuilt, prelude_ast.clone())?;
+                    Ok(prelude_ast)
+                },
+            )
+        };
+        match prelude {
+            Ok(prelude_ast) => {
+                one_shot_rebuilt.set_max_operations(self.one_shot_max_operations);
+                let Some(engine) = std::sync::Arc::get_mut(&mut self.engine) else {
+                    return;
                 };
-                match prelude {
-                    Ok(prelude_ast) => {
-                        *engine = rebuilt;
-                        self.preparation_revision = self.preparation_revision.wrapping_add(1);
-                        self.prelude_ast = prelude_ast;
-                        self.tool_gen = cur;
-                    }
-                    Err(error) => {
-                        bevy::log::error!("[rhai] prelude rebuild failed: {error}");
-                    }
-                }
+                let Some(one_shot_engine) = std::sync::Arc::get_mut(&mut self.one_shot_engine)
+                else {
+                    return;
+                };
+                *engine = rebuilt;
+                *one_shot_engine = one_shot_rebuilt;
+                self.preparation_revision = self.preparation_revision.wrapping_add(1);
+                self.prelude_ast = prelude_ast;
+                self.tool_gen = cur;
             }
-            None => {
-                // `tool_gen` is deliberately NOT advanced — the next `maintain`
-                // (once the borrow is gone) still sees the generation mismatch and
-                // performs the rebuild. Worst case a hot-reloaded tool library
-                // lands one tick late.
-                bevy::log::warn_once!(
-                    "[rhai] tool-library rebuild deferred: the engine is still borrowed by a \
-                     live task/re-entrant script call. Retrying next tick."
-                );
+            Err(error) => {
+                bevy::log::error!("[rhai] prelude rebuild failed: {error}");
             }
         }
     }
@@ -4230,6 +4574,85 @@ fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
 
 // ── One-shot drain (RunRhai) ───────────────────────────────────────────────
 
+/// Bounded execution policy for one-shot scripts that need live World access.
+///
+/// These scripts remain serial because bridge functions can read and mutate
+/// the live World. A small FIFO batch and per-invocation operation ceiling
+/// keep that work from consuming an unbounded application frame.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorldScriptExecutionLimits {
+    max_pending: usize,
+    max_per_update: usize,
+    max_operations: u64,
+}
+
+const MAX_PENDING_WORLD_SCRIPTS: usize = 256;
+const MAX_WORLD_SCRIPTS_PER_UPDATE: usize = 16;
+
+impl WorldScriptExecutionLimits {
+    /// Create validated limits for the live-world REPL queue.
+    pub fn new(
+        max_pending: usize,
+        max_per_update: usize,
+        max_operations: u64,
+    ) -> Result<Self, String> {
+        if max_pending == 0 || max_per_update == 0 || max_operations == 0 {
+            return Err("world script execution limits must all be greater than zero".to_owned());
+        }
+        if max_pending > MAX_PENDING_WORLD_SCRIPTS {
+            return Err(format!(
+                "world script queue capacity cannot exceed {MAX_PENDING_WORLD_SCRIPTS}"
+            ));
+        }
+        if max_per_update > MAX_WORLD_SCRIPTS_PER_UPDATE {
+            return Err(format!(
+                "world scripts per update cannot exceed {MAX_WORLD_SCRIPTS_PER_UPDATE}"
+            ));
+        }
+        if max_per_update > max_pending {
+            return Err(
+                "world scripts per update cannot exceed the pending queue capacity".to_owned(),
+            );
+        }
+        if max_operations > lunco_hooks_rhai::rhai_limits::MAX_OPERATIONS {
+            return Err(format!(
+                "world script operation limit cannot exceed the shared Rhai ceiling ({})",
+                lunco_hooks_rhai::rhai_limits::MAX_OPERATIONS
+            ));
+        }
+        Ok(Self {
+            max_pending,
+            max_per_update,
+            max_operations,
+        })
+    }
+
+    /// Default bounded FIFO capacity for pending world-bound requests.
+    pub const fn max_pending(self) -> usize {
+        self.max_pending
+    }
+
+    /// Maximum world-bound scripts evaluated during one application update.
+    pub const fn max_per_update(self) -> usize {
+        self.max_per_update
+    }
+
+    /// Maximum Rhai VM operations allowed in one world-bound invocation.
+    pub const fn max_operations(self) -> u64 {
+        self.max_operations
+    }
+}
+
+impl Default for WorldScriptExecutionLimits {
+    fn default() -> Self {
+        Self {
+            max_pending: 64,
+            max_per_update: 1,
+            max_operations: 100_000,
+        }
+    }
+}
+
 /// World-bound script requests submitted by `RunRhai` or `RunRhaiTool`, waiting
 /// to run inside the exclusive [`drain_world_scripts`] system where `&mut World`
 /// is available. A tool request keeps its [`TelemetryValue`] payload typed until
@@ -4239,7 +4662,37 @@ fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
 /// local/host launch (§3.4).
 #[derive(Resource, Default)]
 pub struct PendingWorldScripts {
-    pub queue: Vec<PendingWorldScript>,
+    queue: Vec<PendingWorldScript>,
+}
+
+impl PendingWorldScripts {
+    /// Append one request in command-admission order, rejecting overload at
+    /// the command boundary instead of allowing the queue to grow without a
+    /// bound.
+    pub fn enqueue(
+        &mut self,
+        request: PendingWorldScript,
+        limits: WorldScriptExecutionLimits,
+    ) -> Result<(), String> {
+        if self.queue.len() >= limits.max_pending() {
+            return Err(format!(
+                "world script queue is full ({} pending requests)",
+                limits.max_pending()
+            ));
+        }
+        self.queue.push(request);
+        Ok(())
+    }
+
+    /// Whether the owner has work ready for a later application update.
+    pub fn has_pending(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    fn take_batch(&mut self, maximum: usize) -> Vec<PendingWorldScript> {
+        let count = maximum.min(self.queue.len());
+        self.queue.drain(..count).collect()
+    }
 }
 
 /// A queued world-bound script operation. Tool arguments remain native to the
@@ -4319,6 +4772,10 @@ fn world_script_engine(world: &mut World) -> Result<Option<std::sync::Arc<Engine
         };
     }
 
+    let limits = world
+        .get_resource::<WorldScriptExecutionLimits>()
+        .copied()
+        .ok_or_else(|| "world-bound Rhai execution limits are unavailable".to_owned())?;
     let Some(mut driver) =
         world.get_resource_mut::<lunco_scripting::scenario::ScenarioDriver<RhaiScenarioRuntime>>()
     else {
@@ -4331,19 +4788,24 @@ fn world_script_engine(world: &mut World) -> Result<Option<std::sync::Arc<Engine
     if driver.runtime.tool_gen != crate::tool_libs::generation() {
         return Ok(None);
     }
-    Ok(Some(driver.runtime.engine.clone()))
+    driver
+        .runtime
+        .set_one_shot_operation_limit(limits.max_operations())?;
+    Ok(Some(driver.runtime.one_shot_engine.clone()))
 }
 
-/// Exclusive system: run every queued snippet against the live World, record
-/// its internal result, and resolve any waiting API request with the completed
-/// stdout or error.
+/// Exclusive system: run one bounded FIFO batch against the live World, record
+/// each result, and leave later requests queued for the next application update.
 pub fn drain_world_scripts(world: &mut World) {
     let engine = match world_script_engine(world) {
         Ok(Some(engine)) => Ok(engine),
         Ok(None) => return,
         Err(error) => Err(error),
     };
-    let pending = std::mem::take(&mut world.resource_mut::<PendingWorldScripts>().queue);
+    let limits = *world.resource::<WorldScriptExecutionLimits>();
+    let pending = world
+        .resource_mut::<PendingWorldScripts>()
+        .take_batch(limits.max_per_update());
     if pending.is_empty() {
         return;
     }
@@ -4431,7 +4893,7 @@ pub fn eval_with_world_as(
     eval_with_engine(world, &engine, code, authority)
 }
 
-/// Evaluate against the prepared scenario engine without rebuilding its
+/// Evaluate against the prepared bounded engine without rebuilding its
 /// resolver, modules, or authored prelude for each one-shot request.
 fn eval_with_engine(
     world: &mut World,
@@ -4566,6 +5028,7 @@ mod tests {
     //! validated by the production `scripting_asset_contracts` scene so adding
     //! or editing a `.rhai` file does not require rebuilding this crate.
 
+    use super::{PendingWorldScript, PendingWorldScripts, WorldScriptExecutionLimits};
     use bevy::math::DVec3;
     use lunco_core::{
         RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeRoute,
@@ -4582,13 +5045,20 @@ mod tests {
             "fn on_test(context) { print(context); context + \"!\" }",
         );
         let mut runtime = super::RhaiScenarioRuntime::default();
+        let prelude_ast = runtime
+            .engine
+            .compile("fn cached_answer() { 40 + 2 }")
+            .expect("inline prelude must compile");
         runtime
-            .install_prelude(vec![(
-                "inline-test-prelude.rhai".to_owned(),
-                "fn cached_answer() { 40 + 2 }".to_owned(),
-            )])
+            .install_prepared_prelude(
+                vec![(
+                    "inline-test-prelude.rhai".to_owned(),
+                    "fn cached_answer() { 40 + 2 }".to_owned(),
+                )],
+                vec![prelude_ast],
+            )
             .expect("inline prelude must install");
-        let prepared_engine = runtime.engine.clone();
+        let prepared_engine = runtime.one_shot_engine.clone();
 
         let mut world = bevy::prelude::World::new();
         world.insert_resource(lunco_scripting::scenario::ScenarioDriver::with_runtime(
@@ -4598,6 +5068,7 @@ mod tests {
             ready: true,
             error: None,
         });
+        world.insert_resource(WorldScriptExecutionLimits::default());
 
         let stdout =
             super::eval_with_world_as(&mut world, "print(\"cached\"); cached_answer()", None)
@@ -4617,8 +5088,9 @@ mod tests {
             .resource::<lunco_scripting::scenario::ScenarioDriver<super::RhaiScenarioRuntime>>();
         assert!(std::sync::Arc::ptr_eq(
             &prepared_engine,
-            &driver.runtime.engine,
+            &driver.runtime.one_shot_engine,
         ));
+        assert_eq!(prepared_engine.max_operations(), 100_000);
     }
 
     #[test]
@@ -4633,6 +5105,7 @@ mod tests {
                 correlation_id: None,
             }],
         });
+        world.insert_resource(WorldScriptExecutionLimits::default());
 
         super::drain_world_scripts(&mut world);
 
@@ -4640,6 +5113,59 @@ mod tests {
             world.resource::<super::PendingWorldScripts>().queue.len(),
             1,
             "requests must remain queued until the authored prelude is ready"
+        );
+    }
+
+    #[test]
+    fn world_script_queue_is_bounded_and_drains_in_fifo_batches() {
+        let limits = WorldScriptExecutionLimits::new(2, 1, 7).expect("valid limits");
+        let mut pending = PendingWorldScripts::default();
+        let enqueue = |pending: &mut PendingWorldScripts, id| {
+            pending.enqueue(
+                PendingWorldScript::Code {
+                    id,
+                    code: format!("print({id});"),
+                    authority: None,
+                    correlation_id: None,
+                },
+                limits,
+            )
+        };
+
+        enqueue(&mut pending, 1).expect("first request admitted");
+        enqueue(&mut pending, 2).expect("second request admitted");
+        let overflow = enqueue(&mut pending, 3).expect_err("full queue rejects new work");
+        assert!(overflow.contains("queue is full"));
+
+        let first = pending.take_batch(limits.max_per_update());
+        assert!(matches!(
+            first.as_slice(),
+            [PendingWorldScript::Code { id: 1, .. }]
+        ));
+        assert!(pending.has_pending());
+
+        let second = pending.take_batch(limits.max_per_update());
+        assert!(matches!(
+            second.as_slice(),
+            [PendingWorldScript::Code { id: 2, .. }]
+        ));
+        assert!(!pending.has_pending());
+    }
+
+    #[test]
+    fn world_script_execution_limits_reject_unbounded_or_inconsistent_values() {
+        assert!(WorldScriptExecutionLimits::new(0, 1, 1).is_err());
+        assert!(WorldScriptExecutionLimits::new(4, 0, 1).is_err());
+        assert!(WorldScriptExecutionLimits::new(4, 1, 0).is_err());
+        assert!(WorldScriptExecutionLimits::new(1, 2, 1).is_err());
+        assert!(WorldScriptExecutionLimits::new(257, 1, 1).is_err());
+        assert!(WorldScriptExecutionLimits::new(64, 17, 1).is_err());
+        assert!(WorldScriptExecutionLimits::new(64, 1, 1_000_001).is_err());
+        assert_eq!(WorldScriptExecutionLimits::default().max_pending(), 64);
+        assert_eq!(WorldScriptExecutionLimits::default().max_per_update(), 1);
+        assert_eq!(
+            WorldScriptExecutionLimits::default().max_operations(),
+            100_000
         );
     }
 
@@ -4690,6 +5216,47 @@ mod tests {
             runtime.commit_compile(entity, stale, &Default::default()),
             CompileOutcome::Stale
         ));
+    }
+
+    #[test]
+    fn scenario_dependency_hook_returns_typed_causal_and_readiness_inputs() {
+        let mut runtime = super::RhaiScenarioRuntime::default();
+        let mut world = bevy::prelude::World::new();
+        let entity = world.spawn_empty().id();
+        let source = r#"
+            fn simulation_dependencies(me, ctx) {
+                #{
+                    modelica_entities: [17],
+                    required_inputs: [
+                        #{ owner: "sysml.twin-analysis", identity: "school" },
+                    ],
+                }
+            }
+        "#
+        .to_owned();
+        let CompilePreparation::Worker(job) = runtime.prepare_compile(source, None) else {
+            panic!("first source revision must be compiled on the worker");
+        };
+        let prepared = std::thread::spawn(job)
+            .join()
+            .expect("worker compilation must not panic")
+            .expect("dependency plan must compile");
+        assert!(matches!(
+            runtime.commit_compile(entity, prepared, &Default::default()),
+            CompileOutcome::Ready
+        ));
+
+        let plan = runtime
+            .simulation_dependencies(entity, 1)
+            .expect("typed dependency plan is valid");
+        assert_eq!(plan.modelica_entities, vec![17]);
+        assert_eq!(
+            plan.required_inputs,
+            vec![
+                lunco_core_runtime::SimulationDependencyKey::new("sysml.twin-analysis", "school",)
+                    .unwrap()
+            ]
+        );
     }
 
     #[test]

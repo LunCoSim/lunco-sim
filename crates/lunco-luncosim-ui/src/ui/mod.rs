@@ -568,9 +568,7 @@ fn runtime_ui_action_value_to_telemetry(
     Ok(match value {
         HookValue::Unit => return Err(format!("{path} cannot contain unit values")),
         HookValue::Int(value) => TelemetryValue::I64(*value),
-        HookValue::UInt(value) => i64::try_from(*value)
-            .map(TelemetryValue::I64)
-            .map_err(|_| format!("{path} exceeds the telemetry integer range"))?,
+        HookValue::UInt(value) => TelemetryValue::U64(*value),
         HookValue::Float(value) => TelemetryValue::F64(*value),
         HookValue::Bool(value) => TelemetryValue::Bool(*value),
         HookValue::Str(value) => TelemetryValue::String(value.clone()),

@@ -23,7 +23,6 @@
 //! realizes those values as wheel, suspension, tire, and brake mechanics.
 
 use avian3d::dynamics::solver::solver_body::{SolverBody, SolverBodyInertia};
-use avian3d::dynamics::solver::xpbd::{XpbdSolverSystems, solve_xpbd_joint};
 use avian3d::prelude::*;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
@@ -86,6 +85,19 @@ fn mark_wheel_ports_causal(
     }
 }
 
+/// Requests a rebuild of the owning vehicle's derived raycast support geometry.
+/// USD projection and authored wheel resync stamp this marker when source
+/// geometry changes; the publisher consumes it after rebuilding a complete
+/// root footprint.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct RaycastSupportGeometryDirty;
+
+fn mark_raycast_support_geometry_dirty(trigger: On<Add, WheelRaycast>, mut commands: Commands) {
+    commands
+        .entity(trigger.entity)
+        .try_insert(RaycastSupportGeometryDirty);
+}
+
 impl Plugin for LunCoMobilityPlugin {
     fn build(&self, app: &mut App) {
         // Expose physics-backed spatial queries (Raycast, GroundHeight) so the
@@ -107,6 +119,7 @@ impl Plugin for LunCoMobilityPlugin {
             .register_type::<WheelBodyMount>()
             .register_type::<RaycastMassContribution>()
             .add_observer(mark_wheel_ports_causal)
+            .add_observer(mark_raycast_support_geometry_dirty)
             // A vehicle's mass must not depend on which `drivetrain` variant
             // realizes its wheels. Ungated: this is a one-shot mass-property
             // correction per chassis, not a force, so it must land even while
@@ -146,9 +159,7 @@ impl Plugin for LunCoMobilityPlugin {
                 // close the same XPBD iteration.
                 SubstepSchedule,
                 solve_differential_gear
-                    .in_set(XpbdSolverSystems::SolveConstraints)
-                    .after(solve_xpbd_joint::<FixedJoint>)
-                    .before(solve_xpbd_joint::<RevoluteJoint>)
+                    .in_set(lunco_physics::PhysicsJointSolvePass::BeforeRevolute)
                     .run_if(any_with_component::<DifferentialCoupling>)
                     // Same live-physics gate as the wheel systems: a frozen scene
                     // must not have its linkage projected while it is mounting.
@@ -389,10 +400,11 @@ pub struct WheelBodyMount {
 /// rigid body in the active reduced realization. The USD projector resolves the
 /// owner and body-local pose; the fold is then the same composed mass-property
 /// operation as the existing wheel fold.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[derive(Component, Debug, Clone, Reflect)]
 #[reflect(Component)]
 pub struct RaycastMassContribution {
     pub owner: Entity,
+    pub order_key: lunco_physics::PhysicsOrderKey,
     pub local: Transform,
     pub mass: f64,
     pub principal: DVec3,
@@ -441,49 +453,96 @@ fn actuator_root_and_local_transform(
 /// support geometry through runtime collider AABBs.
 fn publish_raycast_support_footprints(
     mut commands: Commands,
-    roots: Query<
-        Entity,
-        (
-            With<MobilityRoot>,
-            Without<lunco_physics::PhysicsSupportFootprint>,
-        ),
-    >,
+    roots: Query<Option<&lunco_physics::PhysicsSupportFootprint>, With<MobilityRoot>>,
     actuator_roots: Query<Entity, With<MobilityRoot>>,
+    dirty_wheels: Query<Entity, With<RaycastSupportGeometryDirty>>,
     wheels: Query<(Entity, &WheelRaycast, &Suspension)>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
 ) {
-    for root in roots.iter() {
-        let contacts = wheels
-            .iter()
-            .filter_map(|(wheel_entity, wheel, suspension)| {
-                let (owner, local) = actuator_root_and_local_transform(
-                    wheel_entity,
-                    &actuator_roots,
-                    &parents,
-                    &transforms,
-                )?;
-                if owner != root || !wheel.wheel_radius.is_finite() || wheel.wheel_radius <= 0.0 {
-                    return None;
-                }
-                Some(lunco_physics::PhysicsSupportContact {
-                    local_offset: local.translation.as_dvec3(),
-                    radius: wheel.wheel_radius,
-                    probe_origin: local.translation.as_dvec3()
-                        + local.rotation.as_dquat()
-                            * DVec3::Y
-                            * strut_offset(suspension.rest_length, wheel.wheel_radius),
-                    probe_direction: local.rotation.as_dquat() * DVec3::NEG_Y,
-                    probe_length: suspension.rest_length,
-                })
-            })
-            .collect::<Vec<_>>();
-        if !contacts.is_empty() {
-            commands.entity(root).try_insert((
-                lunco_physics::PhysicsSupportFootprint(contacts),
-                lunco_physics::PhysicsSupportState::default(),
-            ));
+    let mut affected_roots = HashSet::new();
+    let mut resolved_dirty_wheels = Vec::new();
+    for wheel in &dirty_wheels {
+        if let Some((root, _)) =
+            actuator_root_and_local_transform(wheel, &actuator_roots, &parents, &transforms)
+        {
+            affected_roots.insert(root);
+            resolved_dirty_wheels.push(wheel);
         }
+    }
+    if affected_roots.is_empty() {
+        return;
+    }
+
+    let mut contacts_by_root = std::collections::HashMap::new();
+    for (wheel_entity, wheel, suspension) in &wheels {
+        let Some((root, local)) =
+            actuator_root_and_local_transform(wheel_entity, &actuator_roots, &parents, &transforms)
+        else {
+            continue;
+        };
+        if !affected_roots.contains(&root)
+            || !wheel.wheel_radius.is_finite()
+            || wheel.wheel_radius <= 0.0
+        {
+            continue;
+        }
+        contacts_by_root.entry(root).or_insert_with(Vec::new).push(
+            lunco_physics::PhysicsSupportContact {
+                local_offset: local.translation.as_dvec3(),
+                radius: wheel.wheel_radius,
+                probe_origin: local.translation.as_dvec3()
+                    + local.rotation.as_dquat()
+                        * DVec3::Y
+                        * strut_offset(suspension.rest_length, wheel.wheel_radius),
+                probe_direction: local.rotation.as_dquat() * DVec3::NEG_Y,
+                probe_length: suspension.rest_length,
+            },
+        );
+    }
+
+    for root in affected_roots {
+        let Ok(existing) = roots.get(root) else {
+            continue;
+        };
+        let mut contacts = contacts_by_root.remove(&root).unwrap_or_default();
+        contacts.sort_by(|a, b| {
+            a.local_offset
+                .x
+                .total_cmp(&b.local_offset.x)
+                .then_with(|| a.local_offset.y.total_cmp(&b.local_offset.y))
+                .then_with(|| a.local_offset.z.total_cmp(&b.local_offset.z))
+                .then_with(|| a.radius.total_cmp(&b.radius))
+                .then_with(|| a.probe_origin.x.total_cmp(&b.probe_origin.x))
+                .then_with(|| a.probe_origin.y.total_cmp(&b.probe_origin.y))
+                .then_with(|| a.probe_origin.z.total_cmp(&b.probe_origin.z))
+                .then_with(|| a.probe_direction.x.total_cmp(&b.probe_direction.x))
+                .then_with(|| a.probe_direction.y.total_cmp(&b.probe_direction.y))
+                .then_with(|| a.probe_direction.z.total_cmp(&b.probe_direction.z))
+                .then_with(|| a.probe_length.total_cmp(&b.probe_length))
+        });
+
+        if contacts.is_empty() {
+            if existing.is_some() {
+                commands
+                    .entity(root)
+                    .remove::<lunco_physics::PhysicsSupportFootprint>()
+                    .remove::<lunco_physics::PhysicsSupportState>();
+            }
+        } else {
+            let footprint = lunco_physics::PhysicsSupportFootprint(contacts);
+            if existing.is_none_or(|current| current != &footprint) {
+                commands
+                    .entity(root)
+                    .try_insert((footprint, lunco_physics::PhysicsSupportState::default()));
+            }
+        }
+    }
+
+    for wheel in resolved_dirty_wheels {
+        commands
+            .entity(wheel)
+            .remove::<RaycastSupportGeometryDirty>();
     }
 }
 
@@ -700,8 +759,13 @@ fn publish_raycast_wheel_contact_diagnostics(
 /// the solver integrates against.
 pub fn fold_raycast_wheel_mass(
     mut commands: Commands,
-    q_wheels: Query<(&WheelRaycast, &WheelBodyMount)>,
-    q_contributions: Query<&RaycastMassContribution>,
+    q_wheels: Query<(
+        Entity,
+        &WheelRaycast,
+        &WheelBodyMount,
+        Option<&lunco_physics::PhysicsOrderKey>,
+    )>,
+    q_contributions: Query<(Entity, &RaycastMassContribution)>,
     mut q_body: Query<
         (
             &mut Mass,
@@ -712,25 +776,55 @@ pub fn fold_raycast_wheel_mass(
         ),
         Without<RaycastWheelMassFolded>,
     >,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut physics_time: Option<ResMut<Time<Physics>>>,
 ) {
+    let order = match lunco_physics::ordered_physics_entities(
+        q_wheels
+            .iter()
+            .map(|(entity, _, _, key)| (entity, key))
+            .chain(
+                q_contributions
+                    .iter()
+                    .map(|(entity, contribution)| (entity, Some(&contribution.order_key))),
+            ),
+        "raycast wheel mass fold",
+    ) {
+        Ok(order) => order,
+        Err(invalid) => {
+            lunco_physics::report_invalid_physics_order(
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                physics_time.as_deref_mut(),
+                "physics-wheel-order-invalid",
+                &invalid,
+            );
+            return;
+        }
+    };
     let mut additions_by_carrier =
-        std::collections::HashMap::<Entity, Vec<(f64, DVec3, DVec3)>>::new();
-    for (wheel, mount) in q_wheels.iter() {
-        additions_by_carrier.entry(mount.body).or_default().push((
-            wheel.mass,
-            mount.local.translation.as_dvec3(),
-            DVec3::ZERO,
-        ));
-    }
-    for contribution in &q_contributions {
-        additions_by_carrier
-            .entry(contribution.owner)
-            .or_default()
-            .push((
-                contribution.mass,
-                contribution.local.translation.as_dvec3(),
-                contribution.principal,
+        std::collections::HashMap::<Entity, Vec<(String, f64, DVec3, DVec3)>>::new();
+    for entity in order {
+        if let Ok((_, wheel, mount, key)) = q_wheels.get(entity) {
+            let key = key.expect("raycast wheel order key was validated");
+            additions_by_carrier.entry(mount.body).or_default().push((
+                key.0.clone(),
+                wheel.mass,
+                mount.local.translation.as_dvec3(),
+                DVec3::ZERO,
             ));
+        } else if let Ok((_, contribution)) = q_contributions.get(entity) {
+            additions_by_carrier
+                .entry(contribution.owner)
+                .or_default()
+                .push((
+                    contribution.order_key.0.clone(),
+                    contribution.mass,
+                    contribution.local.translation.as_dvec3(),
+                    contribution.principal,
+                ));
+        }
     }
 
     for (carrier, additions) in additions_by_carrier {
@@ -738,7 +832,7 @@ pub fn fold_raycast_wheel_mass(
         // land a frame after the component itself. A wheel still reading zero means
         // the vehicle is not ready to fold and must be left for a later tick — never
         // folded at half its real mass.
-        let pending = additions.iter().any(|(mass, _, _)| *mass <= 0.0);
+        let pending = additions.iter().any(|(_, mass, _, _)| *mass <= 0.0);
         if pending || additions.is_empty() {
             continue;
         }
@@ -758,7 +852,7 @@ pub fn fold_raycast_wheel_mass(
             .unwrap_or(DVec3::ZERO);
         let carrier_mass = mass.0 as f64;
 
-        let added: f64 = additions.iter().map(|(m, _, _)| *m).sum();
+        let added: f64 = additions.iter().map(|(_, mass, _, _)| *mass).sum();
         let total = carrier_mass + added;
         mass.0 += added as f32;
 
@@ -766,7 +860,7 @@ pub fn fold_raycast_wheel_mass(
         // point mass at its carrier-local mount.
         let com_new = if total > 0.0 {
             let mut moment = com_carrier * carrier_mass;
-            for (m, d, _) in &additions {
+            for (_, m, d, _) in &additions {
                 moment += *d * *m;
             }
             moment / total
@@ -787,7 +881,7 @@ pub fn fold_raycast_wheel_mass(
                 )
             };
             let mut principal = perp(carrier_mass, com_carrier - com_new);
-            for (m, d, authored_principal) in &additions {
+            for (_, m, d, authored_principal) in &additions {
                 principal += perp(*m, *d - com_new);
                 principal += *authored_principal;
             }
@@ -1414,6 +1508,8 @@ fn dynamically_fixed_bodies(
 /// unloaded wheel draws exactly at its authored mount.
 fn apply_wheel_suspension(
     mut q_wheels: Query<(
+        Entity,
+        Option<&lunco_physics::PhysicsOrderKey>,
         &mut WheelRaycast,
         &Suspension,
         &RayHits,
@@ -1428,10 +1524,32 @@ fn apply_wheel_suspension(
     fixed_joints: Query<&FixedJoint>,
     q_bodies: Query<&RigidBody>,
     mut q_visual: Query<&mut Transform, (Without<WheelRaycast>, Without<MobilityRoot>)>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut physics_time: Option<ResMut<Time<Physics>>>,
 ) {
+    let order = match lunco_physics::ordered_physics_entities(
+        q_wheels.iter_mut().map(|(entity, key, ..)| (entity, key)),
+        "raycast wheel suspension",
+    ) {
+        Ok(order) => order,
+        Err(invalid) => {
+            lunco_physics::report_invalid_physics_order(
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                physics_time.as_deref_mut(),
+                "physics-wheel-order-invalid",
+                &invalid,
+            );
+            return;
+        }
+    };
     let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
 
-    for (mut wheel, susp, hits, wheel_tf, mount) in q_wheels.iter_mut() {
+    for entity in order {
+        let Ok((_, _, mut wheel, susp, hits, wheel_tf, mount)) = q_wheels.get_mut(entity) else {
+            continue;
+        };
         let parent_entity = mount.body;
         if let Ok((mut forces, body)) = q_chassis.get_mut(parent_entity) {
             // A Kinematic chassis (a client's replicated proxy rover, or a body
@@ -1732,6 +1850,8 @@ fn cast_wheel_ray_hits_parallel(
 /// actually grip.
 fn apply_wheel_drive(
     q_wheels: Query<(
+        Entity,
+        Option<&lunco_physics::PhysicsOrderKey>,
         &WheelRaycast,
         &Suspension,
         &Transform,
@@ -1755,11 +1875,33 @@ fn apply_wheel_drive(
     fixed_joints: Query<&FixedJoint>,
     q_bodies: Query<&RigidBody>,
     time: Res<Time<Fixed>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut physics_time: Option<ResMut<Time<Physics>>>,
 ) {
+    let order = match lunco_physics::ordered_physics_entities(
+        q_wheels.iter().map(|(entity, key, ..)| (entity, key)),
+        "raycast wheel tire force",
+    ) {
+        Ok(order) => order,
+        Err(invalid) => {
+            lunco_physics::report_invalid_physics_order(
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                physics_time.as_deref_mut(),
+                "physics-wheel-order-invalid",
+                &invalid,
+            );
+            return;
+        }
+    };
     let fixed_dynamic_bodies = dynamically_fixed_bodies(&fixed_joints, &q_bodies);
     let dt = time.delta_secs_f64();
 
-    for (wheel, susp, wheel_tf, hits, mount) in q_wheels.iter() {
+    for entity in order {
+        let Ok((_, _, wheel, susp, wheel_tf, hits, mount)) = q_wheels.get(entity) else {
+            continue;
+        };
         let parent_entity = mount.body;
         if let Ok((mut forces, body, inputs, gravity)) = q_chassis.get_mut(parent_entity) {
             if fixed_dynamic_bodies.contains(&parent_entity) {
@@ -2421,6 +2563,7 @@ mod raycast_wheel_mass_tests {
                         wheel_radius: 0.4,
                         ..default()
                     },
+                    lunco_physics::PhysicsOrderKey(format!("test-wheel/{x}/{z}")),
                     local,
                     WheelBodyMount {
                         body: chassis,
@@ -2545,6 +2688,7 @@ mod raycast_wheel_mass_tests {
                 mass: 25.0,
                 ..default()
             },
+            lunco_physics::PhysicsOrderKey("test-wheel/one".to_owned()),
             WheelBodyMount {
                 body: chassis,
                 local: Transform::IDENTITY,
@@ -2582,6 +2726,7 @@ mod raycast_wheel_mass_tests {
                 mass: 25.0,
                 ..default()
             },
+            lunco_physics::PhysicsOrderKey("test-wheel/articulated".to_owned()),
             WheelBodyMount {
                 body: rocker,
                 local,
@@ -3208,6 +3353,7 @@ mod suspension_visuals_tests {
                     visual_entity: Some(visual),
                     ..default()
                 },
+                lunco_physics::PhysicsOrderKey("test-wheel/suspension".to_owned()),
                 Suspension {
                     rest_length: 0.7,
                     spring_k: 1000.0,

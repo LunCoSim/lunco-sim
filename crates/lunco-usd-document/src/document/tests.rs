@@ -16,6 +16,30 @@ fn prim_exists(doc: &UsdDocument, path: &str) -> bool {
     doc.data().spec(&SdfPath::new(path).unwrap()).is_some()
 }
 
+#[test]
+fn prepared_usd_source_is_send_safe_and_preserves_source_identity() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<PreparedUsdSource>();
+
+    let prepared = PreparedUsdSource::parse(TINY_USDA.to_owned());
+    let doc = UsdDocument::with_prepared_origin(
+        DocumentId::new(998),
+        &prepared,
+        DocumentOrigin::writable_file("/tmp/prepared.usda"),
+    );
+    assert_eq!(doc.parse_error(), None);
+    assert_eq!(doc.source(), TINY_USDA);
+
+    let mut resident = UsdDocument::with_origin(
+        DocumentId::new(997),
+        "#usda 1.0\n",
+        DocumentOrigin::writable_file("/tmp/resident.usda"),
+    );
+    assert!(resident.reload_prepared_base(&prepared));
+    assert_eq!(resident.source(), TINY_USDA);
+    assert_eq!(resident.generation(), 1);
+}
+
 /// Whether a doc's serialized source **reparses cleanly** — the check that
 /// catches malformed metadata a substring assertion misses (e.g. a payload
 /// asset path wrapped `@@…@@` still `contains("hull")` but won't parse). A
@@ -974,44 +998,42 @@ fn rejected_op_is_not_logged() {
     );
 }
 
-/// Author-once's load-bearing invariant: **every generation bump records
-/// exactly one op-log entry**, so `ops_since(0).len() == generation`. This
-/// must hold across the *non-op* path too — [`restore_runtime`] bumps the
-/// generation without a typed op, and relies on the synthetic marker to stay
-/// in lockstep. If a future `commit` caller breaks this, `ops_since` under-
-/// counts and the projector falls back to a full rebuild (fail-safe) rather
-/// than under-applying — this test pins the lockstep so that stays a
-/// deliberate choice, not an accident.
+/// An identical source reload is a no-op. A changed source or runtime layer
+/// advances the projection generation and requires a snapshot instead of
+/// exposing a fabricated authored operation in the incremental stream.
 #[test]
-fn op_log_stays_in_lockstep_with_generation() {
+fn reloads_preserve_authored_operation_and_projection_boundaries() {
     let mut doc = UsdDocument::new(DocumentId::new(32), TINY_USDA);
-    doc.apply(UsdOp::AddPrim {
-        edit_target: LayerId::root(),
-        parent_path: "/World".into(),
-        name: "a".into(),
-        type_name: Some("Xform".into()),
-        reference: None,
-        reference_prim_path: None,
-    })
-    .unwrap();
-    doc.apply(UsdOp::SetTranslate {
-        edit_target: LayerId::root(),
-        path: "/World/a".into(),
-        value: [1.0, 2.0, 3.0],
-    })
-    .unwrap();
-    // A non-op runtime restore also bumps the generation — the synthetic
-    // marker must keep the op log one-per-generation.
-    doc.restore_runtime(usda_to_data(TINY_USDA).unwrap());
+    let initial_generation = doc.generation();
 
-    let ops = doc
-        .ops_since(0)
-        .expect("op ring holds an entry for every generation");
-    assert_eq!(
-        ops.len() as u64,
-        doc.generation(),
-        "one op-log entry per generation bump (incl. the restore_runtime marker)"
+    assert!(doc.reload_base(TINY_USDA));
+    assert_eq!(doc.generation(), initial_generation);
+    assert_eq!(doc.ops_since(initial_generation).unwrap().len(), 0);
+
+    let formatted_source = format!("# refreshed source\n{TINY_USDA}");
+    assert!(doc.reload_base(&formatted_source));
+    assert_eq!(doc.generation(), initial_generation + 1);
+    assert_eq!(doc.source(), formatted_source);
+    assert!(doc.ops_since(initial_generation).is_none());
+
+    let changed_source = format!("{TINY_USDA}\ndef Xform \"Extra\" {{}}\n");
+    assert!(doc.reload_base(&changed_source));
+    assert_eq!(doc.generation(), initial_generation + 2);
+    assert!(doc.ops_since(initial_generation + 1).is_none());
+    assert!(
+        doc.changes_since(initial_generation + 1)
+            .any(|(_, change)| matches!(change, UsdChange::FullReload))
     );
+
+    let full_reload_generation = doc.generation();
+    doc.restore_runtime(usda_to_data(TINY_USDA).unwrap());
+    assert_eq!(doc.generation(), full_reload_generation + 1);
+    assert!(doc.ops_since(full_reload_generation).is_none());
+
+    let restored_generation = doc.generation();
+    doc.restore_runtime(usda_to_data(TINY_USDA).unwrap());
+    assert_eq!(doc.generation(), restored_generation);
+    assert_eq!(doc.ops_since(restored_generation).unwrap().len(), 0);
 }
 
 /// Overwriting an **existing** attribute inverts to a *typed* `SetAttribute`

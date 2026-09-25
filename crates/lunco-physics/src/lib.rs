@@ -53,6 +53,8 @@ pub mod avian_backend;
 pub mod escape;
 pub mod force_ports;
 pub mod joint;
+pub mod joint_solver;
+pub mod order;
 pub mod pose;
 pub mod raycast;
 pub mod readiness;
@@ -65,16 +67,21 @@ pub use avian_backend::{
     avian_backend_vector_is_valid,
 };
 pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
+pub use joint_solver::{DeterministicJointSolverPlugin, PhysicsJointSolvePass};
+pub use order::{
+    PhysicsOrderError, PhysicsOrderKey, ordered_physics_entities, report_invalid_physics_order,
+};
 pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery, SimulationPoseReadState};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
 pub use spatial::{GridSpatialQuery, GridSpatialQueryState};
 pub use support::{
-    PHYSICS_INITIALIZATION_HOOK_PREFIX, PhysicsInitializationExternalValidator,
+    PHYSICS_INITIALIZATION_POLICY_HOOK, PhysicsInitializationExternalValidator,
     PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
     PhysicsInitializationSubject, PhysicsJointDetachRequested, PhysicsJointDetachSet,
     PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact, PhysicsSupportFootprint,
     PhysicsSupportSet, PhysicsSupportState, PhysicsWheelContact, PhysicsWheelRaycastFilter,
     STRICT_AUTHORED_INITIALIZATION_POLICY, evaluate_initialization_policy,
+    physics_initialization_context, physics_initialization_facts,
 };
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.
@@ -99,28 +106,21 @@ pub const DEFAULT_SUBSTEP_COUNT: u32 = 8;
 pub const MIN_DIAGNOSTIC_SUBSTEP_COUNT: u32 = 1;
 pub const MAX_DIAGNOSTIC_SUBSTEP_COUNT: u32 = 64;
 
-/// Runtime admission policy for physics reproducibility.
+/// Effective Bevy compute-pool width observed by the physics composition.
 ///
-/// Avian's parallel island/contact work is order-sensitive. A deterministic
-/// run therefore needs a single-threaded compute pool, not merely a fixed
-/// timestep. The composition root snapshots the initialized Bevy pool width;
-/// the physics crate owns the meaning and exposes it to consumers.
+/// This reports the execution profile; it does not claim that the physics
+/// result or whole simulation is deterministic.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PhysicsDeterminism {
+pub struct PhysicsComputeProfile {
     /// Effective compute-pool width observed at application composition.
-    /// `None` means the pool was unavailable and the result is not reproducible.
+    /// `None` means the pool was unavailable when the profile was captured.
     pub compute_threads: Option<usize>,
-    /// True only for the single-threaded admission profile.
-    pub deterministic: bool,
 }
 
-impl PhysicsDeterminism {
-    /// Build the contract from the effective pool width observed by the host.
+impl PhysicsComputeProfile {
+    /// Capture the effective compute-pool width observed by the host.
     pub const fn from_compute_threads(compute_threads: Option<usize>) -> Self {
-        Self {
-            compute_threads,
-            deterministic: matches!(compute_threads, Some(1)),
-        }
+        Self { compute_threads }
     }
 }
 
@@ -725,6 +725,15 @@ impl PhysicsHolds {
     /// [`readiness::apply_world_readiness_hold`]; the *scope* of a wait (world vs
     /// one object) is an authored policy decision, not a fact of the wait.
     pub const READINESS: &'static str = "readiness";
+    /// A composed physical body or its constraints have not crossed the
+    /// deterministic admission boundary yet. The USD simulation projector owns
+    /// this reason; integration resumes only after the complete pending
+    /// admission set is ready.
+    pub const BODY_ADMISSION: &'static str = "body-admission";
+    /// The scene-test runner is assembling its initial physics/Modelica state.
+    /// It releases this after all startup participants reach their first
+    /// successful exchange, before the authored scenario is opened.
+    pub const SCENE_TEST_STARTUP: &'static str = "scene-test-startup";
     /// A scripted cutscene / offline recording is choosing when the world moves.
     ///
     /// Held, physics is frozen but `Time<Virtual>` keeps running, so `FixedUpdate` —
@@ -992,13 +1001,17 @@ fn correct_prismatic_limit_position(
         ),
         Without<avian3d::prelude::RigidBodyDisabled>,
     >,
+    order: Res<joint_solver::JointSolverOrder>,
     time: Res<Time>,
 ) {
     let delta_secs = time.delta_secs_f64();
     let mut dummy_body1 = avian3d::dynamics::solver::solver_body::SolverBody::DUMMY;
     let mut dummy_body2 = avian3d::dynamics::solver::solver_body::SolverBody::DUMMY;
 
-    for joint in &joints {
+    for entity in order.prismatic.iter().copied() {
+        let Ok(joint) = joints.get(entity) else {
+            continue;
+        };
         let (mut body1, mut inertia1) = (
             &mut dummy_body1,
             &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY,
@@ -1130,13 +1143,17 @@ fn solve_contact_prismatic_joint(
     disabled_bodies: Query<(), With<RigidBodyDisabled>>,
     sensors: Query<(), With<Sensor>>,
     contact_graph: Res<ContactGraph>,
+    order: Res<joint_solver::JointSolverOrder>,
     time: Res<Time>,
 ) {
     let delta_secs = time.delta_secs_f64();
     let mut dummy_body1 = SolverBody::DUMMY;
     let mut dummy_body2 = SolverBody::DUMMY;
 
-    for (mut joint, mut solver_data) in &mut joints {
+    for entity in order.prismatic.iter().copied() {
+        let Ok((mut joint, mut solver_data)) = joints.get_mut(entity) else {
+            continue;
+        };
         let [entity1, entity2] = joint.entities();
         let has_contact = [entity1, entity2].into_iter().any(|body| {
             let Ok(colliders) = collider_lists.get(body) else {
@@ -1214,11 +1231,15 @@ fn project_prismatic_angular_velocity(
             Without<avian3d::prelude::JointDisabled>,
         ),
     >,
+    order: Res<joint_solver::JointSolverOrder>,
 ) {
     let mut dummy_body1 = avian3d::dynamics::solver::solver_body::SolverBody::DUMMY;
     let mut dummy_body2 = avian3d::dynamics::solver::solver_body::SolverBody::DUMMY;
 
-    for joint in &joints {
+    for entity in order.prismatic.iter().copied() {
+        let Ok(joint) = joints.get(entity) else {
+            continue;
+        };
         let (mut body1, mut inertia1) = (
             &mut dummy_body1,
             &avian3d::dynamics::solver::solver_body::SolverBodyInertia::DUMMY,
@@ -1270,6 +1291,7 @@ fn project_prismatic_angular_velocity(
 /// support/penetration check instead.
 fn validate_surface_independent_initialization(
     external_validator: Res<PhysicsInitializationExternalValidator>,
+    coordinator: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     q_pending: Query<
         (
             Entity,
@@ -1292,38 +1314,39 @@ fn validate_surface_independent_initialization(
     }
     let mut findings = Vec::new();
     for (entity, position, rotation, policy, subject) in &q_pending {
-        let subject = subject
-            .map(|subject| subject.0.as_str())
-            .unwrap_or("<unidentified physics body>");
+        let subject = subject.map(|subject| subject.0.as_str());
+        let subject_label = subject.unwrap_or("<unidentified physics body>");
         let policy = policy.cloned().unwrap_or_default();
         if !avian_backend::avian_backend_pose_is_valid(position.0, rotation.0) {
             findings.push(lunco_core::RuntimeDiagnostic {
                 code: "physics-initialization-backend-invalid".to_string(),
                 severity: lunco_core::DiagnosticSeverity::Error,
                 producer: "physics-initialization".to_string(),
-                subject: subject.to_string(),
+                subject: subject_label.to_string(),
                 message: "authored initial position or rotation is not finite and f32-representable; dynamic admission remains held".to_string(),
             });
             continue;
         }
-        let facts = lunco_hooks::HookValue::map([
-            ("subject", lunco_hooks::HookValue::str(subject)),
-            ("policy", lunco_hooks::HookValue::str(policy.0.clone())),
-            (
-                "entity",
-                lunco_hooks::HookValue::Int(entity.to_bits() as i64),
-            ),
-            (
-                "position",
-                lunco_hooks::HookValue::Array(
-                    [position.0.x, position.0.y, position.0.z]
-                        .into_iter()
-                        .map(lunco_hooks::HookValue::Float)
-                        .collect(),
-                ),
-            ),
-        ]);
-        match evaluate_initialization_policy(&policy, facts) {
+        let result = if policy.is_strict_authored() {
+            evaluate_initialization_policy(
+                &policy,
+                lunco_hooks::HookValue::Unit,
+                physics_initialization_context(coordinator.as_deref()),
+            )
+        } else if let Some(subject) = subject {
+            let facts = physics_initialization_facts(&policy, subject, position.0, 1);
+            evaluate_initialization_policy(
+                &policy,
+                facts,
+                physics_initialization_context(coordinator.as_deref()),
+            )
+        } else {
+            Err(
+                "custom physics initialization policy requires a stable USD prim subject path"
+                    .to_string(),
+            )
+        };
+        match result {
             Ok(()) => {
                 commands
                     .entity(entity)
@@ -1333,7 +1356,7 @@ fn validate_surface_independent_initialization(
                 code: "physics-initialization-policy".to_string(),
                 severity: lunco_core::DiagnosticSeverity::Error,
                 producer: "physics-initialization".to_string(),
-                subject: subject.to_string(),
+                subject: subject_label.to_string(),
                 message,
             }),
         }
@@ -1349,6 +1372,7 @@ impl Plugin for PhysicsGatePlugin {
     fn build(&self, app: &mut App) {
         pose::register_spatial_query_providers(app);
         app.register_type::<PhysicsInitializationPolicy>()
+            .register_type::<PhysicsOrderKey>()
             .register_type::<PhysicsInitializationPending>()
             .register_type::<PhysicsInitializationInvalid>()
             .register_type::<PhysicsInitializationSubject>()
@@ -1374,8 +1398,9 @@ impl Plugin for PhysicsGatePlugin {
             // target; no app-level duplicate or target-specific selection is
             // permitted.
             .insert_resource(avian3d::prelude::SubstepCount(DEFAULT_SUBSTEP_COUNT))
-            .init_resource::<PhysicsDeterminism>()
+            .init_resource::<PhysicsComputeProfile>()
             .init_resource::<PhysicsHolds>()
+            .init_resource::<joint_solver::JointSolverOrder>()
             .init_resource::<PhysicsInitializationExternalValidator>()
             .init_resource::<PhysicsStepRequest>()
             .init_resource::<lunco_core::RuntimeDiagnostics>()
@@ -1436,13 +1461,6 @@ mod tests {
     fn contact_impulse_uses_the_current_avian_accumulator_contract() {
         assert!((contact_force_from_impulse(32.4, 1.0) - 16.2).abs() < 1.0e-12);
         assert!((contact_force_from_impulse(0.324, 0.01) - 16.2).abs() < 1.0e-12);
-    }
-
-    #[test]
-    fn determinism_contract_is_true_only_for_a_pinned_single_thread_pool() {
-        assert!(PhysicsDeterminism::from_compute_threads(Some(1)).deterministic);
-        assert!(!PhysicsDeterminism::from_compute_threads(Some(2)).deterministic);
-        assert!(!PhysicsDeterminism::from_compute_threads(None).deterministic);
     }
 
     #[test]

@@ -11,7 +11,7 @@ fn _error(stage, message) {
 }
 
 fn _doc_required(doc, operation) {
-    if doc == () || doc == 0 {
+    if doc == () || doc.to_string() == "0" {
         return _error(operation, "an explicit Rhai document id is required");
     }
     #{ ok: true }

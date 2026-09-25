@@ -62,10 +62,11 @@ use lunco_usd_bevy_mesh::{
 };
 use lunco_usd_bevy_scene::{
     GlbPlaceholder, PlaceholderAssetUri, UsdAnimated, UsdPointInstance, UsdPointInstancer,
-    UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdScenePlugin,
-    UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot,
-    UsdSceneSyncSet, UsdVisualMeshTarget, UsdVisualProjectionSet, is_preview_only,
-    read_primitive_axis, read_shape_dims, scene_root_ancestor, usd_axis_to_quat,
+    UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneChangeBatch,
+    UsdSceneGeometryPending, UsdScenePlugin, UsdSceneProjected, UsdSceneProjectionFailed,
+    UsdSceneProjectionQueued, UsdSceneRoot, UsdSceneSyncSet, UsdVisualMeshTarget,
+    UsdVisualProjectionSet, is_preview_only, read_primitive_axis, read_shape_dims,
+    scene_root_ancestor, usd_axis_to_quat,
 };
 use lunco_usd_bevy_stage::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
@@ -281,6 +282,14 @@ impl Plugin for UsdVisualPlugin {
                     resolve_usd_instance_identities,
                 ),
             );
+        app.add_systems(
+            Update,
+            refresh_standard_surface_material_intents
+                .after(process_queued_usd_visuals)
+                .before(lunco_render::LookRebind)
+                .in_set(UsdVisualProjectionSet)
+                .run_if(bevy::ecs::schedule::common_conditions::on_message::<UsdSceneChangeBatch>),
+        );
     }
 }
 
@@ -2729,6 +2738,104 @@ fn apply_standard_material_intent(
     let look = read_standard_material(reader, sdf_path, asset_server, stage_id)?;
     entity_cmd.try_insert(look);
     Ok(())
+}
+
+/// Refresh standard PBR appearance on geometry bound to an edited
+/// `UsdPreviewSurface`. The authored stage and geometry entities stay live;
+/// the render owner recomputes only the appearance intent that the renderer
+/// binds to `StandardMaterial`.
+fn refresh_standard_surface_material_intents(
+    mut changes: MessageReader<UsdSceneChangeBatch>,
+    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
+    asset_server: Res<AssetServer>,
+    prims: Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&UsdInstanceProjection>,
+        Option<&UsdVisualMeshTarget>,
+    )>,
+    looks: Query<&PbrLook>,
+    mut commands: Commands,
+) {
+    let mut edited_materials = std::collections::HashMap::new();
+    for change in changes.read() {
+        let Some(stage_asset) = stages.get(change.stage_id) else {
+            continue;
+        };
+        let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
+        let materials = edited_materials
+            .entry(change.stage_id)
+            .or_insert_with(std::collections::HashSet::new);
+        for prim_path in &change.info_prim_paths {
+            let Ok(shader_path) = SdfPath::new(prim_path) else {
+                continue;
+            };
+            if UsdRead::type_name(&reader, &shader_path).as_deref() != Some("Shader")
+                || UsdRead::text(&reader, &shader_path, "info:id").as_deref()
+                    != Some("UsdPreviewSurface")
+            {
+                continue;
+            }
+            let mut ancestor = shader_path.parent();
+            while let Some(path) = ancestor {
+                if UsdRead::type_name(&reader, &path).as_deref() == Some("Material") {
+                    materials.insert(path.to_string());
+                    break;
+                }
+                ancestor = path.parent();
+            }
+        }
+    }
+
+    for (stage_id, materials) in edited_materials {
+        if materials.is_empty() {
+            continue;
+        }
+        let Some(stage_asset) = stages.get(stage_id) else {
+            continue;
+        };
+        for (entity, prim_path, instance, visual_target) in &prims {
+            if prim_path.stage_handle.id() != stage_id {
+                continue;
+            }
+            let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
+                continue;
+            };
+            let (reader, _) = canonical.reader_for_entity(stage_id, stage_asset, instance);
+            let Some(material_path) = UsdRead::bound_material(
+                &reader,
+                &sdf_path,
+                lunco_usd_bevy_stage::MaterialPurpose::Render,
+            ) else {
+                continue;
+            };
+            if !materials.contains(&material_path) {
+                continue;
+            }
+            let target = visual_target
+                .map(|target| target.0)
+                .filter(|target| looks.get(*target).is_ok())
+                .or_else(|| looks.get(entity).ok().map(|_| entity));
+            let Some(target) = target else {
+                continue;
+            };
+            match read_standard_material(&reader, &sdf_path, &asset_server, stage_id) {
+                Ok(look) if looks.get(target).is_ok_and(|current| *current == look) => {}
+                Ok(look) => {
+                    commands.entity(target).insert(look);
+                }
+                Err(error) => {
+                    error!(
+                        "[usd-bevy] {} has malformed authored material attribute `{}`; removing stale PbrLook",
+                        sdf_path.as_str(),
+                        error.attribute
+                    );
+                    commands.entity(target).remove::<PbrLook>();
+                }
+            }
+        }
+    }
 }
 
 const MAX_USD_ANCESTRY_DEPTH: usize = 64;

@@ -76,6 +76,8 @@ lunco_hooks::declare_hook! {
 /// A validated decision returned by the authored scene-time policy.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneTimeSelection {
+    /// Scene transaction that owns this deferred selection.
+    pub transition_id: lunco_core::SceneTransitionId,
     /// Selected source: `authored` or `computer_time`.
     pub source: &'static str,
     /// Selected absolute epoch in Julian Date (TDB).
@@ -92,6 +94,8 @@ pub struct SceneTimeSelection {
 /// resource retain the standalone time-spine behavior.
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
 pub struct SceneTimeState {
+    /// Transition whose scene-time decision is being admitted or has committed.
+    pub transition_id: Option<lunco_core::SceneTransitionId>,
     /// Current lifecycle phase.
     pub phase: SceneTimePhase,
     /// The selected scene epoch retained as the reset point.
@@ -123,7 +127,8 @@ pub struct SceneTimeSelectionRecord {
 
 impl SceneTimeState {
     /// Close the gate while the next scene is loading.
-    pub fn begin_scene_load(&mut self) {
+    pub fn begin_scene_load(&mut self, transition_id: lunco_core::SceneTransitionId) {
+        self.transition_id = Some(transition_id);
         self.phase = SceneTimePhase::Loading;
         self.selection = None;
     }
@@ -144,6 +149,7 @@ impl SceneTimeState {
 
     /// Leave the gate closed when there is no active scene.
     pub fn clear_scene(&mut self) {
+        self.transition_id = None;
         self.phase = SceneTimePhase::NoScene;
         self.selection = None;
     }
@@ -170,15 +176,39 @@ pub struct ApplySceneTimeSelection {
 /// Invoke the one scene-time policy and validate that it selected one of the
 /// candidates in `facts`. The policy decides; this function enforces the typed
 /// result contract before a clock owner applies it.
-pub fn select_scene_time(facts: &H) -> Result<SceneTimeSelection, String> {
+pub fn select_scene_time(
+    facts: &H,
+    transition_id: lunco_core::SceneTransitionId,
+    context: lunco_core::RuntimeExecutionContext,
+) -> Result<SceneTimeSelection, String> {
+    let expected_route =
+        lunco_core::RuntimeRoute::twin(lunco_core::RuntimeCycle::Lifecycle, transition_id.get());
+    if context.route != Some(expected_route)
+        || context.phase != lunco_core::RuntimePhase::Preparation
+        || context.clock != lunco_core::RuntimeClock::None
+        || context.time_seconds.is_some()
+        || context.delta_seconds.is_some()
+        || context.sequence.is_some()
+        || context.producer.is_some()
+    {
+        return Err(
+            "scene time selection requires its transition's lifecycle preparation context"
+                .to_owned(),
+        );
+    }
+
     let current = facts
         .get("computer_time_tdb_jd")
         .and_then(H::as_f64)
         .filter(|value| value.is_finite() && *value != 0.0)
         .ok_or_else(|| "scene time facts have no valid computer-time epoch".to_owned())?;
-    let decision = lunco_hooks::invoke(SCENE_TIME_SELECTION_HOOK, std::slice::from_ref(facts))
-        .ok_or_else(|| format!("required policy `{SCENE_TIME_SELECTION_HOOK}` is unavailable"))?
-        .map_err(|error| format!("scene time policy failed: {error}"))?;
+    let decision = lunco_hooks::invoke_with_context(
+        SCENE_TIME_SELECTION_HOOK,
+        std::slice::from_ref(facts),
+        context,
+    )
+    .ok_or_else(|| format!("required policy `{SCENE_TIME_SELECTION_HOOK}` is unavailable"))?
+    .map_err(|error| format!("scene time policy failed: {error}"))?;
     let source = decision
         .get("source")
         .and_then(H::as_str)
@@ -213,6 +243,7 @@ pub fn select_scene_time(facts: &H) -> Result<SceneTimeSelection, String> {
         }
     };
     Ok(SceneTimeSelection {
+        transition_id,
         source: if source == "authored" {
             "authored"
         } else {
@@ -1127,7 +1158,7 @@ mod tests {
 
         world
             .resource_mut::<SceneTransitionCoordinator>()
-            .finish(transition_id);
+            .complete(transition_id);
         assert!(world.resource_mut::<SimulationProgress>().release(key));
         world.run_system_once(project_time_transport).unwrap();
 

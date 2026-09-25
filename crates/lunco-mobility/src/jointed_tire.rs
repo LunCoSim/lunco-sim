@@ -127,23 +127,49 @@ pub fn apply_jointed_tire_forces(
             &ComputedCenterOfMass,
         )>,
     )>,
-    q_tires: Query<(Entity, &JointedWheelTire)>,
+    q_tires: Query<(
+        Entity,
+        Option<&lunco_physics::PhysicsOrderKey>,
+        &JointedWheelTire,
+    )>,
     q_joints: Query<(&JointTorqueActuator, &RevoluteJoint)>,
     q_ports: Query<&Port>,
     q_inputs: Query<&InputPorts>,
     q_child_of: Query<&ChildOf>,
     collisions: Collisions,
     fixed_time: Res<Time<Fixed>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut physics_time: Option<ResMut<Time<Physics>>>,
 ) {
     let full_dt = fixed_time.delta_secs_f64();
     if full_dt <= 0.0 {
         return;
     }
+    let wheel_order = match lunco_physics::ordered_physics_entities(
+        q_tires.iter().map(|(entity, key, _)| (entity, key)),
+        "jointed wheel tire force",
+    ) {
+        Ok(order) => order,
+        Err(invalid) => {
+            lunco_physics::report_invalid_physics_order(
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+                physics_time.as_deref_mut(),
+                "physics-wheel-order-invalid",
+                &invalid,
+            );
+            return;
+        }
+    };
     let mut pending: Vec<(Entity, DVec3, DVec3, bool)> = Vec::new();
 
     {
         let q_state = bodies.p1();
-        for (wheel, tire) in &q_tires {
+        for wheel in wheel_order {
+            let Ok((_, _, tire)) = q_tires.get(wheel) else {
+                continue;
+            };
             let Ok((motor, joint)) = q_joints.get(tire.drive_joint) else {
                 continue;
             };

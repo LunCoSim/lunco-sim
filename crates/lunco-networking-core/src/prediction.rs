@@ -1327,12 +1327,12 @@ fn replay_one_tick(
     chassis: Entity,
     input: &lunco_core_session::InputFrame,
 ) {
-    // Feed the RECORDED input by writing the ports directly. Deliberately NOT a
-    // `SetPorts` trigger: that would fire `record_control_input`, re-logging an input
-    // we are merely re-simulating (and bumping the host ack bookkeeping).
-    ports.write_port(world, chassis, "throttle", input.forward);
-    ports.write_port(world, chassis, "steer", input.steer);
-    ports.write_port(world, chassis, "brake", input.brake);
+    // Feed the RECORDED setpoints by writing the ports directly. Deliberately
+    // NOT a `SetPorts` trigger: that would fire `record_control_input`, re-logging
+    // an input we are merely re-simulating (and bumping host ack bookkeeping).
+    for (name, value) in &input.writes {
+        ports.write_port(world, chassis, name, *value);
+    }
 
     let dt = world.resource::<Time<Fixed>>().delta();
 
@@ -1451,7 +1451,7 @@ pub fn rollback_owned_prediction(world: &mut World) {
             .resource::<lunco_core_session::OwnedInputLog>()
             .0
             .get(&gid)
-            .map(|l| l.frames.iter().filter(|f| f.seq > ack).copied().collect())
+            .map(|l| l.frames.iter().filter(|f| f.seq > ack).cloned().collect())
             .unwrap_or_default();
 
         // SAFETY GATE: an articulated rover whose links we failed to gather must NEVER

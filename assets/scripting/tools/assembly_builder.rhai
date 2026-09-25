@@ -2359,7 +2359,8 @@ fn selected_authoring_context(preview) {
     if selection.selection_state != "single" || selection.primary == () {
         return plan_error("selected_authoring_context requires exactly one selected prim");
     }
-    if selection.stale_selection_count != () && selection.stale_selection_count != 0 {
+    if selection.stale_selection_count != ()
+        && selection.stale_selection_count.to_string() != "0" {
         return plan_error("selected_authoring_context rejects stale selection entries");
     }
     if selection.ambiguous_paths != () && selection.ambiguous_paths.len() != 0 {

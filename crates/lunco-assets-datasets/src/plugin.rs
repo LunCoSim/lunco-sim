@@ -10,9 +10,9 @@
 
 use bevy::prelude::*;
 
-use crate::{
-    DatasetRegistry, DatasetScope, DatasetScopeReady, DatasetScopeRemoved, dataset_failed,
-};
+use crate::{DatasetRegistry, DatasetScopeRemoved, dataset_failed};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{DatasetScope, DatasetScopeReady};
 
 /// Marker installed by the native provisioning plugin while it owns dataset
 /// workers. The registry plugin uses it to leave Twin-scope retirement to the

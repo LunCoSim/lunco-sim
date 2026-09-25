@@ -56,7 +56,7 @@ and selection clicks go through one `scene_interaction` Rhai policy; simulation
 possession accepts only an exclusive `selection.replace` intent. Spawn, terrain,
 attachment, camera, and gizmo consumers are not yet under one captured gesture
 manager, so a route fixture passing does not prove global viewport arbitration.
-The repeatable production gate is `assets/scenes/tests/route_interaction.usda`,
+The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
 run by `scripts/run_editor_scene_tests.sh`; it sends typed native-window input
 through picking and verifies the mounted fixture, waypoint hit, semantic
 context intent, unchanged pre-menu selection, and explicit menu selection

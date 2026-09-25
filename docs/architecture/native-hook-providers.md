@@ -19,8 +19,10 @@ There are two implementation forms for the same contract:
 
 Rhai policies do not create a second command or hook registry. Native providers
 also do not create a parallel registry: they register only an existing
-`installable` hook id and are called through `lunco_hooks::invoke`, which
-performs the same argument and result validation as every other backend.
+`installable` hook id. Owners invoke it through `lunco_hooks::invoke` with a
+`HookInvocation` containing validated positional values and an explicit typed
+runtime context. Discrete boundaries use the explicit unclassified context;
+cycle-owned calls supply their route, clock sample, and phase.
 
 The native substrate is split into two small packages. `lunco-hooks-plugin-api`
 contains only the edition-2024 C ABI descriptor and the shared typed wire
@@ -65,19 +67,21 @@ implementation is valid, required, or a runtime fault.
 
 ## Typed native boundary
 
-The callback receives one bounded versioned binary value containing the
-positional arguments and writes one value to a host-owned output buffer. The
-wire uses explicit tags for unit, integer, `f64`, boolean, UTF-8 string, array,
-map, and byte buffer values. It does not expose Rust layout, a Rust allocator,
-trait objects, Bevy values, USD objects, or JSON. The host preserves exact
-`f64` bits and validates the returned value against the reflected hook contract
-before the owner consumes it.
+The ABI v2 callback receives one bounded versioned binary invocation containing
+the positional arguments and the owner-supplied runtime-context map, then writes
+one value to a host-owned output buffer. Providers decode the call with
+`decode_invocation`; its `arguments` and `runtime_context` fields use explicit
+typed wire values. The wire does not expose Rust layout, a Rust allocator, trait
+objects, Bevy values, USD objects, or JSON. The host preserves exact `f64` bits
+and validates the returned value against the reflected hook contract before the
+owner consumes it.
 
 Provider callbacks must not retain input/output pointers or unwind across the
-C ABI. A provider should decode its arguments, perform its computation, and
-return a value matching the hook's declared output. It must not mutate ECS or
-USD directly. The Rust hook owner remains responsible for validating facts and
-committing the resulting generic action or data plan.
+C ABI. A provider should decode the invocation, use its arguments and context,
+perform its computation, and return a value matching the hook's declared
+output. It must not mutate ECS or USD directly. The Rust hook owner remains
+responsible for validating facts and committing the resulting generic action or
+data plan.
 
 ## Terrain and co-simulation extension point
 

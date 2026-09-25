@@ -58,6 +58,12 @@ deterministic contract only when identical inputs must produce the same result
 on every peer. Set `required` only when the generic mechanism cannot operate
 safely without a policy.
 
+For scheduled or async owner work, consume the `runtime_context` supplied by
+the hook owner and reject calls from the wrong cycle or phase. The owner must
+capture the context before dispatch, preserve it through worker completion,
+and reject stale results before publication. Test the scheduled path and an
+intentional off-cycle call in production authored Rhai.
+
 ## Author and select the policy
 
 Put the implementation in `assets/scripting/policy/<name>.rhai` and add one
@@ -81,6 +87,10 @@ Twin-owned records; application policies remain active for seams the Twin does
 not replace. A Twin manifest that contains policy records must declare its own
 `[startup]` source and entry; an empty Twin policy directory may omit it. Do
 not add a Rust-side policy list or a second bootstrap path.
+When `skip_when_hook_unavailable = true`, the runtime omits the policy only
+when that hook owner is not linked into the selected build and reports its id
+in `policy_status().unavailable`. Source, compile, and activation failures
+remain visible, and required policies cannot use this flag.
 The source path is resolved by the asset/storage layer. Do not read policy
 files through `std::fs` in a runtime/domain crate.
 
@@ -104,7 +114,10 @@ Use `list_hooks()` to inspect the reflected declaration. It reports
 requirement, and installation state. Use `policy_status()` for startup/Twin
 load diagnostics and the last typed Twin lifecycle result. The owner must
 consume every non-`Unit` result; the lifecycle dispatcher retains its returned
-map in that status surface. The `assets_mounted` lifecycle event receives the
+map and exact invocation context in that status surface. Twin lifecycle calls
+use a `Twin/Lifecycle` route whose generation is the mounted Twin's nonzero
+`TwinId`; startup/reload, asset events, and teardown use `Start`, `Event`, and
+`Stop` phases with no elapsed clock. The `assets_mounted` lifecycle event receives the
 parsed Twin manifest, indexed relative paths, exact `twin://` authority, and
 active-Twin fact. Its ordered `{command, params}` actions go through the generic
 typed command bridge; Rhai chooses loaders and order, while each domain owner
@@ -112,6 +125,18 @@ validates paths and performs asynchronous work. A malformed plan faults and
 queues no commands; a rejected command is reported while later actions
 continue. `invoke_hook(id, [args])` distinguishes unavailable hooks from
 installed functions that fault.
+
+Scheduled owner calls supply an immutable `runtime_context` map with their
+route, cycle, phase, clock, and logical sequence. If a policy is valid only in
+one cycle, reject other contexts and verify the real scheduled owner path in
+an authored production test. For example, `readiness.action` runs under
+`Core/Simulation/Behavior` with fixed-clock time and the latest `SimTick`; its
+policy rejects direct calls from other cycles.
+Physics initialization is a discrete lifecycle decision: use the declared
+`physics.initialization(facts)` seam, a generation-qualified
+`Twin/Lifecycle/Preparation` route, and no clock sample. Keep authored
+selector names in `facts.policy`; do not construct dynamic hook ids or expose
+process-local ECS entity ids as deterministic policy facts.
 
 The application `twin.lifecycle` policy selects the active Twin's default USD
 scene, tool libraries, timeline data, SysML/KerML sources, and Modelica roots

@@ -59,41 +59,56 @@ fn walk_package(
     Ok(())
 }
 
-/// Every top-level `*.mo` source, sorted by basename.
-pub fn model_files() -> Result<Vec<(String, String)>, String> {
+/// Every top-level `*.mo` filename, sorted by basename.
+pub fn model_filenames() -> Result<Vec<String>, String> {
     let root = models_root();
     let entries =
         lunco_storage::read_directory_sync(&root).map_err(|error| source_error(&root, error))?;
-    let mut files = entries
+    let mut filenames = entries
         .into_iter()
         .filter(|path| path.is_file() && modelica_file(path))
         .map(|path| {
-            let name = path
-                .file_name()
+            path.file_name()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| {
                     format!(
                         "Modelica asset filename is not valid UTF-8: {}",
                         path.display()
                     )
-                })?
-                .to_owned();
-            Ok((name, read_source(&path)?))
+                })
+                .map(str::to_owned)
         })
         .collect::<Result<Vec<_>, String>>()?;
+    filenames.sort();
+    Ok(filenames)
+}
+
+/// Every top-level `*.mo` source, sorted by basename.
+pub fn model_files() -> Result<Vec<(String, String)>, String> {
+    let root = models_root();
+    let mut files = model_filenames()?
+        .into_iter()
+        .map(|filename| {
+            let path = root.join(&filename);
+            read_source(&path).map(|source| (filename, source))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     files.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(files)
 }
 
 /// Read one top-level Modelica source by basename.
 pub fn model_source(filename: &str) -> Result<Option<String>, String> {
-    let Some((_, source)) = model_files()?
-        .into_iter()
-        .find(|(name, _)| name == filename)
-    else {
+    let candidate = Path::new(filename);
+    if candidate.components().count() != 1 || !modelica_file(candidate) {
         return Ok(None);
-    };
-    Ok(Some(source))
+    }
+    if !model_filenames()?.iter().any(|name| name == filename) {
+        return Ok(None);
+    }
+    let root = models_root();
+    let path = root.join(candidate);
+    read_source(&path).map(Some)
 }
 
 /// Every `.mo` in a structured package under the engine Modelica library.

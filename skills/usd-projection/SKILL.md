@@ -64,7 +64,14 @@ canonical `StageView` and the same extractor contract.
 Doc-backed Twin admission is also asset-event driven. `UsdSourceText` is loaded
 through the registered source scheme; `AssetEvent` and
 `AssetLoadFailedEvent` advance or fail the pending document transaction. The
-composed document overlay is published before `LoadScene` is submitted.
+default Twin path parses the exact source revision through native
+`AsyncWorkAdmission`, commits it through `DocumentRegistry::open_prepared_file`,
+restores the runtime overlay, and serializes a cloned persistent document on
+the worker pool. Source text and document generation are checked again before
+the Twin overlay is published and `LoadScene` is submitted. Runtime sidecar
+read/parse and editor-preview initial serialization remain synchronous; wasm
+worker transport for this path is not installed, so the owner reports that
+boundary visibly. The live USD stage stays with its thread-affine owner.
 Referenced stage closures follow the same event boundary before a reference is
 authored onto the live stage. The instance carries a path-remapped copy of the
 prepared source plan and its root identity; descendants reuse both through the
@@ -75,6 +82,16 @@ or direct filesystem reads to this path. After admission,
 `DocumentChanged` and stage-asset lifecycle events wake the single
 `sync_twin_overlays` owner; do not add a per-frame generation scan or a
 viewport-specific edit/reload path.
+
+For the mounted primary scene, reference fetches stay parallel but live-stage
+mutation and terminal failure publication follow reference operation order. A
+later completed reference remains prepared until every earlier active
+reference for that scene resolves. Keep its ready or failed outcome while
+deferred; never let asset completion order choose composition or fault order.
+Preview stages do not acquire this simulation-specific commit barrier. The
+production `route_lifecycle` Rhai scene gate covers the fixed-tick readiness
+contract with multiple live references; low-level owner tests cover the
+ready-prefix ordering seam.
 
 The Editor is document-scoped. `DocumentId` from the existing
 `DocumentRegistry<UsdDocument>` identifies the file being edited; the Twin
@@ -140,19 +157,20 @@ the presentation resources.
 The preview root carries `UsdPreviewOnly`, the USD projection ownership fence.
 Consumers that can create simulation side effects must use the shared bounded
 `is_preview_only` ancestry helper rather than names, stage handles, or missing
-physics components. Cosim discovery must mark preview prims as examined without
-loading their programs, and wire derivation must exclude preview descendants so
-their duplicate USD paths cannot claim mounted-scene endpoints. Live operator
-entities are admitted only through their `UsdSceneRoot` ownership. The USD DEM
-bridge marks preview terrain prims examined without creating `DemTerrainRequest`;
-preview DEMs must not create collider rings, analytic query sources, or hold
-mission physics. Relief in an isolated Editor terrain preview still needs a
-separate render-only terrain realization and spatial demand.
-Mounted-scene live-edit reconciliation must also ignore preview copies when it
-looks up an entity by stage and USD path; a preview duplicate cannot satisfy the
-mounted scene's structural spawn or refresh. Procedural scene backgrounds are
-likewise excluded from previews because the skybox renderer has one scene-wide
-owner. Unscoped `QueryUsdPrim` reads select the mounted scene by ignoring
+physics components. Authored controls and program projection use that same
+ancestry fence. Cosim discovery marks preview prims examined without loading
+their programs, and wire derivation excludes preview descendants so duplicate
+USD paths cannot claim mounted-scene endpoints. Live operator entities are
+admitted only through their `UsdSceneRoot` ownership. The USD DEM bridge marks
+preview terrain prims examined without creating `DemTerrainRequest`; preview
+DEMs must not create collider rings, analytic query sources, or hold mission
+physics. Relief in an isolated Editor terrain preview still needs a separate
+render-only terrain realization and spatial demand. Mounted-scene live-edit
+reconciliation ignores preview copies when looking up an entity by stage and
+USD path, so a preview duplicate cannot satisfy the mounted scene's structural
+spawn or refresh. Procedural scene backgrounds are also excluded from previews
+because the skybox renderer has one scene-wide owner. Unscoped `QueryUsdPrim`
+reads select the mounted scene by ignoring
 `UsdPreviewOnly` roots; preview roots do not make live queries ambiguous.
 Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity
@@ -167,8 +185,10 @@ workflow; it does not authorize direct USDA or ECS edits.
 
 For agent or editor synchronization, call `SyncUsdDocument` with the explicit
 document generation. Use its typed delta while the cursor is covered; consume
-the returned base/runtime layer snapshot when it reports an expired history
-window. Reject future cursors. To edit a composed path, call
+the returned base/runtime layer snapshot when a full reload or expired history
+window breaks the authored-operation stream. Full reloads advance the projection
+generation without adding a fabricated authored operation. Reject future cursors.
+To edit a composed path, call
 `ResolveUsdTarget` with the explicit document id, prim path, and `@root@` or
 `@runtime@` target. A referenced or payloaded path that has a local authored
 opinion in the current document is valid from that document layer while the

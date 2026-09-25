@@ -339,7 +339,7 @@ fn invoke_policy(
         ("suppressible", HookValue::Bool(root.is_some())),
         ("datasets", HookValue::Array(datasets)),
     ]);
-    match lunco_hooks::invoke(lunco_core_session::DATASET_PROVISION_HOOK, &[facts]) {
+    match lunco_hooks::invoke_unclassified(lunco_core_session::DATASET_PROVISION_HOOK, &[facts]) {
         Some(Ok(value)) => parse_view(value),
         Some(Err(error)) => Err(format!("assets.provision failed: {error}")),
         None => Err("assets.provision is not installed".to_owned()),

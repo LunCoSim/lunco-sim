@@ -22,10 +22,10 @@
 //!   per language for zero-copy reflect reads), the hook boundary marshals through
 //!   this owned enum. Hook args are small (two journal entries, a session record),
 //!   so the one extra conversion hop is irrelevant.
-//! - [`ScriptHook`] — the single interface a language backend implements *once*
-//!   (`HookValue in → HookValue out`); one impl then services **every** hook.
+//! - [`ScriptHook`] — the single interface a language backend implements once;
+//!   every hook receives typed arguments and the caller's runtime context.
 //! - The global [`register`]/[`invoke`] registry — dependency-light, headless-safe
-//!   (works deep inside a pure crate like the journal, with no Bevy/ECS), keyed by
+//!   (works deep inside a pure crate like the journal, with no Bevy ECS/world), keyed by
 //!   a `HookId` string. Owner-side declarations use [`declare_hook!`], whose
 //!   inventory submission is collected automatically across crates.
 //! - [`wire`] — a bounded, versioned binary representation used only by native
@@ -45,6 +45,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
+
+pub use lunco_runtime_context::{
+    RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeProducerStamp,
+    RuntimeRoute, RuntimeScope,
+};
 
 // ── Neutral value ────────────────────────────────────────────────────────────
 
@@ -491,12 +496,107 @@ impl std::fmt::Display for HookError {
 }
 impl std::error::Error for HookError {}
 
-/// The single, object-safe interface a scripting backend implements to fill *any*
-/// hook point. One impl per language (`RhaiHook` in `lunco-hooks-rhai`) services
-/// every hook, because everything is [`HookValue`] in and out.
+/// One synchronous hook call, with the owner-supplied runtime context.
+#[derive(Clone, Copy, Debug)]
+pub struct HookInvocation<'a> {
+    /// Positional values validated against the declared hook contract.
+    pub args: &'a [HookValue],
+    /// Clock and ordering facts from the calling owner.
+    pub context: RuntimeExecutionContext,
+}
+
+impl<'a> HookInvocation<'a> {
+    /// Construct a call for a discrete boundary with no classified runtime
+    /// owner.
+    pub const fn unclassified(args: &'a [HookValue]) -> Self {
+        Self {
+            args,
+            context: RuntimeExecutionContext::unclassified(),
+        }
+    }
+
+    /// Construct a call using the cycle and clock facts from its owner.
+    pub const fn with_context(args: &'a [HookValue], context: RuntimeExecutionContext) -> Self {
+        Self { args, context }
+    }
+}
+
+impl HookInvocation<'_> {
+    /// Lower the call to the shared value ABI used by native providers.
+    pub fn to_hook_value(self) -> HookValue {
+        HookValue::map([
+            ("args", HookValue::Array(self.args.to_vec())),
+            ("context", runtime_context_hook_value(self.context)),
+        ])
+    }
+}
+
+/// Convert the shared runtime context into the stable hook-facing map.
+///
+/// Rhai hooks receive this map as `runtime_context`; native providers receive
+/// the same map in the invocation wire value. The source remains the typed
+/// [`RuntimeExecutionContext`] supplied by the caller.
+pub fn runtime_context_hook_value(context: RuntimeExecutionContext) -> HookValue {
+    fn label(value: impl std::fmt::Debug) -> HookValue {
+        HookValue::str(format!("{value:?}").to_ascii_lowercase())
+    }
+
+    fn route_fields(route: lunco_runtime_context::RuntimeRoute) -> Vec<(String, HookValue)> {
+        vec![
+            ("scope".into(), label(route.scope)),
+            ("cycle".into(), label(route.cycle)),
+            ("generation".into(), HookValue::UInt(route.generation)),
+        ]
+    }
+
+    let (scope, cycle, generation) = context.route.map_or(
+        (HookValue::Unit, HookValue::Unit, HookValue::Unit),
+        |route| {
+            (
+                label(route.scope),
+                label(route.cycle),
+                HookValue::UInt(route.generation),
+            )
+        },
+    );
+    let producer = context.producer.map_or(HookValue::Unit, |producer| {
+        let mut fields = route_fields(producer.route);
+        fields.push(("sequence".into(), HookValue::UInt(producer.sequence)));
+        HookValue::Map(fields)
+    });
+
+    HookValue::map([
+        ("scope", scope),
+        ("cycle", cycle),
+        ("phase", label(context.phase)),
+        ("generation", generation),
+        ("clock", label(context.clock)),
+        (
+            "sequence",
+            context.sequence.map_or(HookValue::Unit, HookValue::UInt),
+        ),
+        ("producer", producer),
+        (
+            "time_seconds",
+            context
+                .time_seconds
+                .map_or(HookValue::Unit, HookValue::Float),
+        ),
+        (
+            "delta_seconds",
+            context
+                .delta_seconds
+                .map_or(HookValue::Unit, HookValue::Float),
+        ),
+    ])
+}
+
+/// The single, object-safe interface a scripting backend implements to fill any
+/// hook point. One implementation per language services the complete typed
+/// invocation, including its runtime context.
 pub trait ScriptHook: Send + Sync + 'static {
-    /// Invoke the hook with positional args; return its value or an error.
-    fn invoke(&self, args: &[HookValue]) -> HookResult;
+    /// Invoke the hook and return its value or a runtime/contract error.
+    fn invoke(&self, invocation: &HookInvocation<'_>) -> HookResult;
 }
 
 /// Declare one hook contract with a small, repeatable owner-side syntax.
@@ -891,20 +991,41 @@ pub fn get(id: &str) -> Option<Arc<RegisteredHook>> {
         .cloned()
 }
 
-/// Invoke the hook registered under `id`. `None` means that the implementation
-/// is unavailable; the owning seam decides whether that is a valid state or a
-/// visible diagnostic. `Some(Err)` means the installed hook faulted.
-pub fn invoke(id: &str, args: &[HookValue]) -> Option<HookResult> {
+/// Invoke a hook at a discrete boundary with no classified runtime owner.
+///
+/// The backend receives an explicit unclassified context; it must not infer a
+/// clock from process state. Owners inside a runtime cycle use
+/// [`invoke_with_context`] instead.
+pub fn invoke_unclassified(id: &str, args: &[HookValue]) -> Option<HookResult> {
+    invoke_with_context(id, args, RuntimeExecutionContext::unclassified())
+}
+
+/// Invoke a hook with the cycle and clock facts supplied by its owner.
+/// `None` means the implementation is unavailable; `Some(Err)` means the
+/// installed hook faulted or returned an invalid contract value.
+pub fn invoke_with_context(
+    id: &str,
+    args: &[HookValue],
+    context: RuntimeExecutionContext,
+) -> Option<HookResult> {
+    invoke(id, &HookInvocation { args, context })
+}
+
+/// Invoke a registered hook call after validating its declared argument and
+/// result types.
+pub fn invoke(id: &str, invocation: &HookInvocation<'_>) -> Option<HookResult> {
     let hook = get(id)?;
     if let Some(contract) = descriptor(id) {
-        if args.len() != contract.parameters.len() {
+        if invocation.args.len() != contract.parameters.len() {
             return Some(Err(HookError(format!(
                 "hook '{id}' expects {} argument(s), received {}",
                 contract.parameters.len(),
-                args.len()
+                invocation.args.len()
             ))));
         }
-        for (index, (argument, parameter)) in args.iter().zip(&contract.parameters).enumerate() {
+        for (index, (argument, parameter)) in
+            invocation.args.iter().zip(&contract.parameters).enumerate()
+        {
             if !matches_value_type(parameter.value_type, argument) {
                 return Some(Err(HookError(format!(
                     "hook '{id}' argument {} ('{}') expects {}, received {}",
@@ -916,7 +1037,7 @@ pub fn invoke(id: &str, args: &[HookValue]) -> Option<HookResult> {
             }
         }
     }
-    let result = hook.hook.invoke(args);
+    let result = hook.hook.invoke(invocation);
     Some(result.and_then(|value| {
         let Some(contract) = descriptor(id) else {
             return Ok(value);
@@ -1107,9 +1228,17 @@ mod tests {
     /// registry works with a non-scripted `ScriptHook` too.
     struct AddHook;
     impl ScriptHook for AddHook {
-        fn invoke(&self, args: &[HookValue]) -> HookResult {
-            let a = args.first().and_then(HookValue::as_i64).unwrap_or(0);
-            let b = args.get(1).and_then(HookValue::as_i64).unwrap_or(0);
+        fn invoke(&self, invocation: &HookInvocation<'_>) -> HookResult {
+            let a = invocation
+                .args
+                .first()
+                .and_then(HookValue::as_i64)
+                .unwrap_or(0);
+            let b = invocation
+                .args
+                .get(1)
+                .and_then(HookValue::as_i64)
+                .unwrap_or(0);
             Ok(HookValue::Int(a + b))
         }
     }
@@ -1127,10 +1256,10 @@ mod tests {
 
         // An absent implementation is observable as None; the owning seam
         // decides whether that is valid.
-        assert!(invoke("test.missing", &[]).is_none());
+        assert!(invoke_unclassified("test.missing", &[]).is_none());
 
         // Present hook runs.
-        let out = invoke("test.add", &[HookValue::Int(2), HookValue::Int(40)]);
+        let out = invoke_unclassified("test.add", &[HookValue::Int(2), HookValue::Int(40)]);
         assert_eq!(out.unwrap().unwrap(), HookValue::Int(42));
 
         // Discovery reflects the determinism flag.

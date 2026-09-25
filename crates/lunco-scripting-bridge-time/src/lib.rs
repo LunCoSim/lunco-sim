@@ -23,7 +23,7 @@ pub fn sim_tick() -> Result<i64, String> {
             .get_resource::<lunco_core_runtime::SimTick>()
             .map(|tick| Ok(tick.0 as i64))
             .unwrap_or_else(|| {
-                report_clock_contract_fault(world, "sim-tick-missing", "SimTick is absent");
+                report_runtime_contract_fault(world, "sim-tick-missing", "SimTick is absent");
                 Err("deterministic simulation clock is missing SimTick".to_owned())
             })
     })
@@ -36,12 +36,12 @@ pub fn dt() -> Result<f64, String> {
     require_simulation_context("dt()")?;
     with_world(|world| {
         let Some(time) = world.get_resource::<Time<bevy::time::Fixed>>() else {
-            report_clock_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
+            report_runtime_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
             return Err("deterministic simulation clock is missing Time<Fixed>".to_owned());
         };
         let delta = time.delta_secs_f64();
         if !delta.is_finite() || delta <= 0.0 {
-            report_clock_contract_fault(
+            report_runtime_contract_fault(
                 world,
                 "fixed-clock-invalid",
                 format!("Time<Fixed>.delta must be finite and positive, got {delta:?}"),
@@ -66,16 +66,16 @@ pub fn elapsed_seconds() -> Result<f64, String> {
             .get_resource::<lunco_core_runtime::SimTick>()
             .map(|tick| tick.0)
         else {
-            report_clock_contract_fault(world, "sim-tick-missing", "SimTick is absent");
+            report_runtime_contract_fault(world, "sim-tick-missing", "SimTick is absent");
             return Err("deterministic simulation clock is missing SimTick".to_owned());
         };
         let Some(time) = world.get_resource::<Time<bevy::time::Fixed>>() else {
-            report_clock_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
+            report_runtime_contract_fault(world, "fixed-clock-missing", "Time<Fixed> is absent");
             return Err("deterministic simulation clock is missing Time<Fixed>".to_owned());
         };
         let dt = time.timestep().as_secs_f64();
         if !dt.is_finite() || dt <= 0.0 {
-            report_clock_contract_fault(
+            report_runtime_contract_fault(
                 world,
                 "fixed-clock-invalid",
                 format!("Time<Fixed>.timestep must be finite and positive, got {dt:?}"),
@@ -191,16 +191,14 @@ fn optional_float<B: ValueBuilder>(b: &B, value: Option<f64>) -> B::Value {
 /// Surface a missing/invalid mandatory clock as a terminal simulation fault.
 /// The scripting bridge never substitutes wall time or a nominal tick: a
 /// production host that omitted the core time spine must stop loudly.
-fn report_clock_contract_fault(world: &mut World, kind: &'static str, detail: impl Into<String>) {
+fn report_runtime_contract_fault(world: &mut World, kind: &'static str, detail: impl Into<String>) {
     let detail = detail.into();
     if let Some(mut faults) = world.get_resource_mut::<lunco_core::RuntimeFaults>() {
         if faults.raise(kind, None, "scripting-clock", detail.clone()) {
-            error!("[scripting] deterministic clock contract violated: {detail}");
+            error!("[scripting] runtime contract violated: {detail}");
         }
     } else {
-        error!(
-            "[scripting] deterministic clock contract violated: {detail} (RuntimeFaults missing)"
-        );
+        error!("[scripting] runtime contract violated: {detail} (RuntimeFaults missing)");
     }
 }
 
@@ -210,8 +208,9 @@ fn report_clock_contract_fault(world: &mut World, kind: &'static str, detail: im
 ///
 /// The mandatory `SimTick` + `Time<Fixed>` + `Time<Virtual>` spine is never
 /// substituted: a missing/invalid spine raises `RuntimeFaults` and sets
-/// `clock_contract_ok` false. Optional physics and domain clocks remain
-/// explicitly represented in the returned map.
+/// `clock_contract_ok` false. The physics Compute profile is also mandatory;
+/// its known state and optional width are returned separately from simulation
+/// time. Optional domain clocks remain explicitly represented in the map.
 pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
     with_world(|world| {
         // Copy the mandatory spine before raising a fault. A fault is a
@@ -248,7 +247,7 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             clock_contract_error.push_str("Time<Virtual> is absent; ");
         }
         if !clock_contract_error.is_empty() {
-            report_clock_contract_fault(
+            report_runtime_contract_fault(
                 world,
                 "simulation-clock-missing",
                 clock_contract_error.clone(),
@@ -269,15 +268,25 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                     time.is_paused(),
                 )
             });
-        let physics_contract = world
-            .get_resource::<lunco_physics::PhysicsDeterminism>()
+        let physics_profile = world
+            .get_resource::<lunco_physics::PhysicsComputeProfile>()
             .copied();
-        let physics_contract_error = if physics_contract.is_none() {
-            let error = "PhysicsDeterminism is absent; physics admission is not enforceable";
-            report_clock_contract_fault(world, "physics-determinism-missing", error.to_owned());
-            error
-        } else {
-            ""
+        let physics_profile_error = match physics_profile {
+            None => {
+                let error = "PhysicsComputeProfile is absent; physics admission is not enforceable";
+                report_runtime_contract_fault(world, "physics-profile-missing", error.to_owned());
+                error
+            }
+            Some(profile) if profile.compute_threads.is_none() => {
+                let error = "ComputeTaskPool was unavailable when the physics profile was captured";
+                report_runtime_contract_fault(
+                    world,
+                    "physics-compute-pool-unavailable",
+                    error.to_owned(),
+                );
+                error
+            }
+            Some(_) => "",
         };
         let world_time = world
             .get_resource::<WorldTime>()
@@ -364,24 +373,18 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                 b.bool(physics_snapshot.is_some_and(|(_, _, paused)| paused)),
             ),
             (
-                "physics_deterministic".to_owned(),
-                b.bool(physics_contract.is_some_and(|contract| contract.deterministic)),
-            ),
-            (
                 "physics_compute_threads".to_owned(),
-                b.int(
-                    physics_contract
-                        .and_then(|contract| contract.compute_threads)
-                        .map_or(-1, |value| value as i64),
-                ),
+                physics_profile
+                    .and_then(|profile| profile.compute_threads)
+                    .map_or_else(|| b.unit(), |value| b.int(value as i64)),
             ),
             (
-                "physics_contract_ok".to_owned(),
-                b.bool(physics_contract.is_some_and(|contract| contract.deterministic)),
+                "physics_profile_known".to_owned(),
+                b.bool(physics_profile.is_some_and(|profile| profile.compute_threads.is_some())),
             ),
             (
-                "physics_contract_error".to_owned(),
-                b.string(physics_contract_error),
+                "physics_profile_error".to_owned(),
+                b.string(physics_profile_error),
             ),
             ("world_sim_s".to_owned(), b.float(world_time.sim_secs)),
             ("world_met_s".to_owned(), b.float(world_time.met_secs)),
@@ -492,7 +495,42 @@ mod tests {
         RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeProducerStamp,
         RuntimeRoute, RuntimeScope,
     };
+    use lunco_scripting_bridge_core::ApiValueBuilder;
     use lunco_scripting_bridge_core::WorldScope;
+
+    #[test]
+    fn clock_snapshot_reports_unknown_compute_profile_and_faults_without_panicking() {
+        let mut world = World::new();
+        world.insert_resource(lunco_core_runtime::SimTick(0));
+        world.insert_resource(Time::<bevy::time::Fixed>::default());
+        world.insert_resource(Time::<bevy::time::Virtual>::default());
+        world.insert_resource(lunco_physics::PhysicsComputeProfile::from_compute_threads(
+            None,
+        ));
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        let context = RuntimeExecutionContext::unclassified();
+        let _scope = WorldScope::enter(&mut world, context);
+
+        let _snapshot = clock_snapshot(&ApiValueBuilder);
+        let fault = world
+            .resource::<lunco_core::RuntimeFaults>()
+            .first
+            .as_ref()
+            .expect("unknown compute profile must fault the runtime");
+        assert_eq!(fault.kind, "physics-compute-pool-unavailable");
+        assert!(fault.detail.contains("ComputeTaskPool was unavailable"));
+
+        world.resource_mut::<lunco_core::RuntimeFaults>().clear();
+        world.remove_resource::<lunco_physics::PhysicsComputeProfile>();
+        let _snapshot = clock_snapshot(&ApiValueBuilder);
+        let fault = world
+            .resource::<lunco_core::RuntimeFaults>()
+            .first
+            .as_ref()
+            .expect("missing compute profile must fault the runtime");
+        assert_eq!(fault.kind, "physics-profile-missing");
+        assert!(fault.detail.contains("PhysicsComputeProfile is absent"));
+    }
 
     #[test]
     fn fixed_clock_helpers_reject_application_context_without_faulting_simulation() {

@@ -81,6 +81,10 @@ fn on_tick(me, ctx) {
     }
 
     let failures = [];
+    failures.push(t_true(this.actuation_root_is_collection,
+        "the composed RCS root lost its standard component collection schema"));
+    failures.push(t_true(this.force_member_schema_is_composed,
+        "the composed RCS member lost its LunCoForceActuatorAPI role"));
     for spec in this.mounts {
         let path = ROOT + "/" + spec[0];
         failures.push(t_true(mount_ok(path, spec[1], spec[2], spec[3]),

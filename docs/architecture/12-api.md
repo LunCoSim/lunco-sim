@@ -212,9 +212,10 @@ values do not belong in an acknowledgement — expose those as authored USD
 `outputs:*` ports instead.
 
 Deferred commands answer on the original request. `RunRhai`, for example,
-waits for the next `Update` and returns its captured stdout or error in the
-response body. In-process `cmd()` calls use the internal `CommandResults`
-store only while the script is running; it is not an API endpoint.
+waits in the bounded FIFO `Repl` cycle and returns its captured stdout or error
+in the response body. In-process `cmd()` calls use the internal
+`CommandResults` store only while the script is running; it is not an API
+endpoint.
 
 ### Registering inside `Plugin::build`
 

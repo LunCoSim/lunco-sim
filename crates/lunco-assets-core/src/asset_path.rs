@@ -3,9 +3,11 @@
 use bevy::asset::{AssetPath, io::AssetSourceId};
 
 pub(crate) use lunco_assets_path::{
-    has_scheme, is_anchored, is_safe_relative_components, is_safe_relative_path, normalize,
-    relative_path, slashed, split_scheme, uri,
+    has_scheme, is_safe_relative_components, is_safe_relative_path, relative_path, slashed,
+    split_scheme, uri,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use lunco_assets_path::{is_anchored, normalize};
 
 /// Rebuild the canonical `scheme://path` spelling represented by a Bevy asset
 /// path. The default Bevy source is the engine `lunco://` library.

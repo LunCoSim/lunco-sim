@@ -13,7 +13,32 @@ fn station_role(role) {
     role == "earth" || role == "base" || role == "relay"
 }
 
+fn valid_link_context(context) {
+    if (context.scope != "core" && context.scope != "twin")
+        || context.cycle != "simulation" {
+        return false;
+    }
+
+    if context.phase == "preparation" {
+        return context.clock == "none"
+            && context.time_seconds == ()
+            && context.delta_seconds == ()
+            && context.sequence == ();
+    }
+    if context.phase == "behavior" {
+        return context.clock == "simulation"
+            && context.time_seconds != ()
+            && context.delta_seconds == ()
+            && context.sequence != ();
+    }
+    false
+}
+
 fn link_connected(ctx) {
+    if !valid_link_context(runtime_context) {
+        throw("link.connected requires the link owner's simulation preparation or behavior context");
+    }
+
     let a_rover = ctx.class_a == "rover";
     let b_rover = ctx.class_b == "rover";
 

@@ -438,20 +438,59 @@ impl ApiQueryProvider for InspectSysmlDocumentProvider {
         };
         let document = host.document();
         let origin = document.origin();
-        let diagnostics = document
-            .analysis()
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| {
-                api_value!({
-                    "kind": format!("{:?}", diagnostic.kind),
-                    "message": diagnostic.message.clone(),
-                    "file": diagnostic.file.clone(),
-                    "start": diagnostic.start,
-                    "end": diagnostic.end,
-                })
-            })
-            .collect::<Vec<_>>();
+        let origin_uri = origin.session_uri();
+        let Some(analyses) = world.get_resource::<crate::SysmlDocumentAnalyses>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "InspectSysmlDocument requires the SysML analysis owner",
+            ));
+        };
+        let state = analyses.state_for(doc_id, document.generation(), &origin_uri);
+        let (analysis_state, analysis_generation, diagnostics, semantic_errors, analysis_error) =
+            match state {
+                crate::SysmlDocumentAnalysisState::Pending { generation, .. } => (
+                    "pending",
+                    api_value!(generation),
+                    api_value!(null),
+                    api_value!(null),
+                    api_value!(null),
+                ),
+                crate::SysmlDocumentAnalysisState::Ready {
+                    generation,
+                    analysis,
+                    ..
+                } => {
+                    let diagnostics = analysis
+                        .diagnostics()
+                        .iter()
+                        .map(|diagnostic| {
+                            api_value!({
+                                "kind": format!("{:?}", diagnostic.kind),
+                                "message": diagnostic.message.clone(),
+                                "file": diagnostic.file.clone(),
+                                "start": diagnostic.start,
+                                "end": diagnostic.end,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    (
+                        "ready",
+                        api_value!(generation),
+                        api_value!(diagnostics),
+                        api_value!(analysis.has_errors()),
+                        api_value!(null),
+                    )
+                }
+                crate::SysmlDocumentAnalysisState::Failed {
+                    generation, error, ..
+                } => (
+                    "failed",
+                    api_value!(generation),
+                    api_value!(null),
+                    api_value!(null),
+                    api_value!(error),
+                ),
+            };
         Ok(Some(api_value!({
             "doc_id": doc_id.raw(),
             "kind": "sysml",
@@ -460,12 +499,15 @@ impl ApiQueryProvider for InspectSysmlDocumentProvider {
             "dirty": document.is_dirty(),
             "read_only": origin.is_read_only(),
             "origin": {
-                "uri": origin.session_uri(),
+                "uri": origin_uri,
                 "title": origin.display_name(),
                 "writable": origin.is_writable(),
             },
+            "analysis_state": analysis_state,
+            "analysis_generation": analysis_generation,
             "diagnostics": diagnostics,
-            "semantic_errors": document.has_diagnostics(),
+            "semantic_errors": semantic_errors,
+            "analysis_error": analysis_error,
         })))
     }
 }

@@ -7,6 +7,8 @@ const ROUTE = "/RouteLifecycle/Route";
 const ALTERNATE_ROUTE = "/RouteLifecycle/AlternateRoute";
 const SUBJECT_PATH = "/RouteLifecycle/Subject";
 const RIBBON_GEOMETRY = "/RouteLifecycle/Route/RouteRibbon/Geometry";
+const ADMISSION_LANDING_PATH = "/RouteLifecycle/AdmissionLanding";
+const ADMISSION_POINT_PATH = "/RouteLifecycle/AdmissionPoint";
 
 fn direct_points(doc) {
     let result = query("QueryUsdPrim", #{ doc_id: doc, path: ROUTE, children: true });
@@ -260,6 +262,8 @@ fn on_start(me, ctx) {
     this.reached_point_path = ();
     this.program_path = ();
     this.alternate_program_path = ();
+    this.reference_admission_started = false;
+    this.reference_admission_checked = false;
 }
 
 fn on_event(me, evt, ctx) {
@@ -308,6 +312,20 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(false, detail));
         finish(this);
         return;
+    }
+
+    if this.reference_admission_started && !this.reference_admission_checked {
+        let landing = find_path(ADMISSION_LANDING_PATH);
+        let point = find_path(ADMISSION_POINT_PATH);
+        if landing < 0 || point < 0 {
+            this.checks.push(t_true(false,
+                "the first fixed tick after reference admission observed an incomplete primary USD projection"));
+            finish(this);
+            return;
+        }
+        this.checks.push(t_true(true,
+            "parallel primary-scene reference preparation commits before the next fixed tick"));
+        this.reference_admission_checked = true;
     }
 
     if this.phase == 0 {
@@ -472,6 +490,54 @@ fn on_tick(me, ctx) {
         // document before the canonical composed stage has projected the new
         // prim. All three edits must still use the authored document target,
         // without surfacing a transient missing-path notification.
+        let admission = cmd("ApplyUsdOps", #{
+            doc_id: this.doc,
+            parent_gen: route_revision(this.doc),
+            label: "Admit references in authored order",
+            ops: [
+                #{ AddPrim: #{
+                    edit_target: "@runtime@",
+                    parent_path: ROOT,
+                    name: "AdmissionLanding",
+                    type_name: "Xform",
+                    reference: "lunco://vessels/markers/landing_location.usda",
+                    reference_prim_path: "",
+                }},
+                #{ AddPrim: #{
+                    edit_target: "@runtime@",
+                    parent_path: ROOT,
+                    name: "AdmissionPoint",
+                    type_name: "Xform",
+                    reference: "lunco://markers/route_point.usda",
+                    reference_prim_path: "",
+                }},
+                #{ SetTranslate: #{
+                    edit_target: "@runtime@",
+                    path: ADMISSION_LANDING_PATH,
+                    value: [1000.0, 1000.0, 1000.0],
+                }},
+                #{ SetTranslate: #{
+                    edit_target: "@runtime@",
+                    path: ADMISSION_POINT_PATH,
+                    value: [1000.0, 1000.0, 1000.0],
+                }},
+            ],
+        });
+        if admission == () || admission.ok != true {
+            let reason = if admission == () { "no result" } else { admission.error };
+            this.checks.push(t_true(false,
+                "primary-scene reference admission was rejected: "
+                    + reason));
+            finish(this);
+            return;
+        }
+        this.reference_admission_started = true;
+        this.phase = 103;
+        return;
+    }
+
+    if this.phase == 103 {
+        if !this.reference_admission_checked { return; }
         let transient = waypoint_editor::on_click(
             context(this.doc, (), [0.0, 1.0, -40.0]),
         );

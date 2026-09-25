@@ -73,12 +73,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
     (
         "cmd",
         "cmd(name, #{params})",
-        "#{ id, ok, status, data, error }",
+        "#{ id: u64, ok, status, data, error }",
         "WRITE. Fire a command by name through ApiCommandEvent — every #[Command] is reachable with no per-command binding. `status` is applied, rejected, failed, or pending; `data` carries command-specific result data (a spawned gid, stdout, etc.). Use command_result(id) when a deferred owner has not finished yet.",
     ),
     (
         "command_result",
-        "command_result(id)",
+        "command_result(id: u64)",
         "#{ id, ok, status, data, error }",
         "READ. Get the shared terminal result of a prior cmd() call. Deferred commands remain status=pending until their owner records applied, rejected, or failed; do not treat acceptance as applied.",
     ),
@@ -276,7 +276,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "usd_document_generation",
-        "usd_document_generation(doc_id)",
+        "usd_document_generation(doc_id: u64)",
         "u64 | ()",
         "Read the authoritative USD document generation as a cheap structural invalidation clock; perform detailed topology queries only after it changes.",
     ),

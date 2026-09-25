@@ -61,7 +61,9 @@ scenario content. Rust loads the source tree through the asset/storage layer
 and applies that decision; source directories are not repeated in Rust
 registries. Standard tools live in the lower `lunco://` layer, while a Twin's
 `tools/*.rhai` files are loaded into its own scoped overlay and are removed on
-Twin close.
+Twin close. A policy whose owner is supplied by an optional runtime feature can
+declare `skip_when_hook_unavailable = true`; the selected build omits it when
+that owner is not linked and exposes the capability in `policy_status()`.
 
 ## Canonical reusable entrypoints
 

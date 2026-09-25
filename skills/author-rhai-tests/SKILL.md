@@ -93,10 +93,37 @@ non-empty footprint.
    evidence; it is not a behavior or visual verdict. For a live Editor session,
    use `RunRhai`/`run_rhai_test.sh` or an attached `RunScenario` and preserve
    the current process and camera. Do not rebuild Rust for a Rhai-only change.
+   Scene discovery is recursive. Give independent Editor fixtures nested
+   one-scene directories so each windowed run mounts its own Twin and preview
+   state. The production test wrappers give each process a run-scoped
+   `LUNCOSIM_CONFIG`, isolating saved workspace/session state as well as
+   ephemeral settings and runtime overlays.
 7. Repeat with deterministic clocks and explicit seeds. Record the clock
    contract, timestep/substeps, source revision, and finite-state result. A
    repeatability check compares the same sampled evidence, not merely a zero
-   exit code.
+   exit code. For an owner-only hook, exercise valid context through its real
+   production owner and rejection from an authored off-cycle invocation. Use
+   `RunRhai`'s `Application/Repl/Evaluation` route for deliberate policy
+   inspection; it does not stand in for the live owner context.
+   World-bound `RunRhai` requests drain one per application update in FIFO
+   order, and excess queue submissions or over-budget invocations return
+   terminal errors. Keep public command behavior assertions in authored Rhai;
+   test only the generic batch and FIFO seam in Rust.
+
+For observable multi-actor ordering, attach scenarios to distinct authored
+hosts and assert the same-pass handoff in Rhai. Keep Rust coverage for the
+generic identity key and reverse-completion commit mechanism; a Rust assertion
+alone does not prove the production script path.
+
+When a public query reports asynchronous analysis, a test may sample that
+query from its test-only `on_tick` until the exact requested generation reaches
+a terminal state. Assert `pending` as retryable and inspect diagnostics only
+after `ready`; do not use elapsed wall time to decide which result is current.
+If a running scenario needs those facts before it can initialize, declare the
+owner and identity in `simulation_dependencies(...).required_inputs` and assert
+from `on_start` that the committed source revision is available. The generic
+scenario lifecycle test may verify Pending-to-Ready hold/release mechanics;
+the authored scene gate must verify the domain key and source revision.
 
 ## Production commands
 

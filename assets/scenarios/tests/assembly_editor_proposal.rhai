@@ -1,4 +1,4 @@
-// TEST-ONLY. Runs against scenes/tests/assembly_editor_proposal.usda.
+// TEST-ONLY. Runs against scenes/tests/editor/assembly_editor_proposal/assembly_editor_proposal.usda.
 // The scenario owns temporary USD and Modelica documents created through the
 // production Editor APIs; it accepts one generated nonzero SysML -> Modelica
 // -> Editor proposal round trip without editing its own mounted scene.
@@ -18,10 +18,10 @@ fn fail(me, message) {
         if me.solve_ticket != () && me.solve_ticket.experiment_id != () {
             modelica_editor::cancel_experiment_ticket(me.solve_ticket);
         }
-        if me.modelica_doc > 0 {
+        if me.modelica_doc != () {
             modelica_editor::close_scratch(me.modelica_doc);
         }
-        if me.doc > 0 {
+        if me.doc != () {
             assembly_edit::close_document(me.doc);
         }
         me.done = true;
@@ -93,8 +93,8 @@ fn vector_matches(value, expected) {
 }
 
 fn on_start(me, ctx) {
-    this.doc = -1;
-    this.modelica_doc = -1;
+    this.doc = ();
+    this.modelica_doc = ();
     this.initial_modelica_generation = -1;
     this.initial_usd_docs = [];
     this.solve_ticket = ();
@@ -142,7 +142,7 @@ fn on_tick(me, ctx) {
                 }
             }
         }
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 8.0 {
                 fail(this, "Editor did not publish the new scratch USD document");
                 this.done = true;

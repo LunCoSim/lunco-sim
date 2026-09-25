@@ -265,7 +265,7 @@ The visual contract is covered by
 and its Rhai observer. Real Avian trigger arrival and route resume are covered
 by [`route_progress.usda`](../../assets/scenes/tests/route_progress.usda); the
 windowed pointer/menu path is covered by
-[`route_interaction.usda`](../../assets/scenes/tests/route_interaction.usda).
+[`route_interaction.usda`](../../assets/scenes/tests/editor/route_interaction/route_interaction.usda).
 The manifest-backed runtime-layer write and restore path is covered by
 [`route_runtime_persistence.usda`](../../assets/scenes/tests/route_runtime_persistence.usda)
 and `scripts/api/test_route_runtime_persistence.py`.

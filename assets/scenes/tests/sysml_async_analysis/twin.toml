@@ -1,0 +1,9 @@
+name = "sysml_async_analysis"
+version = "0.1.0"
+
+[sysml]
+root = "analysis.sysml"
+paths = ["."]
+
+[usd]
+default_scene = "analysis.usda"

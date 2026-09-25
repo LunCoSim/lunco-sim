@@ -21,6 +21,13 @@ Unsupported metadata disables only that program and publishes a document
 diagnostic for its source revision. Keep runtime errors visible; do not catch
 and erase them as successful no-ops.
 
+Scenario actors submit, commit, and run in `GlobalEntityId` order from the
+source-owned component, not from ECS query order or the API lookup index. A
+local-only host without a global identity uses a world-local Bevy key and is not
+part of cross-session replay ordering. If one scenario's synchronous command
+must be visible to another in the same pass, test that handoff through a
+production Rhai scene with stable actor identities.
+
 For mission operations, read the generic
 [mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
 before authoring the scenario. Treat the ConOps, mode transitions, command and
@@ -64,6 +71,29 @@ simulations deliver discrete events on the next `Update` without advancing the
 tick. The first `on_start` does not replay events from before the program
 started. Query current state from the owning subsystem for startup decisions,
 then use `on_event` for later transitions.
+
+Use `simulation_dependencies(me, ctx)` when startup needs Modelica ports/events
+or a committed cross-domain input. Return both arrays, even when one is empty:
+
+```rhai
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [find("/Rover/Controller")],
+        required_inputs: [
+            #{ owner: "sysml.twin-analysis", identity: ctx.twin_name },
+        ],
+    }
+}
+```
+
+Modelica entities join the shared fixed-step causal barrier. Required input
+keys name an owner namespace and an exact identity; the generic runtime waits
+on owner-published Pending/Ready/Failed state before top-level initialization
+and `on_start`. A pending scenario keeps its existing activation hold and
+resumes after the owner publishes a new state revision, so scripts should not
+poll analysis from `on_tick`. A missing owner or failed input produces a
+diagnostic. Keep the selection policy in Rhai and use the key contract exposed
+by the domain owner.
 
 The reusable route marker is a translucent, unlit, shadowless annotation. Its
 unvisited colour is bright green and its visited colour is gray in standard

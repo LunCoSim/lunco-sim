@@ -1,4 +1,4 @@
-# Command Journal — one op log for identity, undo, sync, and replay
+# Command Journal — authored mutations and session replay inputs
 
 > Status: Design · Audience: contributors adding new domain mutations
 >
@@ -9,28 +9,29 @@
 `SpawnEntity`, `AcquireControl`, `SetPorts`, terrain spawning, and time control
 remain transient; deterministic session replay is therefore not built.
 
-The command journal must remain separate from high-rate controls and telemetry:
-it needs an explicit mutation subset, reversible payloads, simulation-tick
-ordering, and a single interaction with the existing journal replication plane.
-Recording every per-frame control sample would produce an unusable persistent
-log and could double-apply networked commands.
+The Twin journal owns authored document mutations. A separate session replay
+input stream must own transient external inputs such as per-tick controls and
+runtime commands. Telemetry remains observational output, not an input source.
+Recording every control change as an authored journal operation would produce
+an unusable history and could double-apply networked commands.
 
 The design below defines those constraints and the intended adoption path. It
 does not describe command journaling as shipped.
 
 ## The thesis
 
-A terrain dig is not special. Neither is a spawn or a possession. They are all
-**mutations of world state expressed as `#[Command]`s** — already serializable,
-already dispatched through one bus. The moment you notice that, the bespoke machinery
-each feature would otherwise grow — a monotonic id counter here, an undo stack there,
-a replication path somewhere else — collapses into one question: *record the command
-in the log.* Do that once, at the one place every command already funnels through, and
-every interaction inherits:
+Authored document edits and runtime commands both change what a user sees, but
+they have different lifecycles. Some mutations use `#[Command]`; authored USD
+operations use the Twin journal, while session inputs need tick-scoped capture.
+Command types are serializable, but they do not share one ingress: transport
+requests use the API dispatcher, while UI and subsystem code can trigger typed
+command events directly. Any session recorder must attach at owners that cover
+the supported external inputs; observing only the API dispatcher would miss
+direct typed events.
 
-The table below is what a journaled command **would** inherit. Today it inherits
-none of it — the rows are live only for the *document* domains (`Usd`, `Modelica`,
-`Script`, …), which do record through `JournalOpRecorder`.
+The table below describes what an authored document operation inherits from the
+Twin journal. Runtime inputs such as possession, time transport, and controls
+have different lifetimes and need a session replay owner.
 
 | Capability | Where it comes from |
 |---|---|
@@ -39,67 +40,88 @@ none of it — the rows are live only for the *document* domains (`Usd`, `Modeli
 | **Undo / redo** | the op's recorded **inverse** (`record_op` stores both) |
 | **Multi-peer sync** | the journal-merge plane replicates entries (`merged_order`) |
 | **Persistence / audit** | the journal serializes (`to_bytes`) and is human-readable |
-| **Deterministic replay** | replay the op stream + seeds = spec 020's Input Log |
+| **Authored-state reconstruction** | replay authored document operations and their recorded inputs |
 
-This is the universal answer to three threads that kept recurring — *"several crater
-layers,"* *"dynamic tool edits,"* *"per-layer identity"* — and to the tool question
-(*"spawn/possess as tools"*). They are one capability: **an addressable op in a shared
-journal.**
+This shared journal is the owner for authored document history. Terrain layer
+identity and dynamic document edits may use it when they are authored as USD
+operations. Runtime spawn, possession, and control behavior need an explicit
+session-input contract; they do not become document operations merely because
+they are exposed as commands or tools.
 
 ## Existing substrate
 
 The current document-journal implementation and ownership boundaries are
 defined in [`18-unified-journal-and-history.md`](18-unified-journal-and-history.md).
-The command work reuses its `Journal`, `EntryId`, inverse, change-set, and
-journal-plane machinery; it must not create a second log.
+Authored document operations reuse the journal's `EntryId`, inverse,
+change-set, and merge machinery. The transient session-input stream has a
+different record shape and lifecycle; it is not a second authored journal.
 
-And the **command bus** is the other half already in place: `#[Command]` types are
-`Serialize + Reflect`, and **every** call path — rhai `cmd(...)`, HTTP `/api`, MCP
-`execute_command`, UI — funnels through **one dispatcher**,
-`api_command_dispatcher` (`lunco-api::executor`), which reflect-builds the command and
-triggers its observer. That single chokepoint is the integration point: record there,
-and you have captured *every* interaction, universally, with no per-command wiring.
+The typed command surface does not currently have one universal ingress.
+HTTP, MCP, and Rhai calls use the API dispatcher; UI and subsystem code can
+also trigger registered typed command events directly.
+`CommandOccurred` projects only the command type name; it does not retain
+parameters, target, origin, scene generation, tick, or sequence. The dispatcher
+alone therefore cannot be the whole-session replay boundary.
 
-So the work is **not** a new system. It is: make a mutating `#[Command]` an
-`OpPayload` (add `fn domain()`; it is already `Serialize`), and record it at the
-dispatcher.
+Replay must capture external authoritative inputs at their owning ingress,
+before projection, with a scene generation, target identity, effective
+`SimTick`, and stable per-tick sequence. Capture must distinguish external
+inputs from commands derived by deterministic Rhai/hooks: replaying both the
+input and its derived command would apply the same effect twice. High-rate
+controls should use semantic per-tick input frames instead of one persistent
+journal entry per frame.
 
-## The model — one write path (record → project), never dual-write
+The existing Twin journal remains the owner for authored document operations.
+It does not record transient controls, scene-time inputs, or physics state and
+cannot reproduce a live session by itself. A session replay input stream must
+cover those transient inputs without recording authored document edits a
+second time. This capture and replay path is not implemented yet. Its design
+must inventory every actual ingress before selecting an integration point; it
+cannot assume that `api_command_dispatcher` observes every typed command.
 
-The journal is the **single source of truth**; ECS is its **projection**. A command
-does not both record an op *and* separately mutate ECS — that dual-write is two truths
-that can diverge and is exactly what makes sync hard. Instead a command **records**;
-a **projection** applies the op to ECS. Local and remote ops take the *identical* path:
+## The authored-document model — one write path (record → project)
+
+For a migrated authored document mutation, the journal is the **single source
+of truth** and ECS is its **projection**. A document command does not both
+record an op and separately mutate ECS; that dual-write creates two truths that
+can diverge. Instead it records an op and the document projection applies it.
+Local and remote authored document ops take the same path:
 
 ```
-   rhai cmd() ─┐
-   HTTP /api  ─┼─►  api_command_dispatcher ─► journal.record_op(author,&op,&inverse) ─► EntryId
-   MCP        ─┤                                          │
-   UI         ─┘                                          ▼
-   remote peer's op ─► merge plane ─► journal ─►  projection applies the op ─► ECS state
+   authored document edit ─► document ingress ─► authored journal ─► domain projection ─► ECS
+   remote authored op ─────► merge plane ──────► authored journal ─► domain projection ─► ECS
+   UserIntent/InputFrame ───► session input log at (scene generation, SimTick, sequence)
+   deterministic Rhai/hooks ───────────────────────────────────────────────► re-derived
 ```
 
-**This is why single-source makes sync trivial:** replicate the log, and every peer
-projects the same log to the same state — no local-vs-remote special case, nothing to
-reconcile write-against-write. A migrated command's observer stops mutating ECS
-directly; its mutation moves *downstream* of the journal into a domain projection that
-reacts to new ops. Migration is **per command** (a command is either not-yet-journaled
-and imperative, or journaled and projected — never both), so this is incremental, not a
-big-bang, and never dual-writes.
+The document ingress in this diagram describes the existing Twin-journal
+boundary. It does not route every runtime command through that journal. Session
+inputs and authored journal operations have separate records and lifecycles.
 
-- **Op vocabulary = the commands.** `BrushTerrain`, `FlattenTerrain`, `SpawnEntity`,
-  `AcquireControl`, a USD prim edit — each a typed op. No separate op language.
-- **Identity = `EntryId`.** A terrain layer's `LayerId` *is* the `EntryId` of the edit
-  that created it; a spawned entity traces to its spawn op; etc. One id space.
-- **Undo = the inverse.** Each mutating command declares its inverse — often another
-  command: the inverse of `BrushTerrain` (which appends layer `EntryId`) is
-  `RemoveTerrainLayer { id: EntryId }`. `record_op<O, I>` stores both; undo applies the
-  inverse; `ChangeSet` groups a multi-op action into one undo step.
-- **Sync = `merged_order`.** Command ops replicate and merge like any entry; peers
-  converge on the same op stream (the journal-merge plane), so terrain, spawns, and
-  possessions stay consistent without per-feature netcode.
-- **Replay = the stream + seeds.** Ops carry their inputs (params, seeds, sim-time);
-  replaying `merged_order` reproduces state — spec 020's deterministic Input Log.
+This gives authored document sync one source of truth: peers merge the same
+document operations and project them into their local runtime state. It does
+not by itself replay session controls or guarantee whole-simulation sync. A
+migrated document command's mutation moves downstream of the journal into its
+domain projection. Migration is per operation; an operation is either
+imperative and not journaled, or journaled and projected, never both.
+
+- **Op vocabulary = authored document operations.** A USD prim edit or a
+  terrain edit authored as a USD prim is a typed document op. Runtime commands
+  such as `SpawnEntity` and `AcquireControl` are not document ops by default.
+- **Identity = `EntryId` within the authored journal.** A document layer's
+  identity may derive from its creating entry. Session entities and inputs keep
+  identities owned by their runtime contracts.
+- **Undo = the inverse.** Each authored document operation declares its inverse.
+  For example, an additive terrain edit may invert to
+  `RemoveTerrainLayer { id: EntryId }`. `record_op<O, I>` stores both; undo
+  applies the inverse; `ChangeSet` groups a multi-op action into one undo step.
+- **Authored document sync = `merged_order`.** Document ops replicate and merge
+  through the journal plane. Runtime spawns, possession, and controls need their
+  own session or networking contract.
+- **Authored-operation replay.** Ops carry their inputs (parameters and seeds);
+  replaying `merged_order` reconstructs authored document state. Whole-session
+  replay additionally requires the separate tick-stamped session input stream;
+  Twin-journal order alone does not reconstruct physics, Modelica, or Rhai state.
 - **Projection, and where granularity lives.** A migrated command's observer stops
   mutating ECS; a domain projection applies its ops. Crucially, **the fine-grained
   history lives in the journal, not in ECS**: each brush stroke is its own op
@@ -114,29 +136,30 @@ big-bang, and never dual-writes.
 
 ## Decisions the design must pin down
 
-1. **Which commands are journaled.** Mutations, not transient view/query commands
-   (`FocusTarget`, reads). Mark them — a `JournaledCommand` trait or an
-   `EntryCategory` on the command — so the dispatcher records mutations only. Author is
-   taken from the call context (tool name for scripts, user for UI, peer for remote).
+1. **Which document mutations are journaled.** Select authored mutations, not
+   transient view/query commands (`FocusTarget`, reads) or session inputs. Any
+   command recorder must observe every supported ingress; the existing API
+   dispatcher does not observe direct typed event triggers and cannot be the
+   sole recorder.
 
 2. **How the inverse is obtained.** Three tiers: (a) **natural inverse** — additive
-   ops invert to a remove-by-`EntryId` (terrain edits, spawns); (b) **computed inverse**
+   authored ops invert to a remove-by-`EntryId` (for example, terrain edits);
+   (b) **computed inverse**
    — `fn inverse(&self, world) -> impl OpPayload` captures the pre-state it overwrites
    (flatten must snapshot the heights it replaced for a *true* undo, vs. the cheap
    "remove the flatten layer" which only pops it); (c) **snapshot/diff** for ops with no
    compact inverse. Start with (a).
 
-3. **Determinism for replay.** Ops must be self-contained: seeds, sim-time, and params
-   in the payload; no hidden RNG/wall-clock in observers (spec 020 US3: fixed timestep,
-   seeded RNG, deterministic ordering). This is a discipline the design imposes on
-   journaled commands.
+3. **Determinism for authored-state reconstruction.** Document ops must be
+   self-contained: required seeds and parameters belong in the payload. This
+   reconstructs authored state; fixed-step simulation inputs and runtime RNG
+   remain part of the separate whole-session contract (spec 020 US3).
 
-4. **One journal, not two.** The networking branch's canonical design says *edits ride
-   the USD-doc-op journal*. This **is** that journal: a USD prim edit and a
-   `BrushTerrain` are both `EntryKind` payloads in `lunco-twin-journal`. The command
-   journal is not a parallel log to reconcile later — it is the same substrate, and a
-   command op can *lower to* a USD-doc op where one exists. The design must forbid a
-   second log.
+4. **Keep record types aligned with their lifecycles.** Authored edits ride the
+   USD-document journal and participate in undo, persistence, and merge. External
+   runtime inputs use a separate tick-stamped session stream and are not Twin
+   journal entries. A session replay implementation must not record deterministic
+   Rhai or hook outputs as independent inputs when replay can derive them again.
 
 ## The Omniverse pattern: USD + Fabric, two tiers
 
@@ -180,10 +203,11 @@ loop, and we follow it:
 **Tradeoff, stated plainly.** Coupling edits to USD composition + journal is more
 machinery than a bespoke ECS edit list, and composition is not free — mitigated by
 param-only prims, commit-granularity, and the runtime projection absorbing interaction.
-The payoff: undo/redo, sync, persistence, collaboration, audit, and replay come free and
-**standard**, matching Omniverse and converging with the canonical merge. Given USD is
-the standard, this is the right default; the per-frame-authoring trap is the one thing
-to forbid.
+The payoff: undo/redo, authored-state sync, persistence, collaboration, and
+audit use the existing USD journal. Authored-state reconstruction comes from
+its operation stream; whole-session replay still requires a separate input log
+and deterministic runtime contract. Given USD is the standard, this is the
+right default; the per-frame-authoring trap is the one thing to forbid.
 
 ## Staged adoption (incremental, not a big-bang rewrite)
 
@@ -223,35 +247,40 @@ to forbid.
   > as one `DocumentHost` history group and, when a `JournalResource` is present,
   > one journal change set. Headless builds without a journal retain the same
   > all-or-nothing document history, just without the Twin journal entry group.
-- **Phase 3 — Replay / determinism.** Seeds + sim-time in ops; replay `merged_order`
-  → spec 020's deterministic Input Log; divergence checks.
-- **Phase 4 — Projection-authoritative.** State = snapshot + replay(log); ECS becomes a
-  pure projection, converging with the USD-canonical projection membrane. This is the
-  merge-coupled end-state, not a prerequisite for Phases 1–3.
+- **Phase 3 — Authored-state reconstruction.** Replay authored document operations
+  and their inputs. Whole-session replay remains separate and requires the
+  tick-stamped session input stream described above, plus divergence checks.
+- **Phase 4 — Projection-authoritative authored state.** Authored document state
+  is reconstructed from snapshots plus journal operations; ECS becomes its pure
+  projection, converging with the USD-canonical projection membrane. This does
+  not replace the separate session input stream and is not a prerequisite for
+  Phases 1–3.
 
-## What each interaction becomes (target — none of these rows exist yet)
+## Interaction ownership
 
-Only the last row is real today: a USD prim edit journals as a `DomainKind::Usd` doc
-op with its inverse. The four command rows above it are the **unbuilt** part — the
-commands run, mutate ECS directly, and leave no journal entry.
+The current runtime and authored paths have different owners and ordering
+contracts:
 
-| Interaction | Op (`#[Command]`) | Inverse | Author |
-|---|---|---|---|
-| Dig / raise | `BrushTerrain` | `RemoveTerrainLayer{EntryId}` | `for_tool("terrain")` / user |
-| Flatten pad | `FlattenTerrain` | `RemoveTerrainLayer{EntryId}` (or heights snapshot) | as above |
-| Spawn a rover | `SpawnEntity` | `Despawn{EntryId}` | user / script |
-| Possess | `AcquireControl` | `ReleaseControlSource` / prior possession | user |
-| USD prim edit | doc op | doc inverse op | user / peer |
+| Interaction | Owner and record | Identity and order |
+|---|---|---|
+| Dig / raise authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
+| Flatten pad authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
+| Spawn a rover during a session | Runtime command; session input capture is not implemented | scene generation, target, `SimTick`, stable sequence |
+| Possess during a session | semantic user intent; whole-session capture is not implemented | scene generation, controlled target, `SimTick`, stable sequence |
+| USD prim edit | USD document operation in the Twin journal | `EntryId` and merged journal order |
 
-Every row is the same shape. That is the point: **the tools, the edits, the identity,
-the undo, the sync, and the replay are one system** — the op log — and terrain editing
-is simply its first, concrete consumer.
+These rows do not all share one lifecycle. The USD prim edit belongs to the
+authored document journal. Runtime interactions require session-input or
+networking contracts with tick and target identity. Terrain editing uses the
+document journal only when the edit is authored as a document operation.
 
 ## See also
 
-- [`specs/020-world-state-and-replay`](../../specs/020-world-state-and-replay) — the
-  Input Log / deterministic replay this realizes.
+- [`specs/020-world-state-and-replay`](../../specs/020-world-state-and-replay) —
+  the broader world-state and session replay contract; this document covers only
+  authored document history and does not implement its full Input Log.
 - [`terrain-substrate.md`](terrain-substrate.md) → "Dynamic modification" — terrain
   edits as layers; the LayerId that becomes an `EntryId`.
 - `lunco-twin-journal` — the op-log substrate (`record_op`, `EntryId`, `merged_order`).
-- `lunco-api::executor::api_command_dispatcher` — the one chokepoint all commands pass.
+- `lunco-api::executor::api_command_dispatcher` — transport command ingress; direct
+  typed command events also exist and must be included in any replay capture audit.

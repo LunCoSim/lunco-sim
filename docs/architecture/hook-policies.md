@@ -68,7 +68,12 @@ contract. The manifest has one `[startup]` entry. That entry names the Rhai
 function that receives the manifest-resolved policy records and installs them
 through the private typed bootstrap binding. Each
 `[[policies]]` entry names a hook id, a relative Rhai source file, an entry
-function, and its determinism/required declaration. A Twin may provide an
+function, and its determinism/required declaration. A policy owned by an
+optional runtime feature may set `skip_when_hook_unavailable = true`; the
+selected composition then leaves it out when its hook owner is not linked and
+reports the hook in `policy_status().unavailable`. This flag skips only an
+absent owner. Missing source, Rhai compile errors, and invocation failures
+remain visible; a required policy cannot be skipped. A Twin may provide an
 independent policy manifest under its own root; its records are merged
 with application records (Twin entries replace the same hook id) and its own
 startup function receives the Twin records that it owns when that Twin becomes
@@ -108,6 +113,13 @@ hook for its own authored behavior. A missing optional lifecycle policy is a
 valid unconfigured state, and a lifecycle fault is reported without crashing
 or silently selecting another implementation.
 
+Every `twin.lifecycle` invocation carries `Twin/Lifecycle` with the mounted
+Twin's nonzero `TwinId` as its generation, `RuntimeClock::None`, and the phase
+`Start`, `Event`, or `Stop`. `TwinId` is allocated monotonically for each mount
+within the owning workspace, so a later mount of the same path has a distinct
+route. `policy_status().lifecycle.runtime_context` retains the exact context
+used for the latest delivery.
+
 The generic asset layer owns asynchronous JSON reads and publishes
 `JsonAssetScopeLoading` and `JsonAssetScopeChanged` events for the engine
 library and each opened Twin. The application manifest installs the optional,
@@ -137,9 +149,11 @@ contribution; a fault or malformed action map is warned and queues no asset
 reads. This is the startup-to-menu path used by the authored tutorial catalog
 policy, so no Rust tutorial menu or catalog parser is needed.
 
-Physics owns the required deterministic `physics.body_escape(ctx: Map) ->
+Physics owns the optional deterministic
+`physics.initialization(facts: Map) -> String` seam for explicit pre-admission
+decisions and the required deterministic `physics.body_escape(ctx: Map) ->
 String` seam, installed by the application policy bootstrap during `PreStartup`
-and replaceable by an active Twin. Its map contains `kind` (`finite_world_exit`
+and replaceable by an active Twin. The escape map contains `kind` (`finite_world_exit`
 or `non_finite_state`), `path` and `global_id` (each a string or `Unit` when
 unavailable), `position_m`, `velocity_mps`, `world_min_m`, and `world_max_m`
 (three-float arrays for a bounded world, otherwise `Unit`). The application
@@ -149,9 +163,21 @@ object cannot affect other bodies. Physics and world time continue for
 everything else. An authored policy can return `pause_world` when a Twin
 intentionally needs that response. Missing, faulting, or malformed policies
 fail closed with a visible runtime fault and physics hold.
+
+The initialization selector is authored through
+`LunCoPhysicsInitializationAPI`; Rust dispatches every selected body through
+the one declared seam and supplies a `Twin/Lifecycle/Preparation` context
+with no elapsed clock. Facts contain the stable USD subject path, selector,
+finite pose, and assembly member count, never ECS entity ids. Missing schema or
+selector, a missing or non-deterministic policy, wrong context, or a malformed
+or rejected result leaves the body held and publishes a runtime diagnostic.
+The built-in `strict-authored` path does not invoke Rhai.
 `assets/scripting/tests/test_hook_policies.rhai` covers the required contract
-and finite-exit default action; `escape_containment` proves the real solver
-keeps moving an unaffected control body.
+and rejects an off-cycle invocation. The physics owner stamps each real call
+with its core simulation route, `Behavior` phase, fixed clock sample, and
+`SimTick`; `escape_containment` proves the installed policy accepts that
+context, contains the escaped object, and keeps the real solver moving an
+unaffected control body.
 
 The lifecycle dispatcher validates the returned map, retains the typed result
 as the current lifecycle record, and exposes it through `policy_status()` and
@@ -242,6 +268,26 @@ manifest-declared `required = true` failure blocks that seam. Deterministic
 hooks can be installed from an authored manifest only when the manifest opts
 into `deterministic = true`; an inline binding cannot claim convergence.
 
+## Runtime execution context
+
+Scheduled owners pass a typed `RuntimeExecutionContext` with each hook call.
+The immutable Rhai `runtime_context` map describes the owner's route, cycle,
+phase, clock sample, sequence, and event producer where applicable. A hook
+whose policy is valid in one cycle should reject other contexts. For example,
+`readiness.action` runs as `Core/Simulation/Behavior` with fixed-clock time and
+the latest `SimTick`; its policy rejects lifecycle, UI, and REPL calls. Test
+both the production owner path and an intentional off-cycle call in authored
+Rhai.
+
+The `synth.acausal-network` and `synth.actuator-wrench` source generators run
+as `Twin/Lifecycle/Preparation` with the active-or-committed scene generation
+and no clock sample. The domain owner captures that context before async
+dispatch and supplies the same value to synchronous live projection. Their
+policies reject calls from other cycles; production tests exercise an off-cycle
+call and verify source publication through the generated-source query. Async
+results also carry the same Twin generation and are discarded when it changes,
+even if their USD stage revision still matches.
+
 ## Native providers
 
 An approved Twin may implement an existing installable hook with a native
@@ -249,7 +295,8 @@ shared library. The provider is listed explicitly in `twin.toml` under
 `[[native_plugins]]`; it is never discovered from USD, a Rhai source file, or a
 directory scan. The loader validates the provider descriptor against the
 link-collected hook catalog and registers the callback through the same
-`lunco_hooks::invoke` path used by Rust and Rhai. See
+`HookInvocation` path used by Rust and Rhai, including owner-supplied runtime
+context. See
 [`native-hook-providers.md`](native-hook-providers.md) for the ABI, lifecycle,
 failure, and future terrain-kernel boundary.
 
@@ -282,7 +329,11 @@ loaded provider ids and admission failures. The API
 `parameters: [{name, type_name}]`. `bind_policy`, `unbind_policy`, and
 `invoke_hook` return structured operation results so denied, rejected,
 unavailable, and faulted states remain visible. `policy_status()` also reports
-the last Twin lifecycle event, status, typed result, and any delivery error.
+the last Twin lifecycle event, status, typed result, runtime context, and any
+delivery error.
+Its `unavailable` list identifies feature-gated policies whose hook owner is
+absent from the selected runtime composition; `failed` remains reserved for
+policies that were selected but could not compile or activate.
 JSON is only the outer API transport representation; internal hook calls use
 `HookValue`, not JSON maps.
 

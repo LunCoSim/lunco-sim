@@ -172,6 +172,9 @@ pub struct TerrainSurfaceVisualizationPlugin;
 
 impl Plugin for TerrainSurfaceVisualizationPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
+            app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+        }
         app.register_type::<crate::stream_viz::TerrainVisualFocus>();
         app.init_resource::<lunco_render::RenderingQualitySettings>();
         crate::stream_viz::register_all_commands(app);
@@ -181,6 +184,9 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
         app.init_resource::<crate::stream_viz::TerrainDetailDemands>();
         app.init_resource::<lunco_viewport_core::SceneViewport>();
         app.init_resource::<crate::stream_viz::TerrainStreamLockstep>();
+        app.init_resource::<crate::stream_viz::TerrainStreamCadence>();
+        app.init_resource::<crate::stream_viz::TerrainCoverResults>();
+        app.add_systems(PreUpdate, crate::stream_viz::advance_terrain_stream_cadence);
         crate::overlay::register(app);
         crate::derived_layers::register(app);
 
@@ -205,6 +211,9 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
             )
                 .in_set(lunco_core::RuntimeCycleSet::Visualization),
         );
+        // Camera cover selection is presentation work at a wall-clock cadence.
+        // Tile completion and residency commits remain in Update so the active
+        // view can use completed work without waiting for another selection pass.
         app.add_systems(
             PostUpdate,
             crate::stream_viz::bind_shadow_cache_to_tiles
@@ -227,11 +236,21 @@ mod tests {
                 .get_resource::<crate::stream_viz::TerrainDetailDemands>()
                 .is_none()
         );
+        assert!(
+            app.world()
+                .get_resource::<crate::stream_viz::TerrainStreamCadence>()
+                .is_none()
+        );
 
         app.add_plugins(TerrainSurfaceVisualizationPlugin);
         assert!(
             app.world()
                 .get_resource::<crate::stream_viz::TerrainDetailDemands>()
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get_resource::<crate::stream_viz::TerrainStreamCadence>()
                 .is_some()
         );
     }

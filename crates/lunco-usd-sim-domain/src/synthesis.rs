@@ -173,6 +173,8 @@ pub enum SynthOutcome {
 pub struct SynthContext<'a> {
     /// Class-per-source-asset, as declared BY THE FILE. See [`MemberClasses`].
     pub classes: &'a MemberClasses,
+    /// Twin lifecycle route that owns this generated-source revision.
+    pub runtime_context: lunco_core::RuntimeExecutionContext,
 }
 
 /// Open registry of synthesizers, by name. No enum: a new domain is a
@@ -278,7 +280,7 @@ impl DomainSynthesizer for HookSynthesizer {
         })?;
         let result = {
             let _span = bevy::log::info_span!("domain_rhai_synthesis").entered();
-            lunco_hooks::invoke(&self.hook_id, &[facts])
+            lunco_hooks::invoke_with_context(&self.hook_id, &[facts], ctx.runtime_context)
         }
         .ok_or_else(|| {
             vec![DomainProjectionError {
@@ -1502,7 +1504,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         view: &dyn ComposedReader,
         root: &SdfPath,
         model_name: &str,
-        _ctx: &SynthContext<'_>,
+        ctx: &SynthContext<'_>,
     ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
         if !is_runtime_domain_network_root(view, root) {
             return Ok(SynthOutcome::NotMine);
@@ -1692,12 +1694,20 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 lunco_hooks::HookValue::Int(wrench_matrix.len() as i64),
             ),
         ]);
-        let value = lunco_hooks::invoke("synth.actuator-wrench", &[facts]).ok_or_else(|| {
+        let value = lunco_hooks::invoke_with_context(
+            "synth.actuator-wrench",
+            &[facts],
+            ctx.runtime_context,
+        )
+        .ok_or_else(|| {
             vec![DomainProjectionError {
                 path: root_string.clone(),
-                message: "actuator-wrench is selected but its Rhai synthesis policy is not registered".into(),
+                message:
+                    "actuator-wrench is selected but its Rhai synthesis policy is not registered"
+                        .into(),
             }]
-        })?.map_err(|error| {
+        })?
+        .map_err(|error| {
             vec![DomainProjectionError {
                 path: root_string.clone(),
                 message: format!("actuator-wrench synthesis policy failed: {}", error.0),

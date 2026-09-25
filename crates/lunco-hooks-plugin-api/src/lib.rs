@@ -3,13 +3,15 @@
 //! A provider is a shared library, so no Rust layout, allocator, trait object,
 //! Bevy value, USD object, or domain type crosses this boundary. The host sends
 //! one [`lunco_hooks::wire`] value and the provider fills a caller-owned output
-//! buffer. Providers can use [`decode_arguments`] and [`encode_result`] to keep
-//! their implementation typed without duplicating the wire format.
+//! buffer. Providers can use [`decode_invocation`] and [`encode_result`] to keep
+//! their implementation typed without duplicating the wire format. Every
+//! invocation carries the arguments and owner-supplied runtime context; use
+//! [`decode_invocation`] to read both.
 
 use lunco_hooks::HookValue;
 
 /// ABI major version. A changed major version is rejected by the host.
-pub const ABI_MAJOR: u16 = 1;
+pub const ABI_MAJOR: u16 = 2;
 /// ABI minor version. The host accepts a provider with the same major and a
 /// minor version no newer than the host's supported version.
 pub const ABI_MINOR: u16 = 0;
@@ -108,9 +110,63 @@ pub struct HookCallResult {
 /// The exported descriptor entry point.
 pub type PluginEntryFn = unsafe extern "C" fn() -> *const PluginDescriptor;
 
-/// Decode the host's top-level positional argument value.
-pub fn decode_arguments(bytes: &[u8]) -> Result<Vec<HookValue>, String> {
-    lunco_hooks::wire::decode_arguments(bytes).map_err(|error| error.to_string())
+/// One decoded invocation supplied by the host.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginInvocation {
+    /// Positional values validated against the registered hook contract.
+    pub arguments: Vec<HookValue>,
+    /// Stable context map lowered from the owner's typed execution context.
+    pub runtime_context: HookValue,
+}
+
+/// Decode one host invocation.
+pub fn decode_invocation(bytes: &[u8]) -> Result<PluginInvocation, String> {
+    let value = lunco_hooks::wire::decode(bytes).map_err(|error| error.to_string())?;
+    let HookValue::Map(entries) = value else {
+        return Err(format!(
+            "native hook invocation must be a map, received {}",
+            value.type_name()
+        ));
+    };
+    if entries.len() != 2 {
+        return Err(format!(
+            "native hook invocation must contain exactly args and context, received {} fields",
+            entries.len()
+        ));
+    }
+    let mut arguments = None;
+    let mut runtime_context = None;
+    for (key, value) in entries {
+        match key.as_str() {
+            "args" if arguments.is_none() => match value {
+                HookValue::Array(values) => arguments = Some(values),
+                other => {
+                    return Err(format!(
+                        "native hook invocation args must be an array, received {}",
+                        other.type_name()
+                    ));
+                }
+            },
+            "context" if runtime_context.is_none() => match value {
+                HookValue::Map(_) => runtime_context = Some(value),
+                other => {
+                    return Err(format!(
+                        "native hook invocation context must be a map, received {}",
+                        other.type_name()
+                    ));
+                }
+            },
+            "args" | "context" => {
+                return Err(format!("native hook invocation repeats `{key}`"));
+            }
+            _ => return Err(format!("native hook invocation has unknown field `{key}`")),
+        }
+    }
+    Ok(PluginInvocation {
+        arguments: arguments.ok_or_else(|| "native hook invocation has no args".to_owned())?,
+        runtime_context: runtime_context
+            .ok_or_else(|| "native hook invocation has no context".to_owned())?,
+    })
 }
 
 /// Decode a provider result.
@@ -123,9 +179,19 @@ pub fn encode_result(value: &HookValue) -> Result<Vec<u8>, String> {
     lunco_hooks::wire::encode(value).map_err(|error| error.to_string())
 }
 
-/// Encode positional provider arguments for a host-side test or adapter.
-pub fn encode_arguments(arguments: &[HookValue]) -> Result<Vec<u8>, String> {
-    lunco_hooks::wire::encode_arguments(arguments).map_err(|error| error.to_string())
+/// Encode an invocation for a host-side test or adapter.
+pub fn encode_invocation(
+    arguments: &[HookValue],
+    runtime_context: &HookValue,
+) -> Result<Vec<u8>, String> {
+    if !matches!(runtime_context, HookValue::Map(_)) {
+        return Err("native hook runtime context must be a map".into());
+    }
+    lunco_hooks::wire::encode(&HookValue::map([
+        ("args", HookValue::Array(arguments.to_vec())),
+        ("context", runtime_context.clone()),
+    ]))
+    .map_err(|error| error.to_string())
 }
 
 /// Declare a provider descriptor and export its one required entry symbol.
@@ -175,4 +241,35 @@ macro_rules! export_plugin {
             &__LUNCO_HOOK_PLUGIN_DESCRIPTOR
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invocation_wire_carries_arguments_and_clock_context() {
+        let context = lunco_hooks::runtime_context_hook_value(
+            lunco_hooks::RuntimeExecutionContext::unclassified(),
+        );
+        let bytes = encode_invocation(&[HookValue::Int(7)], &context).unwrap();
+        let decoded = decode_invocation(&bytes).unwrap();
+        assert_eq!(decoded.arguments, [HookValue::Int(7)]);
+        assert_eq!(decoded.runtime_context, context);
+    }
+
+    #[test]
+    fn invocation_wire_rejects_unknown_fields() {
+        let bytes = lunco_hooks::wire::encode(&HookValue::map([
+            ("args", HookValue::Array(Vec::new())),
+            ("context", HookValue::Map(Vec::new())),
+            ("legacy_clock", HookValue::Unit),
+        ]))
+        .unwrap();
+        assert!(
+            decode_invocation(&bytes)
+                .unwrap_err()
+                .contains("exactly args and context")
+        );
+    }
 }

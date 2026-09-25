@@ -48,7 +48,7 @@ pub fn on_create_scratch_modelica_document(
     scratch_documents.0.insert(doc_id);
     Ok(Ack::with_data(
         OpId::new(),
-        lunco_api_core::api_value!({ "doc_id": doc_id.raw() as i64 }),
+        lunco_api_core::api_value!({ "doc_id": doc_id.raw() }),
     ))
 }
 
@@ -139,7 +139,7 @@ pub fn on_close_scratch_modelica_document(
     scratch_documents.0.remove(&doc);
     Ok(Ack::with_data(
         OpId::new(),
-        lunco_api_core::api_value!({ "doc_id": doc.raw() as i64 }),
+        lunco_api_core::api_value!({ "doc_id": doc.raw() }),
     ))
 }
 

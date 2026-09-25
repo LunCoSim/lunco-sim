@@ -8,7 +8,7 @@
 #[cfg(feature = "rhai")]
 use bevy::asset::AssetPath;
 #[cfg(feature = "rhai")]
-use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
+use bevy::asset::{Asset, AssetId, AssetLoader, LoadContext, io::Reader};
 #[cfg(feature = "rhai")]
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 #[cfg(feature = "rhai")]
 use crate::tool_libs::ScriptSourceRole;
 
-/// Raw text of a `.rhai` file — the file-backed twin of
+/// Source text and parsed AST of a `.rhai` file — the file-backed twin of
 /// [`lunco_core::EmbeddedScenarioSource`] (inline `info:sourceCode`). Lets a scene
 /// reference a scenario by `info:sourceAsset` and keep the source as an
 /// editable, hot-reloadable `.rhai` file instead of a string baked into USD.
@@ -26,6 +26,8 @@ use crate::tool_libs::ScriptSourceRole;
 pub struct RhaiSource {
     /// Raw `.rhai` text. UTF-8.
     pub text: String,
+    /// Parsed source, prepared by the asynchronous asset loader.
+    pub ast: rhai::AST,
     /// Handles for every literal import in this source. Bevy keeps the source
     /// asset pending until this graph is loaded, so synchronous Rhai resolution
     /// never needs a discovery scan or a per-tick async bridge.
@@ -36,6 +38,14 @@ pub struct RhaiSource {
 #[cfg(feature = "rhai")]
 #[derive(Default, TypePath)]
 pub struct RhaiSourceLoader;
+
+/// Convert the resolved Bevy path into the stable identity used by Rhai imports.
+/// The default Bevy source is the engine `lunco://` library, so it must retain
+/// that scheme in the import registry and prepared-AST cache.
+#[cfg(feature = "rhai")]
+pub fn canonical_asset_id(path: &AssetPath<'_>) -> String {
+    lunco_assets_core::engine_asset_uri(&lunco_assets_core::asset_path::anchor_of(path))
+}
 
 /// Schedule boundary for admitting manifest candidates through the authored
 /// source-classification policy.
@@ -66,9 +76,17 @@ impl AssetLoader for RhaiSourceLoader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let text = String::from_utf8(bytes)?;
-        let importer = lunco_assets_core::asset_path::anchor_of(load_context.path());
+        let importer = canonical_asset_id(load_context.path());
         let dependencies = load_import_dependencies(&text, &importer, load_context)?;
-        Ok(RhaiSource { text, dependencies })
+        let mut engine = rhai::Engine::new();
+        lunco_hooks_rhai::rhai_limits::apply(&mut engine);
+        let mut ast = lunco_scripting_rhai_core::compile_with_script_consts(&engine, &text)?;
+        ast.set_source(&importer);
+        Ok(RhaiSource {
+            text,
+            ast,
+            dependencies,
+        })
     }
 
     fn extensions(&self) -> &[&str] {
@@ -109,8 +127,8 @@ fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, an
 
 /// Handles for application-owned Rhai sources selected by the authored startup
 /// classification policy from the runtime asset manifest. Keeping the handles
-/// alive makes the Bevy asset graph retain the sources and lets the scripting
-/// runtime install edits without a compiled snapshot. The manifest supplies
+/// alive makes the Bevy asset graph retain source text, prepared ASTs, and their
+/// literal import dependencies. The manifest supplies
 /// candidates; the policy decides which sources belong to the startup runtime.
 #[cfg(feature = "rhai")]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,6 +164,45 @@ pub struct BuiltinRhaiAssets {
 #[cfg(feature = "rhai")]
 #[derive(Resource, Default)]
 pub struct RhaiSourceAssetRevision(pub(crate) u64);
+
+#[cfg(feature = "rhai")]
+#[derive(Resource, Default)]
+struct RhaiSourceAssetIdentities {
+    // `AssetServer::get_path` is unavailable after final handle release, so
+    // retain the canonical route captured while the asset is live.
+    canonical_by_asset: HashMap<AssetId<RhaiSource>, String>,
+    current_asset_by_canonical: HashMap<String, AssetId<RhaiSource>>,
+}
+
+#[cfg(feature = "rhai")]
+enum SourceAssetRetirement {
+    Current(String),
+    Superseded,
+}
+
+#[cfg(feature = "rhai")]
+impl RhaiSourceAssetIdentities {
+    fn register(&mut self, id: AssetId<RhaiSource>, canonical: &str) {
+        let canonical = canonical.to_owned();
+        if let Some(previous) = self.canonical_by_asset.insert(id, canonical.clone()) {
+            if previous != canonical && self.current_asset_by_canonical.get(&previous) == Some(&id)
+            {
+                self.current_asset_by_canonical.remove(&previous);
+            }
+        }
+        self.current_asset_by_canonical.insert(canonical, id);
+    }
+
+    fn retire_removed(&mut self, id: AssetId<RhaiSource>) -> Option<SourceAssetRetirement> {
+        let canonical = self.canonical_by_asset.remove(&id)?;
+        if self.current_asset_by_canonical.get(&canonical) == Some(&id) {
+            self.current_asset_by_canonical.remove(&canonical);
+            Some(SourceAssetRetirement::Current(canonical))
+        } else {
+            Some(SourceAssetRetirement::Superseded)
+        }
+    }
+}
 
 /// Discover authored Rhai candidates from the authoritative asset manifest and
 /// request only sources that the startup classification policy admits. This
@@ -236,15 +293,15 @@ fn request_builtin_rhai_assets(
 /// resolver's memo (which stores the source it compiled) recompiles on the diff.
 ///
 /// Registration is keyed by the asset's own canonical id
-/// (`lunco_assets_core::asset_path::anchor_of`) — the same identity the `AssetServer`
-/// loaded it under — so a script is importable by exactly the path that names it,
+/// (`canonical_asset_id`) — the same identity used by Rhai imports — so a script
+/// is importable by exactly the path that names it,
 /// through whatever source it came from: `lunco://`, `twin://` for a campaign repo
 /// outside the engine tree, or a peer's synced content mounted as a Twin.
 ///
 /// The root scenario handle is owned by the scenario entity's
 /// [`crate::commands::ScenarioAssetHandle`], while imported handles are retained
-/// by `RhaiSource.dependencies`. An asset whose whole dependency chain has been
-/// dropped is removed from the synchronous registry by its `Unused` event.
+/// by `RhaiSource.dependencies`. When the complete handle graph is dropped,
+/// the `Removed` event retires the canonical id from the synchronous registry.
 #[cfg(feature = "rhai")]
 fn publish_rhai_sources(
     mut events: MessageReader<AssetEvent<RhaiSource>>,
@@ -252,7 +309,11 @@ fn publish_rhai_sources(
     asset_server: Res<AssetServer>,
     sources: Res<lunco_assets_runtime::script_source::ScriptSources>,
     mut registry: ResMut<lunco_scripting::ScriptRegistry>,
+    mut driver: Option<
+        ResMut<lunco_scripting::scenario::ScenarioDriver<crate::world_bridge::RhaiScenarioRuntime>>,
+    >,
     mut revision: ResMut<RhaiSourceAssetRevision>,
+    mut identities: ResMut<RhaiSourceAssetIdentities>,
 ) {
     let mut changed = false;
     for ev in events.read() {
@@ -273,24 +334,34 @@ fn publish_rhai_sources(
                     warn!("[rhai] loaded script {id:?} has no asset path — not importable");
                     continue;
                 };
-                let canonical = lunco_assets_core::asset_path::anchor_of(&path);
+                let canonical = canonical_asset_id(&path);
+                identities.register(*id, &canonical);
                 debug!("[rhai] script available for import: {canonical}");
+                if let Some(driver) = driver.as_deref_mut() {
+                    driver.runtime.commit_source_asset(&canonical, src);
+                }
                 publish_rhai_source(&canonical, &src.text, &sources, &mut registry);
             }
-            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+            AssetEvent::Removed { id } => {
                 changed = true;
-                let Some(path) = asset_server.get_path(*id) else {
-                    warn!(
-                        "[rhai] unloaded script {id:?} has no asset path; \
-                         its registry entry cannot be retired"
-                    );
-                    continue;
-                };
-                let canonical = lunco_assets_core::asset_path::anchor_of(&path);
-                if sources.remove(&canonical) {
-                    debug!("[rhai] retired script source: {canonical}");
+                match identities.retire_removed(*id) {
+                    Some(SourceAssetRetirement::Current(canonical)) => {
+                        if sources.remove(&canonical) {
+                            debug!("[rhai] retired script source: {canonical}");
+                        }
+                    }
+                    Some(SourceAssetRetirement::Superseded) => {
+                        debug!("[rhai] ignored stale removal for replaced script asset {id:?}");
+                    }
+                    None => {
+                        warn!(
+                            "[rhai] removed script {id:?} has no published source identity; \
+                             its registry entry cannot be retired"
+                        );
+                    }
                 }
             }
+            AssetEvent::Unused { .. } => {}
             AssetEvent::LoadedWithDependencies { .. } => changed = true,
         }
     }
@@ -316,7 +387,7 @@ fn publish_rhai_source(
     sources: &lunco_assets_runtime::script_source::ScriptSources,
     registry: &mut lunco_scripting::ScriptRegistry,
 ) {
-    sources.insert(canonical, text);
+    sources.insert_if_changed(canonical, text);
 
     let docs: Vec<_> = registry
         .documents
@@ -364,6 +435,7 @@ impl Plugin for RhaiSourceAssetPlugin {
             .init_asset_loader::<RhaiSourceLoader>()
             .init_resource::<BuiltinRhaiAssets>()
             .init_resource::<RhaiSourceAssetRevision>()
+            .init_resource::<RhaiSourceAssetIdentities>()
             .configure_sets(Update, (RhaiSourceAdmissionSet, RhaiSourceAssetSet).chain())
             .add_systems(
                 Update,
@@ -381,6 +453,44 @@ impl Plugin for RhaiSourceAssetPlugin {
 #[cfg(all(test, feature = "rhai"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_asset_removal_cannot_retire_a_replacement_source() {
+        let mut identities = RhaiSourceAssetIdentities::default();
+        let first = AssetId::<RhaiSource>::from(bevy::asset::AssetIndex::from_bits(1));
+        let second = AssetId::<RhaiSource>::from(bevy::asset::AssetIndex::from_bits(2));
+        let canonical = "twin://tests/shared.rhai";
+
+        identities.register(first, canonical);
+        identities.register(second, canonical);
+
+        assert!(matches!(
+            identities.retire_removed(first),
+            Some(SourceAssetRetirement::Superseded)
+        ));
+        assert!(matches!(
+            identities.retire_removed(second),
+            Some(SourceAssetRetirement::Current(id)) if id == canonical
+        ));
+    }
+
+    #[test]
+    fn canonical_asset_id_qualifies_the_default_engine_source() {
+        let path = AssetPath::parse("scripting/tools/assembly_edit.rhai").into_owned();
+        assert_eq!(
+            canonical_asset_id(&path),
+            "lunco://scripting/tools/assembly_edit.rhai"
+        );
+    }
+
+    #[test]
+    fn canonical_asset_id_preserves_twin_source_identity() {
+        let path = AssetPath::parse("twin://mission/tools/editor.rhai").into_owned();
+        assert_eq!(
+            canonical_asset_id(&path),
+            "twin://mission/tools/editor.rhai"
+        );
+    }
 
     #[test]
     fn imported_assets_use_the_importers_canonical_source() {

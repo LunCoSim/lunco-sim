@@ -133,6 +133,19 @@ class "LunCoPointerInteractionAPI" (
     )
 }
 
+class "LunCoPhysicsInitializationAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Selects an authored deterministic policy for admitting a USD rigid-body pose into physics."
+)
+{
+    uniform token lunco:physics:initializationPolicy (
+        doc = "Named selector passed to the declared physics.initialization Rhai policy. Apply this API and author a non-empty selector together; the policy receives stable USD identity and pose facts with the owning Twin lifecycle context."
+    )
+}
+
 class LunCoPolicy "LunCoPolicy" (
     inherits = </Typed>
     doc = """A scripted authorization hook, expressed as a prim so that policy

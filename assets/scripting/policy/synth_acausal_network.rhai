@@ -696,7 +696,23 @@ fn emit_unit(net, unit, layout) {
     mutable
 }
 
+fn valid_synthesis_context(context) {
+    context.scope == "twin"
+        && context.cycle == "lifecycle"
+        && context.phase == "preparation"
+        && context.clock == "none"
+        && context.generation != ()
+        && context.time_seconds == ()
+        && context.delta_seconds == ()
+        && context.sequence == ()
+        && context.producer == ()
+}
+
 fn synthesize(net) {
+    if !valid_synthesis_context(runtime_context) {
+        throw("synth.acausal-network requires its Twin lifecycle preparation context");
+    }
+
     let units = policy_units(net);
     let layout = visual_layout(net, units);
     let source = "model " + net.model_name + "\n";

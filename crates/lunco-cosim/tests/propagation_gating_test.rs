@@ -196,7 +196,7 @@ fn host_propagates_into_replicated_target() {
 /// still carry the source value into the target. With propagation absent from
 /// the schedule this asserts 0.0 and fails.
 #[test]
-fn rollback_replay_propagates() {
+fn rollback_replay_propagates_while_simulation_is_paused() {
     let mut app = app_with_role(None);
     let target = wire_ports(&mut app, ());
 
@@ -204,6 +204,8 @@ fn rollback_replay_propagates() {
     // clear the value so only the replay schedule can satisfy the assertion.
     app.update();
     app.world_mut().get_mut::<Port>(target).unwrap().value = 0.0;
+    app.world_mut().resource_mut::<Time<Virtual>>().pause();
+    assert!(app.world().resource::<Time<Virtual>>().is_paused());
 
     // Replay runs this schedule and `PhysicsSchedule` only after admission.
     app.world_mut()

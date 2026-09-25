@@ -19,7 +19,7 @@ fn has_subject(findings, subject) {
 
 fn find_document() {
     let documents = query("ListOpenDocuments");
-    if documents == () || documents.open_documents == () { return -1; }
+    if documents == () || documents.open_documents == () { return (); }
     for item in documents.open_documents {
         if item.kind != "usd" { continue; }
         let root = query("QueryUsdPrim", #{
@@ -29,14 +29,14 @@ fn find_document() {
         });
         if root != () && root.ok != false { return item.doc_id; }
     }
-    -1
+    ()
 }
 
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
     this.phase = 0;
-    this.command_id = -1;
+    this.command_id = ();
 }
 
 fn on_tick(me, ctx) {
@@ -44,7 +44,7 @@ fn on_tick(me, ctx) {
     this.elapsed += dt();
     if this.phase == 0 {
         let doc = find_document();
-        if doc < 0 {
+        if doc == () {
             if this.elapsed > 8.0 {
                 fail_fast("connection_preflight USD document was not discoverable",
                     "CONNECTION PREFLIGHT", "CONNECTION_PREFLIGHT");
@@ -151,7 +151,7 @@ fn on_tick(me, ctx) {
     if has_subject(findings, "/ConnectionPreflight/Sink.inputs:prismatic_valid") {
         failures.push("standard PhysicsPrismaticJoint displacement connection was reported as broken");
     }
-    if report.errors != 5 {
+    if to_int(report.errors) != 5 {
         failures.push("total lint errors=" + report.errors + ", expected exactly 5 connection errors");
     }
 

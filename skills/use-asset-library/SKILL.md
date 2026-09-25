@@ -147,6 +147,12 @@ arc before you launch.
 > the importing script. `RhaiSourceLoader` loads every literal import as a Bevy
 > dependency; unused scripts are not preloaded.
 
+The source asset owner qualifies default Bevy paths as `lunco://` before it
+publishes source text or prepared ASTs. Scenario roots, imports, and unloads use
+the same canonical identity; Twin paths retain `twin://`. Consumers commit the
+complete loaded import graph before binding or starting a source because Bevy
+can report graph readiness before its `Added` messages are consumed.
+
 ## Add a USD component
 
 Write one file = one spawnable thing. The full authoring reference is

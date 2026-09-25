@@ -24,10 +24,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica_runner::resolve_setup_bounds;
-use lunco_modelica_runtime::{
-    DEFAULT_COMMUNICATION_PERIOD_SECS, ModelicaChannels, ModelicaCommand, ModelicaModel,
-};
-use std::collections::{BTreeSet, HashMap};
+use lunco_modelica_runtime::ModelicaModel;
+use std::collections::HashMap;
 
 #[cfg(feature = "api")]
 use lunco_api::{DeferredCommandAppExt, executor::PendingApiRequest};
@@ -40,26 +38,16 @@ use lunco_core::{Command, on_command, register_commands};
 use lunco_hooks::HookValue;
 
 use crate::ui::document_context::ModelicaDocuments;
-use crate::ui::workbench_state::WorkbenchState;
 use lunco_doc_bevy::DocumentDiagnostics;
 
 use super::{entity_for_doc, resolve_doc_or_active};
 
 // ─── Compile typed command ────────────────────────────────────────────────
 
-/// Telemetry event published when a Compile never reaches the worker at all —
-/// the channel is closed or the worker was never started.
-///
-/// Published at [`lunco_telemetry_core::Severity::Error`] so the workbench status bar's
-/// error-telemetry observer surfaces it. This is a failure of the user's own
-/// click: pressing Compile and getting
-/// nothing back is precisely the case that must not live only in a log.
-pub const COMPILE_DISPATCH_FAILED: &str = "COMPILE_DISPATCH_FAILED";
-
 /// Compile a document: rumoca front-end → DAE → simulator setup. Idempotent —
 /// an already-compiled, unmodified model skips the worker dispatch unless
-/// `force`. Never changes `paused`; type/parse/DAE errors land in
-/// `WorkbenchState.compilation_error` and surface in the Diagnostics panel.
+/// `force`. A dispatched compile leaves the model paused/ready unless the
+/// request carries explicit Run intent; failures use `DocumentDiagnostics`.
 #[Command(default)]
 pub struct CompileModel {
     /// The document to compile. Unassigned (`0` over the API) means the
@@ -648,207 +636,56 @@ pub(crate) fn render_compile_class_picker(
 // that doesn't want the rest of the UI plugin) to opt in to the
 // command path alone.
 
-/// The source text to overlay into the compiler session when compiling a
-/// document — and the crux of running source-library examples correctly.
-///
-/// A read-only library document (`DocumentOrigin::File { writable: false }`,
-/// what a drilled-in source library class is) holds a class that is *already present in
-/// the loaded library session* (the source library pre-parsed bundle, installed via
-/// `replace_parsed_source_set`). Overlaying its extracted source would
-/// register the same qualified class a SECOND time under `model.mo` and trip
-/// rumoca's "Duplicate class … with non-identical definition" resolver error.
-///
-/// So for library classes we overlay NOTHING and let the compiler resolve the
-/// requested (fully-qualified) class straight from the already-loaded library
-/// — i.e. run the loaded example in place, never a temp copy. User documents
-/// (Untitled scratch, writable files) and bundled examples are NOT in the
-/// session, so they overlay their full source as before.
-fn is_library_document(document: &lunco_modelica_document::ModelicaDocument) -> bool {
-    match document.origin() {
-        lunco_doc::DocumentOrigin::File { path, writable } => {
-            !writable || lunco_assets_runtime::library::owns_filesystem_path(path)
-        }
-        _ => false,
-    }
-}
-
-fn compile_overlay_source(document: &lunco_modelica_document::ModelicaDocument) -> String {
-    if is_library_document(document) {
-        String::new()
-    } else {
-        document.source().to_string()
-    }
-}
-
 // ─── on_compile_model ─────────────────────────────────────────────────────
 
 #[on_command(CompileModel)]
 pub fn on_compile_model(
     trigger: On<CompileModel>,
-    mut commands: Commands,
-    mut registry: ResMut<ModelicaDocuments>,
-    workbench: ResMut<WorkbenchState>,
+    mut requests: MessageWriter<lunco_modelica_runtime::CompileRequested>,
+    registry: Res<ModelicaDocuments>,
     mut compile_states: ResMut<DocumentDiagnostics>,
     mut console: ResMut<lunco_ui::log::LogBuffer>,
-    mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
     mut picker: ResMut<CompileClassPickerState>,
-    mut sim_streams: ResMut<lunco_signal::SimRegistry>,
-    channels: Option<Res<ModelicaChannels>>,
-    mut q_models: Query<&mut ModelicaModel>,
     model_tabs: Res<crate::model_tabs::ModelTabs>,
-    mut world_source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
-    // Unassigned ⇒ the active document. Resolving here is what lets ONE compile
-    // verb serve the toolbar and the API; the wrapper command that used to do
-    // this is gone.
-    let doc = match trigger.event().doc_id {
-        raw if raw.is_unassigned() => {
-            let Some(active) = workspace.and_then(|ws| ws.active_document) else {
-                bevy::log::warn!("[CompileModel] no active document");
-                return;
-            };
-            active
-        }
-        raw => raw,
+    let request = trigger.event();
+    let doc = if request.doc_id.is_unassigned() {
+        let Some(active) = workspace.and_then(|workspace| workspace.active_document) else {
+            console.error("Compile failed: no active Modelica document".to_owned());
+            return;
+        };
+        active
+    } else {
+        request.doc_id
     };
-    let explicit_class = trigger.event().class.clone();
-    let force = trigger.event().force;
-    let resume_after_compile = trigger.event().resume_after_compile;
-
-    // Ownership check. Read-only docs are fair game to compile —
-    // the Save button is what's gated on writability, not compile.
-    // Users *simulate* examples; they just can't overwrite them.
-    //
-    // Use the document's already-parsed AST for the metadata
-    // extraction. Calling the `_source` variants here re-parses
-    // via rumoca on the main thread — a 152 KB source library package file
-    // costs ~30 s per call in debug builds, and there are four
-    // calls, so clicking Compile on a source-library example would lock the
-    // UI for minutes. Pulling from the cached AST is constant-time.
-    // Note: previously this site called `refresh_ast_now()` to force
-    // a fresh parse before extracting metadata. That ran a 2.5 s
-    // rumoca parse synchronously on the main thread (verified in
-    // telemetry: `[Doc] refresh_ast_now: 20052 bytes parsed in
-    // 2522.0ms`) and froze the UI — sim-time stalled, egui animations
-    // stuttered, FixedUpdate skipped 60+ ticks. The off-thread
-    // debounced refresh (see `ui::ast_refresh`) keeps the AST at
-    // most 250 ms behind source, which the metadata extractors
-    // below (params / inputs / bounds / class names) tolerate fine.
-    // The worker re-parses the *source* verbatim for the actual
-    // compile (see `ModelicaCommand::Compile`), so any AST staleness
-    // here only affects telemetry-panel labels for one debounce
-    // cycle, not the compiled model itself.
-    let (
-        source,
-        doc_generation,
-        ast_for_extract,
-        candidate_classes,
-        preferred_count,
-        detected_first_class,
-        params,
-        inputs_with_defaults,
-        runtime_inputs,
-    ) = match registry.host(doc) {
-        Some(h) => {
-            let doc_ref = h.document();
-            let ast = doc_ref.strict_ast();
-            // Document generation at this compile dispatch — recorded as
-            // `pending_generation` and promoted to `compiled_generation`
-            // on success, and used for the idempotency / staleness gate.
-            let doc_generation = doc_ref.generation_owned();
-            // Class candidates + first-non-package detection via
-            // the per-doc Index (sees optimistic patches; no extra
-            // AST walk per call).
-            let index = doc_ref.index();
-            let candidates = index.simulation_candidates();
-            let preferred_count = index.simulation_preferred_count();
-            let first_non_package = candidates.first().cloned();
-            // Compile-time seed values for `ModelicaModel`
-            // (parameters / input defaults / runtime input names)
-            // — read straight from the index. Replaces three
-            // `lunco_modelica_ast::ast_extract::extract_*_from_ast` calls that walked
-            // the same data.
-            let mut params: HashMap<String, f64> = HashMap::new();
-            let mut inputs_with_defaults: HashMap<String, f64> = HashMap::new();
-            let mut runtime_inputs: Vec<String> = Vec::new();
-            for entry in &index.components {
-                let numeric = entry.binding.as_ref().and_then(|s| s.parse::<f64>().ok());
-                match (entry.variability, entry.causality) {
-                    (lunco_modelica_index::index::Variability::Parameter, _)
-                    | (lunco_modelica_index::index::Variability::Constant, _) => {
-                        if let Some(v) = numeric {
-                            params.insert(entry.name.clone(), v);
-                        }
-                    }
-                    (_, lunco_modelica_index::index::Causality::Input) => {
-                        if let Some(v) = numeric {
-                            inputs_with_defaults.insert(entry.name.clone(), v);
-                        } else {
-                            runtime_inputs.push(entry.name.clone());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            (
-                compile_overlay_source(doc_ref),
-                doc_generation,
-                ast,
-                candidates,
-                preferred_count,
-                first_non_package,
-                params,
-                inputs_with_defaults,
-                runtime_inputs,
-            )
-        }
-        None => return,
-    };
-    let Some(_ast) = ast_for_extract else {
-        // Parse failure on this doc (rare — rumoca is
-        // error-recovering). Fall back to the source-based
-        // extractors, which at least try once; if they also fail,
-        // the error message below fires.
-        let msg = "Could not parse Modelica source for compile.".to_string();
-        compile_states.set_error_message(doc, msg.clone());
-        console.error(format!("Compile failed: {msg}"));
+    let Some(host) = registry.host(doc) else {
+        let message = format!("Compile failed: Modelica document {doc} is not open");
+        compile_states.set_error_message(doc, message.clone());
+        console.error(message);
         return;
     };
-    // Prefer the drilled-in class on this doc — the user is looking
-    // at a leaf model (e.g. `AnnotatedRocketStageCopy.RocketStage`)
-    // and pressing Compile must compile *that*, not the enclosing
-    // package. Without this the compile picks the first non-package
-    // class (often the package wrapper) and the simulator returns
-    // `EmptySystem`.
-    let drilled_in_class: Option<String> = model_tabs.drilled_class_for_doc(doc);
-    // Class resolution priority:
-    //   1. explicit_class on the event       — API caller knows exactly
-    //   2. drilled_in_class                  — UI drill-in pin
-    //   3. picker modal                      — GUI fallback for ambiguity
-    //   4. detected_name from AST            — single-class case
-    //
-    // The explicit-class branch (added in spec 033 P0) lets API/agent
-    // callers compile a chosen class without ever opening the picker
-    // modal. Validates against the candidate list so a bad class name
-    // surfaces as a structured error in the diagnostics log instead
-    // of silently picking the wrong thing.
-    let chosen_via_explicit = if let Some(cls) = explicit_class.as_ref() {
-        // Shared resolver (qualified OR bare leaf → canonical qualified),
-        // identical to the `FastRunActiveModel` / `RunExperiment` path so the
-        // surfaces can't drift. A bad/ambiguous name surfaces as a structured,
-        // candidate-listing diagnostic instead of silently picking the wrong
-        // class or failing opaquely at instantiate.
-        match crate::sim_target::resolve_requested_class(cls, &candidate_classes) {
-            Ok(qname) => Some(qname),
-            Err(e) => {
-                let msg = format!(
-                    "compile_model class `{cls}` {e}. Candidates: [{}]",
-                    candidate_classes.join(", ")
+    let document = host.document();
+    if document.syntax_is_stale() || document.ast_is_stale() {
+        console.error(format!(
+            "Compile deferred: Modelica source analysis for document {doc} is still running"
+        ));
+        return;
+    }
+    let candidates = document.index().simulation_candidates();
+    let preferred_count = document.index().simulation_preferred_count();
+    let detected_first_class = candidates.first().cloned();
+    let drilled_in_class = model_tabs.drilled_class_for_doc(doc);
+    let chosen_via_explicit = if let Some(class) = request.class.as_ref() {
+        match crate::sim_target::resolve_requested_class(class, &candidates) {
+            Ok(class) => Some(class),
+            Err(error) => {
+                let message = format!(
+                    "Compile failed: class `{class}` {error}. Candidates: [{}]",
+                    candidates.join(", ")
                 );
-                compile_states.set_error_message(doc, msg.clone());
-                console.error(format!("Compile failed: {msg}"));
-                let _ = diagnostics;
+                compile_states.set_error_message(doc, message.clone());
+                console.error(message);
                 return;
             }
         }
@@ -856,31 +693,13 @@ pub fn on_compile_model(
         None
     };
 
-    // If no explicit class and no drill-in pin and the file is a package
-    // of several models, ask the user which one to compile instead of
-    // silently picking. The picker modal (rendered by
-    // `render_compile_class_picker` in ui/mod.rs) re-dispatches
-    // `CompileModel` once the user confirms.
-    // Show the picker only when there's genuine ambiguity about
-    // which model to run. `preferred_count == 1` means exactly one
-    // class sits in the best non-empty tier — either the sole
-    // `experiment(...)`-annotated class (Dymola / OMEdit's notion of
-    // an obvious root), or, absent any annotation, the sole top-level
-    // model (e.g. `RocketStage` in a package of helper sub-models
-    // like `Tank` / `Engine`). In either case `simulation_candidates`
-    // already sorted it first, so we just compile it directly.
-    // The picker only opens with 2+ equally-good candidates, or with
-    // zero — at which point the user has to opt into a sub-model.
     if chosen_via_explicit.is_none() && drilled_in_class.is_none() {
-        let need_picker = preferred_count != 1 && candidate_classes.len() >= 2;
+        let need_picker = preferred_count != 1 && candidates.len() >= 2;
         if need_picker {
-            // If a picker is already open for *this* doc, leave it
-            // alone so rapid repeated Compile clicks don't blow away
-            // the user's in-progress choice.
-            if picker.0.as_ref().map(|p| p.doc) != Some(doc) {
+            if picker.0.as_ref().map(|entry| entry.doc) != Some(doc) {
                 picker.0 = Some(CompileClassPickerEntry {
                     doc,
-                    candidates: candidate_classes,
+                    candidates,
                     preselected: 0,
                     purpose: PickerPurpose::Compile,
                 });
@@ -888,434 +707,23 @@ pub fn on_compile_model(
             return;
         }
     }
-    let model_name = chosen_via_explicit
+
+    let Some(model_name) = chosen_via_explicit
         .or(drilled_in_class)
-        .or(detected_first_class);
-    let Some(model_name) = model_name else {
-        let msg = "Could not find a valid model declaration.".to_string();
-        compile_states.set_error_message(doc, msg.clone());
-        console.error(format!("Compile failed: {msg}"));
+        .or(detected_first_class)
+    else {
+        let message =
+            "Compile failed: Could not find a valid Modelica model declaration.".to_owned();
+        compile_states.set_error_message(doc, message.clone());
+        console.error(message);
         return;
     };
-    // A duplicated library/bundled class is emitted with a `within P;` header,
-    // so rumoca instantiates it as `P.<class>`. Once the enclosing package is
-    // in the session (the bundled-extra seeding below for nested bundled
-    // duplicates), the bare leaf fails `model not found` in Instantiate — so
-    // qualify the target with `P`. Mirrors the run path in
-    // `dispatch_experiment`. No-op for top-level scratch models (no `within`)
-    // and for drilled source library classes (empty overlay source → no `within`).
-    let model_name = match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
-        Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
-            format!("{pkg}.{model_name}")
-        }
-        _ => model_name,
-    };
-    // Find or spawn the entity linked to this document.
-    let linked = registry.entities_linked_to(doc);
-    let source_uri = registry
-        .host(doc)
-        .map(|host| host.document().origin().session_uri())
-        .unwrap_or_default();
-
-    // Idempotency gate: a Compile on a model that is already compiled,
-    // clean (same document generation as the last successful compile),
-    // and not currently building is a no-op — we skip the worker
-    // dispatch entirely. This is what makes `CompileModel` safe to call
-    // repeatedly (e.g. by `RunActiveModel`'s compile-if-stale path)
-    // without churning the worker. Pass `force = true` to override.
-    // Crucially this does NOT touch `paused` — it leaves whatever
-    // run-state the model is already in.
-    if !force {
-        if let Some(&entity) = linked.first() {
-            if let Ok(model) = q_models.get(entity) {
-                let stale = !model.is_compiled || model.compiled_generation != doc_generation;
-                if model.is_compiled && !stale && !model.is_compiling {
-                    bevy::log::debug!(
-                        "[Modelica] compile skipped: already up to date (doc {}, gen {})",
-                        doc.raw(),
-                        doc_generation
-                    );
-                    return;
-                }
-            }
-        }
-    }
-
-    let target_entity = if let Some(&entity) = linked.first() {
-        // Update existing entity in place.
-        if let Ok(mut model) = q_models.get_mut(entity) {
-            let old_inputs = std::mem::take(&mut model.inputs);
-            model.session_id += 1;
-            // `is_stepping` fences out any in-flight Step results
-            // bearing the old session_id; `is_compiling` tells
-            // `spawn_modelica_requests` that the wait is a normal
-            // long compile (not a hung worker) — suppresses the
-            // per-frame "worker hung?" warning spam during multi-
-            // second Modelica compiles.
-            model.is_stepping = true;
-            model.in_flight_step = None;
-            model.next_step_id = 1;
-            model.is_compiling = true;
-            model.last_error = None;
-            // Capture the generation being compiled; promoted to
-            // `compiled_generation` by the post-compile success handler.
-            model.pending_generation = doc_generation;
-            model.model_name = model_name.clone();
-            model.source_uri = source_uri;
-            model.parameters = params;
-            model.inputs.clear();
-            for (name, val) in &inputs_with_defaults {
-                let existing = old_inputs.get(name).copied();
-                model
-                    .inputs
-                    .entry(name.clone())
-                    .or_insert_with(|| existing.unwrap_or(*val));
-            }
-            for name in &runtime_inputs {
-                let existing = old_inputs.get(name).copied();
-                model
-                    .inputs
-                    .entry(name.clone())
-                    .or_insert_with(|| existing.unwrap_or(0.0));
-            }
-            model.variables.clear();
-            // Compile leaves the model PAUSED/ready — no auto-start of a live
-            // realtime sim. The user starts live stepping explicitly via
-            // ResumeActiveModel (FastRunActiveModel batch runs are unaffected).
-            model.paused = true;
-            model.current_time = 0.0;
-            // The macro-step target restarts with the model (A3): a fresh
-            // stepper owes no catch-up for the time the previous one ran.
-            model.target_time = 0.0;
-            model.last_step_time = 0.0;
-            // …unless this compile was kicked off by a "Run live" that
-            // wants to play as soon as the stepper lands. Don't clobber a
-            // resume intent an earlier RunActiveModel already set.
-            if resume_after_compile {
-                model.resume_after_compile = true;
-            }
-        }
-        entity
-    } else {
-        // No entity yet — spawn one linked to this doc. Spawning goes
-        // through `Commands` (deferred), so we can't immediately
-        // query the new entity in this system — initial fields are
-        // set on the component at spawn time instead.
-        // Initial session_id for newly-spawned model entity. Existing
-        // entities bump their own `session_id` on recompile (see
-        // the "updated-in-place" branch above); this starting value
-        // matters only for the very first compile of a doc, after
-        // which the per-entity counter takes over.
-        let session_id: u64 = 1;
-        let entity = commands
-            .spawn((
-                Name::new(model_name.clone()),
-                ModelicaModel {
-                    model_name: model_name.clone(),
-                    source_uri,
-                    current_time: 0.0,
-                    // The world clock this model is coupled to starts with it
-                    // (A3 — the macro-step target, advanced one fixed-tick delta
-                    // per tick by `spawn_modelica_requests`).
-                    target_time: 0.0,
-                    communication_period_secs: DEFAULT_COMMUNICATION_PERIOD_SECS,
-                    next_communication_time: DEFAULT_COMMUNICATION_PERIOD_SECS,
-                    last_step_time: 0.0,
-                    session_id,
-                    // Newly-compiled model starts paused/ready — no auto-start.
-                    paused: true,
-                    parameters: params,
-                    inputs: {
-                        let mut map = inputs_with_defaults;
-                        for name in runtime_inputs {
-                            map.entry(name).or_insert(0.0);
-                        }
-                        map
-                    },
-                    compiled_input_names: BTreeSet::new(),
-                    variables: HashMap::new(),
-                    last_error: None,
-                    document: doc,
-                    is_stepping: true,
-                    in_flight_step: None,
-                    next_step_id: 1,
-                    is_compiling: true,
-                    is_compiled: false,
-                    compiled_generation: 0,
-                    pending_generation: doc_generation,
-                    // First-ever compile of this doc: carry the "Run live"
-                    // intent straight into the spawn so the post-compile
-                    // handler unpauses — this is the fix for the old
-                    // two-click first run (no entity existed to flip).
-                    resume_after_compile,
-                },
-            ))
-            .id();
-        if let Err(error) = registry.link(entity, doc) {
-            bevy::log::warn!(
-                "[ModelicaCompile] failed to link entity {entity} to document {doc}: {error}"
-            );
-        }
-        // Intentionally NOT setting `workbench.selected_entity` here.
-        // Side panels resolve their target entity via
-        // `active_simulator(world)` (= active doc → linked entity),
-        // so a fresh compile on an inactive tab no longer steals the
-        // visible selection from the focused tab. `selected_entity`
-        // is reserved for an explicit "Pin to model" UX.
-        let _ = &workbench;
-        entity
-    };
-
-    // Resolve the session_id for the command we're about to send. For
-    // the updated-in-place branch this is whatever we just bumped to;
-    // for the newly-spawned branch the entity doesn't exist yet (spawn
-    // is deferred), so fall back to the same `1` we set above.
-    let session_id = q_models
-        .get(target_entity)
-        .map(|m| m.session_id)
-        .unwrap_or(1);
-
-    compile_states.mark_started(doc);
-    console.info(format!("⏵ Compile started: '{model_name}'"));
-    if let Some(diag) = diagnostics.as_mut() {
-        diag.append(vec![lunco_ui::log::LogEntry {
-            at: web_time::Instant::now(),
-            level: lunco_ui::log::LogLevel::Info,
-            text: format!("⏵ Compile started: '{model_name}'"),
-            model: Some(model_name.clone()),
-            loc: None,
-        }]);
-    }
-
-    if let Some(channels) = channels {
-        // Get-or-create the sim stream for this entity. Cloned Arc
-        // goes to the worker (owner-of-writes); the registry holds
-        // the same Arc so plot panels / telemetry can read via
-        // `ArcSwap::load()` on the UI thread without locking.
-        let stream = sim_streams.get_or_insert(target_entity);
-        // Collect sources from EVERY OTHER open Modelica doc and
-        // hand them to the worker so rumoca's resolver can satisfy
-        // cross-doc class references (e.g. an untitled `RocketStage`
-        // referencing `AnnotatedRocketStage.Tank` from a sibling
-        // untitled package).
-        //
-        // IMPORTANT: rumoca dedups overlaid sources by FILENAME, not by
-        // class name. So a sibling doc that defines a top-level class with
-        // the SAME name as the primary (or as an already-overlaid sibling)
-        // would land in the session under a second filename and trip
-        // rumoca's "Duplicate class 'X' found … with non-identical
-        // definition" resolver error — exactly what happens when the same
-        // model is open in two tabs, or a restored workspace doc shadows a
-        // freshly-seeded one. So we only overlay a sibling whose top-level
-        // class names are DISJOINT from everything already claimed; the
-        // primary doc always wins.
-        let class_names_of = |d: lunco_doc::DocumentId| -> Vec<String> {
-            registry
-                .host(d)
-                .and_then(|h| h.document().strict_ast())
-                .map(|ast| ast.classes.iter().map(|(n, _)| n.clone()).collect())
-                .unwrap_or_default()
-        };
-        let mut claimed: std::collections::HashSet<String> =
-            class_names_of(doc).into_iter().collect();
-        // The primary document's stable session URI — its canonical identity
-        // (file path / bundled name / Untitled-<id>), NOT a class name and NOT
-        // "model.mo". This is the key the worker seats the source under, and it
-        // MUST match what the Fast Run path passes for the same document so the
-        // shared per-worker rumoca session never holds it under two filenames
-        // (the duplicate-class merge error).
-        let primary_doc_uri = registry
-            .host(doc)
-            .map(|h| h.document().origin().session_uri())
-            .unwrap_or_else(|| "model.mo".to_string());
-        let mut extra_sources: Vec<(String, String)> = registry
-            .iter()
-            .filter_map(|(other_doc, host)| {
-                if other_doc == doc {
-                    return None;
-                }
-                // A read-only library doc (a drilled-in source library class) is already
-                // in the loaded session — overlaying it as a cross-doc source
-                // would re-register its class and duplicate-collide. Skip.
-                if is_library_document(host.document()) {
-                    return None;
-                }
-                let names = class_names_of(other_doc);
-                if names.iter().any(|n| claimed.contains(n)) {
-                    bevy::log::warn!(
-                        "[compile] skipping doc {} as cross-doc source: its \
-                         top-level class(es) {:?} collide with already-loaded \
-                         classes (would be a duplicate-class compile error)",
-                        other_doc.raw(),
-                        names,
-                    );
-                    return None;
-                }
-                claimed.extend(names);
-                let document = host.document();
-                let filename = format!("doc_{}.mo", other_doc.raw());
-                Some((filename, document.source().to_string()))
-            })
-            .collect();
-        // A duplicated *nested* bundled class compiles as `within P; <leaf>`,
-        // but the bundled package P (which defines the leaf's sibling classes
-        // `Tank`/`Valve`/`Engine`/…) is on no search path and is not an open
-        // doc, so the open-doc scan above can't supply it — the compile fails
-        // `unresolved type reference: 'Tank'`. Re-seat the whole bundled
-        // package so rumoca can satisfy those references in the same `within`
-        // scope. Mirrors the run path in `dispatch_experiment`. source library
-        // within-packages are not bundled (return None) and are left alone;
-        // the `claimed` guard avoids a duplicate-class collision if the
-        // package is somehow already overlaid.
-        if let Some(pkg) = lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
-            if !claimed.contains(&pkg) {
-                if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
-                    extra_sources.push((format!("{pkg}.mo"), bundled));
-                }
-            }
-        }
-        // Source-root dependency scan + lazy load.
-        //
-        // Walk the doc's AST to find every qualified type root
-        // (`Package.X`, `External.Y`, ...). For each known
-        // root that isn't yet `Ready`, publish its location to the
-        // process-wide handle so the worker's `ModelicaCompiler::new`
-        // preloads it on its first construction. The actual parse
-        // cost runs inside the worker thread; this pre-flight is
-        // microseconds.
-        //
-        // Without this scan: the worker's session starts empty and
-        // every `Modelica.*` reference is reported as
-        // `undefined type` by rumoca's typecheck. With it: deps are
-        // ensured available before the Compile dispatches, so the
-        // first compile after a dep-discovering edit may take a few
-        // extra seconds (source library preload), but subsequent compiles see
-        // a warm session.
-        if let Some(ast) = registry.host(doc).and_then(|h| h.document().strict_ast()) {
-            if let Some(roots) = world_source_roots.as_deref_mut() {
-                lunco_modelica_source_roots::log_compile_deps(roots, &model_name, &ast);
-                let deps = lunco_modelica_index::source_deps::scan_source_root_deps(&ast);
-                for root in &deps {
-                    lunco_modelica_source_roots::ensure_loaded(roots, root, &channels);
-                }
-            }
-        }
-        // NOT `let _ = send(..)`. `compile_states.mark_started(doc)` above put
-        // this document into `CompileState::Compiling`, and the ONLY thing that
-        // moves it out is a worker reply. If the channel is closed there is no
-        // worker and no reply is ever coming: the toolbar spins, the model never
-        // compiles, and nothing anywhere says why. Same closed-channel detection
-        // as `source_roots::ensure_loaded` — `send(..).is_err()`.
-        if channels
-            .tx
-            .send(ModelicaCommand::Compile {
-                entity: target_entity,
-                session_id,
-                model_name: model_name.clone(),
-                source,
-                doc_uri: primary_doc_uri,
-                extra_sources,
-                parameter_overrides: Vec::new(),
-                stream: Some(stream),
-                // A model opened in the workbench is being authored and
-                // inspected, not driving a client-predicted body — the realtime
-                // promise is declared in USD on a program prim, which this path
-                // has none of.
-                realtime_safe: false,
-            })
-            .is_err()
-        {
-            fail_compile_dispatch(
-                doc,
-                &model_name,
-                target_entity,
-                "Modelica worker channel closed",
-                &mut compile_states,
-                &mut console,
-                diagnostics.as_deref_mut(),
-                &mut q_models,
-                &mut commands,
-            );
-        }
-    } else {
-        // The resource is absent entirely (worker never started). Same terminal
-        // outcome as a closed channel — and the same reporting, because the user
-        // experiences exactly the same thing: a Compile that goes nowhere. Before
-        // this, `mark_started` had already flipped the doc to `Compiling` and it
-        // stayed there, with only a console line to explain it.
-        fail_compile_dispatch(
-            doc,
-            &model_name,
-            target_entity,
-            "Modelica worker channel not available",
-            &mut compile_states,
-            &mut console,
-            diagnostics.as_deref_mut(),
-            &mut q_models,
-            &mut commands,
-        );
-    }
-}
-
-/// One terminal outcome for a Compile that never reached the worker, so the two
-/// dispatch-failure sites cannot report it differently.
-///
-/// Four things have to be undone or said, and missing any one of them is what
-/// made the original `let _ = send(..)` invisible:
-///
-/// 1. the document's compile state leaves `Compiling` for `Error` — this is what
-///    the toolbar spinner and the red tab marker read;
-/// 2. the model entity stops claiming it is compiling/stepping, so
-///    `spawn_modelica_requests` doesn't keep waiting on a reply that is not coming;
-/// 3. the console + Diagnostics log get the reason;
-/// 4. an Error-severity [`lunco_telemetry_core::TelemetryEvent`] is published, which is
-///    what the workbench status bar's error observer fans to the status bar.
-///    A `console.error` alone is a panel
-///    the user may not have open.
-#[allow(clippy::too_many_arguments)]
-fn fail_compile_dispatch(
-    doc: lunco_doc::DocumentId,
-    model_name: &str,
-    target_entity: Entity,
-    cause: &str,
-    compile_states: &mut DocumentDiagnostics,
-    console: &mut lunco_ui::log::LogBuffer,
-    diagnostics: Option<&mut crate::ui::panels::diagnostics::DiagnosticsLog>,
-    q_models: &mut Query<&mut ModelicaModel>,
-    commands: &mut Commands,
-) {
-    let msg = format!("{cause} — compile of '{model_name}' was never dispatched.");
-    bevy::log::error!("[compile] {msg}");
-    compile_states.set_error_message(doc, msg.clone());
-    console.error(msg.clone());
-    if let Some(diag) = diagnostics {
-        diag.append(vec![lunco_ui::log::LogEntry {
-            at: web_time::Instant::now(),
-            level: lunco_ui::log::LogLevel::Error,
-            text: msg.clone(),
-            model: Some(model_name.to_string()),
-            loc: None,
-        }]);
-    }
-    // The entity may have been spawned this very tick (deferred), in which case
-    // there is nothing to clear yet — it was spawned with `is_compiling: true`
-    // and no worker will ever answer for it. `set_error_message` above is the
-    // authoritative user-facing verdict either way; this just stops the model
-    // from being polled.
-    if let Ok(mut model) = q_models.get_mut(target_entity) {
-        model.is_compiling = false;
-        model.is_stepping = false;
-        model.resume_after_compile = false;
-        model.last_error = Some(msg.clone());
-    }
-    commands.trigger(lunco_telemetry_core::TelemetryEvent {
-        name: COMPILE_DISPATCH_FAILED.into(),
-        source: 0,
-        severity: lunco_telemetry_core::Severity::Error,
-        data: lunco_telemetry_core::TelemetryValue::String(msg),
-        timestamp: 0.0,
-        sim_secs: 0.0,
-        sim_tick: 0,
+    requests.write(lunco_modelica_runtime::CompileRequested {
+        doc,
+        entity: None,
+        class: Some(model_name),
+        force: request.force,
+        resume_after_compile: request.resume_after_compile,
     });
 }
 
@@ -1656,10 +1064,10 @@ fn dispatch_experiment(
             };
             let document = host.document();
             // Library classes compile from the loaded session, not a temp
-            // overlay (see `compile_overlay_source`) — this is what makes a
+            // overlay — this is what makes a
             // drilled source library example (e.g. `Modelica.Blocks.Examples.PID_Controller`)
             // run without a self-duplicate-class collision.
-            let source = compile_overlay_source(document);
+            let source = lunco_modelica_source_roots::compile_overlay_source(document);
             // The document's stable session URI — the SAME canonical identity
             // the interactive `Compile` path passes (file path / bundled name /
             // Untitled-<id>). NOT `display_name()` (a non-unique label) and NOT

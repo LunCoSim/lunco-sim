@@ -969,7 +969,7 @@ fn _vector_matches(value, expected, tolerance) {
 /// moving-local / target-parent-frame equation in CoincidentPointTranslation.
 fn coincident_translation_placement_plan(doc_id, edit_target, path,
     parent_generation, solution) {
-    if doc_id == () || doc_id == 0 || edit_target == () || edit_target == ""
+    if doc_id == () || doc_id.to_string() == "0" || edit_target == () || edit_target == ""
         || path == () || !path.starts_with("/") || parent_generation == ()
         || !map_is(solution) || solution.ok != true
         || !vec3_is_native(solution.translation) || solution.units != "m" {

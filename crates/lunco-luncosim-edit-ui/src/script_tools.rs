@@ -348,7 +348,7 @@ fn scene_tool_context(
         if let Some(doc) =
             lunco_usd_bevy_twin::scene_document_for(backed, asset_server, path.stage_handle.id())
         {
-            context.push(("doc_id".to_string(), TelemetryValue::I64(doc.raw() as i64)));
+            context.push(("doc_id".to_string(), TelemetryValue::U64(doc.raw())));
         }
     }
     if let Some(entity) = selected_entity {
@@ -384,7 +384,7 @@ fn scene_tool_context(
             lunco_usd_bevy_twin::scene_document_for(backed, asset_server, path.stage_handle.id())
         {
             if !context.iter().any(|(name, _)| name == "doc_id") {
-                context.push(("doc_id".to_string(), TelemetryValue::I64(doc.raw() as i64)));
+                context.push(("doc_id".to_string(), TelemetryValue::U64(doc.raw())));
             }
         }
         if let Some(scene_root) = q_scene_roots
@@ -598,10 +598,106 @@ pub(crate) fn on_scene_pointer_event(
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
+    scene_gate: Option<Res<lunco_workbench_core::scene_pick::ScenePickGate>>,
+    ray_map: Option<Res<bevy::picking::backend::ray::RayMap>>,
+    picking_settings: Option<Res<bevy::picking::mesh_picking::MeshPickingSettings>>,
+    q_view_visibility: Query<&ViewVisibility>,
+    q_pickable: Query<&bevy::picking::Pickable>,
+    q_render_layers: Query<&bevy::camera::visibility::RenderLayers>,
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,
+    mut mesh_ray: bevy::picking::mesh_picking::ray_cast::MeshRayCast,
     mut commands: Commands,
 ) {
+    let ray_hits = world
+        .viewport
+        .active_camera
+        .and_then(|camera_entity| world.q_scene_cameras.get(camera_entity).ok())
+        .and_then(|(camera, transform)| {
+            camera
+                .viewport_to_world(transform, click.pointer_location.position)
+                .ok()
+        })
+        .map(|ray| {
+            use bevy::picking::mesh_picking::ray_cast::{MeshRayCastSettings, RayCastVisibility};
+            mesh_ray
+                .cast_ray(
+                    ray,
+                    &MeshRayCastSettings {
+                        visibility: RayCastVisibility::Any,
+                        filter: &|_| true,
+                        early_exit_test: &|_| false,
+                    },
+                )
+                .iter()
+                .filter_map(|(entity, _)| {
+                    world.q_prim.get(*entity).ok().map(|path| {
+                        (
+                            path.path.as_str(),
+                            q_view_visibility
+                                .get(*entity)
+                                .is_ok_and(|visibility| visibility.get()),
+                            q_pickable
+                                .get(*entity)
+                                .ok()
+                                .map(|pickable| pickable.is_hoverable),
+                            world
+                                .viewport
+                                .active_camera
+                                .and_then(|camera| q_render_layers.get(camera).ok())
+                                .cloned()
+                                .unwrap_or_default()
+                                .intersects(
+                                    &q_render_layers.get(*entity).cloned().unwrap_or_default(),
+                                ),
+                        )
+                    })
+                })
+                .take(8)
+                .collect::<Vec<_>>()
+        });
+    let visible_ray_hits = ray_map.as_deref().map(|map| {
+        use bevy::picking::mesh_picking::ray_cast::{MeshRayCastSettings, RayCastVisibility};
+        map.iter()
+            .map(|(ray_id, ray)| {
+                let paths = mesh_ray
+                    .cast_ray(
+                        *ray,
+                        &MeshRayCastSettings {
+                            visibility: RayCastVisibility::VisibleInView,
+                            filter: &|_| true,
+                            early_exit_test: &|_| false,
+                        },
+                    )
+                    .iter()
+                    .filter_map(|(entity, _)| {
+                        world
+                            .q_prim
+                            .get(*entity)
+                            .ok()
+                            .map(|path| path.path.as_str())
+                    })
+                    .take(8)
+                    .collect::<Vec<_>>();
+                (ray_id.camera, paths)
+            })
+            .collect::<Vec<_>>()
+    });
+    info!(
+        target = ?click.entity,
+        button = ?click.button,
+        screen = ?click.pointer_location.position,
+        hit_position = ?click.hit.position,
+        hit_prim = ?world.q_prim.get(click.entity).ok().map(|path| path.path.as_str()),
+        scene_target = ?scene_gate.as_deref().and_then(|gate| gate.resolved()),
+        viewport_camera = ?world.viewport.active_camera,
+        rays = ?ray_map.as_deref().map(|map| map.iter().map(|(id, ray)| (id.camera, id.pointer, ray.direction)).collect::<Vec<_>>()),
+        require_pick_markers = ?picking_settings.as_deref().map(|settings| settings.require_markers),
+        mesh_ray_hits = ?ray_hits,
+        visible_ray_hits = ?visible_ray_hits,
+        viewport_layers = ?world.viewport.active_camera.and_then(|camera| q_render_layers.get(camera).ok()),
+        "[scene-pointer-debug] received click"
+    );
     if armed.armed()
         || !matches!(
             spawn_state.as_ref(),
@@ -610,9 +706,20 @@ pub(crate) fn on_scene_pointer_event(
         || terrain_active.0
         || egui_focus.wants_pointer
     {
+        info!(
+            armed = armed.armed(),
+            spawn_idle = matches!(
+                spawn_state.as_ref(),
+                lunco_luncosim_edit_core::SpawnState::Idle
+            ),
+            terrain = terrain_active.0,
+            egui = egui_focus.wants_pointer,
+            "[scene-pointer-debug] click suppressed"
+        );
         return;
     }
     if click.hit.position.is_none() && world.q_prim.get(click.entity).is_err() {
+        info!("[scene-pointer-debug] click has no scene hit");
         return;
     }
     let key = ScenePointerKey {
@@ -625,6 +732,7 @@ pub(crate) fn on_scene_pointer_event(
         ],
     };
     if !dispatch.seen.insert(key) {
+        info!("[scene-pointer-debug] duplicate click suppressed");
         return;
     }
     let context = scene_tool_context(
@@ -669,4 +777,5 @@ pub(crate) fn on_scene_pointer_event(
         sim_secs: 0.0,
         sim_tick: 0,
     });
+    info!("[scene-pointer-debug] published scene.pointer");
 }

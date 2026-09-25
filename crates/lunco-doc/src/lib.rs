@@ -634,6 +634,27 @@ pub trait FileBacked: Document + Sized {
     }
 }
 
+/// File-backed documents that can accept immutable source preparation produced
+/// away from the document owner thread.
+///
+/// Parsing and other source-only work may run on a worker. The registry still
+/// owns path identity, dirty-document preservation, reload policy, and the
+/// point where the prepared result becomes live.
+pub trait PreparedFileBacked: FileBacked {
+    /// Send-safe result of preparing one exact source revision.
+    type PreparedSource: Send + Sync + 'static;
+
+    /// Construct a document from prepared source and its authoritative origin.
+    fn with_prepared_origin(
+        id: DocumentId,
+        source: &Self::PreparedSource,
+        origin: DocumentOrigin,
+    ) -> Self;
+
+    /// Replace a clean document's base from prepared source.
+    fn reload_prepared_source(&mut self, source: &Self::PreparedSource) -> bool;
+}
+
 /// A file-backed document that can create an independently editable,
 /// untitled snapshot with a new [`DocumentId`].
 ///

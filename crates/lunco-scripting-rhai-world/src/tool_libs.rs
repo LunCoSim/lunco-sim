@@ -100,6 +100,32 @@ impl TwinToolLibraries {
         Ok(())
     }
 
+    /// Install a Twin library from the immutable AST prepared with its source
+    /// asset. The ordinary source registration path remains for explicit
+    /// editor and journal commands whose source arrives as a command payload.
+    pub fn register_prepared(
+        &mut self,
+        twin: lunco_workspace::TwinId,
+        name: &str,
+        source: &str,
+        ast: rhai::AST,
+    ) -> Result<(), String> {
+        if self.owner != Some(twin) {
+            return Err(format!(
+                "tool library scope belongs to {:?}, not Twin {:?}",
+                self.owner, twin
+            ));
+        }
+        lunco_tools_rhai::register_prepared_rhai_tool_in_scope(
+            lunco_tools::ToolScope::Twin(twin.raw().to_string()),
+            name,
+            source,
+            ast,
+        );
+        self.loaded.insert(name.to_string());
+        Ok(())
+    }
+
     /// Restore the names owned by `twin`. A stale close event cannot remove a
     /// replacement Twin's tools.
     pub fn wind_down_for(&mut self, twin: lunco_workspace::TwinId) -> bool {
@@ -282,6 +308,7 @@ fn on_load_twin_tool_library(
     if assets
         .as_deref()
         .is_some_and(|assets| assets.get(id).is_some())
+        && asset_server.is_loaded_with_dependencies(&handle)
     {
         pending.ready.insert(id);
     }
@@ -309,9 +336,8 @@ fn mark_pending_twin_tools(
 ) {
     for event in events.read() {
         match event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::LoadedWithDependencies { id } => pending.mark_ready(*id),
+            AssetEvent::LoadedWithDependencies { id } => pending.mark_ready(*id),
+            AssetEvent::Added { .. } | AssetEvent::Modified { .. } => {}
             AssetEvent::Removed { id } | AssetEvent::Unused { id } => pending.mark_failed(
                 *id,
                 "Twin tool source asset was removed before reading".to_owned(),
@@ -327,7 +353,10 @@ fn drain_pending_twin_tools(
     mut pending: ResMut<PendingTwinTools>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     assets: Res<Assets<crate::source_asset::RhaiSource>>,
-    sources: Option<Res<lunco_assets_runtime::script_source::ScriptSources>>,
+    asset_server: Res<AssetServer>,
+    mut driver: Option<
+        ResMut<lunco_scripting::scenario::ScenarioDriver<crate::world_bridge::RhaiScenarioRuntime>>,
+    >,
     mut scoped: ResMut<TwinToolLibraries>,
 ) {
     let ready = std::mem::take(&mut pending.ready);
@@ -361,10 +390,28 @@ fn drain_pending_twin_tools(
         {
             continue;
         }
-        let validation = match crate::world_bridge::validate_tool_library(
+        let Some(driver) = driver.as_deref_mut() else {
+            warn!(
+                "[tool_libs] Rhai runtime is unavailable; cannot validate `{}`",
+                item.relative_path
+            );
+            continue;
+        };
+        if let Err(error) =
+            driver
+                .runtime
+                .commit_asset_dependency_closure(&item.handle, &assets, &asset_server)
+        {
+            warn!(
+                "[tool_libs] cannot prepare imports for `{}`: {error}",
+                item.relative_path
+            );
+            continue;
+        }
+        let validation = match driver.runtime.validate_prepared_tool_library(
             &item.library_name,
             &source.text,
-            sources.as_deref().cloned().unwrap_or_default(),
+            source.ast.clone(),
         ) {
             Ok(validation) => validation,
             Err(error) => {
@@ -372,7 +419,12 @@ fn drain_pending_twin_tools(
                 continue;
             }
         };
-        if let Err(error) = scoped.register(item.twin, &item.library_name, &source.text) {
+        if let Err(error) = scoped.register_prepared(
+            item.twin,
+            &item.library_name,
+            &source.text,
+            source.ast.clone(),
+        ) {
             warn!(
                 "[tool_libs] cannot install `{}`: {error}",
                 item.relative_path
@@ -385,6 +437,9 @@ fn drain_pending_twin_tools(
             validation.len(),
             if validation.len() == 1 { "" } else { "s" },
         );
+    }
+    if let Some(driver) = driver.as_deref_mut() {
+        lunco_scripting::scenario::ScenarioRuntime::maintain(&mut driver.runtime);
     }
     pending.items = still_pending;
 }
@@ -409,7 +464,9 @@ pub fn register_twin_tool_loading(app: &mut App) {
             Update,
             (mark_pending_twin_tools, drain_pending_twin_tools)
                 .chain()
-                .after(crate::source_asset::RhaiSourceAssetSet),
+                .after(crate::source_asset::RhaiSourceAssetSet)
+                .after(crate::world_bridge::RhaiBuiltinPreparationSet)
+                .before(lunco_core::RuntimeCycleSet::Repl),
         );
     register_all_commands(app);
 }
@@ -438,8 +495,13 @@ pub fn register_tool_library(name: &str, source: &str) {
 
 /// Register a source-defined standard library tool from the `lunco://` asset
 /// tree. Standard assets are lower precedence than application and Twin state.
-pub fn register_standard_tool_library(name: &str, source: &str) {
-    lunco_tools_rhai::register_rhai_tool_in_scope(lunco_tools::ToolScope::Standard, name, source);
+pub fn register_standard_tool_library(name: &str, source: &str, ast: rhai::AST) {
+    lunco_tools_rhai::register_prepared_rhai_tool_in_scope(
+        lunco_tools::ToolScope::Standard,
+        name,
+        source,
+        ast,
+    );
 }
 
 /// Retire a standard library tool selected by the application source policy.
@@ -461,9 +523,10 @@ pub enum ScriptSourceRole {
 }
 
 pub fn classify_source(asset_id: &str) -> Result<Option<ScriptSourceRole>, String> {
-    let Some(result) =
-        lunco_hooks::invoke(SOURCE_CLASSIFY_HOOK, &[HookValue::str(asset_id.to_owned())])
-    else {
+    let Some(result) = lunco_hooks::invoke_unclassified(
+        SOURCE_CLASSIFY_HOOK,
+        &[HookValue::str(asset_id.to_owned())],
+    ) else {
         return Ok(None);
     };
     let value = result.map_err(|error| error.to_string())?;

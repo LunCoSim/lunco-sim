@@ -20,7 +20,10 @@ samples from the outgoing Twin and count them as drops, so delayed delivery cann
 into the next Twin. These boundaries can leave visible gaps in telemetry history while the
 physics tick continues independently. The sampler itself still reads live ECS/port state in
 an exclusive fixed pass; moving immutable source preparation off-thread does not permit
-reading live simulation state asynchronously.
+reading live simulation state asynchronously. An unbound channel uses the mission's
+`SimTick` time. A channel with `TimeBinding` samples only when that exact domain is present
+in `ResolvedDomains`; the owner reports an unavailable domain and skips the channel rather
+than substituting world time.
 
 The one-line thesis: telemetry history is shared, bounded, and policy-driven. Modelica runtime
 state is retained by the render-free Modelica projection; authored channels use the same
@@ -115,13 +118,16 @@ catalog's labels still use `display_channel_label`.
 
 `LunCoTelemetryPlugin` is registered in the shared simulation composition.
 Sampling is `run_if`-gated on a `Parameter` existing and runs on the fixed
-clock. When channels exist, the exclusive sampler walks its cached channel plan
-on each fixed tick to check due times and read live ECS/port state. It queues
-immutable, tick-stamped samples for bounded `PostUpdate` delivery, so retention,
-subscriber, and logging observers do not run inline with physics. The remaining
-fixed-path plan walk and live reads are a performance item in the deterministic
-runtime contract; preserve authored rate/clock semantics while reducing that
-work.
+clock. When channels exist, the exclusive sampler checks one deadline heap per
+active clock on each fixed tick and pops only due channels. It reads live
+ECS/port state only for those channels, then queues immutable, tick-stamped
+samples for bounded `PostUpdate` delivery, so retention, subscriber, and logging
+observers do not run inline with physics. Plan rebuilds sort declarations by
+stable source/channel identity; due records are merged in that same order before
+they enter the bounded queue. A backward clock move resets that lane's cadence
+and emits at most once for a resolved time snapshot. The fixed pass still visits
+active clock lanes, and end-to-end observer throughput and physics tick cost
+remain to be measured.
 
 `lunco-telemetry-core` owns the transport-neutral telemetry contracts
 (`TelemetryEvent`, `SampledParameter`, `Parameter`, `ChannelSource`, and their
@@ -153,8 +159,8 @@ small typed value and source/tick identity. Retention, API delivery, logs, and
 recording use bounded owner queues or in-memory rings and report overload
 explicitly; physics never waits on telemetry I/O. UI plots derive decimated
 summaries from `SignalRegistry` history revisions instead of rebuilding them on
-every repaint. These are the target rules; the current sampler/observer path
-above has not yet completed this separation.
+every repaint. The sampler now indexes deadlines per clock and reads only due
+channels; measured physics cost and end-to-end observer throughput remain open.
 
 ---
 
@@ -165,7 +171,7 @@ ring buffers, a clock tree, and a timeseries type already exist.
 
 | Need | **Already exists** | Verdict |
 |---|---|---|
-| **Different clocks / cycles** | `lunco-time::domain` — `TimeDomain { parent, offset, scale, regime }` (affine child clock, USD `LayerOffset` semantics), `Playback { head, mode, rate, looping }` (independent playhead), **`TimeBinding { domain: Entity }` — a per-entity component**, `ResolvedDomains` resolved once per frame | **Use as-is.** "Sample this channel on another clock" = give the channel a `TimeBinding`. Nothing to build. |
+| **Different clocks / cycles** | `lunco-time::domain` — `TimeDomain { parent, offset, scale, regime }` (affine child clock, USD `LayerOffset` semantics), `Playback { head, mode, rate, looping }` (independent playhead), **`TimeBinding { domain: Entity }` — a per-entity component**, `ResolvedDomains` resolved once per frame | **Use as-is.** "Sample this channel on another clock" = give the channel a `TimeBinding`. A missing bound domain is an owner-visible error, never an implicit switch to world time. |
 | **Retention / ring buffer** | `lunco_signal::SignalRegistry` — `ScalarHistory { VecDeque<ScalarSample>, capacity }` **per signal**, `push_scalar()` drops non-finite, and `SignalMeta { unit, provenance }` | **Use as-is.** Routing `SampledParameter → push_scalar` keeps retention and plotting on one path. |
 | **FPS / frame stats** | Bevy diagnostics provide the engine-owned measurements and short diagnostic ring. `lunco-telemetry` admits the selected paths, samples the typed `EngineHealthSnapshot`, and retains them in the global `SignalRegistry` history | **Use the diagnostic as an input, not as a UI data store.** The retained `SignalRegistry` series is the canonical history for HUDs, plots, APIs, and recording. |
 | **Timeseries / experiments** | `RunResult { times: Vec<f64>, series: BTreeMap<String, Vec<f64>> }` (columnar), `RunUpdate::Progress { delta }` (incremental stream), `RunBounds { dt, n_intervals }` (**the codebase's existing vocabulary for output sample spacing**), `REGISTRY_CAP_PER_TWIN = 20` | A telemetry **recording** should *be* a `RunResult` — it then plots and retains through machinery that already works. Rate vocabulary should rhyme with `RunBounds::dt`. |
@@ -179,7 +185,8 @@ ring buffers, a clock tree, and a timeseries type already exist.
 
 ## 2. The channel
 
-One component. It already exists; it grows four fields.
+One component owns each channel declaration. `Parameter` is the existing reflected
+contract used by USD, scripts, and telemetry commands.
 
 ```rust
 pub struct Parameter {
@@ -241,20 +248,35 @@ history are available to plots, API clients, recording, and future HUDs.
 warp, and would keep firing while the sim is frozen. (Nothing in this repo uses `on_timer`
 today, and this is why it shouldn't start.)
 
-Instead: **an accumulator against the channel's own time domain.**
+Instead: keep each channel's next deadline in its own time domain and index it in a
+min-heap for that clock. A fixed pass checks the stable clock lanes and pops only
+deadlines that have arrived; it never scans every channel just to reject not-due ones.
 
 ```rust
 struct ChannelClock { next_due_t: f64 }     // in the channel's domain seconds
 
-// each fixed step, for each enabled channel:
-let t = domain_time(&resolved_domains, binding);   // lunco-time::domain, already exists
-if t >= clock.next_due_t {
-    emit(sample);
-    clock.next_due_t = t + 1.0 / rate;
-    // clamp so a paused/seeked/warped domain can't queue a burst of catch-up samples:
-    clock.next_due_t = clock.next_due_t.max(t);
+// each fixed step, once per active clock lane:
+let Some(now) = lane.resolved_time() else {
+    // A missing explicit domain holds its channels; it does not use world time.
+    continue;
+};
+let rewound = lane.observe_time(now); // detects a seek/loop once per snapshot
+for channel in lane.pop_due(now, rewound) {
+    read_and_queue(channel, now);
+    channel.next_due_t = if rewound {
+        now + 1.0 / channel.rate
+    } else {
+        (channel.next_due_t + 1.0 / channel.rate).max(now + 1.0 / channel.rate)
+    };
+    lane.reinsert(channel);
 }
 ```
+
+Due channels from all lanes are merged by stable declaration identity before sampling and
+bounded delivery. Forward time jumps do not create catch-up bursts; a backward move samples
+at the new playhead once and starts a new cadence there. Unbound channels use the integer
+simulation tick through `MissionClock`; explicitly bound channels use the exact resolved
+`TimeBinding` domain or remain held.
 
 This inherits pause, warp, `TimeDomain::scale`, and `Playback` seek/loop **for free**, because
 those already live in the domain. A channel bound to a `scale = 100` domain samples 100× the
@@ -271,7 +293,8 @@ warned, and skipped until corrected — it is never replaced by the subsystem de
 
 No `clock` field on `Parameter`. A channel entity carries `TimeBinding { domain }` — the
 component that **already exists** and already governs how everything else reads time. Absent ⇒
-the world domain. `ControlTelemetry.clock` sets it.
+the deterministic mission simulation clock. `ControlTelemetry` does not currently set a
+binding; a caller that needs another domain authors `TimeBinding` on the channel entity.
 
 This is the whole answer to *"option to run it in different cycles/clock"*, and it costs one
 component you already have.
@@ -290,8 +313,10 @@ Three lanes, and they are not interchangeable:
    `TelemetryValue::{Bool, String}` cannot enter a `ScalarHistory`.
 3. **Discrete/eventful → `TelemetryEvent`.** The existing push bus, with `Severity` and the
    authoritative `sim_secs`/`sim_tick` stamp. Bool and
-   String channels belong here, not in the ring buffer. *(This asymmetry is real and must be
-   stated, not papered over: a `String` channel has no plot.)*
+   String channels belong here, not in the ring buffer. Event payloads preserve signed
+   `i64` and unsigned `u64` values as distinct types for scripting and API consumers.
+   *(This asymmetry is real and must be stated, not papered over: a `String` channel has no
+   plot.)*
 
 ### 5b. Model state and explicit channels share one retention plane
 

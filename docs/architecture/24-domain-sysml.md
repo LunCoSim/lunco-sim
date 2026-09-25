@@ -85,10 +85,15 @@ package LunarBaseAlpha {
 
 `lunco-sysml` owns the source-backed `SysmlDocument` and reversible
 `SysmlOp::{ReplaceSource, EditText}` operations. The document retains its
-source, origin, generation and refreshed `lunco-sysml-ast` analysis; generic
-document hosting supplies journaling, undo/redo and save lifecycle. The
-`InspectSysmlDocument` query exposes the current source identity and
-diagnostics, while document commands apply source edits through that host.
+source, origin, and generation; generic document hosting supplies journaling,
+undo/redo, and save lifecycle. Lifecycle events snapshot source and origin for
+`AsyncWorkAdmission` at `Interactive` priority. `SysmlDocumentAnalyses` commits
+the immutable parser/resolver result only while both generation and origin URI
+still match. `InspectSysmlDocument` exposes `pending`, `ready`, or `failed`
+analysis state for that exact revision. Pending responses carry null analysis
+fields, and the Rhai editor reports them as retryable instead of treating an
+unfinished parse as clean. Source edits themselves only validate and update
+text; they do not parse on the caller's schedule.
 
 This document lifecycle is not a claim that SysML has dedicated BDD, IBD,
 requirements-tree or text-editor UI. The production surface is the generic

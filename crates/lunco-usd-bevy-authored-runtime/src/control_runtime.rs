@@ -9,7 +9,7 @@
 
 use crate::program_runtime::refresh_program_owner_with_network_members;
 use bevy::asset::Assets;
-use bevy::prelude::{Add, Commands, Component, Entity, On, Query, With, Without, World};
+use bevy::prelude::{Add, ChildOf, Commands, Component, Entity, On, Query, With, Without, World};
 use lunco_camera_core::{CameraFollow, parse_camera_follow};
 use lunco_control_core::ControlBinding;
 use lunco_port_core::InputPorts;
@@ -37,10 +37,14 @@ pub(crate) struct AuthoredRuntimeProjectionPending;
 pub(crate) fn queue_authored_runtime_projection(
     trigger: On<Add, UsdSceneProjected>,
     owners: Query<(), (With<UsdPrimPath>, Without<UsdPreviewOnly>)>,
+    child_of: Query<&ChildOf>,
+    preview_roots: Query<(), With<UsdPreviewOnly>>,
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
-    if owners.get(entity).is_ok() {
+    if owners.get(entity).is_ok()
+        && !lunco_usd_bevy_scene::is_preview_only(entity, &child_of, &preview_roots)
+    {
         commands
             .entity(entity)
             .try_insert(AuthoredRuntimeProjectionPending);
@@ -121,6 +125,9 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
     for (entity, stage_id, owner_path) in owners {
         if let Ok(mut owner) = world.get_entity_mut(entity) {
             owner.remove::<AuthoredRuntimeProjectionPending>();
+        }
+        if lunco_usd_bevy_scene::is_preview_only_entity(world, entity) {
+            continue;
         }
         let surface = {
             let Some(stage_asset) = world

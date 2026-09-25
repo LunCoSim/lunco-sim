@@ -22,8 +22,9 @@
 //! the physical timeline.
 //!
 //! Bindings: an entity carries a [`TimeBinding`] to a clock entity; absent ⇒ the sim
-//! clock. Per-project / per-selection / per-object are just different bound sets of the
-//! same machinery.
+//! clock. An explicit binding must resolve in [`ResolvedDomains`]; its owner reports an
+//! unavailable domain instead of silently changing clocks. Per-project / per-selection /
+//! per-object are just different bound sets of the same machinery.
 //!
 //! Resolution is split into pure functions ([`derived_local_t`], [`step_playhead`],
 //! [`resolve_clocks`]) so the math is unit-tested headless; the Bevy system
@@ -436,18 +437,18 @@ fn resolve_one(
     t
 }
 
-/// Resolve `binding`'s domain time from the per-frame [`ResolvedDomains`], falling
-/// back to the world clock when unbound or unresolved. This is the one entry point
-/// the sampler uses to turn an entity into its `local_t`.
+/// Resolve an entity's clock from the per-frame [`ResolvedDomains`]. An unbound
+/// entity uses the world clock; an explicit binding whose domain is unavailable
+/// returns `None` so its owner can report and hold the affected operation.
 #[inline]
 pub fn domain_time(
     resolved: &ResolvedDomains,
     binding: Option<&TimeBinding>,
     world: &WorldTime,
-) -> f64 {
+) -> Option<f64> {
     match binding {
-        Some(b) => resolved.get(b.domain).unwrap_or(world.sim_secs),
-        None => world.sim_secs,
+        Some(binding) => resolved.get(binding.domain),
+        None => Some(world.sim_secs),
     }
 }
 
@@ -805,7 +806,7 @@ fn hold_virtual_time(virtual_time: &mut Time<Virtual>, fixed_time: Option<&mut T
 }
 
 pub(crate) fn on_scene_transition_started(
-    _trigger: On<lunco_core::SceneTransitionStarted>,
+    trigger: On<lunco_core::SceneTransitionStarted>,
     mut scene_time: Option<ResMut<crate::SceneTimeState>>,
     virtual_time: Option<ResMut<Time<Virtual>>>,
     mut fixed_time: Option<ResMut<Time<Fixed>>>,
@@ -813,14 +814,14 @@ pub(crate) fn on_scene_transition_started(
     let Some(state) = scene_time.as_deref_mut() else {
         return;
     };
-    state.begin_scene_load();
+    state.begin_scene_load(trigger.event().id);
     if let Some(mut virtual_time) = virtual_time {
         hold_virtual_time(&mut virtual_time, fixed_time.as_deref_mut());
     }
 }
 
 pub(crate) fn on_scene_transition_failed(
-    _trigger: On<lunco_core::SceneTransitionFailed>,
+    trigger: On<lunco_core::SceneTransitionFailed>,
     mut scene_time: Option<ResMut<crate::SceneTimeState>>,
     mut transport: Option<ResMut<crate::TimeTransport>>,
     mut pending_scene_pause: Option<ResMut<crate::PendingScenePause>>,
@@ -830,6 +831,9 @@ pub(crate) fn on_scene_transition_failed(
     let Some(state) = scene_time.as_deref_mut() else {
         return;
     };
+    if state.transition_id != Some(trigger.event().id) {
+        return;
+    }
     state.clear_scene();
     if let Some(transport) = transport.as_deref_mut() {
         transport.mode = crate::TransportMode::Paused;
@@ -859,6 +863,9 @@ pub(crate) fn on_scene_transition_completed(
         return;
     }
     if let Some(mut state) = scene_time {
+        if state.transition_id != Some(trigger.event().id) {
+            return;
+        }
         state.clear_scene();
     }
     if let Some(transport) = transport.as_deref_mut() {
@@ -1062,6 +1069,14 @@ pub(crate) fn on_apply_scene_time_selection(
     mut commands: Commands,
 ) {
     let selection = &trigger.event().selection;
+    if scene_time.transition_id != Some(selection.transition_id) {
+        bevy::log::debug!(
+            selected_transition = selection.transition_id.get(),
+            active_transition = scene_time.transition_id.map(|id| id.get()),
+            "[time] ignoring stale scene-time selection"
+        );
+        return;
+    }
     if !selection.epoch_jd.is_finite()
         || selection.epoch_jd == 0.0
         || !matches!(selection.source, "authored" | "computer_time")
@@ -1430,6 +1445,7 @@ mod tests {
         app.insert_resource(crate::MissionClock::default())
             .insert_resource(lunco_core_runtime::SimTick(11))
             .insert_resource(crate::SceneTimeState {
+                transition_id: None,
                 phase: crate::SceneTimePhase::Ready,
                 selection: Some(crate::SceneTimeSelectionRecord {
                     source: "computer_time",
@@ -1471,11 +1487,18 @@ mod tests {
 
     #[test]
     fn pause_requested_behind_scene_restart_survives_reset() {
+        let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
+        let transition_id = coordinator.start(lunco_core::SceneTransition::Restart {
+            path: "scene.usda".to_owned(),
+            root_prim: "/World".to_owned(),
+            reset_document: false,
+        });
         let mut app = App::new();
         app.insert_resource(crate::TimeTransport::default())
             .insert_resource(crate::PendingScenePause::default())
-            .insert_resource(lunco_core::SceneTransitionCoordinator::default())
+            .insert_resource(coordinator)
             .insert_resource(crate::SceneTimeState {
+                transition_id: Some(transition_id),
                 phase: crate::SceneTimePhase::Loading,
                 selection: None,
             })
@@ -1485,9 +1508,6 @@ mod tests {
             .insert_resource(crate::MissionClock::default())
             .init_resource::<ResolvedDomains>()
             .init_resource::<LastClockT>();
-        app.world_mut()
-            .resource_mut::<lunco_core::SceneTransitionCoordinator>()
-            .admit(lunco_core::SceneTransitionRequest::restart(false));
         app.add_observer(on_set_time_transport);
         app.add_observer(on_reset_time);
 
@@ -1498,6 +1518,7 @@ mod tests {
         app.add_observer(on_apply_scene_time_selection);
         app.world_mut().trigger(crate::ApplySceneTimeSelection {
             selection: crate::SceneTimeSelection {
+                transition_id,
                 source: "authored",
                 epoch_jd: 2_461_234.5,
                 warning: None,
@@ -1510,6 +1531,61 @@ mod tests {
         assert_eq!(
             app.world().resource::<crate::SceneTimeState>().phase,
             crate::SceneTimePhase::Ready
+        );
+    }
+
+    #[test]
+    fn stale_scene_time_events_cannot_mutate_a_replacement_transition() {
+        let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
+        let stale_id = coordinator.start(lunco_core::SceneTransition::Load {
+            path: "same.usda".to_owned(),
+            root_prim: "/World".to_owned(),
+        });
+        assert!(coordinator.complete(stale_id));
+        let current_id = coordinator.start(lunco_core::SceneTransition::Load {
+            path: "same.usda".to_owned(),
+            root_prim: "/Other".to_owned(),
+        });
+        let mut scene_time = crate::SceneTimeState::default();
+        scene_time.begin_scene_load(current_id);
+
+        let mut app = App::new();
+        app.insert_resource(scene_time)
+            .insert_resource(crate::TimeTransport::default())
+            .insert_resource(lunco_core::RuntimeFaults::default())
+            .add_observer(on_apply_scene_time_selection)
+            .add_observer(on_scene_transition_failed)
+            .add_observer(on_scene_transition_completed);
+        app.world_mut().trigger(crate::ApplySceneTimeSelection {
+            selection: crate::SceneTimeSelection {
+                transition_id: stale_id,
+                source: "authored",
+                epoch_jd: 2_461_234.5,
+                warning: None,
+            },
+        });
+        app.world_mut().trigger(lunco_core::SceneTransitionFailed {
+            id: stale_id,
+            transition: lunco_core::SceneTransition::Load {
+                path: "same.usda".to_owned(),
+                root_prim: "/World".to_owned(),
+            },
+            error: "stale failure".to_owned(),
+        });
+        app.world_mut()
+            .trigger(lunco_core::SceneTransitionCompleted {
+                id: stale_id,
+                transition: lunco_core::SceneTransition::Clear,
+            });
+
+        let state = app.world().resource::<crate::SceneTimeState>();
+        assert_eq!(state.transition_id, Some(current_id));
+        assert_eq!(state.phase, crate::SceneTimePhase::Loading);
+        assert!(state.selection.is_none());
+        assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
+        assert_eq!(
+            app.world().resource::<crate::TimeTransport>().mode,
+            crate::TransportMode::Playing
         );
     }
 
@@ -1856,6 +1932,29 @@ mod tests {
         pb.head = 9.0;
         // 9 + 3 = 12 → wraps to 2.
         assert!((step_playhead(&pb, 3.0) - 2.0).abs() < EPS);
+    }
+
+    #[test]
+    fn domain_time_uses_world_only_when_unbound() {
+        let world = WorldTime {
+            sim_secs: 12.5,
+            ..Default::default()
+        };
+        let domain = e(7);
+        let empty = ResolvedDomains::default();
+
+        assert_eq!(domain_time(&empty, None, &world), Some(12.5));
+        assert_eq!(
+            domain_time(&empty, Some(&TimeBinding { domain }), &world),
+            None,
+            "a stale explicit binding must not silently switch to world time"
+        );
+
+        let resolved = ResolvedDomains(HashMap::from([(domain, ClockSample { t: 4.25, dt: 0.5 })]));
+        assert_eq!(
+            domain_time(&resolved, Some(&TimeBinding { domain }), &world),
+            Some(4.25)
+        );
     }
 
     #[test]

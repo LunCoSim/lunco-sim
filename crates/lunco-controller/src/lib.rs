@@ -1172,33 +1172,32 @@ fn record_control_input(
     }
     // --- Client ---
     if owned && cmd.seq != 0 {
-        // Buffer the frame keyed by seq so `record_predicted_state` keys its pose
-        // and reconcile can prune. The forward/steer/brake payload is unused by
-        // the current positional reconcile (awaits true input-replay).
+        // Buffer the complete port frame keyed by seq so rollback can re-simulate
+        // it and reconciliation can prune it after the host acknowledges it.
         let entry = owned_log.0.entry(g).or_default();
         if entry.frames.back().is_none_or(|f| f.seq != cmd.seq) {
-            // Capture the REAL actuation for deterministic input-replay rollback.
-            // `drive_from_bindings` resolves every bound port each tick, so the
-            // owned-client stream carries the full set; latch from the prior frame
-            // for any name a given command happens to omit (API/partial writes).
-            let prev = entry.frames.back();
-            let mut forward = prev.map_or(0.0, |f| f.forward);
-            let mut steer = prev.map_or(0.0, |f| f.steer);
-            let mut brake = prev.map_or(0.0, |f| f.brake);
-            for (name, v) in &cmd.writes {
-                match name.as_str() {
-                    "throttle" | "forward" => forward = *v,
-                    "steer" => steer = *v,
-                    "brake" => brake = *v,
-                    _ => {}
+            // Capture the full port actuation for deterministic rollback.
+            // `drive_from_bindings` resolves every bound port each tick; API
+            // and other partial writes retain the prior value for omitted ports.
+            let mut writes = entry
+                .frames
+                .back()
+                .map(|frame| frame.writes.clone())
+                .unwrap_or_default();
+            for (name, value) in &cmd.writes {
+                if let Some((_, latched_value)) = writes
+                    .iter_mut()
+                    .find(|(latched_name, _)| latched_name == name)
+                {
+                    *latched_value = *value;
+                } else {
+                    writes.push((name.clone(), *value));
                 }
             }
             entry.frames.push_back(lunco_core_session::InputFrame {
                 seq: cmd.seq,
                 tick: cmd.tick,
-                forward,
-                steer,
-                brake,
+                writes,
             });
             while entry.frames.len() > MAX_INPUT_FRAMES {
                 entry.frames.pop_front();
@@ -1250,6 +1249,27 @@ mod input_ack_tests {
             .expect("claim");
         app.add_observer(record_control_input);
         let e = app.world_mut().spawn(GlobalEntityId::from_raw(gid)).id();
+        (app, e)
+    }
+
+    fn predicted_client_app(gid: u64) -> (App, Entity) {
+        let mut app = App::new();
+        app.insert_resource(NetworkRole::Client)
+            .insert_resource(LocalSession(CLIENT_A))
+            .init_resource::<SimTick>()
+            .init_resource::<OwnedInputLog>()
+            .init_resource::<AppliedInputSeq>()
+            .init_resource::<LocalDriveInput>()
+            .init_resource::<BufferedClientInputs>()
+            .init_resource::<SessionRegistry>();
+        app.add_observer(record_control_input);
+        let e = app
+            .world_mut()
+            .spawn((
+                GlobalEntityId::from_raw(gid),
+                lunco_core_session::OwnedLocally,
+            ))
+            .id();
         (app, e)
     }
 
@@ -1343,6 +1363,54 @@ mod input_ack_tests {
         drive(&mut app, e, 2, 0.2);
         integrate_one_fixed_tick(&mut app, gid);
         assert_eq!(app.world().resource::<AppliedInputSeq>().ack(gid), 2);
+    }
+
+    #[test]
+    fn rollback_frames_keep_all_control_ports_and_latch_partial_updates() {
+        let gid = 0xBEEF_0004;
+        let (mut app, entity) = predicted_client_app(gid);
+
+        app.world_mut()
+            .trigger(lunco_cosim_core::commands::SetPorts {
+                target: entity,
+                writes: vec![
+                    ("steer".into(), 0.5),
+                    ("arm".into(), 1.0),
+                    ("throttle".into(), 0.7),
+                ],
+                seq: 1,
+                tick: 7,
+            });
+        app.update();
+
+        app.world_mut()
+            .trigger(lunco_cosim_core::commands::SetPorts {
+                target: entity,
+                writes: vec![("steer".into(), -0.25)],
+                seq: 2,
+                tick: 8,
+            });
+        app.update();
+
+        let frames = &app.world().resource::<OwnedInputLog>().0[&gid].frames;
+        assert_eq!(frames[0].tick, 7);
+        assert_eq!(
+            frames[0].writes,
+            vec![
+                ("steer".into(), 0.5),
+                ("arm".into(), 1.0),
+                ("throttle".into(), 0.7),
+            ]
+        );
+        assert_eq!(frames[1].tick, 8);
+        assert_eq!(
+            frames[1].writes,
+            vec![
+                ("steer".into(), -0.25),
+                ("arm".into(), 1.0),
+                ("throttle".into(), 0.7),
+            ]
+        );
     }
 }
 

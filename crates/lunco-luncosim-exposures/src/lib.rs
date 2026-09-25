@@ -24,7 +24,7 @@ use lunco_core_runtime::{ApplicationCadence, EngineHealthSnapshot, PhysicsHealth
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_exposure_core::{
-    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
+    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
 };
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
@@ -33,7 +33,7 @@ use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use lunco_usd_bevy_stage::read::UsdReadObject;
-use lunco_usd_bevy_stage::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
@@ -184,7 +184,8 @@ lunco_hooks::declare_hook! {
 /// visible. The engine passes one owned, typed fact map; no product or model
 /// name is interpreted here.
 fn runtime_ui_visibility(facts: &HookValue, surface_id: &str) -> bool {
-    match lunco_hooks::invoke(RUNTIME_UI_VISIBILITY_HOOK, std::slice::from_ref(facts)) {
+    match lunco_hooks::invoke_unclassified(RUNTIME_UI_VISIBILITY_HOOK, std::slice::from_ref(facts))
+    {
         Some(Ok(HookValue::Map(values))) => {
             let visible = values
                 .iter()
@@ -234,7 +235,8 @@ fn runtime_ui_visibility(facts: &HookValue, surface_id: &str) -> bool {
 /// drive ordinary template bindings; arrays and maps remain typed so generic
 /// HUI collection hosts can reconcile authored rows without numbered slots.
 fn runtime_ui_properties(facts: &HookValue, surface_id: &str) -> Vec<(String, ExposureValue)> {
-    let Some(result) = lunco_hooks::invoke(RUNTIME_UI_PROPERTIES_HOOK, std::slice::from_ref(facts))
+    let Some(result) =
+        lunco_hooks::invoke_unclassified(RUNTIME_UI_PROPERTIES_HOOK, std::slice::from_ref(facts))
     else {
         warn!(
             surface_id,
@@ -1207,16 +1209,20 @@ mod public_output_cache_tests {
         assert!(names.is_some_and(|names| names.contains("position")));
         assert_eq!(authored_reads.get(), 1);
 
-        assert!(cached_public_output_names(&mut cache, missing_entity, || {
-            missing_reads.set(missing_reads.get() + 1);
-            None
-        })
-        .is_none());
-        assert!(cached_public_output_names(&mut cache, missing_entity, || {
-            missing_reads.set(missing_reads.get() + 1);
-            Some(HashSet::from(["stale".to_owned()]))
-        })
-        .is_none());
+        assert!(
+            cached_public_output_names(&mut cache, missing_entity, || {
+                missing_reads.set(missing_reads.get() + 1);
+                None
+            })
+            .is_none()
+        );
+        assert!(
+            cached_public_output_names(&mut cache, missing_entity, || {
+                missing_reads.set(missing_reads.get() + 1);
+                Some(HashSet::from(["stale".to_owned()]))
+            })
+            .is_none()
+        );
         assert_eq!(missing_reads.get(), 1);
     }
 }

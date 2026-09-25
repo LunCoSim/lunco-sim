@@ -133,6 +133,19 @@ pub enum LoadSourceRootPayload {
     Disk {
         root_dir: PathBuf,
     },
+    /// One file owned by the bundled Modelica asset library. Native workers
+    /// resolve and read the asset during immutable source-root preparation.
+    BundledModel {
+        filename: String,
+    },
+    /// A structured package owned by the bundled Modelica asset library.
+    BundledPackage {
+        root: String,
+    },
+    /// One workspace file admitted by the workspace document owner.
+    WorkspaceFile {
+        path: PathBuf,
+    },
     InMemory {
         label: String,
         files: Vec<(String, String)>,
@@ -307,6 +320,9 @@ pub enum NoticeLevel {
 #[derive(Message, Clone)]
 pub struct CompileRequested {
     pub doc: lunco_doc::DocumentId,
+    /// Existing live participant when compilation is part of scene startup;
+    /// `None` asks the document owner to reuse or create the document's model.
+    pub entity: Option<Entity>,
     pub class: Option<String>,
     pub force: bool,
     pub resume_after_compile: bool,
@@ -332,6 +348,8 @@ pub struct SimSampleStream {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelicaSet {
     HandleResponses,
+    /// Admit compile intent independently of the fixed simulation clock.
+    AdmitCompileRequests,
     SpawnRequests,
 }
 

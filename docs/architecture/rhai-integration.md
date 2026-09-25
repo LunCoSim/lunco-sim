@@ -121,14 +121,18 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   (`mcp/src/index.js`). HTTP: `{"type":"ExecuteCommand","command":"RunScenario","params":{"target":<gid>,"source":"<rhai>"}}`.
   Idempotent + **hot-reload**: re-running on the same entity recompiles in place
   (bumps `ScriptDocument.generation`).
-- **One-shot eval (no attach):** the `RunRhai { code }` command — runs once with
-  full World access; stdout is returned in the original deferred response.
+- **One-shot eval (no attach):** the `RunRhai { code }` command — runs with full
+  World access in the bounded FIFO `Repl` cycle. At most one request executes
+  per `Update`, each invocation is limited to 100,000 Rhai operations, and a
+  full 64-request queue rejects new work with a terminal error. Stdout is
+  returned in the original deferred response.
 - **Structured tool invocation:** `RunRhaiTool { tool, args }` queues a registered
-  `on_click(context)` tool. `args` uses the shared typed `TelemetryValue` model;
-  scene click contexts include `button` (`primary`, `secondary`, or `middle`)
-  so the Rhai tool owns button-specific policy.
-  and is converted directly to a native Rhai value at the backend boundary;
-  scene adapters never build source snippets or JSON literals for tool arguments.
+  `on_click(context)` tool in the same bounded FIFO and uses the same per-update
+  and per-invocation limits. `args` uses the shared typed `TelemetryValue` model
+  and is converted directly to a native Rhai value at the backend boundary.
+  Scene click contexts include `button` (`primary`, `secondary`, or `middle`) so
+  the Rhai tool owns button-specific policy; adapters never build source
+  snippets or JSON literals for tool arguments.
 - **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
   attach `ScriptedModel { language: Rhai, document_id }`.
 
@@ -152,7 +156,7 @@ not part of the production mission contract.
 ### Structural invalidation in authored policy
 
 Policy that reads USD topology on a fixed tick must use the owning document's
-generation as its invalidation clock. The native `usd_document_generation(doc)`
+generation as its invalidation clock. The native `usd_document_generation(doc_id: u64)`
 bridge reads `DocumentHost::generation()` directly; it does not serialize an
 `InspectUsdDocument` response or wait for the asynchronous projection. A policy
 may cache its route/component/relationship snapshot and refresh it only when
@@ -165,8 +169,9 @@ generation and makes the cache refresh deterministic.
 
 | verb | channel | purpose |
 |------|---------|---------|
-| `usd_document_generation(doc_id)` → `u64` | read | read the authoritative USD generation as a cheap structural invalidation clock; detailed topology queries happen only after it changes |
-| `cmd(name, #{params})` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
+| `usd_document_generation(doc_id: u64)` → `u64 | ()` | read | read the authoritative USD generation as a cheap structural invalidation clock; detailed topology queries happen only after it changes |
+| `cmd(name, #{params})` → `#{ id: u64, ... }` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
+| `command_result(id: u64)` → `#{ id: u64, ... }` | read | read the terminal result for an admitted or deferred command |
 | `query(name, #{params})` | read | invoke a read-only structured provider; data is direct, no-data is `()`, errors are `#{ok:false,error}` |
 | `query("CausalTrace", #{target: gid, correlation_id: id})` | read | inspect one semantic edge through its authored binding, selected port owner, USD/Avian admission, and current measured channels |
 | `world_pos(id)` → `[x,y,z]` | read | float-origin-correct world position |
@@ -332,20 +337,24 @@ Scenario and command scripts run in an **exclusive system** (`&mut World`) and
 expose the scoped world bridge for the evaluation duration. Reads run
 synchronously; command writes use the shared reflected command dispatcher, while
 host-local tuning writes use the reflected component/resource and port seams.
-The scenario driver is the authoritative Rhai lifecycle runtime. `RunRhai` uses
-the same engine and bridge for one-shot evaluation without attaching a
-persistent `ScriptedModel`; it is a separate execution mode, not a second
-lifecycle or compatibility implementation. One-shot code and tool requests
-borrow the driver's prepared engine, including its authored prelude, import
-resolver, and registered tool modules. The driver refreshes its engine only
-when the tool-library generation changes; a request does not reread authored
-Rhai assets or rebuild the engine. While startup preparation is pending, queued
-requests remain queued. A thread-local print destination captures output for
-the active request while scenario output continues to use the application log.
+The scenario driver is the authoritative Rhai lifecycle runtime. `RunRhai` and
+`RunRhaiTool` use a prepared companion engine without attaching a persistent
+`ScriptedModel`; it shares the driver's authored prelude, source registry,
+prepared import modules, tool generation, and live-world bridge. Its lower
+operation ceiling is separate from scenario execution. Both engines refresh
+together when the tool-library generation changes, and requests do not reread
+authored assets or compile a new engine per call. While startup preparation is
+pending, queued requests remain queued. A thread-local print destination
+captures output for the active request while scenario output continues to use
+the application log.
 
 The owning system supplies a typed `RuntimeExecutionContext` for each scenario
 phase and one-shot REPL/tool evaluation. Rhai reads it with
 `execution_context()`; nested functions inherit their caller's phase and clock.
+Registered hook functions receive the same context in their immutable
+`runtime_context` map. When a Rhai callback invokes another registered hook,
+`invoke_hook` forwards the active scope context rather than starting an
+unclassified call.
 `sim_tick()`, `dt()`, and `elapsed_seconds()` reject calls outside the simulation
 cycle as a Rhai invocation error. A wrong-cycle call does not fault the
 simulation or another runtime cycle. Persistent scenarios may declare
@@ -813,11 +822,12 @@ runtime yet and is currently limited to one-shot `RunPython` evaluation. The
 script's `task(me, ctx)` identity is the host entity id; `this` is the persistent
 scenario-state map supplied to lifecycle hooks and native task closures.
 
-**Execution model:** ONE shared `rhai::Engine` resource (all host fns registered),
+**Execution model:** one shared scenario `rhai::Engine` and one prepared,
+bounded one-shot engine (both with the host bridge registered), plus a
 **per-entity `AST` + persistent `Scope`** (compiled once, hot-reloaded on source
-change). Fixes today's "fresh Engine per eval" cost. The same `ScriptDocument`
-reused on many entities = **prefab scripts** — 10 subjects run `route_follow.rhai`, each
-with its own `Scope` (independent goal index/state).
+change). The same `ScriptDocument` reused on many entities = **prefab scripts** —
+10 subjects run `route_follow.rhai`, each with its own `Scope` (independent goal
+index/state).
 
 Task leaves accept anonymous closures with one positional host id (`|me| ...`)
 or named script callbacks (`Fn("name")`, declared as `fn name(me)`). The task
@@ -848,9 +858,11 @@ No direct cross-VM calls are offered — by design.
 behavior) vs *centralized* (one scenario `cmd()`s many entities).
 
 **Determinism — pass-delayed actor model:**
-1. Iterate `ScriptedModel`s by `GlobalEntityId`, with the world-local Bevy
-   entity key as a tie-breaker for local hosts that have no API identity. A
-   cross-peer or replayable actor must have a stable `GlobalEntityId`.
+1. Iterate `ScriptedModel`s by the source-owned `GlobalEntityId` component,
+   rather than the Update-synchronized API lookup index. A local-only host with
+   no global identity uses its Bevy entity key only within that running World;
+   it has no cross-session replay identity. Cross-peer or replayable actors
+   require a stable `GlobalEntityId`.
 2. Events emitted in one driver pass are delivered at the start of the next
    driver pass. Each eligible batch is ordered by simulation tick, source,
    event name, severity, time, then a recursive typed payload order; arrival

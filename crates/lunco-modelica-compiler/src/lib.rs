@@ -45,6 +45,110 @@ fn source_roots_from_parsed_docs(
         .collect()
 }
 
+/// Immutable result of preparing a source root before it is installed into the
+/// long-lived Rumoca session. File reads, bound-input extraction, and parsing
+/// can run on a preparation worker; only [`ModelicaCompiler::install_source_root`]
+/// mutates the compiler session.
+pub struct PreparedSourceRoot {
+    id: String,
+    label: String,
+    files: Vec<(String, String)>,
+    parsed: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)>,
+    input_defaults: Vec<(String, f64, String)>,
+    parsed_roots: std::collections::HashSet<String>,
+    diagnostics: Vec<String>,
+    warnings: Vec<String>,
+}
+
+impl PreparedSourceRoot {
+    /// Stable source-root owner identity carried into the session commit.
+    pub fn source_set_id(&self) -> &str {
+        &self.id
+    }
+
+    /// Prepare a complete source set without touching a compiler session.
+    /// Files are canonicalized by URI so parser input, diagnostics, and
+    /// first-wins library defaults do not depend on filesystem enumeration or
+    /// worker completion order. Read errors are terminal for the source set;
+    /// no parseable subset is published.
+    pub fn prepare(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        mut files: Vec<(String, String)>,
+        mut diagnostics: Vec<String>,
+    ) -> Self {
+        let id = id.into();
+        let label = label.into();
+        files.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        if files.is_empty() && diagnostics.is_empty() {
+            diagnostics.push(format!("source root `{id}` contains no Modelica files"));
+        }
+
+        let mut parsed = Vec::with_capacity(files.len());
+        let mut input_defaults = Vec::new();
+        let mut warnings = Vec::new();
+        for (uri, text) in &files {
+            let (stripped, defaults, issues) =
+                lunco_modelica_ast::ast_extract::strip_input_defaults_with_report(text);
+            for issue in issues {
+                match issue {
+                    lunco_modelica_ast::ast_extract::InputDefaultIssue::ParseFailed => {
+                        diagnostics.push(format!(
+                            "source root `{id}`: the bound-`input` strip could not parse {uri} — \
+                             the file is unstripped, so bound inputs could be demoted and their \
+                             wires discarded"
+                        ));
+                    }
+                    lunco_modelica_ast::ast_extract::InputDefaultIssue::Unresolvable {
+                        name,
+                        binding,
+                        ..
+                    } => warnings.push(format!(
+                        "source root `{id}`: {uri} declares `input {name} = {binding}` — an \
+                         expression, not a literal, so the slot starts at 0.0 unless wired"
+                    )),
+                    lunco_modelica_ast::ast_extract::InputDefaultIssue::Collision {
+                        name,
+                        kept_scope,
+                        kept,
+                        dropped_scope,
+                        dropped,
+                    } => warnings.push(format!(
+                        "source root `{id}`: {uri} declares `{name}` in `{kept_scope}` and \
+                         `{dropped_scope}` with different defaults; keeping {kept}, dropping \
+                         {dropped}"
+                    )),
+                }
+            }
+            let mut defaults = defaults.into_iter().collect::<Vec<_>>();
+            defaults.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+            input_defaults.extend(
+                defaults
+                    .into_iter()
+                    .map(|(name, value)| (name, value, uri.clone())),
+            );
+            match lunco_modelica_ast::parse_to_ast(&stripped, uri) {
+                Ok(ast) => parsed.push((uri.clone(), ast)),
+                Err(error) => diagnostics.push(format!(
+                    "source root `{id}`: could not parse {uri}: {error:?}"
+                )),
+            }
+        }
+
+        let parsed_roots = source_roots_from_parsed_docs(&parsed);
+        Self {
+            id,
+            label,
+            files,
+            parsed,
+            input_defaults,
+            parsed_roots,
+            diagnostics,
+            warnings,
+        }
+    }
+}
+
 /// Compile Modelica models through one session-owned source-root admission
 /// boundary and one strict reachable-DAE call. Source roots are admitted from
 /// the parsed source before compilation; an unresolved dependency is a terminal
@@ -112,6 +216,9 @@ pub struct ModelicaCompiler {
     /// These are computed from bytes already read by the admission boundary;
     /// the prepared solve cache uses the aggregate without rescanning disk.
     library_revisions: std::collections::HashMap<String, u64>,
+    /// Roots whose explicit preparation failed. A live compile must report
+    /// that result instead of retrying file reads synchronously on the worker.
+    failed_source_roots: std::collections::HashMap<String, String>,
 }
 
 impl Default for ModelicaCompiler {
@@ -137,6 +244,7 @@ impl ModelicaCompiler {
             seated_user_uris: std::collections::HashSet::new(),
             library_input_defaults: std::collections::HashMap::new(),
             library_revisions: std::collections::HashMap::new(),
+            failed_source_roots: std::collections::HashMap::new(),
         }
     }
 
@@ -193,6 +301,9 @@ impl ModelicaCompiler {
     pub fn ensure_source_root_installed(&mut self, root: &str) -> bool {
         if self.installed_roots.contains(root) {
             return true;
+        }
+        if self.failed_source_roots.contains_key(root) {
+            return false;
         }
         let live_dir = lunco_assets_core::models_package_root_path(root);
         let files = lunco_assets_runtime::models::package_files_live(root);
@@ -283,12 +394,34 @@ impl ModelicaCompiler {
         source: &str,
         filename: &str,
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        self.compile_str_mode(model_name, source, filename, false)
+    }
+
+    /// Compile after a live worker has explicitly admitted all source roots.
+    /// Missing roots are terminal here; the worker never performs synchronous
+    /// file discovery as a fallback on its serialized command lane.
+    pub fn compile_str_after_source_root_admission(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        self.compile_str_mode(model_name, source, filename, true)
+    }
+
+    fn compile_str_mode(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+        require_admitted_roots: bool,
+    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         self.requested_source_roots =
             lunco_modelica_index::source_deps::scan_source_root_deps_from_source(source, filename);
         // Root installation is idempotent and remains owned by this compiler
         // session. It must complete before the first DAE call so USD projection
         // cannot turn dependency discovery into a hidden second compile.
-        self.prepare_requested_source_roots();
+        self.prepare_requested_source_roots(require_admitted_roots)?;
         // A `.mo` declaring `within P;` is a MEMBER of package `P`, not a document
         // that stands on its own. Its class is `P.Name`, and `P`'s source root
         // already owns it, so seating the file as a user overlay registers that
@@ -316,10 +449,17 @@ impl ModelicaCompiler {
                 &within,
                 lunco_modelica_ast::ast_extract::short_name(model_name),
             );
-            if !self.ensure_source_root_installed(&root) {
+            if !self.installed_roots.contains(&root)
+                && (require_admitted_roots || !self.ensure_source_root_installed(&root))
+            {
+                let reason = self
+                    .failed_source_roots
+                    .get(&root)
+                    .map(|reason| format!(": {reason}"))
+                    .unwrap_or_default();
                 return Err(format!(
                     "`{qualified}` declares `within {within};`, but no library `{root}` \
-                     could be seated from the configured Modelica asset library"
+                     could be seated from the configured Modelica asset library{reason}"
                 ));
             }
             return self.compile_loaded(&qualified);
@@ -437,6 +577,30 @@ impl ModelicaCompiler {
         filename: &str,
         extras: &[(String, String)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        self.compile_str_multi_mode(model_name, source, filename, extras, false)
+    }
+
+    /// Compile after a live worker has explicitly admitted all source roots
+    /// used by the primary and sibling documents. Missing roots fail on the
+    /// worker lane rather than triggering synchronous discovery.
+    pub fn compile_str_multi_after_source_root_admission(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+        extras: &[(String, String)],
+    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        self.compile_str_multi_mode(model_name, source, filename, extras, true)
+    }
+
+    fn compile_str_multi_mode(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+        extras: &[(String, String)],
+        require_admitted_roots: bool,
+    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
         self.requested_source_roots =
             lunco_modelica_index::source_deps::scan_source_root_deps_from_source(source, filename);
         for (extra_filename, extra_source) in extras {
@@ -447,20 +611,32 @@ impl ModelicaCompiler {
                 ),
             );
         }
-        self.prepare_requested_source_roots();
-        let primary_owned_class = lunco_modelica_ast::ast_extract::within_package_of_source(source)
-            .and_then(|within| {
-                let root = within.split('.').next().unwrap_or(&within);
-                if !self.installed_roots.contains(root) {
-                    let _ = self.ensure_source_root_installed(root);
+        self.prepare_requested_source_roots(require_admitted_roots)?;
+        let primary_owned_class = if let Some(within) =
+            lunco_modelica_ast::ast_extract::within_package_of_source(source)
+        {
+            let root = within.split('.').next().unwrap_or(&within);
+            if !self.installed_roots.contains(root)
+                && (require_admitted_roots || !self.ensure_source_root_installed(root))
+            {
+                if let Some(error) = self.failed_source_roots.get(root) {
+                    return Err(format!("Modelica source root `{root}` failed: {error}"));
                 }
-                let qualified = lunco_modelica_ast::ast_extract::qualify(
-                    &within,
-                    lunco_modelica_ast::ast_extract::short_name(model_name),
-                );
-                self.class_is_owned_by_installed_root(&qualified)
-                    .then_some(qualified)
-            });
+                if require_admitted_roots {
+                    return Err(format!(
+                        "Modelica source root `{root}` was not admitted before compile"
+                    ));
+                }
+            }
+            let qualified = lunco_modelica_ast::ast_extract::qualify(
+                &within,
+                lunco_modelica_ast::ast_extract::short_name(model_name),
+            );
+            self.class_is_owned_by_installed_root(&qualified)
+                .then_some(qualified)
+        } else {
+            None
+        };
         let mut keep = std::collections::HashSet::new();
         if primary_owned_class.is_none() {
             keep.insert(filename.to_string());
@@ -608,7 +784,7 @@ impl ModelicaCompiler {
     /// compile attempt.  The compiler session is the sole owner of this
     /// operation; callers only provide source text and never duplicate the
     /// dependency inventory or root installation logic.
-    fn prepare_requested_source_roots(&mut self) {
+    fn prepare_requested_source_roots(&mut self, require_admitted: bool) -> Result<(), String> {
         let mut roots = self
             .requested_source_roots
             .iter()
@@ -616,21 +792,33 @@ impl ModelicaCompiler {
             .collect::<Vec<_>>();
         roots.sort_unstable();
         for root in roots {
+            if let Some(error) = self.failed_source_roots.get(&root) {
+                return Err(format!("Modelica source root `{root}` failed: {error}"));
+            }
             if !self.installed_roots.contains(&root) {
+                if require_admitted {
+                    return Err(format!(
+                        "Modelica source root `{root}` was not admitted before compile"
+                    ));
+                }
                 let _ = self.ensure_source_root_installed(&root);
             }
         }
+        Ok(())
     }
 
-    /// Merge a Modelica source root into the live session so
-    /// subsequent compiles can resolve its types. Used by the
-    /// `LoadSourceRoot` worker command (`source_roots` lazy-load
-    /// pipeline) — main thread sends this command before a Compile
-    /// that depends on the library. Idempotent: rumoca dedups by
-    /// `id`, so re-issuing for an already-loaded root is cheap.
-    ///
-    /// Blocks the worker thread for the duration of the parse. Other queued
-    /// commands wait behind it.
+    /// Record a source-root failure from the worker's explicit admission
+    /// result. Later compiles referencing that root fail before a synchronous
+    /// compiler-side retry can read or parse it again.
+    pub fn record_source_root_failure(&mut self, id: impl Into<String>, error: String) {
+        self.failed_source_roots.insert(id.into(), error);
+    }
+
+    /// Synchronous convenience for hosts that do not have a worker admission
+    /// boundary. The live native Modelica worker prepares roots off-thread with
+    /// [`PreparedSourceRoot::prepare`] and calls [`Self::install_source_root`]
+    /// on its session owner. This method reads, prepares, and installs on the
+    /// caller; it must not be used on a responsive application schedule.
     pub fn load_source_root(
         &mut self,
         id: &str,
@@ -647,24 +835,23 @@ impl ModelicaCompiler {
         for diagnostic in &read_diagnostics {
             log::warn!("[ModelicaCompiler] source root `{id}`: {diagnostic}");
         }
-        let mut report =
-            self.load_source_root_in_memory(id, &root_dir.display().to_string(), files);
-        report.diagnostics.extend(
-            read_diagnostics
-                .into_iter()
-                .map(|diagnostic| format!("source root `{id}`: {diagnostic}")),
-        );
-        report
+        let diagnostics = read_diagnostics
+            .into_iter()
+            .map(|diagnostic| format!("source root `{id}`: {diagnostic}"))
+            .collect();
+        self.install_source_root(PreparedSourceRoot::prepare(
+            id,
+            root_dir.display().to_string(),
+            files,
+            diagnostics,
+        ))
     }
 
-    /// Merge an in-memory source root (e.g. a bundled `.mo` file or
-    /// a single workspace file) into the live session. Same
-    /// idempotency + blocking semantics as
-    /// [`Self::load_source_root`], but bytes are passed inline so
-    /// callers without a real on-disk path can still install
-    /// sources. Members are parsed first and installed as one source
-    /// set so a large package invalidates Rumoca once, and a malformed
-    /// member cannot leave a partially-installed root behind.
+    /// Synchronously prepare and install an in-memory source root. This is a
+    /// convenience for small caller-owned inputs; native live workers should
+    /// prepare through [`PreparedSourceRoot::prepare`] and commit through
+    /// [`Self::install_source_root`]. Members are installed as one source set
+    /// so a malformed member cannot leave a partially-installed root behind.
     ///
     /// `label` shows up in diagnostics as the "source root path"
     /// (rumoca convention: `"in-memory:<id>"`). `files` is a list
@@ -687,63 +874,50 @@ impl ModelicaCompiler {
         label: &str,
         files: Vec<(String, String)>,
     ) -> rumoca_compile::compile::SourceRootLoadReport {
+        self.install_source_root(PreparedSourceRoot::prepare(id, label, files, Vec::new()))
+    }
+
+    /// Commit a prepared source set into the session that owns Modelica
+    /// compiler state. Failed file reads or parses leave both the session and
+    /// captured library defaults unchanged.
+    pub fn install_source_root(
+        &mut self,
+        prepared: PreparedSourceRoot,
+    ) -> rumoca_compile::compile::SourceRootLoadReport {
+        let PreparedSourceRoot {
+            id,
+            label,
+            files,
+            parsed,
+            input_defaults,
+            parsed_roots,
+            mut diagnostics,
+            warnings,
+        } = prepared;
         let file_count = files.len();
-        let mut diagnostics = Vec::new();
-        let mut parsed = Vec::with_capacity(file_count);
-        let mut uris = Vec::with_capacity(file_count);
-        for (uri, text) in &files {
-            let (stripped, defaults, issues) =
-                lunco_modelica_ast::ast_extract::strip_input_defaults_with_report(text);
-            uris.push(uri.clone());
-            // A library member has no editor buffer to point diagnostics at, so
-            // the report goes to the log — but it is never dropped: a parse
-            // failure here means NOTHING in this file was stripped and every
-            // bound input in it will be folded to a constant.
-            for issue in &issues {
-                match issue {
-                    lunco_modelica_ast::ast_extract::InputDefaultIssue::ParseFailed => {
-                        let message = format!(
-                            "source root `{id}`: the bound-`input` strip could not parse {uri} — \
-                             the file is seated unstripped, so bound inputs would be demoted and \
-                             their wires discarded"
-                        );
-                        log::warn!("[ModelicaCompiler] {message}");
-                        diagnostics.push(message);
-                    }
-                    lunco_modelica_ast::ast_extract::InputDefaultIssue::Unresolvable {
-                        name,
-                        binding,
-                        ..
-                    } => {
-                        log::warn!(
-                            "[ModelicaCompiler] source root `{id}`: {uri} declares `input {name} = \
-                             {binding}` — an expression, not a literal, so the slot stays runtime \
-                             but starts at 0.0 unless wired"
-                        )
-                    }
-                    lunco_modelica_ast::ast_extract::InputDefaultIssue::Collision {
-                        name,
-                        kept_scope,
-                        kept,
-                        dropped_scope,
-                        dropped,
-                    } => log::warn!(
-                        "[ModelicaCompiler] source root `{id}`: {uri} declares `{name}` in two \
-                         scopes with different defaults — keeping {kept} from `{kept_scope}`, \
-                         dropping {dropped} from `{dropped_scope}`"
-                    ),
-                }
+        for warning in warnings {
+            log::warn!("[ModelicaCompiler] {warning}");
+        }
+        // A source root is one semantic unit. Do not publish a partial package:
+        // the compile owner must either see every member or a terminal load
+        // diagnostic. Bulk installation also keeps Rumoca's source-set index
+        // and invalidation work to one pass instead of one pass per file.
+        let inserted = if diagnostics.is_empty() && !parsed.is_empty() {
+            let inserted = self.session.replace_parsed_source_set(
+                &id,
+                rumoca_compile::compile::SourceRootKind::DurableExternal,
+                parsed,
+                None,
+            );
+            if inserted > 0 {
+                self.installed_roots.extend(parsed_roots);
             }
-            for (name, value) in defaults {
+            for (name, value, uri) in input_defaults {
                 match self.library_input_defaults.entry(name) {
                     std::collections::hash_map::Entry::Vacant(slot) => {
                         slot.insert(value);
                     }
                     std::collections::hash_map::Entry::Occupied(slot) if *slot.get() != value => {
-                        // Two library members author the same leaf name with
-                        // different defaults. Leaf keying can carry one; first
-                        // seated wins (seating order is sorted, so this is
-                        // deterministic) and the other is named rather than lost.
                         log::warn!(
                             "[ModelicaCompiler] source root `{id}`: input default `{}` = {value} \
                              in {uri} conflicts with {} already captured from another member — \
@@ -755,36 +929,18 @@ impl ModelicaCompiler {
                     std::collections::hash_map::Entry::Occupied(_) => {}
                 }
             }
-            match lunco_modelica_ast::parse_to_ast(&stripped, uri) {
-                Ok(ast) => parsed.push((uri.clone(), ast)),
-                Err(error) => {
-                    let message = format!("source root `{id}`: could not parse {uri}: {error:?}");
-                    log::warn!("[ModelicaCompiler] {message}");
-                    diagnostics.push(message);
-                }
-            }
-        }
-        // A source root is one semantic unit. Do not publish a partial package:
-        // the compile owner must either see every member or a terminal load
-        // diagnostic. Bulk installation also keeps Rumoca's source-set index
-        // and invalidation work to one pass instead of one pass per file.
-        let inserted = if diagnostics.is_empty() && !parsed.is_empty() {
-            let inserted = self.session.replace_parsed_source_set(
-                id,
-                rumoca_compile::compile::SourceRootKind::DurableExternal,
-                parsed,
-                None,
-            );
-            for uri in &uris {
-                self.remember_source_roots_from_document(uri);
-            }
             inserted
         } else {
             0
         };
+        if diagnostics.is_empty() && inserted == 0 {
+            diagnostics.push(format!(
+                "source root `{id}` contained no Modelica definitions to install"
+            ));
+        }
         let report = rumoca_compile::compile::SourceRootLoadReport {
-            source_set_id: id.to_string(),
-            source_root_path: label.to_string(),
+            source_set_id: id.clone(),
+            source_root_path: label,
             parsed_file_count: file_count,
             inserted_file_count: inserted,
             cache_status: None,
@@ -794,35 +950,13 @@ impl ModelicaCompiler {
         };
         if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
             self.library_revisions
-                .insert(id.to_string(), source_set_revision(id, &files));
+                .insert(id, source_set_revision(&report.source_set_id, &files));
+            self.failed_source_roots.remove(&report.source_set_id);
+        } else {
+            self.failed_source_roots
+                .insert(report.source_set_id.clone(), report.diagnostics.join("; "));
         }
         report
-    }
-
-    /// Record the authored top-level namespace(s) supplied by one source-root
-    /// document. A source-root identifier is transport metadata and may not be
-    /// the Modelica namespace (`twin:demo` can contain `Demo.*`), so the
-    /// compiler must derive this from the parsed document rather than guess
-    /// from the URI or loader id.
-    fn remember_source_roots_from_document(&mut self, uri: &str) {
-        let roots: Vec<String> = self
-            .session
-            .parsed_file_query(uri)
-            .map(|ast| {
-                let within = ast.within.as_ref().map(ToString::to_string);
-                ast.classes
-                    .keys()
-                    .filter_map(|class_name| {
-                        let qualified = within
-                            .as_deref()
-                            .map(|prefix| format!("{prefix}.{class_name}"))
-                            .unwrap_or_else(|| class_name.clone());
-                        qualified.split('.').next().map(str::to_string)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.installed_roots.extend(roots);
     }
 
     /// The `input` defaults captured from every seated library member — the
@@ -958,6 +1092,69 @@ mod source_root_smoke {
         assert!(
             result.is_err(),
             "a failed source-root admission must not expose only its parseable members"
+        );
+    }
+
+    #[test]
+    fn prepared_source_root_canonicalizes_files_before_parsing() {
+        let prepared = PreparedSourceRoot::prepare(
+            "Demo",
+            "test-root",
+            vec![
+                ("z/Zed.mo".into(), "model Zed end Zed;".into()),
+                ("a/Alpha.mo".into(), "model Alpha end Alpha;".into()),
+            ],
+            Vec::new(),
+        );
+
+        assert_eq!(
+            prepared
+                .files
+                .iter()
+                .map(|(uri, _)| uri.as_str())
+                .collect::<Vec<_>>(),
+            ["a/Alpha.mo", "z/Zed.mo"]
+        );
+        assert_eq!(
+            prepared
+                .parsed
+                .iter()
+                .map(|(uri, _)| uri.as_str())
+                .collect::<Vec<_>>(),
+            ["a/Alpha.mo", "z/Zed.mo"]
+        );
+        assert!(
+            prepared.diagnostics.is_empty(),
+            "{:?}",
+            prepared.diagnostics
+        );
+    }
+
+    #[test]
+    fn source_root_read_error_prevents_installing_parseable_members() {
+        let mut compiler = ModelicaCompiler::new();
+        let prepared = PreparedSourceRoot::prepare(
+            "Demo",
+            "test-root",
+            vec![(
+                "Demo/Healthy.mo".into(),
+                "model Healthy end Healthy;".into(),
+            )],
+            vec!["source root `Demo`: unreadable Demo/Broken.mo".into()],
+        );
+        let report = compiler.install_source_root(prepared);
+
+        assert_eq!(report.parsed_file_count, 1);
+        assert_eq!(report.inserted_file_count, 0);
+        assert_eq!(report.diagnostics.len(), 1);
+        let result = compiler.compile_str(
+            "Consumer",
+            "model Consumer\n  Demo.Healthy healthy;\nend Consumer;",
+            "Consumer.mo",
+        );
+        assert!(
+            result.is_err(),
+            "a read error must not expose a partial source root"
         );
     }
 

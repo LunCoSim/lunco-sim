@@ -25,6 +25,7 @@ use lunco_terrain_surface::TerrainSurfacePlugin;
 use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
 use lunco_usd_avian_filters::filtered_pairs::UsdCollisionFilter;
 use lunco_usd_bevy_runtime::UsdPlugins;
+use std::collections::BTreeSet;
 
 const INPUT_BINDINGS_KIND: &str = "lunco.input-bindings.v1";
 
@@ -385,13 +386,15 @@ mod big_space_propagation_gate_tests {
 
 impl Plugin for LunCoSimSimulationPlugin {
     fn build(&self, app: &mut App) {
+        // Publish the observed Compute width for clock_snapshot diagnostics.
+        // This describes the pool profile; it is not a determinism verdict.
         if !app
             .world()
-            .contains_resource::<lunco_physics::PhysicsDeterminism>()
+            .contains_resource::<lunco_physics::PhysicsComputeProfile>()
         {
             let compute_threads =
                 bevy::tasks::ComputeTaskPool::try_get().map(|pool| pool.thread_num());
-            app.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
+            app.insert_resource(lunco_physics::PhysicsComputeProfile::from_compute_threads(
                 compute_threads,
             ));
         }
@@ -571,8 +574,6 @@ impl Plugin for LunCoSimSimulationPlugin {
                     .chain(),
             );
         configure_big_space_propagation_gates(app);
-        #[cfg(feature = "sysml")]
-        app.add_plugins(lunco_sysml::SysmlPlugin);
         // Dynamic USD bodies are first promoted in `ActivateDynamicBodies`.
         // The terrain support projection must observe that promotion before it
         // decides whether physics may resume; plugin insertion order is not a
@@ -607,11 +608,13 @@ impl Plugin for LunCoSimSimulationPlugin {
                 .after(lunco_celestial_spatial::CelestialTerrainSet::Curvature)
                 .before(lunco_terrain_surface::TerrainSurfaceSet::Build),
         );
-        // The activation gate stays here — it is the assembly point that sees both the
-        // terrain request and the USD simulation readiness contract.
+        // The terrain scan is a lifecycle admission phase. It runs after the
+        // USD terrain bridge but before the time spine can admit fixed work.
         app.add_systems(
-            Update,
-            track_ground_collider_pending.after(lunco_usd_terrain::UsdTerrainSet::Bridge),
+            PreUpdate,
+            track_ground_collider_pending
+                .after(lunco_usd_terrain::UsdTerrainSet::Bridge)
+                .before(lunco_time::TimeSpineSet),
         );
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.
@@ -621,35 +624,67 @@ impl Plugin for LunCoSimSimulationPlugin {
     }
 }
 
-/// Hold dynamic-body activation while an actual DEM terrain build is in flight.
+/// Hold simulation and dynamic-body activation while a DEM substrate is pending.
 ///
-/// The USD terrain bridge is ordered before this system and its deferred commands
-/// are flushed at that boundary, so the query sees the authoritative
-/// [`DemTerrainRequest`] for a newly composed terrain in the same update. A query
-/// over every loaded USD prim is incorrect: most USD prims are not terrain and
-/// would keep the entire simulation kinematic until an arbitrary timeout.
+/// The USD terrain bridge runs before this system in `PreUpdate`, with command
+/// application at that boundary, so the query sees the authoritative request
+/// before `TimeSpineSet` projects clocks into the next fixed loop. A query over
+/// every loaded USD prim is incorrect: most USD prims are not terrain and would
+/// block the simulation on data unrelated to ground physics.
 ///
-/// The request is removed together with the finished collider/oracle by the
-/// terrain-surface owner. A declared-but-uninstalled Twin DEM carries
+/// The terrain-surface owner removes the request after committing the built
+/// collider and oracle. Its web worker marker remains through coarse preview
+/// publication until full refinement reaches a terminal result. A
+/// declared-but-uninstalled Twin DEM carries
 /// [`lunco_usd_terrain::DemDatasetPending`] instead of a build request; that
-/// state is equally not ready for dynamic admission. This crate only mirrors
-/// those domain-owned readiness states into the USD-simulation activation
-/// resource.
+/// state is equally not ready for dynamic admission. Each active terrain also
+/// owns an exact `SimulationProgress` key so `SimTick`, co-simulation, and
+/// physics cannot advance against an incomplete ground artifact. Presentation
+/// and UI schedules continue while the key is held.
 fn track_ground_collider_pending(
     building: Query<
-        Entity,
+        (Entity, Option<&lunco_usd_bevy_scene::UsdPrimPath>),
         Or<(
             With<lunco_terrain_surface::DemTerrainRequest>,
+            With<lunco_terrain_surface::terrain::DemWorkerJob>,
             With<lunco_usd_terrain::DemDatasetPending>,
+            With<lunco_usd_terrain::DemDatasetScanPending>,
         )>,
     >,
     parents: Query<&ChildOf>,
     preview_roots: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     mut pending: ResMut<lunco_usd_sim_core::GroundColliderPending>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
+    mut active: Local<BTreeSet<lunco_core_runtime::SimulationProgressKey>>,
 ) {
-    pending.0 = building
-        .iter()
-        .any(|entity| !lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots))
+    active.clear();
+    for (entity, prim_path) in &building {
+        if lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots) {
+            continue;
+        }
+        let key = lunco_core_runtime::SimulationProgressKey::terrain_preparation(entity);
+        active.insert(key);
+        if !progress.contains(key) {
+            let label = prim_path.map_or_else(
+                || format!("entity {}", entity.to_bits()),
+                |path| path.path.clone(),
+            );
+            progress.acquire(key, format!("Preparing physics terrain for {label}"));
+        }
+    }
+    pending.0 = !active.is_empty();
+
+    let completed: Vec<_> = progress
+        .blockers()
+        .filter(|blocker| {
+            blocker.key.owner == lunco_core_runtime::SimulationProgressOwner::TerrainPreparation
+                && !active.contains(&blocker.key)
+        })
+        .map(|blocker| blocker.key)
+        .collect();
+    for key in completed {
+        progress.release(key);
+    }
 }
 
 #[cfg(test)]
@@ -659,11 +694,59 @@ mod ground_collider_gate_tests {
     use lunco_usd_bevy_stage::UsdStageAsset;
 
     #[test]
-    fn only_an_active_dem_request_holds_dynamic_activation() {
+    fn terrain_progress_is_applied_before_the_first_fixed_tick() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            lunco_core_runtime::LunCoCoreRuntimePlugin,
+            lunco_time::TimePlugin,
+        ))
+        .insert_resource(lunco_time::SceneTimeState {
+            transition_id: None,
+            phase: lunco_time::SceneTimePhase::Ready,
+            selection: None,
+        })
+        .insert_resource(lunco_time::TimeTransport::default())
+        .init_resource::<lunco_usd_sim_core::GroundColliderPending>()
+        .add_systems(
+            PreUpdate,
+            track_ground_collider_pending
+                .after(lunco_usd_terrain::UsdTerrainSet::Bridge)
+                .before(lunco_time::TimeSpineSet),
+        );
+        let terrain = app
+            .world_mut()
+            .spawn(lunco_terrain_surface::DemTerrainRequest {
+                uri: "terrain/site".into(),
+                half_window: 1.0,
+                target_res: 0,
+                lod_viz: false,
+                collider_ring: false,
+                collider: lunco_terrain_surface::TerrainColliderSettings::default(),
+            })
+            .id();
+
+        app.world_mut().run_schedule(PreUpdate);
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 0);
+
+        app.world_mut()
+            .entity_mut(terrain)
+            .remove::<lunco_terrain_surface::DemTerrainRequest>();
+        app.world_mut().run_schedule(PreUpdate);
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(app.world().resource::<lunco_core_runtime::SimTick>().0, 1);
+    }
+
+    #[test]
+    fn authored_dem_preparation_holds_simulation_until_each_terrain_is_committed() {
         let mut app = App::new();
         app.insert_resource(Time::<()>::default())
             .init_resource::<lunco_usd_sim_core::GroundColliderPending>()
-            .add_systems(Update, track_ground_collider_pending);
+            .init_resource::<lunco_core_runtime::SimulationProgress>()
+            .add_systems(PreUpdate, track_ground_collider_pending);
 
         // A loaded USD stage contains many prims that are not terrain. They do
         // not participate in this gate.
@@ -678,6 +761,11 @@ mod ground_collider_gate_tests {
                 .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
+        assert!(
+            !app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
 
         let terrain = app
             .world_mut()
@@ -690,7 +778,90 @@ mod ground_collider_gate_tests {
                 collider: lunco_terrain_surface::TerrainColliderSettings::default(),
             })
             .id();
+        let other_terrain = app
+            .world_mut()
+            .spawn((
+                lunco_terrain_surface::DemTerrainRequest {
+                    uri: "terrain/other".into(),
+                    half_window: 1.0,
+                    target_res: 0,
+                    lod_viz: false,
+                    collider_ring: false,
+                    collider: lunco_terrain_surface::TerrainColliderSettings::default(),
+                },
+                UsdPrimPath {
+                    stage_handle: Handle::default(),
+                    path: "/Terrain/other".into(),
+                },
+            ))
+            .id();
+        let scan_pending = app
+            .world_mut()
+            .spawn(lunco_usd_terrain::DemDatasetScanPending::new(
+                lunco_assets_datasets::DatasetScope::Twin {
+                    name: "scan-fixture".to_owned(),
+                    root: std::path::PathBuf::new(),
+                },
+            ))
+            .id();
         app.update();
+        assert!(
+            app.world()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
+                .0
+        );
+        let key = lunco_core_runtime::SimulationProgressKey::terrain_preparation(terrain);
+        let other_key =
+            lunco_core_runtime::SimulationProgressKey::terrain_preparation(other_terrain);
+        let scan_key = lunco_core_runtime::SimulationProgressKey::terrain_preparation(scan_pending);
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .contains(scan_key)
+        );
+
+        // The browser publishes a coarse collider before the full worker result.
+        // Keep simulation admission held across that staged completion.
+        app.world_mut()
+            .entity_mut(terrain)
+            .remove::<lunco_terrain_surface::DemTerrainRequest>();
+        app.world_mut()
+            .entity_mut(terrain)
+            .insert(lunco_terrain_surface::terrain::DemWorkerJob);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
+
+        app.world_mut()
+            .entity_mut(terrain)
+            .remove::<lunco_terrain_surface::terrain::DemWorkerJob>();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .blockers()
+                .find(|blocker| blocker.key == key),
+            None
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .blockers()
+                .any(|blocker| blocker.key == other_key)
+        );
         assert!(
             app.world()
                 .resource::<lunco_usd_sim_core::GroundColliderPending>()
@@ -698,13 +869,48 @@ mod ground_collider_gate_tests {
         );
 
         app.world_mut()
-            .entity_mut(terrain)
+            .entity_mut(other_terrain)
             .remove::<lunco_terrain_surface::DemTerrainRequest>();
+        app.world_mut()
+            .entity_mut(scan_pending)
+            .remove::<lunco_usd_terrain::DemDatasetScanPending>();
         app.update();
         assert!(
             !app.world()
                 .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
+        );
+        assert!(
+            !app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
+
+        let preview_root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdPreviewOnly)
+            .id();
+        app.world_mut().spawn((
+            lunco_terrain_surface::DemTerrainRequest {
+                uri: "terrain/preview".into(),
+                half_window: 1.0,
+                target_res: 0,
+                lod_viz: false,
+                collider_ring: false,
+                collider: lunco_terrain_surface::TerrainColliderSettings::default(),
+            },
+            ChildOf(preview_root),
+        ));
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<lunco_usd_sim_core::GroundColliderPending>()
+                .0
+        );
+        assert!(
+            !app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
         );
     }
 
@@ -712,7 +918,8 @@ mod ground_collider_gate_tests {
     fn an_uninstalled_twin_dem_keeps_dynamic_activation_held() {
         let mut app = App::new();
         app.init_resource::<lunco_usd_sim_core::GroundColliderPending>()
-            .add_systems(Update, track_ground_collider_pending);
+            .init_resource::<lunco_core_runtime::SimulationProgress>()
+            .add_systems(PreUpdate, track_ground_collider_pending);
 
         let pending = app
             .world_mut()
@@ -726,6 +933,11 @@ mod ground_collider_gate_tests {
                 .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
         );
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
 
         app.world_mut().entity_mut(pending).despawn();
         app.update();
@@ -733,6 +945,11 @@ mod ground_collider_gate_tests {
             !app.world()
                 .resource::<lunco_usd_sim_core::GroundColliderPending>()
                 .0
+        );
+        assert!(
+            !app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
         );
     }
 }

@@ -191,7 +191,7 @@ parse check into runtime evidence.
   sources, an existing world, or no payload. The startup-installed
   `scene.time.select` Rhai policy uses a valid non-zero root
   `lunco:time:epochJd` when authored and current computer UTC converted to TDB
-  otherwise, once the USD scene and queued visual/mesh projections settle.
+  otherwise, once the USD stage and queued structural projection settle.
   Physics, animation, celestial placement, and DEM construction wait for that
   decision. Missing or invalid time for celestial sources warns at runtime and
   through `epoch-api-missing-time` lint. See

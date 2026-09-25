@@ -32,6 +32,9 @@ pub struct UsdSceneRuntimePlugin;
 
 impl Plugin for UsdSceneRuntimePlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
+            app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+        }
         app.add_systems(
             bevy::prelude::Update,
             (

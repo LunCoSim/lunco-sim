@@ -161,10 +161,7 @@ fn set_model_input_result(
             Ack::with_data(
                 OpId::new(),
                 lunco_hooks::HookValue::map([
-                    (
-                        "doc_id",
-                        lunco_hooks::HookValue::Int(applied_doc.raw() as i64),
-                    ),
+                    ("doc_id", lunco_hooks::HookValue::UInt(applied_doc.raw())),
                     ("name", lunco_hooks::HookValue::str(name)),
                     ("value", lunco_hooks::HookValue::Float(value)),
                 ]),

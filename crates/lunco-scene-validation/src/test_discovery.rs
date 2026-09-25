@@ -111,7 +111,7 @@ pub fn classify_rhai_source(source: &str) -> Result<SceneTestKind, String> {
     }
 }
 
-/// Discover every test scene below `scenes_dir` through composed USD reads.
+/// Discover every test scene recursively below `scenes_dir` through composed USD reads.
 ///
 /// Only `.rhai` programs below an asset `tests/` directory are test observers
 /// (`scenarios/tests/` in the shipped library). A scene may also carry a
@@ -148,10 +148,7 @@ fn scene_paths(scenes_dir: &Path) -> Result<Vec<PathBuf>, String> {
     }
     Ok(lunco_assets_runtime::discovery::scan_library(scenes_dir)
         .into_iter()
-        // Preserve the public contract of this function: discover the scene
-        // files directly under the supplied test directory, not nested asset
-        // libraries mounted below it.
-        .filter(|relative| !relative.contains('/') && relative.ends_with(".usda"))
+        .filter(|relative| relative.ends_with(".usda"))
         .map(|relative| scenes_dir.join(relative))
         .collect())
 }
@@ -251,7 +248,9 @@ fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SceneTestKind, classify_rhai_source};
+    use std::fs;
+
+    use super::{SceneTestKind, classify_rhai_source, scene_paths};
 
     #[test]
     fn omitted_kind_is_headless() {
@@ -314,6 +313,33 @@ mod tests {
             )
             .unwrap(),
             SceneTestKind::Headless
+        );
+    }
+
+    #[test]
+    fn scene_paths_include_nested_isolated_scenes() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("editor/preview_domain_isolation");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(root.path().join("headless.usda"), "").unwrap();
+        fs::write(nested.join("preview_domain_isolation.usda"), "").unwrap();
+        fs::write(nested.join("notes.txt"), "").unwrap();
+
+        let mut found = scene_paths(root.path())
+            .unwrap()
+            .into_iter()
+            .map(|path| path.strip_prefix(root.path()).unwrap().to_path_buf())
+            .collect::<Vec<_>>();
+        found.sort();
+
+        assert_eq!(
+            found,
+            [
+                std::path::PathBuf::from(
+                    "editor/preview_domain_isolation/preview_domain_isolation.usda"
+                ),
+                std::path::PathBuf::from("headless.usda"),
+            ]
         );
     }
 }

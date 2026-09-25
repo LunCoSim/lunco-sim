@@ -1,9 +1,24 @@
-// Hook reflection and dynamic policy binding stay at the Rhai production-test
-// boundary. The source is intentionally short: the test exercises the native
-// HookValue ABI rather than embedding a USD fixture or a Rust-only assertion.
+// Hook reflection, runtime-context forwarding, and feature-gated policy loading
+// are observable through the production Rhai bridge, so their acceptance checks
+// stay here rather than in a Rust-only assertion.
 
 let checks = [];
 let hooks = list_hooks();
+
+fn contains_string(entries, value) {
+    for entry in entries {
+        if entry == value { return true; }
+    }
+    false
+}
+
+fn contains_hook(entries, id) {
+    for entry in entries {
+        if entry.id == id { return true; }
+    }
+    false
+}
+
 let camera = ();
 for hook in hooks {
     if hook.id == "camera.default_presentation" { camera = hook; }
@@ -31,6 +46,20 @@ checks.push(t_true(escape_policy_hook != ()
         && escape_policy_hook.parameters[0].type == "map"
         && escape_policy_hook.output == "string",
     "physics escape exposes a required deterministic Rhai action policy"));
+let physics_initialization_hook = ();
+for hook in hooks {
+    if hook.id == "physics.initialization" { physics_initialization_hook = hook; }
+}
+checks.push(t_true(physics_initialization_hook != ()
+        && physics_initialization_hook.declared == true
+        && physics_initialization_hook.deterministic == true
+        && physics_initialization_hook.required == false
+        && physics_initialization_hook.installable == true
+        && physics_initialization_hook.parameters.len() == 1
+        && physics_initialization_hook.parameters[0].name == "facts"
+        && physics_initialization_hook.parameters[0].type == "map"
+        && physics_initialization_hook.output == "string",
+    "physics initialization exposes one declared deterministic owner policy seam"));
 let default_escape_policy = invoke_hook("physics.body_escape", [#{
     kind: "finite_world_exit",
     path: "/EscapeContainmentTest/Escapee",
@@ -40,9 +69,10 @@ let default_escape_policy = invoke_hook("physics.body_escape", [#{
     world_min_m: [-200.0, -200.0, -200.0],
     world_max_m: [200.0, 200.0, 200.0],
 }]);
-checks.push(t_true(default_escape_policy.ok == true
-        && default_escape_policy.value == "pause_object",
-    "the application Rhai default pauses the escaped object"));
+checks.push(t_true(default_escape_policy.ok == false
+        && default_escape_policy.status == "fault"
+        && default_escape_policy.error.contains("classified fixed simulation context"),
+    "the physics escape policy rejects invocation outside its fixed simulation cycle"));
 let merge = ();
 for hook in hooks {
     if hook.id == "journal.merge.order" { merge = hook; }
@@ -80,6 +110,33 @@ checks.push(t_true(lifecycle_call.ok == true
         && lifecycle_call.value.event == "startup"
         && lifecycle_call.value.twin_id == "test",
     "the authored lifecycle policy returns its typed event facts"));
+
+let sysml_lifecycle_call = invoke_hook("twin.lifecycle", [
+    "assets_mounted",
+    #{
+        twin_id: 42,
+        name: "analysis-fixture",
+        root: "twins/analysis-fixture",
+        active: true,
+        manifest: #{sysml: #{root: "models/root.sysml", paths: ["models"]}},
+        files: ["models/root.sysml", "models/base.kerml", "scenes/main.usda"],
+    },
+]);
+let load_count = 0;
+let prepare_found = false;
+for action in sysml_lifecycle_call.value.actions {
+    if action.command == "LoadTwinSysmlSource" { load_count += 1; }
+    if action.command == "PrepareTwinSysmlAnalysis" {
+        prepare_found = action.params.twin_id == 42
+            && action.params.name == "analysis-fixture"
+            && action.params.relative_paths.len() == 2
+            && action.params.relative_paths[0] == "models/root.sysml"
+            && action.params.relative_paths[1] == "models/base.kerml";
+    }
+}
+checks.push(t_true(sysml_lifecycle_call.ok == true && load_count == 2
+        && prepare_found,
+    "Twin policy loads the complete authored SysML set then requests one async analysis snapshot"));
 
 let asset_lifecycle = ();
 for hook in hooks {
@@ -189,7 +246,7 @@ checks.push(t_true(high_profile.ok == true
         && high_profile.value.shadow_first_cascade_far_bound == 30.0
         && high_profile.value.shadow_maximum_distance == 3000.0
         && high_profile.value.terrain_lod_max_depth == 9
-        && high_profile.value.terrain_lod_tile_budget == 1024
+        && high_profile.value.terrain_lod_tile_budget == 256
         && high_profile.value.horizon_march_steps == 96,
     "High shadow quality uses the authored high-detail values"));
 let missing_profile = invoke_hook("render.quality_profile", ["turbo"]);
@@ -204,15 +261,15 @@ checks.push(t_true(wrong_shape.ok == false && wrong_shape.status == "fault"
 let bound = bind_policy(
     "camera.default_presentation",
     "decide",
-    "fn decide(ctx) { \"none\" }",
+    "fn decide(ctx) { runtime_context.scope + \"/\" + runtime_context.cycle + \"/\" + runtime_context.phase + \"/\" + runtime_context.clock }",
 );
 checks.push(t_true(bound.ok == true && bound.status == "installed",
     "Rhai can bind a policy dynamically"));
 
 let invoked = invoke_hook("camera.default_presentation", [#{}]);
 checks.push(t_true(invoked.ok == true && invoked.installed == true
-        && invoked.value == "none",
-    "Rhai invokes a bound policy through the typed HookValue ABI"));
+        && invoked.value == "application/repl/evaluation/application",
+    "nested hook invocation exposes the caller's typed REPL context to Rhai"));
 
 let missing = invoke_hook("test.rhai.missing", []);
 checks.push(t_true(missing.ok == false && missing.status == "unavailable"
@@ -233,9 +290,20 @@ checks.push(t_true(removed.ok == true && removed.status == "removed",
 
 let status = policy_status();
 checks.push(t_true(status.scope != () && status.installed != ()
-        && status.failed != () && status.required_failures != (),
+        && status.failed != () && status.unavailable != ()
+        && status.required_failures != (),
     "Rhai can inspect the application policy load report"));
 checks.push(t_true(status.failed.len() == 0,
-    "the application manifest installs only declared hook policies"));
+    "feature-omitted owners do not become policy installation failures"));
+for hook_id in [
+    "assets.download.prepare",
+    "render.shadow_quality",
+    "runtime.ui.recording",
+] {
+    let hook_declared = contains_hook(hooks, hook_id);
+    let reported_unavailable = contains_string(status.unavailable, hook_id);
+    checks.push(t_true(hook_declared != reported_unavailable,
+        "optional policy owner availability is explicit for " + hook_id));
+}
 
 t_report(checks);

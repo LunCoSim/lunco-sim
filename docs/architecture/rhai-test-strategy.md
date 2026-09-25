@@ -260,6 +260,9 @@ recipes and their acceptance scenes stay in the owning Twin.
    diagnostics that intentionally do not produce a pixel take, and `TEST_KIND =
    "editor"` selects the production windowed host for document/preview/selection
    workflows.
+   Discovery is recursive. Put independent windowed fixtures in nested
+   one-scene directories so each Editor run mounts only its fixture Twin and
+   sibling editor sessions cannot mutate the same preview state.
    `scripts/run_scene_tests.sh` consumes this result and does not maintain a
    second scene or execution-domain classifier.
 
@@ -273,15 +276,19 @@ recipes and their acceptance scenes stay in the owning Twin.
    ```
 
    This reuses `target/debug/luncosim` and runs each authored scene through
-   `luncosim test --scene`, with deterministic `--threads 1 --jitter 0` and a
-   real telemetry verdict. Scene materialization and asynchronous Modelica
+   `luncosim test --scene`, with a single-Compute fixed-step profile
+   (`--threads 1 --jitter 0`) and a real telemetry verdict. This controls the
+   pool width and time-step sequence but does not prove identical outcomes.
+   Scene materialization and asynchronous Modelica
    participant readiness use a wall-clock liveness budget
    (`--readiness-timeout`, default 420 seconds), not a fixed update count: an
    async compile may require different numbers of `app.update()` calls on
    different machines. The shell gate keeps this startup budget separate from
    its larger `SCENE_TIMEOUT` wall-clock execution backstop (default 900
    seconds), because a valid long-running mission must not be killed while it
-   is still advancing. `--max-ticks` remains the simulated-time verdict bound.
+   is still advancing. `--max-ticks` limits cumulative clock-admitted fixed
+   steps across scene replacements; it does not reset with the scene-local
+   `SimTick` clock.
    The default mode performs one Cargo build first;
    `--no-build` is the script/USD iteration path. Discovery still resolves the
    authored scene-to-scenario edge before execution. A scene run is a fresh

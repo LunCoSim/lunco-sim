@@ -1,7 +1,7 @@
 // Generic live physics/readiness evidence for authored scene tests.
 //
 // The solver and all runtime state remain in their owning Rust systems. These
-// helpers only compose the existing public reads into small, deterministic
+// helpers only compose the existing public reads into small, typed
 // reports so a Twin test can use the same acceptance vocabulary for a rover,
 // articulated mechanism, habitat, or landing fixture.
 
@@ -9,14 +9,14 @@ fn evidence_error(message) {
     #{ ok: false, kind: "physics_evidence", error: message }
 }
 
-/// Validate the runtime's deterministic admission spine before comparing any
+/// Validate the runtime's clock and compute-profile observations before comparing any
 /// physical samples.  A scene test should call this once near its start and
-/// carry the returned report into its verdict; this keeps clock/thread policy
-/// generic instead of reimplementing tick arithmetic in each Twin.
-fn determinism_acceptance() {
+/// carry the returned report into its verdict; this keeps pool-profile policy
+/// generic instead of reimplementing clock or pool inspection in each Twin.
+fn single_thread_physics_profile_acceptance() {
     let clocks = clock_snapshot();
     if clocks == () {
-        return #{ ok: false, kind: "determinism_contract", errors: [
+        return #{ ok: false, kind: "physics_compute_profile", errors: [
             "clock_snapshot was unavailable",
         ]};
     }
@@ -28,22 +28,19 @@ fn determinism_acceptance() {
             clocks.clock_contract_error
         });
     }
-    if clocks.physics_contract_ok != true {
-        errors.push(if clocks.physics_contract_error == "" {
-            "physics determinism admission is invalid"
+    if clocks.physics_profile_known != true {
+        errors.push(if clocks.physics_profile_error == "" {
+            "physics compute-pool profile is unavailable"
         } else {
-            clocks.physics_contract_error
+            clocks.physics_profile_error
         });
     }
-    if clocks.physics_deterministic != true {
-        errors.push("physics compute order is not pinned to a deterministic pool");
-    }
-    if clocks.physics_compute_threads != 1 {
-        errors.push("deterministic acceptance requires exactly one compute thread");
+    if clocks.physics_profile_known == true && clocks.physics_compute_threads != 1 {
+        errors.push("this acceptance profile requires exactly one Compute thread");
     }
     #{
         ok: errors.len() == 0,
-        kind: "determinism_contract",
+        kind: "physics_compute_profile",
         errors: errors,
         clocks: clocks,
     }

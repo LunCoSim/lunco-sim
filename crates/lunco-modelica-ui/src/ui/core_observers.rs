@@ -317,23 +317,6 @@ pub fn mirror_source_roots_to_status_bus(
     }
 }
 
-/// Reactive UI: translate runtime [`lunco_modelica_runtime::CompileRequested`] events into the UI
-/// `CompileModel` command. The core stepper asks for a compile without ever
-/// naming the UI command type.
-pub fn relay_compile_requests(
-    mut requests: MessageReader<lunco_modelica_runtime::CompileRequested>,
-    mut commands: Commands,
-) {
-    for r in requests.read() {
-        commands.trigger(crate::ui::commands::CompileModel {
-            doc_id: r.doc,
-            class: r.class.clone(),
-            force: r.force,
-            resume_after_compile: r.resume_after_compile,
-        });
-    }
-}
-
 /// Feed UI input/workspace state into the core [`crate::engine_resource::ParsePacing`]
 /// hints that `drive_engine_sync` reads. The core parse scheduler consumes the
 /// hints (typing debounce, active-tab priority) without ever naming the UI

@@ -37,6 +37,7 @@ RENDER_API_PORT="${RENDER_API_PORT:-4103}"
 RUN_ID="$(date +%Y%m%dT%H%M%S)-$$"
 LOG_DIR="target/scene-tests"
 RENDER_ROOT="$LOG_DIR/render"
+export LUNCOSIM_CONFIG="$REPO_ROOT/$LOG_DIR/config-render-suite-$RUN_ID"
 
 if [[ ! -x "$BIN" ]]; then
     echo "render scene gate: production binary is missing or not executable: $BIN" >&2
@@ -139,7 +140,8 @@ for scene in "${SCENES[@]}"; do
     mkdir -p "$output"
 
     echo "==> render $name"
-    timeout --kill-after=10 "$RENDER_TIMEOUT" \
+    LUNCOSIM_CONFIG="$REPO_ROOT/$LOG_DIR/config-${name}-${RUN_ID}" \
+        timeout --kill-after=10 "$RENDER_TIMEOUT" \
         "$BIN" --api "$RENDER_API_PORT" --offscreen \
         --render-quality "$RENDER_QUALITY" \
         --record-offline "$output" \

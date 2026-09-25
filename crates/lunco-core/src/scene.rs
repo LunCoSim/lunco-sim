@@ -115,6 +115,7 @@ pub struct SceneTransitionCoordinator {
     admitted: Option<SceneTransitionRequest>,
     pending: Option<SceneTransitionRequest>,
     next_id: u64,
+    completed_generation: Option<SceneTransitionId>,
 }
 
 impl SceneTransitionCoordinator {
@@ -165,9 +166,23 @@ impl SceneTransitionCoordinator {
         id
     }
 
-    /// Close the active transaction and admit the pending request for the next
-    /// lifecycle phase.
-    pub fn finish(&mut self, id: SceneTransitionId) -> bool {
+    /// Commit a successfully completed transition and admit the pending request
+    /// for the next lifecycle phase.
+    pub fn complete(&mut self, id: SceneTransitionId) -> bool {
+        if !self.finish_active(id) {
+            return false;
+        }
+        self.completed_generation = Some(id);
+        true
+    }
+
+    /// Close a failed transaction without changing the generation of the last
+    /// successfully composed scene.
+    pub fn fail(&mut self, id: SceneTransitionId) -> bool {
+        self.finish_active(id)
+    }
+
+    fn finish_active(&mut self, id: SceneTransitionId) -> bool {
         if self.active.as_ref().map(|(active_id, _)| *active_id) != Some(id) {
             return false;
         }
@@ -178,6 +193,25 @@ impl SceneTransitionCoordinator {
         self.active = None;
         self.admitted = self.pending.take();
         true
+    }
+
+    /// Generation of the latest successfully completed scene transition.
+    /// Failed, stale, and no-op requests do not advance it.
+    pub const fn completed_generation(&self) -> Option<u64> {
+        match self.completed_generation {
+            Some(id) => Some(id.get()),
+            None => None,
+        }
+    }
+
+    /// Generation owned by lifecycle work currently admitting a scene.
+    /// While a transaction is active, its identity owns projected entities;
+    /// outside a transition, the latest successfully committed scene owns
+    /// new lifecycle work. A failed transition never replaces that generation.
+    pub fn lifecycle_generation(&self) -> Option<u64> {
+        self.active_id()
+            .map(SceneTransitionId::get)
+            .or_else(|| self.completed_generation())
     }
 
     /// Advance after an admitted request resolves to a semantic no-op before a
@@ -280,6 +314,13 @@ pub struct SceneTransitionCompleted {
     pub transition: SceneTransition,
 }
 
+/// Published only after the transaction owner accepts a matching completed
+/// edge. Runtime cycles use this edge to arm work for the new scene generation.
+#[derive(Event, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SceneTransitionCommitted {
+    pub id: SceneTransitionId,
+}
+
 /// Published when a requested stage cannot reach its completion edge.
 #[derive(Event, Debug, Clone, PartialEq, Eq)]
 pub struct SceneTransitionFailed {
@@ -311,11 +352,44 @@ mod tests {
             SceneTransitionAdmission::Queued
         );
 
-        assert!(!coordinator.finish(SceneTransitionId(first_id.get() + 1)));
+        assert!(!coordinator.complete(SceneTransitionId(first_id.get() + 1)));
         assert_eq!(coordinator.active_id(), Some(first_id));
-        assert!(coordinator.finish(first_id));
+        assert!(coordinator.complete(first_id));
+        assert_eq!(coordinator.completed_generation(), Some(first_id.get()));
         assert!(coordinator.active().is_none());
         assert!(coordinator.has_admitted());
+    }
+
+    #[test]
+    fn stale_or_failed_edges_preserve_the_last_successful_scene_generation() {
+        let mut coordinator = SceneTransitionCoordinator::default();
+        coordinator.admit(SceneTransitionRequest::load("first.usda", "/World"));
+        coordinator.take_admitted();
+        let first_id = coordinator.start(SceneTransition::load("first.usda", "/World"));
+        assert_eq!(coordinator.lifecycle_generation(), Some(first_id.get()));
+        assert!(coordinator.complete(first_id));
+        assert_eq!(coordinator.completed_generation(), Some(first_id.get()));
+        assert_eq!(coordinator.lifecycle_generation(), Some(first_id.get()));
+
+        coordinator.admit(SceneTransitionRequest::load("second.usda", "/World"));
+        coordinator.take_admitted();
+        let second_id = coordinator.start(SceneTransition::load("second.usda", "/World"));
+        assert_eq!(coordinator.lifecycle_generation(), Some(second_id.get()));
+
+        assert!(!coordinator.complete(first_id));
+        assert_eq!(coordinator.active_id(), Some(second_id));
+        assert_eq!(coordinator.completed_generation(), Some(first_id.get()));
+        assert!(coordinator.fail(second_id));
+        assert_eq!(coordinator.completed_generation(), Some(first_id.get()));
+        assert_eq!(coordinator.lifecycle_generation(), Some(first_id.get()));
+
+        coordinator.admit(SceneTransitionRequest::load("third.usda", "/World"));
+        coordinator.take_admitted();
+        let third_id = coordinator.start(SceneTransition::load("third.usda", "/World"));
+        assert_eq!(coordinator.lifecycle_generation(), Some(third_id.get()));
+        assert!(coordinator.complete(third_id));
+        assert_eq!(coordinator.completed_generation(), Some(third_id.get()));
+        assert_eq!(coordinator.lifecycle_generation(), Some(third_id.get()));
     }
 
     #[test]

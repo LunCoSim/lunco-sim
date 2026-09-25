@@ -922,7 +922,7 @@ fn update_runtime_ui_recording_contract(
         ("recording_active", HookValue::Bool(true)),
     ]);
 
-    let result = lunco_hooks::invoke("runtime.ui.recording", &[facts]);
+    let result = lunco_hooks::invoke_unclassified("runtime.ui.recording", &[facts]);
     let Some(result) = result else {
         return;
     };

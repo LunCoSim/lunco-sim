@@ -175,14 +175,18 @@ fn authored_input_defaults_changed(info_only: &[String]) -> bool {
 /// This publishes only a generic state revision. The authoring projection does
 /// not decide whether a backend should recompile, reset, or simply accept a
 /// live input; the backend that owns the model decides that from its own state.
-fn mark_model_state_revision(world: &mut World, prim_path: &str) {
-    let entity = world
-        .query::<(Entity, &UsdPrimPath)>()
-        .iter(world)
-        .find_map(|(entity, path)| {
-            (path.path == prim_path && !lunco_usd_bevy_scene::is_preview_only_entity(world, entity))
-                .then_some(entity)
-        });
+fn mark_model_state_revision(world: &mut World, stage_id: AssetId<UsdStageAsset>, prim_path: &str) {
+    let candidates = {
+        let mut query = world.query::<(Entity, &UsdPrimPath)>();
+        query
+            .iter(world)
+            .filter(|(_, path)| path.stage_handle.id() == stage_id && path.path == prim_path)
+            .map(|(entity, _)| entity)
+            .collect::<Vec<_>>()
+    };
+    let entity = candidates
+        .into_iter()
+        .find(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity));
     if let Some(entity) = entity {
         let mut revision = world
             .get::<lunco_core::ModelStateRevision>(entity)
@@ -253,14 +257,17 @@ fn find_live_entity(
     stage_handle_id: AssetId<UsdStageAsset>,
     path: &str,
 ) -> Option<Entity> {
-    let mut q = world.query::<(Entity, &UsdPrimPath)>();
-    q.iter(world)
-        .find(|(entity, upp)| {
-            upp.stage_handle.id() == stage_handle_id
-                && upp.path == *path
-                && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
-        })
-        .map(|(e, _)| e)
+    let candidates = {
+        let mut query = world.query::<(Entity, &UsdPrimPath)>();
+        query
+            .iter(world)
+            .filter(|(_, prim)| prim.stage_handle.id() == stage_handle_id && prim.path == path)
+            .map(|(entity, _)| entity)
+            .collect::<Vec<_>>()
+    };
+    candidates
+        .into_iter()
+        .find(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity))
 }
 
 fn find_program_owner(
@@ -268,15 +275,19 @@ fn find_program_owner(
     stage_id: AssetId<UsdStageAsset>,
     source_path: &str,
 ) -> Option<Entity> {
-    let mut query = world.query::<(Entity, &UsdPrimPath, &lunco_core::ScenarioProgramPrim)>();
-    query
-        .iter(world)
-        .find(|(entity, prim, source)| {
-            prim.stage_handle.id() == stage_id
-                && source.0 == source_path
-                && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
-        })
-        .map(|(entity, _, _)| entity)
+    let candidates = {
+        let mut query = world.query::<(Entity, &UsdPrimPath, &lunco_core::ScenarioProgramPrim)>();
+        query
+            .iter(world)
+            .filter(|(_, prim, source)| {
+                prim.stage_handle.id() == stage_id && source.0 == source_path
+            })
+            .map(|(entity, _, _)| entity)
+            .collect::<Vec<_>>()
+    };
+    candidates
+        .into_iter()
+        .find(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity))
 }
 
 fn mark_stage_projected(
@@ -297,11 +308,11 @@ fn publish_stage_projected(world: &mut World, doc: lunco_doc::DocumentId, genera
     let mut data = BTreeMap::new();
     data.insert(
         "doc_id".to_string(),
-        lunco_telemetry_core::TelemetryValue::I64(doc.raw() as i64),
+        lunco_telemetry_core::TelemetryValue::U64(doc.raw()),
     );
     data.insert(
         "generation".to_string(),
-        lunco_telemetry_core::TelemetryValue::I64(generation as i64),
+        lunco_telemetry_core::TelemetryValue::U64(generation),
     );
     world.trigger(lunco_telemetry_core::TelemetryEvent {
         name: "usd.document.projected".to_string(),
@@ -446,7 +457,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         for path in &info_only {
             if let Some((prim_path, attribute)) = path.split_once('.') {
                 if attribute.starts_with("inputs:") {
-                    mark_model_state_revision(world, prim_path);
+                    mark_model_state_revision(world, id, prim_path);
                 }
             }
         }
@@ -737,9 +748,10 @@ mod translate_seat_tests {
 /// Re-project every prim whose attributes were edited — the general live-edit
 /// path, so **an edit shows up without reloading the scene**.
 ///
-/// `info_only` carries both the owning prim path and the PROPERTY path naming the
-/// changed attribute (pinned by `info_only_reports_both_prim_and_property_paths`).
-/// That attribute name is what lets this be precise instead of a reload:
+/// `info_only` carries full changed property paths. This owner uses their
+/// property names to choose the smallest live projection update, while the
+/// coalesced [`UsdSceneChangeBatch`] exposes owning prim paths to downstream
+/// projectors:
 ///
 /// - **`xformOp:*`** — skipped. [`apply_transform_edits_live`] already wrote the
 ///   changed channels in place. Re-instantiating on a transform edit
@@ -748,9 +760,11 @@ mod translate_seat_tests {
 /// - **live curve geometry** — skipped. The generic USD visual projector rebuilds
 ///   the existing curve mesh from the canonical stage revision in place, so a
 ///   point/topology/width edit does not tear down the entity or its render binding.
-/// - **`Shader` / `Material` prims** — a material edit fans out through
-///   `material:binding` to arbitrary meshes elsewhere in the scene, so the prim's
-///   own subtree is not enough: refresh the scene's visuals.
+/// - **standard `UsdPreviewSurface` inputs** — the render owner re-reads the
+///   affected bound `PbrLook` values from `UsdSceneChangeBatch`; scene entities
+///   and unrelated behavior owners stay live.
+/// - **other `Shader` / `Material` prim properties** — their consumers may span
+///   the scene, so re-project the scene's visuals.
 /// - **anything else** — re-instantiate just that prim's subtree.
 ///
 /// `DomeLight`s are excluded: the light projection consumes
@@ -862,6 +876,9 @@ pub(crate) fn refresh_edited_prims_live(
         if attr.starts_with("xformOp:") {
             continue;
         }
+        if standard_preview_surface_input_edit(world, id, prim, attr) {
+            continue;
+        }
         if curve_geometry_edit(world, id, prim, attr) {
             continue;
         }
@@ -913,6 +930,31 @@ pub(crate) fn refresh_edited_prims_live(
     for prim in subtrees {
         crate::twin_projection::refresh_prim_subtree(world, id, &prim);
     }
+}
+
+/// Standard `UsdPreviewSurface` values are re-read by the visual owner from
+/// `UsdSceneChangeBatch`; rebuilding the stage entities would also restart
+/// unrelated authored programs and simulation projections.
+fn standard_preview_surface_input_edit(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    prim: &str,
+    attribute: &str,
+) -> bool {
+    if !attribute.starts_with("inputs:") {
+        return false;
+    }
+    let Ok(path) = SdfPath::new(prim) else {
+        return false;
+    };
+    world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .and_then(|stages| stages.get(stage_id))
+        .is_some_and(|stage| {
+            let view = stage.view();
+            view.type_name(&path).as_deref() == Some("Shader")
+                && view.text(&path, "info:id").as_deref() == Some("UsdPreviewSurface")
+        })
 }
 
 /// Whether an info-only edit changes the tessellated geometry of a USD curve.

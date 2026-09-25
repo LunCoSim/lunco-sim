@@ -18,12 +18,14 @@
 //!    The scene mount is admitted after the source asset reaches a terminal
 //!    success or failure event.
 //! 2. [`drain_pending_twin_docs`] — once the source asset emits its terminal
-//!    event, allocate a
-//!    [`UsdDocument`](lunco_usd_document::document::UsdDocument) for it (origin = the on-disk path, so Save
-//!    and dedup work), restore its persisted `.lunco/runtime` overlay, publish
-//!    the composed source as the twin overlay, record it in
-//!    [`DocBackedTwinScenes`] (synced after the canonical stage sink is drained), and only then
-//!    fire `LoadScene` — the single mount composes `base ⊕ runtime`.
+//!    event, admit parsing of that exact text revision through
+//!    `AsyncWorkAdmission`. The document registry commits the prepared source
+//!    under its path identity and dirty-document policy. After restoring the
+//!    persisted `.lunco/runtime` overlay, a cloned document snapshot is
+//!    serialized on the worker pool; the owner accepts it only while its
+//!    generation remains current. It then publishes the persistent source as
+//!    the Twin overlay, records the document lease, and fires `LoadScene` —
+//!    the single mount composes `base ⊕ runtime`.
 //! 3. [`sync_twin_overlays`] — later document edits author typed deltas onto the
 //!    live composed stage: translates and structural spawns/removes are
 //!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy_stage::canonical::CanonicalStage)
@@ -50,13 +52,16 @@
 use lunco_usd_document::document::UsdDocument;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::scene::LoadScene;
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets_core::twin_source::TwinRoots;
-use lunco_core_runtime::{SimulationProgress, SimulationProgressKey, SimulationProgressOwner};
+use lunco_core_runtime::{
+    AsyncWorkAdmission, AsyncWorkKey, AsyncWorkKind, AsyncWorkPriority, SimulationProgress,
+    SimulationProgressKey, SimulationProgressOwner,
+};
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued,
@@ -72,6 +77,7 @@ use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::{DocumentChanged, DocumentRegistry};
 use lunco_hooks::HookValue;
 use lunco_usd_core::commands::EmptyViewportReason;
+use lunco_usd_document::document::PreparedUsdSource;
 use lunco_usd_document::document::UsdOp;
 
 /// A default-twin-scene document waiting for its base source text to finish
@@ -89,6 +95,40 @@ struct PendingTwinDoc {
     /// document receives a scene lease only after the source is ready and is
     /// retired with this root if the Twin closes first.
     root: PathBuf,
+    doc: Option<DocumentId>,
+    failure_reported: bool,
+    stage: TwinDocPreparationStage,
+    capacity_revision: Option<u64>,
+    work_key: Option<AsyncWorkKey>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TwinDocPreparationStage {
+    Finished,
+    Failed,
+    AwaitingSource,
+    PreparingSource {
+        operation: u64,
+    },
+    AwaitingPersistentSource {
+        doc: DocumentId,
+        generation: u64,
+    },
+    PreparingPersistentSource {
+        operation: u64,
+        doc: DocumentId,
+        generation: u64,
+    },
+}
+
+struct TwinDocCompletion {
+    operation: u64,
+    result: TwinDocCompletionResult,
+}
+
+enum TwinDocCompletionResult {
+    Source(Result<PreparedUsdSource, String>),
+    PersistentSource(Result<String, String>),
 }
 
 /// Default twin scenes whose base source is still loading. Drained by
@@ -98,6 +138,8 @@ pub(crate) struct PendingTwinDocs {
     items: Vec<PendingTwinDoc>,
     ready: HashSet<AssetId<UsdSourceText>>,
     failed: HashMap<AssetId<UsdSourceText>, String>,
+    completions: Arc<Mutex<Vec<TwinDocCompletion>>>,
+    next_operation: u64,
 }
 
 impl PendingTwinDocs {
@@ -120,6 +162,11 @@ impl PendingTwinDocs {
             rel,
             abs_path,
             root,
+            doc: None,
+            failure_reported: false,
+            stage: TwinDocPreparationStage::AwaitingSource,
+            capacity_revision: None,
+            work_key: None,
         });
     }
 
@@ -135,17 +182,84 @@ impl PendingTwinDocs {
         }
     }
 
+    #[cfg(test)]
     fn has_terminal_source_event(&self) -> bool {
         !self.ready.is_empty() || !self.failed.is_empty()
     }
 
+    fn has_preparation_work(&self, capacity_revision: u64) -> bool {
+        if !self
+            .completions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+        {
+            return true;
+        }
+        self.items.iter().any(|item| match item.stage {
+            TwinDocPreparationStage::AwaitingSource => {
+                self.failed.contains_key(&item.handle.id())
+                    || (self.ready.contains(&item.handle.id())
+                        && item.capacity_revision != Some(capacity_revision))
+            }
+            TwinDocPreparationStage::AwaitingPersistentSource { .. } => {
+                item.capacity_revision != Some(capacity_revision)
+            }
+            TwinDocPreparationStage::PreparingSource { .. }
+            | TwinDocPreparationStage::PreparingPersistentSource { .. }
+            | TwinDocPreparationStage::Finished
+            | TwinDocPreparationStage::Failed => false,
+        })
+    }
+
+    fn allocate_operation(&mut self) -> Option<u64> {
+        let operation = self.next_operation;
+        self.next_operation = operation.checked_add(1)?;
+        Some(operation)
+    }
+
+    fn take_completions(&mut self) -> Vec<TwinDocCompletion> {
+        let mut completions = self
+            .completions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut ready = std::mem::take(&mut *completions);
+        ready.sort_by_key(|completion| completion.operation);
+        ready
+    }
+
     /// Release pending projection work for a closed Twin.
-    pub(crate) fn release_root(&mut self, root: &Path) {
-        self.items
-            .retain(|item| !lunco_doc::same_file(&item.root, root));
+    pub(crate) fn release_root(&mut self, root: &Path) -> Vec<AsyncWorkKey> {
+        let mut cancelled = Vec::new();
+        self.items.retain(|item| {
+            let keep = !lunco_doc::same_file(&item.root, root);
+            if !keep && let Some(key) = item.work_key {
+                cancelled.push(key);
+            }
+            keep
+        });
         let live_ids: HashSet<_> = self.items.iter().map(|item| item.handle.id()).collect();
         self.ready.retain(|id| live_ids.contains(id));
         self.failed.retain(|id, _| live_ids.contains(id));
+        let live_operations: HashSet<_> = self
+            .items
+            .iter()
+            .filter_map(|item| match item.stage {
+                TwinDocPreparationStage::PreparingSource { operation }
+                | TwinDocPreparationStage::PreparingPersistentSource { operation, .. } => {
+                    Some(operation)
+                }
+                TwinDocPreparationStage::AwaitingSource
+                | TwinDocPreparationStage::AwaitingPersistentSource { .. }
+                | TwinDocPreparationStage::Finished
+                | TwinDocPreparationStage::Failed => None,
+            })
+            .collect();
+        self.completions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|completion| live_operations.contains(&completion.operation));
+        cancelled
     }
 }
 
@@ -221,6 +335,42 @@ pub(crate) struct PendingRefSpawns {
     /// referenced closure. Without this retention the load becomes `Unused`
     /// before the async loader can publish its prepared asset.
     retained_assets: HashMap<String, Handle<UsdStageAsset>>,
+}
+
+/// Preserve authored reference order when asset outcomes arrive in a different
+/// order. Preparation remains parallel; live commits and terminal failure
+/// publication for the authoritative scene wait behind earlier unresolved
+/// references.
+#[derive(Default)]
+struct PrimaryReferenceCommitOrder {
+    blocked_scenes: HashSet<AssetId<UsdStageAsset>>,
+}
+
+impl PrimaryReferenceCommitOrder {
+    fn must_defer(
+        &mut self,
+        scene_id: AssetId<UsdStageAsset>,
+        authoritative: bool,
+        result_available: bool,
+    ) -> bool {
+        if !authoritative {
+            return false;
+        }
+        if self.blocked_scenes.contains(&scene_id) {
+            return true;
+        }
+        if !result_available {
+            self.blocked_scenes.insert(scene_id);
+            return true;
+        }
+        false
+    }
+
+    fn block_successors(&mut self, scene_id: AssetId<UsdStageAsset>, authoritative: bool) {
+        if authoritative {
+            self.blocked_scenes.insert(scene_id);
+        }
+    }
 }
 
 /// Prepared source plans waiting for the live-stage sink to create their
@@ -661,8 +811,11 @@ pub(crate) fn mark_pending_twin_docs(
     }
 }
 
-pub(crate) fn pending_twin_docs_ready(pending: Res<PendingTwinDocs>) -> bool {
-    pending.has_terminal_source_event()
+pub(crate) fn pending_twin_docs_ready(
+    pending: Res<PendingTwinDocs>,
+    admission: Res<AsyncWorkAdmission>,
+) -> bool {
+    pending.has_preparation_work(admission.capacity_revision())
 }
 
 /// Transfer referenced-asset lifecycle events into the pending spawn
@@ -756,14 +909,15 @@ pub(crate) fn sync_stage_dependency_diagnostics(
     }
 }
 
-/// Allocate the document for each pending twin scene once its base source text
-/// has loaded through the twin source, restore its persisted runtime overlay,
-/// publish the composed (`base ⊕ runtime`) source as the twin overlay, and then
-/// mount the scene ([`LoadScene`]). The async stage load reads the overlay bytes,
-/// so the initial projection composes the complete document state. The registry
-/// supplies one document for each file origin and preserves its ownership state.
+/// Prepare each pending Twin source through shared worker admission, commit the
+/// exact parsed revision under the registry's file identity and dirty-state
+/// rules, restore its runtime overlay, and asynchronously serialize the
+/// persistent snapshot before publishing it to the Twin source. The async stage
+/// load reads the overlay bytes, so the initial projection composes the complete
+/// document state.
 pub(crate) fn drain_pending_twin_docs(
     mut pending: ResMut<PendingTwinDocs>,
+    mut admission: ResMut<AsyncWorkAdmission>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut backed: ResMut<DocBackedTwinScenes>,
     mut wake: ResMut<TwinProjectionWake>,
@@ -775,109 +929,358 @@ pub(crate) fn drain_pending_twin_docs(
     mut commands: Commands,
 ) {
     if pending.items.is_empty() {
+        pending.take_completions();
         return;
     }
-    let ready = std::mem::take(&mut pending.ready);
-    let failed = std::mem::take(&mut pending.failed);
-    let taken = std::mem::take(&mut pending.items);
-    let mut still = Vec::new();
-    for item in taken {
-        let twin_path = lunco_assets_core::twin_uri(&item.name, &item.rel);
-        if let Some(error) = failed.get(&item.handle.id()) {
-            report_twin_doc_load_failed(
-                &mut empty_reason,
-                &mut commands,
-                &twin_path,
-                format!("the Twin source asset failed to load: {error}"),
-            );
-            continue;
-        }
-        if !ready.contains(&item.handle.id()) {
-            still.push(item);
-            continue;
-        }
-        let Some(UsdSourceText(source)) = sources.get(&item.handle) else {
-            report_twin_doc_load_failed(
-                &mut empty_reason,
-                &mut commands,
-                &twin_path,
-                "the source asset emitted a ready event without a stored value",
-            );
+    let mut items = std::mem::take(&mut pending.items);
+    for completion in pending.take_completions() {
+        let Some(item) = items
+            .iter_mut()
+            .find(|item| item.operation() == Some(completion.operation))
+        else {
             continue;
         };
-        // The asset pipeline owns source freshness and supplies the bytes.
-        let source = source.as_str();
-
-        // The registry owns one-document-per-file deduplication and dirty-document
-        // preservation for the source delivered by the asset pipeline.
-        let (doc, outcome) = registry.open_file(item.abs_path.clone(), source.to_string());
-        match outcome {
-            OpenOutcome::KeptUnparsable => {
-                report_twin_doc_load_failed(
-                    &mut empty_reason,
-                    &mut commands,
-                    &twin_path,
-                    "the source asset is not valid USDA; refusing to mount a stale document",
-                );
-                continue;
-            }
-            OpenOutcome::KeptDirty => warn!(
-                "[usd-e1b] `{twin_path}` has unsaved edits — keeping them; NOT re-reading from disk"
-            ),
-            OpenOutcome::Allocated | OpenOutcome::Refreshed => {}
-        }
-        // Restore the persisted `.lunco/runtime` overlay NOW, before the mount
-        // below. The `DocumentOpened` observer restore fires a flush later —
-        // after the stage load has already read its bytes. Guarded: whichever
-        // runs second is a no-op.
-        if let Some(ws) = workspace.as_deref() {
-            lunco_usd_bevy_runtime_persistence::restore_doc_runtime_with_pending(
-                ws,
-                &mut registry,
-                &runtime_saves,
-                doc,
-            );
-        }
-        // Publish the persistent source as the Twin overlay so the stage build
-        // reads `base ⊕ runtime`, and mark both projection cursors at this generation —
-        // every op through it is reflected by the mount itself, so
-        // `sync_twin_overlays` only has to project edits made AFTER open.
-        let (cur_gen, composed) = match registry.host(doc) {
-            Some(host) => match host.document().persistent_composed_source() {
-                Ok(source) => (host.document().generation(), source),
+        item.work_key = None;
+        item.capacity_revision = None;
+        match (&item.stage, completion.result) {
+            (
+                TwinDocPreparationStage::PreparingSource { operation },
+                TwinDocCompletionResult::Source(result),
+            ) if *operation == completion.operation => match result {
+                Ok(prepared) => {
+                    let current_source = sources
+                        .get(&item.handle)
+                        .map(|UsdSourceText(source)| source.as_str());
+                    if current_source != Some(prepared.source_text()) {
+                        item.stage = TwinDocPreparationStage::AwaitingSource;
+                        continue;
+                    }
+                    let (doc, outcome) =
+                        registry.open_prepared_file(item.abs_path.clone(), prepared, true);
+                    match outcome {
+                        OpenOutcome::KeptUnparsable => {
+                            report_twin_doc_load_failed(
+                                &mut empty_reason,
+                                &mut commands,
+                                &lunco_assets_core::twin_uri(&item.name, &item.rel),
+                                "the source asset is not valid USDA; refusing to mount a stale document",
+                            );
+                            item.stage = TwinDocPreparationStage::Finished;
+                            continue;
+                        }
+                        OpenOutcome::KeptDirty => warn!(
+                            "[usd-e1b] `{}` has unsaved edits — keeping them; NOT re-reading from disk",
+                            lunco_assets_core::twin_uri(&item.name, &item.rel)
+                        ),
+                        OpenOutcome::Allocated | OpenOutcome::Refreshed => {}
+                    }
+                    if let Some(ws) = workspace.as_deref() {
+                        lunco_usd_bevy_runtime_persistence::restore_doc_runtime_with_pending(
+                            ws,
+                            &mut registry,
+                            &runtime_saves,
+                            doc,
+                        );
+                    }
+                    let Some(host) = registry.host(doc) else {
+                        report_twin_doc_load_failed(
+                            &mut empty_reason,
+                            &mut commands,
+                            &lunco_assets_core::twin_uri(&item.name, &item.rel),
+                            "the USD document closed before its Twin source was prepared",
+                        );
+                        item.stage = TwinDocPreparationStage::Finished;
+                        continue;
+                    };
+                    backed.track(doc, item.root.clone(), item.name.clone(), item.rel.clone());
+                    item.doc = Some(doc);
+                    item.stage = TwinDocPreparationStage::AwaitingPersistentSource {
+                        doc,
+                        generation: host.document().generation(),
+                    };
+                }
                 Err(error) => {
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
-                        &twin_path,
-                        format!("could not serialize persistent Twin source: {error}"),
+                        &lunco_assets_core::twin_uri(&item.name, &item.rel),
+                        format!("USDA preparation failed: {error}"),
                     );
-                    continue;
+                    item.stage = TwinDocPreparationStage::Finished;
                 }
             },
-            None => continue,
-        };
-        if let Err(error) =
-            twin_roots.set_overlay(&item.name, &item.rel, Arc::new(composed.into_bytes()))
-        {
-            report_twin_doc_load_failed(
-                &mut empty_reason,
-                &mut commands,
-                &twin_path,
-                format!("could not publish the composed Twin source: {error}"),
-            );
+            (
+                TwinDocPreparationStage::PreparingPersistentSource {
+                    operation,
+                    doc,
+                    generation,
+                },
+                TwinDocCompletionResult::PersistentSource(result),
+            ) if *operation == completion.operation => {
+                let (doc, generation) = (*doc, *generation);
+                let Some(current_generation) =
+                    registry.host(doc).map(|host| host.document().generation())
+                else {
+                    report_twin_doc_load_failed(
+                        &mut empty_reason,
+                        &mut commands,
+                        &lunco_assets_core::twin_uri(&item.name, &item.rel),
+                        "the USD document closed before its Twin source was prepared",
+                    );
+                    item.stage = TwinDocPreparationStage::Failed;
+                    continue;
+                };
+                if current_generation != generation {
+                    item.stage = TwinDocPreparationStage::AwaitingPersistentSource {
+                        doc,
+                        generation: current_generation,
+                    };
+                    continue;
+                }
+                let twin_path = lunco_assets_core::twin_uri(&item.name, &item.rel);
+                let composed = match result {
+                    Ok(composed) => composed,
+                    Err(error) => {
+                        report_twin_doc_load_failed(
+                            &mut empty_reason,
+                            &mut commands,
+                            &twin_path,
+                            format!("persistent USD source serialization failed: {error}"),
+                        );
+                        item.stage = TwinDocPreparationStage::Failed;
+                        continue;
+                    }
+                };
+                if let Err(error) =
+                    twin_roots.set_overlay(&item.name, &item.rel, Arc::new(composed.into_bytes()))
+                {
+                    report_twin_doc_load_failed(
+                        &mut empty_reason,
+                        &mut commands,
+                        &twin_path,
+                        format!("could not publish the composed Twin source: {error}"),
+                    );
+                    item.stage = TwinDocPreparationStage::Failed;
+                    continue;
+                }
+                wake.wake();
+                backed.mark_initial_projection(doc, generation);
+                info!(
+                    "[usd-e1b] default scene `{twin_path}` is doc-backed ({doc}) — mounting composed"
+                );
+                commands.trigger(LoadScene {
+                    path: twin_path,
+                    root_prim: String::new(),
+                });
+                item.stage = TwinDocPreparationStage::Finished;
+            }
+            _ => {}
+        }
+    }
+
+    let capacity_revision = admission.capacity_revision();
+    let mut still = Vec::new();
+    for mut item in items {
+        let twin_path = lunco_assets_core::twin_uri(&item.name, &item.rel);
+        if item.stage == TwinDocPreparationStage::Finished {
             continue;
         }
-        backed.track(doc, item.root.clone(), item.name.clone(), item.rel.clone());
-        wake.wake();
-        backed.mark_initial_projection(doc, cur_gen);
-        info!("[usd-e1b] default scene `{twin_path}` is doc-backed ({doc}) — mounting composed");
-        commands.trigger(LoadScene {
-            path: twin_path,
-            root_prim: String::new(),
-        });
+        if let Some(error) = pending.failed.get(&item.handle.id()) {
+            if let Some(key) = item.work_key.take() {
+                admission.cancel_queued(key);
+            }
+            if !item.failure_reported {
+                report_twin_doc_load_failed(
+                    &mut empty_reason,
+                    &mut commands,
+                    &twin_path,
+                    format!("the Twin source asset failed to load: {error}"),
+                );
+                item.failure_reported = true;
+            }
+            if item.doc.is_some() {
+                item.stage = TwinDocPreparationStage::Failed;
+                still.push(item);
+            }
+            continue;
+        }
+
+        match item.stage {
+            TwinDocPreparationStage::AwaitingSource => {
+                if !pending.ready.contains(&item.handle.id()) {
+                    still.push(item);
+                    continue;
+                }
+                let Some(UsdSourceText(source)) = sources.get(&item.handle) else {
+                    report_twin_doc_load_failed(
+                        &mut empty_reason,
+                        &mut commands,
+                        &twin_path,
+                        "the source asset emitted a ready event without a stored value",
+                    );
+                    continue;
+                };
+                if item.capacity_revision == Some(capacity_revision) {
+                    still.push(item);
+                    continue;
+                }
+                let Some(operation) = pending.allocate_operation() else {
+                    report_twin_doc_load_failed(
+                        &mut empty_reason,
+                        &mut commands,
+                        &twin_path,
+                        "USD preparation operation id exhausted",
+                    );
+                    continue;
+                };
+                let key =
+                    twin_usd_work_key(&item, lunco_hash::fnv1a64(source.as_bytes()), operation);
+                let completions = Arc::clone(&pending.completions);
+                let source = source.clone();
+                let job = move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        PreparedUsdSource::parse(source)
+                    }))
+                    .map_err(|_| "USDA parser panicked".to_owned());
+                    completions
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push(TwinDocCompletion {
+                            operation,
+                            result: TwinDocCompletionResult::Source(result),
+                        });
+                };
+                match admission.submit(AsyncWorkPriority::SimulationRequired, key, job) {
+                    Ok(()) | Err(lunco_core_runtime::AsyncWorkRejection::DuplicateKey) => {
+                        item.stage = TwinDocPreparationStage::PreparingSource { operation };
+                        item.capacity_revision = None;
+                        item.work_key = Some(key);
+                    }
+                    Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+                        item.capacity_revision = Some(capacity_revision);
+                    }
+                    Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable) => {
+                        report_twin_doc_load_failed(
+                            &mut empty_reason,
+                            &mut commands,
+                            &twin_path,
+                            "USD source preparation requires a worker transport on this host",
+                        );
+                        continue;
+                    }
+                }
+                still.push(item);
+            }
+            TwinDocPreparationStage::AwaitingPersistentSource { doc, generation: _ } => {
+                if item.capacity_revision == Some(capacity_revision) {
+                    still.push(item);
+                    continue;
+                }
+                let Some(host) = registry.host(doc) else {
+                    report_twin_doc_load_failed(
+                        &mut empty_reason,
+                        &mut commands,
+                        &twin_path,
+                        "the USD document closed before its Twin source was prepared",
+                    );
+                    item.stage = TwinDocPreparationStage::Failed;
+                    still.push(item);
+                    continue;
+                };
+                let generation = host.document().generation();
+                let snapshot = host.document().clone();
+                let Some(operation) = pending.allocate_operation() else {
+                    report_twin_doc_load_failed(
+                        &mut empty_reason,
+                        &mut commands,
+                        &twin_path,
+                        "USD preparation operation id exhausted",
+                    );
+                    item.stage = TwinDocPreparationStage::Failed;
+                    still.push(item);
+                    continue;
+                };
+                let key = twin_usd_work_key(&item, generation, operation);
+                let completions = Arc::clone(&pending.completions);
+                let job = move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        snapshot
+                            .persistent_composed_source()
+                            .map_err(|error| error.to_string())
+                    }))
+                    .unwrap_or_else(|_| {
+                        Err("persistent USD source serializer panicked".to_owned())
+                    });
+                    completions
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push(TwinDocCompletion {
+                            operation,
+                            result: TwinDocCompletionResult::PersistentSource(result),
+                        });
+                };
+                match admission.submit(AsyncWorkPriority::SimulationRequired, key, job) {
+                    Ok(()) | Err(lunco_core_runtime::AsyncWorkRejection::DuplicateKey) => {
+                        item.stage = TwinDocPreparationStage::PreparingPersistentSource {
+                            operation,
+                            doc,
+                            generation,
+                        };
+                        item.capacity_revision = None;
+                        item.work_key = Some(key);
+                    }
+                    Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+                        item.capacity_revision = Some(capacity_revision);
+                        item.stage =
+                            TwinDocPreparationStage::AwaitingPersistentSource { doc, generation };
+                    }
+                    Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable) => {
+                        report_twin_doc_load_failed(
+                            &mut empty_reason,
+                            &mut commands,
+                            &twin_path,
+                            "USD source serialization requires a worker transport on this host",
+                        );
+                        item.stage = TwinDocPreparationStage::Failed;
+                    }
+                }
+                still.push(item);
+            }
+            TwinDocPreparationStage::Finished => {}
+            TwinDocPreparationStage::Failed => still.push(item),
+            TwinDocPreparationStage::PreparingSource { .. }
+            | TwinDocPreparationStage::PreparingPersistentSource { .. } => still.push(item),
+        }
     }
     pending.items.extend(still);
+    let live_ids: HashSet<_> = pending.items.iter().map(|item| item.handle.id()).collect();
+    pending.ready.retain(|id| live_ids.contains(id));
+    pending.failed.retain(|id, _| live_ids.contains(id));
+}
+
+impl PendingTwinDoc {
+    fn operation(&self) -> Option<u64> {
+        match self.stage {
+            TwinDocPreparationStage::PreparingSource { operation }
+            | TwinDocPreparationStage::PreparingPersistentSource { operation, .. } => {
+                Some(operation)
+            }
+            TwinDocPreparationStage::AwaitingSource
+            | TwinDocPreparationStage::AwaitingPersistentSource { .. }
+            | TwinDocPreparationStage::Finished
+            | TwinDocPreparationStage::Failed => None,
+        }
+    }
+}
+
+fn twin_usd_work_key(item: &PendingTwinDoc, source_revision: u64, operation: u64) -> AsyncWorkKey {
+    AsyncWorkKey::new(
+        AsyncWorkKind::UsdPreparation,
+        lunco_hash::fnv1a64(item.root.to_string_lossy().as_bytes()),
+        lunco_hash::fnv1a64(item.abs_path.to_string_lossy().as_bytes()) as u128,
+        source_revision,
+        operation,
+    )
 }
 
 /// Keep each doc-backed Twin scene's in-memory next-mount source and live stage
@@ -885,10 +1288,11 @@ pub(crate) fn drain_pending_twin_docs(
 /// lifecycle events; it does not poll every frame. Durable runtime-layer I/O
 /// is owned separately by the asynchronous persistence plugin. Drops entries
 /// whose document has closed.
-/// Publish the persistent source into the in-memory Twin asset overlay for the
-/// next stage mount and mark it synced at `generation`. This is an O(stage)
-/// recompose and serialize, so it runs at the initial projection boundary;
-/// ordinary edits use typed incremental operations on the live stage.
+/// Publish an already-serialized persistent source into the in-memory Twin
+/// asset overlay for the next stage mount. Default Twin startup prepares that
+/// source on the worker pool before calling this path; editor-preview initial
+/// snapshots remain event-driven. Ordinary edits use typed incremental
+/// operations on the live stage.
 fn write_twin_overlay(
     world: &mut World,
     doc: DocumentId,
@@ -938,6 +1342,12 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         Option<u64>,
         Option<u64>,
     )> = world.resource::<DocBackedTwinScenes>().entries().collect();
+    let preparing_docs: HashSet<_> = world
+        .resource::<PendingTwinDocs>()
+        .items
+        .iter()
+        .filter_map(|item| item.doc)
+        .collect();
 
     // A twin scene projects only when it is the scene currently mounted.
     // Keeping that admission check here makes projection ownership explicit:
@@ -963,6 +1373,9 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     // loaded dependent recipe and its canonical stage is rebuilt in place.  The
     // viewport state (including orbit camera) is deliberately not touched.
     for (doc, name, rel, applied, view_applied, overlay_synced) in entries {
+        if preparing_docs.contains(&doc) {
+            continue;
+        }
         let preview_owned = world
             .resource::<DocBackedTwinScenes>()
             .has_preview_lease(doc);
@@ -1313,7 +1726,8 @@ fn component_refresh_decision(
         ("camera_policy", HookValue::str("preserve")),
     ])];
 
-    let Some(result) = lunco_hooks::invoke(COMPONENT_REFRESH_POLICY_HOOK, &args) else {
+    let Some(result) = lunco_hooks::invoke_unclassified(COMPONENT_REFRESH_POLICY_HOOK, &args)
+    else {
         return ComponentRefreshDecision::Propagate;
     };
 
@@ -2479,6 +2893,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
     let mut pending = std::mem::take(&mut world.resource_mut::<PendingRefSpawns>().items);
     pending.sort_by_key(|item| item.progress_key.operation_id);
     let mut still = Vec::new();
+    let mut commit_order = PrimaryReferenceCommitOrder::default();
     for mut item in pending {
         if item.removed {
             deactivate_reference_progress(world, &mut item);
@@ -2496,15 +2911,34 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
             continue;
         }
         activate_reference_progress(world, &mut item);
+        let authoritative = is_authoritative_scene_stage(world, item.scene_id);
+        if commit_order.must_defer(
+            item.scene_id,
+            authoritative,
+            item.failure.is_some()
+                || failed.contains_key(&item.ref_handle.id())
+                || item.asset_ready
+                || ready.contains(&item.ref_handle.id()),
+        ) {
+            item.asset_ready |= ready.contains(&item.ref_handle.id());
+            if let Some(error) = failed.get(&item.ref_handle.id()) {
+                item.failure = Some(error.clone());
+            }
+            still.push(item);
+            continue;
+        }
         if let Some(error) = item.failure.clone() {
             if !item.failure_reported {
                 fail_reference_spawn(world, &mut item, error);
             }
+            commit_order.block_successors(item.scene_id, authoritative);
             still.push(item);
             continue;
         }
         if let Some(error) = failed.get(&item.ref_handle.id()) {
             fail_reference_spawn(world, &mut item, error.clone());
+            item.failure = Some(error.clone());
+            commit_order.block_successors(item.scene_id, authoritative);
             still.push(item);
             continue;
         }
@@ -2523,6 +2957,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 &mut item,
                 "the ready referenced asset has no usable layer recipe".to_owned(),
             );
+            commit_order.block_successors(item.scene_id, authoritative);
             still.push(item);
             continue;
         };
@@ -2535,6 +2970,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                 &mut item,
                 "the asset-ready event has no prepared USD asset".to_owned(),
             );
+            commit_order.block_successors(item.scene_id, authoritative);
             still.push(item);
             continue;
         };
@@ -2546,6 +2982,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                     &mut item,
                     format!("invalid prepared projection plan: {error}"),
                 );
+                commit_order.block_successors(item.scene_id, authoritative);
                 still.push(item);
                 continue;
             }
@@ -2557,6 +2994,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
         let Ok(sp) = openusd::sdf::Path::new(&item.prim_path) else {
             let detail = format!("invalid USD prim path `{}`", item.prim_path);
             fail_reference_spawn(world, &mut item, detail);
+            commit_order.block_successors(item.scene_id, authoritative);
             still.push(item);
             continue;
         };
@@ -2592,12 +3030,14 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
                     &mut item,
                     "the owning scene stage disappeared before projection".to_owned(),
                 );
+                commit_order.block_successors(item.scene_id, authoritative);
                 still.push(item);
                 continue;
             }
             Some(Ok(translated)) => translated,
             Some(Err(error)) => {
                 fail_reference_spawn(world, &mut item, error);
+                commit_order.block_successors(item.scene_id, authoritative);
                 still.push(item);
                 continue;
             }
@@ -2979,6 +3419,40 @@ mod tests {
     }
 
     #[test]
+    fn twin_document_preparation_wakes_on_source_capacity_and_completion() {
+        let mut pending = PendingTwinDocs::default();
+        let handle = Handle::<UsdSourceText>::default();
+        pending.push(
+            handle.clone(),
+            false,
+            "incoming".into(),
+            "scene.usda".into(),
+            PathBuf::from("/twins/incoming/scene.usda"),
+            PathBuf::from("/twins/incoming"),
+        );
+        assert!(!pending.has_preparation_work(0));
+
+        pending.mark_ready(handle.id());
+        assert!(pending.has_preparation_work(0));
+        pending.items[0].capacity_revision = Some(0);
+        assert!(!pending.has_preparation_work(0));
+        assert!(pending.has_preparation_work(1));
+
+        pending.items[0].stage = TwinDocPreparationStage::PreparingSource { operation: 7 };
+        pending.items[0].capacity_revision = None;
+        assert!(!pending.has_preparation_work(1));
+        pending.completions.lock().unwrap().push(TwinDocCompletion {
+            operation: 7,
+            result: TwinDocCompletionResult::Source(Ok(PreparedUsdSource::parse(
+                "#usda 1.0\n".into(),
+            ))),
+        });
+        assert!(pending.has_preparation_work(1));
+        assert_eq!(pending.take_completions().len(), 1);
+        assert!(!pending.has_preparation_work(1));
+    }
+
+    #[test]
     fn resident_source_is_ready_when_queued() {
         let mut pending = PendingTwinDocs::default();
         let handle = Handle::<UsdSourceText>::default();
@@ -3083,6 +3557,32 @@ mod tests {
 
         world.run_system_once(reset_scene_projection_state).unwrap();
         assert!(!world.resource::<SimulationProgress>().is_held());
+    }
+
+    #[test]
+    fn primary_reference_commit_order_holds_ready_successors_until_the_prefix_is_ready() {
+        let scene_id = AssetId::<UsdStageAsset>::default();
+        let mut order = PrimaryReferenceCommitOrder::default();
+
+        assert!(order.must_defer(scene_id, true, false));
+        assert!(
+            order.must_defer(scene_id, true, true),
+            "later completed results wait behind the unresolved operation"
+        );
+        assert!(
+            !order.must_defer(scene_id, false, false),
+            "preview projection does not wait on the primary simulation boundary"
+        );
+
+        let mut next_drain = PrimaryReferenceCommitOrder::default();
+        assert!(!next_drain.must_defer(scene_id, true, true));
+        assert!(!next_drain.must_defer(scene_id, true, true));
+
+        next_drain.block_successors(scene_id, true);
+        assert!(
+            next_drain.must_defer(scene_id, true, true),
+            "a terminal failure prevents later operations from committing"
+        );
     }
 
     #[test]

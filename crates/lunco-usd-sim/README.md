@@ -47,27 +47,44 @@ surface produces a persistent `physics-initialization-terrain-penetration`
 error and stays held; the runtime does not lift, reseat, zero, or otherwise
 repair the body.
 
-The default needs no custom USD property. A Twin that genuinely needs a
-different initialization rule names it explicitly on the rigid-body prim and
-provides a deterministic `LunCoPolicy` hook:
+The default needs no custom USD property. A Twin that needs a different
+initialization rule applies `LunCoPhysicsInitializationAPI` to the rigid-body
+prim and authors a selector. One declared deterministic
+`physics.initialization(facts) -> String` hook receives that selector; Rhai owns
+its interpretation and the accept/reject decision:
 
 ```usda
+prepend apiSchemas = ["LunCoPhysicsInitializationAPI"]
 token lunco:physics:initializationPolicy = "my-policy"
 
-def LunCoPolicy "MyInitializationPolicy"
+def LunCoPolicy "PhysicsInitialization"
 {
-    string lunco:policy:seam = "physics.initialization.my-policy"
+    string lunco:policy:seam = "physics.initialization"
     string lunco:policy:entry = "initialize"
-    string info:sourceCode = "fn initialize(facts) { \"accept\" }"
+    string info:sourceCode = '''
+        fn initialize(facts) {
+            let context = runtime_context;
+            if context.scope != "twin" || context.cycle != "lifecycle"
+                || context.phase != "preparation" || context.clock != "none"
+                || context.generation == () {
+                throw "physics initialization received the wrong runtime context";
+            }
+            if facts.policy != "my-policy" {
+                throw "unknown physics initialization selector";
+            }
+            "accept"
+        }
+    '''
     bool lunco:policy:deterministic = true
 }
 ```
 
-The hook receives the authored subject, policy name, entity, position, and
-joint-connected members, and must return exactly `"accept"` or `"reject"`.
-Missing, malformed, non-deterministic, or rejected policies are errors, not
-requests for an engine fallback. Inspect them through the runtime diagnostics
-surface; static USD schema errors remain the responsibility of USD linting.
+The hook receives the stable USD subject path, selector, finite pose, and
+articulated assembly member count. It never receives process-local ECS entity
+ids. It must return exactly `"accept"` or `"reject"`. Missing schema or
+selector, missing policy, a non-deterministic registration, malformed result,
+or rejection leaves the body held and publishes a runtime diagnostic; there is
+no engine fallback or implicit pose repair.
 
 ## Implementation Status
 *   [x] Basic `PhysxVehicleWheelAPI` intercept.

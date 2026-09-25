@@ -13,6 +13,7 @@ cd "$REPO_ROOT" || exit 1
 # developer's settings or Twin runtime overlay while exercising a fixture.
 export LUNCOSIM_EPHEMERAL_SETTINGS=1
 export LUNCOSIM_ISOLATED_RUN=1
+export LUNCOSIM_CONFIG="$REPO_ROOT/target/scene-tests/config-editor-suite-$$"
 
 BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 export LUNCOSIM_BIN="$BIN"
@@ -100,7 +101,8 @@ for scene in "${SCENES[@]}"; do
     port=$((EDITOR_API_PORT + index))
     index=$((index + 1))
     echo "==> editor $name"
-    if python3 scripts/api/run_editor_scene_test.py \
+    if LUNCOSIM_CONFIG="$LOG_DIR/config-${name}-$$-$index" \
+        python3 scripts/api/run_editor_scene_test.py \
         --port "$port" \
         --timeout "$EDITOR_TIMEOUT" \
         --scene "$scene" \

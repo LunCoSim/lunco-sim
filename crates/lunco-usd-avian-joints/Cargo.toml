@@ -8,9 +8,11 @@ description = "Reusable Avian joint admission, seating, filtering, and lifecycle
 [dependencies]
 avian3d.workspace = true
 bevy.workspace = true
+lunco-core = { path = "../lunco-core" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 
 [lints]
 workspace = true

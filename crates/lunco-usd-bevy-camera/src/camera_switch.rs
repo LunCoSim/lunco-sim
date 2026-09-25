@@ -273,11 +273,12 @@ fn default_presentation_action(
             HookValue::Int(local_avatar_camera_count as i64),
         ),
     ]);
-    let result = lunco_hooks::invoke(DEFAULT_PRESENTATION_HOOK, &[context]).ok_or_else(|| {
-        format!(
-            "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' is not registered"
-        )
-    })?;
+    let result = lunco_hooks::invoke_unclassified(DEFAULT_PRESENTATION_HOOK, &[context])
+        .ok_or_else(|| {
+            format!(
+                "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' is not registered"
+            )
+        })?;
     let value = result.map_err(|error| {
         format!("camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' faulted: {error}")
     })?;
@@ -2131,8 +2132,9 @@ mod tests {
     struct TestPresentationPolicy;
 
     impl lunco_hooks::ScriptHook for TestPresentationPolicy {
-        fn invoke(&self, args: &[lunco_hooks::HookValue]) -> lunco_hooks::HookResult {
-            let context = args
+        fn invoke(&self, invocation: &lunco_hooks::HookInvocation<'_>) -> lunco_hooks::HookResult {
+            let context = invocation
+                .args
                 .first()
                 .ok_or_else(|| lunco_hooks::HookError("missing presentation facts".into()))?;
             let avatar_count = context

@@ -1623,73 +1623,85 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
 }
 
 #[on_command(OpenUsdPreviewView)]
-fn on_open_usd_preview_view(trigger: On<OpenUsdPreviewView>, mut commands: Commands) {
-    let command = trigger.event();
-    let preview = command.preview;
-    let view = command.view;
+fn on_open_usd_preview_view(
+    trigger: On<OpenUsdPreviewView>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
+    let command = trigger.event().clone();
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        let Some(session) = world.resource::<UsdViewportState>().session(preview) else {
-            report_preview_error(
-                world,
-                "usd-preview-view-open-failed",
-                format!("preview {} is not open", preview.0),
-            );
-            return;
-        };
-        if view.0 == 0 || world.resource::<UsdViewportState>().view(view).is_some() {
-            report_preview_error(
-                world,
-                "usd-preview-view-open-failed",
-                format!("view {} is invalid or already open", view.0),
-            );
-            return;
-        }
-        let render_layer = session.render_layer();
-        let profile = match validated_preview_profile(world) {
-            Ok(profile) => profile,
-            Err(detail) => {
-                report_preview_error(world, "usd-preview-view-open-failed", detail);
-                return;
+        let outcome = (|| {
+            let Some(render_layer) = world
+                .resource::<UsdViewportState>()
+                .session(command.preview)
+                .map(UsdPreviewSession::render_layer)
+            else {
+                return Err(format!("preview {} is not open", command.preview.0));
+            };
+            if command.view.0 == 0
+                || world
+                    .resource::<UsdViewportState>()
+                    .view(command.view)
+                    .is_some()
+            {
+                return Err(format!(
+                    "view {} is invalid or already open",
+                    command.view.0
+                ));
             }
-        };
-        let Some((view_state, render_target)) =
-            create_preview_view(world, preview, view, render_layer, profile)
-        else {
-            report_preview_error(
-                world,
-                "usd-preview-view-open-failed",
-                "USD preview view resources could not be allocated".to_string(),
-            );
-            return;
-        };
-        world
-            .resource_mut::<UsdPreviewRenderTargets>()
-            .insert(view, render_target);
-        if let Err(view_state) = world
-            .resource_mut::<UsdViewportState>()
-            .insert_view(view_state)
-        {
-            despawn_preview_view(world, *view_state);
-            report_preview_error(
-                world,
-                "usd-preview-view-open-failed",
-                format!("view {} could not be registered", view.0),
-            );
-            return;
-        }
-        if let Some(doc) = world
-            .resource::<UsdViewportState>()
-            .session(preview)
-            .map(UsdPreviewSession::doc)
-        {
+            let profile = validated_preview_profile(world)?;
+            let Some((view_state, render_target)) =
+                create_preview_view(world, command.preview, command.view, render_layer, profile)
+            else {
+                return Err("USD preview view resources could not be allocated".to_string());
+            };
             world
+                .resource_mut::<UsdPreviewRenderTargets>()
+                .insert(command.view, render_target);
+            if let Err(view_state) = world
                 .resource_mut::<UsdViewportState>()
-                .clear_preview_closed(doc);
+                .insert_view(view_state)
+            {
+                despawn_preview_view(world, *view_state);
+                return Err(format!("view {} could not be registered", command.view.0));
+            }
+            if let Some(doc) = world
+                .resource::<UsdViewportState>()
+                .session(command.preview)
+                .map(UsdPreviewSession::doc)
+            {
+                world
+                    .resource_mut::<UsdViewportState>()
+                    .clear_preview_closed(doc);
+            }
+            world.trigger(OpenTab {
+                kind: USD_PREVIEW_VIEW_PANEL_ID,
+                instance: command.view.0,
+            });
+            Ok(Ack::with_data(
+                OpId::new(),
+                lunco_api_core::api_value!({
+                    "preview": command.preview.0,
+                    "view": command.view.0,
+                    "action": "opened",
+                }),
+            ))
+        })();
+        if let Err(detail) = &outcome {
+            report_preview_error(world, "usd-preview-view-open-failed", detail.clone());
         }
-        world.trigger(OpenTab {
-            kind: USD_PREVIEW_VIEW_PANEL_ID,
-            instance: view.0,
-        });
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
     });
 }
 
@@ -1721,21 +1733,49 @@ fn on_focus_usd_preview(trigger: On<FocusUsdPreview>, mut commands: Commands) {
 }
 
 #[on_command(FocusUsdPreviewView)]
-fn on_focus_usd_preview_view(trigger: On<FocusUsdPreviewView>, mut commands: Commands) {
+fn on_focus_usd_preview_view(
+    trigger: On<FocusUsdPreviewView>,
+    mut commands: Commands,
+    active_id: Option<Res<ActiveCommandId>>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
     let view = trigger.event().view;
+    let command_id = active_id.as_ref().and_then(|id| id.get());
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        if world.resource_mut::<UsdViewportState>().focus_view(view) {
-            world.trigger(OpenTab {
-                kind: USD_PREVIEW_VIEW_PANEL_ID,
-                instance: view.0,
-            });
-        } else {
-            report_preview_error(
-                world,
-                "usd-preview-view-focus-failed",
-                format!("view {} is not open", view.0),
-            );
+        let preview = world
+            .resource::<UsdViewportState>()
+            .view(view)
+            .map(UsdPreviewView::preview);
+        let outcome = match preview {
+            Some(preview) if world.resource_mut::<UsdViewportState>().focus_view(view) => {
+                world.trigger(OpenTab {
+                    kind: USD_PREVIEW_VIEW_PANEL_ID,
+                    instance: view.0,
+                });
+                Ok(Ack::with_data(
+                    OpId::new(),
+                    lunco_api_core::api_value!({
+                        "preview": preview.0,
+                        "view": view.0,
+                        "action": "focused",
+                    }),
+                ))
+            }
+            _ => Err(format!("view {} is not open", view.0)),
+        };
+        if let Err(detail) = &outcome {
+            report_preview_error(world, "usd-preview-view-focus-failed", detail.clone());
         }
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
     });
 }
 

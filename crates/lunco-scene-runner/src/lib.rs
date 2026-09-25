@@ -1,4 +1,4 @@
-//! `luncosim test` — headless, physics-only, deterministic scene+scenario runner.
+//! `luncosim test` — headless, manually stepped scene+scenario runner.
 //!
 //! ## Why this exists
 //!
@@ -19,8 +19,8 @@
 //!
 //! `luncosim test` composes the **same app the server composes**
 //! (`lunco-luncosim-runtime::build_headless_app_with_threads` plus
-//! `LunCoSimHeadlessPlugin`), steps it by hand as fast as the CPU allows, watches the scenario's
-//! telemetry verdict, and exits with a status code.
+//! `LunCoSimHeadlessPlugin`), steps it by hand as fast as the CPU allows,
+//! watches the scenario's telemetry verdict, and exits with a status code.
 //!
 //! ```text
 //! cargo run -q -p lunco-luncosim --bin luncosim -j 4 -- \
@@ -28,29 +28,28 @@
 //! echo $?   # 0 = PASS, 1 = FAIL, 2 = no verdict (hang / load failure)
 //! ```
 //!
-//! ## Why it is deterministic (and unbounded in rate)
+//! ## Manual stepping without wall-clock pacing
 //!
 //! Two knobs, both essential:
 //!
 //! 1. **`TimeUpdateStrategy::ManualDuration(dt)`** — the clock no longer reads
 //!    the wall. Every `app.update()` advances `Time<Virtual>` by exactly `dt`,
-//!    which `Time<Fixed>` drains into exactly one `FixedUpdate` tick when
-//!    `--tick-hz` matches `lunco_core_runtime::FIXED_HZ`. So the run is BOTH
-//!    bit-reproducible (identical dt sequence every time, no frame-time noise
-//!    leaking into the solver) and as fast as the CPU can go (no sleeping, no
-//!    vsync, no realtime pacing).
+//!    which `Time<Fixed>` drains into one `FixedUpdate` tick when `--tick-hz`
+//!    matches `lunco_core_runtime::FIXED_HZ`. This fixes the clock input and
+//!    avoids realtime pacing; it does not by itself guarantee identical
+//!    authoritative state across runs. The runner advances as fast as the CPU
+//!    allows, without sleeping or vsync.
 //!
-//!    This is a deterministic manual stepping mode, independent of the live
-//!    transport rate. It is useful for scene tests because there is no realtime
-//!    pacing or frame-time noise in the step sequence.
+//!    This is a manual stepping mode, independent of the live transport rate.
+//!    It avoids realtime pacing and frame-time noise in the step sequence.
 //!
-//! 2. **A single-threaded compute pool.** The deterministic scene-test contract
-//!    avian's parallel solver reorders island/contact work across threads, so a
-//!    multi-threaded run is NOT run-to-run reproducible, while the same scene on
-//!    one compute thread is bit-identical. A test runner that can't reproduce
-//!    its own result is worthless, so we pin `compute` to 1 thread. (This is a
-//!    deliberate divergence from how the GUI runs — see `pinned_compute_pool`
-//!    and `--threads` below.)
+//! 2. **A pinned Compute pool.** The default scene-test gate pins the Bevy
+//!    `ComputeTaskPool` to one thread to control parallel physics scheduling.
+//!    `--threads 0` uses Bevy's default task-pool allocation, matching the pool
+//!    policy used by GUI `DefaultPlugins`. Neither setting establishes
+//!    whole-simulation repeatability: IO and AsyncCompute remain separate pools,
+//!    and GUI schedules, rendering, and input are not part of this headless
+//!    runner.
 //!
 //! Manual stepping also means we do **not** call `App::run()`. The
 //! `ScheduleRunnerPlugin` that `LunCoSimHeadlessPlugin` installs simply never
@@ -95,54 +94,42 @@
 //!
 //! This module is intentionally a small Rust harness, not a vehicle-specific
 //! test implementation. Rust owns process lifecycle, app construction, asynchronous
-//! asset/Modelica readiness, deterministic clock injection, barrier pumping,
+//! asset/Modelica readiness, manual clock injection, barrier pumping,
 //! telemetry capture, wall-time budgets, and exit codes. Those operations must
 //! happen outside the Rhai VM: Rhai is scheduled only after a Bevy world exists,
 //! and a script cannot safely construct or replace that world without creating a
 //! second runtime owner. Twin-authored Rhai files own the assertions, component
 //! decomposition, observations, and verdict payloads. A scene test therefore has
 //! one generic Rust runner and many replaceable Rhai contracts; moving this file
-//! into Rhai would weaken the fail-closed and reproducibility guarantees rather
+//! into Rhai would weaken the fail-closed execution guarantees rather
 //! than move runtime policy into the core.
 //!
 //! ## The 2x2 matrix: `--threads` × `--jitter`
 //!
-//! The two knobs above are exactly the two ways this runner differs from the
-//! GUI luncosim, and a scene can pass here while failing there. That happened:
-//! `scenes/tests/drivetrain_parity.usda` passes 8/8 under `luncosim test` and
-//! blows up under the GUI (measured speed 4.5 → 120 → 846 m/s during the steer
-//! phase, heading NaN). Two candidate causes, and "it passes headless" tells
-//! you nothing about WHICH:
+//! The runner exposes two diagnostic knobs: Compute pool width and the fixed
+//! versus jittered dt sequence. A four-profile matrix can help isolate their
+//! effects when each profile is run separately; the optional `--stress` pass
+//! varies both at once and cannot identify which caused a failure. Matching
+//! the GUI task-pool policy does not reproduce GUI schedules, rendering, or
+//! input behavior.
 //!
 //! ```text
-//!                jitter=0 (fixed dt)      jitter>0 (variable dt)
-//!   threads=1    the default gate         isolates DT SENSITIVITY
-//!   threads=0/N  isolates THREAD ORDER    closest to the real GUI
+//!                jitter=0 (fixed dt)      jitter>0 (seeded variable dt)
+//!   threads=1    default gate             vary dt only
+//!   threads=0    vary pool only           combined stress profile
 //! ```
 //!
-//! Each axis isolates one thing, so read the matrix like this:
-//!
-//! * **Fails only when `--jitter > 0`** ⇒ a **dt-sensitivity bug**, not a
-//!   threading bug. Something in the drivetrain integrates in a way that is not
-//!   stable across a varying step — a per-frame delta divided by a stale `dt`,
-//!   a spring/PD gain tuned for one step size, an explicit integration that
-//!   goes unstable past a step threshold. A 4.5 → 846 m/s explosion is the
-//!   signature of exactly this: a blowup, not numerical drift.
-//! * **Fails only when `--threads` ≠ 1** ⇒ an **ordering/race bug**: avian's
-//!   parallel solver visiting islands and contacts in a different order, or a
-//!   system pair whose relative order is unconstrained.
-//! * **Fails in both** ⇒ they are the same underlying fragility, surfaced two
-//!   ways.
-//! * **Passes in all four** ⇒ the GUI differs in a THIRD way not modelled here
-//!   (rendering feedback, input, interpolation, a UI-only system) and the
-//!   bisection has to continue outside this binary.
+//! A seeded jitter profile repeats its dt sequence for a fixed seed, but does
+//! not guarantee identical simulation results. Failures in one controlled
+//! profile show sensitivity to that profile; they do not by themselves prove a
+//! race or identify a specific subsystem.
 //!
 //! `--jitter` is a MODEL of realtime pacing, not realtime itself: the clock is
 //! still `ManualDuration`, just re-set to a different value before each update,
-//! drawn from a **seeded** PRNG (`--seed`). So a jittered failure is still
-//! exactly reproducible — same seed, same dt sequence, same blowup, every run.
-//! A test you cannot re-run is not a test, which is why this deliberately does
-//! not touch the wall clock or system randomness.
+//! drawn from a **seeded** PRNG (`--seed`). A fixed seed therefore repeats the
+//! dt sequence. Other runtime inputs and asynchronous completion order are
+//! outside that guarantee; jitter generation does not use wall time or system
+//! randomness.
 //!
 //! Note that under `--jitter` one `app.update()` is no longer necessarily one
 //! `FixedUpdate` tick: `Time<Fixed>` accumulates a varying delta and will drain
@@ -159,7 +146,6 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use lunco_core_runtime::SimTick;
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_simulation::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
@@ -200,8 +186,8 @@ struct Cli {
     /// scene must be the registry mapping for this qualified name and the
     /// registry's verdict channel is used unless explicitly overridden.
     verification: Option<String>,
-    /// Compute-pool threads. `1` = the reproducible default, `0` = leave bevy's
-    /// default multi-threaded pool alone (what the GUI runs), `n>1` = pin n.
+    /// Compute-pool threads. `1` pins one thread, `0` uses Bevy's default
+    /// task-pool allocation (the same policy as GUI DefaultPlugins), `n>1` pins n.
     threads: usize,
     /// Fractional dt jitter in `[0, 1)`. `0.0` = the exact fixed step.
     jitter: f64,
@@ -261,6 +247,23 @@ struct Verdict {
     result: Option<(String, bool)>,
     /// Set from the CLI so the observer can filter by channel.
     want_channel: Option<String>,
+}
+
+/// Fixed steps accumulated by this test process, independent of scene-local
+/// clock resets during authored scene transitions.
+#[derive(Resource, Default)]
+struct SceneTestTickCount(u64);
+
+fn count_scene_test_tick(
+    mut count: ResMut<SceneTestTickCount>,
+    virtual_time: Option<Res<Time<Virtual>>>,
+) {
+    let running = virtual_time
+        .as_deref()
+        .is_some_and(|time| !time.is_paused() && time.relative_speed_f64() > 0.0);
+    if running {
+        count.0 = count.0.saturating_add(1);
+    }
 }
 
 fn parse_args() -> Result<Cli, String> {
@@ -469,7 +472,7 @@ fn resolve_component_test(
 fn usage() -> String {
     format!(
         "\
-    luncosim test — run one authored USD scene + its scenario headless and deterministically.
+    luncosim test — run one authored USD scene + its scenario headless with manual time stepping.
 
 USAGE:
     luncosim test --scene <PATH> [--verification QUALIFIED_NAME]
@@ -485,7 +488,8 @@ USAGE:
     --scene PATH             REQUIRED. USD scene path. It may be relative to
                              assets/, relative to the current directory, or an
                              absolute path into a custom Twin.
-    --max-ticks N            Safety bound on simulated ticks (default {DEFAULT_MAX_TICKS}).
+    --max-ticks N            Safety bound on cumulative running fixed steps across scene
+                             transitions (default {DEFAULT_MAX_TICKS}).
                              Exhausting it with no verdict exits 2.
     --tick-hz HZ             Manual clock step rate (default {hz}, = lunco_core_runtime::FIXED_HZ).
                              Keep it at FIXED_HZ for exactly one physics tick
@@ -500,26 +504,24 @@ USAGE:
                              `test-component`; its manifest verification owns
                              the scene and Rhai observer that are executed.
 
-DIAGNOSTIC AXES (defaults reproduce the deterministic gate exactly):
+DIAGNOSTIC AXES (default settings match the gate profile):
     --threads N              Compute-pool threads (default 1).
-                               1  pin one thread — reproducible, the gate.
-                               0  DO NOT override the pool: bevy's default
-                                  multi-threaded sizing, i.e. what the GUI runs.
+                               1  pin one Compute thread — the gate profile.
+                               0  use Bevy's default task-pool allocation,
+                                  also used by GUI DefaultPlugins.
                                N  pin N compute threads.
-                             Non-1 values are NOT run-to-run reproducible
-                             (avian's parallel solver reorders island work) —
-                             use them to isolate ordering bugs, not to gate.
+                             This changes Compute width only; IO and
+                             AsyncCompute retain their Bevy assignments.
     --jitter FRAC            Fractional dt jitter in [0.0, 1.0) (default 0.0).
                              0.0 keeps the exact fixed step. Above 0, each
                              update advances by a seeded pseudo-random dt in
-                             [(1-FRAC)*base, (1+FRAC)*base], MIMICKING the
-                             variable frame pacing of the realtime GUI so that
-                             GUI-only failures can be reproduced headlessly.
-                             A scene that PASSES at jitter=0 and FAILS at
-                             jitter>0 has a DT-SENSITIVITY bug, not a threading
-                             bug. Still fully reproducible for a given --seed.
+                             [(1-FRAC)*base, (1+FRAC)*base], approximating
+                             variable frame pacing. This does not reproduce
+                             GUI-only behavior or prove a dt-sensitivity root
+                             cause by itself. A fixed seed repeats the dt
+                             sequence, not necessarily the simulation outcome.
     --seed U64               Seed for the jitter PRNG (default {seed}).
-                             Same seed => same dt sequence => same outcome.
+                             Same seed => same jitter dt sequence.
     --readiness-timeout SECS Wall-clock budget for scene materialization and
                              asynchronous Modelica/physics readiness (default
                              {readiness_timeout}s). A timeout is a no-verdict
@@ -627,15 +629,6 @@ fn apply_verification_selection(cli: &mut Cli) -> Result<(), String> {
     ))
 }
 
-/// Pin the compute task pool to exactly `threads` threads.
-///
-/// The deterministic headless test runner uses one compute worker: a regression
-/// gate must reproduce its own result before it can meaningfully diagnose a
-/// scenario failure. The scenes under test are single-rover, so the throughput
-/// trade-off is small.
-///
-/// `threads == 0` is handled by the CALLER, which skips this override entirely
-/// rather than asking for a zero-sized pool.
 /// Catch the scenario's verdict off the shared telemetry bus.
 ///
 /// `emit(name, "PASS"|"FAIL")` in rhai lands here as a triggered
@@ -814,6 +807,17 @@ fn physics_admission_ready(world: &mut World) -> bool {
     q_pending.iter(world).next().is_none()
 }
 
+fn set_scene_test_startup_hold(app: &mut App, held: bool) -> Result<(), &'static str> {
+    let Some(mut holds) = app
+        .world_mut()
+        .get_resource_mut::<lunco_physics::PhysicsHolds>()
+    else {
+        return Err("physics hold resource is not installed");
+    };
+    holds.set(lunco_physics::PhysicsHolds::SCENE_TEST_STARTUP, held);
+    Ok(())
+}
+
 /// Pause every compiled Modelica participant at the scene-test startup fence.
 /// This is runner policy, not a production vehicle rule: it keeps asynchronous
 /// worker completion from becoming a hidden source of initial-condition drift.
@@ -979,7 +983,7 @@ fn log_participant_readiness_blockers(world: &mut World) {
 }
 
 /// Explain a scene-materialization timeout with the live projection state.
-/// The scene gate spans the USD load, visual projection, simulation projection,
+/// The scene gate spans the USD load, structural projection, simulation projection,
 /// terrain build, and Modelica source lifecycle; reporting only the final
 /// boolean would hide which owner failed to publish its completion marker.
 fn log_scene_readiness_blockers(world: &mut World) {
@@ -1171,6 +1175,13 @@ pub fn run() -> u8 {
     // (Under `--jitter` that one-to-one relation is INTENTIONALLY broken — the
     // fixed accumulator drains 0, 1 or 2 ticks per update, as it does in the GUI.)
     app.insert_resource(Time::<Fixed>::from_hz(cli.tick_hz));
+    app.insert_resource(SceneTestTickCount::default());
+    app.add_systems(
+        FixedUpdate,
+        count_scene_test_tick
+            .in_set(lunco_core::RuntimeCycleSet::Simulation)
+            .after(lunco_core_runtime::SimTickSet),
+    );
     // THE determinism knob: the clock stops reading the wall (see module docs).
     // With `--jitter` this resource is re-set before each update; it is still
     // `ManualDuration`, so the wall clock never enters the run either way.
@@ -1218,7 +1229,7 @@ pub fn run() -> u8 {
     // verdicts (measured: same `--seed`, same binary, same 6006 ticks, Easy
     // tier flips at a different station every run).
     //
-    // Freeze the sim clock while the scene finishes loading: run `Update`
+    // Freeze the sim clock while the scene finishes structural loading: run `Update`
     // (which pumps the asset server and the bridge) with a ZERO step so the
     // fixed clock never advances, and start the real clock only once the whole
     // WALL-CLOCK-CONTINGENT half of the spawn pipeline is done — the load
@@ -1340,6 +1351,10 @@ pub fn run() -> u8 {
     // body, making the first thrust vector (and the eventual landing attitude)
     // depend on wall-clock scheduling.
     pause_modelica_participants(app.world_mut());
+    if let Err(error) = set_scene_test_startup_hold(&mut app, true) {
+        eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+        return 2;
+    }
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
 
     let admission_waits = {
@@ -1374,21 +1389,10 @@ pub fn run() -> u8 {
         return 2;
     }
 
-    // Physics now has a stable admitted baseline. Release all compiled
-    // participants together, then wait for their first successful solver
-    // exchange before opening the scenario. This prime tick is deliberately
-    // scenario-free: it turns an asynchronous compile snapshot into one
-    // deterministic live sensor/actuator baseline. Keep Avian integration held
-    // during this exchange. The participant result must be admitted before the
-    // first physical step; otherwise worker completion order can change the
-    // initial force/attitude state even though the authored fixed tick sequence
-    // is identical.
-    if let Some(mut holds) = app
-        .world_mut()
-        .get_resource_mut::<lunco_physics::PhysicsHolds>()
-    {
-        holds.set(lunco_physics::PhysicsHolds::READINESS, true);
-    }
+    // Release all compiled participants together while the runner-owned
+    // startup hold keeps their first successful exchange out of the physical
+    // initial condition. This reason is independent from the readiness policy
+    // hold, which may clear during the final body-admission update.
     resume_modelica_participants(app.world_mut());
     let participant_waits = {
         let mut waits = 0u32;
@@ -1428,11 +1432,9 @@ pub fn run() -> u8 {
     let participants_are_ready =
         modelica_exchanges_ready(app.world_mut()) && participants_ready(app.world_mut());
     if participants_are_ready {
-        if let Some(mut holds) = app
-            .world_mut()
-            .get_resource_mut::<lunco_physics::PhysicsHolds>()
-        {
-            holds.set(lunco_physics::PhysicsHolds::READINESS, false);
+        if let Err(error) = set_scene_test_startup_hold(&mut app, false) {
+            eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
+            return 2;
         }
         // The final worker response may have released the coupling barrier in
         // the same update that made the participant set ready.  Do not wait for
@@ -1469,7 +1471,7 @@ pub fn run() -> u8 {
     }
 
     // The scene and its asynchronous participants are ready now. Install the
-    // deterministic scene-test policy only for the authored simulation: the
+    // manual scene-test clock policy only for the authored simulation: the
     // production cadence policy must remain active while wall-clock asset IO,
     // USD projection, and Modelica preparation are being pumped above. EXACT
     // solves the celestial tree every update, which is correct for verdicts but
@@ -1481,11 +1483,12 @@ pub fn run() -> u8 {
     {
         gate.enabled = true;
     }
-    // `SimTick` advances only for a completed FixedUpdate while the virtual
-    // clock is live. It is the authoritative progress counter for this test;
-    // counting `app.update()` calls would include barrier waits and make the
-    // same physical horizon depend on worker scheduling.
-    let sim_tick_start = app.world().resource::<SimTick>().0;
+    // Count completed, clock-admitted fixed steps in a runner-owned resource.
+    // This process-level horizon survives authored scene transitions, which
+    // intentionally reset scene-local simulation time. Counting `app.update()`
+    // calls would include barrier waits and make the same physical horizon
+    // depend on worker scheduling.
+    app.world_mut().resource_mut::<SceneTestTickCount>().0 = 0;
     let mut ticks = 0u64;
     let mut updates = 0u64;
     let mut early_exit = false;
@@ -1505,11 +1508,7 @@ pub fn run() -> u8 {
         }
         app.update();
         updates += 1;
-        ticks = app
-            .world()
-            .resource::<SimTick>()
-            .0
-            .wrapping_sub(sim_tick_start);
+        ticks = app.world().resource::<SceneTestTickCount>().0;
         sim_seconds = ticks as f64 / cli.tick_hz;
 
         // Let an in-flight Modelica worker make progress before the next
@@ -1613,10 +1612,10 @@ pub fn run() -> u8 {
     }
 
     // The run CONFIGURATION, on the same line as the result. A green line that
-    // does not say which cell of the threads×jitter matrix produced it cannot be
+    // does not say which threads×jitter profile produced it cannot be
     // attributed, and an unattributable result is not evidence of anything.
     let threads_desc = if cli.threads == 0 {
-        "default(multi)".to_string()
+        "default".to_string()
     } else {
         cli.threads.to_string()
     };

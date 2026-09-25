@@ -551,15 +551,15 @@ mod tests {
         assert!(keys.iter().all(|key| key.starts_with("session/")));
         let delivery = data.get("delivery").expect("delivery status object");
         assert_eq!(
-            delivery.get("pending_samples").and_then(ApiValue::as_i64),
+            delivery.get("pending_samples").and_then(ApiValue::as_u64),
             Some(1)
         );
         assert_eq!(
-            delivery.get("dropped_samples").and_then(ApiValue::as_i64),
+            delivery.get("dropped_samples").and_then(ApiValue::as_u64),
             Some(3)
         );
         assert_eq!(
-            delivery.get("queue_capacity").and_then(ApiValue::as_i64),
+            delivery.get("queue_capacity").and_then(ApiValue::as_u64),
             Some(65_536)
         );
     }

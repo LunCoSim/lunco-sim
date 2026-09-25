@@ -16,6 +16,7 @@ lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime", optional = true }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-doc = { path = "../lunco-doc" }
@@ -27,6 +28,7 @@ lunco-lint = { path = "../lunco-lint" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-sysml-ast = { path = "../lunco-sysml-ast" }
+lunco-sysml = { path = "../lunco-sysml", optional = true }
 lunco-tools = { path = "../lunco-tools" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-usd-avian-lint = { path = "../lunco-usd-avian-lint" }
@@ -45,6 +47,10 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[features]
+default = []
+sysml-runtime = ["dep:lunco-core-runtime", "dep:lunco-sysml"]
 
 [lints]
 workspace = true

@@ -10,7 +10,7 @@ fn _error(stage, message) {
 }
 
 fn _doc_required(doc, operation) {
-    if doc == () || doc == 0 {
+    if doc == () || doc.to_string() == "0" {
         return _error(operation, "an explicit SysML document id is required");
     }
     #{ ok: true }
@@ -100,8 +100,9 @@ fn apply(doc, ops, parent_generation) {
 }
 
 /// Check the current source snapshot before an apply or save checkpoint.
-/// Untitled documents use the eager document analysis; file-backed documents
-/// additionally expose the full Twin source-set validation report.
+/// Analysis state is revision-scoped and may be pending while the shared
+/// worker prepares parser/resolver facts. File-backed documents additionally
+/// expose the full Twin source-set validation report.
 fn verify(doc) {
     let inspection = inspect(doc);
     // Successful read-only queries may omit `ok`; only an explicit false
@@ -109,6 +110,19 @@ fn verify(doc) {
     // generation-bearing InspectSysmlDocument responses as failures.
     if inspection == () || inspection.ok == false {
         return _error("inspect", "InspectSysmlDocument failed");
+    }
+    if inspection.analysis_state == "pending" {
+        return #{ ok: false, domain: "sysml", stage: "analysis",
+            retryable: true, inspection: inspection,
+            error: "SysML analysis is still preparing for this source revision" };
+    }
+    if inspection.analysis_state == "failed" {
+        return #{ ok: false, domain: "sysml", stage: "analysis",
+            retryable: false, inspection: inspection,
+            error: inspection.analysis_error };
+    }
+    if inspection.analysis_state != "ready" {
+        return _error("analysis", "SysML analysis returned an unknown state");
     }
     if inspection.semantic_errors == true {
         return #{ ok: false, domain: "sysml", stage: "semantic",

@@ -42,15 +42,17 @@ The runtime uses these existing cycle families:
 | `Command` / `Repl` | typed command admission and one-shot script evaluation | application/wall cadence; never advances simulation time |
 | `Telemetry` | delivery of fixed-tick samples to retention and external subscribers | bounded application-frame work; each sample keeps its source tick and domain time |
 | `Ui` | egui and workbench updates | host frame/input cadence |
-| `Visualization` / `Presentation` | LOD selection, render preparation, visual projection | presentation cadence or an explicitly selected visual time domain |
+| `Visualization` / `Presentation` | LOD selection, render preparation, visual projection | presentation cadence or an explicitly selected visual time domain; terrain cover reselection is capped at 30 Hz using `Time<Real>` |
 
 `RuntimeCycleSet` names ordering lanes inside Bevy schedules. It does not by
-itself isolate CPU cost or give `Visualization` an independent cadence. In
-particular, UI work and LOD work both registered in `Update` still contend for
-the same main-thread frame. Owners that need separate cadence must have an
-explicit driver/clock boundary; expensive LOD selection and baking must leave
-the UI-critical path, while its bounded result application stays on the owning
-visualization boundary.
+itself isolate CPU cost or give `Visualization` an independent cadence. Terrain
+cover reselection has an explicit 30 Hz wall-clock skip boundary, and its
+immutable calculation uses shared bounded background admission. The owning
+system checks the camera, surface, and operation signatures before committing a
+result. Tile-mesh CPU bakes still use the per-terrain task queue; mesh upload,
+visibility, and residency commit in `Update`. This removes the quadtree cover
+walk from the UI frame, while tile-bake admission and per-frame ECS work still
+share that frame.
 
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
 Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled
@@ -150,13 +152,53 @@ from its owning Rust cycle with:
   application work, or none at a discrete lifecycle boundary);
 - the producer stamp for event-driven calls.
 
+The scene transaction coordinator owns the shared Twin scene generation. It
+advances only after the matching active transition succeeds and emits
+`SceneTransitionCommitted`; a failure or stale completion leaves the previous
+generation in force. Scenario lifecycle reads this value for compile fences
+and execution routes. Other Twin-scoped cycle owners use the same source instead
+of keeping private scene counters. Before a successful scene commit, there is
+no Twin execution route. Scenario drivers idle while the readiness gate is
+closed and when their language has no attached scenarios; a missing generation
+faults only when live scenario work needs a Twin route.
+
 Systems declare their cycle and read that cycle's clock. A synchronous helper,
 Rhai function, or nested registered hook inherits the caller's context. An
 event retains its producer stamp while its consumer also knows its execution
 cycle. A discrete callback must not infer its timing from whichever Bevy
-`Time<T>` happens to be accessible. Rust owns this typed contract; Rhai gets a
-read-only `execution_context()` view beside the existing `clock_snapshot()`. The
+`Time<T>` happens to be accessible. `lunco-runtime-context` owns these typed
+values, while `lunco-core` supplies the Bevy `RuntimeCycleSet` labels. Rhai gets
+a read-only `execution_context()` view beside the existing `clock_snapshot()`.
+Registered hooks receive one typed `HookInvocation`; isolated Rhai hooks expose
+its context as an immutable `runtime_context` map, and native providers receive
+the same map through ABI v2. A Rust hook owner with no classified cycle uses
+`invoke_unclassified`; scheduled owners supply `invoke_with_context` from their
+cycle inputs. The scheduled `readiness.action` policy is classified as
+`Core/Simulation/Behavior`, with `Time<Fixed>` elapsed time and the latest
+completed `SimTick`; its Rhai policy rejects calls from other cycles. The
+post-solver `physics.body_escape` decision is classified as
+the core simulation `Behavior` phase and stamped with `SimTick` plus the fixed
+clock sample. Its Rhai policy rejects invocation outside that contract. The
 Rhai map preserves route generations and sequences as native `u64` values.
+Physics initialization is a separate discrete lifecycle call. It uses the
+active scene transaction id while a new stage is being admitted and the last
+committed scene id afterward, with `Twin/Lifecycle`, `Preparation`, and no
+clock, delta, or sequence. Its selector is data for one declared Rhai seam,
+not a dynamically constructed hook id. Stable USD paths and f64 poses cross
+that boundary; process-local ECS ids do not.
+Generated Modelica source synthesis uses the same active-or-committed Twin
+generation in `Twin/Lifecycle/Preparation`, with no elapsed clock. The owner
+captures this context before dispatching synthesis to the async worker, so both
+the async startup path and synchronous live projection invoke the same policy
+contract. Both shipped synthesis policies reject calls from scenario, UI, or
+REPL cycles. Async results must still match that Twin generation as well as the
+canonical USD generation or exact prepared instance plan before publication.
+The settled USD scene-time owner uses the completed edge's `SceneTransitionId`
+for `scene.time.select` in the same `Twin/Lifecycle/Preparation` context. The
+typed selection carries that id through its deferred application; the time
+owner ignores stale selection and terminal edges after a replacement begins.
+Explicit policy inspection from `RunRhai` is separately stamped
+`Application/Repl/Evaluation` and does not apply a scene-time decision.
 An unclassified bridge call has no owner route; its `scope`, `cycle`, and
 `generation` map values are Rhai unit instead of an invented Application route.
 `sim_tick()`, `dt()`, and `elapsed_seconds()` return a Rhai error outside
@@ -193,11 +235,16 @@ authoritative hook holds or faults its owner through the runtime-fault contract.
 `lunco-core-runtime` owns the fixed-step tick, the reason-keyed
 `SimulationProgress` admission gate, and the generic per-step simulation
 barrier. Scene lifecycle holds carry a monotonic `SceneTransitionId`; only the
-matching terminal edge releases its hold. The admission gate covers work that
-changes which authoritative scene can run. Ordinary parsing, analysis, editor
-work, and optional LOD refinement do not acquire this gate. Their selected
-owner plugins control their cadence; GUI LOD still shares the `Update` schedule
-with UI until its heavy selection work moves to a bounded worker path (D16).
+matching terminal edge releases its hold. `SimulationProgress` aggregates
+owner-local operations that must commit before authoritative virtual time can
+advance; it is not a global readiness bit for every clock or subsystem.
+Ordinary parsing, analysis, editor work, optional LOD refinement, and
+physics-only readiness use their own owner boundary. Their selected owner
+plugins control their cadence. GUI terrain cover selection runs at a 30 Hz
+`Time<Real>` cadence; immutable cover preparation uses the shared background
+queue and current results commit in `Update`. Tile-mesh bake completion and
+residency also commit in `Update`. Offline capture bypasses the cadence and
+prepares covers synchronously at each captured frame.
 An active reference spawn on the mounted primary `UsdSceneRoot` acquires a
 `SceneReferences` operation key when the typed structural change is admitted.
 Its hold follows the prepared closure through live-stage authoring and ECS root
@@ -208,6 +255,14 @@ has faulted. A primary closure or projection failure records a `RuntimeFault`,
 a path-addressed diagnostic, and a persistent progress hold; scene teardown
 clears both before a replacement scene runs. `UsdSceneRuntimePlugin` installs
 the progress resource it needs, so selecting that capability is sufficient.
+The Modelica execution owner also reconciles active, causally required
+participants before the time spine. A participant whose current session still
+needs compilation owns one `ModelicaPreparation` key; compile intent is admitted
+in the lifecycle cycle, which continues while `Time<Virtual>` is held. The
+worker result is committed by the Modelica response handler before the next
+lifecycle pass releases that key. Intentionally paused and noncausal models do
+not hold world time. This gate covers prepared solver state; the first normal
+co-simulation step remains governed by the per-step barrier after activation.
 The causal transaction follows explicit owner phases:
 
 1. Capture external commands and events as typed inputs with their authoritative
@@ -245,7 +300,7 @@ asynchronous completion never selects the visible simulation tick.
 | USD | Asset I/O, dependency discovery, immutable layer parsing/composition, and send-safe projection-plan preparation | Check source generation; mutate the live, thread-affine stage and publish ECS projection in stable scene order |
 | Modelica | Source I/O, declaration/interface extraction, parsing/lowering, solver construction, and requested numerical step | Check model generation/session/step; publish outputs and propagate ports at the fixed co-simulation boundary |
 | SysML | Source-set I/O, parse, resolve, typed analysis, and requirement report preparation | Publish only the current source revision; verification that reads live simulation values consumes the committed tick snapshot |
-| Rhai | Root and literal transitive module parsing, AST lowering, and immutable compile-artifact construction from one source snapshot | Validate and commit the dependency closure; evaluate imported module bodies, top-level initialization, and lifecycle hooks against the live world in stable actor order; apply commands at their declared boundary |
+| Rhai | Parse file-backed `.rhai` assets in Bevy's async asset-loading tasks; prepare inline roots and immutable compile artifacts through shared admission | Publish canonical source/AST revisions; validate and commit the dependency closure; evaluate imported module bodies, top-level initialization, and lifecycle hooks against the live world in stable actor order; apply commands at their declared boundary |
 | Physics | Preparation that does not read or mutate live solver state | Kinematics, contact solving, integration, and authoritative writes remain within the fixed physics schedule |
 | Rendering and UI | Mesh/shader preparation, presentation, editor analysis, and persistence I/O | Read committed simulation state; presentation completion cannot advance or release authoritative time |
 
@@ -277,23 +332,113 @@ source revision, and operation id. The resource bounds queued and admitted
 work, applies the three priorities with reserved interactive/background
 service, and exposes aggregate queue counters. It can withdraw queued work but
 does not preempt a running task. Owners still validate and commit their typed
-results at their own boundary. Modelica document parsing and Rhai root plus
-imported-module parsing use this path. Identical Rhai source misses share one immutable
-compile result. Rhai drains worker results into a scene-wide preparation barrier
-and commits the complete ready set in stable actor order before `TimeSpineSet`
-releases simulation time. Its exact progress holds remain active through
-dependency planning, top-level initialization, and the first `on_start`; cache
-hits use the same activation boundary without a worker.
+results at their own boundary. Modelica document parsing, inline Rhai roots and
+source-matched import misses, Twin SysML source-set analysis, and default USD
+Twin source parsing plus persistent-source serialization use this path. USD
+source parse results are checked against the current asset text before the
+registry applies path identity and dirty-document policy. Persistent snapshots
+are cloned after runtime-overlay restoration and serialized away from the main
+schedule; the owner commits the Twin overlay only if the document generation
+still matches. Runtime sidecar reads/parsing remain synchronous, and this USD
+path reports the missing worker transport on wasm rather than blocking the page.
+File-backed Rhai assets are parsed and const-folded in the asynchronous Bevy
+asset loader; the source asset publishes its canonical id, exact text, AST, and
+literal import dependencies together. The owner qualifies the default Bevy
+source path as `lunco://` for imports and the prepared-AST cache; `twin://`
+identities retain their source scheme. Activation owners commit the complete
+loaded dependency closure before binding or starting a source; later asset
+events publish revisions and hot reload. Startup and Twin tools plus the prelude
+consume that AST, while the admitted scenario worker reuses it when the source
+matches and parses only inline roots or an asset not yet committed at its owner
+boundary.
+Native live Modelica source-root commands use the worker's bounded preparation
+pool to read source bytes, extract bound-input defaults, and parse each source
+set without touching the Rumoca session. Files are sorted by URI before
+preparation. A dedicated Rumoca actor owns the mutable compiler session and
+shared DAE cache. Source-root installation and ordinary `Compile` requests use
+one FIFO mailbox; the worker commits actor results in submission order and
+fences compile artifacts by entity session and library generation. This keeps
+Rumoca's stateful work off the Modelica command owner while preserving one
+compiler session and deterministic source-root-before-dependent-compile order.
+Immutable DAE lowering and persistent solve-cache reads, decoding, encoding,
+and writes run on the bounded solve-preparation pool. The command owner only
+commits the ready solve model. Actor admission is bounded across submitted
+compiles, root installs, and lowerings.
+Parameter updates, resets, and cache-invalidating Step auto-init are
+continuations on that same FIFO. The command owner keeps servicing other
+entities while Rumoca compiles and the bounded pool lowers immutable DAE data;
+the original Step resumes only after the matching session and library
+generation commit. Step-triggered rebuilds share the bounded admission count,
+so a scene with many models cannot overfill the pipeline. Root discovery
+enumerates bundled filenames without loading their text; a load reads only the
+selected flat model or package. For wasm, the host reads storage-backed roots
+and sends text to the Modelica Web Worker, where preparation and installation
+run; that storage read remains synchronous at the browser host boundary.
+First-compile intent is admitted by `request_modelica_compiles` in
+`ModelicaSet::AdmitCompileRequests`, inside the application lifecycle cycle.
+`ModelicaExecutionPlugin` consumes the typed `CompileRequested` intent and the
+worker owner resolves the current document snapshot and dispatches the
+compiler command without UI resources; the UI command only resolves the
+selected class and publishes intent. Solver stepping remains in
+`spawn_modelica_requests` inside `FixedUpdate`. Because this request is emitted
+only for an unpaused model, it carries resume intent through compilation so a
+successful first compile does not leave the model paused. The compile request
+can therefore be dispatched while `Time<Virtual>` is held. Compile-result
+commit validates both worker session and captured document generation. If the
+document changed during compilation, the old result is discarded and an active
+model remains held with its run intent for the current revision. The scene
+admission hold still needs to include reference closure, Modelica preparation,
+Rhai activation, and physics readiness in one transaction.
+Twin SysML source-set analysis is read-only preparation for the active Twin, so
+it uses `Interactive` priority and does not acquire `SimulationProgress`.
+`AnalyzeSysml` reports `Pending` until the current snapshot is committed. A
+simulation scenario promotes that work to a startup prerequisite only when its
+`simulation_dependencies` plan names the SysML analysis input. The generic
+`SimulationDependencyStates` owner registry publishes Pending, Ready, and
+Failed edges; the scenario keeps its existing `ScriptPreparation` hold through
+that dependency and resumes when an owner state revision changes. The wait
+reason includes the missing input. Twin analysis by itself never holds the
+whole-world clock.
+`SceneValidationPlugin` is the composition owner for the optional SysML
+runtime plugin, so every host installs that integration once through the same
+feature path.
+Twin lifecycle policy selects the checked manifest source set and requests one
+preparation; Bevy loads its `twin://` assets, the worker parses and resolves the
+complete immutable snapshot, and the SysML owner commits only the current
+Twin-id/root/operation. Runtime `AnalyzeSysml` and `ValidateSysml` queries read
+that committed snapshot and report pending, failed, or unprepared state
+explicitly. The production Rhai contract at
+`assets/scenarios/tests/sysml_twin_analysis.rhai` checks the committed
+requirement facts and the unmounted-Twin diagnostic. Source-asset changes admit
+a new revision, and `TwinClosed` retires queued work and fences late results for
+that Twin. An empty selected set commits an empty analysis without dispatching
+a worker. The `twin.lifecycle` hook receives `Twin/Lifecycle` with the mounted
+`TwinId` as its generation, no elapsed clock, and an explicit `Start`, `Event`,
+or `Stop` phase. Its retained `policy_status().lifecycle.runtime_context` makes
+the owner stamp inspectable from Rhai and the API. Identical Rhai source misses share one
+immutable compile result. Rhai drains worker results into a scene-wide
+preparation barrier and commits the complete ready set in stable actor order
+before `TimeSpineSet` releases simulation time. Its exact progress holds remain
+active through dependency planning, top-level initialization, and the first
+`on_start`; cache hits use the same activation boundary without a worker.
 Scenario compilation captures the transitive literal-import closure from one
-revisioned source snapshot and prepares its module ASTs on the worker. At commit,
-the owner validates every discovered source or missing-source input and publishes
-the ASTs to a prepared-only scenario resolver. A module absent from that prepared
-closure fails visibly instead of being compiled during a lifecycle call. Module
-body evaluation remains synchronous at the owner lifecycle boundary because it
-can execute authored world behavior. SysML, USD, Modelica library preparation,
-and visualization preparation still need to join shared admission. On wasm,
-native admission rejects CPU work until a Web Worker transport exists; it does
-not run the same parse synchronously on the browser main thread.
+revisioned source snapshot and reuses matching source-asset ASTs, preparing any
+missing ASTs on the worker. At commit, the owner validates every discovered
+source or missing-source input and publishes the ASTs to a prepared-only
+scenario resolver. A module absent from that prepared closure fails visibly
+instead of being compiled during a lifecycle call. Module body evaluation
+remains synchronous at the owner lifecycle boundary because it can execute
+authored world behavior. Standalone `SysmlDocument` edits capture immutable
+source and origin facts for shared `AsyncWorkAdmission`; the owner commits only
+for the exact current generation and origin URI. `InspectSysmlDocument`
+distinguishes pending, ready, and failed states, and editor verification treats
+pending as retryable. This analysis remains editor-only and never holds
+simulation progress. Terrain cover preparation now uses shared admission;
+remaining USD and Modelica library preparation and terrain tile-bake admission
+remain owner-local or synchronous. On wasm, native admission rejects CPU work
+until a Web Worker transport exists; terrain cover preparation therefore stays
+synchronous on that host rather than silently running on the browser main
+thread.
 
 Results are committed only by their owner at a named cycle boundary. Results
 for presentation may be adopted when current and useful. Results that change
@@ -301,6 +446,14 @@ authoritative topology or inputs carry a declared target simulation boundary;
 that boundary waits for the complete required set, validates every revision,
 and commits in stable owner/identity order. Completion time and worker arrival
 order never choose a tick. Unrelated work never joins that admission hold.
+
+Dynamic referenced spawns on the mounted primary USD stage fetch and prepare in
+parallel, while live-stage mutations and terminal failures follow reference
+operation order. The owner drains only the completed prefix for that stage and
+retains later ready or failed outcomes until earlier active references resolve.
+A failed prefix operation faults and holds the simulation before any successor
+can commit. Preview and non-primary stage projections do not join this
+simulation boundary.
 
 Parsing and compilation should move off the UI and fixed schedules when their
 inputs can be captured immutably. A script's top-level body is executable
@@ -310,8 +463,11 @@ preparation off-thread does not mean sharing the stage object with a worker.
 
 ## 5. Rhai execution and safe parallelism
 
-Rhai root-source parsing and immutable compilation artifacts are prepared
-through shared admission. The owner buffers completed artifacts until every
+Rhai inline-root parsing and immutable compilation artifacts are prepared
+through shared admission. File-backed source assets are parsed in Bevy's async
+asset-loading task and publish text plus source-matched AST at the asset
+boundary; tools and prelude installation reuse that AST instead of compiling on
+the update thread. The owner buffers completed artifacts until every
 currently admitted scenario compile is ready, then commits by stable actor
 identity before the time spine. A progress hold remains through dependency
 planning, top-level initialization, and the first `on_start`, so physics cannot
@@ -319,33 +475,39 @@ consume a tick before activation. Scenario `this` state and live-world calls
 remain owned by the script activation/execution boundary. A paused Update
 activation still assigns dependency planning, initialization, and `on_start` the
 Simulation clock and current sequence; discrete events retain Lifecycle context.
-Literal transitive module sources are captured from one revisioned snapshot and
-their ASTs are prepared on the worker; the scenario resolver accepts only those
-owner-committed ASTs. Imported module bodies still evaluate on the serialized
-lifecycle path because they can execute world behavior. All
-functions and hooks inherit the invocation context; the scenario owner assigns
-each callback to its Rust-owned cycle. Event handlers read both the event's
-origin stamp and the consumer's current cycle. Source metadata may validate an
-author's required cadence, but it does not install or move a hook.
+Literal transitive module sources are captured from one revisioned snapshot;
+matching asset ASTs are reused and missing ASTs are prepared on the worker. The
+scenario resolver accepts only owner-committed ASTs. Imported module bodies
+still evaluate on the serialized lifecycle path because they can execute world
+behavior. All functions and hooks inherit the invocation context; the scenario
+owner assigns each callback to its Rust-owned cycle. Event handlers read both
+the event's origin stamp and the consumer's current cycle. Source metadata may
+validate an author's required cadence, but it does not install or move a hook.
 
 Before a scenario's first lifecycle hook, a source may define the optional,
 scenario-scoped `simulation_dependencies(me, ctx)` hook. The second argument is
-the validated scenario parameter map. It returns an array of nonnegative
-integer global entity ids. The owner evaluates it once for each source/parameter
-revision in the `DependencyPlan` phase, resolves every id against the live
-entity registry, and adds the scenario's set to the shared simulation barrier.
-Omitting the hook declares no Rhai dependencies; the USD causal graph still
-applies. The hook resolves identities from the composed world and parameters;
-commands, direct mutations, emitted events, and live port access are rejected
-in this phase. An unresolved plan keeps every Modelica participant synchronized
-until commit. A non-array result, invalid id, or unresolved entity is a terminal
-scenario diagnostic for that revision. This hook runs before mutable top-level
-initialization, so derive its result from `me`, scenario parameters, and
-read-only world queries rather than top-level initialization effects. Once the
-plan is committed, the owner runs top-level initialization in the
-`Initialization` phase and then dispatches `on_start` in stable actor order.
-The production sensor scene verifies declared Modelica reads and rejects a
-live port read during planning.
+the validated scenario parameter map. It returns a map with
+`modelica_entities: [global_entity_id, ...]` and
+`required_inputs: [#{ owner: "domain.owner", identity: "stable-key" }, ...]`.
+The owner resolves the entity ids against the live registry and adds those
+Modelica participants to the shared simulation barrier. Each required input
+names an owner registered in `SimulationDependencyStates`. A missing owner is
+a terminal diagnostic; an absent or Pending key from a registered owner keeps
+the scenario's existing activation hold until the next owner-state revision;
+Ready admits initialization, and Failed reports the producer diagnostics.
+The dependency plan runs once per source/parameter revision, and readiness is
+checked again only after an owner publishes a change. Omitting the hook declares
+no Rhai dependencies; the USD causal graph still applies. The hook resolves
+identities from the composed world and parameters; commands, direct mutations,
+emitted events, and live port access are rejected in this phase. While a plan is
+pending, all Modelica participants remain synchronized and simulation time
+stays held by the scenario's exact preparation key. The production sensor scene
+verifies declared Modelica reads and rejects a live port read during planning.
+This hook runs before mutable top-level initialization, so derive its result
+from `me`, scenario parameters, and read-only world queries rather than
+top-level initialization effects. Once all declared inputs are Ready, the owner
+commits the Modelica participant set, runs top-level initialization in the
+`Initialization` phase, and dispatches `on_start` in stable actor order.
 
 Current Rhai world verbs can read and mutate live ECS/port state, and `cmd()`
 effects are visible to later actors in the same pass. Their existing stable
@@ -368,10 +530,12 @@ The causal barrier is only sound when it contains every path by which a
 participant result can affect authoritative state. USD `SimConnection`s and
 Rhai scenario dependencies both contribute to the same barrier projection. A
 scenario that reads or writes a Modelica port, or consumes a Modelica-produced
-event that can affect its behavior, lists that producer entity in
-`simulation_dependencies(me, ctx)`. Rhai keeps the selection policy; Rust
-resolves and validates the returned ids and adds that scenario's contribution
-to the shared barrier. While a dependency plan is pending, all Modelica
+event that can affect its behavior, lists that producer in the
+`modelica_entities` field of `simulation_dependencies(me, ctx)`. Rhai keeps the
+selection policy; Rust resolves and validates the returned ids and adds that
+scenario's contribution to the shared barrier. Required owner inputs occupy
+the same plan but do not add Modelica barrier participants. While a dependency
+plan is pending, all Modelica
 participants are synchronized. After admission, direct simulation-clock access
 to an unbarriered Modelica port or event fails at the scripting owner with a
 diagnostic that names the missing hook. Presentation reads continue to observe
@@ -414,14 +578,15 @@ loss or a reason to block the physics step on I/O.
 Continuous `SampledParameter` records are observations of committed state, not
 simulation inputs. Their value and `SimTick` stamp are captured at the declared
 sample boundary so a sample cannot combine values from different ticks. Capture
-uses the authored channel rates and clock bindings, walks the cached channel
-plan for due checks and live reads, then queues a small typed record for bounded
-post-simulation delivery and retention. Reducing that fixed-path walk and live
-read cost remains open. API subscriptions, display decimation, log formatting,
-recording encoders, and file/network I/O run after capture on their owning
-application or background cycle. Live display may report dropped observations;
-a configured lossless recording must instead fault explicitly if its bounded
-queue cannot keep up.
+uses one deadline heap per authored clock binding, visits only due channels,
+and queues a small typed record for bounded post-simulation delivery and
+retention. Stable identity order decides the sequence when multiple channels are
+due together; clock rewinds reset cadence without catch-up bursts. The fixed
+pass still visits active clock lanes, and measured physics cost remains open.
+API subscriptions, display decimation, log formatting, recording encoders, and
+file/network I/O run after capture on their owning application or background
+cycle. Live display may report dropped observations; a configured lossless
+recording must instead fault explicitly if its bounded queue cannot keep up.
 
 Telemetry collection is bounded by the configured channel cap and per-channel
 rate. It must not enumerate unrelated diagnostics, rescan port backends, or
@@ -435,8 +600,10 @@ telemetry consumers are delayed.
 All observable batches use a total key owned by their domain. Current runtime
 ordering includes:
 
-- scenario actors: `GlobalEntityId`, then the world-local Bevy entity key for
-  local-only hosts;
+- scenario actors: the source-owned `GlobalEntityId` component, read directly
+  instead of through the Update-synchronized API lookup index; hosts without a
+  global identity use their Bevy entity key only within that running World and
+  are outside cross-session replay ordering;
 - telemetry delivery: simulation tick, source, name, severity, time, and a
   recursive order over the typed payload;
 - USD-connected events: instance namespace, authored event prim path, source,
@@ -465,56 +632,153 @@ revision-gated document handling, and explicit readiness/coupling barriers.
 Scenario order, same-tick event delivery, connected-event emission, and
 Modelica command submission are now canonicalized at their boundaries. The
 scene lifecycle holds `SimulationProgress` from transition start through its
-authoritative asset and visual-projection terminal edge. The gate exposes its
-owner and operation key plus a user-facing wait reason; matching failure and
-completion edges release only their own operation. `TimeTransport` mode and
-rate remain the user's intent while this gate pauses `Time<Virtual>`.
+authoritative asset and structural-projection terminal edge. CPU-generated
+render meshes stream independently and remain visible to presentation readiness.
+The gate exposes its owner and operation key plus a user-facing wait reason;
+matching failure and completion edges release only their own operation.
+`TimeTransport` mode and rate remain the user's intent while this gate pauses
+`Time<Virtual>`.
 
 The whole-simulation guarantee remains open because:
 
-1. Active USD Modelica participants now keep their owning physical subtree in
-   readiness until the first successful communication point; intentionally
-   paused models are ready after compilation. This does not yet make readiness
-   and scene lifecycle one admission transaction through reference closure,
-   Modelica preparation, and world physics admission. The lifecycle progress
-   hold still ends at the asset/visual-projection terminal edge.
-2. Runtime referenced assets can be projected as soon as their async load
-   completes, and their pending dependency closure is not fully represented by
-   readiness.
-3. Dynamic Rhai port access is not represented in the Modelica causal graph.
-4. Some heavy preparation remains synchronous: SysML analysis/source-set
-   discovery and initial USD document parse/overlay serialization. Rhai module
-   body evaluation remains on the owner lifecycle path; it can execute world
-   behavior even though parsing and compilation are asynchronous. Native Modelica source interfaces are
+1. Scene start composes owner-specific deterministic boundaries rather than one
+   global readiness bit. The root USD loader fetches and composes its available
+   dependency closure before publishing the stage asset; the lifecycle progress
+   key holds through structural projection; active primary references and
+   causal Modelica compilation hold exact `SimulationProgress` keys; the USD
+   terrain bridge and progress scan run in `PreUpdate` before `TimeSpineSet`,
+   including a pending Twin manifest scan, so authored terrain data and
+   collider work hold entity-keyed `SimulationProgress` before the first
+   eligible fixed tick and through the web worker's coarse-to-full result; physics
+   admission uses the physics readiness owner; and scenarios open only after
+   their readiness state clears. These owners intentionally control different
+   clocks. CPU render-mesh construction no longer delays authoritative scene
+   admission. The production sensor fixture captures its first simulation
+   behavior call and verifies finite reads from both declared Modelica
+   participants and admitted physics ports. Its Rhai test also attaches two
+   scenario actors: the lower `GlobalEntityId` actor writes a temporary marker,
+   and the higher actor must observe and restore it during `on_start`. The
+   initial altimeter miss remains explicitly invalid until the first Avian ray
+   sample; a present zero is not treated as a valid range. The production
+   harness `scripts/compare_deterministic_startup_dependencies.py` runs the
+   scene twice at Compute width 1 and twice at the default width 24, then
+   compares the exact first-behavior trace for scene generation, actor identity,
+   IMU, altimeter, and contact values. The 2026-09-25 main-integrated build
+   matched at tick 10 across all four runs and passed the authored actor-order
+   verdict at Compute widths 1 and 24, with snapshot digest
+   `8ad6116be742467fe9d20f40e6e4b8e9c88ad59d587917550a08a0a3e7fe6bf5`.
+   Scene-readiness holds varied from 1,164 to 1,370 Update passes; participant
+   readiness took 9 passes, and each run took 1.0–1.2 seconds. This is
+   same-build evidence for one authored dependency graph; it does not force
+   opposite Modelica completion order or establish complete scene closure.
+   The first normal co-simulation step uses the per-step barrier after
+   activation.
+2. Dynamic references on the mounted primary scene hold admission through
+   closure preparation and live projection; preview and additive mounts remain
+   independent. Initial USD composition dependencies are fetched and composed
+   by the root asset loader before the stage asset reaches structural
+   projection.
+3. Rhai port and event reads require a declared `simulation_dependencies`
+   closure and unbarriered access fails visibly. A complete typed action path
+   for every script write remains open.
+4. Twin `AnalyzeSysml`/`ValidateSysml` queries now read committed async source
+   snapshots; read-only analysis uses interactive admission and does not hold
+   simulation time. Scenario plans can now wait on generic owner-published
+   readiness keys without polling or making editor analysis a global hold. The
+   production `sysml_async_analysis` scene verifies that a declared Twin
+   analysis dependency admits the script only after its source-set snapshot is
+   ready. Standalone SysML document analysis uses shared async
+   admission and exact generation/origin fencing. Initial USD document
+   parse/overlay serialization remain synchronous. Rhai module body evaluation
+   remains on the owner lifecycle path; it can
+   execute world behavior even though parsing and compilation are asynchronous.
+   Native Modelica source interfaces and their sorted required-root sets are
    extracted once on Bevy's async-compute pool while the source asset loads;
    co-simulation, member discovery, and the web workbench reuse that
-   revision-matched interface. Bevy's wasm task pool runs on the browser main
-   thread, so the web loader still needs a Modelica Web Worker handoff for a
-   fully non-blocking parse.
-5. The simulation composition records the effective Bevy compute-pool width in
-   `PhysicsDeterminism`, and the production scripting task scene checks that
-   observation. The GUI's physical-core cap bounds total Bevy workers but does
-   not select or enforce a deterministic Avian profile; the current live solver
-   may still use multiple workers. Measure and select a deterministic solver
-   profile or prove deterministic reductions before claiming that guarantee.
+   revision-matched interface. Live compile producers admit those roots before
+   `Compile` on one ordered worker channel; generated models use the authored
+   root manifest, and document compiles derive requirements from their parsed
+   source set. Worker root preparation commits in admission order; the live
+   compile entry point rejects unadmitted roots, and a failed root is retained
+   as a terminal compiler state for dependent compiles. Native root installs and
+   ordinary compiles run on the single Rumoca actor, while immutable DAE lowering
+   uses the bounded solve-preparation pool, including persistent solve-cache
+   I/O. Reset, UpdateParameters, and
+   cache-invalidating Step auto-init are continuations on the same actor FIFO;
+   entity/session/library-generation fences apply before commit, and
+   Step-triggered work shares the bounded admission count. Native compile and
+   lowering no longer block the Modelica command owner. Bevy's wasm task pool
+   runs on the browser main thread, so the web loader still needs a Modelica Web
+   Worker handoff for a fully non-blocking parse and compile path.
+5. The simulation composition records the observed Compute pool width in
+   `PhysicsComputeProfile`; `clock_snapshot()` returns `physics_profile_known`
+   and the optional `physics_compute_threads` value, which the production
+   scripting task scene checks. The scene-test `--threads 0` profile uses
+   Bevy's default `TaskPoolOptions`, matching GUI `DefaultPlugins`; the normal
+   headless server entry point currently pins one Compute thread. Bevy's default
+   assigns 25% of available threads to IO and AsyncCompute each, clamped to one
+   through four, and gives Compute the remaining cores. Avian uses Compute for
+   parallel broad-phase, narrow-phase, and constraint work. Broad-phase chunk
+   results retain input order before contact-graph insertion; narrow-phase
+   status bitsets combine before serial graph/solver updates; the active
+   collision filter is read-only. USD projection supplies `PhysicsOrderKey`
+   from the instance root and authored prim path. The physics owner validates
+   joint keys after Avian prepares solver data and before its substep loop;
+   native joints, motor warm-start, custom prismatic correction, raycast
+   suspension and tire forces, jointed tire forces, and raycast wheel
+   mass-property folds use that key order. Missing, duplicate, or empty keys
+   raise a runtime fault and hold physics. The production
+   `multi_rover_stress_20` Rhai replay gate compares rover physics and Modelica
+   snapshots. On the 2026-09-25 main-integrated build, a four-run matrix at
+   Compute widths 1 and 24 matched all six checkpoint snapshots, 32 per-tick
+   samples, 240 Modelica participant snapshots, and all 20 articulated-body
+   states in every run, with digest
+   `0a080decafbe69264944d141da6afa3e02a87514e2d1da4e92d2317713f82dd1`.
+   Every run produced the authored Rhai stress verdict. Scene-readiness holds
+   spanned 3,760–4,645 Update passes; physics-admission holds were 5 passes,
+   participant-readiness holds were 11–12, and each scene run took 26.8–27.1
+   seconds including startup. This is same-build evidence for that fixture and
+   those pool widths; it does not establish whole-simulation or cross-machine
+   determinism. The current profile records effective pool width but does not
+   select a deterministic Avian solver profile; that guarantee still needs a
+   measured production choice or deterministic reductions.
 6. The command journal does not yet provide a whole-simulation authoritative
-   input log and replay verdict, and adaptive Modelica is not a cross-machine
-   bitwise deterministic solver.
+   input log and replay verdict. Networking rollback's bounded per-vessel input
+   frames retain ordered, latched `SetPorts` setpoints for owned-body replay,
+   but do not capture scene lifecycle, authored external commands, or all Rhai
+   and Modelica state. Adaptive Modelica is not a cross-machine bitwise
+   deterministic solver.
 7. `RuntimeCycleSet` is ordering vocabulary rather than an independent cadence
-   driver. Typed context now reaches scenario preparation/start/event/behavior/
-   stop calls and one-shot Rhai evaluation, but other hook owners still need
-   adoption. GUI UI and LOD still share the main `Update` schedule, although
-   server hosts now omit the visual plugin entirely.
+   driver. Typed context reaches scenario preparation/start/event/behavior/stop
+   calls and one-shot Rhai evaluation. Generic registered hooks now receive a
+   typed `HookInvocation`; Rhai hooks expose its immutable `runtime_context`
+   map and native hook ABI v2 transports the same map. The Rhai world bridge
+   forwards the active context for nested `invoke_hook` calls. The physics
+   escape owner also supplies its core simulation `Behavior` context from
+   `SimTick` and `Time<Fixed>`; the authored policy rejects other cycles. The
+   scheduled `link.connected` owner supplies the active/committed scene route and
+   its `Simulation/Preparation` or `Simulation/Behavior` context. Because its
+   sweep runs in `Update`, behavior carries the latest completed `SimTick` and
+   `WorldTime` without inventing a per-call delta; an installed policy fault
+   rejects that edge. Time-free offline, lifecycle, and command decisions keep
+   their discrete owner context or remain explicitly unclassified. The settled
+   USD scene-time owner invokes its policy with the exact transition generation
+   in `Twin/Lifecycle/Preparation`; `SceneTimeSelection` preserves that id
+   through apply, and the time owner ignores stale completion/apply edges. Its
+   authored policy is also inspectable in `Application/Repl/Evaluation`. Other
+   scheduled Rust hook owners remain open until their cycle owners classify them.
+   GUI UI and LOD still share the main `Update` schedule, although server hosts
+   now omit the visual plugin entirely.
 8. Async task admission and priority are local to individual owners. The shared
    Bevy pool can be saturated by background work, and completion commits are
    not yet governed by one cross-owner budget/order contract.
 9. Rhai hooks and co-simulation still have live-world access paths that prevent
    safe parallel evaluation even where the dependency graph contains
    independent actors.
-10. Telemetry sampling still walks its cached channel list for due checks in
-    the fixed simulation cycle. Subscriber callbacks now run in a bounded
-    post-simulation telemetry cycle, but capture cost and end-to-end observer
-    throughput have not been measured against physics.
+10. Telemetry sampling now uses per-clock deadline heaps and only reads due
+    channels in the fixed simulation cycle. Subscriber callbacks run in a
+    bounded post-simulation telemetry cycle, but capture cost and end-to-end
+    observer throughput have not been measured against physics.
 11. Cycle duration, queue pressure, and overload counters are not yet exposed
     together at the diagnostics boundary, so optimization cannot target an
     owner using comparable cycle evidence.
@@ -524,13 +788,15 @@ The whole-simulation guarantee remains open because:
     promise 60 wall-clock physics ticks per second or responsive UI during a
     long tick/burst. No integration-level tick-deadline or backlog result is
     published to distinguish a slow solver from lost wall-time admission.
-13. World-bound REPL requests are drained and evaluated serially by one
-    exclusive `Update` system, with a shared limit of one million Rhai
-    operations; a queued burst or one expensive live-world call can consume an
-    unbounded frame slice. Scenario hooks are likewise serialized and may run
-    in fixed time. Terrain lockstep mode waits for all in-flight bakes inside
-    `Update`, and ordinary mode commits every completed bake in one pass, so
-    worker completion bursts can still produce a main-thread hitch.
+13. World-bound REPL requests use a bounded 64-entry FIFO, reject excess
+    commands visibly, drain one request per `Update`, and cap each live-world
+    invocation at 100,000 Rhai operations. This bounds interpreter work per
+    application frame while preserving serial command order. A single native
+    bridge call can still be expensive, and scenario hooks remain serialized
+    in their owning schedules. Terrain lockstep mode waits for all in-flight
+    bakes inside `Update`, and ordinary mode commits every completed bake in
+    one pass, so worker completion bursts can still produce a main-thread
+    hitch.
 14. The async admission queue limits its own in-flight requests to four and
     priority selects queued work only. It cannot preempt running jobs, and many
     visualization/preparation producers still submit directly to Bevy pools;
@@ -542,7 +808,8 @@ These findings and their owner-specific file evidence are maintained in
 ## 10. Migration order
 
 1. **Canonical boundary order.** Sort current scenario, event, and serialized
-   Modelica work by stable keys; add production Rhai verdicts for observable
+   Modelica work by stable keys, including input assignments inside each worker
+   step request; add production Rhai verdicts for observable
    event ordering. Keep source-owned identities and fail visibly when a
    required identity is invalid.
 2. **Cycle and clock context.** Extend the typed invocation context from
@@ -550,11 +817,19 @@ These findings and their owner-specific file evidence are maintained in
    Rhai. Give UI and visualization independent cadences while keeping both
    presentation-only.
 3. **Async work admission.** Use shared bounded priority admission over the
-   existing worker pools. Modelica document parsing and Rhai root plus literal
-   transitive module parsing now use native admission; move SysML, USD, remaining
-   Modelica, and visualization preparation to workers while preserving
-   owner-specific typed results and commits. Keep Web Worker admission explicit
-   for wasm hosts.
+   existing worker pools. Modelica document parsing, Rhai inline roots and
+   asset AST cache misses, and Twin SysML source-set analysis use native
+   admission. Twin and document analysis use `Interactive` priority and never
+   acquire the simulation progress gate. File-backed Rhai AST parsing uses the
+   Bevy asset task pool. Native Modelica source-root file reads,
+   input-default extraction, and parsing now run on the bounded Modelica
+   preparation pool; the sole Rumoca session owner commits prepared roots in
+   admission order and holds compile, parameter-update, and reset commands
+   until root commits finish. Measure the remaining non-preemptible session
+   installation and compile work before splitting those operations further.
+   Move USD, remaining Modelica, and visualization preparation to workers while
+   preserving owner-specific typed results and commits. Keep Web Worker
+   admission explicit for wasm hosts.
 4. **Telemetry observation boundary.** Keep authoritative event delivery in
    stable simulation order; make continuous sampling due-driven and bounded,
    then move logging, fan-out, encoding, and persistence to the observation
@@ -565,17 +840,22 @@ These findings and their owner-specific file evidence are maintained in
 6. **Parallel actor execution.** Buffer Rhai actor effects and co-simulation
    participant results, then merge by stable identity at explicit boundaries.
    Keep any actor serial while it has immediate live-world dependencies.
-7. **Real-time owner isolation.** Route main-world command reads/writes through
+7. **First-tick admission and physics profile.** Prove that the first
+   authoritative fixed tick follows every owner-specific readiness fact
+   required by the active scene and scenario. Keep simulation-required async
+   work on exact `SimulationProgress` keys, physics readiness on the physics
+   gate, and presentation readiness on its own status path. Preserve the
+   schedules needed to finish physics admission and first solver exchange;
+   preparation must remain live while simulation time is held. Measure the
+   serial and any deterministic parallel solver profile before selecting the
+   production default.
+8. **Real-time owner isolation.** Route main-world command reads/writes through
    typed tick-stamped requests and immutable snapshots, then move the whole
    authoritative tick to one paced simulation owner. Keep fixed `dt`, report
    deadline misses/backlog, and let realtime, unpaced capture, and test drivers
    choose wall pacing without changing tick order or discarding ticks. Retain
    the current same-world path until every authoritative consumer crosses this
    boundary; do not run only the solver concurrently.
-8. **Complete admission and physics profile.** Hold the first simulation
-   boundary through scene references, required Modelica preparation, and physics
-   readiness. Measure the serial and any deterministic parallel solver profile
-   before selecting the production default.
 9. **Replay evidence.** Record admitted inputs and deterministic result keys;
    add a production scene suite spanning USD projection, Modelica coupling,
    Rhai events, SysML revisioned verification, and Avian state. Compare state at

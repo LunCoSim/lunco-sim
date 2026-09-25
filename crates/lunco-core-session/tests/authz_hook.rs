@@ -51,8 +51,8 @@ fn scripted_hook_tightens_an_open_command() {
     // A hook that denies exactly "SecretCmd", allows everything else.
     struct DenySecret;
     impl ScriptHook for DenySecret {
-        fn invoke(&self, args: &[HookValue]) -> HookResult {
-            let cap = args[0]
+        fn invoke(&self, invocation: &lunco_hooks::HookInvocation<'_>) -> HookResult {
+            let cap = invocation.args[0]
                 .get("capability")
                 .and_then(HookValue::as_str)
                 .unwrap_or("");
@@ -89,7 +89,7 @@ fn faulting_hook_fails_closed() {
 
     struct Boom;
     impl ScriptHook for Boom {
-        fn invoke(&self, _args: &[HookValue]) -> HookResult {
+        fn invoke(&self, _invocation: &lunco_hooks::HookInvocation<'_>) -> HookResult {
             Err(HookError("policy crashed".into()))
         }
     }

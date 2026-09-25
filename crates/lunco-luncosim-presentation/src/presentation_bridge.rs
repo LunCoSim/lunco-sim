@@ -668,7 +668,7 @@ fn report_terrain_generation_status(
 /// other:
 ///
 /// * [`SceneLoadInFlight`](lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight) — present from
-///   `LoadScene` until every visual projection phase for that stage has drained.
+///   `LoadScene` until the stage and its structural projection have drained.
 ///   This covers the gap BEFORE any prim entity exists, which an entity count
 ///   alone reads as "nothing to wait for".
 /// * `UsdSceneAwaitingStage` entities — prims queued on a stage that has not resolved.

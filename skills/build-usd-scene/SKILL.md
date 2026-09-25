@@ -76,11 +76,12 @@ the short version is below.
 | Existing world | Reference or payload the authoritative scene that already owns gravity, lighting, time, and celestial content. | Adding a lesson or assembly whose subject is behaviour, not scenery. |
 | UI-only lesson | Omit the payload; the tutorial launcher clears an outgoing lesson scene before showing the UI-only lesson. | Teaching menus, commands, or workbench concepts. |
 
-After the USD scene and queued visual/mesh projections settle,
+After the USD stage and queued structural projection settle,
 `scene.time.select` runs once. It selects the authored non-zero root epoch when
 present; otherwise it selects current computer UTC converted to TDB. Physics,
 celestial placement, USD animation sampling, and DEM construction wait for
-that result. Missing time for a celestial source and an invalid
+that result. CPU-generated render meshes may continue streaming while this
+decision is applied. Missing time for a celestial source and an invalid
 `LunCoEpochAPI` value produce runtime warnings and `epoch-api-missing-time`
 lint findings. Author a root epoch when the scene must reproduce the same
 celestial date across launches. A fixed light is a complete scene contract

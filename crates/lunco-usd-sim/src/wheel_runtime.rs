@@ -5,7 +5,7 @@ use bevy::asset::AssetId;
 use bevy::log::{error, info};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, World};
-use lunco_mobility::{JointedWheelTire, Suspension, WheelRaycast};
+use lunco_mobility::{JointedWheelTire, RaycastSupportGeometryDirty, Suspension, WheelRaycast};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_sim_authoring::WheelParams;
@@ -206,6 +206,9 @@ pub(crate) fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAss
             if let Some(mut susp) = world.get_mut::<Suspension>(u.entity) {
                 u.params.apply_to_suspension(&mut susp);
             }
+            world
+                .entity_mut(u.entity)
+                .insert(RaycastSupportGeometryDirty);
             if let (Some(susp), Some(mut ray)) = (
                 u.params.suspension,
                 world.get_mut::<avian3d::prelude::RayCaster>(u.entity),

@@ -97,17 +97,28 @@ pub struct PhysicsJointPending;
 /// The default initialization policy for every USD-authored dynamic body.
 pub const STRICT_AUTHORED_INITIALIZATION_POLICY: &str = "strict-authored";
 
-/// Hook prefix for Twin-authored initialization policies.
-pub const PHYSICS_INITIALIZATION_HOOK_PREFIX: &str = "physics.initialization.";
+/// Declared Twin policy seam for dynamic-body initialization decisions.
+pub const PHYSICS_INITIALIZATION_POLICY_HOOK: &str = "physics.initialization";
+
+lunco_hooks::declare_hook! {
+    id: PHYSICS_INITIALIZATION_POLICY_HOOK,
+    owner: "lunco-physics",
+    description: "Decide whether an authored rigid-body pose is admissible.",
+    signature: [facts: Map],
+    output: String,
+    deterministic: true,
+    required: false,
+    installable: true,
+}
 
 /// Authored policy selected before a dynamic body crosses the physics admission
 /// boundary.
 ///
 /// This is deliberately an initialization policy, not a grounding mode. The
 /// default policy validates the composed USD pose and accepts it unchanged. A
-/// Twin may name a custom policy and provide the corresponding deterministic
-/// `LunCoPolicy` hook. The engine never silently changes a policy name or falls
-/// back to a terrain placement algorithm.
+/// Twin may select a named policy and provide the declared deterministic
+/// `physics.initialization` hook. Rhai interprets the selected name; Rust never
+/// turns it into a dynamic hook id or falls back to terrain placement.
 #[derive(Component, Debug, Clone, Reflect, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct PhysicsInitializationPolicy(pub String);
@@ -133,11 +144,6 @@ impl PhysicsInitializationPolicy {
     /// Whether this is the built-in strict authored-pose policy.
     pub fn is_strict_authored(&self) -> bool {
         self.0 == STRICT_AUTHORED_INITIALIZATION_POLICY
-    }
-
-    /// Hook id used for an explicit custom policy.
-    pub fn hook_id(&self) -> String {
-        format!("{PHYSICS_INITIALIZATION_HOOK_PREFIX}{}", self.0)
     }
 }
 
@@ -167,6 +173,63 @@ pub struct PhysicsInitializationSubject(pub String);
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicsInitializationExternalValidator(pub bool);
 
+/// Construct the lifecycle context for a physics initialization decision.
+///
+/// An active transition owns projected bodies until its completion edge; once
+/// no transition is active, the latest committed scene owns new admission.
+/// Missing generation is an error so a custom policy cannot run with an
+/// invented Twin identity.
+pub fn physics_initialization_context(
+    coordinator: Option<&lunco_core::SceneTransitionCoordinator>,
+) -> Result<lunco_core::RuntimeExecutionContext, String> {
+    let generation = coordinator
+        .and_then(lunco_core::SceneTransitionCoordinator::lifecycle_generation)
+        .ok_or_else(|| {
+            "physics initialization policy requires an active or committed scene generation"
+                .to_string()
+        })?;
+    Ok(lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::twin(
+            lunco_core::RuntimeCycle::Lifecycle,
+            generation,
+        )),
+        phase: lunco_core::RuntimePhase::Preparation,
+        clock: lunco_core::RuntimeClock::None,
+        time_seconds: None,
+        delta_seconds: None,
+        sequence: None,
+        producer: None,
+    })
+}
+
+/// Stable facts shared by both physics initialization paths. ECS entity ids
+/// are process-local handles, not replay-stable identity, so they do not cross
+/// the hook boundary.
+pub fn physics_initialization_facts(
+    policy: &PhysicsInitializationPolicy,
+    subject: &str,
+    position: DVec3,
+    assembly_member_count: usize,
+) -> lunco_hooks::HookValue {
+    lunco_hooks::HookValue::map([
+        ("subject", lunco_hooks::HookValue::str(subject)),
+        ("policy", lunco_hooks::HookValue::str(policy.0.clone())),
+        (
+            "position",
+            lunco_hooks::HookValue::Array(
+                [position.x, position.y, position.z]
+                    .into_iter()
+                    .map(lunco_hooks::HookValue::Float)
+                    .collect(),
+            ),
+        ),
+        (
+            "assembly_member_count",
+            lunco_hooks::HookValue::UInt(assembly_member_count as u64),
+        ),
+    ])
+}
+
 /// Evaluate a named initialization policy without giving it a pose mutation
 /// capability. Built-in strict-authored is handled by the engine; custom
 /// policies are deterministic hook decisions and must return exactly
@@ -174,11 +237,34 @@ pub struct PhysicsInitializationExternalValidator(pub bool);
 pub fn evaluate_initialization_policy(
     policy: &PhysicsInitializationPolicy,
     facts: lunco_hooks::HookValue,
+    context: Result<lunco_core::RuntimeExecutionContext, String>,
 ) -> Result<(), String> {
     if policy.is_strict_authored() {
         return Ok(());
     }
-    let hook_id = policy.hook_id();
+    let context = context?;
+    let hook_id = PHYSICS_INITIALIZATION_POLICY_HOOK;
+    let Some(route) = context.route else {
+        return Err(
+            "physics initialization policy requires a classified Twin lifecycle preparation context"
+                .to_string(),
+        );
+    };
+    if route.scope != lunco_core::RuntimeScope::Twin
+        || route.cycle != lunco_core::RuntimeCycle::Lifecycle
+        || route.generation == 0
+        || context.phase != lunco_core::RuntimePhase::Preparation
+        || context.clock != lunco_core::RuntimeClock::None
+        || context.time_seconds.is_some()
+        || context.delta_seconds.is_some()
+        || context.sequence.is_some()
+        || context.producer.is_some()
+    {
+        return Err(
+            "physics initialization policy requires a classified Twin lifecycle preparation context"
+                .to_string(),
+        );
+    }
     let Some(hook) = lunco_hooks::get(&hook_id) else {
         return Err(format!(
             "initialization policy `{}` is selected but hook `{hook_id}` is not registered",
@@ -191,7 +277,7 @@ pub fn evaluate_initialization_policy(
             policy.0
         ));
     }
-    let decision = match lunco_hooks::invoke(&hook_id, &[facts]) {
+    let decision = match lunco_hooks::invoke_with_context(hook_id, &[facts], context) {
         None => {
             return Err(format!(
                 "initialization policy `{}` became unavailable before invocation",
@@ -349,10 +435,10 @@ mod tests {
     }
 
     #[test]
-    fn custom_initialization_policy_is_an_explicit_hook_name() {
+    fn custom_initialization_policy_is_a_named_selector() {
         let policy = PhysicsInitializationPolicy::new("lander-contact").unwrap();
         assert!(!policy.is_strict_authored());
-        assert_eq!(policy.hook_id(), "physics.initialization.lander-contact");
+        assert_eq!(policy.0, "lander-contact");
     }
 
     #[test]

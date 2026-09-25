@@ -135,6 +135,9 @@ impl Plugin for ModelicaCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<lunco_modelica_library::worker_bridge::ModelicaWorkerBridge>();
         build_modelica_core(app);
+        if !app.is_plugin_added::<lunco_modelica_source_roots::ModelicaSourceRootsPlugin>() {
+            app.add_plugins(lunco_modelica_source_roots::ModelicaSourceRootsPlugin);
+        }
         // Runtime model-input control is a core command, not a UI command.
         // Register it here so headless and workbench hosts expose the same
         // reflected command contract.

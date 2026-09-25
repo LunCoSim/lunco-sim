@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 bevy = { workspace = true }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
+lunco-runtime-context = { path = "../lunco-runtime-context" }
 serde = { workspace = true }
 lunco-command-macro = { path = "../lunco-command-macro" }
 # ID generation is owned by the platform-neutral ID substrate rather than the

@@ -16,16 +16,15 @@ use lunco_cosim_core::SimConnection;
 use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_avian_contracts::ScenePhysicsOwned;
 use lunco_usd_bevy_scene::{
-    FailedSceneLoad, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending,
-    UsdSceneProjectionQueued, UsdSceneRoot,
+    FailedSceneLoad, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjectionQueued, UsdSceneRoot,
 };
 use lunco_usd_bevy_stage::{
     UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
 };
 
 /// Scene transition transaction: set when a scene load is dispatched, cleared
-/// once the stage's awaiting, queued-projection, and pending-mesh visual phases
-/// have all drained.
+/// once the stage and its queued structural projections have drained. Async
+/// mesh construction and other presentation work continue independently.
 #[derive(Resource)]
 pub struct SceneLoadInFlight {
     /// Identity of the lifecycle transaction that owns this asynchronous load.
@@ -106,7 +105,6 @@ fn record_scene_load_terminal_outcome(
     coordinator: Res<SceneTransitionCoordinator>,
     q_awaiting: Query<&UsdPrimPath, With<UsdSceneAwaitingStage>>,
     q_projecting: Query<&UsdPrimPath, With<UsdSceneProjectionQueued>>,
-    q_pending_meshes: Query<&UsdPrimPath, With<UsdSceneGeometryPending>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
     mut pending: ResMut<PendingSceneStageOutcome>,
     mut commands: Commands,
@@ -191,10 +189,7 @@ fn record_scene_load_terminal_outcome(
     let still_projecting = q_projecting
         .iter()
         .any(|prim| prim.stage_handle.id() == g.stage_id);
-    let still_pending_meshes = q_pending_meshes
-        .iter()
-        .any(|prim| prim.stage_handle.id() == g.stage_id);
-    if still_awaiting || still_projecting || still_pending_meshes {
+    if still_awaiting || still_projecting {
         return;
     }
 
@@ -522,12 +517,13 @@ pub(crate) fn has_admitted_scene_transition(coordinator: Res<SceneTransitionCoor
 pub(crate) fn on_scene_transition_completed(
     trigger: On<SceneTransitionCompleted>,
     mut coordinator: ResMut<SceneTransitionCoordinator>,
+    mut commands: Commands,
 ) {
-    if !coordinator.finish(trigger.event().id) {
-        warn!(
-            "[scene] ignoring stale completed transition {}",
-            trigger.event().id.get()
-        );
+    let id = trigger.event().id;
+    if coordinator.complete(id) {
+        commands.trigger(lunco_core::SceneTransitionCommitted { id });
+    } else {
+        warn!("[scene] ignoring stale completed transition {}", id.get());
     }
 }
 
@@ -535,7 +531,7 @@ pub(crate) fn on_scene_transition_failed(
     trigger: On<SceneTransitionFailed>,
     mut coordinator: ResMut<SceneTransitionCoordinator>,
 ) {
-    if !coordinator.finish(trigger.event().id) {
+    if !coordinator.fail(trigger.event().id) {
         warn!(
             "[scene] ignoring stale failed transition {}",
             trigger.event().id.get()
@@ -965,6 +961,7 @@ mod tests {
         SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted,
         SceneTransitionCompleted, SceneTransitionCoordinator, SceneTransitionRequest,
     };
+    use lunco_usd_bevy_scene::UsdSceneGeometryPending;
 
     #[derive(Resource, Default)]
     struct CompletedTransitions(Vec<SceneTransition>);
@@ -1023,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_stage_outcome_waits_for_bounded_visual_projection() {
+    fn loaded_stage_outcome_finishes_structural_projection_while_mesh_streams() {
         let transition = SceneTransition::load("scene.usda", "/World");
         let stage_id = Handle::<UsdStageAsset>::default().id();
         let mut app = App::new();
@@ -1095,17 +1092,16 @@ mod tests {
             .entity_mut(awaiting)
             .remove::<UsdSceneProjectionQueued>();
         app.update();
-        assert!(app.world().contains_resource::<SceneLoadInFlight>());
-        assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
-
-        app.world_mut()
-            .entity_mut(pending_mesh)
-            .remove::<UsdSceneGeometryPending>();
-        app.update();
         assert!(!app.world().contains_resource::<SceneLoadInFlight>());
         assert_eq!(
             app.world().resource::<CompletedTransitions>().0,
             vec![transition]
+        );
+        assert!(
+            app.world()
+                .entity(pending_mesh)
+                .contains::<UsdSceneGeometryPending>(),
+            "presentation mesh work remains pending after authoritative scene admission"
         );
     }
 

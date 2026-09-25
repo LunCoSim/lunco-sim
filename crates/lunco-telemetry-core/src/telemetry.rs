@@ -69,6 +69,7 @@ pub enum Severity {
 pub enum TelemetryValue {
     F64(f64),
     I64(i64),
+    U64(u64),
     Bool(bool),
     String(String),
     Array(Vec<TelemetryValue>),

@@ -24,6 +24,7 @@ lunco-modelica-core = { path = "../lunco-modelica-core", default-features = fals
 lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-modelica-source-roots = { path = "../lunco-modelica-source-roots" }
 lunco-usd-actuation = { path = "../lunco-usd-actuation" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }

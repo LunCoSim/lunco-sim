@@ -511,8 +511,12 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Compile a document: rumoca front-end → DAE → simulator setup. Idempotent —
  an already-compiled, unmodified model skips the worker dispatch unless
- `force`. Never changes `paused`; type/parse/DAE errors land in
- `WorkbenchState.compilation_error` and surface in the Diagnostics panel.
+ `force`. A dispatched compile leaves the model paused/ready unless the request
+ carries explicit Run intent. Compile and source diagnostics use the shared
+ `DocumentDiagnostics` state and the workbench diagnostics panel.
+The UI adapter resolves the selected class and publishes typed
+`CompileRequested` intent; `ModelicaExecutionPlugin` dispatches the current
+document snapshot to the worker without UI resources.
 
 - *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
@@ -1087,11 +1091,12 @@ actually call, with the fields the deserializer actually accepts. See the
  Run a rhai snippet against the live world — the scripting escape hatch when
  no typed command covers what you need.
 
- The result arrives on the next `Update`: rhai needs full `World` access,
- which an observer cannot hold, so the handler enqueues the snippet and the
- exclusive `drain_world_scripts` system runs it before answering the
- deferred API request with the real stdout. `Update` is intentional because
- kinematic celestial warp freezes `FixedUpdate`.
+ The result arrives through the bounded FIFO `Repl` cycle: Rhai needs full
+ `World` access, which an observer cannot hold, so the handler enqueues the
+ snippet and the exclusive `drain_world_scripts` system evaluates at most one
+ request per `Update`. The 64-entry queue rejects overload, and each
+ invocation is limited to 100,000 Rhai operations. `Update` is intentional
+ because kinematic celestial warp freezes `FixedUpdate`.
 
 - *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 

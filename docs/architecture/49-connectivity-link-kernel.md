@@ -181,6 +181,17 @@ A pure boolean over precomputed geometry — no loops, no queries — so a rhai 
 Luau policy stays trivial. With no hook registered, the builtin rule applies
 (range ∧ elevation masks ∧ ¬occluded ∧ ¬terrain_blocked ∧ ¬occluder_blocked).
 
+The owner invokes this seam with an explicit simulation context. While a scene is
+being admitted, the route is its active generation and the phase is `Preparation`,
+with no elapsed clock. After commit, the route is the committed Twin generation and
+the phase is `Behavior`, stamped with the latest completed `SimTick` and `WorldTime`;
+there is no delta because the link sweep runs in `Update` and may follow zero or many
+fixed steps. A host with no mounted scene uses a core simulation route. The authored
+policy accepts only those owner phases. An installed policy fault or malformed return
+rejects that pair and emits a warning; only an absent optional hook selects the builtin
+verdict. The production `comms_demo` Rhai test checks both off-cycle rejection from
+scenario startup and the live multi-hop route.
+
 This is why occlusion in Rust does **not** make the feature un-scriptable: the kernel
 computes the `terrain_blocked` / `occluder_blocked` *facts*; the script decides what they
 *mean*.

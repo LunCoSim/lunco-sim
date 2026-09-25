@@ -8,13 +8,16 @@
   each with its inverse, undo/redo, cross-peer merge, `to_bytes` persistence, and **document-level**
   replay (journal → document → scene projection).
 - **NOT built — US3 (Deterministic Replay):** there is **no Input Log**. `#[Command]`s are not
-  journaled: `api_command_dispatcher` (`lunco-api::executor`, the single funnel for every HTTP / MCP /
-  rhai / UI command) performs zero journal interaction, and there is no `DomainKind::Command`. So
-  `SpawnEntity`, `AcquireControl`, `DriveRover`, `SetPorts`, terrain spawn/overlay and all time control
-  are neither recorded nor replayable, and entries carry no sim-tick/seed. **Replaying a session is
-  impossible today**; reopening a twin restores *document* state only. See
-  [`docs/architecture/command-journal.md`](../../docs/architecture/command-journal.md) for the design
-  and the four prerequisites.
+  journaled. HTTP, MCP, and Rhai transport calls use `api_command_dispatcher`, but UI and subsystem
+  code can also trigger registered typed command events directly. The generated `CommandOccurred`
+  projection carries only the command type name; it has no parameters, target, origin, scene generation,
+  tick, or sequence. The existing bounded per-vessel `InputFrame` log retains all latched `SetPorts`
+  setpoints for opt-in owned-body prediction rollback; it is not a persistent whole-session input log. Therefore
+  runtime actions such as `SpawnEntity`, `AcquireControl`, `DriveRover`, `SetPorts`, terrain spawn, and
+  time control cannot be reconstructed as a session from the current Twin journal. Reopening a Twin
+  restores *document* state only. See
+  [`docs/architecture/command-journal.md`](../../docs/architecture/command-journal.md) for the separate
+  authored-document and session-input lifecycles.
 - **NOT built — US1/US2/US4/US5:** no ECS `WorldSnapshot`, no `PeriodicSave`, no MCAP/ROSbag export or
   playback.
 **Input**: Unified ECS State Persistence, check-pointing, deterministic replay, MCAP streaming, and replaying missions.

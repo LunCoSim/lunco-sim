@@ -24,6 +24,229 @@ pub fn on_remove_modelica(
     );
 }
 
+/// Admit first-compile intent from the application lifecycle cycle.
+///
+/// Compilation can take place while scene admission holds `Time<Virtual>`, so
+/// compile intent cannot depend on a fixed simulation tick. Solver steps remain
+/// in [`spawn_modelica_requests`] and are admitted only after the simulation
+/// clock resumes.
+pub fn request_modelica_compiles(
+    mut compile_requests: MessageWriter<CompileRequested>,
+    models: Query<(Entity, &ModelicaModel, Option<&lunco_core::GlobalEntityId>)>,
+) {
+    let mut models: Vec<_> = models.iter().collect();
+    models.sort_unstable_by_key(|(entity, _, global_id)| {
+        (
+            global_id.map(lunco_core::GlobalEntityId::get),
+            entity.to_bits(),
+        )
+    });
+
+    for (entity, model, _) in models {
+        if model.paused
+            || model.is_compiled
+            || model.is_compiling
+            || model.is_stepping
+            || model.document.is_unassigned()
+            || model.validated_communication_period_secs().is_err()
+        {
+            continue;
+        }
+
+        compile_requests.write(CompileRequested {
+            doc: model.document,
+            entity: Some(entity),
+            class: if model.model_name.is_empty() {
+                None
+            } else {
+                Some(model.model_name.clone())
+            },
+            force: false,
+            // This request is emitted only for an unpaused model. Preserve that
+            // run intent while compilation temporarily pauses stepping.
+            resume_after_compile: true,
+        });
+    }
+}
+
+/// Hold the causal simulation while an active Modelica participant is not
+/// compiled for its current session.
+///
+/// Runs in the lifecycle cycle before the time spine. The worker compile path
+/// remains live while `Time<Virtual>` is held; a successful compile result is
+/// committed in `Update`, and this system releases the exact participant hold
+/// on the next lifecycle pass. Intentionally paused models and models outside
+/// the shared causal closure do not gate world time.
+pub fn reconcile_modelica_preparation_progress(
+    models: Query<(Entity, &ModelicaModel, Option<&lunco_core::GlobalEntityId>)>,
+    mut removed_models: RemovedComponents<ModelicaModel>,
+    participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
+    progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
+) {
+    let Some(mut progress) = progress else {
+        return;
+    };
+    let mut models: Vec<_> = models.iter().collect();
+    models.sort_unstable_by_key(|(entity, _, global_id)| {
+        (
+            global_id.map(lunco_core::GlobalEntityId::get),
+            entity.to_bits(),
+        )
+    });
+
+    for (entity, model, _) in models {
+        let key = lunco_core_runtime::SimulationProgressKey::modelica_participant(entity);
+        let causal_participant = participants.as_deref().is_some_and(|participants| {
+            participants.modelica_entities.contains(&entity)
+                && participants.requires_barrier(entity)
+        });
+        let run_requested = !model.paused || model.resume_after_compile;
+        let preparation_pending = !model.is_compiled || model.is_compiling;
+
+        if causal_participant && run_requested && preparation_pending {
+            progress.acquire(
+                key,
+                format!("Preparing Modelica participant `{}`", model.model_name),
+            );
+        } else {
+            progress.release(key);
+        }
+    }
+
+    for entity in removed_models.read() {
+        progress.release(lunco_core_runtime::SimulationProgressKey::modelica_participant(entity));
+    }
+}
+
+#[cfg(test)]
+mod compile_admission_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Resource, Default)]
+    struct CapturedCompileRequests(Vec<CompileRequested>);
+
+    fn capture_compile_requests(
+        mut requests: MessageReader<CompileRequested>,
+        mut captured: ResMut<CapturedCompileRequests>,
+    ) {
+        captured.0.extend(requests.read().cloned());
+    }
+
+    #[test]
+    fn compile_intent_is_admitted_while_virtual_time_is_paused() {
+        let mut app = App::new();
+        app.add_message::<CompileRequested>()
+            .init_resource::<CapturedCompileRequests>()
+            .init_resource::<Time<Virtual>>()
+            .add_systems(
+                Update,
+                (request_modelica_compiles, capture_compile_requests).chain(),
+            );
+
+        let mut model = ModelicaModel::default();
+        model.document = lunco_doc::DocumentId::new(7);
+        model.model_name = "RoverPlant".to_owned();
+        let entity = app.world_mut().spawn(model).id();
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+
+        app.world_mut().run_schedule(Update);
+
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        let requests = &app.world().resource::<CapturedCompileRequests>().0;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].doc, lunco_doc::DocumentId::new(7));
+        assert_eq!(requests[0].entity, Some(entity));
+        assert_eq!(requests[0].class.as_deref(), Some("RoverPlant"));
+        assert!(requests[0].resume_after_compile);
+    }
+
+    #[test]
+    fn modelica_step_inputs_use_stable_name_order() {
+        let inputs = HashMap::from([
+            ("throttle".to_owned(), 0.75),
+            ("altitude".to_owned(), 12.0),
+            ("temperature".to_owned(), 280.0),
+        ]);
+
+        assert_eq!(
+            ordered_modelica_inputs(&inputs),
+            vec![
+                ("altitude".to_owned(), 12.0),
+                ("temperature".to_owned(), 280.0),
+                ("throttle".to_owned(), 0.75),
+            ]
+        );
+    }
+
+    #[test]
+    fn modelica_preparation_holds_only_active_causal_participants() {
+        use lunco_core_runtime::{SimulationProgress, SimulationProgressOwner};
+
+        let mut app = App::new();
+        app.init_resource::<SimulationProgress>()
+            .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+            .add_systems(PreUpdate, reconcile_modelica_preparation_progress);
+
+        let active = app
+            .world_mut()
+            .spawn(ModelicaModel {
+                model_name: "ActivePlant".to_owned(),
+                paused: false,
+                is_compiled: false,
+                ..Default::default()
+            })
+            .id();
+        let paused = app
+            .world_mut()
+            .spawn(ModelicaModel {
+                model_name: "PausedPlant".to_owned(),
+                paused: true,
+                is_compiled: false,
+                ..Default::default()
+            })
+            .id();
+        let unrelated = app
+            .world_mut()
+            .spawn(ModelicaModel {
+                model_name: "UnrelatedPlant".to_owned(),
+                paused: false,
+                is_compiled: false,
+                ..Default::default()
+            })
+            .id();
+
+        let mut participants = app
+            .world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>();
+        participants.replace([active, paused]);
+        participants.replace_modelica_entities([active, paused, unrelated]);
+        drop(participants);
+
+        app.world_mut().run_schedule(PreUpdate);
+
+        let progress = app.world().resource::<SimulationProgress>();
+        assert!(progress.is_held());
+        let blockers: Vec<_> = progress.blockers().collect();
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(
+            blockers[0].key,
+            lunco_core_runtime::SimulationProgressKey::modelica_participant(active)
+        );
+        assert_eq!(
+            blockers[0].key.owner,
+            SimulationProgressOwner::ModelicaPreparation
+        );
+
+        app.world_mut()
+            .get_mut::<ModelicaModel>(active)
+            .unwrap()
+            .is_compiled = true;
+        app.world_mut().run_schedule(PreUpdate);
+        assert!(!app.world().resource::<SimulationProgress>().is_held());
+    }
+}
+
 /// Decide this tick's macro step for one model.
 ///
 /// **The macro-step contract** (A3), factored out as a pure function so it is
@@ -58,6 +281,15 @@ pub(crate) fn plan_macro_step(target_time: f64, current_time: f64, in_flight: bo
     Some(deficit.min(MAX_MACRO_STEP_DT))
 }
 
+fn ordered_modelica_inputs(inputs: &HashMap<String, f64>) -> Vec<(String, f64)> {
+    let mut ordered = inputs
+        .iter()
+        .map(|(name, value)| (name.clone(), *value))
+        .collect::<Vec<_>>();
+    ordered.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    ordered
+}
+
 /// Sends `Step` commands for each active model — **the co-simulation master's
 /// macro-step dispatch**.
 ///
@@ -80,9 +312,6 @@ pub fn spawn_modelica_requests(
     participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
     coupling: Option<ResMut<lunco_core_runtime::SimulationBarrier>>,
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
-    // Auto-compile request goes out as a core event; the UI relays it to the
-    // `CompileModel` command. Core no longer references the UI command.
-    mut compile_requests: MessageWriter<CompileRequested>,
 ) {
     // The FIXED delta — constant (1/`FIXED_HZ`) by construction. `rate` bursts
     // show up as MORE fixed ticks, never as a longer one, so accumulating it
@@ -140,31 +369,10 @@ pub fn spawn_modelica_requests(
             continue;
         }
 
-        // First-step path: model has been unpaused (user pressed Run)
-        // but no Compile has succeeded yet — the worker has no stepper
-        // and a Step would just bounce back as "Click Compile first".
-        // Auto-trigger CompileModel instead. The observer flips
-        // `is_compiling`/`is_stepping` and bumps `session_id`, so the guard
-        // below stops us re-triggering on subsequent ticks; on a successful
-        // result the response handler sets `is_compiled = true` and unpauses.
+        // Compile intent is admitted in the application lifecycle cycle. This
+        // fixed-step path only waits for the prepared stepper; it never starts
+        // compilation as a side effect of consuming simulation time.
         if !model.is_compiled {
-            let doc = model.document;
-            let compile_in_flight = model.is_compiling || model.is_stepping;
-            if doc != lunco_doc::DocumentId::default() && !compile_in_flight {
-                compile_requests.write(CompileRequested {
-                    doc,
-                    class: if model.model_name.is_empty() {
-                        None
-                    } else {
-                        Some(model.model_name.clone())
-                    },
-                    force: false,
-                    // Compile-on-first-step: preserve whatever resume
-                    // intent the model already carries (this path never
-                    // arms a new one).
-                    resume_after_compile: false,
-                });
-            }
             // Don't ship a Step this tick either way — let the
             // compile flow run. The model isn't running yet, so its target
             // clock stays put (no phantom catch-up debt accrues while the
@@ -228,11 +436,7 @@ pub fn spawn_modelica_requests(
             continue;
         };
 
-        let inputs: Vec<(String, f64)> = model
-            .inputs
-            .iter()
-            .map(|(name, val)| (name.clone(), *val))
-            .collect();
+        let inputs = ordered_modelica_inputs(&model.inputs);
 
         let Some(next_step_id) = model.next_step_id.checked_add(1) else {
             let error = format!(
@@ -399,41 +603,6 @@ pub fn handle_modelica_responses(
             continue;
         }
 
-        // Pipe Modelica `experiment(...)` annotation values into the
-        // experiments runner's per-ModelRef cache so the Fast Run
-        // toolbar's bounds readout reflects the model rather than
-        // always falling back to 0..1. Runs once per successful
-        // Compile (is_new_model = true).
-        if result.is_new_model && result.error.is_none() {
-            if let (Some(runner), Some(name)) =
-                (runner_res.as_ref(), result.compiled_model_name.as_ref())
-            {
-                runner.0.set_model_defaults(
-                    lunco_experiments::ModelRef(name.clone()),
-                    lunco_modelica_runner::ModelDefaults {
-                        t_start: result.experiment_start_time,
-                        t_end: result.experiment_stop_time,
-                        tolerance: result.experiment_tolerance,
-                        interval: result.experiment_interval,
-                        // The live worker path carries `Interval` only; the
-                        // `NumberOfIntervals` count flows through the batch
-                        // experiments path (compile.rs ModelDefaults builder).
-                        number_of_intervals: None,
-                        // Resolve the annotation's solver name against the
-                        // REGISTRY once here. A name nobody registered falls to
-                        // `None` (= let the resolver pick from what the model
-                        // needs) rather than being carried as a free string that
-                        // some later layer parses differently.
-                        solver: result.experiment_solver.as_deref().and_then(|s| {
-                            lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
-                            let id = lunco_experiments::SolverId::from(s);
-                            lunco_experiments::solver::get(&id).map(|spec| spec.id)
-                        }),
-                    },
-                );
-            }
-        }
-
         if result.entity == Entity::PLACEHOLDER {
             let msg = "Simulation worker crashed and restarted.";
             warn!("{msg}");
@@ -477,6 +646,112 @@ pub fn handle_modelica_responses(
                 model.is_compiled = false;
                 model.last_error = Some(detail);
                 continue;
+            }
+
+            // A session fences worker commands, while the document generation
+            // fences the source snapshot that produced a compile artifact. A
+            // user can edit the document while Rumoca is compiling; accepting
+            // that older stepper would let a later FixedUpdate advance against
+            // equations that no longer match the authoritative document.
+            if result.is_new_model
+                && model.pending_generation != 0
+                && !model.document.is_unassigned()
+            {
+                let current_generation = documents
+                    .as_ref()
+                    .and_then(|registry| registry.host(model.document))
+                    .map(|host| host.document().generation_owned());
+                let Some(current_generation) = current_generation else {
+                    let detail = format!(
+                        "Modelica source document {} closed before compile session {} completed",
+                        model.document, model.session_id
+                    );
+                    warn!("[Modelica] {detail}");
+                    notices.write(ModelicaNotice {
+                        level: NoticeLevel::Error,
+                        text: detail.clone(),
+                    });
+                    if let Some(cs) = compile_states.as_mut() {
+                        cs.mark_finished(model.document, lunco_doc::CompileState::Error);
+                        cs.set_error_message(model.document, detail.clone());
+                    }
+                    let active = model.resume_after_compile
+                        || participants.as_deref().is_some_and(|participants| {
+                            participants.requires_barrier(result.entity)
+                        });
+                    if active {
+                        if let Some(faults) = faults.as_deref_mut() {
+                            faults.raise(
+                                "modelica-compile-source-closed",
+                                Some(result.entity),
+                                model.model_name.clone(),
+                                detail.clone(),
+                            );
+                        }
+                    }
+                    model.in_flight_step = None;
+                    model.is_stepping = false;
+                    model.is_compiling = false;
+                    model.is_compiled = false;
+                    model.paused = true;
+                    model.resume_after_compile = false;
+                    model.last_error = Some(detail);
+                    continue;
+                };
+                if current_generation != model.pending_generation {
+                    let active = model.resume_after_compile;
+                    let detail = format!(
+                        "discarded stale Modelica compile for `{}` (compiled generation {}, current generation {})",
+                        model.model_name, model.pending_generation, current_generation,
+                    );
+                    warn!("[Modelica] {detail}");
+                    notices.write(ModelicaNotice {
+                        level: NoticeLevel::Warn,
+                        text: detail,
+                    });
+                    if let Some(cs) = compile_states.as_mut() {
+                        cs.mark_finished(model.document, lunco_doc::CompileState::Idle);
+                        cs.clear_error(model.document);
+                    }
+                    model.in_flight_step = None;
+                    model.is_stepping = false;
+                    model.is_compiling = false;
+                    model.is_compiled = false;
+                    model.last_error = None;
+                    // Preserve the user's run intent. The lifecycle admission
+                    // pass will request the now-current revision; paused,
+                    // manually compiled models remain paused and await an
+                    // explicit compile request.
+                    model.paused = !active;
+                    continue;
+                }
+            }
+
+            // Pipe `experiment(...)` annotations into the runner only after
+            // both worker session and source revision have been validated.
+            if result.is_new_model && result.error.is_none() {
+                if let (Some(runner), Some(name)) =
+                    (runner_res.as_ref(), result.compiled_model_name.as_ref())
+                {
+                    runner.0.set_model_defaults(
+                        lunco_experiments::ModelRef(name.clone()),
+                        lunco_modelica_runner::ModelDefaults {
+                            t_start: result.experiment_start_time,
+                            t_end: result.experiment_stop_time,
+                            tolerance: result.experiment_tolerance,
+                            interval: result.experiment_interval,
+                            // The live worker path carries `Interval` only; the
+                            // `NumberOfIntervals` count flows through the batch
+                            // experiments path (compile.rs ModelDefaults builder).
+                            number_of_intervals: None,
+                            solver: result.experiment_solver.as_deref().and_then(|s| {
+                                lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
+                                let id = lunco_experiments::SolverId::from(s);
+                                lunco_experiments::solver::get(&id).map(|spec| spec.id)
+                            }),
+                        },
+                    );
+                }
             }
 
             // A plain result is a response to exactly one master-issued Step.
@@ -560,7 +835,7 @@ pub fn handle_modelica_responses(
             model.is_stepping = false;
             // Compile-shaped results (new model / parameter update /
             // reset) close out the corresponding `is_compiling` window
-            // the `CompileModel` observer opened. Step results don't
+            // the execution dispatcher opened for the worker operation. Step results don't
             // touch this flag — they were never compile-flagged.
             if result.is_new_model || result.is_parameter_update || result.is_reset {
                 model.is_compiling = false;
@@ -658,6 +933,21 @@ pub fn handle_modelica_responses(
                     };
                     cs.set_error(model.document, diags);
                 }
+                if result.is_new_model
+                    && model.resume_after_compile
+                    && participants
+                        .as_deref()
+                        .is_some_and(|participants| participants.requires_barrier(result.entity))
+                {
+                    if let Some(faults) = faults.as_deref_mut() {
+                        faults.raise(
+                            "modelica-compile-failed",
+                            Some(result.entity),
+                            model.model_name.clone(),
+                            err.clone(),
+                        );
+                    }
+                }
                 warn!("[Modelica] {err}");
                 // Classify for the console: compile-time errors are
                 // distinct from solver blowups during Step. Both are
@@ -738,8 +1028,7 @@ pub fn handle_modelica_responses(
                     model.paused = !model.resume_after_compile;
                     model.resume_after_compile = false;
                     // Worker has installed a stepper for this entity.
-                    // `spawn_modelica_requests` reads this to decide
-                    // whether to ship Step or trigger Compile-on-first-step.
+                    // `spawn_modelica_requests` now admits its next fixed step.
                     model.is_compiled = true;
                 } else {
                     model.is_compiled = false;
@@ -874,6 +1163,194 @@ pub fn handle_modelica_responses(
         {
             coupling.held = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod compile_fault_tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct CapturedCompileRequests(Vec<CompileRequested>);
+
+    fn capture_compile_requests(
+        mut requests: MessageReader<CompileRequested>,
+        mut captured: ResMut<CapturedCompileRequests>,
+    ) {
+        captured.0.extend(requests.read().cloned());
+    }
+
+    #[test]
+    fn active_causal_compile_failure_faults_before_progress_can_resume() {
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .init_resource::<SimSampleStream>()
+            .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+            .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .init_resource::<lunco_core::RuntimeFaults>()
+            .add_systems(Update, handle_modelica_responses);
+
+        let (tx_result, rx_result) = crossbeam_channel::unbounded();
+        let (tx_command, _rx_command) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels {
+            tx: tx_command,
+            rx: rx_result,
+        });
+
+        let entity = app
+            .world_mut()
+            .spawn(ModelicaModel {
+                model_name: "ActivePlant".to_owned(),
+                session_id: 4,
+                is_compiling: true,
+                resume_after_compile: true,
+                ..Default::default()
+            })
+            .id();
+        let mut participants = app
+            .world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>();
+        participants.replace([entity]);
+        participants.replace_modelica_entities([entity]);
+        drop(participants);
+
+        tx_result
+            .send(ModelicaResult {
+                entity,
+                session_id: 4,
+                is_new_model: true,
+                error: Some("authored equation did not compile".to_owned()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        app.world_mut().run_schedule(Update);
+
+        let fault = app
+            .world()
+            .resource::<lunco_core::RuntimeFaults>()
+            .first
+            .as_ref()
+            .expect("active causal compile failure is terminal");
+        assert_eq!(fault.kind, "modelica-compile-failed");
+        assert_eq!(fault.entity, Some(entity));
+        let model = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert!(model.paused);
+        assert!(!model.is_compiled);
+        assert!(!model.resume_after_compile);
+    }
+
+    #[test]
+    fn stale_compile_result_keeps_active_model_held_for_current_revision() {
+        use lunco_doc::Document;
+        use lunco_doc_bevy::DocumentRegistry;
+        use lunco_modelica_document::{ModelicaDocument, ModelicaOp};
+
+        let source = "model ActivePlant\n  Real position;\nequation\n  der(position) = 1;\nend ActivePlant;\n";
+        let mut documents = DocumentRegistry::<ModelicaDocument>::default();
+        let doc = documents.allocate(
+            source.to_owned(),
+            lunco_doc::PathlessOrigin::untitled("ActivePlant"),
+        );
+        let host = documents.host_mut(doc).unwrap();
+        host.document_mut().refresh_ast_now();
+        let compile_generation = host.document().generation_owned();
+        host.document_mut()
+            .apply(ModelicaOp::ReplaceSource {
+                new: source.replace("1;", "2;"),
+            })
+            .unwrap();
+        let current_generation = host.document().generation_owned();
+        assert!(current_generation > compile_generation);
+
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .add_message::<CompileRequested>()
+            .init_resource::<SimSampleStream>()
+            .init_resource::<lunco_doc_bevy::DocumentDiagnostics>()
+            .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+            .init_resource::<lunco_core_runtime::SimulationBarrier>()
+            .init_resource::<lunco_core_runtime::SimulationProgress>()
+            .init_resource::<lunco_core::RuntimeFaults>()
+            .init_resource::<CapturedCompileRequests>()
+            .insert_resource(documents);
+
+        let (tx_result, rx_result) = crossbeam_channel::unbounded();
+        let (tx_command, rx_command) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels {
+            tx: tx_command,
+            rx: rx_result,
+        });
+
+        let entity = app
+            .world_mut()
+            .spawn(ModelicaModel {
+                model_name: "ActivePlant".to_owned(),
+                document: doc,
+                session_id: 4,
+                pending_generation: compile_generation,
+                is_compiling: true,
+                resume_after_compile: true,
+                ..Default::default()
+            })
+            .id();
+        let mut participants = app
+            .world_mut()
+            .resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>();
+        participants.replace([entity]);
+        participants.replace_modelica_entities([entity]);
+        drop(participants);
+        app.world_mut()
+            .resource_mut::<lunco_doc_bevy::DocumentRegistry<ModelicaDocument>>()
+            .link(entity, doc)
+            .unwrap();
+
+        tx_result
+            .send(ModelicaResult {
+                entity,
+                session_id: 4,
+                is_new_model: true,
+                ..Default::default()
+            })
+            .unwrap();
+
+        app.add_systems(
+            Update,
+            (
+                handle_modelica_responses,
+                request_modelica_compiles,
+                capture_compile_requests,
+            )
+                .chain(),
+        );
+        app.add_systems(PreUpdate, reconcile_modelica_preparation_progress);
+        app.world_mut().run_schedule(Update);
+        app.world_mut().run_schedule(PreUpdate);
+
+        let model = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert!(!model.paused);
+        assert!(!model.is_compiled);
+        assert!(!model.is_compiling);
+        assert!(model.resume_after_compile);
+        assert_eq!(model.pending_generation, compile_generation);
+        assert_eq!(
+            app.world()
+                .resource::<lunco_doc_bevy::DocumentDiagnostics>()
+                .state_of(doc),
+            lunco_doc::CompileState::Idle
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_core_runtime::SimulationProgress>()
+                .is_held()
+        );
+
+        let requests = &app.world().resource::<CapturedCompileRequests>().0;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].doc, doc);
+        assert_eq!(requests[0].entity, Some(entity));
+        assert!(requests[0].resume_after_compile);
+        assert!(rx_command.try_recv().is_err());
     }
 }
 

@@ -67,6 +67,7 @@ impl Serialize for NaturalTelemetryValue<'_> {
         match self.0 {
             TelemetryValue::F64(value) => serializer.serialize_f64(*value),
             TelemetryValue::I64(value) => serializer.serialize_i64(*value),
+            TelemetryValue::U64(value) => serializer.serialize_u64(*value),
             TelemetryValue::Bool(value) => serializer.serialize_bool(*value),
             TelemetryValue::String(value) => serializer.serialize_str(value),
             TelemetryValue::Array(values) => {
@@ -115,9 +116,7 @@ impl<'de> Visitor<'de> for NaturalTelemetryValueVisitor {
     where
         E: de::Error,
     {
-        i64::try_from(value)
-            .map(TelemetryValue::I64)
-            .map_err(|_| E::custom("unsigned parameter exceeds i64 range"))
+        Ok(TelemetryValue::U64(value))
     }
 
     fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
@@ -597,6 +596,21 @@ pub struct ScriptedModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(feature = "rhai", feature = "python"))]
+    #[test]
+    fn scenario_parameters_round_trip_unsigned_values_without_narrowing() {
+        let parameters: ScenarioParameters =
+            serde_json::from_str(r#"{"document_id":18446744073709551615}"#).unwrap();
+        assert_eq!(
+            parameters.as_map().get("document_id"),
+            Some(&TelemetryValue::U64(u64::MAX))
+        );
+        assert_eq!(
+            serde_json::to_string(&parameters).unwrap(),
+            r#"{"document_id":18446744073709551615}"#
+        );
+    }
 
     #[test]
     fn untitled_script_is_editable() {

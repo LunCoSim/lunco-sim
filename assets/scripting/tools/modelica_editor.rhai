@@ -10,7 +10,7 @@ fn _error(stage, message) {
 }
 
 fn _doc_required(doc, operation) {
-    if doc == () || doc == 0 {
+    if doc == () || doc.to_string() == "0" {
         return _error(operation, "an explicit Modelica document id is required");
     }
     #{ ok: true }
@@ -25,7 +25,7 @@ fn new_scratch(source, name) {
     }
     let created = cmd("CreateScratchModelicaDocument", #{ source: source, name: name });
     if created == () || created.ok != true || created.data == ()
-        || created.data.doc_id == () || created.data.doc_id <= 0 {
+        || created.data.doc_id == () || created.data.doc_id.to_string() == "0" {
         return _error("new_scratch", "Modelica Editor did not return the created document identity");
     }
     #{ ok: true, doc_id: created.data.doc_id, command: created }
@@ -139,7 +139,7 @@ fn _accept_experiment_ack(ticket, acknowledgement) {
 /// blocks the Editor/Rhai thread waiting for Rumoca's worker or frame drain.
 fn experiment_ticket(doc, class, source_generation, label,
     output_names, t_start, t_end, dt, poll_limit) {
-    if doc == () || doc == 0 || class == () || type_of(class) != "string"
+    if doc == () || doc.to_string() == "0" || class == () || type_of(class) != "string"
         || class == "" || source_generation == () || label == ()
         || type_of(label) != "string" || label == "" {
         return _error("experiment_ticket", "explicit document, class, source generation, and run label are required");

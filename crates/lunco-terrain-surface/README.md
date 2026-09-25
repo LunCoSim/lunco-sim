@@ -34,6 +34,12 @@ GUI compositions also install `TerrainSurfaceVisualizationPlugin` through
 `lunco-luncosim-presentation`. Headless servers and scene-test hosts omit it,
 so they do not schedule camera-driven LOD, visual-map baking, or terrain
 overlays. Terrain height queries and authored collider rings remain available.
+On visual hosts, terrain cover selection follows a 30 Hz wall-clock cadence;
+the immutable selection calculation uses shared bounded background admission,
+and its generation-fenced result is committed with tile residency each
+`Update`. Tile-mesh bakes retain their per-terrain worker queue. Offline capture
+lockstep computes selection synchronously every frame so visual output remains
+tied to the captured frame.
 
 ## Status
 

@@ -1566,6 +1566,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
     channels: Option<Res<ModelicaChannels>>,
+    mut source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
     mut notices: MessageWriter<lunco_modelica_runtime::ModelicaNotice>,
     // The solver-selection input only carries the authored prediction contract.
     // Solver capability and Modelica lowering remain owned by the worker's
@@ -1706,31 +1707,45 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let dispatch_error = channels
-            .tx
-            .send(ModelicaCommand::Compile {
-                entity,
-                session_id: pending.session_id,
-                model_name: model_name.clone(),
-                source: src.text.clone(),
-                // Stable per-asset session URI (its asset path) — keeps this
-                // model's overlay distinct in the worker session and consistent
-                // across recompiles. See `ModelicaCommand::Compile::doc_uri`.
-                doc_uri: pending.asset_path.to_string(),
-                extra_sources: Vec::new(),
-                parameter_overrides,
-                stream: None,
-                // Declared, never inferred. A program without the promise is
-                // authoritative live co-simulation, not client prediction.
-                realtime_safe: q_realtime_safe.contains(entity),
-            })
+        let root_admission = match source_roots.as_deref_mut() {
+            Some(source_roots) => lunco_modelica_source_roots::admit_compile_roots(
+                source_roots,
+                src.interface.required_source_roots.iter().cloned(),
+                &channels,
+            ),
+            None if src.interface.required_source_roots.is_empty() => Ok(()),
+            None => Err("Modelica source-root registry is not installed".to_owned()),
+        };
+        let dispatch_error = root_admission
             .err()
-            .map(|_| {
-                format!(
-                    "Modelica worker channel closed — `{}` was never compiled \
-                     and will never step",
-                    pending.asset_path
-                )
+            .map(|error| format!("could not admit Modelica source roots: {error}"))
+            .or_else(|| {
+                channels
+                    .tx
+                    .send(ModelicaCommand::Compile {
+                        entity,
+                        session_id: pending.session_id,
+                        model_name: model_name.clone(),
+                        source: src.text.clone(),
+                        // Stable per-asset session URI (its asset path) — keeps this
+                        // model's overlay distinct in the worker session and consistent
+                        // across recompiles. See `ModelicaCommand::Compile::doc_uri`.
+                        doc_uri: pending.asset_path.to_string(),
+                        extra_sources: Vec::new(),
+                        parameter_overrides,
+                        stream: None,
+                        // Declared, never inferred. A program without the promise is
+                        // authoritative live co-simulation, not client prediction.
+                        realtime_safe: q_realtime_safe.contains(entity),
+                    })
+                    .err()
+                    .map(|_| {
+                        format!(
+                            "Modelica worker channel closed — `{}` was never compiled \
+                             and will never step",
+                            pending.asset_path
+                        )
+                    })
             });
 
         component.parameters = parameters.clone();

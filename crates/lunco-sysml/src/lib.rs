@@ -7,13 +7,20 @@
 //! in [`lunco_sysml_ast`], keeping the expensive language implementation out
 //! of consumers that only need the document contract.
 
+mod analysis;
 mod api;
 mod document;
+mod document_analysis;
 mod source_asset;
 mod twin_source;
 
+pub use analysis::{
+    PrepareTwinSysmlAnalysis, TWIN_ANALYSIS_DEPENDENCY_OWNER, TwinSysmlAnalyses,
+    TwinSysmlAnalysisState,
+};
 pub use api::{ApplySysmlOps, SysmlApiOp, SysmlApiPlugin};
 pub use document::{SysmlDocument, SysmlOp};
+pub use document_analysis::{SysmlDocumentAnalyses, SysmlDocumentAnalysisState};
 pub use source_asset::{SysmlSource, SysmlSourceAssetPlugin, SysmlSourceLoader};
 pub use twin_source::{LoadTwinSysmlSource, PendingSysmlSources, SYSML_TWIN_SOURCE_LOAD_FAILED};
 
@@ -48,5 +55,7 @@ impl Plugin for SysmlPlugin {
             .add_observer(twin_source::sync_workspace_on_sysml_doc_changed)
             .add_observer(twin_source::sync_workspace_on_sysml_doc_saved);
         twin_source::register_twin_source_commands(app);
+        analysis::register(app);
+        document_analysis::register(app);
     }
 }

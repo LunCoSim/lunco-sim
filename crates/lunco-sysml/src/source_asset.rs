@@ -11,7 +11,7 @@ use bevy::prelude::*;
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct SysmlSource {
     /// UTF-8 source text.
-    pub text: String,
+    pub text: std::sync::Arc<str>,
 }
 
 /// Bevy loader for SysML source files.
@@ -32,7 +32,7 @@ impl AssetLoader for SysmlSourceLoader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         Ok(SysmlSource {
-            text: std::str::from_utf8(&bytes)?.to_owned(),
+            text: std::sync::Arc::from(std::str::from_utf8(&bytes)?),
         })
     }
 

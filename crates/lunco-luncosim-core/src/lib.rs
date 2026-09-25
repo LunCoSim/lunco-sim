@@ -90,7 +90,10 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
         .build()
 }
 
-/// Build a host-neutral Bevy application with an explicit compute-pool size.
+/// Build the host-neutral Bevy substrate with an optional pinned Compute pool.
+///
+/// `None` keeps Bevy's default task-pool allocation. `Some(n)` pins only the
+/// Compute pool to `n` threads; IO and AsyncCompute retain their Bevy defaults.
 ///
 /// Domain plugins and application services are layered by the production host;
 /// this function deliberately cannot install them because it has no dependency
@@ -99,30 +102,22 @@ pub fn build_core_app(compute_threads: Option<usize>) -> App {
     let mut app = App::new();
     lunco_assets_runtime::register_lunco_asset_sources(&mut app);
 
-    let compute = if let Some(threads) = compute_threads {
+    let task_pool_options = if let Some(threads) = compute_threads {
         assert!(threads > 0, "compute_threads must be positive");
-        bevy::app::TaskPoolThreadAssignmentPolicy {
-            min_threads: threads,
-            max_threads: threads,
-            percent: 1.0,
-            on_thread_spawn: None,
-            on_thread_destroy: None,
+        bevy::app::TaskPoolOptions {
+            compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                min_threads: threads,
+                max_threads: threads,
+                percent: 1.0,
+                on_thread_spawn: None,
+                on_thread_destroy: None,
+            },
+            ..default()
         }
     } else {
-        bevy::app::TaskPoolThreadAssignmentPolicy {
-            min_threads: 1,
-            max_threads: 4,
-            percent: 1.0,
-            on_thread_spawn: None,
-            on_thread_destroy: None,
-        }
+        bevy::app::TaskPoolOptions::default()
     };
-    let plugins = default_plugins().set(bevy::app::TaskPoolPlugin {
-        task_pool_options: bevy::app::TaskPoolOptions {
-            compute,
-            ..default()
-        },
-    });
+    let plugins = default_plugins().set(bevy::app::TaskPoolPlugin { task_pool_options });
     app.add_plugins(plugins);
     lunco_assets_runtime::register_lunco_asset_types(&mut app);
     app.add_plugins(log_dedup::LogDedupPlugin);

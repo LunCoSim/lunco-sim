@@ -5,6 +5,7 @@
 //! validation. The parent `lunco-scripting` package owns lifecycle, documents,
 //! commands, and world integration.
 
+mod compile;
 pub mod module_resolver;
 pub mod names;
 pub mod rhai_assembly;
@@ -14,3 +15,5 @@ pub mod rhai_math;
 pub mod task_tree;
 pub mod ui_bridge;
 pub mod values;
+
+pub use compile::compile_with_script_consts;

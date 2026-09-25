@@ -61,6 +61,7 @@ lunco-modelica-document = { path = "../lunco-modelica-document" }
 lunco-modelica-index = { path = "../lunco-modelica-index" }
 lunco-modelica-library = { path = "../lunco-modelica-library" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-modelica-source-roots = { path = "../lunco-modelica-source-roots" }
 rumoca-compile = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

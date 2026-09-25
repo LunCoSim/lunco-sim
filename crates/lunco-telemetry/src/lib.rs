@@ -23,12 +23,13 @@
 //!
 //! ## Rate is measured on the channel's own clock, NOT the wall clock
 //!
-//! Each channel keeps an accumulator against the time domain its entity is bound to
-//! ([`lunco_time::TimeBinding`] → [`lunco_time::domain_time`]; absent ⇒ the world
-//! domain). That one decision buys pause, warp, `TimeDomain::scale`, and `Playback`
-//! seek/loop **for free**, because those already live in the domain: a channel on a
-//! `scale = 100` domain samples 100× the sim-seconds per wall-second, and a paused sim
-//! samples nothing.
+//! Each channel keeps its next deadline against the time domain its entity is bound to
+//! (`TimeBinding`; absent ⇒ the deterministic mission simulation clock). A bound domain
+//! that is not resolved holds its samples until that exact domain becomes available.
+//! Channels share a deadline heap per clock, so each fixed pass visits only due channels.
+//! Pause, warp, `TimeDomain::scale`, and `Playback` seek/loop follow the selected clock:
+//! a channel on a `scale = 100` domain samples 100× the sim-seconds per wall-second, and
+//! a paused sim samples nothing.
 //!
 //! This is deliberately **not** bevy's `on_timer` run-condition. `on_timer` is
 //! wall-clock: it would keep firing while the sim is frozen and would ignore warp
@@ -60,9 +61,10 @@ use lunco_port_core::ports::{PortRegistry, ResolvedPort};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_signal::TelemetryDeadband;
 use lunco_telemetry_core::{ChannelSource, Parameter, SampledParameter, TelemetryValue};
-use lunco_time::{ResolvedDomains, TimeBinding, WorldTime, domain_time};
+use lunco_time::{ResolvedDomains, TimeBinding};
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 /// Persisted telemetry defaults. Stored under the `"telemetry"` key of
 /// `settings.json`.
@@ -391,7 +393,7 @@ fn spawn_engine_health_channels(
 }
 
 /// Per-channel sampling state. Added lazily by the sampler — never authored.
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug)]
 struct ChannelClock {
     /// Next due time, in the channel's domain seconds.
     next_due_t: f64,
@@ -405,19 +407,83 @@ struct ChannelClock {
     resolve_failed: bool,
 }
 
-/// The cached sampling plan: which entities carry a channel. Rebuilt only when
-/// the channel set changes (see [`mark_sampling_plan_dirty`]), NOT per tick —
-/// the per-tick pass walks this list and reads `Parameter`/`TimeBinding` in
-/// place, so the old full-snapshot clone of every `Parameter` (heap Strings)
-/// per fixed tick is gone.
+impl Default for ChannelClock {
+    fn default() -> Self {
+        Self {
+            next_due_t: f64::NEG_INFINITY,
+            last_emitted: None,
+            resolved: None,
+            resolve_failed: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SamplingClockKey {
+    Simulation,
+    Domain(Entity),
+}
+
+/// The deadline index stores only channels that may need sampling. `rank` is
+/// assigned from stable source identity and channel name when the plan rebuilds;
+/// entity bits break ties only for session-local declarations.
+#[derive(Debug, Clone, Copy)]
+struct ScheduledChannel {
+    next_due_t: f64,
+    rank: u64,
+    entity: Entity,
+}
+
+impl PartialEq for ScheduledChannel {
+    fn eq(&self, other: &Self) -> bool {
+        self.next_due_t.total_cmp(&other.next_due_t) == Ordering::Equal
+            && self.rank == other.rank
+            && self.entity.to_bits() == other.entity.to_bits()
+    }
+}
+
+impl Eq for ScheduledChannel {}
+
+impl PartialOrd for ScheduledChannel {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ScheduledChannel {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.next_due_t
+            .total_cmp(&other.next_due_t)
+            .then_with(|| self.rank.cmp(&other.rank))
+            .then_with(|| self.entity.to_bits().cmp(&other.entity.to_bits()))
+    }
+}
+
+/// The cached sampling plan. Channel ownership and per-clock deadline heaps
+/// rebuild on authoring changes; a steady fixed step checks each clock lane and
+/// visits only channels whose deadlines have arrived.
 #[derive(Resource, Default)]
 struct SamplingPlan {
-    /// Channel entities, in query order. May briefly contain despawned
-    /// entities (removal marks the plan dirty the same tick, and the sampler
-    /// skips dead entities), never miss live ones.
+    /// Unique active declarations in stable identity order.
     channels: Vec<Entity>,
-    /// Set by [`mark_sampling_plan_dirty`]; consumed by the sampler, which
-    /// rebuilds `channels` before the pass.
+    /// Rank for deterministic ties across independent clock lanes.
+    ranks: HashMap<Entity, u64>,
+    /// A clock lane owns a min-heap of each channel's next deadline.
+    due_by_clock: HashMap<SamplingClockKey, BinaryHeap<Reverse<ScheduledChannel>>>,
+    /// Stable lane iteration order, rebuilt with the deadline index.
+    clock_lanes: Vec<SamplingClockKey>,
+    /// Reused scratch storage for channels popped from the deadline heaps.
+    due_work: Vec<DueWork>,
+    /// Reused scratch storage for sampled channels' updated clock state.
+    clock_writes: Vec<(Entity, ChannelClock)>,
+    /// Last time observed for each lane, used to recognize a seek or loop-back
+    /// once even when several fixed steps run against the same frame snapshot.
+    last_times: HashMap<SamplingClockKey, f64>,
+    /// Missing or invalid clock reports are emitted once per bound domain and
+    /// cleared when the domain resolves again.
+    reported_unavailable_domains: HashSet<Entity>,
+    /// Set by [`mark_sampling_plan_dirty`]; consumed by the sampler to rebuild
+    /// declarations and deadline heaps.
     dirty: bool,
 }
 
@@ -456,23 +522,155 @@ fn discard_pending_samples_on_scene_transition(
 ///
 /// Every channel is an explicit recording declaration. Its `Parameter` owns
 /// rate, retention, metadata, and source policy.
-fn rebuild_sampling_plan(world: &mut World, plan: &mut SamplingPlan) -> usize {
-    let mut selected = std::collections::HashMap::<(Entity, String), Entity>::new();
-    let mut candidates = 0usize;
+fn sampling_identity_order(
+    world: &World,
+    channel: Entity,
+    measured: Entity,
+    name: &str,
+) -> (Option<u64>, String, Option<u64>, u64) {
+    (
+        world
+            .get::<lunco_core::GlobalEntityId>(measured)
+            .map(|identity| identity.get()),
+        name.to_owned(),
+        world
+            .get::<lunco_core::GlobalEntityId>(channel)
+            .map(|identity| identity.get()),
+        channel.to_bits(),
+    )
+}
+
+fn sampling_clock_key(world: &World, channel: Entity) -> SamplingClockKey {
+    world
+        .get::<TimeBinding>(channel)
+        .map(|binding| SamplingClockKey::Domain(binding.domain))
+        .unwrap_or(SamplingClockKey::Simulation)
+}
+
+fn sampling_clock_order(world: &World, key: SamplingClockKey) -> (u8, Option<u64>, u64) {
+    match key {
+        SamplingClockKey::Simulation => (0, None, 0),
+        SamplingClockKey::Domain(domain) => (
+            1,
+            world
+                .get::<lunco_core::GlobalEntityId>(domain)
+                .map(|identity| identity.get()),
+            domain.to_bits(),
+        ),
+    }
+}
+
+fn observe_clock_time(plan: &mut SamplingPlan, key: SamplingClockKey, now: f64) -> bool {
+    let rewound = plan
+        .last_times
+        .get(&key)
+        .is_some_and(|previous| now < *previous);
+    plan.last_times.insert(key, now);
+    rewound
+}
+
+fn rebuild_sampling_plan(world: &mut World, plan: &mut SamplingPlan, max_channels: usize) -> usize {
+    let mut candidates = Vec::new();
 
     for (entity, parameter) in world.query::<(Entity, &Parameter)>().iter(world) {
         if !parameter.enabled || parameter.name.is_empty() {
             continue;
         }
-        candidates += 1;
         let measured = parameter.target.unwrap_or(entity);
-        let key = (measured, parameter.name.clone());
-        selected.entry(key).or_insert(entity);
+        candidates.push((
+            entity,
+            measured,
+            parameter.name.clone(),
+            sampling_identity_order(world, entity, measured, &parameter.name),
+        ));
     }
 
-    plan.channels = selected.into_values().collect();
-    plan.channels.sort_by_key(|entity| entity.to_bits());
-    candidates.saturating_sub(plan.channels.len())
+    candidates.sort_unstable_by(|left, right| left.3.cmp(&right.3));
+    let mut identities = HashSet::new();
+    plan.channels.clear();
+    plan.ranks.clear();
+    for (entity, measured, name, _) in &candidates {
+        if identities.insert((*measured, name.clone())) {
+            let rank = plan.channels.len() as u64;
+            plan.channels.push(*entity);
+            plan.ranks.insert(*entity, rank);
+        }
+    }
+
+    plan.due_by_clock.clear();
+    for &entity in plan.channels.iter().take(max_channels) {
+        let next_due_t = world
+            .get::<ChannelClock>(entity)
+            .map(|clock| clock.next_due_t)
+            .unwrap_or(f64::NEG_INFINITY);
+        let scheduled = ScheduledChannel {
+            next_due_t,
+            rank: plan.ranks[&entity],
+            entity,
+        };
+        plan.due_by_clock
+            .entry(sampling_clock_key(world, entity))
+            .or_default()
+            .push(Reverse(scheduled));
+    }
+    plan.clock_lanes = plan.due_by_clock.keys().copied().collect();
+    plan.clock_lanes
+        .sort_unstable_by_key(|key| sampling_clock_order(world, *key));
+    plan.last_times
+        .retain(|clock, _| plan.due_by_clock.contains_key(clock));
+    plan.reported_unavailable_domains.retain(|domain| {
+        plan.due_by_clock
+            .contains_key(&SamplingClockKey::Domain(*domain))
+    });
+
+    candidates.len().saturating_sub(plan.channels.len())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DueWork {
+    clock: SamplingClockKey,
+    time: f64,
+    rewound: bool,
+    channel: ScheduledChannel,
+}
+
+fn pop_due_channels(
+    heap: &mut BinaryHeap<Reverse<ScheduledChannel>>,
+    clock: SamplingClockKey,
+    now: f64,
+    rewound: bool,
+    due: &mut Vec<DueWork>,
+) {
+    while heap
+        .peek()
+        .is_some_and(|Reverse(channel)| rewound || channel.next_due_t <= now)
+    {
+        if let Some(Reverse(channel)) = heap.pop() {
+            due.push(DueWork {
+                clock,
+                time: now,
+                rewound,
+                channel,
+            });
+        }
+    }
+}
+
+fn schedule_channel(
+    plan: &mut SamplingPlan,
+    clock: SamplingClockKey,
+    entity: Entity,
+    rank: u64,
+    next_due_t: f64,
+) {
+    plan.due_by_clock
+        .entry(clock)
+        .or_default()
+        .push(Reverse(ScheduledChannel {
+            next_due_t,
+            rank,
+            entity,
+        }));
 }
 
 /// Last metadata applied to a retained signal by a telemetry channel.
@@ -495,10 +693,19 @@ fn mark_sampling_plan_dirty(
     mut clocks: ParamSet<(
         Query<&mut ChannelClock, Changed<Parameter>>,
         Query<&mut ChannelClock, (With<Parameter>, Changed<TimeBinding>)>,
+        Query<&mut ChannelClock, With<Parameter>>,
     )>,
-    changed: Query<(), Or<(Changed<Parameter>, Changed<TimeBinding>)>>,
+    changed: Query<
+        (),
+        Or<(
+            Changed<Parameter>,
+            Changed<TimeBinding>,
+            Changed<lunco_core::GlobalEntityId>,
+        )>,
+    >,
     mut removed_params: RemovedComponents<Parameter>,
     mut removed_bindings: RemovedComponents<TimeBinding>,
+    settings: Res<TelemetrySettings>,
     mut plan: ResMut<SamplingPlan>,
 ) {
     // `ChannelClock` caches source resolution, the due time, and the last emitted
@@ -511,8 +718,19 @@ fn mark_sampling_plan_dirty(
         *clock = ChannelClock::default();
     }
 
-    let removed = removed_params.read().next().is_some() | removed_bindings.read().next().is_some();
-    if removed || !changed.is_empty() {
+    let removed_binding_entities = removed_bindings.read().collect::<Vec<_>>();
+    for entity in &removed_binding_entities {
+        if let Ok(mut clock) = clocks.p2().get_mut(*entity) {
+            *clock = ChannelClock::default();
+        }
+    }
+
+    let removed_parameter = removed_params.read().next().is_some();
+    if removed_parameter
+        || !removed_binding_entities.is_empty()
+        || !changed.is_empty()
+        || settings.is_changed()
+    {
         plan.dirty = true;
     }
 }
@@ -559,6 +777,7 @@ impl Plugin for LunCoTelemetryPlugin {
         app.insert_resource(SamplingPlan {
             channels: Vec::new(),
             dirty: true,
+            ..Default::default()
         })
         .init_resource::<SampleDeliveryQueue>();
         app.add_systems(
@@ -567,8 +786,8 @@ impl Plugin for LunCoTelemetryPlugin {
             // machine, a flood on an uncapped headless loop) and replay would diverge.
             FixedUpdate,
             (
-                // Change-driven plan maintenance — the sampler itself never scans
-                // the channel set; it walks the cached plan.
+                // Change-driven plan maintenance — each sampler pass checks the
+                // active clock lanes and pops only due declarations.
                 mark_sampling_plan_dirty,
                 // The sampler is EXCLUSIVE (`&mut World`) — it forces a sync point
                 // whenever it runs. Don't run it when there's nothing to sample,
@@ -753,7 +972,6 @@ fn sample_parameters(world: &mut World) {
     // Absolute epoch for wall-clock labelling; the per-channel domain gives the
     // precise timebase (see `SampledParameter::sim_secs`). Both come from the
     // unified mission-time spine installed above.
-    let world_time = *world.resource::<WorldTime>();
     let sim_tick = world.resource::<lunco_core_runtime::SimTick>().0;
     let mission_clock = *world.resource::<lunco_time::MissionClock>();
     let epoch_jd = mission_clock.epoch_jd(sim_tick);
@@ -764,17 +982,14 @@ fn sample_parameters(world: &mut World) {
         );
         return;
     }
-    // The sampling plan: which entities to visit. Rebuilt ONLY when the channel
-    // set changed (see `mark_sampling_plan_dirty`) — steady state pays a Vec
-    // walk, not a query + per-channel `Parameter` clone. The plan is taken OUT
-    // of the world for the pass (reinserted below) so the loop can borrow
-    // `&World` freely. The plugin owns this cache; a missing plan is an
-    // integration error rather than a reason to rescan under different semantics.
+    // The plan owns per-clock deadline heaps. Take it OUT for the pass so the
+    // sampler can read live ECS state without cloning declarations or scanning
+    // channels whose deadlines have not arrived.
     let mut plan = world
         .remove_resource::<SamplingPlan>()
         .expect("LunCoTelemetryPlugin requires its SamplingPlan resource");
     if plan.dirty {
-        let duplicate_count = rebuild_sampling_plan(world, &mut plan);
+        let duplicate_count = rebuild_sampling_plan(world, &mut plan, settings.max_channels);
         if duplicate_count > 0 {
             debug!(
                 duplicate_count,
@@ -785,9 +1000,8 @@ fn sample_parameters(world: &mut World) {
     }
 
     // The resolver runs once per frame in `Update`. Take the resource OUT for the
-    // pass instead of cloning its HashMap every fixed tick — the loop only reads
-    // it, and it is reinserted before any event fires. (The resolver rewrites it
-    // every frame anyway, so the remove/insert changes no change-detection story.)
+    // pass instead of cloning its HashMap every fixed tick; each bound lane reads
+    // one resolved clock sample and is reinserted before event delivery.
     let resolved_taken = world
         .remove_resource::<ResolvedDomains>()
         .expect("LunCoTelemetryPlugin requires lunco_time::ResolvedDomains");
@@ -809,12 +1023,79 @@ fn sample_parameters(world: &mut World) {
         );
     }
 
-    let mut clock_writes: Vec<(Entity, ChannelClock)> = Vec::new();
+    let mut due_work = std::mem::take(&mut plan.due_work);
+    due_work.clear();
+
+    for lane_index in 0..plan.clock_lanes.len() {
+        let key = plan.clock_lanes[lane_index];
+        let now = match key {
+            SamplingClockKey::Simulation => mission_clock.sim_secs(sim_tick),
+            SamplingClockKey::Domain(domain) => {
+                let Some(time) = resolved_domains.get(domain) else {
+                    if plan.reported_unavailable_domains.insert(domain) {
+                        let channel_name = plan
+                            .due_by_clock
+                            .get(&key)
+                            .and_then(|heap| heap.peek())
+                            .and_then(|Reverse(channel)| world.get::<Parameter>(channel.entity))
+                            .map(|parameter| parameter.name.as_str())
+                            .unwrap_or("<removed>");
+                        warn!(
+                            channel = channel_name,
+                            ?domain,
+                            "telemetry channel is bound to an unavailable time domain; its samples are held"
+                        );
+                    }
+                    continue;
+                };
+                plan.reported_unavailable_domains.remove(&domain);
+                time
+            }
+        };
+
+        if !now.is_finite() {
+            match key {
+                SamplingClockKey::Simulation => warn_once!(
+                    "telemetry: mission simulation time is non-finite; sampling is skipped until the clock is repaired"
+                ),
+                SamplingClockKey::Domain(domain) => {
+                    if plan.reported_unavailable_domains.insert(domain) {
+                        warn!(
+                            ?domain,
+                            "telemetry domain time is non-finite; bound samples are held"
+                        );
+                    }
+                }
+            }
+            continue;
+        }
+
+        let rewound = observe_clock_time(&mut plan, key, now);
+        if let Some(heap) = plan.due_by_clock.get_mut(&key) {
+            pop_due_channels(heap, key, now, rewound, &mut due_work);
+        }
+    }
+
+    due_work.sort_unstable_by(|left, right| {
+        left.channel.rank.cmp(&right.channel.rank).then_with(|| {
+            left.channel
+                .entity
+                .to_bits()
+                .cmp(&right.channel.entity.to_bits())
+        })
+    });
+
+    let mut clock_writes = std::mem::take(&mut plan.clock_writes);
+    clock_writes.clear();
     let mut dropped = 0usize;
 
-    for &entity in plan.channels.iter().take(settings.max_channels) {
-        // The plan may be a tick stale on removal — a dead entity or a stripped
-        // `Parameter` is simply skipped (the dirty flag is already set).
+    for due in due_work.iter().copied() {
+        let entity = due.channel.entity;
+        let key = due.clock;
+        let t = due.time;
+        let rewound = due.rewound;
+        let rank = due.channel.rank;
+
         let Ok(entity_ref) = world.get_entity(entity) else {
             continue;
         };
@@ -840,43 +1121,10 @@ fn sample_parameters(world: &mut World) {
             );
             continue;
         }
-        let binding = entity_ref.get::<TimeBinding>();
-
-        // The unbound channel is keyed directly to the current fixed tick.
-        // `WorldTime` is published after the fixed loop, so reading its frame
-        // view inside that loop could miss ticks completed earlier in this
-        // rendered frame. Bound channels retain their authored domain semantics
-        // through the shared resolver.
-        let t = match binding {
-            None => mission_clock.sim_secs(sim_tick),
-            Some(_) => domain_time(resolved_domains, binding, &world_time),
-        };
-        if !t.is_finite() {
-            warn_once!(
-                "telemetry: channel '{}' resolved a non-finite simulation time; sampling is skipped until its clock is repaired",
-                param.name
-            );
-            continue;
-        }
-
-        // Due check BEFORE any clone or read: a not-due channel costs two
-        // component lookups and nothing else.
-        if let Some(clock) = entity_ref.get::<ChannelClock>() {
-            if t < clock.next_due_t {
-                continue;
-            }
-        }
-
         let mut clock = entity_ref
             .get::<ChannelClock>()
             .map(clone_clock)
-            .unwrap_or_else(|| {
-                // First sight of this channel: due immediately.
-                ChannelClock {
-                    next_due_t: t,
-                    ..Default::default()
-                }
-            });
+            .unwrap_or_default();
 
         let Some(rate) = effective_rate(param, &settings) else {
             // An explicit invalid rate is an invalid channel declaration. Do not
@@ -888,7 +1136,8 @@ fn sample_parameters(world: &mut World) {
         let Some(value) = read_value(world, measured, param, &mut clock) else {
             // Unreadable (port not resolvable, bad reflect path, unsupported type).
             // Still advance the clock so a broken channel doesn't retry every tick.
-            advance(&mut clock, t, rate);
+            advance(&mut clock, t, rate, rewound);
+            schedule_channel(&mut plan, key, entity, rank, clock.next_due_t);
             clock_writes.push((entity, clock));
             continue;
         };
@@ -930,19 +1179,23 @@ fn sample_parameters(world: &mut World) {
         }
         delivery_queue.samples.push_back(sample);
 
-        advance(&mut clock, t, rate);
+        advance(&mut clock, t, rate, rewound);
+        schedule_channel(&mut plan, key, entity, rank, clock.next_due_t);
         clock_writes.push((entity, clock));
     }
 
-    world.insert_resource(resolved_taken);
-    world.insert_resource(plan);
-    world.insert_resource(delivery_queue);
+    plan.due_work = due_work;
 
-    for (entity, clock) in clock_writes {
+    for (entity, clock) in clock_writes.drain(..) {
         if let Ok(mut e) = world.get_entity_mut(entity) {
             e.insert(clock);
         }
     }
+    plan.clock_writes = clock_writes;
+
+    world.insert_resource(resolved_taken);
+    world.insert_resource(plan);
+    world.insert_resource(delivery_queue);
 
     if dropped > 0 {
         let mut queue = world.resource_mut::<SampleDeliveryQueue>();
@@ -1028,13 +1281,15 @@ fn accepted_channel_deadband(deadband: f64, subject: &str) -> Option<f64> {
     Some(deadband)
 }
 
-/// Advance the due time by one period, never into the past.
-///
-/// The `max(t)` clamp is load-bearing: after a pause, a seek, or a warp the domain time
-/// can jump far ahead, and a naive `next += period` would then fire a burst of catch-up
-/// samples for time that never elapsed. A sampled signal has no backlog.
-fn advance(clock: &mut ChannelClock, t: f64, rate: f64) {
-    clock.next_due_t = (clock.next_due_t + 1.0 / rate).max(t);
+/// Advance one deadline without replaying missed samples after a clock jump.
+/// A backward seek or loop resets the cadence from the new playhead.
+fn advance(clock: &mut ChannelClock, t: f64, rate: f64, rewound: bool) {
+    let period = 1.0 / rate;
+    clock.next_due_t = if rewound {
+        t + period
+    } else {
+        (clock.next_due_t + period).max(t + period)
+    };
 }
 
 fn clone_clock(c: &ChannelClock) -> ChannelClock {
@@ -1050,6 +1305,7 @@ fn numeric_of(v: &TelemetryValue) -> Option<f64> {
     match v {
         TelemetryValue::F64(f) => Some(*f),
         TelemetryValue::I64(i) => Some(*i as f64),
+        TelemetryValue::U64(i) => Some(*i as f64),
         TelemetryValue::Bool(_)
         | TelemetryValue::String(_)
         | TelemetryValue::Array(_)
@@ -1616,10 +1872,76 @@ mod tests {
             ..Default::default()
         };
 
-        let duplicates = rebuild_sampling_plan(&mut world, &mut plan);
+        let duplicates = rebuild_sampling_plan(&mut world, &mut plan, usize::MAX);
 
         assert_eq!(duplicates, 1);
         assert_eq!(plan.channels.len(), 1);
+    }
+
+    #[test]
+    fn deadline_heap_pops_only_due_channels_in_stable_order() {
+        let mut world = World::new();
+        let mut heap = BinaryHeap::new();
+        for index in 0..8192u64 {
+            let entity = world.spawn_empty().id();
+            let rank = match index {
+                0 => 9,
+                1 => 2,
+                2 => 5,
+                _ => index + 100,
+            };
+            heap.push(Reverse(ScheduledChannel {
+                next_due_t: if index < 3 { 0.5 } else { 2.0 },
+                rank,
+                entity,
+            }));
+        }
+
+        let mut due = Vec::new();
+        pop_due_channels(
+            &mut heap,
+            SamplingClockKey::Simulation,
+            1.0,
+            false,
+            &mut due,
+        );
+
+        assert_eq!(due.len(), 3, "only the due entries should be visited");
+        assert_eq!(
+            due.iter()
+                .map(|channel| channel.channel.rank)
+                .collect::<Vec<_>>(),
+            [2, 5, 9],
+            "equal-deadline channels must have a stable identity order"
+        );
+        assert_eq!(heap.len(), 8189);
+    }
+
+    #[test]
+    fn telemetry_deadlines_do_not_replay_missed_samples_after_clock_jumps() {
+        let mut clock = ChannelClock {
+            next_due_t: 1.0,
+            ..Default::default()
+        };
+
+        advance(&mut clock, 10.0, 2.0, false);
+        assert_eq!(clock.next_due_t, 10.5);
+
+        advance(&mut clock, 3.0, 2.0, true);
+        assert_eq!(clock.next_due_t, 3.5);
+    }
+
+    #[test]
+    fn a_clock_rewind_is_handled_once_per_resolved_time_snapshot() {
+        let mut plan = SamplingPlan::default();
+        let clock = SamplingClockKey::Domain(Entity::PLACEHOLDER);
+
+        assert!(!observe_clock_time(&mut plan, clock, 10.0));
+        assert!(observe_clock_time(&mut plan, clock, 2.0));
+        assert!(
+            !observe_clock_time(&mut plan, clock, 2.0),
+            "fixed substeps sharing one resolved frame must not repeat rewind samples"
+        );
     }
 
     #[test]
@@ -1642,7 +1964,7 @@ mod tests {
             ..Default::default()
         };
 
-        let duplicates = rebuild_sampling_plan(&mut world, &mut plan);
+        let duplicates = rebuild_sampling_plan(&mut world, &mut plan, usize::MAX);
 
         assert_eq!(duplicates, 0);
         assert_eq!(plan.channels.len(), 2);
@@ -1703,6 +2025,44 @@ mod tests {
             seen.lock().unwrap().is_empty(),
             "nothing tagged ⇒ nothing sampled"
         );
+    }
+
+    #[test]
+    fn a_bound_channel_waits_for_its_clock_domain() {
+        let mut app = app();
+        let seen = capture(&mut app);
+        let domain = app.world_mut().spawn_empty().id();
+        let channel = app
+            .world_mut()
+            .spawn((
+                Port { value: 2.5 },
+                TimeBinding { domain },
+                Parameter {
+                    rate_hz: Some(lunco_core_runtime::FIXED_HZ),
+                    ..reflect_channel("bound")
+                },
+            ))
+            .id();
+
+        step_fixed(&mut app, 2);
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "an unresolved explicit clock must not fall back to world time"
+        );
+        assert!(
+            app.world().entity(channel).get::<ChannelClock>().is_none(),
+            "the unresolved channel must not acquire an implicit sampling schedule"
+        );
+
+        app.world_mut()
+            .entity_mut(domain)
+            .insert(lunco_time::TimeDomain::default());
+        step_fixed(&mut app, 2);
+        let samples = seen.lock().unwrap();
+        assert!(matches!(
+            samples.last().map(|sample| &sample.value),
+            Some(TelemetryValue::F64(value)) if *value == 2.5
+        ));
     }
 
     /// Rate is per channel: a fixed-step channel and a slower channel in the same

@@ -1,0 +1,21 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World"
+{
+    def Scope "Scenario"
+    {
+        def Scope "SysmlTwinAnalysis" (
+            prepend apiSchemas = "LunCoProgramAPI"
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/sysml_twin_analysis.rhai@
+            uniform bool lunco:program:realtimeSafe = false
+        }
+    }
+}

@@ -561,13 +561,14 @@ pub struct PendingReplicatedSpawns(pub Vec<ReplicatedSpawn>);
 /// the client `SimTick` it was sampled at. Buffered for client-prediction replay:
 /// after a snapshot snaps the owned body to the authoritative state, the reconcile
 /// re-applies the still-unacked frames in order to advance back to "now".
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct InputFrame {
     pub seq: u32,
     pub tick: u64,
-    pub forward: f64,
-    pub steer: f64,
-    pub brake: f64,
+    /// Complete latched set of authored control-port values at this input
+    /// boundary. Keep the command's stable order so rollback writes the same
+    /// port sequence as live control dispatch.
+    pub writes: Vec<(String, f64)>,
 }
 
 /// Per-vessel input log: a monotonic `seq` counter plus the unacked frames.
@@ -1237,7 +1238,7 @@ pub fn authorize_policy(
             HookValue::Bool(target_gid.is_some_and(|g| paths.is_down(g))),
         ),
     ]);
-    match lunco_hooks::invoke(AUTHORIZE_HOOK, &[ctx]) {
+    match lunco_hooks::invoke_unclassified(AUTHORIZE_HOOK, &[ctx]) {
         // No hook registered → unchanged behaviour.
         None => Ok(()),
         // Hook allowed.
@@ -1313,7 +1314,7 @@ pub fn may_take_control(
         ("target", HookValue::Int(target_gid as i64)),
     ]);
     matches!(
-        lunco_hooks::invoke(CONTROL_AUTHORITY_HOOK, &[ctx]),
+        lunco_hooks::invoke_unclassified(CONTROL_AUTHORITY_HOOK, &[ctx]),
         Some(Ok(v)) if v.as_bool() == Some(true)
     )
 }
@@ -1343,8 +1344,9 @@ mod tests {
     /// control path is down, exempt autonomy, allow everything else.
     struct TeleopPolicy;
     impl lunco_hooks::ScriptHook for TeleopPolicy {
-        fn invoke(&self, args: &[lunco_hooks::HookValue]) -> lunco_hooks::HookResult {
-            let ctx = args
+        fn invoke(&self, invocation: &lunco_hooks::HookInvocation<'_>) -> lunco_hooks::HookResult {
+            let ctx = invocation
+                .args
                 .first()
                 .cloned()
                 .unwrap_or(lunco_hooks::HookValue::Unit);
@@ -1390,7 +1392,10 @@ mod tests {
         // the decision the possession command now commits atomically with its bind.
         struct AllowTakeover;
         impl lunco_hooks::ScriptHook for AllowTakeover {
-            fn invoke(&self, _args: &[lunco_hooks::HookValue]) -> lunco_hooks::HookResult {
+            fn invoke(
+                &self,
+                _invocation: &lunco_hooks::HookInvocation<'_>,
+            ) -> lunco_hooks::HookResult {
                 Ok(lunco_hooks::HookValue::Bool(true))
             }
         }

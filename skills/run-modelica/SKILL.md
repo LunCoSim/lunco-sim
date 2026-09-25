@@ -130,12 +130,30 @@ declare `[modelica].paths` (Twin-relative, with `"."` meaning the Twin root) and
 from the indexed Twin `.mo` files, so package discovery does not depend on a
 hard-coded folder. A qualified reference such as `LunCo.Electrical.Battery` is
 resolved by its root segment through the normal Modelica search-path inventory;
-do not add a library-specific Rust load call. Every admitted Twin root uses the
-existing `LoadSourceRoot` worker path. A generated policy's `source_roots`
-metadata can prewarm a dependency, but it is not the source of truth for class
+do not add a library-specific Rust load call. Every live compile admits its
+required roots through the existing `LoadSourceRoot` worker path before it
+sends `Compile`. File-backed source assets carry root requirements from their
+prepared AST interface, document compiles derive them from the primary and
+sibling ASTs, and a generated policy's `source_roots` list is its required root
+manifest. The worker commits root preparations in admission order before
+compilation, rejects unadmitted roots, and reports failed roots without retrying
+synchronous discovery. Synchronous compiler helpers remain for CLI and batch
+callers.
+The policy list does not replace composed USD facts for member-class
 discovery. The worker's prepared-solve cache keys library state from the
 revisions that `ModelicaCompiler` records while admitting source roots; it does
 not scan the complete Modelica tree during the first live stepper build.
+
+On native runs, one dedicated Rumoca actor owns the mutable session and shared
+DAE cache. Source-root installation, `Compile`, `Reset`, parameter updates, and
+cache-invalidating Step auto-init share a FIFO. The worker commits results in
+submission order after entity-session and library-generation checks; a Step
+that needs a rebuild resumes only after its initialization commits. These
+continuations leave the Modelica command owner free to service other entities,
+and actor requests plus solve preparations share bounded admission. Persistent
+solve-cache reads and writes run with DAE lowering in the preparation pool; the
+native owner thread does not perform cache I/O or fall back to synchronous
+lowering. Wasm keeps compilation inside its Modelica Web Worker.
 
 On native desktop startup, cache-miss solve-IR lowering runs in the worker's
 bounded preparation pool because the DAE input and solve options are immutable.

@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_core::lunco_source::ASSETS_DIR_NAME;
 
 /// Marker that distinguishes a scripting policy manifest from other authored
@@ -124,6 +125,11 @@ pub struct PolicySpec {
     /// Whether failure to load this policy blocks the owning seam.
     #[serde(default)]
     pub required: bool,
+    /// Skip this policy when its hook owner is not linked into the selected
+    /// runtime composition. The loader reports the skipped hook explicitly;
+    /// this does not suppress source, compile, or invocation failures.
+    #[serde(default)]
+    pub skip_when_hook_unavailable: bool,
 }
 
 /// The authored Rhai function that installs one resolved policy set.
@@ -222,6 +228,13 @@ fn parse_policy_manifest(text: &str, location: &Path) -> Result<PolicyManifest, 
         if spec.entry.trim().is_empty() {
             return Err(format!(
                 "policy manifest {} has an empty entry for hook '{}'",
+                location.display(),
+                spec.hook
+            ));
+        }
+        if spec.required && spec.skip_when_hook_unavailable {
+            return Err(format!(
+                "policy manifest {} marks required hook '{}' as skippable when its owner is unavailable",
                 location.display(),
                 spec.hook
             ));
@@ -328,6 +341,7 @@ fn qualified_asset_path(prefix: &str, source: &str) -> String {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn require_application_startup(
     bundle: LoadedPolicyBundle,
     location: &Path,
@@ -389,6 +403,7 @@ fn relative_asset_prefix(root: &Path, path: &Path) -> Result<String, String> {
     Ok(parent)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn asset_prefix(root: &Path, path: &Path) -> Result<String, String> {
     let parent = relative_asset_prefix(root, path)?;
     Ok(if parent.is_empty() {
@@ -514,4 +529,39 @@ pub fn twin_policy_set(root: &Path) -> Result<Option<LoadedPolicyBundle>, String
         ));
     }
     Ok(Some(bundle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FEATURE_OPTIONAL_POLICY: &str = r#"
+kind = "lunco.policy.v1"
+
+[[policies]]
+hook = "render.shadow_quality"
+source = "render_shadow_quality.rhai"
+entry = "shadow_quality"
+skip_when_hook_unavailable = true
+"#;
+
+    #[test]
+    fn policy_manifest_accepts_optional_feature_owner() {
+        let manifest =
+            parse_policy_manifest(FEATURE_OPTIONAL_POLICY, Path::new("policy/index.toml"))
+                .expect("feature-gated policy metadata is valid");
+        assert!(manifest.policies[0].skip_when_hook_unavailable);
+        assert!(!manifest.policies[0].required);
+    }
+
+    #[test]
+    fn required_policy_cannot_be_skipped_for_an_unavailable_owner() {
+        let source = FEATURE_OPTIONAL_POLICY.replace(
+            "skip_when_hook_unavailable = true",
+            "required = true\nskip_when_hook_unavailable = true",
+        );
+        let error = parse_policy_manifest(&source, Path::new("policy/index.toml"))
+            .expect_err("required policy must not be skipped");
+        assert!(error.contains("required hook 'render.shadow_quality' as skippable"));
+    }
 }

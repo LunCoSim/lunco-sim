@@ -13,7 +13,7 @@ fn on_start(me, ctx) {
     this.start_dt = dt();
     let physics_clock = clock_snapshot();
     this.physics_compute_threads = physics_clock.physics_compute_threads;
-    this.physics_deterministic = physics_clock.physics_deterministic;
+    this.physics_profile_known = physics_clock.physics_profile_known;
     this.task_ctx_is_empty = false;
     this.mission_ctx_is_empty = false;
     this.elapsed = 0.0;
@@ -30,6 +30,21 @@ fn on_start(me, ctx) {
     this.task_complete = false;
     this.mission_complete = false;
     this.done = false;
+    this.repl_values = [];
+    this.repl_operation_limit_rejected = false;
+    this.repl_queue_overflow_rejected = false;
+    this.repl_operation_command = 0;
+    subscribe("RHAI_REPL_BUDGET");
+    cmd("RunRhai", #{ code: "emit(\"RHAI_REPL_BUDGET\", 1);" });
+    cmd("RunRhai", #{ code: "emit(\"RHAI_REPL_BUDGET\", 2);" });
+    let limited = cmd("RunRhai", #{ code: "while true { }" });
+    this.repl_operation_command = limited.id;
+    for index in 0..61 {
+        cmd("RunRhai", #{ code: "()" });
+    }
+    let overflow = cmd("RunRhai", #{ code: "()" });
+    this.repl_queue_overflow_rejected = overflow.ok == false
+        && overflow.error.contains("queue is full");
     subscribe("TASK_CTX_EMPTY");
     subscribe("MISSION_CTX_EMPTY");
     subscribe("TASK_SEQ_A");
@@ -105,6 +120,9 @@ fn on_event(me, evt, ctx) {
     if evt.name == "TASK_FOREVER" { this.forever += 1; }
     if evt.name == "TASK_COMPLETE" { this.task_complete = true; }
     if evt.name == "MISSION_COMPLETE" { this.mission_complete = true; }
+    if evt.name == "RHAI_REPL_BUDGET" {
+        this.repl_values.push(evt.value);
+    }
 }
 
 fn on_tick(me, ctx) {
@@ -116,6 +134,11 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 
+    let limited = command_result(this.repl_operation_command);
+    if limited != () && limited.ok == false && limited.error.contains("operation") {
+        this.repl_operation_limit_rejected = true;
+    }
+
     if !this.go_sent {
         emit("TASK_GO", 1);
         this.go_sent = true;
@@ -125,14 +148,15 @@ fn on_tick(me, ctx) {
         this.go2_sent = true;
     }
 
-    if this.mission_complete && this.forever >= 3 {
+    if this.mission_complete && this.forever >= 3 && this.repl_values.len() == 2
+        && this.repl_operation_limit_rejected {
         this.done = true;
         report_verdict([
             t_true(this.start_ctx_is_empty, "on_start receives the empty default context"),
             t_true(this.start_cycle == "simulation" && this.start_phase == "start", "on_start inherits its simulation cycle and start phase"),
             t_true(this.start_clock == "simulation" && this.start_dt > 0.0 && this.start_tick >= 0, "simulation clock APIs work in on_start"),
-            t_true(this.physics_compute_threads >= 1, "physics admission reports the effective compute-pool width"),
-            t_true(this.physics_deterministic == (this.physics_compute_threads == 1), "physics determinism matches the effective compute-pool width"),
+            t_true(this.physics_profile_known, "physics admission reports a known compute-pool profile"),
+            t_true(this.physics_profile_known && this.physics_compute_threads >= 1, "physics admission reports the effective compute-pool width"),
             t_true(this.task_ctx_is_empty, "task receives the empty default context"),
             t_true(this.mission_ctx_is_empty, "mission receives the empty default context"),
             t_true(this.event_ctx_is_empty, "on_event receives the empty default context"),
@@ -150,13 +174,16 @@ fn on_tick(me, ctx) {
             t_true(this.forever >= 3, "forever kept running"),
             t_true(!this.task_complete, "forever did not report task completion"),
             t_true(this.mission_complete, "gated mission completed"),
+            t_true(this.repl_values == [1, 2], "one-shot REPL requests preserve FIFO execution order"),
+            t_true(this.repl_operation_limit_rejected, "a world-bound one-shot cannot exceed its operation budget"),
+            t_true(this.repl_queue_overflow_rejected, "the full one-shot queue rejects new commands explicitly"),
         ], "SCRIPTING TASK CONTRACT", "SCRIPTING_TASK_CONTRACT");
         return;
     }
 
     if this.elapsed > 15.0 {
         this.done = true;
-        report_verdict(["task/mission contract did not reach its public observations"],
+        report_verdict(["task/mission or bounded REPL contract did not reach its public observations"],
             "SCRIPTING TASK CONTRACT", "SCRIPTING_TASK_CONTRACT");
     }
 }

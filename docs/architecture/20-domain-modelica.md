@@ -173,10 +173,20 @@ stage and synthesizer query set. The system retains the same trigger guard for
 direct system invocation, while the production schedule owns the idle-frame
 skip.
 
-Before a USD-owned Modelica participant is submitted to the Modelica worker,
-the compiler's source-root admission step seats every dependency discoverable
-from the source text (bundled roots and MSL when available). The worker
-then performs one DAE compile against the settled session. A later compile is valid only for
+Before a live Modelica compile is submitted, its owner admits required roots
+through `lunco-modelica-source-roots` and sends each `LoadSourceRoot` before the
+`Compile` command on the same ordered worker channel. File-backed source assets
+carry sorted root requirements from their prepared AST interface; generated
+domain compiles use the root set returned by the authored synthesizer policy;
+document compiles derive roots from the primary and sibling document ASTs. The
+worker holds compile work until pending root preparation commits in admission
+order, then uses a compile entry point that rejects any dependency not already
+admitted. A failed root is recorded in the compiler session, so dependent
+compiles return the root error instead of repeating synchronous file discovery.
+Synchronous compiler convenience methods remain for CLI and batch callers. Root
+reads, bound-input extraction, and parsing run on the bounded preparation
+pool. Session installation and ordinary Rumoca DAE compilation remain
+synchronous on the serialized worker owner. A later compile is valid only for
 an actual authored source/topology change or an explicit library-set change;
 normal scene projection and solver stepping do not recompile an unchanged USD
 participant.
@@ -419,8 +429,10 @@ State on `ModelicaModel`:
 - `compiled_generation: u64` — document `generation_owned()` at the last
   *successful* compile.
 - `pending_generation: u64` — generation captured at compile dispatch;
-  promoted to `compiled_generation` on success so an edit landing
-  mid-compile does not mark the just-built model as up to date.
+  copied to `compiled_generation` only when the matching worker result lands
+  for the still-current document revision. An edit during compilation causes
+  that result to be discarded; an active participant keeps its run intent and
+  requests a compile for the current parsed revision.
 - `resume_after_compile: bool` — transient; set by `RunActiveModel` so
   the post-compile success handler unpauses (instead of staying paused).
   Cleared on both success and error so a failed Run never silently
@@ -434,15 +446,17 @@ plugin registers `handle_modelica_responses` in `Update`, so an off-thread
 compile or step can settle while a host holds the fixed clock during scene
 readiness. It registers `spawn_modelica_requests` in `FixedUpdate`, where the
 master clock advances and the next deterministic communication request is
-issued. Coupling the response drain to `FixedUpdate` (or forgetting either
-registration when splitting the crate) leaves `is_compiling` stuck forever in
-a max-speed/readiness loop even though the worker has finished.
+issued. `ModelicaExecutionPlugin` consumes `CompileRequested` intent and the
+worker dispatches from the current document snapshot; the UI command only
+resolves class selection. Coupling the response drain to `FixedUpdate` (or
+forgetting either registration when splitting the crate) leaves `is_compiling`
+stuck forever in a max-speed/readiness loop even though the worker has finished.
 
 Verb semantics:
 
 | Verb | Effect |
 |---|---|
-| `CompileModel` | Compile only, idempotent. Skips the worker dispatch when `is_compiled && !stale && !is_compiling` (logged at debug); pass `force: true` to override. Never changes `paused`. |
+| `CompileModel` | Compile only, idempotent. Skips the worker dispatch when `is_compiled && !stale && !is_compiling` (logged at debug); pass `force: true` to override. A dispatched compile leaves the model paused/ready unless explicit Run intent is carried through it. |
 | `RunActiveModel` | Compile-if-stale, then play. If already compiled & clean, just sets `paused = false` (no recompile); otherwise sets `resume_after_compile = true` and triggers `CompileModel`, which resumes on success. |
 | `ResumeActiveModel` | Unpause (`paused = false`); no compile. |
 | `PauseActiveModel` | Pause (`paused = true`). |

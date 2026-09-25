@@ -174,6 +174,14 @@ fn twin_sysml_source_action(ctx, path) {
     twin_command("LoadTwinSysmlSource", params)
 }
 
+fn twin_sysml_analysis_action(ctx, sources) {
+    let params = #{};
+    params.twin_id = ctx.twin_id;
+    params.name = ctx.name;
+    params.relative_paths = sources;
+    twin_command("PrepareTwinSysmlAnalysis", params)
+}
+
 fn twin_sysml_primary_action(ctx, root, roots, sources) {
     if root == () { return (); }
     if !twin_under_any_root(root, roots) { return (); }
@@ -187,6 +195,7 @@ fn twin_sysml_actions(ctx, manifest) {
     let root = twin_sysml_root(sysml);
     let sources = twin_sysml_sources(ctx, roots);
     let source_count = sources.len();
+    let analysis_sources = sources;
     let actions = [];
     let root_action = twin_sysml_primary_action(ctx, root, roots, sources);
     if root_action != () {
@@ -198,6 +207,7 @@ fn twin_sysml_actions(ctx, manifest) {
             actions.push(action);
         }
     }
+    actions.push(twin_sysml_analysis_action(ctx, analysis_sources));
     let info = "";
     if source_count == 0 {
         info = "Twin " + ctx.name + " declares no indexed .sysml or .kerml sources";

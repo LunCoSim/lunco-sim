@@ -70,6 +70,11 @@ pub struct ModelInterface {
     /// The only authority on what a `.mo` is CALLED from outside it, which is
     /// what a generated model instantiating it has to get right.
     pub within: Option<String>,
+    /// Top-level Modelica source roots required by this source, including its
+    /// `within` package root when that root is not declared in the same file.
+    /// The sorted set is prepared with the interface so runtime admission does
+    /// not need to parse the same source on the application schedule.
+    pub required_source_roots: BTreeSet<String>,
     /// `parameter` declarations with their authored values.
     pub parameters: HashMap<String, f64>,
     /// Every declared input, seeded with its authored default (`0.0` when it has
@@ -167,9 +172,12 @@ pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
 /// through separate parses or recovery modes.
 pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface {
     let defaults = extract_inputs_with_defaults_from_ast(ast);
+    let within = within_package(ast);
+    let required_source_roots = required_source_roots_from_ast(ast);
     ModelInterface {
         model_name: extract_model_name_from_ast(ast),
-        within: within_package(ast),
+        within,
+        required_source_roots,
         parameters: extract_parameters_from_ast(ast),
         inputs: extract_input_names_from_ast(ast)
             .into_iter()
@@ -1076,6 +1084,52 @@ pub fn walk_class_type_names<F: FnMut(&str)>(class: &ClassDef, visit: &mut F) {
     }
 }
 
+/// Return deterministic top-level roots referenced by qualified type names and
+/// imports in a parsed definition. Bare names resolve in the current source
+/// context, while Modelica built-ins are handled by Rumoca.
+pub fn source_root_dependencies_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
+    let mut qualified_names = BTreeSet::new();
+    for class in ast.classes.values() {
+        walk_class_type_names(class, &mut |name| {
+            if name.contains('.') {
+                qualified_names.insert(name.to_owned());
+            }
+        });
+        for import in &class.imports {
+            use rumoca_ir_ast::Import;
+            let path = match import {
+                Import::Qualified { path, .. }
+                | Import::Renamed { path, .. }
+                | Import::Unqualified { path, .. }
+                | Import::Selective { path, .. } => path.to_string(),
+            };
+            if path.contains('.') {
+                qualified_names.insert(path);
+            }
+        }
+    }
+    qualified_names
+        .into_iter()
+        .filter_map(|name| name.split('.').next().map(str::to_owned))
+        .filter(|root| !root.is_empty() && !is_builtin_type_name(root))
+        .collect()
+}
+
+/// Return every source root needed to compile one definition: qualified
+/// references plus its `within` package root when that root is not declared in
+/// the same source set.
+pub fn required_source_roots_from_ast(ast: &StoredDefinition) -> BTreeSet<String> {
+    let mut roots = source_root_dependencies_from_ast(ast);
+    if let Some(package) = within_package(ast)
+        && let Some(root) = package.split('.').next()
+        && !ast.classes.contains_key(root)
+        && !root.is_empty()
+    {
+        roots.insert(root.to_owned());
+    }
+    roots
+}
+
 /// Whether a type reference is handled by Modelica/Rumoca without an external
 /// source root. Keep this filter beside the shared type-name traversal so the
 /// source-root admission path and the icon warmer cannot diverge on built-ins.
@@ -1419,6 +1473,22 @@ pub fn hash_content(source: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_interface_prepares_ordered_source_root_requirements() {
+        let source = concat!(
+            "within LunCo.Pointing;\n",
+            "model SunTracker\n",
+            "  extends LunCo.Controls.Base;\n",
+            "  Modelica.Blocks.Interfaces.RealInput azimuth;\n",
+            "end SunTracker;\n",
+        );
+        let interface = parse_model_interface(source, "SunTracker.mo");
+        assert_eq!(
+            interface.required_source_roots,
+            BTreeSet::from(["LunCo".to_owned(), "Modelica".to_owned()])
+        );
+    }
 
     // --- strip_input_defaults (rumoca bound-input demotion) ---
 

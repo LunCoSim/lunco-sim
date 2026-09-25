@@ -14,7 +14,7 @@ fn finish(me, passed, message) {
 
 fn document_id() {
     let documents = query("ListOpenDocuments");
-    if documents == () || documents.open_documents == () { return -1; }
+    if documents == () || documents.open_documents == () { return (); }
     for document in documents.open_documents {
         if document.kind != "usd" { continue; }
         let root = query("InspectUsdDocument", #{ doc_id: document.doc_id, path: ROOT });
@@ -22,16 +22,25 @@ fn document_id() {
             return document.doc_id;
         }
     }
-    -1
+    ()
 }
 
-fn preview_ready(doc, generation) {
+fn preview_ready(preview_id, doc, generation) {
     for preview in assembly_edit::viewport().previews {
-        if preview.preview == PREVIEW && preview.doc_id == doc
+        if preview.preview.to_string() == preview_id.to_string() && preview.doc_id == doc
             && preview.projection_ready
             && preview.projected_generation == generation { return true; }
     }
     false
+}
+
+fn preview_matches(viewport, preview_id, doc) {
+    let matches = 0;
+    for preview in viewport.previews {
+        if preview.preview.to_string() == preview_id.to_string()
+            && preview.doc_id == doc { matches += 1; }
+    }
+    matches
 }
 
 fn shader_matches(doc, red, green, blue, roughness) {
@@ -42,21 +51,26 @@ fn shader_matches(doc, red, green, blue, roughness) {
     });
     if shader == () || shader.ok == false || shader.attrs == () { return false; }
     let color = shader.attrs["inputs:diffuseColor"];
-    color != () && color.len() == 3
+    let authored_roughness = shader.attrs["inputs:roughness"];
+    let matches = color != () && color.len() == 3
         && abs(color[0] - red) < 0.0001
         && abs(color[1] - green) < 0.0001
         && abs(color[2] - blue) < 0.0001
-        && abs(shader.attrs["inputs:roughness"] - roughness) < 0.0001
+        && authored_roughness != ()
+        && abs(authored_roughness - roughness) < 0.0001;
+    matches
 }
 
 fn on_start(me, ctx) {
     this.done = false;
     this.phase = 0;
     this.elapsed = 0.0;
-    this.doc = -1;
-    this.command = -1;
-    this.generation = -1;
-    this.primary_view = -1;
+    this.doc = ();
+    this.source_doc = ();
+    this.initial_docs = [];
+    this.command = ();
+    this.generation = ();
+    this.primary_view = ();
     this.original_source = "";
 }
 
@@ -69,8 +83,30 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 0 {
-        this.doc = document_id();
-        if this.doc < 0 { return; }
+        this.source_doc = document_id();
+        if this.source_doc == () { return; }
+        let documents = query("ListOpenDocuments");
+        for document in documents.open_documents {
+            this.initial_docs.push(document.doc_id);
+        }
+        let forked = assembly_edit::fork_document(this.source_doc, "PBR material preview");
+        if forked == () || forked.ok == false {
+            finish(this, false, "Editor did not accept a material preview document fork");
+            return;
+        }
+        this.phase = 1;
+        return;
+    }
+
+    if this.phase == 1 {
+        let documents = query("ListOpenDocuments");
+        for document in documents.open_documents {
+            if document.kind == "usd" && !this.initial_docs.contains(document.doc_id) {
+                this.doc = document.doc_id;
+                break;
+            }
+        }
+        if this.doc == () { return; }
         let description = assembly_edit::describe(this.doc);
         let source = assembly_edit::sync_document(this.doc, ());
         if description == () || description.ok == false || source == ()
@@ -85,22 +121,38 @@ fn on_tick(me, ctx) {
             finish(this, false, "Editor preview session could not be opened");
             return;
         }
-        this.phase = 1;
+        this.phase = 2;
         return;
     }
 
-    if this.phase == 1 {
-        if !preview_ready(this.doc, this.generation) { return; }
-        let viewport = assembly_edit::viewport();
-        if viewport == () || viewport.focused_preview != PREVIEW
-            || viewport.preview_count != 1 || viewport.view_count != 1
-            || viewport.previews.len() != 1 {
-            finish(this, false, "InspectUsdViewport did not report the opened preview session");
+    if this.phase == 2 {
+        let description = assembly_edit::describe(this.doc);
+        if description == () || description.ok == false {
+            finish(this, false, "Editor preview document became unavailable");
             return;
         }
-        let preview = viewport.previews[0];
-        if preview.doc_id != this.doc || !preview.focused || preview.views.len() != 1 {
-            finish(this, false, "InspectUsdViewport lost the preview document or primary view");
+        this.generation = description.generation;
+        if !preview_ready(PREVIEW, this.doc, this.generation) {
+            return;
+        }
+        let viewport = assembly_edit::viewport();
+        if viewport == () {
+            finish(this, false, "InspectUsdViewport returned no viewport state");
+            return;
+        }
+        let preview_count = preview_matches(viewport, PREVIEW, this.doc);
+        let preview = ();
+        for candidate in viewport.previews {
+            if candidate.preview.to_string() == PREVIEW.to_string()
+                && candidate.doc_id == this.doc {
+                preview = candidate;
+            }
+        }
+        if preview_count != 1 || viewport.focused_preview == ()
+            || viewport.focused_preview.to_string() != PREVIEW.to_string()
+            || preview == () || !preview.focused || preview.views.len() != 1
+            || viewport.focused_view == () || viewport.focused_view != preview.views[0].view {
+            finish(this, false, "InspectUsdViewport did not report the opened preview session");
             return;
         }
         this.primary_view = preview.views[0].view;
@@ -139,15 +191,25 @@ fn on_tick(me, ctx) {
             return;
         }
         let viewport = assembly_edit::viewport();
-        if viewport == () || viewport.focused_preview != PREVIEW
-            || viewport.focused_view != SECOND_VIEW
-            || viewport.preview_count != 1 || viewport.view_count != 2
-            || viewport.previews.len() != 1 || viewport.previews[0].doc_id != this.doc
-            || !viewport.previews[0].focused || viewport.previews[0].views.len() != 2
-            || viewport.previews[0].views[0].view != this.primary_view
-            || viewport.previews[0].views[0].focused
-            || viewport.previews[0].views[1].view != SECOND_VIEW
-            || !viewport.previews[0].views[1].focused {
+        if viewport == () {
+            finish(this, false, "InspectUsdViewport returned no viewport state");
+            return;
+        }
+        let preview_count = preview_matches(viewport, PREVIEW, this.doc);
+        let preview = ();
+        for candidate in viewport.previews {
+            if candidate.preview.to_string() == PREVIEW.to_string()
+                && candidate.doc_id == this.doc {
+                preview = candidate;
+            }
+        }
+        if viewport.focused_preview == () || viewport.focused_view == ()
+            || viewport.focused_preview.to_string() != PREVIEW.to_string()
+            || viewport.focused_view.to_string() != SECOND_VIEW.to_string()
+            || preview_count != 1 || preview == () || !preview.focused || preview.views.len() != 2
+            || preview.views[0].view != this.primary_view || preview.views[0].focused
+            || preview.views[1].view.to_string() != SECOND_VIEW.to_string()
+            || !preview.views[1].focused {
             finish(this, false, "InspectUsdViewport did not report the exact focused preview/view handles");
             return;
         }
@@ -166,11 +228,12 @@ fn on_tick(me, ctx) {
             return;
         }
         this.command = edit.id;
-        this.phase = 2;
+        this.phase = 8;
         return;
     }
 
-    if this.phase == 2 || this.phase == 4 {
+    if this.phase == 8 || this.phase == 4 {
+        let phase = this.phase;
         let result = command_result(this.command);
         if result.status == "pending" { return; }
         if result.status != "applied" || result.ok != true {
@@ -178,12 +241,16 @@ fn on_tick(me, ctx) {
             return;
         }
         this.generation = assembly_edit::describe(this.doc).generation;
-        this.phase += 1;
+        if phase == 8 {
+            this.phase = 3;
+        } else {
+            this.phase = 5;
+        }
         return;
     }
 
     if this.phase == 3 {
-        if !preview_ready(this.doc, this.generation) { return; }
+        if !preview_ready(PREVIEW, this.doc, this.generation) { return; }
         if !shader_matches(this.doc, 0.0, 0.0, 1.0, 0.1) {
             finish(this, false, "USD edit did not update the authored material query and preview generation");
             return;
@@ -203,12 +270,13 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 5 {
-        if !preview_ready(this.doc, this.generation) { return; }
+        if !preview_ready(PREVIEW, this.doc, this.generation) { return; }
         if !shader_matches(this.doc, 1.0, 0.5, 0.25, 0.75) {
             finish(this, false, "whole-source replacement did not restore the original USD material");
             return;
         }
         assembly_edit::preview_close(PREVIEW);
+        assembly_edit::close_document(this.doc);
         finish(this, true, "authored USD material edits and whole-source replacement advanced the production preview");
     }
 }

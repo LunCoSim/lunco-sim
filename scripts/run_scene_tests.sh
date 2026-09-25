@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
 # run_scene_tests.sh — build the production luncosim runner ONCE, then run every
-# authored scene test: deterministic headless Rhai tests, pixel graphics tests,
+# authored scene test: manually stepped headless Rhai tests, pixel graphics tests,
 # GPU render-contract tests, and editor tests, selected by the Rhai observer's
 # `TEST_KIND` declaration.
 #
 # Each headless scene is an authored USD file whose attached Rhai scenario ends
 # in `emit("<CHANNEL>", "PASS"|"FAIL")`. `luncosim test` runs it headless and
-# deterministically (manual clock, no window, no GPU, no realtime pacing) and
+# with a manual clock (no window, no GPU, no realtime pacing) and
 # exits 0 = PASS, 1 = FAIL, 2 = no verdict. Render-only scenes run through
 # `scripts/run_render_scene_tests.sh` using the same production binary in
 # GPU-full offscreen mode. Render-contract tests use the same production GPU
@@ -32,26 +32,26 @@
 # ── The gate pass vs the --stress pass ──────────────────────────────────────
 #
 # The GATE runs every scene with `--threads 1 --jitter 0`: one compute thread
-# and an exactly-fixed manual dt. That combination is bit-reproducible, so a
-# red here is a real, re-runnable regression.
+# and an exactly-fixed manual dt. These settings make the input profile
+# repeatable; they do not prove that every authoritative result is bitwise
+# reproducible.
 #
 # `--stress` adds a SECOND, clearly separated pass over the same scenes with
-# `--threads 0` (bevy's default multi-threaded pool, as the GUI runs) and
-# `--jitter 0.4` (seeded pseudo-random dt, modelling realtime frame pacing).
-# That pass exists because `scenes/tests/drivetrain_parity.usda` passes
-# headless and explodes under the GUI, and those two flags are the two known
-# differences. Reading the stress pass:
+# `--threads 0` (Bevy's default task-pool allocation, also used by GUI
+# DefaultPlugins) and `--jitter 0.4` (seeded pseudo-random dt). It changes both
+# settings, so a failure identifies stress-profile sensitivity only. Run
+# separate controlled profiles to attribute thread-pool versus dt sensitivity:
 #
-#   red only with jitter   => dt-sensitivity bug, not a threading bug
-#   red only with threads  => ordering/race bug in the parallel solver path
+#   --threads 1 --jitter 0.4  => vary dt while holding Compute width fixed
+#   --threads 0 --jitter 0    => vary pool width while holding dt fixed
 #
 # The stress pass is reported SEPARATELY and does NOT affect the exit code. It
-# is diagnostic, not a gate: multi-threading is by construction not run-to-run
-# reproducible, so gating on it would make the build flaky, and until we know
-# what a jittered failure means it must not be able to turn CI red.
+# is diagnostic, not a gate: the project has not established a whole-simulation
+# repeatability contract for those profiles, and a seeded dt sequence alone
+# cannot establish one.
 #
 # `-j/--jobs` bounds the number of independent production processes in either
-# headless pass. It does not change the deterministic gate's `--threads 1`
+# headless pass. It does not change the gate's `--threads 1`
 # setting. Graphics scenes remain a separate serial acceptance pass because
 # they share the offscreen renderer/GPU. Editor scenes use the production
 # windowed host because preview/document/selection APIs are UI-owned.
@@ -61,16 +61,18 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
-# Acceptance runs are isolated by default: every child is a throwaway process
-# with in-memory settings and no runtime-overlay reads or writes.
+# Acceptance runs use a throwaway configuration root, in-memory settings, and
+# no runtime-overlay reads or writes. Each scene process below gets its own
+# workspace-state directory so a prior assertion cannot seed the next run.
 export LUNCOSIM_EPHEMERAL_SETTINGS=1
 export LUNCOSIM_ISOLATED_RUN=1
+export LUNCOSIM_CONFIG="$REPO_ROOT/target/scene-tests/config-suite-$$"
 
 # ── Stress-pass configuration ───────────────────────────────────────────────
 STRESS=0
-STRESS_THREADS=0     # 0 = leave bevy's default multi-threaded pool alone
+STRESS_THREADS=0     # 0 = use Bevy's default task-pool allocation
 STRESS_JITTER=0.4    # +/- 40% dt, i.e. frame times from 10 ms to 23 ms at 60 Hz
-STRESS_SEED=12345    # FIXED: a stress failure must be replayable verbatim
+STRESS_SEED=12345    # FIXED: repeat the stress profile's jitter dt sequence
 BUILD=1
 BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 JOBS=4               # independent production processes, not Bevy test threads
@@ -312,7 +314,8 @@ run_one_scene() {
     # `--max-ticks` can only fire between ticks; `scenes/tests/rover_comparison`
     # can spin forever inside one physics step, so the runner must report a
     # named hang rather than wedge the complete gate.
-    timeout --kill-after=10 "$SCENE_TIMEOUT" \
+    LUNCOSIM_CONFIG="$LOG_DIR/config-${name}${suffix}-$$-$index" \
+        timeout --kill-after=10 "$SCENE_TIMEOUT" \
         "$BIN" test --scene "$scene" --max-ticks "$SCENE_MAX_TICKS" \
         "$@" --readiness-timeout "$READINESS_TIMEOUT" >"$log" 2>&1
     code=$?
@@ -524,9 +527,8 @@ echo "logs: $LOG_DIR"
 if [[ $STRESS -eq 1 ]]; then
     echo
     echo "==> STRESS pass (DIAGNOSTIC — does NOT affect the exit code)"
-    echo "    --threads $STRESS_THREADS (bevy default pool)  --jitter $STRESS_JITTER  --seed $STRESS_SEED"
-    echo "    A scene GREEN in the gate and RED here is dt-sensitive and/or order-sensitive,"
-    echo "    which is the class of bug that only shows up under the GUI."
+    echo "    --threads $STRESS_THREADS (Bevy default pool allocation)  --jitter $STRESS_JITTER  --seed $STRESS_SEED"
+    echo "    A scene GREEN in the gate and RED here is sensitive to the combined pool+dt profile."
 
     run_scene_batch "stress" ".stress" \
         --threads "$STRESS_THREADS" \
@@ -544,10 +546,11 @@ if [[ $STRESS -eq 1 ]]; then
     done
     echo "============================================================"
     echo "stress logs: $LOG_DIR/*.stress.log"
-    echo "reproduce any stress failure verbatim:"
+    echo "rerun the same stress profile:"
     echo "  $BIN test --scene <SCENE> --threads $STRESS_THREADS --jitter $STRESS_JITTER --seed $STRESS_SEED"
-    echo "(note: --threads $STRESS_THREADS is multi-threaded and therefore NOT bit-reproducible;"
-    echo " re-run with --threads 1 --jitter $STRESS_JITTER to isolate dt-sensitivity alone.)"
+    echo "(note: stress changes both pool allocation and dt; use separate controlled runs to attribute a failure.)"
+    echo "  $BIN test --scene <SCENE> --threads 1 --jitter $STRESS_JITTER --seed $STRESS_SEED"
+    echo "  $BIN test --scene <SCENE> --threads $STRESS_THREADS --jitter 0 --seed $STRESS_SEED"
 fi
 
 if [[ $overall -eq 0 ]]; then

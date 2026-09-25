@@ -1,5 +1,6 @@
 // TEST-ONLY: mixed-domain document lifecycle through the production Editor.
 const TEST_KIND = "editor";
+const PREVIEW = 15201;
 
 fn record_for(docs, id) {
     for record in docs.open_documents {
@@ -12,9 +13,9 @@ fn on_start(me, ctx) {
     this.phase = 0;
     this.elapsed = 0.0;
     this.done = false;
-    this.original = -1;
-    this.modelica = -1;
-    this.fork = -1;
+    this.original = ();
+    this.modelica = ();
+    this.fork = ();
     this.initial_ids = [];
     this.checks = [];
 }
@@ -40,7 +41,7 @@ fn on_tick(me, ctx) {
                 }
             }
         }
-        if this.original < 0 { return; }
+        if this.original == () { return; }
         cmd("NewDocument", #{ kind: "modelica" });
         this.phase = 1;
         return;
@@ -58,7 +59,7 @@ fn on_tick(me, ctx) {
                 this.modelica = record.doc_id;
             }
         }
-        if this.modelica < 0 { return; }
+        if this.modelica == () { return; }
         this.checks.push(t_true(this.modelica != this.original,
             "Modelica and USD have distinct live handles"));
         this.checks.push(t_true(original != () && original.kind == "usd",
@@ -80,17 +81,18 @@ fn on_tick(me, ctx) {
                 this.fork = record.doc_id;
             }
         }
-        if this.fork < 0 { return; }
+        if this.fork == () { return; }
         this.checks.push(t_true(this.fork != this.modelica && this.fork != this.original,
             "fork allocation shares the cross-domain identity owner"));
-        assembly_ui::open_session(15201, this.fork, "@root@");
+        assembly_ui::open_session(PREVIEW, this.fork, "@root@");
         this.phase = 3;
         return;
     }
     if this.phase == 3 {
         let ready = false;
         for preview in assembly_edit::viewport().previews {
-            if preview.preview == 15201 && preview.doc == this.fork {
+            if preview.preview.to_string() == PREVIEW.to_string()
+                && preview.doc_id == this.fork {
                 ready = preview.projection_ready;
             }
         }
@@ -118,7 +120,7 @@ fn on_tick(me, ctx) {
         let original = assembly_edit::describe(this.original);
         this.checks.push(t_true(!original.dirty && original.origin.File.path != saved.origin.path,
             "USD Save-As preserves the original file identity"));
-        assembly_edit::preview_close(15201);
+        assembly_edit::preview_close(PREVIEW);
         assembly_edit::close_document(this.fork);
         this.phase = 4;
         return;

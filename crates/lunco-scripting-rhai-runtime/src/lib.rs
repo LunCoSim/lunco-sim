@@ -51,6 +51,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             .init_resource::<lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry>()
             .init_resource::<lunco_scripting_rhai_world::policy::PendingTwinPolicyCommands>()
             .init_resource::<lunco_scripting_rhai_world::world_bridge::PendingWorldScripts>()
+            .init_resource::<lunco_scripting_rhai_world::world_bridge::WorldScriptExecutionLimits>()
             .init_resource::<lunco_scripting_rhai_world::world_bridge::RhaiRuntimeStatus>();
         #[cfg(feature = "native-plugins")]
         app.init_resource::<lunco_scripting_rhai_world::native_plugins::NativeTwinPlugins>();
@@ -93,7 +94,9 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
             .add_systems(
                 Update,
                 lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets
-                    .after(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetSet),
+                    .in_set(lunco_scripting_rhai_world::world_bridge::RhaiBuiltinPreparationSet)
+                    .after(lunco_scripting_rhai_world::source_asset::RhaiSourceAssetSet)
+                    .before(lunco_core::RuntimeCycleSet::Repl),
             )
             .add_systems(
                 Update,
@@ -211,13 +214,15 @@ fn scripts_run_here(role: Option<Res<lunco_core_session::NetworkRole>>) -> bool 
 fn world_scripts_are_queued(
     pending: Res<lunco_scripting_rhai_world::world_bridge::PendingWorldScripts>,
 ) -> bool {
-    !pending.queue.is_empty()
+    pending.has_pending()
 }
 
 #[cfg(all(test, feature = "rhai"))]
 mod tests {
     use bevy::prelude::{App, IntoScheduleConfigs, ResMut, Resource, Update};
-    use lunco_scripting_rhai_world::world_bridge::{PendingWorldScript, PendingWorldScripts};
+    use lunco_scripting_rhai_world::world_bridge::{
+        PendingWorldScript, PendingWorldScripts, WorldScriptExecutionLimits,
+    };
 
     use super::world_scripts_are_queued;
 
@@ -232,6 +237,7 @@ mod tests {
     fn empty_repl_queue_does_not_schedule_its_exclusive_drain() {
         let mut app = App::new();
         app.init_resource::<PendingWorldScripts>();
+        app.init_resource::<WorldScriptExecutionLimits>();
         app.init_resource::<Scheduled>();
         app.add_systems(Update, count_schedule_run.run_if(world_scripts_are_queued));
 
@@ -240,13 +246,16 @@ mod tests {
 
         app.world_mut()
             .resource_mut::<PendingWorldScripts>()
-            .queue
-            .push(PendingWorldScript::Code {
-                id: 0,
-                code: String::new(),
-                authority: None,
-                correlation_id: None,
-            });
+            .enqueue(
+                PendingWorldScript::Code {
+                    id: 0,
+                    code: String::new(),
+                    authority: None,
+                    correlation_id: None,
+                },
+                WorldScriptExecutionLimits::default(),
+            )
+            .expect("one request fits the default queue");
         app.update();
         assert_eq!(app.world().resource::<Scheduled>().0, 1);
     }

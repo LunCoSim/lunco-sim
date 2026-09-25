@@ -10,8 +10,8 @@ fn finish(checks) {
 fn on_start(me, ctx) {
     this.done = false;
     this.phase = 0;
-    this.original = -1;
-    this.fork = -1;
+    this.original = ();
+    this.fork = ();
     this.elapsed = 0.0;
     this.initial_docs = [];
     this.checks = [];
@@ -39,7 +39,7 @@ fn on_tick(me, ctx) {
                 }
             }
         }
-        if this.original < 0 { return; }
+        if this.original == () { return; }
         assembly_edit::fork_document(this.original, "Audit fork");
         this.phase = 1;
         return;
@@ -52,10 +52,13 @@ fn on_tick(me, ctx) {
                 break;
             }
         }
-        if this.fork < 0 { return; }
-        let unmapped = query("QueryUsdPrim", #{ doc_id: this.fork, path: HINGE });
-        this.checks.push(t_true(unmapped.ok == false,
-            "open document without a projection cannot read the live stage"));
+        if this.fork == () { return; }
+        let unmapped = query("QueryUsdPrim", #{
+            doc_id: this.fork, path: HINGE, attrs: ["physics:axis"],
+        });
+        this.checks.push(t_true(unmapped.ok != false
+            && unmapped.attrs["physics:axis"] == "X",
+            "an unprojected fork reads its own composed USD document"));
         let before = assembly_edit::describe(this.fork);
         assembly_edit::attribute(this.fork, "@root@", HINGE,
             "physics:axis", "token", "\"Y\"", before.generation);
@@ -93,7 +96,7 @@ fn on_tick(me, ctx) {
     let viewport = assembly_edit::viewport();
     let ready = 0;
     for preview in viewport.previews {
-        if (preview.doc == this.original || preview.doc == this.fork)
+        if (preview.doc_id == this.original || preview.doc_id == this.fork)
             && preview.projection_ready { ready += 1; }
     }
     if ready != 2 { return; }

@@ -50,12 +50,15 @@ pub struct SetEmptyViewportReason {
 pub(crate) fn clear_scene_on_twin_closed(
     trigger: On<TwinClosed>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
+    mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
     mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut commands: Commands,
 ) {
     let root = trigger.event().root.clone();
-    pending_twin.release_root(&root);
+    for key in pending_twin.release_root(&root) {
+        admission.cancel_queued(key);
+    }
     for doc in backed.release_root(&root) {
         registry.remove(doc);
     }

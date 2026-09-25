@@ -1124,7 +1124,7 @@ fn shadow_quality_policy_warning(
         ("estimated_bytes", shadow_hook_int(required_bytes)),
         ("budget_bytes", shadow_hook_int(budget_bytes)),
     ]);
-    match lunco_hooks::invoke(RENDER_SHADOW_QUALITY_HOOK, &[facts]) {
+    match lunco_hooks::invoke_unclassified(RENDER_SHADOW_QUALITY_HOOK, &[facts]) {
         None | Some(Ok(lunco_hooks::HookValue::Unit)) => None,
         Some(Ok(lunco_hooks::HookValue::Str(message))) if !message.is_empty() => Some(message),
         Some(Ok(lunco_hooks::HookValue::Str(_))) => None,
@@ -1527,7 +1527,7 @@ mod tests {
     impl lunco_hooks::ScriptHook for TestShadowQualityPolicy {
         fn invoke(
             &self,
-            _args: &[lunco_hooks::HookValue],
+            _invocation: &lunco_hooks::HookInvocation<'_>,
         ) -> Result<lunco_hooks::HookValue, lunco_hooks::HookError> {
             Ok(lunco_hooks::HookValue::str("policy warning"))
         }

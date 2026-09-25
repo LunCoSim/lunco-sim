@@ -696,8 +696,6 @@ impl Plugin for ModelicaUiPlugin {
             // state → status bar. Core emits events/state; these project them.
             .add_systems(Update, core_observers::drain_notices_to_console)
             .add_systems(Update, core_observers::mirror_source_roots_to_status_bus)
-            // Reactive UI: relay core compile requests → CompileModel command.
-            .add_systems(Update, core_observers::relay_compile_requests)
             // Reactive UI: feed input/workspace pacing hints into the core
             // parse scheduler (before it reads them this frame).
             .add_systems(

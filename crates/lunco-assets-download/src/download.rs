@@ -843,7 +843,8 @@ fn prepare_download_policy(
         ("has_process", HookValue::Bool(entry.process.is_some())),
     ]);
 
-    let Some(result) = lunco_hooks::invoke(ASSET_DOWNLOAD_PREPARE_HOOK, &[facts]) else {
+    let Some(result) = lunco_hooks::invoke_unclassified(ASSET_DOWNLOAD_PREPARE_HOOK, &[facts])
+    else {
         return Ok(DownloadPolicy::default());
     };
     let value = result.map_err(|error| DownloadError::PolicyInvalid(error.to_string()))?;

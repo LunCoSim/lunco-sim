@@ -87,7 +87,21 @@ impl Plugin for ModelicaExecutionPlugin {
 
         app.add_plugins(lunco_modelica_runner::ModelicaRunnerPlugin);
 
-        app.configure_sets(Update, ModelicaSet::HandleResponses);
+        app.configure_sets(
+            Update,
+            (
+                ModelicaSet::HandleResponses,
+                ModelicaSet::AdmitCompileRequests,
+            )
+                .chain()
+                .in_set(lunco_core::RuntimeCycleSet::Lifecycle),
+        );
+        app.init_resource::<lunco_core_runtime::SimulationProgress>()
+            .add_systems(
+                PreUpdate,
+                lunco_modelica_worker::worker::reconcile_modelica_preparation_progress
+                    .in_set(lunco_core::RuntimeCycleSet::Lifecycle),
+            );
         app.configure_sets(FixedUpdate, ModelicaSet::SpawnRequests);
         app.add_plugins(lunco_modelica_telemetry::ModelicaTelemetryPlugin);
         app.init_resource::<lunco_modelica_worker::worker::CosimLag>();
@@ -97,6 +111,15 @@ impl Plugin for ModelicaExecutionPlugin {
                 Update,
                 lunco_modelica_worker::worker::handle_modelica_responses
                     .in_set(ModelicaSet::HandleResponses),
+            )
+            .add_systems(
+                Update,
+                (
+                    lunco_modelica_worker::worker::request_modelica_compiles,
+                    lunco_modelica_worker::worker::dispatch_modelica_compile_requests,
+                )
+                    .chain()
+                    .in_set(ModelicaSet::AdmitCompileRequests),
             )
             .add_systems(
                 FixedUpdate,

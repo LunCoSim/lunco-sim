@@ -47,18 +47,19 @@
 //! If this simulator ever grows radiometric navigation or two-way ranging
 //! residuals, those are the terms to add, and they belong here.
 
+use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{Command, SceneTransitionCoordinator, on_command, register_commands};
 use lunco_hooks::HookValue;
 use lunco_spatial::coords::world_pose;
 use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
 use lunco_terrain_surface::{DemHeightField, SurfaceOracle};
-use lunco_time::CelestialTime;
+use lunco_time::{CelestialTime, WorldTime};
 
 use crate::pose::SolarFramePose;
 use lunco_celestial::CelestialBodyRegistry;
@@ -270,6 +271,14 @@ struct GeometryEndpoint {
     pose: SolarFramePose,
 }
 
+#[derive(SystemParam)]
+pub(crate) struct LinkOwnerInputs<'w> {
+    config: Option<Res<'w, LinkConfig>>,
+    world_time: Option<Res<'w, WorldTime>>,
+    sim_tick: Option<Res<'w, lunco_core_runtime::SimTick>>,
+    scene_transition: Option<Res<'w, SceneTransitionCoordinator>>,
+}
+
 /// The cadence-gated pairwise connectivity sweep. A REGULAR system on purpose:
 /// it writes through `Commands`, so it adds NO extra command-flush sync point. An
 /// earlier EXCLUSIVE version (to call the `TerrainRaycast` provider with
@@ -292,7 +301,7 @@ struct GeometryEndpoint {
 /// an f32 cast of a ~1.7e6 m lunar coordinate throws away decimetres.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_links(
-    config: Option<Res<LinkConfig>>,
+    owner: LinkOwnerInputs,
     celestial_time: Option<Res<CelestialTime>>,
     ephemeris: Option<Res<EphemerisResource>>,
     registry: Option<Res<CelestialBodyRegistry>>,
@@ -321,9 +330,18 @@ pub(crate) fn update_links(
     mut commands: Commands,
     mut topology: Option<ResMut<lunco_port_core::ports::PortTopologyRevision>>,
 ) {
-    let (Some(config), Some(celestial_time)) = (config, celestial_time) else {
+    let (Some(config), Some(celestial_time), Some(world_time)) = (
+        owner.config.as_deref(),
+        celestial_time.as_deref(),
+        owner.world_time.as_deref(),
+    ) else {
         return;
     };
+    let runtime_context = link_runtime_context(
+        world_time,
+        owner.sim_tick.as_deref(),
+        owner.scene_transition.as_deref(),
+    );
     // `1` (or a fat-fingered `0`) means "flip immediately" — the pre-debounce behaviour.
     let debounce = config.drop_debounce.max(1);
     let jd = celestial_time.epoch_jd;
@@ -552,9 +570,24 @@ pub(crate) fn update_links(
                 // accidentally reopening an occluded or out-of-range pair.
                 ("builtin", HookValue::Bool(builtin)),
             ]);
-            let raw = match lunco_hooks::invoke(LINK_HOOK, &[ctx]) {
-                Some(Ok(v)) => v.as_bool().unwrap_or(builtin),
-                _ => builtin,
+            let raw = match lunco_hooks::invoke_with_context(LINK_HOOK, &[ctx], runtime_context) {
+                None => builtin,
+                Some(Ok(HookValue::Bool(connected))) => connected,
+                Some(Ok(value)) => {
+                    warn_once!(
+                        "[link] hook {LINK_HOOK} returned {value:?}, expected Bool; rejecting the link"
+                    );
+                    false
+                }
+                Some(Err(error)) => {
+                    warn_once!(
+                        "[link] hook {LINK_HOOK} faulted for pair {}-{}; rejecting the link: {}",
+                        a.gid,
+                        b.gid,
+                        error.0
+                    );
+                    false
+                }
             };
 
             // Asymmetric drop debounce (see `LinkConfig::drop_debounce`). Acquire the
@@ -657,6 +690,50 @@ pub(crate) fn update_links(
         if let Some(topology) = topology.as_mut() {
             topology.bump();
         }
+    }
+}
+
+/// Stamp the scheduled link decision with the simulation facts that own it.
+/// Before a scene transition commits, link geometry is part of scene
+/// preparation and has no elapsed simulation clock. Once a scene is active,
+/// the decision uses the latest completed simulation tick and mission time.
+fn link_runtime_context(
+    world_time: &WorldTime,
+    sim_tick: Option<&lunco_core_runtime::SimTick>,
+    scene_transition: Option<&SceneTransitionCoordinator>,
+) -> lunco_core::RuntimeExecutionContext {
+    let generation = scene_transition.and_then(SceneTransitionCoordinator::lifecycle_generation);
+    let preparing = scene_transition.is_some_and(|coordinator| coordinator.active_id().is_some());
+    let route = generation
+        .map(|generation| {
+            lunco_core::RuntimeRoute::twin(lunco_core::RuntimeCycle::Simulation, generation)
+        })
+        .unwrap_or_else(|| lunco_core::RuntimeRoute::core(lunco_core::RuntimeCycle::Simulation));
+    let (phase, clock, time_seconds, sequence) = if preparing {
+        (
+            lunco_core::RuntimePhase::Preparation,
+            lunco_core::RuntimeClock::None,
+            None,
+            None,
+        )
+    } else {
+        (
+            lunco_core::RuntimePhase::Behavior,
+            lunco_core::RuntimeClock::Simulation,
+            Some(world_time.sim_secs),
+            sim_tick.map(|tick| tick.0),
+        )
+    };
+    lunco_core::RuntimeExecutionContext {
+        route: Some(route),
+        phase,
+        clock,
+        time_seconds,
+        // This owner is called from Update after the fixed simulation. There is
+        // no exact per-call delta, so consumers must not infer one from Fixed.
+        delta_seconds: None,
+        sequence,
+        producer: None,
     }
 }
 
@@ -2266,7 +2343,7 @@ mod tests {
     ///
     struct ConstHook(bool);
     impl lunco_hooks::ScriptHook for ConstHook {
-        fn invoke(&self, _args: &[HookValue]) -> lunco_hooks::HookResult {
+        fn invoke(&self, _invocation: &lunco_hooks::HookInvocation<'_>) -> lunco_hooks::HookResult {
             Ok(HookValue::Bool(self.0))
         }
     }
@@ -2322,8 +2399,11 @@ mod tests {
         #[derive(Default)]
         struct Captor(std::sync::Mutex<Vec<String>>);
         impl lunco_hooks::ScriptHook for Captor {
-            fn invoke(&self, args: &[HookValue]) -> lunco_hooks::HookResult {
-                if let Some(HookValue::Map(entries)) = args.first() {
+            fn invoke(
+                &self,
+                invocation: &lunco_hooks::HookInvocation<'_>,
+            ) -> lunco_hooks::HookResult {
+                if let Some(HookValue::Map(entries)) = invocation.args.first() {
                     *self.0.lock().unwrap() = entries.iter().map(|(k, _)| k.clone()).collect();
                 }
                 Ok(HookValue::Bool(true))
@@ -2381,6 +2461,7 @@ mod tests {
                 TelemetryValue::String(s) => s.clone(),
                 TelemetryValue::F64(v) => v.to_string(),
                 TelemetryValue::I64(v) => v.to_string(),
+                TelemetryValue::U64(v) => v.to_string(),
                 TelemetryValue::Bool(v) => v.to_string(),
                 TelemetryValue::Array(_) | TelemetryValue::Map(_) => String::new(),
             };

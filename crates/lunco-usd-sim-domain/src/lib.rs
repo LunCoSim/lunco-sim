@@ -289,6 +289,7 @@ struct PendingDomainProjection {
     entity: Entity,
     stage_id: AssetId<UsdStageAsset>,
     stage_generation: u64,
+    scene_generation: u64,
     /// Prepared runtime instances are immutable read surfaces. Their scene
     /// stage generation may advance when the spawn layer is authored, so the
     /// canonical-generation fence only applies to ordinary scene plans.
@@ -303,8 +304,8 @@ struct PendingDomainProjection {
 /// In-flight domain synthesis owned by the scene projection lifecycle.
 ///
 /// One network has one synthesis owner. Completion is fenced by the USD entity
-/// and either the ordinary canonical-stage generation or the exact immutable
-/// prepared instance plan before it can publish a result.
+/// and Twin generation, then by either the ordinary canonical-stage generation
+/// or the exact immutable prepared instance plan before it can publish a result.
 #[derive(Resource, Default)]
 pub struct PendingDomainProjections {
     tasks: Vec<PendingDomainProjection>,
@@ -576,10 +577,14 @@ pub fn reset_scene_projection_work(
     mut users: ResMut<DomainClassUsers>,
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
     mut generated_documents: ResMut<PendingGeneratedSourceDocuments>,
+    pending_synthesis: Option<ResMut<PendingDomainProjections>>,
 ) {
     users.clear();
     candidates.reset_for_scene();
     generated_documents.0 = PendingEntityWork::with_initial_discovery();
+    if let Some(mut pending_synthesis) = pending_synthesis {
+        pending_synthesis.tasks.clear();
+    }
 }
 
 pub fn queue_added_domain_prim(
@@ -643,6 +648,7 @@ fn queue_domain_projection(
     entity: Entity,
     stage_id: AssetId<UsdStageAsset>,
     stage_generation: u64,
+    scene_generation: u64,
     root_path: &SdfPath,
     model_name: String,
     requested: String,
@@ -650,6 +656,7 @@ fn queue_domain_projection(
     plan: Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
     instance_plan: bool,
     classes: MemberClasses,
+    runtime_context: lunco_core::RuntimeExecutionContext,
 ) {
     let root_path_string = root_path.to_string();
     let task_root = root_path.clone();
@@ -657,13 +664,17 @@ fn queue_domain_projection(
     let task_plan = plan.clone();
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let view: &dyn ComposedReader = task_plan.as_ref();
-        let context = SynthContext { classes: &classes };
+        let context = SynthContext {
+            classes: &classes,
+            runtime_context,
+        };
         synthesizer.synthesize(view, &task_root, &task_model_name, &context)
     });
     pending.tasks.push(PendingDomainProjection {
         entity,
         stage_id,
         stage_generation,
+        scene_generation,
         instance_plan,
         root_path: root_path_string,
         model_name,
@@ -671,6 +682,31 @@ fn queue_domain_projection(
         plan,
         task,
     });
+}
+
+fn modelica_synthesis_context(
+    coordinator: Option<&lunco_core::SceneTransitionCoordinator>,
+) -> Result<(lunco_core::RuntimeExecutionContext, u64), String> {
+    let generation = coordinator
+        .and_then(lunco_core::SceneTransitionCoordinator::lifecycle_generation)
+        .ok_or_else(|| {
+            "Modelica source synthesis requires an active or committed Twin generation".to_string()
+        })?;
+    Ok((
+        lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin(
+                lunco_core::RuntimeCycle::Lifecycle,
+                generation,
+            )),
+            phase: lunco_core::RuntimePhase::Preparation,
+            clock: lunco_core::RuntimeClock::None,
+            time_seconds: None,
+            delta_seconds: None,
+            sequence: None,
+            producer: None,
+        },
+        generation,
+    ))
 }
 
 fn resolve_domain_synthesizer(
@@ -713,6 +749,7 @@ fn commit_domain_projection(
     view: &dyn ComposedReader,
     classes: &MemberClasses,
     channels: &ModelicaChannels,
+    source_roots: Option<&mut lunco_modelica_source_roots::SourceRootRegistry>,
     requested: &str,
     model_name: &str,
     synthesized: Result<SynthOutcome, Vec<DomainProjectionError>>,
@@ -861,39 +898,52 @@ fn commit_domain_projection(
             return false;
         }
     };
-    let projection_error = match channels.tx.send(ModelicaCommand::Compile {
-        entity,
-        session_id,
-        model_name: compiled_name,
-        source,
-        doc_uri: doc_uri.clone(),
-        extra_sources: Vec::new(),
-        parameter_overrides: Vec::new(),
-        stream: None,
-        // The worker, not this projector, owns backend selection and DAE
-        // lowering for generated domain networks.
-        realtime_safe: false,
-    }) {
-        Ok(()) => {
-            info!(
-                "[domain-projection] compiling `{}` from {} component(s) via `{requested}` as \
-                 generated://{}.mo",
-                prim.path, component_count, model_name
-            );
-            None
-        }
-        Err(error) => {
-            let message = format!("could not dispatch generated model compile: {error}");
-            model.is_stepping = false;
-            model.is_compiling = false;
-            model.last_error = Some(message.clone());
-            notices.write(ModelicaNotice {
-                level: NoticeLevel::Error,
-                text: format!("[{}] Compile error: {message}", model.model_name),
-            });
-            Some(message)
-        }
+    let root_admission = match source_roots {
+        Some(source_roots) => lunco_modelica_source_roots::admit_compile_roots(
+            source_roots,
+            synthesized.source_roots.iter().cloned(),
+            channels,
+        ),
+        None if synthesized.source_roots.is_empty() => Ok(()),
+        None => Err("Modelica source-root registry is not installed".to_owned()),
     };
+    let dispatch_error = root_admission
+        .err()
+        .map(|error| format!("could not admit generated Modelica source roots: {error}"))
+        .or_else(|| {
+            channels
+                .tx
+                .send(ModelicaCommand::Compile {
+                    entity,
+                    session_id,
+                    model_name: compiled_name,
+                    source,
+                    doc_uri: doc_uri.clone(),
+                    extra_sources: Vec::new(),
+                    parameter_overrides: Vec::new(),
+                    stream: None,
+                    // The worker, not this projector, owns backend selection and DAE
+                    // lowering for generated domain networks.
+                    realtime_safe: false,
+                })
+                .err()
+                .map(|error| format!("could not dispatch generated model compile: {error}"))
+        });
+    if let Some(message) = &dispatch_error {
+        model.is_stepping = false;
+        model.is_compiling = false;
+        model.last_error = Some(message.clone());
+        notices.write(ModelicaNotice {
+            level: NoticeLevel::Error,
+            text: format!("[{}] Compile error: {message}", model.model_name),
+        });
+    } else {
+        info!(
+            "[domain-projection] compiling `{}` from {} component(s) via `{requested}` as \
+             generated://{}.mo",
+            prim.path, component_count, model_name
+        );
+    }
     let generated_source = GeneratedModelicaSource {
         network_root: prim.path.clone(),
         doc_uri,
@@ -906,7 +956,7 @@ fn commit_domain_projection(
         boundary_inputs: synthesized.inputs.iter().cloned().collect(),
         boundary_outputs: synthesized.outputs.iter().cloned().collect(),
         layout: synthesized.layout,
-        projection_error,
+        projection_error: dispatch_error,
     };
     retire_sim_interface(commands, entity);
     commands.entity(entity).try_insert((
@@ -953,14 +1003,32 @@ pub fn project_domain_islands(
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
     class_users: Res<DomainClassUsers>,
     classes: Res<MemberClasses>,
-    registry: Res<SynthesizerRegistry>,
-    channels: Option<Res<ModelicaChannels>>,
+    synthesis_owner: (
+        Res<SynthesizerRegistry>,
+        Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    ),
+    mut modelica_admission: (
+        Option<Res<ModelicaChannels>>,
+        Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
+    ),
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
-    let Some(channels) = channels else { return };
+    let Some(channels) = modelica_admission.0.as_deref() else {
+        return;
+    };
     if candidates.projection.is_empty() {
         return;
     }
+    let (runtime_context, scene_generation) =
+        match modelica_synthesis_context(synthesis_owner.1.as_deref()) {
+            Ok(context) => context,
+            Err(message) => {
+                bevy::log::error_once!(
+                    "[domain-projection] {message}; synthesis candidates remain queued"
+                );
+                return;
+            }
+        };
     let started = web_time::Instant::now();
     let mut projected = 0usize;
     let mut candidate_entities: Vec<_> = candidates.projection.drain().collect();
@@ -1040,7 +1108,7 @@ pub fn project_domain_islands(
                 continue;
             }
             let Some((requested, synthesizer)) =
-                resolve_domain_synthesizer(plan_view, &root_path, &prim.path, &registry)
+                resolve_domain_synthesizer(plan_view, &root_path, &prim.path, &synthesis_owner.0)
             else {
                 continue;
             };
@@ -1050,6 +1118,7 @@ pub fn project_domain_islands(
                 entity,
                 id,
                 stage_generation,
+                scene_generation,
                 &root_path,
                 model_name,
                 requested,
@@ -1057,6 +1126,7 @@ pub fn project_domain_islands(
                 plan,
                 instance_projection.is_some(),
                 classes.clone(),
+                runtime_context,
             );
             continue;
         }
@@ -1073,7 +1143,7 @@ pub fn project_domain_islands(
         // collections have no exposed selector and are classified from their
         // `LunCoForceActuatorAPI` members.
         let Some((requested, synthesizer)) =
-            resolve_domain_synthesizer(&reader, &root_path, &prim.path, &registry)
+            resolve_domain_synthesizer(&reader, &root_path, &prim.path, &synthesis_owner.0)
         else {
             continue;
         };
@@ -1084,7 +1154,10 @@ pub fn project_domain_islands(
                 &reader,
                 &root_path,
                 &model_name,
-                &SynthContext { classes: &classes },
+                &SynthContext {
+                    classes: &classes,
+                    runtime_context,
+                },
             )
         };
         let committed = {
@@ -1098,7 +1171,8 @@ pub fn project_domain_islands(
                 &root_path,
                 &reader,
                 &classes,
-                &channels,
+                channels,
+                modelica_admission.1.as_deref_mut(),
                 &requested,
                 &model_name,
                 synthesized,
@@ -1141,10 +1215,26 @@ pub fn poll_domain_projection_tasks(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     classes: Res<MemberClasses>,
-    channels: Option<Res<ModelicaChannels>>,
+    scene_transitions: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    mut modelica_admission: (
+        Option<Res<ModelicaChannels>>,
+        Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
+    ),
     mut notices: MessageWriter<ModelicaNotice>,
 ) {
-    let Some(channels) = channels else { return };
+    let Some(channels) = modelica_admission.0.as_deref() else {
+        return;
+    };
+    let current_scene_generation = scene_transitions
+        .as_deref()
+        .and_then(lunco_core::SceneTransitionCoordinator::lifecycle_generation);
+    let Some(current_scene_generation) = current_scene_generation else {
+        pending.tasks.clear();
+        return;
+    };
+    pending
+        .tasks
+        .retain(|task| task.scene_generation == current_scene_generation);
     let mut telemetry_indexes = HashMap::new();
     let mut index = 0;
     while index < pending.tasks.len() {
@@ -1197,7 +1287,8 @@ pub fn poll_domain_projection_tasks(
             &root_path,
             view,
             &classes,
-            &channels,
+            channels,
+            modelica_admission.1.as_deref_mut(),
             &task.requested,
             &task.model_name,
             synthesized,
@@ -2061,6 +2152,21 @@ mod tests {
     use super::*;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
 
+    fn synthesis_test_context() -> lunco_core::RuntimeExecutionContext {
+        lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin(
+                lunco_core::RuntimeCycle::Lifecycle,
+                1,
+            )),
+            phase: lunco_core::RuntimePhase::Preparation,
+            clock: lunco_core::RuntimeClock::None,
+            time_seconds: None,
+            delta_seconds: None,
+            sequence: None,
+            producer: None,
+        }
+    }
+
     #[test]
     fn source_class_users_invalidate_only_dependent_roots() {
         let mut users = DomainClassUsers::default();
@@ -2619,7 +2725,10 @@ mod tests {
                 &view,
                 &root_path,
                 "Rig_System",
-                &SynthContext { classes: &classes },
+                &SynthContext {
+                    classes: &classes,
+                    runtime_context: synthesis_test_context(),
+                },
             )
             .expect("fixture synthesis")
         else {
@@ -3295,9 +3404,13 @@ def Scope "Rig"
             ("allocation_step".into(), lunco_hooks::HookValue::Float(0.1)),
             ("actuator_count".into(), lunco_hooks::HookValue::Int(1)),
         ]);
-        let value = lunco_hooks::invoke("synth.actuator-wrench", &[facts])
-            .expect("actuator hook registered")
-            .expect("actuator policy succeeds");
+        let value = lunco_hooks::invoke_with_context(
+            "synth.actuator-wrench",
+            &[facts],
+            synthesis_test_context(),
+        )
+        .expect("actuator hook registered")
+        .expect("actuator policy succeeds");
         let lunco_hooks::HookValue::Map(map) = value else {
             panic!("actuator policy must return a map");
         };

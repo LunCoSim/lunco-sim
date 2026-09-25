@@ -27,7 +27,7 @@ fn modelica_apply(doc, ops) {
 /// preferred editor path; the two-argument form above remains for authored
 /// scripts that intentionally do not use optimistic concurrency.
 fn modelica_apply_against(doc, ops, parent_generation) {
-    if doc == () || doc == 0 { return __missing_document("Modelica"); }
+    if doc == () || doc.to_string() == "0" { return __missing_document("Modelica"); }
     cmd("ApplyModelicaOps", #{
         doc_id: doc,
         ops: ops,

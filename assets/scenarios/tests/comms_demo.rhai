@@ -24,6 +24,12 @@
 
 fn on_start(me, ctx) {
     this.t = 0.0;
+    let off_cycle = invoke_hook("link.connected", [#{}]);
+    this.link_hook_rejects_start = off_cycle.installed == true
+        && off_cycle.status == "fault";
+    let off_cycle_time = invoke_hook("scene.time.select", [#{}]);
+    this.scene_time_hook_rejects_start = off_cycle_time.installed == true
+        && off_cycle_time.status == "fault";
     // Ephemeris, orbit and the graph cadence all have to land first; a verdict on
     // tick one measures a graph nobody has filled in.
     this.settle_s = 3.0;
@@ -68,6 +74,8 @@ fn on_tick(me, ctx) {
         hops: path.len(),
         has_relay: has_relay,
         ends_at_earth: ends_at_earth,
+        off_cycle_hook_rejected: this.link_hook_rejects_start,
+        off_cycle_time_hook_rejected: this.scene_time_hook_rejects_start,
     });
 }
 
@@ -97,6 +105,10 @@ fn path_ends_at(path, ids) {
 //                           asked for.
 fn verdict(s) {
     let f = [];
+    f.push(t_true(s.off_cycle_hook_rejected == true,
+        "link.connected accepted a call from scenario startup instead of rejecting its off-cycle context"));
+    f.push(t_true(s.off_cycle_time_hook_rejected == true,
+        "scene.time.select accepted a call from scenario startup instead of rejecting its off-cycle context"));
     f.push(t_true(s.n_nodes >= 6,
         "the graph carries " + s.n_nodes + " node(s); this scene authors six " +
         "(rover, mast, relay, three DSN complexes)"));

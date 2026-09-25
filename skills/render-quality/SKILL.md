@@ -58,7 +58,18 @@ LOD approaches, consult the source-linked
 4. Compare a settled frame sequence, not one screenshot. Fast color changes
    usually indicate changing inputs, repeated derived bakes, missing asset
    readiness, or unstable lighting—not a reason to clamp the image in a
-   shader. Find the owner and gate the work by asset/revision events.
+   shader. Find the owner and gate the work by asset/revision events. Camera-
+   driven terrain cover selection runs at 30 Hz wall-clock cadence and uses
+   shared bounded background admission on native visual hosts. The owner fences
+   and commits current results in `Update`; tile-mesh bake admission still uses
+   its per-terrain queue. Offline capture lockstep bypasses the cadence and runs
+   selection synchronously for each captured frame. Profile remaining frame
+   hitches before changing LOD budgets.
+
+Standard `UsdPreviewSurface` input edits travel through
+`UsdSceneChangeBatch`; the visual owner refreshes the bound `PbrLook` in place
+and the renderer rebinds its material. If the authored value changes but the
+surface stays stale, inspect that owner path before adding a scene rebuild.
 
 For celestial globes, verify the installed Earth/Moon imagery dataset and the
 composed USD body look. A body shader look may add shader parameters, but it

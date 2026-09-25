@@ -1,0 +1,13 @@
+[package]
+name = "lunco-runtime-context"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Owner-neutral runtime cycle, route, clock, and invocation context contracts shared by the engine and scripting backends."
+
+[dependencies]
+bevy_reflect = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

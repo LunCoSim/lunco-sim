@@ -27,7 +27,9 @@ fn on_start(me, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
-    if this.elapsed < 2.0 { return; }
+    // The scene inherits the simulator's lunar gravity. A one-metre cube
+    // dropped from 10 m needs a little over 3.4 s to reach the ground.
+    if this.elapsed < 4.0 { return; }
 
     let escapee_end = world_pos(this.escapee);
     let control_end = world_pos(this.control);

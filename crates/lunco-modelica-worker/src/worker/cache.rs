@@ -94,11 +94,6 @@ impl PreparedSolveCache {
         revision.filter(|_| self.persistent_enabled)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(super) fn persistent_library_revision(&self, _revision: Option<u64>) -> Option<u64> {
-        None
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn disable_persistent(&mut self) {
         self.persistent_enabled = false;
@@ -112,7 +107,6 @@ impl PreparedSolveCache {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn load_disk(
-        &self,
         source_key: u64,
         library_revision: u64,
         parameter_overrides: &[(String, u64)],
@@ -132,19 +126,8 @@ impl PreparedSolveCache {
         Some(record.model)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(super) fn load_disk(
-        &self,
-        _source_key: u64,
-        _library_revision: u64,
-        _parameter_overrides: &[(String, u64)],
-    ) -> Option<rumoca_ir_solve::SolveModel> {
-        None
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn save_disk(
-        &self,
         source_key: u64,
         library_revision: u64,
         parameter_overrides: &[(String, u64)],
@@ -167,15 +150,5 @@ impl PreparedSolveCache {
         // Storage performs the native atomic replacement and owns the
         // platform-specific persistence path.
         let _ = write_file_sync(&path, &compressed);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(super) fn save_disk(
-        &self,
-        _source_key: u64,
-        _library_revision: u64,
-        _parameter_overrides: &[(String, u64)],
-        _model: &rumoca_ir_solve::SolveModel,
-    ) {
     }
 }

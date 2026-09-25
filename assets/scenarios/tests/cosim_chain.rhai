@@ -6,6 +6,13 @@
 
 const WAIT_S = 30.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{
+        modelica_entities: [find("/CosimChain/Oscillator")],
+        required_inputs: [],
+    }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;

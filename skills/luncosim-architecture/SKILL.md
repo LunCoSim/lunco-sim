@@ -34,24 +34,61 @@ owner boundary in stable identity order. Keep live-world hooks and physics
 inside their deterministic schedule. A Rhai scenario that depends on Modelica
 ports or events declares the participating entity ids in
 `simulation_dependencies(me, ctx)`, where `ctx` is the validated scenario
-parameter map. The optional hook returns nonnegative integer global entity ids;
-the owner resolves it once per source/parameter revision before the first
-lifecycle hook and adds it to the shared causal barrier. Omitting it declares
-no Rhai dependencies. The plan runs before mutable top-level initialization,
-so derive it from `me`, scenario parameters, and read-only world queries.
-Top-level initialization runs in its own `Initialization` phase after the plan
-commits. Dependency planning may resolve identities but cannot access live
-ports, issue commands, mutate the world, or emit events. Invalid or unresolved
-ids fail that source revision with a diagnostic. Unbarriered port access and
-Modelica event delivery fail visibly. Do not claim
-whole-simulation replay determinism while other reviewed gaps remain, including
-production physics using an unpinned parallel profile.
+parameter map. The hook returns a map with `modelica_entities: [ids]` and
+`required_inputs: [#{ owner, identity }]`. The owner resolves Modelica ids once
+per source/parameter revision and adds them to the shared causal barrier.
+Required input keys refer to producer namespaces registered in the generic
+`SimulationDependencyStates` resource. The scenario holds its existing
+`ScriptPreparation` key until every required input is Ready; it retries only
+after an owner-published state revision, and the visible wait reason names the
+input. A missing producer is a terminal diagnostic; a producer's Failed state
+reports its errors. Omitting the hook declares no Rhai dependencies. The plan
+runs before mutable top-level initialization, so derive it from `me`, scenario
+parameters, and read-only world queries. Top-level initialization runs in its
+own `Initialization` phase after the plan commits. Dependency planning may
+resolve identities but cannot access live ports, issue commands, mutate the
+world, or emit events. Invalid or unresolved Modelica ids fail that source
+revision with a diagnostic. Unbarriered port access and Modelica event delivery
+fail visibly. Physics operations that can accumulate into shared bodies use
+`PhysicsOrderKey` from the instance root and authored prim path. Joint solving,
+motor warm-start, custom prismatic correction, raycast and jointed tire forces,
+and raycast mass-property folds consume stable key order. The production
+`multi_rover_stress_20` Rhai gate compares physics and Modelica state across
+repeated single-thread and default-pool runs; two four-run matrices matched all
+recorded snapshots on the same build. This is fixture-specific evidence. Do not
+claim whole-simulation replay determinism while the remaining reviewed gaps
+are open.
+
+Scenario actor compile submission, completion commit, and hook execution use the
+source-owned `GlobalEntityId` component directly; the Update-synchronized API
+lookup index is not an ordering source. A local-only host without that component
+uses its Bevy entity key only within the current World and has no cross-session
+replay identity. Author observable multi-actor ordering checks in Rhai scene
+tests; reserve Rust tests for the generic ordering and async commit mechanisms.
+
+For file-backed documents, use `PreparedFileBacked` with the shared
+`DocumentRegistry::open_prepared_file` path when source parsing moves to a
+worker. The registry remains authoritative for path identity, dirty-document
+preservation, and lifecycle events. Owners fence results against the exact
+source/document revision before committing them. The default USD Twin scene
+uses this path for native USDA parse and persistent-source serialization;
+runtime sidecar restore and the browser worker transport remain separate open
+boundaries.
 
 Lifecycle work that changes authoritative scene state participates in
 `lunco-core-runtime::SimulationProgress`. Acquire with a typed owner/operation
 key, carry that identity through async preparation, and release it only after
 the owning terminal result has been committed. Scene load/restart/clear use
 `SceneTransitionId`; same-path transitions still have distinct identities.
+The coordinator advances the shared scene generation only for the matching
+successful transition and emits `SceneTransitionCommitted`. Scenario and other
+Twin-scoped cycle owners read that committed generation; do not maintain a
+subsystem-local scene counter or arm lifecycle work from a stale completion.
+Lifecycle hooks receive a discrete owner context keyed to the exact transition.
+For example, `scene.time.select` runs as `Twin/Lifecycle/Preparation` with no
+elapsed clock, and its typed result carries the same `SceneTransitionId` through
+application. The time owner ignores stale results and terminal edges after a
+replacement begins. One-shot policy inspection uses `Application/Repl/Evaluation`.
 Keep participant readiness and `PhysicsHolds` in their owners: they control
 local/world physics admission, while `SimulationProgress` controls whether the
 shared causal tick may advance. `UsdSceneRuntimePlugin` installs this shared
@@ -61,10 +98,40 @@ mounts retain diagnostics without pausing or faulting the primary simulation. A
 terminal primary reference failure retains its exact hold and publishes a path
 diagnostic plus `RuntimeFault` until scene teardown; inactive or removed,
 nonfaulted operations release their own keys. Surface the active wait reason
-through the existing status bus. An active USD Modelica participant remains
+through the existing status bus. Async data that changes authoritative physics,
+including a mounted DEM download/build, also holds an exact terrain entity key
+through the committed collider/oracle result; on web the hold spans the coarse
+preview and full worker result. The DEM bridge and readiness scan run in
+`PreUpdate` before `TimeSpineSet`, including while a Twin manifest scan is
+pending, so the first eligible fixed tick cannot precede terrain admission.
+UI and presentation schedules remain live.
+Physics readiness then admits bodies and joints on fixed steps. An active USD Modelica participant remains
 readiness-held through its first successful communication point; a compiled,
 intentionally paused model is ready without being stepped. Keep that participant
 readiness separate from the shared `SimulationProgress` lifecycle gate.
+First-compile intent is admitted by `request_modelica_compiles` in the lifecycle
+cycle while solver stepping stays in `FixedUpdate`, so compilation can be
+requested while virtual simulation time is held. The Modelica execution owner
+consumes typed `CompileRequested` intent and owns document resolution and
+worker dispatch; the UI command only chooses the class and publishes intent.
+On native, source-root installation, compile requests, Reset, parameter updates,
+and cache-invalidating Step auto-init share one single-owner Rumoca actor FIFO.
+Results return asynchronously and commit in submission order; actor requests
+and solve preparations use bounded admission. A Step that requires a rebuild
+resumes only after the matching session and library generation commit.
+Compile results must match both worker session and captured document
+generation. A result for an edited source revision is discarded, and an active
+model keeps its compile-run intent until a current result commits. The execution
+owner reconciles active causal models into `SimulationProgress` before
+`TimeSpineSet` and releases each exact entity key only after the matching
+compile result has been committed. Intentionally paused and noncausal models do
+not hold world time. Their first normal co-simulation step uses the per-step
+barrier after activation. The root USD loader composes the available dependency
+closure before publishing the stage asset, and scene admission ends after
+structural projection. CPU mesh construction stays on the presentation path.
+Keep owner-specific clock gates separate; production acceptance must still
+prove that the first authoritative fixed tick observes each dependency declared
+by the scene and scenario, independent of worker completion order.
 
 For engineering requirements, keep the same split at the numerical boundary:
 SysML owns typed intent, units, normative tolerances, and requirement/
@@ -118,8 +185,9 @@ each API-capable composition root install it explicitly. Keep the data/core
 crate independent of transport and presentation layers.
 
 For dynamic providers, keep `lunco-hooks` as the single reflected contract and
-invocation owner. `lunco-hooks-plugin-api` owns only the stable edition-2024
-ABI and typed wire helpers; `lunco-hooks-native` owns `libloading`, unsafe
+invocation owner. `HookInvocation` carries the typed runtime context with the
+validated values. `lunco-hooks-plugin-api` owns the stable edition-2024 ABI v2
+and typed invocation wire helpers; `lunco-hooks-native` owns `libloading`, unsafe
 admission, callback limits, and exact-registration teardown. Enable that path
 only from an application composition feature. A Twin must explicitly approve a
 provider with a Twin-relative `[[native_plugins]]` manifest entry; USD and Rhai
@@ -128,10 +196,15 @@ untrusted bundles require deployment-level signature and isolation controls.
 
 A provider may implement only an existing reflected, installable hook and must
 return typed data or a validated action plan. It must not mutate ECS/USD or add
-a second domain registry. The owner invokes it through `lunco_hooks::invoke`,
-validates the result, and reports a fault or unconfigured state according to
-the hook contract. Put an eventual expensive terrain provider at the consumed
-`lunco-terrain-bake` kernel boundary; keep `lunco-terrain-core` projection-free
+a second domain registry. The owner invokes it through `lunco_hooks::invoke`
+with a typed `HookInvocation`: cycle-owned callers supply their runtime
+context, while discrete boundaries explicitly use an unclassified context.
+The owner validates the result and reports a fault or unconfigured state
+according to the hook contract. Policy manifests may mark an optional
+feature-owned hook with `skip_when_hook_unavailable`; the runtime reports that
+capability in `policy_status().unavailable`, while compile and activation
+failures remain in `failed`. Put an eventual expensive terrain provider at the
+consumed `lunco-terrain-bake` kernel boundary; keep `lunco-terrain-core` projection-free
 and leave `lunco-terrain-surface` as the runtime projection owner. See
 [`native-hook-providers.md`](../../docs/architecture/native-hook-providers.md).
 
@@ -174,7 +247,8 @@ pattern. BigSpace propagates both the changed Earth grid pose and rotation to
 
 ### Runtime scopes, cycles, and publication boundaries
 
-Use the shared `lunco_core::RuntimeScope` and `RuntimeCycleSet` vocabulary when
+Use the shared `lunco_runtime_context::RuntimeScope` and
+`lunco_core::RuntimeCycleSet` vocabulary when
 placing a cross-cutting system. `Core`, `Application`, and `Twin` describe
 ownership; `Lifecycle`, `Simulation`, `Interaction`, `Command`, `Repl`, `Telemetry`,
 `Ui`, `Presentation`, and `Visualization` describe cadence. These are schedule labels and typed route
@@ -187,7 +261,18 @@ Bevy's owning schedules provide the actual execution boundary. A typed
 `RuntimeExecutionContext` carries the current owner route, cycle, phase, clock
 sample, logical sequence, and optional event producer stamp into synchronous
 Rhai calls. Scenario hooks and one-shot REPL/tool calls use their owning
-contexts; `execution_context()` exposes a read-only Rhai map. `sim_tick()`,
+contexts; `execution_context()` exposes a read-only Rhai map. Generic hook
+calls carry `HookInvocation`; nested `invoke_hook` forwards its active context,
+and an isolated Rhai hook reads it from the immutable `runtime_context` map.
+`twin.lifecycle` uses the mounted Twin's `TwinId` as its `Twin/Lifecycle`
+generation, with explicit `Start`, `Event`, or `Stop` phase and no elapsed
+clock; `policy_status().lifecycle.runtime_context` exposes the exact stamp.
+Rust call sites without a classified owner use the explicit unclassified hook
+entry point. The physics escape policy is a scheduled core simulation hook and
+receives its `Behavior` context from `SimTick` and `Time<Fixed>`; its authored
+policy rejects off-cycle calls. The scheduled `readiness.action` policy uses
+`Core/Simulation/Behavior` with `Time<Fixed>` and the latest `SimTick`, and its
+authored policy rejects calls from other cycles. `sim_tick()`,
 `dt()`, and `elapsed_seconds()` reject calls outside the simulation cycle as
 invocation errors, while missing mandatory simulation clock resources remain
 runtime faults. An unclassified invocation has no route; Rhai exposes its
@@ -203,6 +288,41 @@ selects which queued job starts; the owner still validates and commits its
 typed result at its own boundary. WebAssembly's Bevy async-compute pool runs
 cooperatively on the browser main thread, so expensive web work needs an
 explicit worker transport rather than this native dispatcher.
+Serialize each Modelica step's input assignments in variable-name order;
+never let hash-map iteration choose a worker command's observable order.
+File-backed Rhai source assets are parsed and const-folded by the asynchronous
+asset loader, which publishes their canonical id, exact text, AST, and literal
+import dependencies together. Activation owners commit the complete loaded
+dependency graph before binding or starting a source; Bevy can report graph
+readiness before its `Added` messages are consumed. Startup/Twin tools and the
+prelude reuse that AST; scenario workers reuse it only when the source bytes
+match, and parse inline roots or uncommitted sources inside shared admission.
+Do not compile loaded tool or prelude source synchronously during registration.
+The asset publisher retains each loaded `AssetId`'s canonical URI and retires it
+on `AssetEvent::Removed`, because `AssetServer::get_path` may fail after the
+last handle is released. Ignore the earlier `Unused` edge, and prevent a stale
+asset removal from deleting a replacement source with the same URI.
+Twin SysML analysis follows the same boundary: `twin.lifecycle` selects the
+checked manifest source set, `PrepareTwinSysmlAnalysis` loads source assets and
+prepares one immutable snapshot through shared admission, and runtime
+`twin://` queries read only the current Twin-id/root/operation result. Pending,
+failed, and unprepared snapshots remain visible. This read-only active-Twin work
+uses `Interactive` priority and never holds `SimulationProgress`; a scenario
+that requires SysML facts declares the typed owner key in its dependency plan.
+Open SysML documents use the same bounded `Interactive` admission. Lifecycle
+events capture immutable source/origin facts, and `SysmlDocumentAnalyses`
+commits only for the exact current document generation and origin URI.
+`InspectSysmlDocument` returns `analysis_state` as `pending`, `ready`, or
+`failed`; pending diagnostics and error fields are null. Rhai editor verification
+must return a retryable pending result and must not call it clean. These editor
+analyses do not hold simulation progress. Browser worker transport is explicit
+and remains unsupported by this native dispatcher. The Twin analysis producer
+registers `sysml.twin-analysis` and publishes each mounted Twin's state under
+its exact name. A scenario that needs those facts lists
+`#{ owner: "sysml.twin-analysis", identity: twin_name }` in
+`required_inputs`; only that scenario's activation hold waits for the async
+analysis. The analysis worker itself remains read-only and never acquires a
+world-time hold.
 Telemetry samples are captured with the fixed tick, then delivered through the
 plugin-owned bounded `Telemetry` cycle. Never run subscription, retention, or
 logging observers inline with fixed physics; report queue loss through the
@@ -245,6 +365,13 @@ until the exclusive REPL owner runs it. Publish their sequence and timing
 through `ApplicationCadence`/`application-cadence` so consumers do not add
 their own timers or infer cadence from render frames.
 
+World-bound one-shot Rhai requests remain serial because their verbs read and
+mutate the live World. The REPL owns a bounded FIFO (64 pending requests by
+default), evaluates one request per `Update`, and applies a 100,000-operation
+ceiling per invocation. Queue overflow is a terminal command error. Keep
+scenario and hook execution in their owning clocks; do not parallelize callbacks
+that still use live-world access.
+
 Publish each fact through its one domain boundary before adding a consumer:
 scalar co-simulation endpoints use `PortRegistry`; presentation-ready values
 use `EngineExposures`; lifecycle occurrences use typed events or revisioned
@@ -253,6 +380,12 @@ recorders consume those publications. They must not independently scan engine
 diagnostics, query a physics owner, or introduce a widget-specific registry.
 The fixed-step and rollback co-simulation paths share one propagation function
 and compiled cache; transform propagation remains a separate spatial owner.
+Rollback is an instantaneous replay cycle over recorded inputs, so systems in
+`RollbackReplay` must not be gated by the live virtual clock's paused/running
+condition. Keep its actuation ordering aligned with the fixed path and test the
+real replay schedule while `Time<Virtual>` is paused. This body prediction
+replay does not reconstruct whole-session commands, Rhai state, or Modelica
+state; do not claim whole-simulation replay determinism from it.
 
 For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources as
 one linked material contract: both stages read the same `@binding(0)` uniform
@@ -643,10 +776,18 @@ populations for `Added<T>` filters. Domain source-class completion invalidates
 only roots that use that source. A root is not synthesized until every
 referenced member class has a terminal verdict, avoiding repeated graph
 extraction across asynchronous asset arrivals. Scene teardown clears the
-scene-owned reverse index and pending candidate sets; resolved member-class
-facts remain asset-owned and reusable. Cosim source discovery and Python
+scene-owned reverse index, pending candidates, and in-flight synthesis tasks;
+resolved member-class facts remain asset-owned and reusable. Cosim source discovery and Python
 readiness share one lifecycle-coalesced pending-prim set rather than probing
 all USD prims for unprocessed markers on stable updates.
+
+Synthesis hooks run with the owning `Twin/Lifecycle/Preparation` context and
+active-or-committed scene generation, without an elapsed clock. Capture that
+typed context before async dispatch and pass it unchanged to the hook; the
+synchronous live-projection path uses the same contract. Fence async results
+by that Twin generation and the owning USD generation or prepared plan. Keep
+the policy's context check in Rhai and cover off-cycle rejection plus
+generated-source publication in a production scene test.
 
 If zero-delay bidirectional coupling is required, move the coupled components
 into one generated Modelica root and solve the combined DAE. Do not add a Rhai
@@ -730,10 +871,14 @@ current default.
   ordinary Modelica search-path roots: the compiler/editor discovers the root
   segment of a qualified reference generically and loads that package through
   the shared Modelica engine. A Twin without that section derives package roots
-  from its indexed `.mo` files. A
-  policy-declared `source_roots` list may prewarm dependencies, but it must not
-  be required for class discovery and Rust must not name a particular library.
-  Reproject from the generic completion signal.
+  from its indexed `.mo` files. Each live compile admits required roots through
+  the `LoadSourceRoot` worker path before `Compile`; file-backed source assets
+  derive requirements from their prepared AST interface, and generated-model
+  policies return the required `source_roots` manifest. That manifest does not
+  replace composed USD facts for class discovery, and Rust must not name a
+  particular library. The live worker rejects unadmitted roots and reports
+  failed roots to dependent compiles rather than synchronously rediscovering
+  them. Reproject from the generic completion signal.
 - Let Rhai own the required `member_output_aliases` promotion table, including
   the explicit empty-table case. Rust may validate known member/output pairs and
   identifier uniqueness, but must not choose aliases or emit visual source for a

@@ -236,7 +236,7 @@ impl LintReport {
 /// thing it is diagnosing.
 pub fn run_lint(domain: &str, facts: H) -> Vec<LintFinding> {
     let hook = hook_id(domain);
-    let Some(outcome) = lunco_hooks::invoke(&hook, &[facts]) else {
+    let Some(outcome) = lunco_hooks::invoke_unclassified(&hook, &[facts]) else {
         // No rules authored for this domain. Not a problem, and not worth a log
         // line on every scene load.
         return Vec::new();
@@ -318,7 +318,7 @@ mod tests {
     /// A stand-in for a rhai policy: whatever the test wants to "author".
     struct Canned(Vec<H>);
     impl ScriptHook for Canned {
-        fn invoke(&self, _args: &[H]) -> lunco_hooks::HookResult {
+        fn invoke(&self, _invocation: &lunco_hooks::HookInvocation<'_>) -> lunco_hooks::HookResult {
             Ok(H::Array(self.0.clone()))
         }
     }

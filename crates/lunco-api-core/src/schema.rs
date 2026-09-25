@@ -166,6 +166,7 @@ fn telemetry_value_to_api_value(value: &lunco_telemetry_core::TelemetryValue) ->
     match value {
         lunco_telemetry_core::TelemetryValue::F64(v) => ApiValue::Float(*v),
         lunco_telemetry_core::TelemetryValue::I64(v) => ApiValue::Int(*v),
+        lunco_telemetry_core::TelemetryValue::U64(v) => ApiValue::UInt(*v),
         lunco_telemetry_core::TelemetryValue::Bool(v) => ApiValue::Bool(*v),
         lunco_telemetry_core::TelemetryValue::String(v) => ApiValue::Str(v.clone()),
         lunco_telemetry_core::TelemetryValue::Array(v) => {

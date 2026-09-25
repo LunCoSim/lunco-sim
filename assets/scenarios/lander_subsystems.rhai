@@ -29,7 +29,7 @@ fn own_gnc(me) {
 }
 
 fn simulation_dependencies(me, ctx) {
-    [own_gnc(me)]
+    #{ modelica_entities: [own_gnc(me)], required_inputs: [] }
 }
 
 fn on_event(me, evt, ctx) {

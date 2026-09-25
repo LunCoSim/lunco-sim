@@ -12,6 +12,8 @@ use rhai::Engine;
 pub const MAX_GLOBAL_EXPR_DEPTH: usize = 64;
 /// Standard Rhai function expression-nesting limit, explicit to avoid dependency drift.
 pub const MAX_FUNCTION_EXPR_DEPTH: usize = 32;
+/// Maximum Rhai VM operations allowed by the shared sandbox policy.
+pub const MAX_OPERATIONS: u64 = 1_000_000;
 
 /// Apply LunCoSim's bounded-resource policy to a Rhai engine.
 ///
@@ -19,7 +21,7 @@ pub const MAX_FUNCTION_EXPR_DEPTH: usize = 32;
 /// limits. Keeping them together gives each execution plane identical safety and
 /// authoring semantics.
 pub fn apply(engine: &mut Engine) {
-    engine.set_max_operations(1_000_000);
+    engine.set_max_operations(MAX_OPERATIONS);
     engine.set_max_call_levels(64);
     engine.set_max_string_size(64 * 1024);
     engine.set_max_array_size(10_000);

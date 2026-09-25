@@ -40,6 +40,7 @@ fn spawn_scene(mut commands: Commands) {
     attach_joint(
         &mut commands,
         joint,
+        "test/fixed-joint".to_owned(),
         body0,
         body1,
         fixed_joint(body0, body1),

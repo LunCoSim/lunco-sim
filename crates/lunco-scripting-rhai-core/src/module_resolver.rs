@@ -318,13 +318,38 @@ impl PreparedModuleAsts {
 
     /// Commit one source-matched immutable module AST.
     pub fn insert(&self, id: String, source: String, ast: rhai::AST) {
-        self.modules
+        let mut modules = self
+            .modules
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id, (source, ast));
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if modules
+            .get(&id)
+            .is_some_and(|(prepared_source, _)| prepared_source == &source)
+        {
+            return;
+        }
+        modules.insert(id, (source, ast));
     }
 
-    fn get(&self, id: &str, source: &str) -> Option<rhai::AST> {
+    /// Commit a borrowed source-matched AST without cloning unchanged entries.
+    pub fn insert_if_changed(&self, id: &str, source: &str, ast: &rhai::AST) {
+        let mut modules = self
+            .modules
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if modules
+            .get(id)
+            .is_some_and(|(prepared_source, _)| prepared_source == source)
+        {
+            return;
+        }
+        modules.insert(id.to_owned(), (source.to_owned(), ast.clone()));
+    }
+
+    /// Clone an AST only when it was prepared for these exact source bytes.
+    /// Callers that run on a worker may prepare a miss there; evaluation paths
+    /// use `require_prepared` to reject a missing owner-thread commit.
+    pub fn get(&self, id: &str, source: &str) -> Option<rhai::AST> {
         self.modules
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

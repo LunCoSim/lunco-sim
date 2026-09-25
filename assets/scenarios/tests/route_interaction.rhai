@@ -7,11 +7,13 @@ const ROOT = "/RouteInteraction";
 const ROUTE = ROOT + "/Route";
 
 fn selected_only(entity) {
+    if entity < 0 { return false; }
+    let expected = entity.to_string();
     let selection = query("InspectSelection", #{});
     selection != () && selection.ok != false
-        && selection.primary == entity
+        && selection.primary.to_string() == expected
         && selection.selected != () && selection.selected.len() == 1
-        && selection.selected[0] == entity
+        && selection.selected[0].to_string() == expected
 }
 
 fn report(me, passed, message) {

@@ -159,14 +159,25 @@ sources are discovered from the runtime manifest, then the authored
 `scripting.source.classify` startup policy admits only prelude and tool sources
 to the built-in runtime. Scenario, test, and other authored sources stay
 demand-loaded through an explicit scene/runtime request or the CLI test path.
-The source lifecycle is ordered: the policy admits candidates, Bevy publishes
-loaded sources, then the runtime prepares the prelude and tool registry. If the
+The source lifecycle is ordered: policy admits candidates, then Bevy loads the
+literal dependency graph. A loaded dependency graph can be ready before its
+`AssetEvent::Added` messages are consumed, so each activation owner commits the
+complete loaded text/AST closure before binding tools or starting a scenario.
+The event publisher then advances source revisions and hot reload. If the
 required classifier is temporarily unavailable during a policy replacement,
 the runtime keeps its current admissions and remains unready until the authored
 policy is available again. USD policy projection runs after source publication
 and before prelude preparation; projecting an unchanged layer preserves the
 active lower-layer hooks instead of briefly removing them from the shared
-registry.
+registry. Rhai source identity promotes the default Bevy asset path to its
+`lunco://` URI before publishing text or ASTs; Twin paths retain their
+`twin://` identity. See
+[`56-asset-resolution-and-cache.md`](56-asset-resolution-and-cache.md) for the
+shared import and prepared-AST identity rule.
+The publisher retains each loaded `AssetId`'s canonical URI because Bevy may no
+longer resolve its path after the last handle is released. It retires the
+source on `AssetEvent::Removed` and ignores the preceding `Unused` edge; a stale
+removal cannot retire a newer asset currently registered under the same URI.
 
 ## Allow-list
 

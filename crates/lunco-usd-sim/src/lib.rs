@@ -56,7 +56,8 @@ use lunco_usd_avian_contracts::{
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
 use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
 use lunco_usd_bevy_scene::{
-    UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending, instance_key, is_preview_only,
+    UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending, UsdSceneRoot, instance_key,
+    is_preview_only,
 };
 use lunco_usd_bevy_stage::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_stage::{
@@ -381,6 +382,7 @@ impl Plugin for UsdSimPlugin {
             (
                 UsdSimSet::ProjectionPrepare.before(UsdSimSet::Projection),
                 UsdSimSet::Projection.before(lunco_spatial::SceneSpatialHandoffSet),
+                lunco_usd_avian_joints::JointAdmission.after(UsdSimSet::Projection),
                 UsdSimSet::ActivateDynamicBodies,
             ),
         )
@@ -423,6 +425,17 @@ impl Plugin for UsdSimPlugin {
                 .in_set(UsdSimSet::ActivateDynamicBodies)
                 .before(lunco_physics::apply_physics_holds)
                 .run_if(any_with_component::<ShouldBeDynamic>),
+        );
+        // Bodies and constraints can become admissible on different updates
+        // after asynchronous scene projection. Do not let early bodies enter
+        // the solver while another part of that authored admission set is
+        // still pending; the hold affects physics only, so preparation, UI,
+        // telemetry, and authored readiness clocks continue to run.
+        app.add_systems(
+            PreUpdate,
+            sync_physics_body_admission_hold
+                .after(activate_dynamic_bodies)
+                .before(lunco_physics::apply_physics_holds),
         );
         // Screen-constant markers. `PostUpdate` before transform propagation:
         // the scale is a function of the camera's position THIS frame, and the
@@ -967,26 +980,43 @@ fn process_usd_sim_prim_read(
             .try_insert(lunco_core_session::ArticulatedLink);
     }
     // Initialization is a pre-admission policy, not an implicit terrain
-    // placement algorithm. The default is installed by the USD→Avian body owner;
-    // this optional authored override only selects a named Twin policy. An
-    // invalid value is retained as an error and leaves the body pending — it
-    // is never replaced with a built-in policy.
+    // placement algorithm. The default is installed by the USD→Avian body owner.
+    // Custom selection is a registered USD API field and dispatches through the
+    // one declared physics.initialization Rhai seam. Missing schema or selector
+    // state is retained as an error and leaves the body pending.
     if reader.has_api_schema(&sdf_path, "PhysicsRigidBodyAPI") {
         commands
             .entity(entity)
             .try_remove::<lunco_physics::PhysicsInitializationInvalid>();
     }
-    if reader.has_api_schema(&sdf_path, "PhysicsRigidBodyAPI")
-        && reader.has_authored_attribute(&sdf_path, "lunco:physics:initializationPolicy")
-    {
-        match reader
-            .text(&sdf_path, "lunco:physics:initializationPolicy")
-            .and_then(|name| lunco_physics::PhysicsInitializationPolicy::new(name).ok())
-        {
-            Some(policy) => {
+    if reader.has_api_schema(&sdf_path, "PhysicsRigidBodyAPI") {
+        let has_policy_api = reader.has_api_schema(&sdf_path, "LunCoPhysicsInitializationAPI");
+        let has_policy_attribute =
+            reader.has_authored_attribute(&sdf_path, "lunco:physics:initializationPolicy");
+        let policy_result: Result<lunco_physics::PhysicsInitializationPolicy, String> =
+            match (has_policy_api, has_policy_attribute) {
+            (false, false) => Ok(lunco_physics::PhysicsInitializationPolicy::default()),
+            (true, true) => reader
+                .text(&sdf_path, "lunco:physics:initializationPolicy")
+                .ok_or_else(|| {
+                    "LunCoPhysicsInitializationAPI selector is not a token".to_string()
+                })
+                .and_then(|name| {
+                    lunco_physics::PhysicsInitializationPolicy::new(name)
+                        .map_err(|error| error.to_string())
+                }),
+            (true, false) => Err(
+                "LunCoPhysicsInitializationAPI requires an authored lunco:physics:initializationPolicy selector".to_string(),
+            ),
+            (false, true) => Err(
+                "lunco:physics:initializationPolicy requires LunCoPhysicsInitializationAPI".to_string(),
+            ),
+        };
+        match policy_result {
+            Ok(policy) => {
                 commands.entity(entity).try_insert(policy);
             }
-            None => {
+            Err(error) => {
                 commands
                     .entity(entity)
                     .try_insert(lunco_physics::PhysicsInitializationInvalid);
@@ -994,18 +1024,14 @@ fn process_usd_sim_prim_read(
                     diagnostics,
                     &prim_path.path,
                     "physics-initialization-policy",
-                    "lunco:physics:initializationPolicy must be a non-empty token or string without whitespace",
+                    &error,
                 );
                 warn!(
-                    "USD prim {} has malformed `lunco:physics:initializationPolicy`; dynamic admission remains held",
-                    prim_path.path
+                    "USD prim {} has invalid physics initialization authoring: {}; dynamic admission remains held",
+                    prim_path.path, error
                 );
             }
         }
-    } else if reader.has_api_schema(&sdf_path, "PhysicsRigidBodyAPI") {
-        commands
-            .entity(entity)
-            .try_insert(lunco_physics::PhysicsInitializationPolicy::default());
     }
     // Screen-facing label the PRIM asked for. Opt-in: only a prim that
     // authors `lunco:billboard = true` gets one, so adding the schema can
@@ -1676,6 +1702,19 @@ fn process_usd_sim_prim_read(
             commands.entity(entity).try_insert(UsdSimProcessed);
             return;
         };
+        let wheel_order_key =
+            match usd_physics_order_key(&prim_path.path, instance_projection, all_prims) {
+                Ok(key) => key,
+                Err(reason) => {
+                    error!(
+                        "USD wheel {} has no stable physics identity — refusing to spawn: {}",
+                        sdf_path.as_str(),
+                        reason
+                    );
+                    commands.entity(entity).try_insert(UsdSimProcessed);
+                    return;
+                }
+            };
         if is_physical {
             let Some(authored_collider) = authored_collider else {
                 error!(
@@ -1697,6 +1736,7 @@ fn process_usd_sim_prim_read(
                 commands,
                 entity,
                 prim_path,
+                wheel_order_key.0.clone(),
                 &existing_tf,
                 maybe_mesh,
                 maybe_mat,
@@ -1746,6 +1786,7 @@ fn process_usd_sim_prim_read(
                 commands,
                 entity,
                 prim_path,
+                wheel_order_key,
                 &existing_tf,
                 maybe_mesh,
                 maybe_mat,
@@ -1809,6 +1850,31 @@ fn usd_entity_for_path(
         .map(|(entity, _, _, _)| entity);
     let entity = matches.next()?;
     matches.next().is_none().then_some(entity)
+}
+
+fn usd_physics_order_key(
+    prim_path: &str,
+    instance_projection: Option<&UsdInstanceProjection>,
+    all_prims: &Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&Transform>,
+        Option<&UsdInstanceProjection>,
+    )>,
+) -> Result<lunco_physics::PhysicsOrderKey, String> {
+    let Some(projection) = instance_projection else {
+        return Ok(lunco_physics::PhysicsOrderKey(prim_path.to_owned()));
+    };
+    let root = projection
+        .root
+        .ok_or_else(|| "instanced prim has no projected instance root".to_owned())?;
+    let (_, root_path, ..) = all_prims
+        .get(root)
+        .map_err(|_| "projected instance root has no USD prim identity".to_owned())?;
+    Ok(lunco_physics::PhysicsOrderKey(format!(
+        "{}|{prim_path}",
+        root_path.path
+    )))
 }
 
 /// Resolve the nearest authored rigid body above a raycast wheel. The wheel
@@ -1955,8 +2021,10 @@ fn raycast_mass_contribution_from_usd(
         .ok_or_else(|| "cannot resolve local transform".to_owned())?;
     let principal = convention.dir_d(DVec3::new(inertia[0], inertia[1], inertia[2]))
         * (meters_per_unit * meters_per_unit);
+    let order_key = usd_physics_order_key(prim.as_str(), instance_projection, all_prims)?;
     Ok(Some(lunco_mobility::RaycastMassContribution {
         owner,
+        order_key,
         local,
         mass,
         principal,
@@ -2034,6 +2102,7 @@ fn setup_raycast_wheel(
     commands: &mut Commands,
     entity: Entity,
     prim_path: &UsdPrimPath,
+    order_key: lunco_physics::PhysicsOrderKey,
     existing_tf: &Transform,
     maybe_mesh: Option<&Mesh3d>,
     maybe_mat: Option<&PbrLook>,
@@ -2136,6 +2205,7 @@ fn setup_raycast_wheel(
     // it — the mobility sync is the sole writer.
     commands.entity(entity).try_insert((
         wheel,
+        order_key,
         body_mount,
         Suspension {
             rest_length: susp.rest_length,
@@ -2223,6 +2293,7 @@ fn setup_physical_wheel(
     commands: &mut Commands,
     entity: Entity,
     prim_path: &UsdPrimPath,
+    order_key: String,
     existing_tf: &Transform,
     maybe_mesh: Option<&Mesh3d>,
     maybe_mat: Option<&PbrLook>,
@@ -2290,18 +2361,24 @@ fn setup_physical_wheel(
         .remove::<RayHits>();
 
     commands.entity(entity).try_insert((
-        PhysicalWheel {
-            visual_entity: visual_id,
-            wheel_radius: radius,
-            wheel_width: params.width as f32,
-            axis_rot: wheel_axis_rot,
-            spin_angle: 0.0,
-            // Authored wheel offset in the vehicle frame. The physical wheel is
-            // nested under its suspension carrier, so this is separate from
-            // the carrier-local joint pose.
-            mount_local: vehicle_mount.translation,
-        },
-        body_mount,
+        (
+            PhysicalWheel {
+                visual_entity: visual_id,
+                wheel_radius: radius,
+                wheel_width: params.width as f32,
+                axis_rot: wheel_axis_rot,
+                spin_angle: 0.0,
+                // Authored wheel offset in the vehicle frame. The physical wheel is
+                // nested under its suspension carrier, so this is separate from
+                // the carrier-local joint pose.
+                mount_local: vehicle_mount.translation,
+            },
+            lunco_physics::PhysicsOrderKey(order_key.clone()),
+            body_mount,
+        ),
+        // Rebuild the vehicle support contract after replacing its raycast
+        // wheel with this collider-backed realization.
+        lunco_mobility::RaycastSupportGeometryDirty,
         // The standard wheel mass is a body mass, independent of the authored
         // collision shape. `NoAutoMass` prevents child/shape changes from
         // silently replacing the USD value during Avian recomputation.
@@ -2450,6 +2527,7 @@ fn setup_physical_wheel(
     lunco_usd_avian_joints::attach_joint(
         commands,
         joint_entity,
+        order_key,
         carrier,
         entity,
         lunco_usd_avian_joints::wheel_revolute_joint(carrier, entity, mount_local, axle),
@@ -3185,6 +3263,58 @@ fn activate_dynamic_bodies(
         // next sealed pass seeds every already-valid sensor/actuator wire from
         // that finalized state rather than retaining its pre-admission zero.
         binding_epoch.0 = true;
+    }
+}
+
+fn sync_physics_body_admission_hold(
+    pending: Query<
+        (Entity, Option<&UsdPrimPath>),
+        Or<(
+            With<ShouldBeDynamic>,
+            With<lunco_core::PhysicsStatePending>,
+            With<lunco_physics::PhysicsInitializationPending>,
+            With<PendingJointAdmission>,
+            With<PendingUsdJoint>,
+            With<PendingDifferential>,
+            With<lunco_usd_avian_joints::PendingJoint<RevoluteJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<PrismaticJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<FixedJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<SphericalJoint>>,
+            With<lunco_usd_avian_joints::PendingJoint<DistanceJoint>>,
+        )>,
+    >,
+    parents: Query<&ChildOf>,
+    preview_roots: Query<(), With<UsdPreviewOnly>>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
+    primary_roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
+    holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+) {
+    let Some(mut holds) = holds else { return };
+    // A ready additive document or editor preview must not suspend the running
+    // Twin. Only the pending closure below the currently mounted primary root
+    // owns this simulation-wide admission boundary.
+    let primary_root = mount
+        .as_deref()
+        .and_then(lunco_core::SceneMountState::active_root)
+        .and_then(|root| primary_roots.get(root).ok());
+    let pending_admission = primary_root.is_some_and(|primary| {
+        pending.iter().any(|(entity, path)| {
+            let belongs_to_primary = path.is_some_and(|path| {
+                path.stage_handle.id() == primary.stage_handle.id()
+                    && (path.path == primary.path
+                        || path
+                            .path
+                            .strip_prefix(&primary.path)
+                            .is_some_and(|suffix| suffix.starts_with('/')))
+            });
+            belongs_to_primary && !is_preview_only(entity, &parents, &preview_roots)
+        })
+    });
+    if holds.holds(lunco_physics::PhysicsHolds::BODY_ADMISSION) != pending_admission {
+        holds.set(
+            lunco_physics::PhysicsHolds::BODY_ADMISSION,
+            pending_admission,
+        );
     }
 }
 

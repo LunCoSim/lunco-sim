@@ -16,7 +16,7 @@ fn fail(me, message) {
 
 fn find_document() {
     let documents = query("ListOpenDocuments");
-    if documents == () || documents.open_documents == () { return -1; }
+    if documents == () || documents.open_documents == () { return (); }
     for document in documents.open_documents {
         if document.kind != "usd" { continue; }
         let root = query("InspectUsdDocument", #{ doc_id: document.doc_id, path: ROOT });
@@ -24,16 +24,16 @@ fn find_document() {
             return document.doc_id;
         }
     }
-    -1
+    ()
 }
 
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;
     this.phase = 0;
-    this.doc = -1;
+    this.doc = ();
     this.base_generation = -1;
-    this.command_id = -1;
+    this.command_id = ();
 }
 
 fn on_tick(me, ctx) {
@@ -46,7 +46,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 0 {
         this.doc = find_document();
-        if this.doc < 0 { return; }
+        if this.doc == () { return; }
 
         let missing_id = query("InspectUsdDocument", #{});
         if missing_id == () || missing_id.ok != false
@@ -62,6 +62,11 @@ fn on_tick(me, ctx) {
             return;
         }
         this.base_generation = document.generation;
+        let fast_generation = usd_document_generation(this.doc);
+        if fast_generation == () || fast_generation != this.base_generation {
+            fail(this, "usd_document_generation did not accept the typed document id");
+            return;
+        }
 
         let arc = query("ResolveUsdTarget", #{
             doc_id: this.doc,
@@ -124,15 +129,27 @@ fn on_tick(me, ctx) {
         });
         if delta == () || delta.ok == false || delta.kind != "delta"
             || delta.from_generation != this.base_generation
-            || delta.to_generation != this.base_generation + 1
             || delta.ops.len() != 1 {
             fail(this, "SyncUsdDocument did not return the single-op generation delta");
+            return;
+        }
+        let revision_step = delta.to_generation - delta.from_generation;
+        if to_int(revision_step) != 1 {
+            fail(this, "a single document operation did not advance one generation");
+            return;
+        }
+        if to_int(delta.to_generation) != to_int(this.base_generation) + 1 {
+            fail(this, "SyncUsdDocument did not advance the single-op delta by one");
+            return;
+        }
+        if usd_document_generation(this.doc) != delta.to_generation {
+            fail(this, "usd_document_generation did not advance with the committed document");
             return;
         }
 
         let future = query("SyncUsdDocument", #{
             doc_id: this.doc,
-            since_generation: this.base_generation + 2,
+            since_generation: delta.to_generation + revision_step,
         });
         if future == () || future.ok != false || !future.error.contains("newer than document") {
             fail(this, "SyncUsdDocument did not reject a cursor newer than the document");
@@ -140,6 +157,7 @@ fn on_tick(me, ctx) {
         }
 
         let operations = [];
+        let expected_snapshot_generation = delta.to_generation;
         for index in 0..256 {
             operations.push(#{ AddPrim: #{
                 edit_target: "@root@",
@@ -149,12 +167,14 @@ fn on_tick(me, ctx) {
                 reference: (),
                 reference_prim_path: "",
             }});
+            expected_snapshot_generation += revision_step;
         }
+        this.expected_snapshot_generation = expected_snapshot_generation;
         let batch = assembly_edit::batch(
             this.doc,
             "Exercise USD query history window",
             operations,
-            this.base_generation + 1,
+            delta.to_generation,
         );
         if batch == () || batch.id == () || batch.ok == false {
             fail(this, "the history-window fixture operations were rejected");
@@ -178,7 +198,7 @@ fn on_tick(me, ctx) {
     });
     if snapshot == () || snapshot.ok == false || snapshot.kind != "snapshot"
         || snapshot.reason != "history_window_exceeded"
-        || snapshot.generation != this.base_generation + 257
+        || snapshot.generation != this.expected_snapshot_generation
         || !snapshot.layers.root.source.contains("Part256") {
         fail(this, "SyncUsdDocument did not return a complete snapshot after history expired");
         return;

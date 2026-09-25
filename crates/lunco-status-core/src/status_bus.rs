@@ -855,6 +855,7 @@ pub fn surface_error_telemetry(
         TelemetryValue::String(_) => String::new(),
         TelemetryValue::F64(v) => v.to_string(),
         TelemetryValue::I64(v) => v.to_string(),
+        TelemetryValue::U64(v) => v.to_string(),
         TelemetryValue::Bool(v) => v.to_string(),
         TelemetryValue::Array(_) | TelemetryValue::Map(_) => format!("{:?}", ev.data),
     };

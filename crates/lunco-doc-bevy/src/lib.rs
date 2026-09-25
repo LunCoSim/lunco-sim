@@ -1463,10 +1463,13 @@ where
         let Some(host) = self.hosts.get_mut(&doc) else {
             return false;
         };
+        let generation = host.document().generation();
         if !host.document_mut().reload_base(source) {
             return false;
         }
-        self.mark_changed(doc);
+        if host.document().generation() != generation {
+            self.mark_changed(doc);
+        }
         true
     }
 
@@ -1506,22 +1509,55 @@ where
         source: String,
         writable: bool,
     ) -> (DocumentId, lunco_doc::OpenOutcome) {
+        let source = std::sync::Arc::<str>::from(source);
+        let source_for_new = std::sync::Arc::clone(&source);
+        self.open_file_using(
+            path,
+            writable,
+            move |id, origin| D::with_origin(id, source_for_new.to_string(), origin),
+            move |document| document.reload_base(&source),
+        )
+    }
+
+    /// Open a file using source work that was prepared away from the document
+    /// owner thread. File identity, dirty-document preservation, reload
+    /// generation, and lifecycle notification remain identical to
+    /// [`open_file_with_writable`](Self::open_file_with_writable).
+    pub fn open_prepared_file(
+        &mut self,
+        path: impl Into<std::path::PathBuf>,
+        prepared: D::PreparedSource,
+        writable: bool,
+    ) -> (DocumentId, lunco_doc::OpenOutcome)
+    where
+        D: lunco_doc::PreparedFileBacked,
+    {
+        let prepared_ref = &prepared;
+        self.open_file_using(
+            path,
+            writable,
+            move |id, origin| D::with_prepared_origin(id, prepared_ref, origin),
+            move |document| document.reload_prepared_source(prepared_ref),
+        )
+    }
+
+    fn open_file_using(
+        &mut self,
+        path: impl Into<std::path::PathBuf>,
+        writable: bool,
+        make: impl FnOnce(DocumentId, lunco_doc::DocumentOrigin) -> D,
+        reload: impl FnOnce(&mut D) -> bool,
+    ) -> (DocumentId, lunco_doc::OpenOutcome) {
         use lunco_doc::OpenOutcome;
         let path = path.into();
         let Some(id) = self.doc_for_file(&path) else {
-            // Straight to `install`: this is the ONE authorized way to mint a
-            // file-backed document, and it earns that by having just proved the
-            // path isn't open. `allocate` can no longer express a `File` origin.
-            let id = self.install(|id| {
-                D::with_origin(
-                    id,
-                    source,
-                    lunco_doc::DocumentOrigin::File { path, writable },
-                )
-            });
-            // Baseline the watermark off the origin we just wrote — one stamping
-            // path for open, reload, and save. The domain adds its dependency
-            // closure with its own `watch_files` call once it has parsed.
+            // The registry is the only path that installs a file origin, after
+            // establishing that this identity is not already open.
+            let origin = lunco_doc::DocumentOrigin::File {
+                path: path.clone(),
+                writable,
+            };
+            let id = self.install(|id| make(id, origin));
             self.watch_files(id, []);
             return (id, OpenOutcome::Allocated);
         };
@@ -1529,20 +1565,16 @@ where
             unreachable!("doc_for_file returned an id with no host");
         };
         if host.document().is_dirty() {
-            // We did NOT take disk content, so the watermark stays put: the
-            // document is still ahead of (or diverged from) disk, and the caller
-            // wants to know the file moved, not be told we're in sync with it.
             return (id, OpenOutcome::KeptDirty);
         }
-        if !host.document_mut().reload_base(&source) {
+        let generation = host.document().generation();
+        if !reload(host.document_mut()) {
             return (id, OpenOutcome::KeptUnparsable);
         }
-        // Fresh disk content landed — re-baseline. Drops any previously-watched
-        // dependency: the new content's closure may differ, and the domain
-        // re-registers it after parsing.
+        if host.document().generation() == generation {
+            return (id, OpenOutcome::Refreshed);
+        }
         self.watch_files(id, []);
-        // The content moved — same ring the mutating ops feed, so views rebuild
-        // off an open exactly as they would off an edit.
         self.mark_changed(id);
         (id, OpenOutcome::Refreshed)
     }
@@ -1736,6 +1768,7 @@ mod tests {
     use super::*;
     use lunco_doc::{
         Document, DocumentError, DocumentOp, DocumentOrigin, FileBacked, PathlessOrigin,
+        PreparedFileBacked,
     };
     use lunco_twin_journal::{AuthorId, EntryKind, TwinId};
 
@@ -1809,6 +1842,22 @@ mod tests {
         }
     }
 
+    impl PreparedFileBacked for RegistryDocument {
+        type PreparedSource = String;
+
+        fn with_prepared_origin(
+            id: DocumentId,
+            source: &Self::PreparedSource,
+            origin: DocumentOrigin,
+        ) -> Self {
+            Self::with_origin(id, source.clone(), origin)
+        }
+
+        fn reload_prepared_source(&mut self, source: &Self::PreparedSource) -> bool {
+            self.reload_base(source)
+        }
+    }
+
     impl lunco_twin_journal::OpPayload for RegistryOp {
         fn domain(&self) -> lunco_twin_journal::DomainKind {
             lunco_twin_journal::DomainKind::Other("document-registry-test".into())
@@ -1832,6 +1881,30 @@ mod tests {
                 .any(|e| matches!(e.kind, EntryKind::Lifecycle(LifecycleKind::Saved)))
         });
         assert!(saved);
+    }
+
+    #[test]
+    fn prepared_file_open_keeps_registry_identity_and_dirty_policy() {
+        let mut registry = DocumentRegistry::<RegistryDocument>::default();
+        let path = std::path::PathBuf::from("/twins/prepared/scene.usda");
+        let (doc, first) = registry.open_prepared_file(&path, "first".into(), true);
+        assert_eq!(first, lunco_doc::OpenOutcome::Allocated);
+
+        let (same_doc, refreshed) = registry.open_prepared_file(&path, "second".into(), true);
+        assert_eq!(same_doc, doc);
+        assert_eq!(refreshed, lunco_doc::OpenOutcome::Refreshed);
+        assert_eq!(registry.host(doc).unwrap().document().generation(), 1);
+
+        registry
+            .host_mut(doc)
+            .unwrap()
+            .document_mut()
+            .apply(RegistryOp::Replace("local edit".into()))
+            .unwrap();
+        let (same_doc, dirty) = registry.open_prepared_file(&path, "third".into(), true);
+        assert_eq!(same_doc, doc);
+        assert_eq!(dirty, lunco_doc::OpenOutcome::KeptDirty);
+        assert_eq!(registry.host(doc).unwrap().document().source, "local edit");
     }
 
     #[test]

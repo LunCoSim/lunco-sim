@@ -16,8 +16,11 @@ use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::ecs::system::SystemState;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use lunco_usd_avian_contracts::{AuthoredInitialVelocity, PendingJointAdmission};
+use lunco_usd_avian_contracts::{AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
+use lunco_usd_bevy_scene::{
+    UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjectionQueued, UsdSceneRoot, scene_root_ancestor,
+};
 
 const JOINT_SEAT_EPS: f64 = 1.0e-3;
 const JOINT_SEAT_ANGLE_EPS: f64 = 1.0e-3;
@@ -109,6 +112,9 @@ impl<J: Component + Clone> JointSpec<J> {
 /// A joint that is parked until Avian has admitted both endpoint bodies.
 #[derive(Component, Clone, Debug)]
 pub struct PendingJoint<J: Component + Clone> {
+    /// Stable owner-supplied identity used to commit all ready constraints in a
+    /// deterministic order before Avian's first solve.
+    pub order_key: String,
     /// First jointed body.
     pub body0: Entity,
     /// Second jointed body.
@@ -122,13 +128,31 @@ pub struct PendingJoint<J: Component + Clone> {
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct JointAdmission;
 
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+struct JointAdmissionCommit;
+
+/// Whether every authored and native pending constraint can join one stable
+/// solver-admission batch.
+#[derive(Resource, Default)]
+struct JointAdmissionBatch {
+    ready: bool,
+}
+
 /// Plugin that owns native joint admission and solver-safe detach.
 pub struct JointAttachPlugin;
 
 impl Plugin for JointAttachPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(collision_filters::on_remove_joint_collision_pair);
+        app.add_plugins(lunco_physics::DeterministicJointSolverPlugin)
+            .init_resource::<JointAdmissionBatch>()
+            .add_observer(collision_filters::on_remove_joint_collision_pair);
         app.add_systems(Update, retire_requested_joints.before(JointAdmission));
+        app.add_systems(
+            Update,
+            synchronize_joint_admission_batch
+                .in_set(JointAdmission)
+                .before(JointAdmissionCommit),
+        );
         app.add_systems(
             Update,
             (
@@ -143,6 +167,7 @@ impl Plugin for JointAttachPlugin {
                 admit_pending_joints::<DistanceJoint>
                     .run_if(any_with_component::<PendingJoint<DistanceJoint>>),
             )
+                .in_set(JointAdmissionCommit)
                 .in_set(JointAdmission),
         );
     }
@@ -152,6 +177,7 @@ impl Plugin for JointAttachPlugin {
 pub fn attach_joint<J: Component + Clone>(
     commands: &mut Commands,
     joint_entity: Entity,
+    order_key: String,
     body0: Entity,
     body1: Entity,
     joint: JointSpec<J>,
@@ -161,6 +187,7 @@ pub fn attach_joint<J: Component + Clone>(
     commands.entity(joint_entity).try_insert((
         collision_filters::JointCollisionPair { body0, body1 },
         PendingJoint {
+            order_key,
             body0,
             body1,
             joint,
@@ -175,16 +202,22 @@ pub fn attach_joint<J: Component + Clone>(
 /// Install pending joints whose endpoint bodies are admitted to Avian's
 /// solver graph. Static bodies are admitted by construction; a pair of two
 /// static bodies is retained pending because it cannot constrain simulation.
-pub fn admit_pending_joints<J: Component + Clone>(
+fn admit_pending_joints<J: Component + Clone>(
     pending: Query<(Entity, &PendingJoint<J>)>,
     admitted: Query<(), With<avian3d::dynamics::solver::islands::BodyIslandNode>>,
     bodies: Query<&RigidBody>,
+    batch: Res<JointAdmissionBatch>,
     mut q_pose: Query<(&mut Position, &mut Rotation)>,
     mut q_vel: Query<(&mut LinearVelocity, &mut AngularVelocity)>,
     q_authored_velocity: Query<&AuthoredInitialVelocity>,
     mut commands: Commands,
 ) {
-    for (entity, p) in pending.iter() {
+    if !batch.ready {
+        return;
+    }
+    let mut pending = pending.iter().collect::<Vec<_>>();
+    pending.sort_by(|left, right| left.1.order_key.cmp(&right.1.order_key));
+    for (entity, p) in pending {
         let ready = |e: Entity| {
             admitted.contains(e) || bodies.get(e).map(RigidBody::is_static).unwrap_or(false)
         };
@@ -208,11 +241,101 @@ pub fn admit_pending_joints<J: Component + Clone>(
         }
         commands
             .entity(entity)
-            .try_insert((p.joint.clone(), JointCollisionDisabled))
+            .try_insert((
+                p.joint.clone(),
+                JointCollisionDisabled,
+                lunco_physics::PhysicsOrderKey(p.order_key.clone()),
+            ))
             .try_remove::<PendingJoint<J>>()
             .try_remove::<PendingJointAdmission>()
             .try_remove::<lunco_physics::PhysicsJointPending>();
     }
+}
+
+fn pending_joint_is_admitted<J: Component + Clone>(
+    pending: &PendingJoint<J>,
+    admitted: &Query<(), With<avian3d::dynamics::solver::islands::BodyIslandNode>>,
+    bodies: &Query<&RigidBody>,
+) -> bool {
+    let body_ready =
+        |entity| admitted.contains(entity) || bodies.get(entity).is_ok_and(|body| body.is_static());
+    body_ready(pending.body0)
+        && body_ready(pending.body1)
+        && (admitted.contains(pending.body0) || admitted.contains(pending.body1))
+}
+
+/// Keep native constraints out of Avian until the authored resolver has
+/// exposed every joint and every currently pending native endpoint is admitted.
+/// This closes the whole solver batch before any joint component enters an
+/// archetype, so asynchronous stage readiness cannot choose row order.
+fn synchronize_joint_admission_batch(
+    unresolved_usd: Query<
+        (),
+        (
+            With<PendingUsdJoint>,
+            Without<lunco_physics::PhysicsJointDetachRequested>,
+        ),
+    >,
+    fixed: Query<&PendingJoint<FixedJoint>, Without<lunco_physics::PhysicsJointDetachRequested>>,
+    revolute: Query<
+        &PendingJoint<RevoluteJoint>,
+        Without<lunco_physics::PhysicsJointDetachRequested>,
+    >,
+    spherical: Query<
+        &PendingJoint<SphericalJoint>,
+        Without<lunco_physics::PhysicsJointDetachRequested>,
+    >,
+    prismatic: Query<
+        &PendingJoint<PrismaticJoint>,
+        Without<lunco_physics::PhysicsJointDetachRequested>,
+    >,
+    distance: Query<
+        &PendingJoint<DistanceJoint>,
+        Without<lunco_physics::PhysicsJointDetachRequested>,
+    >,
+    admitted: Query<(), With<avian3d::dynamics::solver::islands::BodyIslandNode>>,
+    bodies: Query<&RigidBody>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
+    primary_roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
+    projection_pending: Query<
+        Entity,
+        Or<(With<UsdSceneAwaitingStage>, With<UsdSceneProjectionQueued>)>,
+    >,
+    scene_roots: Query<(), With<UsdSceneRoot>>,
+    parents: Query<&ChildOf>,
+    entities: Query<Entity>,
+    mut batch: ResMut<JointAdmissionBatch>,
+) {
+    let primary_projection_pending = mount
+        .as_deref()
+        .and_then(lunco_core::SceneMountState::active_root)
+        .is_some_and(|root| {
+            if primary_roots.get(root).is_err() {
+                return true;
+            }
+            projection_pending.iter().any(|entity| {
+                scene_root_ancestor(entity, &scene_roots, &parents, &entities)
+                    .is_ok_and(|ancestor| ancestor == Some(root))
+            })
+        });
+
+    batch.ready = !primary_projection_pending
+        && unresolved_usd.is_empty()
+        && fixed
+            .iter()
+            .all(|pending| pending_joint_is_admitted(pending, &admitted, &bodies))
+        && revolute
+            .iter()
+            .all(|pending| pending_joint_is_admitted(pending, &admitted, &bodies))
+        && spherical
+            .iter()
+            .all(|pending| pending_joint_is_admitted(pending, &admitted, &bodies))
+        && prismatic
+            .iter()
+            .all(|pending| pending_joint_is_admitted(pending, &admitted, &bodies))
+        && distance
+            .iter()
+            .all(|pending| pending_joint_is_admitted(pending, &admitted, &bodies));
 }
 
 /// Retire a requested joint before removing its native components and entity.
@@ -303,6 +426,7 @@ pub fn wheel_revolute_joint(
 pub fn attach_fixed_joint(
     commands: &mut Commands,
     joint_entity: Entity,
+    order_key: String,
     body0: Entity,
     body1: Entity,
     local_pos0: DVec3,
@@ -318,6 +442,7 @@ pub fn attach_fixed_joint(
     attach_joint(
         commands,
         joint_entity,
+        order_key,
         body0,
         body1,
         JointSpec::new(joint).with_seat(JointSeat::new(
@@ -335,6 +460,7 @@ pub fn attach_fixed_joint(
 pub fn attach_prismatic_joint(
     commands: &mut Commands,
     joint_entity: Entity,
+    order_key: String,
     body0: Entity,
     body1: Entity,
     local_pos0: DVec3,
@@ -359,6 +485,7 @@ pub fn attach_prismatic_joint(
     attach_joint(
         commands,
         joint_entity,
+        order_key,
         body0,
         body1,
         JointSpec::new(joint).with_seat(JointSeat::new(
@@ -376,6 +503,7 @@ pub fn attach_prismatic_joint(
 pub fn attach_revolute_joint(
     commands: &mut Commands,
     joint_entity: Entity,
+    order_key: String,
     body0: Entity,
     body1: Entity,
     local_pos0: DVec3,
@@ -400,6 +528,7 @@ pub fn attach_revolute_joint(
     attach_joint(
         commands,
         joint_entity,
+        order_key,
         body0,
         body1,
         JointSpec::new(joint).with_seat(JointSeat::new(
@@ -417,6 +546,7 @@ pub fn attach_revolute_joint(
 pub fn attach_spherical_joint(
     commands: &mut Commands,
     joint_entity: Entity,
+    order_key: String,
     body0: Entity,
     body1: Entity,
     local_pos0: DVec3,
@@ -444,6 +574,7 @@ pub fn attach_spherical_joint(
     attach_joint(
         commands,
         joint_entity,
+        order_key,
         body0,
         body1,
         JointSpec::new(joint).with_seat(JointSeat::new(
@@ -461,6 +592,7 @@ pub fn attach_spherical_joint(
 pub fn attach_distance_joint(
     commands: &mut Commands,
     joint_entity: Entity,
+    order_key: String,
     body0: Entity,
     body1: Entity,
     local_pos0: DVec3,
@@ -485,6 +617,7 @@ pub fn attach_distance_joint(
     attach_joint(
         commands,
         joint_entity,
+        order_key,
         body0,
         body1,
         JointSpec::new(joint).with_seat(JointSeat::new(

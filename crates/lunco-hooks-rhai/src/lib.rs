@@ -15,7 +15,10 @@
 /// Used by the world-bound `lunco-scripting-rhai-runtime` plane.
 pub mod rhai_limits;
 
-use lunco_hooks::{HookError, HookResult, HookValue, RegisteredHook, ScriptHook};
+use lunco_hooks::{
+    HookError, HookInvocation, HookResult, HookValue, RegisteredHook, RuntimeExecutionContext,
+    ScriptHook, runtime_context_hook_value,
+};
 use rhai::{AST, Dynamic, Engine, Scope};
 
 /// Register the shared JSON-to-Rhai value bridge on an engine.
@@ -197,10 +200,14 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
 }
 
 impl ScriptHook for RhaiHook {
-    fn invoke(&self, args: &[HookValue]) -> HookResult {
-        let dyn_args: Vec<Dynamic> = args.iter().map(hook_to_dynamic).collect();
+    fn invoke(&self, invocation: &HookInvocation<'_>) -> HookResult {
+        let dyn_args: Vec<Dynamic> = invocation.args.iter().map(hook_to_dynamic).collect();
         // Fresh scope clone per call → no cross-call state (determinism).
         let mut scope = self.scope.clone();
+        scope.push_constant_dynamic(
+            "runtime_context",
+            hook_to_dynamic(&runtime_context_hook_value(invocation.context)),
+        );
         let options = rhai::CallFnOptions::new()
             .eval_ast(false)
             .rewind_scope(true);
@@ -249,13 +256,17 @@ pub fn register_rhai_hook(
 /// `Ok(None)` means the seam has no implementation. A runtime or return-shape
 /// failure is an `Err`; callers can therefore distinguish an unconfigured
 /// optional seam from a configured policy that faulted.
-pub fn invoke_rhai_hook(id: &str, args: Vec<Dynamic>) -> Result<Option<Dynamic>, String> {
+pub fn invoke_rhai_hook(
+    id: &str,
+    args: Vec<Dynamic>,
+    context: RuntimeExecutionContext,
+) -> Result<Option<Dynamic>, String> {
     let values = args
         .iter()
         .map(dynamic_to_hook)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
-    match lunco_hooks::invoke(id, &values) {
+    match lunco_hooks::invoke_with_context(id, &values, context) {
         None => Ok(None),
         Some(Ok(value)) => Ok(Some(hook_to_dynamic(&value))),
         Some(Err(error)) => Err(error.to_string()),
@@ -339,6 +350,7 @@ pub fn dynamic_to_hook(d: &Dynamic) -> HookResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_hooks::{RuntimeClock, RuntimeCycle, RuntimePhase, RuntimeRoute, RuntimeScope};
 
     #[test]
     fn unsigned_values_round_trip_without_string_coercion() {
@@ -378,10 +390,12 @@ mod tests {
             ("lamport", HookValue::Int(5)),
             ("author", HookValue::str("peer-2")),
         ]);
-        let out = hook.invoke(&[a.clone(), b.clone()]).unwrap();
+        let out = hook
+            .invoke(&HookInvocation::unclassified(&[a.clone(), b.clone()]))
+            .unwrap();
         assert_eq!(out.as_i64(), Some(-2), "lamport 3 sorts before 5");
         // Symmetric.
-        let out = hook.invoke(&[b, a]).unwrap();
+        let out = hook.invoke(&HookInvocation::unclassified(&[b, a])).unwrap();
         assert_eq!(out.as_i64(), Some(2));
     }
 
@@ -393,7 +407,7 @@ mod tests {
         )
         .expect("literal policy constants must be available inside hook functions");
         let out = hook
-            .invoke(&[HookValue::Int(4)])
+            .invoke(&HookInvocation::unclassified(&[HookValue::Int(4)]))
             .expect("the hook call must resolve its constant");
         assert_eq!(out, HookValue::Int(12));
     }
@@ -424,14 +438,19 @@ mod tests {
             "entry",
         )
         .expect("helper functions must receive the same constant propagation");
-        let out = hook.invoke(&[]).expect("entry must call helper");
+        let out = hook
+            .invoke(&HookInvocation::unclassified(&[]))
+            .expect("entry must call helper");
         assert_eq!(out, HookValue::Int(10));
     }
 
     #[test]
     fn register_places_hook_in_registry() {
         register_rhai_hook("test.rhai_id", "pick", "fn pick(a, b) { a + b }", true).unwrap();
-        let got = lunco_hooks::invoke("test.rhai_id", &[HookValue::Int(1), HookValue::Int(2)]);
+        let got = lunco_hooks::invoke_unclassified(
+            "test.rhai_id",
+            &[HookValue::Int(1), HookValue::Int(2)],
+        );
         assert_eq!(got.unwrap().unwrap(), HookValue::Int(3));
         lunco_hooks::unregister("test.rhai_id");
     }
@@ -448,14 +467,101 @@ mod tests {
         let hook = RhaiHook::compile("fn emit() { #{value: [1, 2]}[\"value\"] }", "emit")
             .expect("policy compiles");
         assert_eq!(
-            hook.invoke(&[]).expect("hook invocation succeeds"),
+            hook.invoke(&HookInvocation::unclassified(&[]))
+                .expect("hook invocation succeeds"),
             HookValue::Array(vec![HookValue::Int(1), HookValue::Int(2),])
         );
 
         let opaque = RhaiHook::compile("fn emit() { 1..3 }", "emit").expect("policy compiles");
         let error = opaque
-            .invoke(&[])
+            .invoke(&HookInvocation::unclassified(&[]))
             .expect_err("ranges are not part of the hook ABI");
         assert!(error.0.contains("unsupported Rhai hook return type"));
+    }
+
+    #[test]
+    fn registered_hook_reads_its_callers_runtime_context() {
+        let hook = RhaiHook::compile(
+            "fn inspect() { runtime_context.scope + \"/\" + runtime_context.cycle + \"/\" + runtime_context.phase + \"/\" + runtime_context.clock + \"/\" + runtime_context.generation }",
+            "inspect",
+        )
+        .unwrap();
+        let simulation = RuntimeExecutionContext {
+            route: Some(RuntimeRoute {
+                scope: RuntimeScope::Twin,
+                cycle: RuntimeCycle::Simulation,
+                generation: 17,
+            }),
+            phase: RuntimePhase::Behavior,
+            clock: RuntimeClock::Simulation,
+            time_seconds: Some(2.5),
+            delta_seconds: Some(0.01),
+            sequence: Some(250),
+            producer: None,
+        };
+        let first = hook
+            .invoke(&HookInvocation::with_context(&[], simulation))
+            .unwrap();
+        assert_eq!(
+            first,
+            HookValue::str("twin/simulation/behavior/simulation/17")
+        );
+
+        let ui = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::application(RuntimeCycle::Ui)),
+            phase: RuntimePhase::Evaluation,
+            clock: RuntimeClock::Application,
+            time_seconds: Some(8.0),
+            delta_seconds: None,
+            sequence: Some(3),
+            producer: None,
+        };
+        let second = hook.invoke(&HookInvocation::with_context(&[], ui)).unwrap();
+        assert_eq!(
+            second,
+            HookValue::str("application/ui/evaluation/application/0")
+        );
+    }
+
+    #[test]
+    fn discrete_hook_has_explicit_unclassified_context() {
+        let hook = RhaiHook::compile(
+            "fn inspect() { runtime_context.cycle == () && runtime_context.phase == \"unclassified\" && runtime_context.clock == \"none\" }",
+            "inspect",
+        )
+        .unwrap();
+        assert_eq!(
+            hook.invoke(&HookInvocation::unclassified(&[])).unwrap(),
+            HookValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn registry_invocation_forwards_the_callers_context() {
+        let hook_id = "test.rhai_context";
+        register_rhai_hook(
+            hook_id,
+            "inspect",
+            "fn inspect() { runtime_context.cycle + \"/\" + runtime_context.sequence }",
+            true,
+        )
+        .unwrap();
+        let context = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::twin(RuntimeCycle::Simulation, 9)),
+            phase: RuntimePhase::Event,
+            clock: RuntimeClock::Simulation,
+            time_seconds: Some(1.25),
+            delta_seconds: Some(0.01),
+            sequence: Some(125),
+            producer: None,
+        };
+        let result = invoke_rhai_hook(hook_id, Vec::new(), context)
+            .unwrap()
+            .expect("registered Rhai hook is available");
+        assert_eq!(
+            dynamic_to_hook(&result).unwrap(),
+            HookValue::str("simulation/125")
+        );
+        lunco_hooks::unregister(hook_id);
     }
 }

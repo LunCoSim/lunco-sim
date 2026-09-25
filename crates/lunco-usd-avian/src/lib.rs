@@ -58,8 +58,8 @@ use lunco_usd_bevy_scene::{
     is_preview_only,
 };
 use lunco_usd_bevy_stage::{
-    Purpose, TransformReadError, UsdInstanceProjection, UsdInstanceRoot, UsdRead, UsdStageAsset,
-    effective_purpose, world_transform,
+    Purpose, TransformReadError, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
+    UsdRead, UsdStageAsset, effective_purpose, world_transform,
 };
 use openusd::sdf::Path as SdfPath;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
@@ -1635,6 +1635,7 @@ fn build_usd_physics_joints(
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     q_instance_projection: Query<&UsdInstanceProjection>,
+    q_instance_member: Query<&UsdInstanceMember>,
     q_pose: Query<(&Position, &Rotation)>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -1867,6 +1868,11 @@ fn build_usd_physics_joints(
             .unwrap_or_else(|| commands.spawn((RigidBody::Static, ScenePhysicsOwned)).id());
         let b1 = body1_ent
             .unwrap_or_else(|| commands.spawn((RigidBody::Static, ScenePhysicsOwned)).id());
+        let instance_path = q_instance_member
+            .get(joint_entity)
+            .map(|member| member.root_path.as_str())
+            .unwrap_or("");
+        let order_key = format!("{instance_path}|{}", joint_prim_path.path);
 
         debug!(
             "Built USD joint {} -> {} <-> {}",
@@ -1895,6 +1901,7 @@ fn build_usd_physics_joints(
                 lunco_usd_avian_joints::attach_prismatic_joint(
                     &mut commands,
                     joint_entity,
+                    order_key.clone(),
                     b0,
                     b1,
                     pending.local_pos0,
@@ -1919,6 +1926,7 @@ fn build_usd_physics_joints(
                 lunco_usd_avian_joints::attach_revolute_joint(
                     &mut commands,
                     joint_entity,
+                    order_key.clone(),
                     b0,
                     b1,
                     pending.local_pos0,
@@ -1936,6 +1944,7 @@ fn build_usd_physics_joints(
                 lunco_usd_avian_joints::attach_fixed_joint(
                     &mut commands,
                     joint_entity,
+                    order_key.clone(),
                     b0,
                     b1,
                     pending.local_pos0,
@@ -1952,6 +1961,7 @@ fn build_usd_physics_joints(
                 lunco_usd_avian_joints::attach_spherical_joint(
                     &mut commands,
                     joint_entity,
+                    order_key.clone(),
                     b0,
                     b1,
                     pending.local_pos0,
@@ -1971,6 +1981,7 @@ fn build_usd_physics_joints(
                 lunco_usd_avian_joints::attach_distance_joint(
                     &mut commands,
                     joint_entity,
+                    order_key.clone(),
                     b0,
                     b1,
                     pending.local_pos0,

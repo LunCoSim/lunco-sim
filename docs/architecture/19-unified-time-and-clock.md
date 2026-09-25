@@ -42,19 +42,32 @@ Scene time selection is one application policy: `scene.time.select`, installed
 by `assets/scripting/policy/startup.rhai` from `policy/index.toml`. Startup
 installs the policy; it does not choose an epoch before a scene exists. The USD
 scene lifecycle invokes it once at `SceneTransitionCompleted`, after the
-composed stage dependencies and queued visual/mesh projection work have
-settled. A completion notification that did not enter the loading phase is
+composed stage dependencies and queued structural projection have settled.
+CPU-generated render meshes may continue streaming because they do not affect
+the selected epoch. A completion notification that did not enter the loading phase is
 ignored, so an idempotent load of the active scene does not select or apply time
 again. Its typed facts include the selected root path, composed epoch API and
 value status, celestial-source presence, and a fresh computer UTC→TDB candidate.
 Rhai selects a valid non-zero root `lunco:time:epochJd` when present; otherwise
 it selects current computer time. Rust verifies that the returned epoch matches
-one of those candidates and passes the result to the time owner.
+one of those candidates and passes the result to the time owner. The hook call
+uses `Twin/Lifecycle/Preparation`, keyed by that exact `SceneTransitionId`, with
+no elapsed clock. The deferred `SceneTimeSelection` carries the same id; the
+time owner ignores an apply, failure, or clear edge when it belongs to an older
+transition. One-shot policy inspection uses its separate
+`Application/Repl/Evaluation` context.
 
 Until the selection is installed, `SceneTimeState` holds the physical fixed
 loop and gates USD time-sample animation, celestial placement/presentation, and
 USD DEM terrain construction. Applying the selection resets `SimTick`, the
-mission calendar, and clock-domain samples before releasing those consumers.
+mission calendar, and clock-domain samples. In the following `PreUpdate`, the
+terrain bridge resolves authored DEM prims and the simulation assembly records
+their exact progress holds before `TimeSpineSet` can admit a fixed tick. This
+includes Twin manifest scans and downloads that have not produced a terrain
+request yet. Pending DEM data, collider construction, and the browser worker's
+full result keep `SimTick`, Rhai simulation hooks, Modelica, and Avian held
+while render and UI schedules continue. Physics readiness then covers
+fixed-step body and joint admission.
 `ResetTime` uses the retained selection and never invokes the policy. This
 keeps a replacement scene from consuming the outgoing scene's epoch while its
 assets and projections are still arriving. A missing epoch warns when celestial
@@ -132,7 +145,9 @@ it is never re-parented to `Wall`.
 A derived domain follows its parent. A driven domain adds `Playback` with its
 own seekable head, range, rate, loop, and pause state. `TimeBinding` attaches an
 entity to a domain. `ResolvedDomains` resolves these explicit bindings once per
-frame; missing required bindings are reported by their owner.
+frame. An unbound entity uses its documented owner clock; an explicit binding
+that is absent from `ResolvedDomains` is unavailable. Its owner reports the
+missing domain and holds that operation instead of silently switching clocks.
 
 ## 4. Animation funnel
 
@@ -195,10 +210,13 @@ network state. Local animation-preview seeks are presentation decisions, not
 physics ticks. A camera path's playback is local unless its authored shot is
 part of the shared scene contract.
 
-Physics determinism also requires the Avian compute order to be pinned. The
-production headless/server builder publishes `PhysicsDeterminism`; the
-`clock_snapshot()` query exposes that contract and reports a missing admission
-resource as a runtime fault rather than treating the world as deterministic.
+The production composition publishes `PhysicsComputeProfile`, which records
+the observed Bevy Compute pool width. `clock_snapshot()` exposes
+`physics_profile_known` and the optional `physics_compute_threads` value; an
+absent profile or unavailable pool raises a runtime fault. A one-thread Compute
+profile controls one source of scheduling variation. It is not a verdict that
+physics or the whole simulation is deterministic, and it does not constrain IO
+or AsyncCompute.
 
 `RuntimeCycleSet` supplies ordering vocabulary, not an active clock sample or
 an independent cadence driver. Every system and callback must use the clock

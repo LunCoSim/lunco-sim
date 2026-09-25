@@ -6,16 +6,15 @@ use crossbeam_channel::Sender;
 use lunco_modelica_runtime::{ModelicaCommand, ModelicaResult};
 use std::collections::{HashMap, VecDeque};
 
-/// M8 — the worker's two-lane scheduler, on ONE thread.
+/// The worker's two-lane command scheduler.
 ///
-/// The `SimulationSession`s are `!Send` and the rumoca `Session` is owned by
-/// the same thread, so a genuine compile-thread/step-thread split would have
-/// to move one of them across threads — not available. The alternative the
-/// architecture does support is PRIORITY scheduling: commands are queued into
-/// two lanes and every runnable Step is processed before the next queued
-/// compile-shaped command, so a slow compile (or a 10-60 s `LoadSourceRoot`)
-/// delays other live models' Steps by at most the command currently executing,
-/// never by the whole queue.
+/// This thread owns live steppers and command ordering. A separate single-owner
+/// actor owns the mutable Rumoca session and compiled-artifact cache. Native
+/// source-root reads, input-default extraction, and parsing run on the bounded
+/// preparation pool; source-root installs and ordinary compiles are sent to the
+/// actor in FIFO order and return as ordered completions. The two lanes
+/// prioritize runnable Steps for initialized entities while holding commands
+/// that need an in-flight compile or root commit.
 ///
 /// Lanes:
 /// * **step lane** — `Step` for an entity with no queued compile-lane command.
@@ -23,6 +22,8 @@ use std::collections::{HashMap, VecDeque};
 ///   preparation is in flight.
 /// * **compile lane** — everything else (`Compile`, `UpdateParameters`,
 ///   `Reset`, `Despawn`, `LoadSourceRoot`), strictly FIFO, one per round.
+///   Compile, parameter, and reset commands wait while an admitted source root
+///   is being prepared or committed.
 ///
 /// **The per-entity ordering guarantee is preserved**: a `Step` whose entity
 /// has any command pending in the compile lane is appended to the compile lane
@@ -129,20 +130,42 @@ pub(super) fn take_runnable_compile_command(
     compile_lane: &mut VecDeque<ModelicaCommand>,
     pending_entities: &std::collections::HashSet<Entity>,
     preparation_pending: bool,
+    source_root_preparation_pending: bool,
     preparation_capacity_available: bool,
 ) -> Option<ModelicaCommand> {
     let command = compile_lane.front()?;
     let runnable = match command {
         ModelicaCommand::Compile { entity, .. } => {
-            preparation_capacity_available && !pending_entities.contains(entity)
+            preparation_capacity_available
+                && !source_root_preparation_pending
+                && !pending_entities.contains(entity)
         }
         ModelicaCommand::UpdateParameters { entity, .. }
-        | ModelicaCommand::Reset { entity, .. } => !pending_entities.contains(entity),
+        | ModelicaCommand::Reset { entity, .. } => {
+            !preparation_pending
+                && !source_root_preparation_pending
+                && !pending_entities.contains(entity)
+        }
         ModelicaCommand::Despawn { .. } => true,
-        ModelicaCommand::LoadSourceRoot { .. } => !preparation_pending,
+        ModelicaCommand::LoadSourceRoot { .. } => {
+            !preparation_pending && preparation_capacity_available
+        }
         ModelicaCommand::Step { entity, .. } => !pending_entities.contains(entity),
     };
     runnable.then(|| compile_lane.pop_front().expect("front command exists"))
+}
+
+/// Take a completed immutable preparation only when all earlier submissions
+/// have also completed. Completion timing therefore cannot choose commit order.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn pop_ready_in_order<T>(
+    order: &mut VecDeque<u64>,
+    ready: &mut HashMap<u64, T>,
+) -> Option<T> {
+    let id = *order.front()?;
+    let result = ready.remove(&id)?;
+    order.pop_front();
+    Some(result)
 }
 
 #[cfg(test)]
@@ -240,11 +263,12 @@ mod tests {
     }
 
     #[test]
-    fn load_source_root_does_not_block_live_steps() {
+    fn step_queues_ahead_of_a_waiting_source_root() {
         let mut l = Lanes::new();
         l.push(load_root());
         l.push(step(ent(3)));
-        assert_eq!(l.step.len(), 1);
+        assert_eq!(l.step.len(), 1, "queued Step is runnable first");
+        assert_eq!(l.compile.len(), 1, "source root remains queued");
     }
 
     #[test]
@@ -294,12 +318,15 @@ mod tests {
         let mut compile_lane = VecDeque::from([compile(ent(1), 2), compile(ent(2), 3)]);
         let pending = std::collections::HashSet::from([ent(1)]);
 
-        assert!(take_runnable_compile_command(&mut compile_lane, &pending, true, true).is_none());
+        assert!(
+            take_runnable_compile_command(&mut compile_lane, &pending, true, false, true).is_none()
+        );
         assert_eq!(compile_lane.len(), 2);
 
         let pending = std::collections::HashSet::new();
-        let command = take_runnable_compile_command(&mut compile_lane, &pending, false, true)
-            .expect("front compile becomes runnable after preparation commits");
+        let command =
+            take_runnable_compile_command(&mut compile_lane, &pending, false, false, true)
+                .expect("front compile becomes runnable after preparation commits");
         assert_eq!(cmd_entity(&command), ent(1));
     }
 
@@ -308,13 +335,60 @@ mod tests {
         let mut compile_lane = VecDeque::from([load_root()]);
         let pending = std::collections::HashSet::from([ent(1)]);
 
-        assert!(take_runnable_compile_command(&mut compile_lane, &pending, true, true).is_none());
+        assert!(
+            take_runnable_compile_command(&mut compile_lane, &pending, true, false, true).is_none()
+        );
 
         let pending = std::collections::HashSet::new();
         assert!(matches!(
-            take_runnable_compile_command(&mut compile_lane, &pending, false, true),
+            take_runnable_compile_command(&mut compile_lane, &pending, false, false, true),
             Some(ModelicaCommand::LoadSourceRoot { .. })
         ));
+    }
+
+    #[test]
+    fn rebuild_commands_wait_for_owner_preparations() {
+        let pending = std::collections::HashSet::new();
+        let mut compile_lane = VecDeque::from([ModelicaCommand::Reset {
+            entity: ent(2),
+            session_id: 4,
+        }]);
+
+        assert!(
+            take_runnable_compile_command(&mut compile_lane, &pending, true, false, true).is_none()
+        );
+        assert_eq!(compile_lane.len(), 1);
+        assert!(matches!(
+            take_runnable_compile_command(&mut compile_lane, &pending, false, false, true),
+            Some(ModelicaCommand::Reset { entity, session_id: 4 }) if entity == ent(2)
+        ));
+    }
+
+    #[test]
+    fn compile_waits_until_source_root_commit() {
+        let mut compile_lane = VecDeque::from([compile(ent(1), 2)]);
+        let pending = std::collections::HashSet::new();
+
+        assert!(
+            take_runnable_compile_command(&mut compile_lane, &pending, false, true, true).is_none()
+        );
+        assert!(matches!(
+            take_runnable_compile_command(&mut compile_lane, &pending, false, false, true),
+            Some(ModelicaCommand::Compile { .. })
+        ));
+    }
+
+    #[test]
+    fn later_async_completion_waits_for_earlier_commit() {
+        let mut order = VecDeque::from([11, 12]);
+        let mut ready = HashMap::from([(12, "later")]);
+
+        assert_eq!(pop_ready_in_order(&mut order, &mut ready), None);
+        assert_eq!(order, VecDeque::from([11, 12]));
+        ready.insert(11, "earlier");
+        assert_eq!(pop_ready_in_order(&mut order, &mut ready), Some("earlier"));
+        assert_eq!(pop_ready_in_order(&mut order, &mut ready), Some("later"));
+        assert!(order.is_empty());
     }
 
     #[test]
@@ -324,7 +398,7 @@ mod tests {
         let pending = std::collections::HashSet::from([entity]);
 
         assert!(matches!(
-            take_runnable_compile_command(&mut compile_lane, &pending, true, false),
+            take_runnable_compile_command(&mut compile_lane, &pending, true, false, false),
             Some(ModelicaCommand::Despawn { entity: candidate }) if candidate == entity
         ));
     }
