@@ -1,9 +1,8 @@
 //! Generic retained-telemetry sparkline.
 //!
-//! This widget deliberately accepts a [`SignalRef`] instead of a diagnostic
-//! name. Engine health, vehicle state, Modelica outputs, and authored channels
-//! therefore use the same retained-history path. A status bar may choose a
-//! default channel, but it does not get a private frame-time plotter.
+//! Retained telemetry signals and application-owned scalar histories use the
+//! same painter. Each caller supplies history from its owning runtime resource;
+//! this widget keeps only derived display points and statistics.
 
 use std::sync::Arc;
 
@@ -46,33 +45,40 @@ pub struct TelemetrySparklineStats {
 
 /// Calculate display statistics without changing the retained signal history.
 pub fn telemetry_history_stats(history: &ScalarHistory) -> Option<TelemetrySparklineStats> {
-    let mut values = Vec::with_capacity(history.len());
+    let values = history
+        .iter()
+        .map(|sample| sample.value)
+        .collect::<Vec<_>>();
+    telemetry_values_stats(&values)
+}
+
+/// Calculate display statistics for an ordered slice of scalar measurements.
+pub fn telemetry_values_stats(values: &[f64]) -> Option<TelemetrySparklineStats> {
+    let mut finite_values = Vec::with_capacity(values.len());
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     let mut latest = None;
-    for sample in history.iter() {
-        min = min.min(sample.value);
-        max = max.max(sample.value);
-        latest = Some(sample.value);
-        values.push(sample.value);
+    for value in values.iter().copied().filter(|value| value.is_finite()) {
+        min = min.min(value);
+        max = max.max(value);
+        latest = Some(value);
+        finite_values.push(value);
     }
-    if values.is_empty() {
+    if finite_values.is_empty() {
         return None;
     }
-    values.sort_by(f64::total_cmp);
-    let p99 = values[((values.len() as f64 * 0.99) as usize).min(values.len() - 1)];
+    finite_values.sort_by(f64::total_cmp);
+    let p99 =
+        finite_values[((finite_values.len() as f64 * 0.99) as usize).min(finite_values.len() - 1)];
     Some(TelemetrySparklineStats {
         min,
         max,
         p99,
-        latest: latest.expect("non-empty history has a latest sample"),
+        latest: latest.expect("finite values have a latest sample"),
     })
 }
 
-/// Read the last screen-ready statistics for a widget without touching the
-/// retained history. The status bar uses this for its optional p99 label; the
-/// first frame intentionally omits that optional detail until the widget has
-/// built its cache.
+/// Read cached statistics for a retained signal without rebuilding its history.
 pub fn cached_telemetry_sparkline_stats(
     ctx: &egui::Context,
     id: Id,
@@ -137,12 +143,6 @@ pub fn render_telemetry_sparkline(
         Sense::hover(),
     );
     let Some(history) = registry.and_then(|registry| registry.scalar_history(signal)) else {
-        ui.painter_at(rect).rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(0.5, theme.tokens.text_subdued.gamma_multiply(0.55)),
-            egui::StrokeKind::Inside,
-        );
         return (response, None);
     };
     let fingerprint = history_fingerprint(history);
@@ -174,13 +174,61 @@ pub fn render_telemetry_sparkline(
         cached
     });
 
-    let Some(stats) = cached.stats else {
-        ui.painter_at(rect).rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(0.5, theme.tokens.text_subdued.gamma_multiply(0.55)),
-            egui::StrokeKind::Inside,
-        );
+    paint_sparkline(
+        ui,
+        rect,
+        &cached.points,
+        cached.stats,
+        &signal.path,
+        theme,
+        options,
+        response,
+    )
+}
+
+/// Render a sparkline from an application-level series retained by its owner.
+pub fn render_values_sparkline(
+    ui: &mut Ui,
+    values: &[f64],
+    color_key: &str,
+    theme: &Theme,
+    options: TelemetrySparklineOptions,
+) -> (Response, Option<TelemetrySparklineStats>) {
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(options.width.max(1.0), options.height.max(1.0)),
+        Sense::hover(),
+    );
+    let raw = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .enumerate()
+        .map(|(index, value)| [index as f64, value])
+        .collect::<Vec<_>>();
+    let points = decimate_min_max(&raw, rect.width()).unwrap_or(raw);
+    paint_sparkline(
+        ui,
+        rect,
+        &points,
+        telemetry_values_stats(values),
+        color_key,
+        theme,
+        options,
+        response,
+    )
+}
+
+fn paint_sparkline(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    points: &[[f64; 2]],
+    stats: Option<TelemetrySparklineStats>,
+    color_key: &str,
+    theme: &Theme,
+    options: TelemetrySparklineOptions,
+    response: Response,
+) -> (Response, Option<TelemetrySparklineStats>) {
+    let Some(stats) = stats else {
         return (response, None);
     };
     let mut low = stats.min;
@@ -198,18 +246,18 @@ pub fn render_telemetry_sparkline(
     low -= padding;
     high += padding;
     let y_span = (high - low).max(f64::EPSILON);
-    let x0 = cached.points.first().map_or(0.0, |point| point[0]);
-    let x1 = cached.points.last().map_or(1.0, |point| point[0]);
+    let x0 = points.first().map_or(0.0, |point| point[0]);
+    let x1 = points.last().map_or(1.0, |point| point[0]);
     let x_span = x1 - x0;
     let line_color = options
         .line_color
-        .unwrap_or_else(|| crate::signal::color_for_signal(theme, &signal.path));
+        .unwrap_or_else(|| crate::signal::color_for_signal(theme, color_key));
     let painter = ui.painter_at(rect);
     let to_screen = |index: usize, point: [f64; 2]| {
         let x = if x_span > 0.0 {
             (point[0] - x0) / x_span
-        } else if cached.points.len() > 1 {
-            index as f64 / (cached.points.len() - 1) as f64
+        } else if points.len() > 1 {
+            index as f64 / (points.len() - 1) as f64
         } else {
             0.5
         };
@@ -220,10 +268,12 @@ pub fn render_telemetry_sparkline(
         )
     };
     let mut previous = None;
-    for (index, point) in cached.points.iter().copied().enumerate() {
+    for (index, point) in points.iter().copied().enumerate() {
         let current = to_screen(index, point);
         if let Some(previous) = previous {
             painter.line_segment([previous, current], Stroke::new(1.0, line_color));
+        } else if points.len() == 1 {
+            painter.circle_filled(current, 1.25, line_color);
         }
         previous = Some(current);
     }

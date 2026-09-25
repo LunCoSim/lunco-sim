@@ -1239,6 +1239,7 @@ mod engine_health_exposure_tests {
             frame_time_ms: Some(16.666),
             raw_frame_time_ms: Some(20.0),
             revision: 7,
+            ..Default::default()
         })
         .insert_resource(PhysicsHealthSnapshot {
             step_time_ms: Some(0.5),

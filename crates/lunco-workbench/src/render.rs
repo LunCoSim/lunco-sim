@@ -4,10 +4,7 @@
 //! egui dock, menus, status presentation, and graphics/settings rendering.
 
 use super::*;
-use lunco_viz::{
-    SignalRef, TelemetrySparklineOptions, cached_telemetry_sparkline_stats,
-    render_telemetry_sparkline,
-};
+use lunco_viz::{TelemetrySparklineOptions, render_values_sparkline, telemetry_values_stats};
 use lunco_workbench_core::{DeferredWorldTriggers, trigger_or_defer};
 use lunco_workbench_perf_ui::{PerfHudSettings, PerfStats};
 
@@ -1188,11 +1185,20 @@ pub(crate) fn render_status_bar_inner(
         (latest, history)
     };
     let perf_stats = world.resource::<PerfStats>().clone();
-    // The status bar uses the ordinary retained telemetry channel. The
-    // sparkline is a generic signal widget; frame time is only its default
-    // selection, not a special diagnostics reader.
-    let frame_time_signal = SignalRef::global("engine.frame_time");
-    let signal_registry = world.get_resource::<lunco_viz::SignalRegistry>();
+    // Engine frame health advances with rendered frames, including before a
+    // Twin is active. Its shared snapshot owns this history; simulation
+    // telemetry remains sampled on its fixed simulation clock.
+    let frame_time_samples = world
+        .get_resource::<lunco_core_runtime::EngineHealthSnapshot>()
+        .map(|health| {
+            health
+                .frame_time_history
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let frame_time_p99 = telemetry_values_stats(&frame_time_samples).map(|stats| stats.p99 as f32);
     let perf_enabled = world.resource::<PerfHudSettings>().enabled;
     // The networking chip only paints when not standalone; reserve room
     // for it on the right so the clickable status region doesn't overlap.
@@ -1208,6 +1214,10 @@ pub(crate) fn render_status_bar_inner(
         .get_resource::<CurrentScenePath>()
         .map(|s| s.0.clone())
         .unwrap_or_default();
+    let scene_visible = !scene_name.is_empty()
+        && world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .is_some_and(|workspace| workspace.active_twin.is_some());
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
     let recent_events_width = status_popup_width(ui.ctx().content_rect().width());
     let popup_width = recent_events_width;
@@ -1219,7 +1229,7 @@ pub(crate) fn render_status_bar_inner(
         // the status scope. The controls shrink together on compact windows;
         // the left scope never competes with an unbounded label.
         let right_widths =
-            status_bar_right_widths(bar_width, perf_enabled, net_active, !scene_name.is_empty());
+            status_bar_right_widths(bar_width, perf_enabled, net_active, scene_visible);
         let right_reserve = right_widths.total();
 
         let status_width =
@@ -1335,7 +1345,7 @@ pub(crate) fn render_status_bar_inner(
             egui::Popup::toggle_id(ui.ctx(), popup_id);
         }
 
-        if !scene_name.is_empty() {
+        if scene_visible {
             ui.separator();
             let scene_response = ui
                 .allocate_ui_with_layout(
@@ -1376,7 +1386,7 @@ pub(crate) fn render_status_bar_inner(
 
         ui.separator();
 
-        if !scene_name.is_empty() && perf_enabled {
+        if scene_visible && perf_enabled {
             ui.add_space(STATUS_BAR_SCENE_PERF_GAP);
         }
 
@@ -1389,14 +1399,11 @@ pub(crate) fn render_status_bar_inner(
             let perf_width = status_bar_perf_width(ui.available_width(), right_widths.perf);
             if perf_width > 0.0 {
                 let sparkline_id = ui.id().with("engine_frame_time");
-                let p99 =
-                    cached_telemetry_sparkline_stats(ui.ctx(), sparkline_id, &frame_time_signal)
-                        .map(|stats| stats.p99 as f32);
                 let (required_text, perf_text) = perf_hud_text(
                     perf_stats.fps,
                     perf_stats.frame_ms,
                     perf_stats.physics_ms,
-                    p99,
+                    frame_time_p99,
                 );
                 ui.allocate_ui_with_layout(
                     egui::vec2(perf_width, 18.0),
@@ -1421,10 +1428,10 @@ pub(crate) fn render_status_bar_inner(
                             ),
                         )
                         .on_hover_text(&perf_text);
-                        render_telemetry_sparkline(
+                        render_values_sparkline(
                             ui,
-                            signal_registry,
-                            &frame_time_signal,
+                            &frame_time_samples,
+                            "engine.frame_time",
                             theme,
                             TelemetrySparklineOptions {
                                 id: sparkline_id,

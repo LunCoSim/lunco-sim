@@ -212,7 +212,8 @@ The Prims rows reuse the Entities selectable-row presentation
 and expose preview-scoped Visible, Invisible, and Contour controls at the
 trailing edge. Those controls dispatch
 `SetUsdPrimDisplayMode`; the viewport projects the typed intent and the render
-binder owns wireframe rendering.
+binder owns wireframe rendering. Strip leading decorative bullet, circle, and
+square markers from the row's presentation label without changing the authored name.
 The viewport panel paints the session selected by the focused `UsdPreviewViewId`. Views share that
 session projection while keeping independent camera/render-target state. The
 viewport applies `UsdPreviewRenderBudget` to visible view targets (2048 px per

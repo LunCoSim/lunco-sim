@@ -6,9 +6,10 @@
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
+use std::collections::VecDeque;
 
-/// Retained frame-health horizon used by the diagnostic source and the
-/// application telemetry channel. At 60 Hz this is approximately four seconds.
+/// Retained frame-health horizon used by diagnostics, the app health snapshot,
+/// and the application telemetry channel. At 60 Hz this is approximately four seconds.
 pub const ENGINE_HEALTH_HISTORY_LEN: usize = 240;
 
 /// Latest presentation/render health facts published by the engine.
@@ -16,7 +17,7 @@ pub const ENGINE_HEALTH_HISTORY_LEN: usize = 240;
 /// Values are canonical `f64` diagnostics.  UI adapters may narrow at their
 /// explicit text/GPU boundary, but telemetry and other runtime consumers read
 /// this resource without another diagnostic-store scan.
-#[derive(Resource, Reflect, Debug, Clone, Copy, Default)]
+#[derive(Resource, Reflect, Debug, Clone, Default)]
 #[reflect(Resource, Debug)]
 pub struct EngineHealthSnapshot {
     /// Smoothed frames per second, when a frame diagnostic is installed.
@@ -28,6 +29,11 @@ pub struct EngineHealthSnapshot {
     /// The headline uses `frame_time_ms`; telemetry history uses this value so
     /// short hitches remain visible in a generic sparkline or plot.
     pub raw_frame_time_ms: Option<f64>,
+    /// Recent raw frame times for application-level performance views.
+    ///
+    /// This history advances with rendered frames, including while no Twin is
+    /// active. Simulation telemetry remains sampled on its simulation clock.
+    pub frame_time_history: VecDeque<f64>,
     /// Monotonic revision of the published values.
     pub revision: u64,
 }
@@ -73,5 +79,12 @@ pub fn publish_engine_health(
         snapshot.frame_time_ms = frame_time_ms;
         snapshot.raw_frame_time_ms = raw_frame_time_ms;
         snapshot.revision = snapshot.revision.wrapping_add(1);
+    }
+
+    if let Some(frame_time_ms) = raw_frame_time_ms.filter(|value| value.is_finite()) {
+        if snapshot.frame_time_history.len() == ENGINE_HEALTH_HISTORY_LEN {
+            snapshot.frame_time_history.pop_front();
+        }
+        snapshot.frame_time_history.push_back(frame_time_ms);
     }
 }

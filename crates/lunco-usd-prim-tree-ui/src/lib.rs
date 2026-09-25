@@ -415,14 +415,14 @@ fn render_prim_node(
     let Some(node) = view.nodes.get(key) else {
         return;
     };
-    let label = &node.display_name;
+    let label = strip_tree_marker_prefix(&node.display_name);
 
     if node.children.is_empty() {
         let _ = lunco_workbench_widgets::tree::leaf(ui, |ui| {
             prim_select_label(
                 ui,
                 node,
-                &label,
+                label,
                 selected,
                 primary,
                 selection_changed,
@@ -454,7 +454,7 @@ fn render_prim_node(
             prim_select_label(
                 ui,
                 node,
-                &label,
+                label,
                 selected,
                 primary,
                 selection_changed,
@@ -490,6 +490,36 @@ fn render_prim_node(
     if let Some(mode) = header_display_mode.or(body_display_mode) {
         *to_display_mode = Some(mode);
     }
+}
+
+fn strip_tree_marker_prefix(label: &str) -> &str {
+    let mut label = label.trim_start();
+    loop {
+        let stripped = label.trim_start_matches(is_tree_marker).trim_start();
+        if stripped.len() == label.len() {
+            return label;
+        }
+        label = stripped;
+    }
+}
+
+fn is_tree_marker(character: char) -> bool {
+    matches!(
+        character,
+        '•' | '●'
+            | '○'
+            | '◦'
+            | '∙'
+            | '⋅'
+            | '·'
+            | '◉'
+            | '▪'
+            | '▫'
+            | '■'
+            | '□'
+            | '◾'
+            | '◽'
+    )
 }
 
 /// The row for one prim: selectable when it has an entity, otherwise a dim inert

@@ -173,7 +173,7 @@ ring buffers, a clock tree, and a timeseries type already exist.
 |---|---|---|
 | **Different clocks / cycles** | `lunco-time::domain` — `TimeDomain { parent, offset, scale, regime }` (affine child clock, USD `LayerOffset` semantics), `Playback { head, mode, rate, looping }` (independent playhead), **`TimeBinding { domain: Entity }` — a per-entity component**, `ResolvedDomains` resolved once per frame | **Use as-is.** "Sample this channel on another clock" = give the channel a `TimeBinding`. A missing bound domain is an owner-visible error, never an implicit switch to world time. |
 | **Retention / ring buffer** | `lunco_signal::SignalRegistry` — `ScalarHistory { VecDeque<ScalarSample>, capacity }` **per signal**, `push_scalar()` drops non-finite, and `SignalMeta { unit, provenance }` | **Use as-is.** Routing `SampledParameter → push_scalar` keeps retention and plotting on one path. |
-| **FPS / frame stats** | Bevy diagnostics provide the engine-owned measurements and short diagnostic ring. `lunco-telemetry` admits the selected paths, samples the typed `EngineHealthSnapshot`, and retains them in the global `SignalRegistry` history | **Use the diagnostic as an input, not as a UI data store.** The retained `SignalRegistry` series is the canonical history for HUDs, plots, APIs, and recording. |
+| **FPS / frame stats** | Bevy diagnostics provide the engine-owned measurements and short diagnostic ring. The core health publisher exposes the latest facts and a bounded frame-time history in `EngineHealthSnapshot`; `lunco-telemetry` also retains selected samples in the global `SignalRegistry` | **Use typed engine-health facts for app presentation and the retained `SignalRegistry` for telemetry plots, APIs, and recording.** Do not read `DiagnosticsStore` from a UI surface. |
 | **Timeseries / experiments** | `RunResult { times: Vec<f64>, series: BTreeMap<String, Vec<f64>> }` (columnar), `RunUpdate::Progress { delta }` (incremental stream), `RunBounds { dt, n_intervals }` (**the codebase's existing vocabulary for output sample spacing**), `REGISTRY_CAP_PER_TWIN = 20` | A telemetry **recording** should *be* a `RunResult` — it then plots and retains through machinery that already works. Rate vocabulary should rhyme with `RunBounds::dt`. |
 | **Physics observations and conversions** | Native Avian ports plus LunCoRaycastAPI raw-query outputs; Modelica IMU/altimeter/attitude conversions are ordinary SimComponent ports | **Use the same telemetry path.** No semantic Rust sensor registry is needed. |
 | **Channel address space** | `lunco_port_core::ports` — `PortRegistry`, `PortRef { name, direction, value: f64 }`, and crucially **`ResolvedPort { backend, slot }` — resolve the name ONCE, then read every tick with one call**. Backends: Modelica vars, Avian bodies, joints, FSW signals, USD sensors | The fast path. **Do not re-resolve a name at 60 Hz.** |
@@ -225,20 +225,22 @@ same `SignalRegistry` using `TelemetrySettings`. No USD output attribute, per-va
 
 ### Engine diagnostics and generic visualization
 
-Bevy's `DiagnosticsStore` and diagnostic rings are an engine-owned measurement source. They are
-read once by the core health publisher and by the telemetry admission/sampling bridge; no HUD,
-status widget, plot, or API surface reads the store directly. The default admitted engine
-channels are FPS and frame time. Additional diagnostic paths require explicit channel metadata
-or policy so an internal diagnostic cannot silently become a public catalog entry.
+Bevy's `DiagnosticsStore` and diagnostic rings are an engine-owned measurement source. The core
+health publisher reads standard frame diagnostics and publishes them through
+`EngineHealthSnapshot`; the telemetry sampler consumes that snapshot for the default FPS and
+frame-time channels. No HUD, status widget, plot, or API surface reads the store directly.
+Additional diagnostic paths require explicit channel metadata or policy so an internal
+diagnostic cannot silently become a public catalog entry.
 
-The bridge publishes the latest typed health facts through `EngineHealthSnapshot` and retains
-the selected scalar samples as global signals (`engine.fps`, `engine.frame_time`) in the shared
-`SignalRegistry`. The headline frame time is smoothed, while `engine.frame_time` retains the
-latest raw diagnostic value so short hitches remain visible. `lunco-viz` owns the generic
-telemetry sparkline: it consumes a `SignalRef` and the corresponding retained
-`ScalarHistory`, caches only derived display points/statistics, and does not create another
-history. The status bar merely selects the default frame-time signal; the same widget and
-history are available to plots, API clients, recording, and future HUDs.
+The core health publisher reads diagnostics once and exposes the latest typed facts plus a
+bounded rolling raw frame-time history through `EngineHealthSnapshot`. That history advances
+with rendered frames, so the app performance HUD stays useful before a Twin starts or while
+simulation time is paused. `lunco-telemetry` retains selected samples as global signals
+(`engine.fps`, `engine.frame_time`) in `SignalRegistry` on the simulation clock; that history
+remains canonical for telemetry plots, APIs, and recording. The headline frame time is
+smoothed, while the retained `engine.frame_time` channel keeps the raw diagnostic value so
+short hitches remain visible. `lunco-viz` renders both sources with the same sparkline
+presentation and does not create another history.
 
 ---
 
@@ -540,11 +542,10 @@ The resolution rules are deliberately narrow:
   Modelica conversion outputs are ordinary ports, so tagging one for telemetry
   is just `lunco:telemetry:port` naming it. Recording = `ExportTelemetryRecording`.
 - **Phase 5 — DONE.** `ChannelSource::Diagnostic` admits FPS/frame-time as real channels. The
-  status bar no longer owns a diagnostic-specific `VecDeque`: the typed engine-health publisher
-  samples the engine facts once, `SignalRegistry` retains the canonical global series, and the
-  generic `lunco-viz` sparkline reads that history. Bevy's diagnostic ring remains a bounded
-  engine measurement source and smoothing aid; it is not the application's UI or recording
-  history.
+  status bar does not own a diagnostic-specific history: the typed engine-health publisher
+  exposes the bounded frame-time history for app presentation, `SignalRegistry` retains the
+  canonical simulation-time series for telemetry plots, APIs, and recording, and Bevy's
+  diagnostic ring remains the measurement source and smoothing aid.
 
 ### There is no separate "recorder"
 

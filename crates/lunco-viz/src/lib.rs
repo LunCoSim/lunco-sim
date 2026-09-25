@@ -61,7 +61,8 @@ pub use telemetry_browser::{
 #[cfg(feature = "ui")]
 pub use telemetry_sparkline::{
     TelemetrySparklineOptions, TelemetrySparklineStats, cached_telemetry_sparkline_stats,
-    render_telemetry_sparkline, telemetry_history_stats,
+    render_telemetry_sparkline, render_values_sparkline, telemetry_history_stats,
+    telemetry_values_stats,
 };
 #[cfg(feature = "ui")]
 pub use view::{Panel2DCtx, ViewKind, ViewTarget};

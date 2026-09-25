@@ -75,12 +75,14 @@ same registry.
 
 The same rule applies to engine health. The core runtime publishes the latest
 frame and physics facts once as typed `EngineHealthSnapshot` and
-`PhysicsHealthSnapshot` resources. The renderer-independent exposure layer
-projects those facts into the ordinary `engine-health` namespace. Native egui,
-authored HUI, API readers, telemetry adapters, and recorders consume that
-publication; none of them scans `DiagnosticsStore` or the physics schedule for
-their own copy. A new HUD value therefore requires a producer-side exposure
-property and a normal authored binding, not a HUD-specific reader.
+`PhysicsHealthSnapshot` resources. The engine snapshot also retains a bounded
+raw frame-time history for app-level performance presentation. The
+renderer-independent exposure layer projects the latest facts into the ordinary
+`engine-health` namespace. Native egui, authored HUI, API readers, telemetry
+adapters, and recorders consume those publications; none of them scans
+`DiagnosticsStore` or the physics schedule for their own copy. A new HUD value
+therefore requires a producer-side exposure property and a normal authored
+binding, not a HUD-specific reader.
 
 Application interaction has two distinct wall-clock cadences. Typed commands
 advance the application `command` clock when the shared `CommandOccurred` fact
