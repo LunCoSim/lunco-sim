@@ -120,7 +120,28 @@ constraints separately. Verification coverage comes from the resolved
 `verifiedRequirement` relationship in the semantic model. The authored
 `lint.sysml` policy's verification checks now compare those same resolved
 snapshot handles; written `verify` names remain display/source data rather than
-identifiers used to decide coverage.
+identifiers used to decide coverage. The 154 informational findings are
+definitions without a formal SysML `require` constraint, not failed or
+unverified requirements: of 183 definitions, 29 have formal `require`
+constraints and 154 do not; 113 of the 154 belong to Griffin, 37 to FLIP, and 4
+to the Moon Base project. The engineering-review audit found resolved
+verification links for all 183. That proves model traceability only; the audit
+does not execute the mapped Rhai procedures or inspect fresh runtime evidence.
+For example, GLL-006 has no embedded formal predicate, but the authored landing
+leg scenario contains checks for each strut's type, radius, height, axis, and
+placement. This is code presence, not a passing run. The CLI now names each
+finding and separates formal predicates, resolved verification links, and
+unexecuted external evidence. Quantitative geometry and clearance checks should
+be formal constraints when they bind typed source values to composed USD
+measurements; other measurable requirements can be accepted by a mapped,
+executable verification procedure. Visual, mission-flow, runtime, provenance,
+and evidence requirements need suitable verifier/evidence procedures instead.
+The Twin's explicit quality-audit function currently sets
+`require_formal_constraint = true`, which would reject all 154 definitions as
+one blanket rule. That policy still needs to distinguish a missing applicable
+verification method from the valid choice to keep prose or use an external
+verifier. Unknown supplier data must remain explicitly provisional rather than
+being turned into invented numeric predicates.
 
 This closes generic membership selection and aggregate evaluation, not the
 complete SysML binding semantics. The existing Griffin solar verification

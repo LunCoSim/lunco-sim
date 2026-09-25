@@ -2729,7 +2729,7 @@ pub fn audit_requirements(
                 message: if policy.require_formal_constraint {
                     "requirement has only informal or assumed content; the project policy requests a formal required constraint".to_owned()
                 } else {
-                    "requirement has no formal required constraint; this is permitted by SysML and remains a text-only requirement".to_owned()
+                    "requirement definition has no formal SysML `require` constraint; this finding does not assess linked external verification".to_owned()
                 },
             });
         }

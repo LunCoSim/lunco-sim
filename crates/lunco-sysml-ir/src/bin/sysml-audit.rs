@@ -4,8 +4,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use lunco_sysml_ast::{SysmlAnalysis, SysmlDiagnosticKind};
-use lunco_sysml_ir::{RequirementAuditPolicy, RequirementAuditSeverity, audit_requirements};
+use lunco_sysml_ast::{
+    SysmlAnalysis, SysmlDiagnosticKind, SysmlElement, SysmlElementHandle,
+    SysmlRequirementConstraintKind, SysmlSourceRef,
+};
+use lunco_sysml_ir::{
+    RequirementAuditCode, RequirementAuditPolicy, RequirementAuditSeverity, audit_requirements,
+};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -14,8 +19,44 @@ struct JsonReport<'a> {
     source_revision: u64,
     source_fingerprint: u64,
     policy: RequirementAuditPolicy,
+    requirement_summary: RequirementSummary,
     diagnostics: &'a [lunco_sysml_ast::SysmlDiagnostic],
-    audit: lunco_sysml_ir::RequirementAuditReport,
+    audit: JsonAuditReport<'a>,
+}
+
+#[derive(Serialize)]
+struct JsonAuditReport<'a> {
+    source_revision: u64,
+    source_fingerprint: u64,
+    has_errors: bool,
+    findings: Vec<JsonAuditFinding<'a>>,
+}
+
+#[derive(Serialize)]
+struct JsonAuditFinding<'a> {
+    code: RequirementAuditCode,
+    severity: RequirementAuditSeverity,
+    element: Option<ElementContext<'a>>,
+    source: &'a SysmlSourceRef,
+    message: &'a str,
+}
+
+#[derive(Serialize)]
+struct RequirementSummary {
+    definitions: usize,
+    definitions_with_formal_require_constraint: usize,
+    definitions_without_formal_require_constraint: usize,
+    definitions_with_resolved_verification_link: usize,
+    definitions_without_resolved_verification_link: usize,
+    external_verifier_execution_checked: bool,
+}
+
+#[derive(Serialize)]
+struct ElementContext<'a> {
+    handle: SysmlElementHandle,
+    qualified_name: &'a str,
+    short_name: Option<&'a str>,
+    kind: &'a str,
 }
 
 fn main() -> ExitCode {
@@ -90,15 +131,37 @@ fn run() -> Result<ExitCode, String> {
     let analysis = SysmlAnalysis::from_files(files);
     let audit = audit_requirements(&analysis, policy);
     let failed = !analysis.diagnostics().is_empty() || audit.has_errors();
+    let requirement_summary = requirement_summary(&analysis);
 
     if json {
+        let json_audit = JsonAuditReport {
+            source_revision: audit.source_revision,
+            source_fingerprint: audit.source_fingerprint,
+            has_errors: audit.has_errors(),
+            findings: audit
+                .findings
+                .iter()
+                .map(|finding| JsonAuditFinding {
+                    code: finding.code,
+                    severity: finding.severity,
+                    element: analysis
+                        .elements()
+                        .iter()
+                        .find(|element| element.handle == finding.element)
+                        .map(element_context),
+                    source: &finding.source,
+                    message: &finding.message,
+                })
+                .collect(),
+        };
         let report = JsonReport {
             source_count: analysis.files().len(),
             source_revision: audit.source_revision,
             source_fingerprint: audit.source_fingerprint,
             policy,
+            requirement_summary,
             diagnostics: analysis.diagnostics(),
-            audit,
+            audit: json_audit,
         };
         println!(
             "{}",
@@ -106,7 +169,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|error| format!("cannot serialize report: {error}"))?
         );
     } else {
-        print_text_report(&analysis, policy, &audit);
+        print_text_report(&analysis, policy, &requirement_summary, &audit);
     }
 
     Ok(if failed {
@@ -170,6 +233,7 @@ fn ignored_directory(name: &std::ffi::OsStr) -> bool {
 fn print_text_report(
     analysis: &SysmlAnalysis,
     policy: RequirementAuditPolicy,
+    requirement_summary: &RequirementSummary,
     audit: &lunco_sysml_ir::RequirementAuditReport,
 ) {
     println!("SysML requirement audit");
@@ -182,6 +246,17 @@ fn print_text_report(
         policy.require_typed_subject,
         policy.require_verification,
         policy.require_formal_constraint
+    );
+    println!(
+        "Requirement definitions: {} ({} with formal `require`, {} without formal `require`)",
+        requirement_summary.definitions,
+        requirement_summary.definitions_with_formal_require_constraint,
+        requirement_summary.definitions_without_formal_require_constraint
+    );
+    println!(
+        "Resolved verification links: {}/{} definitions; external verifier execution: not checked",
+        requirement_summary.definitions_with_resolved_verification_link,
+        requirement_summary.definitions
     );
 
     if analysis.diagnostics().is_empty() {
@@ -211,8 +286,14 @@ fn print_text_report(
                 RequirementAuditSeverity::Warning => "WARN",
                 RequirementAuditSeverity::Error => "ERROR",
             };
+            let element_name = analysis
+                .elements()
+                .iter()
+                .find(|element| element.handle == finding.element)
+                .map(|element| element.qualified_name.as_str())
+                .unwrap_or("<unresolved element>");
             println!(
-                "  {severity} {:?} {}:{}..{} {}",
+                "  {severity} {:?} {element_name} {}:{}..{} {}",
                 finding.code,
                 finding.source.file,
                 finding.source.start,
@@ -220,6 +301,54 @@ fn print_text_report(
                 finding.message
             );
         }
+    }
+}
+
+fn requirement_summary(analysis: &SysmlAnalysis) -> RequirementSummary {
+    let definitions = analysis
+        .requirements()
+        .iter()
+        .filter(|requirement| requirement.element.kind == "RequirementDefinition")
+        .collect::<Vec<_>>();
+    let definitions_with_formal_require_constraint = definitions
+        .iter()
+        .filter(|requirement| {
+            requirement
+                .constraints
+                .iter()
+                .any(|constraint| constraint.kind == SysmlRequirementConstraintKind::Require)
+        })
+        .count();
+
+    let verification_policy = RequirementAuditPolicy {
+        require_verification: true,
+        ..RequirementAuditPolicy::default()
+    };
+    let verification_audit = audit_requirements(analysis, verification_policy);
+    let definitions_without_resolved_verification_link = verification_audit
+        .findings
+        .iter()
+        .filter(|finding| finding.code == RequirementAuditCode::MissingVerification)
+        .count();
+
+    RequirementSummary {
+        definitions: definitions.len(),
+        definitions_with_formal_require_constraint,
+        definitions_without_formal_require_constraint: definitions.len()
+            - definitions_with_formal_require_constraint,
+        definitions_with_resolved_verification_link: definitions.len()
+            - definitions_without_resolved_verification_link,
+        definitions_without_resolved_verification_link,
+        external_verifier_execution_checked: false,
+    }
+}
+
+fn element_context(element: &SysmlElement) -> ElementContext<'_> {
+    ElementContext {
+        handle: element.handle,
+        qualified_name: &element.qualified_name,
+        short_name: element.short_name.as_deref(),
+        kind: &element.kind,
     }
 }
 
