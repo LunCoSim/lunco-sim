@@ -88,8 +88,12 @@ calls to source-projected `ConstraintDefinition`s by binding actual expressions
 to typed formals and compiling the definition body in its own parameter scope.
 The evaluator and Modelica lowerer apply those bindings; Rhai exposes the call
 tree and constraint kind. Type, multiplicity, and unit mismatches, incomplete
-bindings, recursive calls, non-Boolean bodies, and structured member access
-through a formal are rejected with source-linked diagnostics.
+bindings, recursive calls, non-Boolean bodies, whole-structured-value use,
+computed-argument member navigation, and collection-valued member navigation
+are rejected with source-linked diagnostics. Member navigation is supported
+when a scalar structured formal is bound to a resolved source feature path; the
+IR rebases that member path onto the call-site path and requests the resulting
+typed provider observation.
 
 The affected crates pass `cargo check`; no tests or Griffin runtime/Editor
 session were run. Griffin currently authors reusable parameterized constraint
