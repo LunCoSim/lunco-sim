@@ -163,7 +163,7 @@ in Modelica, and do not turn the recipe into an `on_tick` loop. See the
   [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md).
 - **Scene structure / spawning geometry / wiring** → USD.
 - **Vector and angle math is already NATIVE — never write it in a script.**
-  `vadd` `vsub` `vscale` `vlen` `norm_squared` `vdot` `vcross` `vnorm` `qrot` `clamp`
+  `vadd` `vsub` `vscale` `vlen` `squared_norm` `vdot` `vcross` `vnorm` `qrot` `clamp`
   `angle_deg` `yaw_delta_deg` are Rust (`lunco_scripting_rhai_core::rhai_math`, on glam).
   Existing array operands remain supported; hot-loop code should use native
   `Vec3`/`Quat` from `world_pos3`, `world_forward3`, and

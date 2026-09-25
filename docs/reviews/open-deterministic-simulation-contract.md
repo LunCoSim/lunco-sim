@@ -57,7 +57,7 @@ tracker and Modelica-driven energy path in the same production run. The
 hinge angle followed the controller yaw from -2.4434 rad to -2.1416 rad. These
 results verify that changed angular and linear motor targets wake sleeping
 dynamic joint islands, allowing Avian to apply each target on the next solver
-step. The `sun_tracker` run also exercised `norm_squared` in authored Rhai.
+step. The `sun_tracker` run also exercised `squared_norm` in authored Rhai.
 These are focused same-build production results; they do not establish
 whole-simulation or cross-machine determinism. The separate
 `multi_rover_stress_20` profile measurements above remain diagnostic evidence,

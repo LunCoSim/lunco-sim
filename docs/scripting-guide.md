@@ -367,7 +367,7 @@ authoritative list; highlights in [Part II §B](#b-prelude-helpers)):
 
 - **Drive:** `drive(rover, fwd, steer)`, `brake(rover)`, `nav_to(entity, target, speed, radius)`.
 - **Sense:** `velocity3`/`velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
-- **Math:** `distance`, `arrived`, `vsub`/`vlen`/`norm_squared`/`vnorm`/`vcross`, `clamp`.
+- **Math:** `distance`, `arrived`, `vsub`/`vlen`/`squared_norm`/`vnorm`/`vcross`, `clamp`.
 - **Collisions:** `collision_pair`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
 
 A reactive mission (avoid obstacles, run a waypoint plan, coordinate between
@@ -462,7 +462,7 @@ The [`prelude/`](../assets/scripting/prelude) directory (one `.rhai` per topic �
 `math`, `select`, `hud`, …) is the hot-reloadable helper library on top of the
 verbs — read the topic files for the full, authoritative list. Highlights:
 
-- **Vector math:** `vsub`/`vadd`/`vlen`/`norm_squared`/`vdot`/`vcross`/`vnorm`/`vscale`/`clamp`, `distance`, `arrived`. Use `norm_squared(v)` for the squared Euclidean norm of one vector; it accepts native `Vec3` or a three-number array. Use native `Vec3`/`Quat` (`world_pos3`, `world_forward3`, `world_rotation_quat`) in hot loops; arrays are the explicit USD/telemetry interchange form and are lowered with `vec3_array`/`quat_array`.
+- **Vector math:** `vsub`/`vadd`/`vlen`/`squared_norm`/`vdot`/`vcross`/`vnorm`/`vscale`/`clamp`, `distance`, `arrived`. Use `squared_norm(v)` for the squared Euclidean norm of one vector; it accepts native `Vec3` or a three-number array. Use native `Vec3`/`Quat` (`world_pos3`, `world_forward3`, `world_rotation_quat`) in hot loops; arrays are the explicit USD/telemetry interchange form and are lowered with `vec3_array`/`quat_array`.
 - **Navigation:** `drive(rover, fwd, steer)`, `brake(rover)`, `steer_to`, `nav_to(entity, target, speed, radius)`.
 - **Discrete controls:** `intent_edge(target, intent, edge)` and `intent_pulse(target, intent)` emit one atomic `pressed`, `released`, or `pulse` edge; handle `intent.edge` in `on_event`.
 - **Causal control inspection:** `query("CausalTrace", #{target: id, correlation_id: edge.id})` joins one semantic edge to its binding, selected port owner, USD/Avian admission state, and current measurements.
