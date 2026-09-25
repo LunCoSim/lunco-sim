@@ -21,7 +21,7 @@ The main Bevy plugin that sets up the physics mapping logic. It registers necess
 ### 2. Mapping (observers + deferred resolution)
 When an entity is tagged with a `UsdPrimPath`, the crate looks up the Prim and maps:
 *   **RigidBody** — an applied `PhysicsRigidBodyAPI` is the only thing that makes a prim a body; its own `physics:rigidBodyEnabled` (default true) says whether that body is simulated → `RigidBody`, with **mass-properties** `physics:mass` / `physics:diagonalInertia` / `physics:centerOfMass` → the Avian override components (`Mass`/`AngularInertia`/`CenterOfMass`, shared with the runtime mass-props ports).
-*   **Colliders** — every `UsdGeom` shape: `Cube`→cuboid, `Sphere`, `Cylinder`, `Cone`, `Capsule`, `Mesh`→trimesh (DEM grids→heightfield), `Plane`→thin cuboid. Compound bodies via child `PhysicsCollisionAPI`.
+*   **Colliders** — USD `Cube`, `Sphere`, `Cylinder`, `Cone`, and `Capsule` map to matching analytic shapes. A finite `Plane` remains a zero-thickness triangle surface. `Mesh` uses its composed indexed points/topology and honors `PhysicsMeshCollisionAPI` approximation (`none`, `convexHull`, `convexDecomposition`, or `boundingCube` where supported); dynamic bodies reject triangle-mesh `none`. DEM grids use heightfields. Compound bodies use child `PhysicsCollisionAPI` geometry.
 *   **Joints** — see below. The deferred USD projector matches `physics:body0/1` paths to entities, then passes normalized facts to `lunco-usd-avian-joints`, which owns native admission so it survives async USD loads.
 
 ### 3. Joints
@@ -44,4 +44,4 @@ schema map: [`docs/architecture/21-domain-usd.md`](../../docs/architecture/21-do
 ## Current Limitations
 *   **Parser Maturity**: Relies on the `openusd` crate (native Rust), which currently has limited support for complex ASCII (`.usda`) property blocks.
 *   **D6 joints**: only joints reducible to a single Avian primitive are built; a genuinely multi-DOF D6 (e.g. two free rotations) warns.
-*   **Convex hulls**: meshes always build as trimesh (no convex-hull decomposition).
+*   **NURBS collision**: `UsdGeomNurbsPatch` is not directly a USD Physics mesh collider. Use the explicit `PlanNurbsCollisionProxy` query and `nurbs.rhai` proposal to author an invisible, source-linked `UsdGeomMesh` proxy. The physics reader re-cooks the patch and rejects stale or edited proxy geometry. The cook uses fixed authored subdivisions; it does not currently certify a geometric-error tolerance. Unsupported approximation tokens are rejected instead of silently mapped to another shape.

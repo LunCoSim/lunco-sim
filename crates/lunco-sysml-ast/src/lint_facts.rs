@@ -6,11 +6,11 @@
 //! it does not execute a requirement or verification.
 
 use crate::{
-    SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlDiagnostic, SysmlElement,
-    SysmlElementHandle, SysmlExpression, SysmlExpressionKind, SysmlExpressionOperator,
-    SysmlFeatureHandle, SysmlLiteral, SysmlReference, SysmlRelationship, SysmlRequirementRecord,
-    SysmlStandardConstant, SysmlStandardFunction, SysmlSubject, SysmlType, SysmlTypeRef,
-    SysmlUnsupportedExpression, SysmlVerificationRecord,
+    SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlConstraintBinding, SysmlDiagnostic,
+    SysmlElement, SysmlElementHandle, SysmlExpression, SysmlExpressionKind,
+    SysmlExpressionOperator, SysmlFeatureHandle, SysmlLiteral, SysmlReference, SysmlRelationship,
+    SysmlRequirementRecord, SysmlStandardConstant, SysmlStandardFunction, SysmlSubject, SysmlType,
+    SysmlTypeRef, SysmlUnsupportedExpression, SysmlVerificationRecord,
 };
 use lunco_hooks::HookValue as H;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -615,9 +615,20 @@ fn constraint(value: &SysmlConstraint) -> H {
     H::map([
         ("element", element(&value.element)),
         (
+            "bindings",
+            H::Array(value.bindings.iter().map(constraint_binding).collect()),
+        ),
+        (
             "expressions",
             H::Array(value.expressions.iter().map(expression).collect()),
         ),
+    ])
+}
+
+fn constraint_binding(value: &SysmlConstraintBinding) -> H {
+    H::map([
+        ("formal_parameter", feature_handle(value.formal_parameter)),
+        ("value", expression(&value.value)),
     ])
 }
 

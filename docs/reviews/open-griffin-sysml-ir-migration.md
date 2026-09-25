@@ -107,16 +107,31 @@ constraint by its snapshot-scoped semantic handle and evaluate all `require`
 memberships on one requirement, aggregating their four-state results. An
 optional verification-case handle must resolve a `verify` relationship to the
 same requirement. Rhai exposes this as `SysmlModel.evaluate_requirement`.
-Griffin's solar observer now uses this grouped path for its three formal
-geometry constraints (GSA-005, GSA-006, and GSA-009).
+The generic IR also exposes an opt-in `SysmlModel.audit_requirements(policy)`
+operation for duplicate short names, project-required identifiers and typed
+subjects, verification coverage, text-only requirement classification, and
+unresolved names/verification targets. The Griffin requirements tool exposes
+that audit as an explicit review operation; normal Twin startup does not run
+it.
 
 This closes generic membership selection and aggregate evaluation, not the
-complete SysML binding semantics. The solar observer still selects a
-constraint to prepare provider values by qualified name and supplies values by
-parameter name. Usage-site argument bindings, defaults, output binding, and
-general binding relationships remain unsupported. The affected Rust crates
-pass `cargo check`; no tests or Griffin Editor/runtime verification were run
-in this batch.
+complete SysML binding semantics. The existing Griffin solar verification
+scenario calls `sysml_requirements::required_constraints_check` for GSA-005,
+GSA-006, and GSA-009; that shared adapter selects a source predicate and calls
+`SysmlModel.evaluate_requirement`, which evaluates the full required set using
+resolved requirement and verification handles. Provider observations for
+Griffin's current bare memberships are still assembled from Rhai maps keyed by
+parameter display names, with the qualified predicate name selecting which
+binding shape to prepare. The AST now projects explicit feature-value bindings
+on constraint usages through resolved redefinition handles, and the IR
+substitutes supported typed actual expressions before requirement evaluation.
+Defaults, output binding, general binding relationships, and
+specialization/redefinition traversal remain unsupported. This batch
+compile-checks the affected crates, but does not run the authored scenario or
+exercise a Griffin usage containing actual bindings.
+The grouped path is present in authored Griffin verification, but it was not
+executed in this batch. No tests, Griffin audit run, or Editor/runtime
+verification were performed in this batch.
 
 ## Audit of the current Griffin model
 
@@ -144,7 +159,7 @@ permanent semantic layer.
 |---|---|---|---|
 | Part usages, feature membership, roles, and multiplicity | Many `part def` and attribute declarations, but no complete lander usage graph with typed component roles and bounds | Arrays and parallel IDs can drift; policy cannot navigate an authored assembly | Resolved feature membership, usage identity, redefinition/subsetting, and multiplicity-preserving handles |
 | Ports, interfaces, connections, and bindings | Values such as `sourceComponent`, `usdPath`, and frame/unit strings | Rhai manually joins endpoints and providers; no typed contract says which observation supplies a feature | Typed endpoint/feature chains and standard binding/connectors with source spans and target identity |
-| Constraint definitions/usages | Reusable parameterized definitions exist; source projection distinguishes `require`/`assume`, the IR executes requirement-owned `require` memberships by typed handle, and Griffin solar geometry uses grouped evaluation | Provider values are still selected per constraint by qualified name and parameter name; usage-site argument bindings are not projected | Complete usage-level argument/default/output bindings, general binding relationships, and result typing; migrate remaining Griffin checks to exact membership handles |
+| Constraint definitions/usages | Reusable parameterized definitions exist; source projection distinguishes `require`/`assume`; the IR executes grouped `require` memberships by handle and applies projected feature-value bindings; Griffin's solar scenario calls the grouped path | Current Griffin usage members have no actual argument bindings, so providers still select values by qualified predicate and parameter display name. Defaults, output binding, and full specialization traversal remain | Complete default/output/general bindings and specialization traversal; derive provider observations from source-owned feature bindings where the model defines them |
 | Feature navigation | Dotted `PATH_EXPR` now projects to typed feature chains and exact dependency paths; compile-checked, not runtime-verified | Griffin source and providers have not yet been migrated to consume full typed paths; optional navigation and collection-valued traversal remain unsupported | Runtime-verified standard feature navigation, collection-aware path typing, and explicit unavailable/invalid propagation |
 | Collections and aggregates | Parallel arrays and index assumptions | Index drift and hand-coded reductions for mass, COM, inertia, envelopes | Homogeneous scalar sequence literals, one-based indexing, typed `sum`/`product`, size predicates, and Boolean aggregates now compile/evaluate; feature-valued, structured/N-dimensional collections and reductions remain required |
 | Quantities and units | Many anonymous `Real` values and naming conventions such as `...M`, `...Kg`, `...Deg`, plus string `frameUnits` | Unit correctness is policy convention rather than a source-checked contract | Standard quantity kinds, unit literals/conversion contracts, dimensional checking, and frame/time metadata |

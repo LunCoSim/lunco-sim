@@ -19,7 +19,9 @@ use lunco_sysml_ir::{
     EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
     IrDiagnosticCode, IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
     IrStandardFunction, IrType, IrValue, IrValueType, ObservationState,
-    RequiredConstraintEvaluation, RequirementEvaluationReport, VerificationVerdict,
+    RequiredConstraintEvaluation, RequirementAuditCode, RequirementAuditFinding,
+    RequirementAuditPolicy, RequirementAuditReport, RequirementAuditSeverity,
+    RequirementEvaluationReport, VerificationVerdict, audit_requirements,
     compile_constraint_by_name, evaluate_constraint, evaluate_requirement,
 };
 use lunco_sysml_modelica::{lower_constraint, supports_standard_function_lowering};
@@ -415,6 +417,17 @@ pub fn evaluate_requirement_value(
         report.verdict = VerificationVerdict::Error;
     }
     requirement_evaluation_dynamic(&report)
+}
+
+/// Run an explicit policy-driven audit of requirement organization.
+///
+/// Normal SysML analysis and startup validation do not enforce these project
+/// policies. Callers opt in by invoking this method and supplying a policy.
+pub fn audit_requirements_value(
+    model: &mut SysmlModelValue,
+    policy: RequirementAuditPolicy,
+) -> RequirementAuditReport {
+    audit_requirements(&model.analysis, policy)
 }
 
 fn evaluation_options_from_map(tolerances: &Map) -> EvaluationOptions {
@@ -1375,9 +1388,94 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_fn("modelica_constraint", modelica_constraint_value)
         .register_fn("evaluate_constraint", evaluate_constraint_value)
         .register_fn("evaluate_requirement", evaluate_requirement_value)
+        .register_fn("audit_requirements", audit_requirements_value)
         .register_fn("sysml_standard_functions", standard_functions_dynamic)
         .register_fn("sysml_standard_constants", standard_constants_dynamic)
         .register_fn("sysml_constraint_operators", standard_operators_dynamic)
+        .register_type_with_name::<RequirementAuditPolicy>("RequirementAuditPolicy")
+        .register_fn("requirement_audit_policy", RequirementAuditPolicy::default)
+        .register_fn(
+            "engineering_review_requirement_audit_policy",
+            RequirementAuditPolicy::engineering_review,
+        )
+        .register_get(
+            "require_short_name",
+            |policy: &mut RequirementAuditPolicy| policy.require_short_name,
+        )
+        .register_set(
+            "require_short_name",
+            |policy: &mut RequirementAuditPolicy, value: bool| {
+                policy.require_short_name = value;
+            },
+        )
+        .register_get(
+            "require_typed_subject",
+            |policy: &mut RequirementAuditPolicy| policy.require_typed_subject,
+        )
+        .register_set(
+            "require_typed_subject",
+            |policy: &mut RequirementAuditPolicy, value: bool| {
+                policy.require_typed_subject = value;
+            },
+        )
+        .register_get(
+            "require_verification",
+            |policy: &mut RequirementAuditPolicy| policy.require_verification,
+        )
+        .register_set(
+            "require_verification",
+            |policy: &mut RequirementAuditPolicy, value: bool| {
+                policy.require_verification = value;
+            },
+        )
+        .register_get(
+            "require_formal_constraint",
+            |policy: &mut RequirementAuditPolicy| policy.require_formal_constraint,
+        )
+        .register_set(
+            "require_formal_constraint",
+            |policy: &mut RequirementAuditPolicy, value: bool| {
+                policy.require_formal_constraint = value;
+            },
+        )
+        .register_type_with_name::<RequirementAuditReport>("RequirementAuditReport")
+        .register_get("source_revision", |report: &mut RequirementAuditReport| {
+            report.source_revision
+        })
+        .register_get(
+            "source_fingerprint",
+            |report: &mut RequirementAuditReport| report.source_fingerprint,
+        )
+        .register_get("has_errors", |report: &mut RequirementAuditReport| {
+            report.has_errors()
+        })
+        .register_get("findings", |report: &mut RequirementAuditReport| {
+            Dynamic::from_array(report.findings.iter().cloned().map(Dynamic::from).collect())
+        })
+        .register_type_with_name::<RequirementAuditFinding>("RequirementAuditFinding")
+        .register_get("code", |finding: &mut RequirementAuditFinding| finding.code)
+        .register_get("severity", |finding: &mut RequirementAuditFinding| {
+            finding.severity
+        })
+        .register_get("element", |finding: &mut RequirementAuditFinding| {
+            finding.element
+        })
+        .register_get("source", |finding: &mut RequirementAuditFinding| {
+            finding.source.clone()
+        })
+        .register_get("message", |finding: &mut RequirementAuditFinding| {
+            finding.message.clone()
+        })
+        .register_type_with_name::<RequirementAuditCode>("RequirementAuditCode")
+        .register_fn(
+            "==",
+            |left: RequirementAuditCode, right: RequirementAuditCode| left == right,
+        )
+        .register_type_with_name::<RequirementAuditSeverity>("RequirementAuditSeverity")
+        .register_fn(
+            "==",
+            |left: RequirementAuditSeverity, right: RequirementAuditSeverity| left == right,
+        )
         .register_type_with_name::<SysmlRequirementValue>("SysmlRequirement")
         .register_get(
             "qualified_name",
@@ -1817,6 +1915,24 @@ fn constraint_dynamic(constraint: &lunco_sysml_ast::SysmlConstraint) -> Dynamic 
                 .iter()
                 .cloned()
                 .map(Dynamic::from)
+                .collect(),
+        ),
+    );
+    value.insert(
+        "bindings".into(),
+        Dynamic::from_array(
+            constraint
+                .bindings
+                .iter()
+                .map(|binding| {
+                    let mut value = Map::new();
+                    value.insert(
+                        "formal_parameter".into(),
+                        Dynamic::from(binding.formal_parameter),
+                    );
+                    value.insert("value".into(), Dynamic::from(binding.value.clone()));
+                    Dynamic::from_map(value)
+                })
                 .collect(),
         ),
     );

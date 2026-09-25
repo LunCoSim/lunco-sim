@@ -12,9 +12,9 @@
 
 use lunco_hash::Fnv1a;
 use lunco_sysml_ast::{
-    SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlConstraintKind, SysmlElementHandle,
-    SysmlExpression, SysmlExpressionData, SysmlExpressionOperator, SysmlFeature,
-    SysmlFeatureDirection, SysmlFeatureHandle, SysmlFeaturePath, SysmlMultiplicity,
+    SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlConstraintKind, SysmlDiagnosticKind,
+    SysmlElementHandle, SysmlExpression, SysmlExpressionData, SysmlExpressionOperator,
+    SysmlFeature, SysmlFeatureDirection, SysmlFeatureHandle, SysmlFeaturePath, SysmlMultiplicity,
     SysmlPrimitiveType, SysmlRequirementConstraintKind, SysmlSourceRef, SysmlType,
     SysmlTypeCategory, SysmlUnsupportedExpression,
 };
@@ -430,6 +430,9 @@ define_ir_diagnostic_codes! {
     VerificationNotFound => "SYSML-IR-055",
     VerificationDoesNotCoverRequirement => "SYSML-IR-056",
     RequirementHasNoRequiredConstraints => "SYSML-IR-057",
+    ConstraintUsageBindingInvalid => "SYSML-IR-058",
+    ConstraintUsageBindingTypeMismatch => "SYSML-IR-059",
+    ConstraintUsageBindingNavigationUnsupported => "SYSML-IR-060",
 }
 
 /// A source-linked diagnostic. Diagnostics are part of the contract and are
@@ -518,6 +521,258 @@ pub fn compile_constraint_by_handle(
                     .to_owned(),
             }],
         },
+    }
+}
+
+/// Apply the standard feature-value bindings owned by one constraint usage to
+/// the reusable definition selected by its resolved typing relationship.
+fn apply_constraint_usage_bindings(
+    analysis: &SysmlAnalysis,
+    membership: &lunco_sysml_ast::SysmlRequirementConstraint,
+    compiled: &mut CompiledConstraint,
+) {
+    let Some(usage) = analysis
+        .constraints()
+        .iter()
+        .find(|constraint| constraint.element.handle == membership.usage.handle)
+    else {
+        return;
+    };
+    if usage.bindings.is_empty() {
+        return;
+    }
+    let Some(target) = compiled.constraint.as_ref() else {
+        return;
+    };
+
+    let mut diagnostics = Vec::new();
+    let mut seen = HashSet::new();
+    let mut bindings = Vec::new();
+    for binding in &usage.bindings {
+        let Some(formal) = target
+            .parameters
+            .iter()
+            .find(|parameter| parameter.feature == binding.formal_parameter)
+        else {
+            diagnostics.push(error(
+                IrDiagnosticCode::ConstraintUsageBindingInvalid,
+                &binding.source,
+                "constraint usage binds a feature that is not a formal parameter of its resolved definition",
+            ));
+            continue;
+        };
+        if !seen.insert(binding.formal_parameter) {
+            diagnostics.push(error(
+                IrDiagnosticCode::ConstraintUsageBindingInvalid,
+                &binding.source,
+                "constraint usage binds the same formal parameter more than once",
+            ));
+            continue;
+        }
+        if formal.direction == IrFeatureDirection::Out {
+            diagnostics.push(error(
+                IrDiagnosticCode::ConstraintUsageBindingInvalid,
+                &binding.source,
+                "output constraint parameters cannot be supplied as input bindings",
+            ));
+            continue;
+        }
+
+        let mut expression_diagnostics = Vec::new();
+        let mut dependencies = Vec::new();
+        let mut active_predicates = Vec::new();
+        let actual = compile_expression(
+            &binding.value,
+            analysis,
+            analysis.attributes(),
+            &usage.parameters,
+            &mut expression_diagnostics,
+            &mut dependencies,
+            0,
+            &mut active_predicates,
+        );
+        diagnostics.extend(expression_diagnostics);
+        let Some(actual) = actual else {
+            continue;
+        };
+        if !predicate_argument_types_compatible(&formal.ty, &actual.result_type) {
+            diagnostics.push(error(
+                IrDiagnosticCode::ConstraintUsageBindingTypeMismatch,
+                &binding.source,
+                "constraint usage value does not match its formal parameter type, unit, or multiplicity",
+            ));
+            continue;
+        }
+        bindings.push((binding.formal_parameter, actual));
+    }
+
+    let Some(target) = compiled.constraint.as_mut() else {
+        return;
+    };
+    for (formal, actual) in &bindings {
+        for expression in &mut target.expressions {
+            substitute_formal_binding(expression, *formal, actual, &mut diagnostics);
+        }
+    }
+    let mut dependencies = Vec::new();
+    for expression in &target.expressions {
+        collect_expression_dependencies(expression, &mut dependencies);
+    }
+    dependencies.dedup();
+    target.dependencies = dependencies;
+    target.fingerprint = fingerprint_bound_constraint(
+        target.fingerprint,
+        usage.element.handle,
+        &target.expressions,
+    );
+    compiled.diagnostics.extend(diagnostics);
+}
+
+fn fingerprint_bound_constraint(
+    definition_fingerprint: u64,
+    usage: SysmlElementHandle,
+    expressions: &[IrExpression],
+) -> u64 {
+    let mut hash = Fnv1a::new();
+    hash.write_bytes(b"lunco.sysml.bound-constraint-ir.v1");
+    hash.write_u64(definition_fingerprint);
+    hash.write_u64(usage.source_revision);
+    hash.write_u64(usage.source_fingerprint);
+    hash.write_u64(u64::from(usage.element_id));
+    for expression in expressions {
+        fingerprint_expression(&mut hash, expression);
+    }
+    hash.finish()
+}
+
+fn substitute_formal_binding(
+    expression: &mut IrExpression,
+    formal: SysmlFeatureHandle,
+    actual: &IrExpression,
+    diagnostics: &mut Vec<IrDiagnostic>,
+) {
+    if let IrExpressionKind::FeatureReference { path } = &expression.kind {
+        if path.features().first() == Some(&formal) {
+            let suffix = &path.features()[1..];
+            if suffix.is_empty() {
+                *expression = actual.clone();
+                return;
+            }
+            if let IrExpressionKind::FeatureReference { path: actual_path } = &actual.kind {
+                let mut features = actual_path.features().to_vec();
+                features.extend_from_slice(suffix);
+                if let Some(path) = SysmlFeaturePath::new(features) {
+                    expression.kind = IrExpressionKind::FeatureReference { path };
+                    return;
+                }
+            }
+            diagnostics.push(error(
+                IrDiagnosticCode::ConstraintUsageBindingNavigationUnsupported,
+                &expression.source,
+                "feature navigation through a bound parameter requires a feature-valued binding",
+            ));
+            return;
+        }
+    }
+
+    match &mut expression.kind {
+        IrExpressionKind::Unary { operand, .. } | IrExpressionKind::Group(operand) => {
+            substitute_formal_binding(operand, formal, actual, diagnostics);
+        }
+        IrExpressionKind::Binary { left, right, .. } => {
+            substitute_formal_binding(left, formal, actual, diagnostics);
+            substitute_formal_binding(right, formal, actual, diagnostics);
+        }
+        IrExpressionKind::Conditional {
+            condition,
+            when_true,
+            when_false,
+        } => {
+            substitute_formal_binding(condition, formal, actual, diagnostics);
+            substitute_formal_binding(when_true, formal, actual, diagnostics);
+            substitute_formal_binding(when_false, formal, actual, diagnostics);
+        }
+        IrExpressionKind::Invocation { arguments, .. } => {
+            for argument in arguments {
+                substitute_formal_binding(argument, formal, actual, diagnostics);
+            }
+        }
+        IrExpressionKind::PredicateInvocation {
+            arguments, body, ..
+        } => {
+            for argument in arguments {
+                substitute_formal_binding(argument, formal, actual, diagnostics);
+            }
+            for child in body {
+                substitute_formal_binding(child, formal, actual, diagnostics);
+            }
+        }
+        IrExpressionKind::Index { collection, index } => {
+            substitute_formal_binding(collection, formal, actual, diagnostics);
+            substitute_formal_binding(index, formal, actual, diagnostics);
+        }
+        IrExpressionKind::Collection(elements) => {
+            for child in elements {
+                substitute_formal_binding(child, formal, actual, diagnostics);
+            }
+        }
+        IrExpressionKind::FeatureReference { .. }
+        | IrExpressionKind::StandardConstant { .. }
+        | IrExpressionKind::Literal(_) => {}
+    }
+}
+
+fn collect_expression_dependencies(
+    expression: &IrExpression,
+    dependencies: &mut Vec<SysmlFeaturePath>,
+) {
+    match &expression.kind {
+        IrExpressionKind::FeatureReference { path } => {
+            if !dependencies.contains(path) {
+                dependencies.push(path.clone());
+            }
+        }
+        IrExpressionKind::Unary { operand, .. } | IrExpressionKind::Group(operand) => {
+            collect_expression_dependencies(operand, dependencies);
+        }
+        IrExpressionKind::Binary { left, right, .. } => {
+            collect_expression_dependencies(left, dependencies);
+            collect_expression_dependencies(right, dependencies);
+        }
+        IrExpressionKind::Conditional {
+            condition,
+            when_true,
+            when_false,
+        } => {
+            collect_expression_dependencies(condition, dependencies);
+            collect_expression_dependencies(when_true, dependencies);
+            collect_expression_dependencies(when_false, dependencies);
+        }
+        IrExpressionKind::Invocation { arguments, .. } => {
+            for argument in arguments {
+                collect_expression_dependencies(argument, dependencies);
+            }
+        }
+        IrExpressionKind::PredicateInvocation {
+            arguments, body, ..
+        } => {
+            for argument in arguments {
+                collect_expression_dependencies(argument, dependencies);
+            }
+            for child in body {
+                collect_expression_dependencies(child, dependencies);
+            }
+        }
+        IrExpressionKind::Index { collection, index } => {
+            collect_expression_dependencies(collection, dependencies);
+            collect_expression_dependencies(index, dependencies);
+        }
+        IrExpressionKind::Collection(elements) => {
+            for child in elements {
+                collect_expression_dependencies(child, dependencies);
+            }
+        }
+        IrExpressionKind::StandardConstant { .. } | IrExpressionKind::Literal(_) => {}
     }
 }
 
@@ -1979,6 +2234,89 @@ pub struct RequirementEvaluationReport {
     pub diagnostics: Vec<IrDiagnostic>,
 }
 
+/// Explicit project policy for auditing requirement organization.
+///
+/// The audit is opt-in. It is not applied by normal source loading or
+/// startup validation. Requirement identifiers and typed subjects are useful
+/// project policies, but are not universal SysML validity rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequirementAuditPolicy {
+    /// Require requirement definitions to declare a short name.
+    pub require_short_name: bool,
+    /// Require requirement definitions to declare a typed subject.
+    pub require_typed_subject: bool,
+    /// Require each requirement definition to be covered by a verification
+    /// case through a resolved requirement usage.
+    pub require_verification: bool,
+    /// Require at least one formal required constraint. Informal requirements
+    /// remain valid SysML; this option applies only where a project demands an
+    /// executable predicate.
+    pub require_formal_constraint: bool,
+}
+
+impl RequirementAuditPolicy {
+    /// A project review policy suitable for configuration-controlled
+    /// engineering requirements. Formal predicates remain optional because
+    /// SysML permits informal requirements.
+    pub const fn engineering_review() -> Self {
+        Self {
+            require_short_name: true,
+            require_typed_subject: true,
+            require_verification: true,
+            require_formal_constraint: false,
+        }
+    }
+}
+
+/// Stable finding categories produced by a requirement audit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequirementAuditCode {
+    DuplicateShortName,
+    MissingShortName,
+    MissingTypedSubject,
+    MissingVerification,
+    TextOnlyRequirement,
+    UnresolvedVerificationTarget,
+    UnresolvedNameInRequirement,
+}
+
+/// Audit finding severity. Informal requirements are informational unless a
+/// caller's explicit policy requires formal constraints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RequirementAuditSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+/// One source-linked finding from an explicit requirement audit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequirementAuditFinding {
+    pub code: RequirementAuditCode,
+    pub severity: RequirementAuditSeverity,
+    /// Requirement or verification element that owns the finding.
+    pub element: SysmlElementHandle,
+    pub source: SysmlSourceRef,
+    pub message: String,
+}
+
+/// Complete result from auditing one immutable SysML source snapshot.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequirementAuditReport {
+    pub source_revision: u64,
+    pub source_fingerprint: u64,
+    pub findings: Vec<RequirementAuditFinding>,
+}
+
+impl RequirementAuditReport {
+    pub fn has_errors(&self) -> bool {
+        self.findings
+            .iter()
+            .any(|finding| finding.severity == RequirementAuditSeverity::Error)
+    }
+}
+
 /// Numerical comparison policy used by the evaluator. Exact equality is not
 /// a safe default for measured or solver-produced real values.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -2209,11 +2547,11 @@ pub fn evaluate_requirement(
                 .as_ref()
                 .map(|definition| definition.handle)
                 .unwrap_or(membership.usage.handle);
-            (
-                *membership,
-                target,
-                compile_constraint_by_handle(analysis, target),
-            )
+            let mut compiled = compile_constraint_by_handle(analysis, target);
+            if membership.definition.is_some() {
+                apply_constraint_usage_bindings(analysis, membership, &mut compiled);
+            }
+            (*membership, target, compiled)
         })
         .collect::<Vec<_>>();
 
@@ -2290,6 +2628,189 @@ pub fn evaluate_requirement(
             })),
     );
     report
+}
+
+/// Audit requirement organization under an explicit project policy.
+///
+/// The audit operates on resolved snapshot handles. It does not rewrite or
+/// reject source loading, and it distinguishes valid text-only requirements
+/// from unresolved references and malformed verification links.
+pub fn audit_requirements(
+    analysis: &SysmlAnalysis,
+    policy: RequirementAuditPolicy,
+) -> RequirementAuditReport {
+    use RequirementAuditCode as Code;
+    use RequirementAuditSeverity as Severity;
+
+    let definitions = analysis
+        .requirements()
+        .iter()
+        .filter(|record| record.element.kind == "RequirementDefinition")
+        .collect::<Vec<_>>();
+    let mut report = RequirementAuditReport {
+        source_revision: analysis.source_revision(),
+        source_fingerprint: analysis.source_fingerprint(),
+        findings: Vec::new(),
+    };
+
+    let mut identifiers =
+        HashMap::<(Option<SysmlElementHandle>, String), SysmlElementHandle>::new();
+    for requirement in &definitions {
+        let element = &requirement.element;
+        let source = source_of(element, analysis.source_revision());
+        if let Some(short_name) = &element.short_name {
+            let key = (element.owner_handle, short_name.clone());
+            if identifiers.insert(key, element.handle).is_some() {
+                report.findings.push(RequirementAuditFinding {
+                    code: Code::DuplicateShortName,
+                    severity: Severity::Error,
+                    element: element.handle,
+                    source: source.clone(),
+                    message: format!(
+                        "requirement short name `{short_name}` is duplicated in its namespace"
+                    ),
+                });
+            }
+        } else if policy.require_short_name {
+            report.findings.push(RequirementAuditFinding {
+                code: Code::MissingShortName,
+                severity: Severity::Error,
+                element: element.handle,
+                source: source.clone(),
+                message: "project policy requires a short name on every requirement definition"
+                    .to_owned(),
+            });
+        }
+
+        if policy.require_typed_subject
+            && !requirement
+                .subjects
+                .iter()
+                .any(|subject| subject.type_name.is_some())
+        {
+            report.findings.push(RequirementAuditFinding {
+                code: Code::MissingTypedSubject,
+                severity: Severity::Error,
+                element: element.handle,
+                source: source.clone(),
+                message: "project policy requires a typed subject on every requirement definition"
+                    .to_owned(),
+            });
+        }
+
+        let has_required_constraint = requirement
+            .constraints
+            .iter()
+            .any(|constraint| constraint.kind == SysmlRequirementConstraintKind::Require);
+        if !has_required_constraint {
+            report.findings.push(RequirementAuditFinding {
+                code: Code::TextOnlyRequirement,
+                severity: if policy.require_formal_constraint {
+                    Severity::Error
+                } else {
+                    Severity::Info
+                },
+                element: element.handle,
+                source: source.clone(),
+                message: if policy.require_formal_constraint {
+                    "requirement has only informal or assumed content; the project policy requests a formal required constraint".to_owned()
+                } else {
+                    "requirement has no formal required constraint; this is permitted by SysML and remains a text-only requirement".to_owned()
+                },
+            });
+        }
+
+        for diagnostic in analysis.diagnostics().iter().filter(|diagnostic| {
+            diagnostic.kind == SysmlDiagnosticKind::Name
+                && diagnostic.file == element.file
+                && diagnostic.start >= element.start
+                && diagnostic.end <= element.end
+        }) {
+            report.findings.push(RequirementAuditFinding {
+                code: Code::UnresolvedNameInRequirement,
+                severity: Severity::Error,
+                element: element.handle,
+                source: SysmlSourceRef {
+                    file: diagnostic.file.clone(),
+                    start: diagnostic.start,
+                    end: diagnostic.end,
+                    revision: analysis.source_revision(),
+                },
+                message: diagnostic.message.clone(),
+            });
+        }
+    }
+
+    let requirement_by_handle = analysis
+        .requirements()
+        .iter()
+        .map(|record| (record.element.handle, record))
+        .collect::<HashMap<_, _>>();
+    let mut covered_definitions = HashSet::new();
+    for verification in analysis.verifications() {
+        if !verification.verifies.is_empty() && verification.verified_requirements.is_empty() {
+            report.findings.push(RequirementAuditFinding {
+                code: Code::UnresolvedVerificationTarget,
+                severity: Severity::Error,
+                element: verification.element.handle,
+                source: source_of(&verification.element, analysis.source_revision()),
+                message:
+                    "verification objective names requirements but resolves no requirement targets"
+                        .to_owned(),
+            });
+        }
+        for target in &verification.verified_requirements {
+            if target.source_revision != analysis.source_revision()
+                || target.source_fingerprint != analysis.source_fingerprint()
+            {
+                continue;
+            }
+            if target.kind_is_requirement_definition(analysis) {
+                covered_definitions.insert(*target);
+            }
+            if let Some(usage) = requirement_by_handle.get(target) {
+                for reference in analysis.references().iter().filter(|reference| {
+                    (reference.from == usage.element.handle
+                        || reference.from_owner == Some(usage.element.handle))
+                        && reference.target.source_revision == analysis.source_revision()
+                        && reference.target.source_fingerprint == analysis.source_fingerprint()
+                }) {
+                    if reference.target.kind_is_requirement_definition(analysis) {
+                        covered_definitions.insert(reference.target);
+                    }
+                }
+            }
+        }
+    }
+
+    if policy.require_verification {
+        for requirement in definitions {
+            if !covered_definitions.contains(&requirement.element.handle) {
+                report.findings.push(RequirementAuditFinding {
+                    code: Code::MissingVerification,
+                    severity: Severity::Error,
+                    element: requirement.element.handle,
+                    source: source_of(&requirement.element, analysis.source_revision()),
+                    message: "no verification case resolves a verify relationship to this requirement definition or one of its usages".to_owned(),
+                });
+            }
+        }
+    }
+
+    report
+}
+
+trait RequirementHandleKind {
+    fn kind_is_requirement_definition(self, analysis: &SysmlAnalysis) -> bool;
+}
+
+impl RequirementHandleKind for SysmlElementHandle {
+    fn kind_is_requirement_definition(self, analysis: &SysmlAnalysis) -> bool {
+        analysis
+            .elements()
+            .iter()
+            .any(|element| element.handle == self && element.kind == "RequirementDefinition")
+    }
 }
 
 fn handle_belongs_to_analysis(analysis: &SysmlAnalysis, handle: SysmlElementHandle) -> bool {

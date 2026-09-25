@@ -746,8 +746,19 @@ impl SysmlExpression {
     }
 }
 
-/// A source-backed constraint/assertion with zero or more typed expression
-/// statements. Unsupported grammar remains explicit at a source location.
+/// A value bound to a formal parameter of a constraint usage.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlConstraintBinding {
+    /// Formal parameter selected by the resolved KerML redefinition.
+    pub formal_parameter: SysmlFeatureHandle,
+    /// Authored actual argument expression.
+    pub value: SysmlExpression,
+    /// Source span of the value expression.
+    pub source: SysmlSourceRef,
+}
+
+/// A source-backed constraint/assertion with typed expression statements.
+/// Unsupported grammar remains explicit at a source location.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlConstraint {
     /// Source-backed constraint element.
@@ -766,6 +777,10 @@ pub struct SysmlConstraint {
     /// declaration text.
     #[serde(default)]
     pub parameters: Vec<SysmlFeature>,
+    /// Explicit usage-site values bound to formal parameters by standard
+    /// feature redefinition relationships.
+    #[serde(default)]
+    pub bindings: Vec<SysmlConstraintBinding>,
     /// Parsed, resolved body expressions in authored order.
     #[serde(default)]
     pub expressions: Vec<SysmlExpression>,
@@ -2000,6 +2015,17 @@ fn project_constraints(
                     source_fingerprint,
                     element_id: definition.index() as u32,
                 });
+            let bindings = if kind.is_a(ElementKind::ConstraintUsage) {
+                project_constraint_bindings(
+                    workspace,
+                    file,
+                    id,
+                    source_revision,
+                    source_fingerprint,
+                )
+            } else {
+                Vec::new()
+            };
             let expressions = workspace
                 .file_parse(file)
                 .syntax()
@@ -2034,11 +2060,93 @@ fn project_constraints(
                 },
                 definition,
                 parameters,
+                bindings,
                 expressions,
             });
         }
     }
     constraints
+}
+
+fn project_constraint_bindings(
+    workspace: &Workspace,
+    file: usize,
+    usage: ElementId,
+    source_revision: u64,
+    source_fingerprint: u64,
+) -> Vec<SysmlConstraintBinding> {
+    let model = workspace.model();
+    let Some(definition) = constraint_definition_target(workspace, usage) else {
+        return Vec::new();
+    };
+    let formal_parameters = model
+        .owned(definition)
+        .iter()
+        .copied()
+        .filter(|&feature| model.kind(feature).is_a(ElementKind::Feature))
+        .collect::<HashSet<_>>();
+    let syntax = workspace.file_parse(file).syntax();
+    let mut bindings = Vec::new();
+
+    for member in model
+        .owned(usage)
+        .iter()
+        .copied()
+        .filter(|&member| model.kind(member).is_a(ElementKind::Feature))
+    {
+        let targets = model
+            .owned_redefinition(member)
+            .iter()
+            .filter_map(|&redefinition| model.redefined_feature(redefinition))
+            .filter(|target| formal_parameters.contains(target))
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            continue;
+        }
+        let Some((member_range, _)) = workspace.element_ranges(member) else {
+            continue;
+        };
+        let member_node = syntax.descendants().find(|node| {
+            node.text_range().start() == member_range.start()
+                && node.text_range().end() == member_range.end()
+        });
+        let Some(value_clause) = member_node.and_then(|node| {
+            node.children()
+                .find(|child| child.kind() == SyntaxKind::VALUE)
+        }) else {
+            continue;
+        };
+        let Some(value_node) = value_clause
+            .children()
+            .find(|child| child.kind() != SyntaxKind::BODY)
+        else {
+            continue;
+        };
+        let value = lower_expression(
+            &value_node,
+            workspace,
+            file,
+            workspace.file_name(file),
+            source_revision,
+            source_fingerprint,
+            0,
+        );
+        for target in targets {
+            let formal_parameter = SysmlFeatureHandle {
+                element: SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: target.index() as u32,
+                },
+            };
+            bindings.push(SysmlConstraintBinding {
+                formal_parameter,
+                source: value.source.clone(),
+                value: value.clone(),
+            });
+        }
+    }
+    bindings
 }
 
 fn function_input_parameters(workspace: &Workspace, function: ElementId) -> Vec<ElementId> {
