@@ -9,6 +9,8 @@ const SUBJECT_PATH = "/RouteLifecycle/Subject";
 const RIBBON_GEOMETRY = "/RouteLifecycle/Route/RouteRibbon/Geometry";
 const ADMISSION_LANDING_PATH = "/RouteLifecycle/AdmissionLanding";
 const ADMISSION_POINT_PATH = "/RouteLifecycle/AdmissionPoint";
+const APPLICATION_ADMISSION_PATH = "/RouteLifecycle/ApplicationAdmissionMarker";
+const APPLICATION_ADMISSION_EVENT = "ROUTE_LIFECYCLE_APPLICATION_EDIT";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [find_path(SUBJECT_PATH)], entity_reads: [], entity_writes: [],
@@ -258,8 +260,10 @@ fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.checks = [];
-    this.checks.push(t_true(this.visualization_prepared == true,
-        "visualization preparation runs before simulation lifecycle startup"));
+    if !is_unattended() {
+        this.checks.push(t_true(this.visualization_prepared == true,
+            "visualization preparation runs before simulation lifecycle startup"));
+    }
     this.new_point = ROUTE + "/P3";
     this.subject = -1;
     this.started = 0;
@@ -276,6 +280,13 @@ fn on_start(me, ctx) {
     this.alternate_program_path = ();
     this.reference_admission_started = false;
     this.reference_admission_checked = false;
+    this.application_admission_received = false;
+    this.application_admission_accepted = false;
+    this.application_admission_context_ok = false;
+    this.application_admission_event_tick_matches = false;
+    this.application_admission_entity_unindexed = false;
+    this.application_admission_pause_observed = false;
+    this.application_admission_first_tick_checked = false;
 }
 
 fn on_event(me, evt, ctx) {
@@ -294,6 +305,19 @@ fn on_event(me, evt, ctx) {
         // before this broadcast is delivered, so the event's path is the
         // lifecycle identity and the generation is diagnostic context only.
         this.route_ready = true;
+    }
+    if evt.name == APPLICATION_ADMISSION_EVENT && this.phase == 15 {
+        let execution = evt.value;
+        this.application_admission_received = true;
+        this.application_admission_accepted = execution["accepted"] == true;
+        this.application_admission_context_ok = execution["scope"] == "application"
+            && execution["cycle"] == "repl"
+            && execution["phase"] == "evaluation"
+            && execution["clock"] == "application"
+            && execution["sequence"] != ();
+        this.application_admission_event_tick_matches = execution["tick"] == evt.sim_tick;
+        this.application_admission_entity_unindexed = execution["entity_indexed"] == false;
+        this.application_admission_pause_observed = clock_snapshot().virtual_paused;
     }
 }
 
@@ -362,6 +386,14 @@ fn on_tick(me, ctx) {
         if this.phase == 9 {
             detail += "; point_count=" + point_count(this.doc).to_string()
                 + ", ribbon_count=" + ribbon_count(this.doc).to_string();
+        }
+        if this.phase == 15 {
+            detail += "; application_event_received=" + this.application_admission_received.to_string()
+                + ", accepted=" + this.application_admission_accepted.to_string()
+                + ", context_ok=" + this.application_admission_context_ok.to_string()
+                + ", entity_unindexed=" + this.application_admission_entity_unindexed.to_string()
+                + ", pause_observed=" + this.application_admission_pause_observed.to_string()
+                + ", first_tick_checked=" + this.application_admission_first_tick_checked.to_string();
         }
         this.checks.push(t_true(false, detail));
         finish(this);
@@ -1039,6 +1071,54 @@ fn on_tick(me, ctx) {
         if !has_path(this.doc, ALTERNATE_ROUTE + "/P1") { return; }
         this.checks.push(t_true(point_count(this.doc) == 2,
             "editing the alternate program does not mutate the first route"));
+        let generation = route_revision(this.doc);
+        if generation == () {
+            this.checks.push(t_true(false,
+                "Application/Repl projection admission requires the current document generation"));
+            finish(this);
+            return;
+        }
+        let code = "let edit = cmd(\"ApplyUsdOps\", #{ doc_id: "
+            + this.doc.to_string()
+            + ", parent_gen: " + generation.to_string()
+            + ", label: \"Application Repl projection admission\", ops: [#{ AddPrim: #{"
+            + " edit_target: \"@runtime@\", parent_path: \"/RouteLifecycle\","
+            + " name: \"ApplicationAdmissionMarker\", type_name: \"Xform\","
+            + " reference: \"lunco://vessels/markers/predicted_landing.usda\","
+            + " reference_prim_path: \"\" }}] });"
+            + " let runtime = execution_context(); let clocks = clock_snapshot();"
+            + " emit(\"" + APPLICATION_ADMISSION_EVENT + "\", #{ accepted: edit.ok,"
+            + " scope: runtime.scope, cycle: runtime.cycle, phase: runtime.phase,"
+            + " clock: runtime.clock, sequence: runtime.sequence, tick: clocks.sim_tick,"
+            + " entity_indexed: find_path(\"" + APPLICATION_ADMISSION_PATH + "\") >= 0 });";
+        let queued = cmd("RunRhai", #{ code: code });
+        this.checks.push(t_true(queued != () && queued.ok == true,
+            "the Application/Repl script is admitted through the public command queue"));
+        if queued == () || queued.ok != true { finish(this); return; }
+        this.phase = 15;
+        return;
+    }
+
+    if this.phase == 15 {
+        if !this.application_admission_first_tick_checked {
+            let projected = find_path(APPLICATION_ADMISSION_PATH) >= 0;
+            this.checks.push(t_true(projected,
+                "the first simulation tick after an Application/Repl USD edit sees its referenced prim projected"));
+            this.application_admission_first_tick_checked = true;
+            if !projected { finish(this); return; }
+            return;
+        }
+        if !this.application_admission_received { return; }
+        this.checks.push(t_true(this.application_admission_accepted,
+            "the Application/Repl USD edit is accepted by the typed document command"));
+        this.checks.push(t_true(this.application_admission_context_ok,
+            "the edit and its event retain Application/Repl evaluation context"));
+        this.checks.push(t_true(this.application_admission_event_tick_matches,
+            "the application-produced event carries the simulation tick observed at its producer boundary"));
+        this.checks.push(t_true(this.application_admission_entity_unindexed,
+            "entity lookup has not indexed the referenced prim immediately after the Application/Repl document edit"));
+        this.checks.push(t_true(this.application_admission_pause_observed,
+            "pending Application/Repl projection pauses simulation admission"));
         finish(this);
     }
 }

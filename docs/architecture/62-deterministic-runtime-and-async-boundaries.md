@@ -351,6 +351,13 @@ coarse projection as causal work. The steady-frame path does not poll document
 contents. Any `FixedLast` owner that may discover new causal work must publish
 its hold through `SimulationProgressAdmissionSet` before the clock closes the
 fixed-loop burst.
+The production `route_lifecycle` Rhai gate covers both edit origins: a fixed
+simulation hook admits referenced prims, and an Application/Repl evaluation
+admits a new referenced prim through `ApplyUsdOps`. The Repl check confirms the
+public entity index has not caught up immediately after the document edit,
+observes simulation paused while that projection is pending, and requires the
+first later simulation tick to see the projected prim. It also checks the
+Application/Repl execution context and the event's producer tick.
 An inactive or removed primary root releases its exact key until that operation
 has faulted. A primary closure or projection failure records a `RuntimeFault`,
 a path-addressed diagnostic, and a persistent progress hold; scene teardown
