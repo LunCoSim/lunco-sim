@@ -2225,7 +2225,11 @@ fn query_ok(record) {
 // stage.
 fn composed_query(doc, params) {
     let scoped = params;
-    scoped.doc_id = doc;
+    // The query provider uses an explicit document when one is supplied and
+    // the unique mounted stage otherwise. Rhai Unit means "no document"; do
+    // not serialize it as an explicit doc_id because the typed provider
+    // correctly rejects non-numeric document identities.
+    if doc != () { scoped.doc_id = doc; }
     let record = query("QueryUsdPrim", scoped);
     if query_ok(record) {
         return record;

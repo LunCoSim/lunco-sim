@@ -19,8 +19,8 @@ use lunco_sysml_ir::{
     EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
     IrDiagnosticCode, IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
     IrStandardFunction, IrType, IrValue, IrValueType, ObservationState,
-    RequiredConstraintEvaluation, RequiredConstraintIr, RequirementAuditCode,
-    RequirementAuditFinding, RequirementAuditPolicy, RequirementAuditReport,
+    RequiredConstraintEvaluation, RequiredConstraintIr, RequiredConstraintParameterBinding,
+    RequirementAuditCode, RequirementAuditFinding, RequirementAuditPolicy, RequirementAuditReport,
     RequirementAuditSeverity, RequirementConstraintIrReport, RequirementEvaluationReport,
     VerificationVerdict, audit_requirements, compile_constraint_by_name,
     compile_required_constraints, evaluate_constraint, evaluate_requirement,
@@ -2086,6 +2086,25 @@ fn required_constraint_ir_dynamic(required: &RequiredConstraintIr) -> Dynamic {
         "compiled".into(),
         compiled_constraint_dynamic(&required.compiled),
     );
+    value.insert(
+        "parameter_bindings".into(),
+        Dynamic::from_array(
+            required
+                .parameter_bindings
+                .iter()
+                .map(required_constraint_parameter_binding_dynamic)
+                .collect(),
+        ),
+    );
+    Dynamic::from_map(value)
+}
+
+fn required_constraint_parameter_binding_dynamic(
+    binding: &RequiredConstraintParameterBinding,
+) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("parameter".into(), Dynamic::from(binding.parameter));
+    value.insert("value".into(), ir_expression_dynamic(&binding.value));
     Dynamic::from_map(value)
 }
 
