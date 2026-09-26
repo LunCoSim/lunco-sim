@@ -132,6 +132,22 @@ FIXED bounding volume and a WGSL shader draws inside it, taking the live value o
 `inputs:<name>.connect` wire like any other port sink. `assets/shaders/plume.wgsl` is the
 worked example: the cone never moves, and `throttle` shapes what is drawn in it.
 
+For an engine cluster, `LunCo.Propulsion.PlumePhotometry.engine_count` is the
+number of identical nozzles represented by its aggregate thrust and propellant
+flow inputs. The model divides those extensive quantities by the count when it
+derives each plume's exit pressure and light output. Author one fixed plume pair
+and one simulation-driven light at each nozzle, and connect each to that shared
+photometry result. A single-nozzle vehicle leaves `engine_count` at its default
+of one. Do not fan total cluster light out to every nozzle without this per-nozzle
+normalization.
+
+Place each fixed plume envelope at the measured nozzle exit plane and orient its
+narrow end away from the nozzle. Its initial throttle and light intensity must be
+zero so a paused scene starts with no exhaust; simulation outputs reveal it after
+the model advances. Bind vehicle-specific plume materials in the vehicle
+composition layer, so a shared nozzle component does not depend on one vehicle's
+absolute material paths.
+
 The test is what the number means. If it is a dimension, scale the prim. If it is a
 parameter the appearance is a function of, wire it to a shader —
 [`visualize-physics-with-shaders`](../../skills/visualize-physics-with-shaders/SKILL.md).

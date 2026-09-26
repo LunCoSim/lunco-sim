@@ -122,6 +122,25 @@ WGSL owns the perceptual width response and flicker; Modelica owns the physical
 length and photometry; Rhai supplies stimulus and verdicts only. Zero thrust is
 therefore dark without a script-side visual mirror.
 
+### Aggregate propulsion with multiple nozzles
+
+When a propulsion model publishes cluster-total thrust and flow but the vehicle
+has one visual nozzle per engine, set
+`PlumePhotometry.engine_count` to the configured nozzle count. Keep the input
+thrust and flow aggregate; supply each nozzle's own exit radius and area. The
+photometry model divides the extensive cluster values before deriving the
+per-nozzle momentum flux, exit pressure, and light output. Connect the same
+per-nozzle results to one fixed flame pair and one light at each nozzle. Source
+the count from the Twin's typed engine-instance configuration and verify the
+authored model parameter against it. Do not send the undivided cluster light to
+every nozzle or calculate per-engine plume state in Rhai.
+
+Set the fixed envelope's nozzle end on the measured bell exit plane and point its
+narrow end down the exhaust axis. Start its throttle and light intensity at zero;
+the simulation's live outputs reveal the flame during a burn.
+Keep vehicle-specific material paths in the vehicle composition layer; a reusable
+nozzle component must not point at a particular vehicle's absolute material path.
+
 **A driven `Transform` is not a licence to animate.** A transform WIRED to a port is
 a consequence — some model or joint published the number and the stage shows where
 it came from. A transform COMPUTED per tick in a script is animation, and is still
