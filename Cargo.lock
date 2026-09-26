@@ -10191,6 +10191,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-usd-avian-contracts",
  "lunco-usd-bevy-stage",
  "lunco-usd-compose",
  "lunco-usd-data",

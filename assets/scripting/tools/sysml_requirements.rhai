@@ -679,6 +679,28 @@ fn scalar_constraint_observations(ir, inputs) {
     observations
 }
 
+// Compile a constraint through the requirement usage that owns it. Standard
+// usage-level feature bindings are applied before provider inputs are mapped,
+// so observations follow source features instead of disconnected parameter
+// names.
+fn required_constraint_input_observations(source_model, requirement, constraint_name, inputs) {
+    let ir = required_constraint_ir(source_model, requirement, constraint_name);
+    if ir == () || ir.ok != true || ir.constraint == () {
+        let requirement_name = if requirement == () {
+            "<missing requirement>"
+        } else { requirement.qualified_name };
+        let detail = if ir == () { "required SysML constraint IR is unavailable" }
+            else if ir.error != () { ir.error }
+            else if ir.diagnostics != () && ir.diagnostics.len() > 0 {
+                ir.diagnostics[0].message
+            } else { "required SysML constraint IR is invalid" };
+        return [#{path: [], provider: "derived", state: "invalid",
+            detail: detail + "; requirement: " + requirement_name
+                + "; constraint: " + constraint_name}];
+    }
+    scalar_constraint_observations(ir, inputs)
+}
+
 fn _constraint_observations(model, check, requirement) {
     if check.constraint == () || check.constraint == "" {
         return #{ok: false, error: "SysML constraint identity is missing"};

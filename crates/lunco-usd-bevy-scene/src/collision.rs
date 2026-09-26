@@ -2,11 +2,13 @@
 //!
 //! This is a render-free scene contract. It reads the same standard USD
 //! collision schemas and primitive dimensions used by the visual and Avian
-//! projections, but does not depend on either implementation. Spawn, query,
+//! projections, and uses Avian's shared capability contract when deciding
+//! which mesh approximation has a realizable collision envelope. Spawn, query,
 //! and authoring code can therefore derive one placement envelope without
-//! importing the large visual adapter.
+//! importing the large visual adapter or duplicating its supported modes.
 
 use bevy::math::{DMat4, DQuat, DVec3};
+use lunco_usd_avian_contracts::AvianMeshApproximation;
 use lunco_usd_bevy_stage::{
     Purpose, StageView, UsdReadObject, effective_purpose, stage_convention,
 };
@@ -183,7 +185,7 @@ pub fn collision_aabb(
         }
         let ty = UsdReadObject::type_name(reader, &path).unwrap_or_default();
         let (corners, approximation) = local_shape_corners(reader, &path, &ty, true)?;
-        if approximation == Some(CollisionApprox::ConvexDecomposition)
+        if approximation == Some(AvianMeshApproximation::ConvexDecomposition)
             || matches!(ty.as_str(), "Sphere" | "Cylinder" | "Cone" | "Capsule")
         {
             fidelity = CollisionBoundsFidelity::ConservativeGeometryEnvelope;
@@ -322,7 +324,7 @@ fn local_shape_corners(
     path: &SdfPath,
     ty: &str,
     collision_geometry: bool,
-) -> Result<(Vec<bevy::math::DVec3>, Option<CollisionApprox>), CollisionAabbError> {
+) -> Result<(Vec<bevy::math::DVec3>, Option<AvianMeshApproximation>), CollisionAabbError> {
     let mut approximation = None;
     if ty == "Mesh" {
         if collision_geometry {
@@ -332,19 +334,12 @@ fn local_shape_corners(
                     value: error.value,
                 }
             })?;
-            if !matches!(
-                selected,
-                CollisionApprox::None
-                    | CollisionApprox::ConvexHull
-                    | CollisionApprox::ConvexDecomposition
-                    | CollisionApprox::BoundingCube
-            ) {
-                return Err(CollisionAabbError::UnsupportedApproximation {
+            approximation = Some(AvianMeshApproximation::try_from(selected).map_err(
+                |unsupported| CollisionAabbError::UnsupportedApproximation {
                     prim: path.as_str().to_owned(),
-                    approximation: selected,
-                });
-            }
-            approximation = Some(selected);
+                    approximation: unsupported,
+                },
+            )?);
         }
         let (vertices, _) = read_usd_mesh_indexed(reader, path).ok_or_else(|| {
             CollisionAabbError::MalformedPrimitive {
@@ -356,7 +351,7 @@ fn local_shape_corners(
             .into_iter()
             .map(|[x, y, z]| DVec3::new(x as f64, y as f64, z as f64))
             .collect::<Vec<_>>();
-        let vertices = if approximation == Some(CollisionApprox::BoundingCube) {
+        let vertices = if approximation == Some(AvianMeshApproximation::BoundingCube) {
             let mut min = DVec3::splat(f64::INFINITY);
             let mut max = DVec3::splat(f64::NEG_INFINITY);
             for vertex in vertices {
