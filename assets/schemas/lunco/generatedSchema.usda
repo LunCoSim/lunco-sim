@@ -1360,8 +1360,8 @@ class "LunCoLatheAPI" (
 
 # A collision proxy generated from a standard UsdGeomNurbsPatch is an ordinary
 # UsdGeomMesh with the USD Physics schemas. This API records its source and the
-# exact cook inputs so the runtime can reject stale geometry instead of silently
-# simulating an out-of-date approximation.
+# requested deviation tolerance and selected resolution so the runtime can
+# reject stale geometry instead of simulating an out-of-date approximation.
 class "LunCoDerivedGeometryAPI" (
     customData = {
         token apiSchemaType = "singleApply"
@@ -1370,7 +1370,8 @@ class "LunCoDerivedGeometryAPI" (
     from a USD NURBS surface. The source relationship is authoritative; the mesh
     is a regenerated physics proxy. The geometry fingerprint covers the cooked
     canonical vertices and topology and is checked against both source and proxy
-    at collider admission."""
+    at collider admission. The refinement deviation is a deterministic sampled
+    convergence estimate, not a certified error bound."""
 )
 {
     rel lunco:derived:source (
@@ -1379,17 +1380,23 @@ class "LunCoDerivedGeometryAPI" (
     uniform uint64 lunco:derived:geometryFingerprint = 0 (
         doc = "Stable fingerprint of the canonical cooked point and triangle arrays. A mismatch rejects the proxy as stale or modified."
     )
+    uniform double lunco:derived:deviationToleranceM = 0 (
+        doc = "Positive target for the sampled between-refinement mesh deviation, in canonical metres."
+    )
+    uniform double lunco:derived:refinementDeviationM = 0 (
+        doc = "Measured symmetric vertex-to-triangle distance between the last two refinement levels, in canonical metres. This is an estimate and not a certified surface-error bound."
+    )
     uniform int lunco:derived:nurbsUSubdivisions = 0 (
-        doc = "Number of parameter subdivisions used in the NURBS U direction."
+        doc = "U parameter subdivisions selected by the tolerance-driven untrimmed surface cook."
     )
     uniform int lunco:derived:nurbsVSubdivisions = 0 (
-        doc = "Number of parameter subdivisions used in the NURBS V direction."
+        doc = "V parameter subdivisions selected by the tolerance-driven untrimmed surface cook."
     )
     uniform int lunco:derived:trimCurveSamples = 0 (
-        doc = "Samples used for each authored NURBS trim curve."
+        doc = "Samples per authored NURBS trim curve selected by the tolerance-driven trimmed surface cook."
     )
     uniform int lunco:derived:trimGridSubdivisions = 0 (
-        doc = "Parameter-grid subdivisions used to triangulate an authored NURBS trim domain."
+        doc = "Parameter-grid subdivisions selected to triangulate the authored NURBS trim domain."
     )
 }
 

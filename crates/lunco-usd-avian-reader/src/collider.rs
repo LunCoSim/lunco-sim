@@ -3,7 +3,7 @@ use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_usd_avian_contracts::AvianMeshApproximation;
-use lunco_usd_bevy_mesh::{NurbsCollisionTessellation, build_nurbs_collision_mesh_from_usd};
+use lunco_usd_bevy_mesh::build_nurbs_collision_mesh_to_tolerance;
 use lunco_usd_bevy_scene::{
     ShapeDims, read_mesh_collision_approximation, read_primitive_axis, read_shape_dims,
     read_usd_mesh_indexed, read_usd_mesh_topology, usd_axis_to_quat, usd_plane_surface_vertices,
@@ -818,24 +818,26 @@ fn validate_derived_nurbs_proxy(
             .integer(proxy, name)
             .and_then(|value| usize::try_from(value).ok())
     };
-    let tessellation = NurbsCollisionTessellation {
-        u_subdivisions: read_setting("lunco:derived:nurbsUSubdivisions").ok_or_else(|| {
-            fail("derived NURBS U subdivisions are missing or invalid".to_owned())
-        })?,
-        v_subdivisions: read_setting("lunco:derived:nurbsVSubdivisions").ok_or_else(|| {
-            fail("derived NURBS V subdivisions are missing or invalid".to_owned())
-        })?,
-        trim_curve_samples: read_setting("lunco:derived:trimCurveSamples")
-            .ok_or_else(|| fail("derived trim-curve samples are missing or invalid".to_owned()))?,
-        trim_grid_subdivisions: read_setting("lunco:derived:trimGridSubdivisions").ok_or_else(
-            || fail("derived trim-grid subdivisions are missing or invalid".to_owned()),
-        )?,
+    let deviation_tolerance_m = match reader.attr_value(proxy, "lunco:derived:deviationToleranceM")
+    {
+        Some(SdfValue::Double(value)) if value.is_finite() && value > 0.0 => value,
+        _ => {
+            return Err(fail(
+                "derived NURBS deviationToleranceM is missing, invalid, or not authored as double"
+                    .to_owned(),
+            ));
+        }
     };
-    if !tessellation.is_valid() {
-        return Err(fail(
-            "derived NURBS tessellation settings are outside supported ranges".to_owned(),
-        ));
-    }
+    let refinement_deviation_m =
+        match reader.attr_value(proxy, "lunco:derived:refinementDeviationM") {
+            Some(SdfValue::Double(value)) if value.is_finite() && value >= 0.0 => value,
+            _ => {
+                return Err(fail(
+                "derived NURBS refinementDeviationM is missing, invalid, or not authored as double"
+                    .to_owned(),
+            ));
+            }
+        };
     let expected_fingerprint = match reader.attr_value(proxy, "lunco:derived:geometryFingerprint") {
         Some(SdfValue::Uint64(value)) => value,
         _ => {
@@ -844,18 +846,49 @@ fn validate_derived_nurbs_proxy(
             ));
         }
     };
-    let expected =
-        build_nurbs_collision_mesh_from_usd(reader, source, tessellation).ok_or_else(|| {
+    let expected = build_nurbs_collision_mesh_to_tolerance(reader, source, deviation_tolerance_m)
+        .map_err(|error| {
             fail(format!(
-                "derived NURBS source `{source}` can no longer be cooked"
+                "derived NURBS source `{source}` can no longer meet its authored cook tolerance: {error}"
             ))
         })?;
-    if expected.geometry_fingerprint != expected_fingerprint {
+    let (
+        Some(u_subdivisions),
+        Some(v_subdivisions),
+        Some(trim_curve_samples),
+        Some(trim_grid_subdivisions),
+    ) = (
+        read_setting("lunco:derived:nurbsUSubdivisions"),
+        read_setting("lunco:derived:nurbsVSubdivisions"),
+        read_setting("lunco:derived:trimCurveSamples"),
+        read_setting("lunco:derived:trimGridSubdivisions"),
+    )
+    else {
+        return Err(fail(
+            "derived NURBS refinement settings are missing or invalid".to_owned(),
+        ));
+    };
+    let selected = expected.tessellation;
+    let selected_matches = u_subdivisions == selected.u_subdivisions
+        && v_subdivisions == selected.v_subdivisions
+        && trim_curve_samples == selected.trim_curve_samples
+        && trim_grid_subdivisions == selected.trim_grid_subdivisions;
+    let measurement_tolerance = 1.0e-12 * refinement_deviation_m.abs().max(1.0);
+    if !selected_matches
+        || (expected.refinement_deviation_m - refinement_deviation_m).abs() > measurement_tolerance
+    {
+        return Err(fail(
+            "derived NURBS tolerance result or selected resolution does not match the source recook"
+                .to_owned(),
+        ));
+    }
+    if expected.mesh.geometry_fingerprint != expected_fingerprint {
         return Err(fail(format!(
             "derived collision proxy is stale: source `{source}` no longer produces fingerprint {expected_fingerprint}; regenerate it"
         )));
     }
     let expected_triangles: Vec<[u32; 3]> = expected
+        .mesh
         .face_vertex_indices
         .chunks_exact(3)
         .map(|indices| [indices[0] as u32, indices[1] as u32, indices[2] as u32])
@@ -863,20 +896,21 @@ fn validate_derived_nurbs_proxy(
     let topology = read_usd_mesh_topology(reader, proxy).ok_or_else(|| {
         fail("derived collision proxy has malformed USD mesh topology".to_owned())
     })?;
-    let indices_match = topology.face_vertex_counts.len() == expected.face_vertex_counts.len()
+    let indices_match = topology.face_vertex_counts.len() == expected.mesh.face_vertex_counts.len()
         && topology.face_vertex_counts.iter().all(|&count| count == 3)
-        && topology.face_vertex_indices == expected.face_vertex_indices;
+        && topology.face_vertex_indices == expected.mesh.face_vertex_indices;
     let scale = expected
+        .mesh
         .points
         .iter()
         .flatten()
         .fold(1.0_f32, |scale, value| scale.max(value.abs()));
     let tolerance = 2.0e-6 * scale;
-    let points_match = topology.points.len() == expected.points.len()
+    let points_match = topology.points.len() == expected.mesh.points.len()
         && topology
             .points
             .iter()
-            .zip(&expected.points)
+            .zip(&expected.mesh.points)
             .all(|(actual, expected)| {
                 actual
                     .iter()
@@ -885,7 +919,7 @@ fn validate_derived_nurbs_proxy(
             });
     if !indices_match
         || !points_match
-        || actual_points.len() != expected.points.len()
+        || actual_points.len() != expected.mesh.points.len()
         || actual_triangles != expected_triangles
     {
         return Err(fail(format!(

@@ -10103,6 +10103,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-geometry",
  "openusd",
+ "parry3d-f64",
 ]
 
 [[package]]

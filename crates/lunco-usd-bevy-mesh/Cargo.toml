@@ -14,6 +14,7 @@ lunco-usd-bevy-lathe = { path = "../lunco-usd-bevy-lathe" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 openusd = { workspace = true }
+parry3d-f64 = { version = "0.27.0", default-features = false, features = ["alloc", "dim3", "f64", "std"] }
 
 [dev-dependencies]
 lunco-usd-compose = { path = "../lunco-usd-compose" }

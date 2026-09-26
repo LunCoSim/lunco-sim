@@ -18,9 +18,9 @@ use lunco_usd_bevy_stage::{
     UsdRead, UsdStageAsset, canonical::CanonicalStages, read, stage_convention,
 };
 
-/// Explicit, Graphics-independent tessellation inputs for an authored NURBS
-/// collision proxy. Counts are parameter-grid subdivisions, not render quality
-/// levels, and are persisted with the generated proxy so it can be reproduced.
+/// Parameter-grid subdivisions selected for an authored NURBS collision proxy.
+/// These are independent of render quality and are recorded as the adaptive
+/// cook's reproducible resolution result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NurbsCollisionTessellation {
     pub u_subdivisions: usize,
@@ -30,7 +30,7 @@ pub struct NurbsCollisionTessellation {
 }
 
 impl NurbsCollisionTessellation {
-    /// Stable physical-cook defaults based only on the source control net.
+    /// Initial refinement resolution based only on the source control net.
     pub fn for_surface(surface: &lathe::NurbsSurface) -> Self {
         let u_count = surface.u_count as usize;
         let v_count = surface.v_count as usize;
@@ -42,13 +42,42 @@ impl NurbsCollisionTessellation {
         }
     }
 
-    /// Reject unreasonable or empty authored cook settings before allocation.
+    /// Reject unreasonable or empty subdivision values before allocation.
     pub fn is_valid(self) -> bool {
         (1..=512).contains(&self.u_subdivisions)
             && (1..=512).contains(&self.v_subdivisions)
             && (2..=4096).contains(&self.trim_curve_samples)
             && (2..=512).contains(&self.trim_grid_subdivisions)
     }
+
+    fn refine(self, trimmed: bool) -> Option<Self> {
+        let mut refined = self;
+        let mut changed = false;
+        if trimmed {
+            if let Some(samples) = double_with_limit(self.trim_curve_samples, 4096) {
+                refined.trim_curve_samples = samples;
+                changed = true;
+            }
+            if let Some(subdivisions) = double_with_limit(self.trim_grid_subdivisions, 512) {
+                refined.trim_grid_subdivisions = subdivisions;
+                changed = true;
+            }
+        } else {
+            if let Some(subdivisions) = double_with_limit(self.u_subdivisions, 512) {
+                refined.u_subdivisions = subdivisions;
+                changed = true;
+            }
+            if let Some(subdivisions) = double_with_limit(self.v_subdivisions, 512) {
+                refined.v_subdivisions = subdivisions;
+                changed = true;
+            }
+        }
+        changed.then_some(refined)
+    }
+}
+
+fn double_with_limit(value: usize, limit: usize) -> Option<usize> {
+    (value < limit).then(|| value.saturating_mul(2).min(limit))
 }
 
 /// The reproducible triangle geometry generated from a USD NURBS patch.
@@ -63,6 +92,67 @@ pub struct NurbsCollisionMesh {
     /// Stable fingerprint of the generated canonical points and topology.
     pub geometry_fingerprint: u64,
 }
+
+/// A tolerance-driven collision cook and its reproducible selected resolution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NurbsCollisionCook {
+    /// Cooked mesh geometry and its stable fingerprint.
+    pub mesh: NurbsCollisionMesh,
+    /// Resolution selected by the deterministic refinement process.
+    pub tessellation: NurbsCollisionTessellation,
+    /// Target tolerance in canonical metres.
+    pub deviation_tolerance_m: f64,
+    /// Symmetric sampled vertex-to-surface distance between the last two
+    /// refinement levels, in canonical metres. This is a convergence estimate,
+    /// not a certified upper bound on the exact NURBS deviation.
+    pub refinement_deviation_m: f64,
+}
+
+/// Failure to produce a tolerance-driven NURBS collision cook.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NurbsCollisionCookError {
+    /// The requested target was not finite and positive.
+    InvalidTolerance,
+    /// The source surface or trim data was malformed or unsupported.
+    InvalidSurface,
+    /// A valid NURBS surface could not produce a collision mesh.
+    TessellationFailed,
+    /// The cooked meshes could not be compared with the geometry backend.
+    DeviationMeasurementFailed,
+    /// The maximum physical tessellation resolution did not meet the target.
+    RefinementBudgetExceeded {
+        deviation_tolerance_m: f64,
+        last_refinement_deviation_m: f64,
+    },
+}
+
+impl std::fmt::Display for NurbsCollisionCookError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidTolerance => {
+                f.write_str("NURBS collision deviation tolerance must be finite and positive")
+            }
+            Self::InvalidSurface => {
+                f.write_str("NURBS collision source is malformed or unsupported")
+            }
+            Self::TessellationFailed => {
+                f.write_str("NURBS collision source could not be tessellated")
+            }
+            Self::DeviationMeasurementFailed => {
+                f.write_str("NURBS collision refinement deviation could not be measured")
+            }
+            Self::RefinementBudgetExceeded {
+                deviation_tolerance_m,
+                last_refinement_deviation_m,
+            } => write!(
+                f,
+                "NURBS collision refinement budget exhausted at {last_refinement_deviation_m} m; requested estimate is at most {deviation_tolerance_m} m"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NurbsCollisionCookError {}
 
 /// Dimensions are decoded by `lunco-usd-bevy-scene`, the shared owner used by
 /// both the visual mesh and physics collider paths.
@@ -870,24 +960,83 @@ pub fn build_usd_nurbs_patch_mesh(
     build_usd_nurbs_patch_mesh_with_tessellation(reader, path, surface, lathe_params, tessellation)
 }
 
-/// Derive collision geometry from a standard USD NURBS patch or `LunCoLatheAPI`
-/// patch with explicit, non-render tessellation settings.
-pub fn build_nurbs_collision_mesh_from_usd(
+/// Derive collision geometry from a NURBS patch until the sampled refinement
+/// deviation is within `deviation_tolerance_m`.
+///
+/// The tolerance is expressed in canonical metres. Each refinement level is
+/// compared symmetrically by projecting both meshes' vertices onto the other
+/// mesh's triangles, using Parry's triangle-mesh BVH. This deterministic
+/// estimator drives resolution selection but is not a certified upper bound on
+/// the exact rational surface deviation.
+pub fn build_nurbs_collision_mesh_to_tolerance(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
+    deviation_tolerance_m: f64,
+) -> Result<NurbsCollisionCook, NurbsCollisionCookError> {
+    if !deviation_tolerance_m.is_finite() || deviation_tolerance_m <= 0.0 {
+        return Err(NurbsCollisionCookError::InvalidTolerance);
+    }
+    let (surface, lathe_params) =
+        read_nurbs_patch_surface(reader, path).ok_or(NurbsCollisionCookError::InvalidSurface)?;
+    let trimmed = has_authored_nurbs_trim(reader, path);
+    let mut tessellation = NurbsCollisionTessellation::for_surface(&surface);
+    let mut previous =
+        build_nurbs_collision_mesh_at(reader, path, &surface, lathe_params.as_ref(), tessellation)
+            .ok_or(NurbsCollisionCookError::TessellationFailed)?;
+    let mut last_deviation_m = None;
+
+    loop {
+        let Some(next_tessellation) = tessellation.refine(trimmed) else {
+            return Err(NurbsCollisionCookError::RefinementBudgetExceeded {
+                deviation_tolerance_m,
+                last_refinement_deviation_m: last_deviation_m.unwrap_or(f64::INFINITY),
+            });
+        };
+        let next = build_nurbs_collision_mesh_at(
+            reader,
+            path,
+            &surface,
+            lathe_params.as_ref(),
+            next_tessellation,
+        )
+        .ok_or(NurbsCollisionCookError::TessellationFailed)?;
+        let refinement_deviation_m = symmetric_mesh_vertex_deviation(&previous, &next)
+            .ok_or(NurbsCollisionCookError::DeviationMeasurementFailed)?;
+        if refinement_deviation_m <= deviation_tolerance_m {
+            return Ok(NurbsCollisionCook {
+                mesh: next,
+                tessellation: next_tessellation,
+                deviation_tolerance_m,
+                refinement_deviation_m,
+            });
+        }
+        tessellation = next_tessellation;
+        previous = next;
+        last_deviation_m = Some(refinement_deviation_m);
+    }
+}
+
+fn build_nurbs_collision_mesh_at(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+    surface: &lathe::NurbsSurface,
+    lathe_params: Option<&lathe::UsdLathe>,
     tessellation: NurbsCollisionTessellation,
 ) -> Option<NurbsCollisionMesh> {
     if !tessellation.is_valid() {
         return None;
     }
-    let (surface, lathe_params) = read_nurbs_patch_surface(reader, path)?;
     let (mesh, _) = build_usd_nurbs_patch_mesh_with_tessellation(
         reader,
         path,
-        surface,
-        lathe_params,
+        surface.clone(),
+        lathe_params.cloned(),
         tessellation,
     )?;
+    nurbs_collision_mesh_from_bevy_mesh(&mesh)
+}
+
+fn nurbs_collision_mesh_from_bevy_mesh(mesh: &Mesh) -> Option<NurbsCollisionMesh> {
     let bevy_mesh::VertexAttributeValues::Float32x3(points) =
         mesh.attribute(Mesh::ATTRIBUTE_POSITION)?
     else {
@@ -918,6 +1067,43 @@ pub fn build_nurbs_collision_mesh_from_usd(
         face_vertex_indices,
         geometry_fingerprint,
     })
+}
+
+fn symmetric_mesh_vertex_deviation(
+    first: &NurbsCollisionMesh,
+    second: &NurbsCollisionMesh,
+) -> Option<f64> {
+    Some(
+        directed_mesh_vertex_deviation(&first.points, second)?
+            .max(directed_mesh_vertex_deviation(&second.points, first)?),
+    )
+}
+
+fn directed_mesh_vertex_deviation(
+    source_points: &[[f32; 3]],
+    target: &NurbsCollisionMesh,
+) -> Option<f64> {
+    use parry3d_f64::{query::PointQuery, shape::TriMesh};
+
+    let vertices = target
+        .points
+        .iter()
+        .map(|point| parry3d_f64::math::Vec3::from_array(point.map(f64::from)))
+        .collect();
+    let triangles = target
+        .face_vertex_indices
+        .chunks_exact(3)
+        .map(|indices| [indices[0] as u32, indices[1] as u32, indices[2] as u32])
+        .collect();
+    let target_mesh = TriMesh::new(vertices, triangles).ok()?;
+    source_points
+        .iter()
+        .map(|point| {
+            let point = parry3d_f64::math::Vec3::from_array(point.map(f64::from));
+            let projection = target_mesh.project_local_point(point, false);
+            Some(point.distance(projection.point))
+        })
+        .try_fold(0.0_f64, |maximum, distance| Some(maximum.max(distance?)))
 }
 
 /// Stable FNV-1a fingerprint for one canonical NURBS proxy mesh.

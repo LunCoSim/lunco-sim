@@ -7,13 +7,14 @@
 
 use bevy::prelude::{App, Plugin, Vec3, World};
 use lunco_api::queries::{
-    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_str, api_param_u64,
+    ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_f64,
+    api_param_str, api_param_u64,
 };
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value, api_value_from_serializable};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
 use lunco_usd_avian_contracts::AvianMeshApproximation;
-use lunco_usd_bevy_mesh::{NurbsCollisionTessellation, build_nurbs_collision_mesh_from_usd};
+use lunco_usd_bevy_mesh::build_nurbs_collision_mesh_to_tolerance;
 use lunco_usd_bevy_stage::{UsdRead, stage_convention};
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, canonical_stage_for_document};
 use lunco_usd_data::usd_data::UsdDataExt;
@@ -236,50 +237,24 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
             }
         }
 
-        let (surface, _) = lunco_usd_bevy_mesh::read_nurbs_patch_surface(&view, &source)
-            .ok_or_else(|| {
-                ApiQueryError::new(
-                    ApiErrorCode::DeserializationError,
-                    format!("PlanNurbsCollisionProxy: `{source}` has an invalid or unsupported NURBS surface"),
-                )
-            })?;
-        let mut tessellation = NurbsCollisionTessellation::for_surface(&surface);
-        for (field, value) in [
-            ("u_subdivisions", &mut tessellation.u_subdivisions),
-            ("v_subdivisions", &mut tessellation.v_subdivisions),
-            ("trim_curve_samples", &mut tessellation.trim_curve_samples),
-            (
-                "trim_grid_subdivisions",
-                &mut tessellation.trim_grid_subdivisions,
-            ),
-        ] {
-            if let Some(authored) = params.get(field) {
-                *value = match authored {
-                    ApiValue::Int(value) => usize::try_from(*value).ok(),
-                    ApiValue::UInt(value) => usize::try_from(*value).ok(),
-                    _ => None,
-                }
-                .ok_or_else(|| {
-                    ApiQueryError::new(
-                        ApiErrorCode::DeserializationError,
-                        format!("PlanNurbsCollisionProxy: `{field}` must be an integer"),
-                    )
-                })?;
-            }
-        }
-        if !tessellation.is_valid() {
+        let Some(deviation_tolerance_m) = api_param_f64(params, "deviation_tolerance_m") else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "PlanNurbsCollisionProxy: subdivision settings are outside supported ranges",
+                "PlanNurbsCollisionProxy: positive `deviation_tolerance_m` in canonical metres is required",
             ));
-        }
-        let cooked =
-            build_nurbs_collision_mesh_from_usd(&view, &source, tessellation).ok_or_else(|| {
+        };
+        let cooked = build_nurbs_collision_mesh_to_tolerance(&view, &source, deviation_tolerance_m)
+            .map_err(|error| {
+                let code = match &error {
+                    lunco_usd_bevy_mesh::NurbsCollisionCookError::InvalidTolerance
+                    | lunco_usd_bevy_mesh::NurbsCollisionCookError::InvalidSurface => {
+                        ApiErrorCode::DeserializationError
+                    }
+                    _ => ApiErrorCode::CommandRejected,
+                };
                 ApiQueryError::new(
-                    ApiErrorCode::DeserializationError,
-                    format!(
-                        "PlanNurbsCollisionProxy: NURBS surface `{source}` could not be tessellated"
-                    ),
+                    code,
+                    format!("PlanNurbsCollisionProxy: `{source}`: {error}"),
                 )
             })?;
         let convention = stage_convention(&view).map_err(|error| {
@@ -289,6 +264,7 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
             )
         })?;
         let points = cooked
+            .mesh
             .points
             .iter()
             .map(|point| {
@@ -308,14 +284,16 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
             "supported_approximations": AvianMeshApproximation::ALL
                 .map(|mode| mode.as_usd_approximation().as_token()),
             "schemas": schemas,
-            "u_subdivisions": tessellation.u_subdivisions as i64,
-            "v_subdivisions": tessellation.v_subdivisions as i64,
-            "trim_curve_samples": tessellation.trim_curve_samples as i64,
-            "trim_grid_subdivisions": tessellation.trim_grid_subdivisions as i64,
-            "geometry_fingerprint": cooked.geometry_fingerprint,
+            "deviation_tolerance_m": cooked.deviation_tolerance_m,
+            "refinement_deviation_m": cooked.refinement_deviation_m,
+            "u_subdivisions": cooked.tessellation.u_subdivisions as i64,
+            "v_subdivisions": cooked.tessellation.v_subdivisions as i64,
+            "trim_curve_samples": cooked.tessellation.trim_curve_samples as i64,
+            "trim_grid_subdivisions": cooked.tessellation.trim_grid_subdivisions as i64,
+            "geometry_fingerprint": cooked.mesh.geometry_fingerprint,
             "points": points,
-            "face_vertex_counts": cooked.face_vertex_counts,
-            "face_vertex_indices": cooked.face_vertex_indices,
+            "face_vertex_counts": cooked.mesh.face_vertex_counts,
+            "face_vertex_indices": cooked.mesh.face_vertex_indices,
         })))
     }
 }
