@@ -10,6 +10,63 @@
 use avian3d::prelude::{JointDamping, MotorModel};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use openusd::schemas::physics::CollisionApprox;
+
+/// Mesh approximation modes that the Avian adapter can cook from standard
+/// `UsdPhysicsMeshCollisionAPI` input.
+///
+/// OpenUSD defines six tokens. Keeping the four implemented modes in this
+/// adapter contract lets authoring queries expose exactly what the runtime can
+/// realize, while still parsing and diagnosing the complete standard token set
+/// through [`CollisionApprox`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvianMeshApproximation {
+    /// Use the source triangles directly; valid only for static or kinematic
+    /// bodies under the USD Physics mesh-collision rules.
+    TriangleMesh,
+    ConvexHull,
+    ConvexDecomposition,
+    /// Current Avian realization: an axis-aligned box in the mesh's local
+    /// frame, computed from the source vertex bounds.
+    BoundingCube,
+}
+
+impl AvianMeshApproximation {
+    /// Implemented USD modes, in the stable order used by authoring tools.
+    pub const ALL: [Self; 4] = [
+        Self::TriangleMesh,
+        Self::ConvexHull,
+        Self::ConvexDecomposition,
+        Self::BoundingCube,
+    ];
+
+    pub const fn as_usd_approximation(self) -> CollisionApprox {
+        match self {
+            Self::TriangleMesh => CollisionApprox::None,
+            Self::ConvexHull => CollisionApprox::ConvexHull,
+            Self::ConvexDecomposition => CollisionApprox::ConvexDecomposition,
+            Self::BoundingCube => CollisionApprox::BoundingCube,
+        }
+    }
+
+    pub const fn requires_static_or_kinematic_body(self) -> bool {
+        matches!(self, Self::TriangleMesh)
+    }
+}
+
+impl TryFrom<CollisionApprox> for AvianMeshApproximation {
+    type Error = CollisionApprox;
+
+    fn try_from(value: CollisionApprox) -> Result<Self, Self::Error> {
+        match value {
+            CollisionApprox::None => Ok(Self::TriangleMesh),
+            CollisionApprox::ConvexHull => Ok(Self::ConvexHull),
+            CollisionApprox::ConvexDecomposition => Ok(Self::ConvexDecomposition),
+            CollisionApprox::BoundingCube => Ok(Self::BoundingCube),
+            unsupported => Err(unsupported),
+        }
+    }
+}
 
 /// Marks an Avian entity synthesized for the currently mounted USD scene.
 ///

@@ -6,6 +6,7 @@ license.workspace = true
 description = "UI-free public query providers for USD documents and edit sessions"
 
 [dependencies]
+lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-usd-bevy-mesh = { path = "../lunco-usd-bevy-mesh" }
 bevy = { workspace = true }

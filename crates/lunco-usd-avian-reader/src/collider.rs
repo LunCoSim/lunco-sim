@@ -2,6 +2,7 @@ use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use lunco_usd_avian_contracts::AvianMeshApproximation;
 use lunco_usd_bevy_mesh::{NurbsCollisionTessellation, build_nurbs_collision_mesh_from_usd};
 use lunco_usd_bevy_scene::{
     ShapeDims, read_mesh_collision_approximation, read_primitive_axis, read_shape_dims,
@@ -614,20 +615,27 @@ pub fn build_collider_from_usd_at_scale(
             .into_iter()
             .map(|v| DVec3::new(v[0] as f64, v[1] as f64, v[2] as f64))
             .collect();
-        // Read the standard schema token into its upstream typed enum once.
-        // `None` uses the source mesh as a triangle mesh; Avian also realizes
-        // convex hull, convex decomposition, and bounding-cube modes. Any
-        // other token stays an explicit unsupported-approximation error.
+        // Parse the full standard USD enum, then narrow it through the shared
+        // Avian capability contract. Runtime projection and authoring queries
+        // use the same mapping, so unsupported standard tokens cannot be
+        // advertised by the proxy planner.
         // `physics:approximation` is a property OF `PhysicsMeshCollisionAPI`, so
         // it only means anything when that schema is applied.
-        let approximation =
+        let usd_approximation =
             read_mesh_collision_approximation(reader, sdf_path).map_err(|error| {
                 ColliderProjectionError::InvalidApproximation {
                     prim: error.prim,
                     value: error.value,
                 }
             })?;
-        if approximation == CollisionApprox::None {
+        let approximation =
+            AvianMeshApproximation::try_from(usd_approximation).map_err(|approximation| {
+                ColliderProjectionError::UnsupportedApproximation {
+                    prim: sdf_path.to_string(),
+                    approximation,
+                }
+            })?;
+        if approximation.requires_static_or_kinematic_body() {
             if let Some(body) = dynamic_rigid_body_ancestor(reader, sdf_path)? {
                 return Err(ColliderProjectionError::Backend {
                     prim: sdf_path.to_string(),
@@ -638,20 +646,24 @@ pub fn build_collider_from_usd_at_scale(
             }
         }
         let collider = match approximation {
-            CollisionApprox::ConvexHull => {
+            AvianMeshApproximation::ConvexHull => {
                 Collider::convex_hull(verts).ok_or_else(|| ColliderProjectionError::Backend {
                     prim: sdf_path.to_string(),
                     detail: "authored convexHull approximation could not be built".to_owned(),
                 })?
             }
-            CollisionApprox::ConvexDecomposition => Collider::convex_decomposition(verts, tris),
-            CollisionApprox::None => Collider::try_trimesh(verts, tris).map_err(|error| {
-                ColliderProjectionError::Backend {
-                    prim: sdf_path.to_string(),
-                    detail: format!("authored triangle mesh could not be built: {error}"),
-                }
-            })?,
-            CollisionApprox::BoundingCube => {
+            AvianMeshApproximation::ConvexDecomposition => {
+                Collider::convex_decomposition(verts, tris)
+            }
+            AvianMeshApproximation::TriangleMesh => {
+                Collider::try_trimesh(verts, tris).map_err(|error| {
+                    ColliderProjectionError::Backend {
+                        prim: sdf_path.to_string(),
+                        detail: format!("authored triangle mesh could not be built: {error}"),
+                    }
+                })?
+            }
+            AvianMeshApproximation::BoundingCube => {
                 let mut min = DVec3::splat(f64::INFINITY);
                 let mut max = DVec3::splat(f64::NEG_INFINITY);
                 for vertex in &verts {
@@ -682,12 +694,6 @@ pub fn build_collider_from_usd_at_scale(
                     prim: sdf_path.to_string(),
                     detail: "authored boundingCube approximation could not be built".to_owned(),
                 })?
-            }
-            approximation => {
-                return Err(ColliderProjectionError::UnsupportedApproximation {
-                    prim: sdf_path.to_string(),
-                    approximation,
-                });
             }
         };
         return Ok(ColliderBuildOutcome::Built(apply_collider_scale(

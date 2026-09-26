@@ -12,10 +12,12 @@ use lunco_api::queries::{
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value, api_value_from_serializable};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
+use lunco_usd_avian_contracts::AvianMeshApproximation;
 use lunco_usd_bevy_mesh::{NurbsCollisionTessellation, build_nurbs_collision_mesh_from_usd};
 use lunco_usd_bevy_stage::{UsdRead, stage_convention};
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, canonical_stage_for_document};
 use lunco_usd_data::usd_data::UsdDataExt;
+use openusd::schemas::physics::CollisionApprox;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
 use lunco_usd_core::edit_session::UsdEditSessions;
@@ -118,18 +120,30 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
                 "PlanNurbsCollisionProxy: generated proxy path is invalid",
             )
         })?;
-        let approximation = api_param_str(params, "approximation").unwrap_or("convexHull");
-        if !matches!(
-            approximation,
-            "none" | "convexHull" | "convexDecomposition" | "boundingCube"
-        ) {
-            return Err(ApiQueryError::new(
+        let approximation_token = api_param_str(params, "approximation")
+            .unwrap_or(CollisionApprox::ConvexHull.as_token());
+        let usd_approximation = CollisionApprox::from_token(approximation_token).ok_or_else(|| {
+            ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
                 format!(
-                    "PlanNurbsCollisionProxy: Avian currently supports none, convexHull, convexDecomposition, and boundingCube; got `{approximation}`"
+                    "PlanNurbsCollisionProxy: `{approximation_token}` is not a standard UsdPhysicsMeshCollisionAPI approximation token"
                 ),
-            ));
-        }
+            )
+        })?;
+        let approximation = AvianMeshApproximation::try_from(usd_approximation).map_err(
+            |unsupported| {
+                let supported = AvianMeshApproximation::ALL
+                    .map(|mode| mode.as_usd_approximation().as_token())
+                    .join(", ");
+                ApiQueryError::new(
+                    ApiErrorCode::CommandRejected,
+                    format!(
+                        "PlanNurbsCollisionProxy: Avian does not implement the standard `{}` mode; supported Avian modes are {supported}",
+                        unsupported.as_token()
+                    ),
+                )
+            },
+        )?;
 
         let Some(stage) = canonical_stage_for_document(world, doc) else {
             return Err(ApiQueryError::new(
@@ -150,7 +164,7 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
                 format!("PlanNurbsCollisionProxy: `{source}` must be a UsdGeomNurbsPatch"),
             ));
         }
-        if approximation == "none" {
+        if approximation.requires_static_or_kinematic_body() {
             let mut ancestor = Some(source.clone());
             while let Some(path) = ancestor {
                 if view.has_api_schema(&path, "PhysicsRigidBodyAPI") {
@@ -182,7 +196,8 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
                         return Err(ApiQueryError::new(
                             ApiErrorCode::CommandRejected,
                             format!(
-                                "PlanNurbsCollisionProxy: `none` creates a triangle mesh and cannot be used on dynamic body `{path}`; choose convexHull, convexDecomposition, or boundingCube"
+                                "PlanNurbsCollisionProxy: `{}` creates a triangle mesh and cannot be used on dynamic body `{path}`; choose one of the supported convex approximations",
+                                approximation.as_usd_approximation().as_token()
                             ),
                         ));
                     }
@@ -289,7 +304,9 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
             "proxy_name": proxy_name,
             "proxy_path": proxy.to_string(),
             "create_prim": create_prim,
-            "approximation": approximation,
+            "approximation": approximation.as_usd_approximation().as_token(),
+            "supported_approximations": AvianMeshApproximation::ALL
+                .map(|mode| mode.as_usd_approximation().as_token()),
             "schemas": schemas,
             "u_subdivisions": tessellation.u_subdivisions as i64,
             "v_subdivisions": tessellation.v_subdivisions as i64,

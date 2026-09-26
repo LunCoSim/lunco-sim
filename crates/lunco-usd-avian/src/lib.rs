@@ -2539,10 +2539,7 @@ mod collider_parity_tests {
         assert!(build_collider_from_usd(&view, &SdfPath::new("/BadHull").unwrap()).is_err());
         assert!(matches!(
             build_collider_from_usd(&view, &SdfPath::new("/BoundingCube").unwrap()),
-            Err(lunco_usd_avian_reader::collider::ColliderProjectionError::UnsupportedApproximation {
-                approximation: openusd::schemas::physics::CollisionApprox::BoundingCube,
-                ..
-            })
+            Ok(ColliderBuildOutcome::Built(_))
         ));
     }
 
