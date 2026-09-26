@@ -13,6 +13,30 @@ fn status_label(status) {
     "UNAVAILABLE"
 }
 
+fn progress_owner_active(facts, owner) {
+    let blockers = facts.simulation_progress;
+    if blockers == () { return false; }
+    for blocker in blockers {
+        if blocker.owner == owner { return true; }
+    }
+    false
+}
+
+fn runtime_status_label(facts) {
+    if facts.status == "error" { return "ERROR"; }
+    if progress_owner_active(facts, "ModelicaPreparation") || facts.status == "compiling" {
+        return "PHYSICS LOADING";
+    }
+    if progress_owner_active(facts, "TerrainPreparation") { return "TERRAIN LOADING"; }
+    if progress_owner_active(facts, "SceneLifecycle")
+        || progress_owner_active(facts, "SceneReferences")
+        || progress_owner_active(facts, "DocumentPreparation") {
+        return "SCENE PREPARING";
+    }
+    if facts.status == "unavailable" { return "SIMULATION PREPARING"; }
+    status_label(facts.status)
+}
+
 fn status_color(status) {
     if status == "running" { return "var(--ok-color)"; }
     if status == "error" { return "var(--danger-color)"; }
@@ -95,6 +119,7 @@ fn runtime_ui_properties(facts) {
     result.vehicle = facts.label;
     result.status = if facts.available { status_label(facts.status) } else { "WAITING" };
     result.status_color = if facts.available { status_color(facts.status) } else { "var(--muted-color)" };
+    result.runtime_status = runtime_status_label(facts);
     result.owner = facts.control_owner;
     result.speed = vector_text(facts.velocity);
     result.position = vector_text(facts.position);

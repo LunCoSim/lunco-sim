@@ -11,7 +11,7 @@ A compiled scenario has three parts, split by the discriminator *"is it in `key(
 | Part | Kind | Function of | Shared / cached? |
 |---|---|---|---|
 | `AST` (prelude-merged) | **structure** | source, asset identity, installed prelude | ✅ one `Arc`, content-addressed |
-| hook mask (`on_start/tick/stop/event` present bits) | **structure** | `AST` | ✅ derived with the AST |
+| hook mask (`on_visualization/start/tick/stop/event` present bits) | **structure** | `AST` | ✅ derived with the AST |
 | `scope` (top-level initialization) | **state** | one explicit run per scenario instance; may touch the world | ❌ never |
 | `this` (per-entity map) | **state** | runtime | ❌ never |
 | event `filter` (`subscribe`) | **state** | `on_start` | ❌ never |
@@ -51,6 +51,18 @@ initialization remain at the serialized owner lifecycle boundary.
 
 `CompiledProgram` includes the full AST, the imports-only hook AST when needed,
 the task AST, and the derived hook mask.
+
+`on_visualization(me, ctx)` is a one-shot presentation hook for a compiled
+program. The owner invokes it in `PreUpdate`, after scene, document, terrain,
+and time-spine preparation but before `FixedUpdate`, through the Twin
+`Visualization` cycle. Reference, document, and terrain preparation must
+settle, while Modelica compilation may still hold simulation admission. It runs
+before top-level initialization and `on_start`, so it uses its host id,
+parameters, and read-only world queries to prepare disposable presentation
+state. Rhai mutation guards reject world
+writes and events; only `ApplyUsdTransientOps` may update the disposable USD
+view layer. The normal dependency plan and lifecycle remain gated by Modelica
+and the other declared simulation inputs.
 
 ### Invalidation
 - **Source edit** bumps the document generation → the driver recompiles with new source → new key → a fresh entry. The old entry is *not* dropped (it's retained for reuse — a replay of the prior version hits it); it goes away only when the whole memo is cleared at the cap (below).

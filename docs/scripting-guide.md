@@ -156,6 +156,7 @@ target/debug/luncosim --api 4101
 |---|---|
 | `fn task(me, ctx)` | builds one native task tree; the kernel advances it each fixed step |
 | `fn mission(me, ctx)` | declares objective state and completion conditions |
+| `fn on_visualization(me, ctx)` | one-shot presentation preparation after scene/document/terrain inputs settle |
 | `fn on_start(me, ctx)` | optional setup after (re)compile |
 | `fn on_event(me, evt, ctx)` | optional reaction to a `TelemetryEvent` |
 | `fn on_stop(me, ctx)` | optional teardown on hot-reload / detach / despawn |
@@ -173,8 +174,14 @@ The runtime assigns persistent scenario hooks to the cycles owned by the
 selected application plugins. Use `// @scope host|client|both` to choose the
 network peer. Continuous behavior may declare `// @timing simulation`; this
 records its fixed-step requirement and does not install a schedule from Rhai.
-`on_start` and `on_event` inherit the lifecycle or simulation context of the
-pass that invokes them, which is available through `execution_context()`.
+`on_visualization` runs once in `PreUpdate` after lifecycle/time-spine
+preparation and before the first fixed tick, through the Twin visualization
+cycle, with presentation time and no simulation tick. It can prepare disposable
+visual state while Modelica participants are loading, after scene, document,
+and terrain inputs settle. Rhai blocks world writes and events in this phase;
+only `ApplyUsdTransientOps` can update the disposable USD view. `on_start` and
+`on_event` inherit the lifecycle or simulation context of the pass that invokes
+them, which is available through `execution_context()`.
 
 An unsupported scope or timing value disables only that scenario and publishes
 a document diagnostic for that source revision. Editing the source reparses

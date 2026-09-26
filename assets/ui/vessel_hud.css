@@ -72,6 +72,12 @@
   font-weight: 700;
 }
 
+#vessel-hud-runtime-status {
+  color: var(--accent-color);
+  font-size: 10px;
+  font-weight: 700;
+}
+
 #vessel-hud-nav-heading,
 #vessel-hud-attitude-fine,
 #vessel-hud-geo,

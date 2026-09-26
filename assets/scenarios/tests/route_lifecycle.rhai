@@ -246,12 +246,18 @@ fn invalid_edit_checks(doc) {
     ]
 }
 
+fn on_visualization(me, ctx) {
+    this.visualization_prepared = true;
+}
+
 fn on_start(me, ctx) {
     this.doc = -1;
     this.phase = 0;
     this.elapsed = 0.0;
     this.done = false;
     this.checks = [];
+    this.checks.push(t_true(this.visualization_prepared == true,
+        "visualization preparation runs before simulation lifecycle startup"));
     this.new_point = ROUTE + "/P3";
     this.subject = -1;
     this.started = 0;

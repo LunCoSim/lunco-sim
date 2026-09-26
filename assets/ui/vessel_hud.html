@@ -1,6 +1,7 @@
 <template>
   <property name="label">VESSEL</property>
   <property name="program_label">PROGRAM UNAVAILABLE</property>
+  <property name="runtime_status">SIMULATION PREPARING</property>
   <property name="tilt">—</property>
   <property name="tilt_status">STABLE</property>
   <property name="tilt_limits">generic limits</property>
@@ -59,6 +60,7 @@
           <text id="vessel-hud-program-label">{program_label}</text>
         </button>
       </node>
+      <text id="vessel-hud-runtime-status">{runtime_status}</text>
       <text id="vessel-hud-frame">site frame · metres</text>
       <node id="vessel-hud-nav-details">
         <node id="vessel-hud-altitude-block">

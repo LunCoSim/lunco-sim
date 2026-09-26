@@ -850,6 +850,24 @@ fn on_start(me, ctx) {
     }
 }
 
+// The ribbon is disposable presentation geometry. Prepare it after the scene,
+// document, and terrain inputs settle, without waiting for Modelica startup.
+fn on_visualization(me, ctx) {
+    let route = route_path(me);
+    let doc = route_document(me);
+    if (route == () || doc == ()) {
+        throw "route ribbon inputs are unavailable after visualization preparation";
+    }
+    let result = waypoint_editor::ensure_ribbon(#{ doc_id: doc, route_path: route });
+    if result == () || result.ok != true {
+        let message = if result == () || result.error == () {
+            "route ribbon could not be prepared after visualization inputs settled"
+        } else { result.error };
+        throw message;
+    }
+    this
+}
+
 fn bind_projected_route(me, state, expected_doc) {
     let route = route_path(me);
     let program = program_path(me);

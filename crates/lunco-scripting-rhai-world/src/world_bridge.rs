@@ -1214,7 +1214,8 @@ fn build_world_engine_base(
     engine.register_fn(
         "cmd",
         |name: ImmutableString, params: Map| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
-            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            bridge_core::ensure_script_command_allowed(name.as_str())
+                .map_err(script_runtime_error)?;
             let params =
                 dynamic_to_hook_value(&Dynamic::from_map(params)).map_err(value_boundary_error)?;
             Ok(bridge_core::cmd(&RhaiBuilder, name.as_str(), params))
@@ -1224,7 +1225,8 @@ fn build_world_engine_base(
     engine.register_fn(
         "cmd",
         |name: ImmutableString| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
-            bridge_core::ensure_script_mutation_allowed().map_err(script_runtime_error)?;
+            bridge_core::ensure_script_command_allowed(name.as_str())
+                .map_err(script_runtime_error)?;
             Ok(bridge_core::cmd(
                 &RhaiBuilder,
                 name.as_str(),
@@ -2682,6 +2684,7 @@ pub fn validate_tool_library(
 struct ProgramMask {
     task: bool,
     mission: bool,
+    visualization: bool,
     start: bool,
     tick: bool,
     stop: bool,
@@ -2696,6 +2699,7 @@ impl ProgramMask {
             match (f.name, f.params.len()) {
                 ("task", 2) => m.task = true,
                 ("mission", 2) => m.mission = true,
+                ("on_visualization", 2) => m.visualization = true,
                 ("on_start", 2) => m.start = true,
                 ("on_tick", 2) => m.tick = true,
                 ("on_stop", 2) => m.stop = true,
@@ -2725,6 +2729,9 @@ impl ProgramMask {
         }
         if self.mission {
             v.push("mission".into());
+        }
+        if self.visualization {
+            v.push("on_visualization".into());
         }
         if self.start {
             v.push("on_start".into());
@@ -3752,6 +3759,26 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         }
     }
 
+    fn call_visualization(&mut self, entity: Entity, self_gid: i64) -> Option<Diagnostic> {
+        let st = self.states.get_mut(&entity)?;
+        if !st.program.mask.visualization {
+            return None;
+        }
+        bridge_core::rng_begin(self_gid as u64, time_bridge::logical_sequence(), 5);
+        let (hook_ast, eval_ast) = st.program.hook_target();
+        call_hook(
+            &self.engine,
+            &mut st.scope,
+            hook_ast,
+            eval_ast,
+            "on_visualization",
+            self_gid,
+            &mut st.this,
+            &st.params,
+        )
+        .map(|(message, position)| rhai_diagnostic(message, position))
+    }
+
     fn call_hook(
         &mut self,
         entity: Entity,
@@ -4173,6 +4200,15 @@ pub fn tick_rhai_scenarios(world: &mut World) {
 /// startup and queued discrete events without running fixed-step behavior.
 pub fn tick_rhai_scenarios_while_paused(world: &mut World) {
     lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run_without_simulation_tick(
+        world,
+        ScriptLanguage::Rhai,
+    );
+}
+
+/// Run one-shot authored visualization hooks after scene, document, and terrain
+/// preparation. Modelica holds do not block presentation-only work.
+pub fn tick_rhai_scenario_visualization(world: &mut World) {
+    lunco_scripting::scenario::ScenarioDriver::<RhaiScenarioRuntime>::run_visualization(
         world,
         ScriptLanguage::Rhai,
     );

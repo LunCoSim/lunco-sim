@@ -141,6 +141,15 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
                     .run_if(lunco_scripting::scenario::scenario_execution_enabled)
                     .run_if(lunco_scripting_rhai_world::world_bridge::rhai_runtime_ready)
                     .run_if(lunco_scripting::scenario::simulation_is_paused),
+            )
+            .add_systems(
+                PreUpdate,
+                lunco_scripting_rhai_world::world_bridge::tick_rhai_scenario_visualization
+                    .in_set(lunco_core::RuntimeCycleSet::Visualization)
+                    .after(lunco_scripting_rhai_world::world_bridge::prepare_rhai_scenario_compiles)
+                    .after(lunco_time::TimeSpineSet)
+                    .run_if(lunco_scripting::scenario::scenario_execution_enabled)
+                    .run_if(lunco_scripting_rhai_world::world_bridge::rhai_runtime_ready),
             );
 
         commands::register_all_commands(app);

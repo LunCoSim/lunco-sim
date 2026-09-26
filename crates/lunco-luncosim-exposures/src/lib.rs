@@ -336,6 +336,7 @@ fn runtime_ui_facts(
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     telemetry: &[PublicTelemetryValue],
+    progress: Option<&lunco_core_runtime::SimulationProgress>,
 ) -> HookValue {
     let label = root
         .map(|root| {
@@ -515,6 +516,7 @@ fn runtime_ui_facts(
         ("angular_velocity", angular_velocity),
         ("rotation", rotation),
         ("telemetry", HookValue::Array(telemetry)),
+        ("simulation_progress", simulation_progress_facts(progress)),
         (
             "participants",
             HookValue::Array(participants.into_iter().map(|(_, facts)| facts).collect()),
@@ -571,6 +573,43 @@ fn sim_status_facts(status: &SimStatus) -> (String, Option<String>) {
     }
 }
 
+fn simulation_progress_facts(
+    progress: Option<&lunco_core_runtime::SimulationProgress>,
+) -> HookValue {
+    let Some(progress) = progress else {
+        return HookValue::Array(Vec::new());
+    };
+    HookValue::Array(
+        progress
+            .blockers()
+            .map(|blocker| {
+                let owner = match blocker.key.owner {
+                    lunco_core_runtime::SimulationProgressOwner::SceneLifecycle => "SceneLifecycle",
+                    lunco_core_runtime::SimulationProgressOwner::SceneReferences => {
+                        "SceneReferences"
+                    }
+                    lunco_core_runtime::SimulationProgressOwner::TerrainPreparation => {
+                        "TerrainPreparation"
+                    }
+                    lunco_core_runtime::SimulationProgressOwner::DocumentPreparation => {
+                        "DocumentPreparation"
+                    }
+                    lunco_core_runtime::SimulationProgressOwner::ModelicaPreparation => {
+                        "ModelicaPreparation"
+                    }
+                    lunco_core_runtime::SimulationProgressOwner::ScriptPreparation => {
+                        "ScriptPreparation"
+                    }
+                };
+                HookValue::map([
+                    ("owner", HookValue::str(owner)),
+                    ("reason", HookValue::str(blocker.reason.clone())),
+                ])
+            })
+            .collect(),
+    )
+}
+
 /// Optional progress resources projected into generic runtime surfaces.
 ///
 /// The values stay domain-neutral after this boundary: HUI and egui consumers
@@ -580,6 +619,7 @@ fn sim_status_facts(status: &SimStatus) -> (String, Option<String>) {
 pub(crate) struct RuntimeOverlayInputs<'w> {
     terrain: Option<Res<'w, lunco_terrain_surface::TerrainGenStatus>>,
     overlay: Option<Res<'w, lunco_terrain_surface::overlay::TerrainOverlayParams>>,
+    simulation_progress: Option<Res<'w, lunco_core_runtime::SimulationProgress>>,
     #[cfg(feature = "networking")]
     scenario: Option<Res<'w, lunco_networking_sync::scenario_sync::ScenarioDownloadStatus>>,
 }
@@ -592,7 +632,6 @@ pub(crate) struct RuntimeOverlayInputs<'w> {
 #[derive(Default)]
 pub(crate) struct SeminarExposureTrace {
     current_vessel: Option<Entity>,
-    current_surface: Option<String>,
     last_label: Option<String>,
     tipped: bool,
     max_slope_deg: Option<f32>,
@@ -1517,6 +1556,10 @@ pub(crate) fn mark_exposure_dirty(
             .is_some_and(|workspace| workspace.is_changed());
     let authored_changed = stage_revision.is_some_and(|revision| revision.is_changed());
     let scene_mount_changed = scene_mount.is_changed();
+    let simulation_progress_changed = overlays
+        .simulation_progress
+        .as_ref()
+        .is_some_and(|progress| progress.is_changed());
 
     let overlay_changed = overlays
         .terrain
@@ -1545,7 +1588,7 @@ pub(crate) fn mark_exposure_dirty(
     if schema_changed || authored_changed {
         refresh.schema_dirty = true;
     }
-    if authored_changed || scene_mount_changed {
+    if authored_changed || scene_mount_changed || simulation_progress_changed {
         refresh.control_dirty = true;
     }
     if celestial_changed {
@@ -1671,13 +1714,6 @@ pub(crate) struct ExposureQueries<'w, 's> {
     scene_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
 }
 
-fn hide_runtime_surface(exposures: &mut EngineExposures, surface_id: &str) {
-    let mut ui = exposures.writer(surface_id);
-    ui.subject(None);
-    ui.visible(false);
-    ui.clear_properties();
-}
-
 pub(crate) fn publish_exposure(
     queries: ExposureQueries,
     geo: GeodeticHud,
@@ -1761,6 +1797,7 @@ pub(crate) fn publish_exposure(
             &runtime.sessions,
             runtime.local_session.0,
             &queries.inputs,
+            overlays.simulation_progress.as_deref(),
         );
         retired_surface_ids.clear();
     }
@@ -1848,13 +1885,6 @@ pub(crate) fn publish_exposure(
                 ..
             } = &mut *runtime_surface_roots;
             if let Some(surface) = roots.iter().find(|surface| surface.entity == vessel.entity) {
-                if seminar.current_surface.as_deref() != Some(surface.surface_id.as_str()) {
-                    if let Some(previous) =
-                        seminar.current_surface.replace(surface.surface_id.clone())
-                    {
-                        hide_runtime_surface(&mut runtime.exposures, &previous);
-                    }
-                }
                 let mut ui = runtime.exposures.writer(&surface.surface_id);
                 let subject = queries.gid.get(vessel.entity).ok().copied();
                 ui.subject(subject);
@@ -1895,6 +1925,7 @@ pub(crate) fn publish_exposure(
                     &runtime.stages,
                     &runtime.canonical,
                     &[],
+                    overlays.simulation_progress.as_deref(),
                 );
                 ui.visible(runtime_ui_visibility(&facts, &surface.surface_id));
                 let telemetry = resolve_authored_telemetry(
@@ -1904,19 +1935,12 @@ pub(crate) fn publish_exposure(
                     &queries.channels,
                 );
                 publish_vessel_values(&mut ui, &vessel, &telemetry);
-            } else {
-                if let Some(surface_id) = seminar.current_surface.take() {
-                    hide_runtime_surface(&mut runtime.exposures, &surface_id);
-                }
             }
         } else {
             seminar.current_vessel = None;
             seminar.last_label = None;
             seminar.tipped = false;
             seminar.max_slope_deg = None;
-            if let Some(surface_id) = seminar.current_surface.take() {
-                hide_runtime_surface(&mut runtime.exposures, &surface_id);
-            }
         }
     }
 
@@ -2355,6 +2379,7 @@ fn publish_runtime_surface_exposures(
     sessions: &lunco_core_session::SessionRegistry,
     local_session: lunco_command_contracts::SessionId,
     q_inputs: &Query<&InputPorts>,
+    progress: Option<&lunco_core_runtime::SimulationProgress>,
 ) {
     for surface_id in retired_surface_ids {
         let mut ui = exposures.writer(surface_id);
@@ -2403,6 +2428,7 @@ fn publish_runtime_surface_exposures(
             q_paths,
             stages,
             canonical,
+            progress,
         );
     }
 }
@@ -2433,6 +2459,7 @@ fn publish_selected_control_exposure(
     q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
+    progress: Option<&lunco_core_runtime::SimulationProgress>,
 ) {
     let facts = runtime_ui_facts(
         namespace,
@@ -2459,6 +2486,7 @@ fn publish_selected_control_exposure(
         stages,
         canonical,
         telemetry,
+        progress,
     );
     let visible = runtime_ui_visibility(&facts, namespace);
     let properties = runtime_ui_properties(&facts, namespace);

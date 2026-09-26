@@ -580,10 +580,25 @@ fn validate_simulation_target_dependency(
 
 /// Keep dependency planning free of commands and direct world mutations.
 pub fn ensure_script_mutation_allowed() -> Result<(), String> {
-    if execution_context().phase == lunco_core::RuntimePhase::DependencyPlan {
-        Err("simulation_dependencies is read-only; it may resolve dependency identities but cannot mutate the world".into())
-    } else {
+    match execution_context().phase {
+        lunco_core::RuntimePhase::DependencyPlan => Err(
+            "simulation_dependencies is read-only; it may resolve dependency identities but cannot mutate the world".into(),
+        ),
+        lunco_core::RuntimePhase::Visualization => Err(
+            "on_visualization cannot mutate simulation state; use ApplyUsdTransientOps for disposable view edits".into(),
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Gate typed commands to the disposable USD view edit during visualization.
+pub fn ensure_script_command_allowed(name: &str) -> Result<(), String> {
+    if execution_context().phase == lunco_core::RuntimePhase::Visualization
+        && name == "ApplyUsdTransientOps"
+    {
         Ok(())
+    } else {
+        ensure_script_mutation_allowed()
     }
 }
 
@@ -729,7 +744,7 @@ fn insert_map_value(value: &mut ApiValue, key: &str, replacement: ApiValue) -> b
 pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
     let id = OpId::new().0;
     with_world(|world| {
-        if let Err(error) = ensure_script_mutation_allowed() {
+        if let Err(error) = ensure_script_command_allowed(name) {
             return command_result_error(id, "rejected", error);
         }
         if world
@@ -1650,6 +1665,19 @@ pub fn telemetry_value<B: ValueBuilder>(b: &B, v: &TelemetryValue) -> B::Value {
 mod tests {
     use super::*;
     use lunco_core_session::{AuthorityRole, CommandPolicy, UserSession};
+
+    #[test]
+    fn visualization_mutations_are_limited_to_disposable_usd_view_edits() {
+        let mut world = World::new();
+        let mut context = lunco_core::RuntimeExecutionContext::unclassified();
+        context.phase = lunco_core::RuntimePhase::Visualization;
+        let _scope = WorldScope::enter(&mut world, context);
+
+        assert!(ensure_script_mutation_allowed().is_err());
+        assert!(ensure_script_command_allowed("SetPorts").is_err());
+        assert!(ensure_script_command_allowed("ApplyUsdOp").is_err());
+        assert!(ensure_script_command_allowed("ApplyUsdTransientOps").is_ok());
+    }
 
     #[test]
     fn telemetry_unsigned_values_keep_their_unsigned_type() {

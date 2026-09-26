@@ -40,7 +40,6 @@ def Xform "SolarPanel" (
     double inputs:target_mount_y.connect = []
     custom double inputs:target_mount_z
     double inputs:target_mount_z.connect = []
-    float inputs:peak_power_rating_w = inf
     def Scope "Looks"
     {
         def Material "SolarPanel"

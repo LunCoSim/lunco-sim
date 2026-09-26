@@ -124,6 +124,15 @@ bridge. Native UI, HUI, API, telemetry, and recording consumers all read the
 common publication. For scalar participant state, use the shared
 `PortRegistry`; do not create a parallel port reader for a HUD.
 
+`SimulationProgress` owner and reason facts are projected into each authored
+runtime surface as typed `simulation_progress` data. Let the active Rhai policy
+turn those facts into user-facing labels such as `PHYSICS LOADING` or
+`TERRAIN LOADING`; the engine does not hardcode HUD wording. Progress changes
+invalidate the existing surface projection, so a readiness label does not poll
+the simulation. During preparation the built-in Rhai visibility policy
+temporarily shows an authored surface before possession, then returns to its
+authored `possessed` or `always` mode when the holds clear.
+
 Command and one-shot REPL timing is also generic presentation data. Read the
 `application-cadence` exposure for command and REPL sequence/interval/rate
 values; do not attach a HUD timer to `Time<Virtual>`, count API requests as

@@ -121,6 +121,7 @@
       "bindings": {
         "label": { "source": "label" },
         "program_label": { "source": "program_label" },
+        "runtime_status": { "source": "runtime_status" },
         "tilt": { "source": "tilt" },
         "tilt_status": { "source": "tilt_status" },
         "tilt_limits": { "source": "tilt_limits" },

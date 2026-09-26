@@ -491,7 +491,7 @@ pub struct ScenarioSnapshot<V> {
     /// built into `V` by the caller's builder. The builder's `unit` if none.
     pub state: V,
     /// Which policy/lifecycle entrypoints the compiled program actually defines
-    /// (`task` / `mission` / `on_start` / `on_tick` / `on_event` / `on_stop`).
+    /// (`task` / `mission` / `on_visualization` / `on_start` / `on_tick` / `on_event` / `on_stop`).
     pub hooks: Vec<String>,
 }
 
@@ -590,6 +590,14 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
         None
     }
 
+    /// Run presentation-only preparation for a compiled program once its scene,
+    /// document, and terrain inputs are ready. This hook runs in the Twin's
+    /// visualization cycle and may run while Modelica participants are still
+    /// preparing. It must not issue authoritative simulation actions.
+    fn call_visualization(&mut self, _entity: Entity, _self_gid: i64) -> Option<Diagnostic> {
+        None
+    }
+
     /// Call a lifecycle hook for `entity` — a no-op if the scenario doesn't
     /// define it or has no compiled program. Returns a runtime-error diagnostic
     /// if the hook ran and failed.
@@ -676,6 +684,8 @@ struct Fsm {
     parameters_revision: u64,
     /// Whether `on_start` has run for the current program.
     started: bool,
+    /// Whether the current program's one-shot visualization hook has run.
+    visualization_complete: bool,
     /// Whether the backend currently holds a compiled program for this entity.
     compiled: bool,
     /// Runtime engine/prelude revision used for the current compiled program.
@@ -1079,6 +1089,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
 
                 let state = driver.fsm.entry(*entity).or_default();
                 state.started = false;
+                state.visualization_complete = false;
                 state.compiled = false;
                 state.initialized = false;
                 state.dependency_plan = None;
@@ -1439,6 +1450,143 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         Self::run_with_tick(world, language, false);
     }
 
+    /// Run each compiled program's one-shot presentation preparation in the
+    /// Twin visualization cycle. Scene/reference/document/terrain preparation
+    /// remains a prerequisite; Modelica preparation is independent and does
+    /// not hold this visual path.
+    pub fn run_visualization(world: &mut World, language: ScriptLanguage) {
+        if !world
+            .get_resource::<ScenarioExecutionGate>()
+            .is_none_or(|gate| gate.enabled)
+        {
+            return;
+        }
+        let Some(scene_generation) = committed_scene_generation(world) else {
+            return;
+        };
+        let visualization_inputs_ready = world
+            .get_resource::<lunco_core_runtime::SimulationProgress>()
+            .is_none_or(|progress| {
+                !progress.blockers().any(|blocker| {
+                    matches!(
+                        blocker.key.owner,
+                        lunco_core_runtime::SimulationProgressOwner::SceneLifecycle
+                            | lunco_core_runtime::SimulationProgressOwner::SceneReferences
+                            | lunco_core_runtime::SimulationProgressOwner::TerrainPreparation
+                            | lunco_core_runtime::SimulationProgressOwner::DocumentPreparation
+                    )
+                })
+            });
+        if !visualization_inputs_ready {
+            return;
+        }
+
+        let is_client = matches!(
+            world.get_resource::<lunco_core_session::NetworkRole>(),
+            Some(lunco_core_session::NetworkRole::Client)
+        );
+        let held_roots = world
+            .get_resource::<lunco_readiness::ReadinessState>()
+            .map(|state| state.held_entities.clone())
+            .unwrap_or_default();
+        let mut models = {
+            let model_facts = {
+                let mut query = world.query::<(Entity, &ScriptedModel, Option<&ScriptAuthority>)>();
+                query
+                    .iter(world)
+                    .filter(|(_, model, _)| model.language == Some(language))
+                    .map(|(entity, model, authority)| {
+                        (
+                            entity,
+                            model.document_id,
+                            model.parameters_revision,
+                            authority.and_then(|authority| authority.0),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let registry = world.get_resource::<ScriptRegistry>();
+            model_facts
+                .into_iter()
+                .map(|(entity, document_id, parameters_revision, authority)| {
+                    let document_generation = document_id.and_then(|raw| {
+                        registry
+                            .and_then(|registry| registry.documents.get(&DocumentId::new(raw)))
+                            .map(|host| host.document().generation)
+                    });
+                    (
+                        entity,
+                        document_id,
+                        document_generation,
+                        parameters_revision,
+                        authority,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        models.sort_unstable_by_key(|model| scenario_actor_order_key(world, model.0));
+
+        let context = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin(
+                lunco_core::RuntimeCycle::Visualization,
+                scene_generation,
+            )),
+            phase: lunco_core::RuntimePhase::Visualization,
+            clock: lunco_core::RuntimeClock::Presentation,
+            time_seconds: None,
+            delta_seconds: None,
+            sequence: None,
+            producer: None,
+        };
+        world.resource_scope(|world, mut driver: Mut<ScenarioDriver<R>>| {
+            let runtime_revision = driver.runtime.preparation_revision();
+            for (entity, document_id, document_generation, parameters_revision, authority) in
+                &models
+            {
+                let Some(raw) = *document_id else {
+                    continue;
+                };
+                let Some(document_generation) = *document_generation else {
+                    continue;
+                };
+                let source_dependency_revision = driver.runtime.source_dependency_revision(*entity);
+                let Some(state) = driver.fsm.get_mut(entity) else {
+                    continue;
+                };
+                let directives = state.directives;
+                if !state.compiled
+                    || state.visualization_complete
+                    || state.document_id != Some(raw)
+                    || state.generation != document_generation
+                    || state.scene_generation != scene_generation
+                    || state.preparation_revision != Some(runtime_revision)
+                    || state.attempted_dependency_revision != Some(source_dependency_revision)
+                    || state.parameters_revision != *parameters_revision
+                    || !directives.is_supported()
+                    || !directives.scope.runs_on(is_client)
+                    || scenario_owner_is_held(world, *entity, &held_roots)
+                {
+                    continue;
+                }
+
+                state.visualization_complete = true;
+                let gid = state.gid;
+                bridge_core::set_script_client_local(is_client);
+                bridge_core::set_script_authority(*authority);
+                let _scope = bridge_core::WorldScope::enter(world, context);
+                let _phase = bridge_core::ExecutionContextScope::enter(context);
+                if let Some(diagnostic) = driver.runtime.call_visualization(*entity, gid) {
+                    if let Some(mut diagnostics) = world.get_resource_mut::<DocumentDiagnostics>() {
+                        let document = DocumentId::new(raw);
+                        let mut current = diagnostics.diagnostics(document).to_vec();
+                        current.push(diagnostic);
+                        diagnostics.set_error(document, current);
+                    }
+                }
+            }
+        });
+    }
+
     fn run_with_tick(world: &mut World, language: ScriptLanguage, run_tick: bool) {
         if !world
             .get_resource::<ScenarioExecutionGate>()
@@ -1797,6 +1945,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     }
                     st.gid = gid;
                     st.started = false;
+                    st.visualization_complete = false;
                     st.compiled = false;
                     st.initialized = false;
                     st.dependency_plan = None;
@@ -2382,6 +2531,7 @@ fn finish_compile_completion<R: ScenarioRuntime>(
             state.parameters_revision = parameters_revision;
             state.preparation_revision = Some(runtime_revision);
             state.compiled = true;
+            state.visualization_complete = false;
             state.initialized = false;
             state.dependency_plan = None;
             state.newly_compiled = true;
@@ -3160,6 +3310,7 @@ mod lifecycle_readiness_tests {
     #[derive(Debug, PartialEq, Eq)]
     enum RecordedCall {
         Compile,
+        Visualization,
         Start,
         Tick,
         Stop,
@@ -3200,6 +3351,15 @@ mod lifecycle_readiness_tests {
                 .unwrap()
                 .push(bridge_core::execution_context());
             CompileOutcome::Ready
+        }
+
+        fn call_visualization(&mut self, _entity: Entity, _self_gid: i64) -> Option<Diagnostic> {
+            self.1
+                .lock()
+                .unwrap()
+                .push(bridge_core::execution_context());
+            self.0.lock().unwrap().push(RecordedCall::Visualization);
+            None
         }
 
         fn call_hook(
@@ -3327,6 +3487,99 @@ mod lifecycle_readiness_tests {
         ScenarioDriver::<RecordingRuntime>::run_without_simulation_tick(
             world,
             ScriptLanguage::Rhai,
+        );
+    }
+
+    #[test]
+    fn visualization_hook_runs_during_modelica_preparation_before_start() {
+        use lunco_core_runtime::{SimulationProgressKey, SimulationProgressOwner};
+
+        let mut world = World::new();
+        world.insert_resource(scene_coordinator_at_generation(1));
+        world.insert_resource(ScriptRegistry::default());
+        world.insert_resource(DocumentDiagnostics::default());
+        world.init_resource::<lunco_core_runtime::SimulationProgress>();
+        world.init_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
+        world.init_resource::<ScriptEventInbox>();
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(81),
+            ScriptDocument::new(81, ScriptLanguage::Rhai, "scenario"),
+        );
+        let entity = world
+            .spawn(ScriptedModel {
+                document_id: Some(81),
+                language: Some(ScriptLanguage::Rhai),
+                ..Default::default()
+            })
+            .id();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let contexts = Arc::new(Mutex::new(Vec::new()));
+        world.insert_resource(ScenarioDriver::with_runtime(RecordingRuntime(
+            calls.clone(),
+            contexts.clone(),
+            Arc::new(Mutex::new(false)),
+        )));
+        world
+            .resource_mut::<ScenarioDriver<RecordingRuntime>>()
+            .fsm
+            .insert(
+                entity,
+                Fsm {
+                    generation: 0,
+                    document_id: Some(81),
+                    attempted_generation: Some(0),
+                    attempted_dependency_revision: Some(0),
+                    started: false,
+                    visualization_complete: false,
+                    compiled: true,
+                    preparation_revision: Some(0),
+                    initialized: false,
+                    gid: 17,
+                    scene_generation: 1,
+                    directives_generation: Some(0),
+                    ..Default::default()
+                },
+            );
+        let modelica_key = SimulationProgressKey {
+            owner: SimulationProgressOwner::ModelicaPreparation,
+            operation_id: 9,
+        };
+        world
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .acquire(modelica_key, "Preparing Modelica participant");
+
+        ScenarioDriver::<RecordingRuntime>::run_visualization(&mut world, ScriptLanguage::Rhai);
+        assert_eq!(*calls.lock().unwrap(), [RecordedCall::Visualization]);
+        let visualization_context = contexts.lock().unwrap()[0];
+        assert_eq!(
+            visualization_context.route.unwrap().cycle,
+            lunco_core::RuntimeCycle::Visualization
+        );
+        assert_eq!(
+            visualization_context.phase,
+            lunco_core::RuntimePhase::Visualization
+        );
+        assert_eq!(
+            visualization_context.clock,
+            lunco_core::RuntimeClock::Presentation
+        );
+
+        ScenarioDriver::<RecordingRuntime>::run_without_simulation_tick(
+            &mut world,
+            ScriptLanguage::Rhai,
+        );
+        assert_eq!(*calls.lock().unwrap(), [RecordedCall::Visualization]);
+
+        world
+            .resource_mut::<lunco_core_runtime::SimulationProgress>()
+            .release(modelica_key);
+        ScenarioDriver::<RecordingRuntime>::run_without_simulation_tick(
+            &mut world,
+            ScriptLanguage::Rhai,
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [RecordedCall::Visualization, RecordedCall::Start]
         );
     }
 
