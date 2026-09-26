@@ -97,7 +97,10 @@ impl AvianMeshApproximation {
     }
 
     pub const fn requires_static_or_kinematic_body(self) -> bool {
-        matches!(self, Self::TriangleMesh)
+        matches!(
+            self.capability().body_support,
+            AvianMeshBodySupport::StaticOrKinematicOnly
+        )
     }
 
     /// Runtime geometry and body restrictions used by both projection and
@@ -135,6 +138,30 @@ impl TryFrom<CollisionApprox> for AvianMeshApproximation {
             CollisionApprox::ConvexDecomposition => Ok(Self::ConvexDecomposition),
             CollisionApprox::BoundingCube => Ok(Self::BoundingCube),
             unsupported => Err(unsupported),
+        }
+    }
+}
+
+#[cfg(test)]
+mod mesh_approximation_capability_tests {
+    use super::{AvianMeshApproximation, AvianMeshBodySupport};
+
+    #[test]
+    fn supported_usd_tokens_round_trip_through_one_capability_contract() {
+        for approximation in AvianMeshApproximation::ALL {
+            let capability = approximation.capability();
+            assert_eq!(capability.approximation, approximation);
+            assert_eq!(
+                AvianMeshApproximation::try_from(approximation.as_usd_approximation()),
+                Ok(approximation)
+            );
+            assert_eq!(
+                approximation.requires_static_or_kinematic_body(),
+                matches!(
+                    capability.body_support,
+                    AvianMeshBodySupport::StaticOrKinematicOnly
+                )
+            );
         }
     }
 }
