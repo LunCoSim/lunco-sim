@@ -49,7 +49,32 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   participant reads/writes through; the cosim engine registers the built-in backends.
   `entity_port_infos` adds the same live values with owner-supplied type, unit,
   bounds, source, authority, and writability for `ReadPorts` and the native
-  Ports panel.
+  Ports panel. Map-backed `SimComponent` values use `ScalarPortMap`, which
+  updates its identity key only when the set of port names changes; live samples
+  remain independent of topology invalidation. Hot writers use borrowed-name
+  `set`, or strict `set_existing` for declared inputs, and mark the component
+  changed only when the sample actually differs. The shared `InputPorts`
+  backend follows the same no-op change-detection rule for declared commands.
+  At fixed cadence, compiled wires retain process-local backend slots and dense
+  target indices; they rebuild on connection or `PortTopologyRevision` changes.
+  Dynamic port surfaces use `PortMap<T>`, while names remain the authored and
+  command identity. Map-backed Modelica and control ports, link-class outputs,
+  shader inputs, and scene-property sinks resolve to owner slots before steady
+  propagation. Shader live values retain empty slots for declared drives, so
+  the first sample does not change the slot layout; authored-name fingerprints
+  are refreshed only by structural setters. Active manual holds map to dense
+  targets only when the hold set or compiled wiring changes; physics ticks read
+  the retained target-aligned buffer without hashing port names.
+  Modelica output snapshots are copied on `ModelicaModel` changes; the last
+  admitted values remain the propagation source between solver responses.
+  Binding revisions are raised by topology, endpoint, and Modelica lifecycle
+  changes; an open-but-unsettled epoch is checked for readiness without
+  repeatedly requesting a full connection and causal-graph reconciliation.
+  The composed Modelica-network membership fact has one shared cache in
+  `lunco-usd-bevy-core::program`, keyed by stage asset, generation, and runtime
+  instance. Initial program projection and co-simulation wiring reuse the same
+  immutable set; generation changes replace stale entries, and scene teardown
+  clears the cache.
 - **`InputPorts` / `OutputPorts`** — an imperative producer's authored command
   inputs and runtime outputs. `InputPorts` accepts writes; `OutputPorts` is
   read-only and exposes values written by an authored program such as a
@@ -106,6 +131,21 @@ until the bound connection set changes. The fixed simulation schedule and
 rollback replay schedule invoke this same function and share that cache, so
 replay does not introduce a second wiring table or a second source-reader
 implementation.
+
+Manual `PortHolds` are indexed by entity, then port name. Effective hold changes
+advance a revision. Propagation maps active holds to compiled target indices only
+when that revision or the compiled wiring changes, retaining a target-aligned
+scalar buffer across physics ticks. It does not clone the hold map, hash names,
+or rebuild the hold projection per tick. The flat hold snapshot is reserved for
+presentation consumers.
+
+Propagation keeps its accumulator, hold projection, and diagnostic staging
+buffers in the shared `PropagationCache`, so fixed simulation and rollback use
+the same retained storage. A successful target records only its compiled target
+index during the hot pass; it shares the compiled port name when updating the
+once-per-endpoint landed ledger. Live broken/pending snapshots share those
+compiled names as `Arc<str>` instead of cloning a `String`; warning keys and
+labels are built only on the first terminal fault, not on every failed tick.
 
 `RollbackReplay` is an instantaneous simulation invocation driven by recorded
 input frames. Its systems must not use the live `Time<Virtual>` running guard:

@@ -7609,6 +7609,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-port-core",
 ]
 
 [[package]]
@@ -8333,6 +8334,7 @@ name = "lunco-materials"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-port-core",
  "lunco-render",
 ]
 

@@ -81,6 +81,58 @@ const TRANSFORM_PORTS: [&str; 6] = [
     "scale_z",
 ];
 
+#[repr(u64)]
+#[derive(Clone, Copy)]
+enum ScenePropertySlot {
+    LightIntensity,
+    LightRadius,
+    LightColorR,
+    LightColorG,
+    LightColorB,
+    TranslationX,
+    TranslationY,
+    TranslationZ,
+    ScaleX,
+    ScaleY,
+    ScaleZ,
+}
+
+impl ScenePropertySlot {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "light_intensity" => Self::LightIntensity,
+            "light_radius" => Self::LightRadius,
+            "light_color_r" => Self::LightColorR,
+            "light_color_g" => Self::LightColorG,
+            "light_color_b" => Self::LightColorB,
+            "translation_x" => Self::TranslationX,
+            "translation_y" => Self::TranslationY,
+            "translation_z" => Self::TranslationZ,
+            "scale_x" => Self::ScaleX,
+            "scale_y" => Self::ScaleY,
+            "scale_z" => Self::ScaleZ,
+            _ => return None,
+        })
+    }
+
+    fn from_slot(slot: u64) -> Option<Self> {
+        Some(match slot {
+            0 => Self::LightIntensity,
+            1 => Self::LightRadius,
+            2 => Self::LightColorR,
+            3 => Self::LightColorG,
+            4 => Self::LightColorB,
+            5 => Self::TranslationX,
+            6 => Self::TranslationY,
+            7 => Self::TranslationZ,
+            8 => Self::ScaleX,
+            9 => Self::ScaleY,
+            10 => Self::ScaleZ,
+            _ => return None,
+        })
+    }
+}
+
 fn read_light(world: &World, entity: Entity, name: &str) -> Option<f32> {
     if let Some(light) = world.get::<PointLight>(entity) {
         return match name {
@@ -120,6 +172,114 @@ fn read_transform(world: &World, entity: Entity, name: &str) -> Option<f32> {
 
 fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
     read_light(world, entity, name).or_else(|| read_transform(world, entity, name))
+}
+
+fn read_light_slot(world: &World, entity: Entity, slot: ScenePropertySlot) -> Option<f32> {
+    let read = |color: Color, intensity: f32, radius: f32| match slot {
+        ScenePropertySlot::LightIntensity => Some(intensity),
+        ScenePropertySlot::LightRadius => Some(radius),
+        ScenePropertySlot::LightColorR => Some(color.to_linear().red),
+        ScenePropertySlot::LightColorG => Some(color.to_linear().green),
+        ScenePropertySlot::LightColorB => Some(color.to_linear().blue),
+        _ => None,
+    };
+    if let Some(light) = world.get::<PointLight>(entity) {
+        return read(light.color, light.intensity, light.radius);
+    }
+    world
+        .get::<SpotLight>(entity)
+        .and_then(|light| read(light.color, light.intensity, light.radius))
+}
+
+fn read_transform_slot(world: &World, entity: Entity, slot: ScenePropertySlot) -> Option<f32> {
+    let transform = world.get::<Transform>(entity)?;
+    Some(match slot {
+        ScenePropertySlot::TranslationX => transform.translation.x,
+        ScenePropertySlot::TranslationY => transform.translation.y,
+        ScenePropertySlot::TranslationZ => transform.translation.z,
+        ScenePropertySlot::ScaleX => transform.scale.x,
+        ScenePropertySlot::ScaleY => transform.scale.y,
+        ScenePropertySlot::ScaleZ => transform.scale.z,
+        _ => return None,
+    })
+}
+
+fn read_value_slot(world: &World, entity: Entity, slot: ScenePropertySlot) -> Option<f32> {
+    read_light_slot(world, entity, slot).or_else(|| read_transform_slot(world, entity, slot))
+}
+
+fn resolve_input_slot(world: &World, entity: Entity, name: &str) -> Option<u64> {
+    let slot = ScenePropertySlot::from_name(name)?;
+    read_value_slot(world, entity, slot)?;
+    Some(slot as u64)
+}
+
+fn write_light_slot(
+    world: &mut World,
+    entity: Entity,
+    slot: ScenePropertySlot,
+    value: f32,
+) -> bool {
+    let Some(current) = read_light_slot(world, entity, slot) else {
+        return false;
+    };
+    if current.to_bits() == value.to_bits() {
+        return true;
+    }
+    macro_rules! update_light {
+        ($component:ty) => {
+            if let Some(mut light) = world.get_mut::<$component>(entity) {
+                match slot {
+                    ScenePropertySlot::LightIntensity => light.intensity = value,
+                    ScenePropertySlot::LightRadius => light.radius = value,
+                    ScenePropertySlot::LightColorR
+                    | ScenePropertySlot::LightColorG
+                    | ScenePropertySlot::LightColorB => {
+                        let mut color = light.color.to_linear();
+                        match slot {
+                            ScenePropertySlot::LightColorR => color.red = value,
+                            ScenePropertySlot::LightColorG => color.green = value,
+                            ScenePropertySlot::LightColorB => color.blue = value,
+                            _ => return false,
+                        }
+                        light.color = Color::LinearRgba(color);
+                    }
+                    _ => return false,
+                }
+                return true;
+            }
+        };
+    }
+    update_light!(PointLight);
+    update_light!(SpotLight);
+    false
+}
+
+fn write_transform_slot(
+    world: &mut World,
+    entity: Entity,
+    slot: ScenePropertySlot,
+    value: f32,
+) -> bool {
+    let Some(current) = read_transform_slot(world, entity, slot) else {
+        return false;
+    };
+    if current.to_bits() == value.to_bits() {
+        return true;
+    }
+    let Some(mut transform) = world.get_mut::<Transform>(entity) else {
+        return false;
+    };
+    match slot {
+        ScenePropertySlot::TranslationX => transform.translation.x = value,
+        ScenePropertySlot::TranslationY => transform.translation.y = value,
+        ScenePropertySlot::TranslationZ => transform.translation.z = value,
+        ScenePropertySlot::ScaleX => transform.scale.x = value,
+        ScenePropertySlot::ScaleY => transform.scale.y = value,
+        ScenePropertySlot::ScaleZ => transform.scale.z = value,
+        _ => return false,
+    }
+    true
 }
 
 /// True when the value already at `name` is bit-identical to `v`.
@@ -282,9 +442,19 @@ pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
         write_light(world, entity, name, v) || write_transform(world, entity, name, v)
     },
     resolve_output: None,
-    resolve_input: None,
+    resolve_input: Some(resolve_input_slot),
     read_slot: None,
-    write_slot: None,
+    read_input_slot: Some(|world, entity, slot| {
+        read_value_slot(world, entity, ScenePropertySlot::from_slot(slot)?).map(f64::from)
+    }),
+    write_slot: Some(|world, entity, slot, value| {
+        let Some(slot) = ScenePropertySlot::from_slot(slot) else {
+            return false;
+        };
+        let value = value as f32;
+        write_light_slot(world, entity, slot, value)
+            || write_transform_slot(world, entity, slot, value)
+    }),
 };
 
 /// Register the scene-property backend.
@@ -378,6 +548,15 @@ mod tests {
         assert_eq!(
             reg.read_input_port(app.world(), e, "light_intensity"),
             Some(680_000.0)
+        );
+        let resolved = reg
+            .resolve_input(app.world(), e, "light_intensity")
+            .expect("light input resolves once to a typed slot");
+        assert_eq!(reg.read_resolved(app.world(), e, resolved), Some(680_000.0));
+        assert!(reg.write_resolved(app.world_mut(), e, resolved, 700_000.0));
+        assert_eq!(
+            app.world().get::<PointLight>(e).unwrap().intensity,
+            700_000.0
         );
     }
 

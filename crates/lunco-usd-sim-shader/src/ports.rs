@@ -14,12 +14,11 @@
 //! }
 //! ```
 //!
-//! **This module adds no resolver and no per-frame system.** `rewire_usd_connections`
-//! already turns any `inputs:foo.connect` on any prim entity into a `SimConnection`
-//! with no check on what kind of thing the target is, and `propagate_connections`
-//! already routes every write through [`PortRegistry::write_port`]. So making a
-//! uniform drivable is one registered [`PortBackend`] — the extension point
-//! `register_builtin_port_backends` documents for exactly this.
+//! `rewire_usd_connections` already turns any `inputs:foo.connect` on any prim
+//! entity into a `SimConnection` with no check on what kind of thing the target
+//! is, and `propagate_connections` routes every write through the shared port
+//! registry. This backend resolves driven parameters to their ordered authored
+//! slots once; steady-state propagation does not normalize or compare names.
 //!
 //! The write lands in [`ShaderLook::live`], the intent field that sits OUTSIDE the
 //! material sharing key, and `rebind_changed_shader_look` drains it to the GPU on
@@ -91,7 +90,7 @@ use lunco_materials::look::ShaderLook;
 use lunco_materials::naming::to_snake_case;
 use lunco_port_core::ports::{
     PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry, PortTopologyRevision,
-    PortTopologyState, port_name_set_key,
+    PortTopologyState,
 };
 
 /// Does this entity drive a shader parameter called `key`?
@@ -108,7 +107,7 @@ use lunco_port_core::ports::{
 fn declares(world: &World, entity: Entity, key: &str) -> bool {
     world
         .get::<ShaderLook>(entity)
-        .is_some_and(|look| look.driven.contains(key))
+        .is_some_and(|look| look.driven().contains(key))
 }
 
 fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
@@ -119,7 +118,9 @@ fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
     // material schema, which only exists in a render build, and reading a port
     // differently depending on whether a GPU is present is the defect this module
     // was moved here to remove. An undriven, unauthored parameter reads as absent.
-    let v = *look.live.get(&key).or_else(|| look.values.get(&key))?;
+    let v = look
+        .live_value(&key)
+        .or_else(|| look.values().get(&key).copied())?;
     match v {
         ParamValue::F32(v) => Some(v),
         ParamValue::I32(v) => Some(v as f32),
@@ -128,6 +129,45 @@ fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
         // f64, so drive components individually (`inputs:tint_r`) if you need one.
         _ => None,
     }
+}
+
+fn resolve_shader_input(world: &World, entity: Entity, name: &str) -> Option<u64> {
+    let key = to_snake_case(name);
+    let look = world.get::<ShaderLook>(entity)?;
+    if !look.driven().contains(&key) {
+        return None;
+    }
+    look.live().resolve_slot(&key)
+}
+
+fn read_shader_slot(world: &World, entity: Entity, slot: u64) -> Option<f64> {
+    let look = world.get::<ShaderLook>(entity)?;
+    let (name, live) = look.live().get_slot_entry(slot)?;
+    let value = live.as_ref().or_else(|| look.values().get(name))?;
+    match *value {
+        ParamValue::F32(value) => Some(f64::from(value)),
+        ParamValue::I32(value) => Some(f64::from(value)),
+        ParamValue::U32(value) => Some(f64::from(value)),
+        _ => None,
+    }
+}
+
+fn write_shader_slot(world: &mut World, entity: Entity, slot: u64, value: f64) -> bool {
+    let value = value as f32;
+    let Some(current) = world
+        .get::<ShaderLook>(entity)
+        .and_then(|look| look.live().get_slot_entry(slot))
+        .map(|(_, value)| value)
+    else {
+        return false;
+    };
+    if matches!(current, Some(ParamValue::F32(current)) if current.to_bits() == value.to_bits()) {
+        return true;
+    }
+    let Some(mut look) = world.get_mut::<ShaderLook>(entity) else {
+        return false;
+    };
+    look.set_live_slot(slot, ParamValue::F32(value)) == Some(true)
 }
 
 /// Shader parameters are **inputs**: a uniform is something the world writes into,
@@ -159,8 +199,8 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         // strictly larger set (a shared shader's full surface, most of it irrelevant
         // to this prim) and it required the reflected schema, i.e. a GPU build. The
         // parameters a prim actually HAS are the ones it drives or authors.
-        let mut names: std::collections::BTreeSet<&String> = look.driven.iter().collect();
-        names.extend(look.values.keys());
+        let mut names: std::collections::BTreeSet<&String> = look.driven().iter().collect();
+        names.extend(look.values().keys());
         for name in names {
             out.push(PortRef {
                 name: name.clone(),
@@ -199,25 +239,26 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         // propagation produces the moment a Modelica source diverges — is never
         // equal to itself, so a value comparison would dirty the look every tick
         // forever and rebuild the material behind it every tick forever.
-        if matches!(look.live.get(&key), Some(ParamValue::F32(p)) if p.to_bits() == v.to_bits()) {
+        if matches!(look.live_value(&key), Some(ParamValue::F32(p)) if p.to_bits() == v.to_bits()) {
             return true;
         }
-        look.live.insert(key, ParamValue::F32(v));
+        look.set_live(key, ParamValue::F32(v));
         true
     },
     resolve_output: None,
-    resolve_input: None,
+    resolve_input: Some(resolve_shader_input),
     read_slot: None,
-    write_slot: None,
+    read_input_slot: Some(read_shader_slot),
+    write_slot: Some(write_shader_slot),
 };
 
 fn shader_topology_key(look: &ShaderLook) -> u64 {
-    port_name_set_key(look.driven.iter()) ^ port_name_set_key(look.values.keys()).rotate_left(23)
+    look.port_topology_key()
 }
 
-/// Detect an in-place change to the shader parameter surface. `ShaderLook` also
-/// carries `live`, so this change-filtered structural comparison is what keeps
-/// per-tick uniform writes from invalidating the port projection.
+/// Detect an in-place change to the shader parameter surface. The key is cached
+/// by authored-shape setters and reads the live-slot layout identity, so changing
+/// samples does not walk or hash parameter names.
 fn check_shader_port_structure(
     changed: Query<(Entity, &ShaderLook), Changed<ShaderLook>>,
     mut state: ResMut<PortTopologyState>,
@@ -262,11 +303,9 @@ mod tests {
 
     /// A look as the USD pass authors it for a prim driving `name`.
     fn driving(name: &str) -> ShaderLook {
-        ShaderLook {
-            driven: [name.to_string()].into_iter().collect(),
-            unshared: true,
-            ..Default::default()
-        }
+        ShaderLook::default()
+            .with_driven([name.to_string()].into_iter().collect())
+            .unshared()
     }
 
     /// The whole point: a value arriving through the ordinary port graph lands on a
@@ -281,12 +320,45 @@ mod tests {
         assert!(reg.write_port(app.world_mut(), e, "loadFrac", 0.5));
 
         let look = app.world().get::<ShaderLook>(e).unwrap();
-        assert_eq!(look.live.get("load_frac"), Some(&ParamValue::F32(0.5)));
+        assert_eq!(look.live_value("load_frac"), Some(ParamValue::F32(0.5)));
         // It reads back as an INPUT...
         assert_eq!(reg.read_input_port(app.world(), e, "load_frac"), Some(0.5));
         // ...and never as an output. A material parameter resolving as a connection
         // SOURCE would let a wire feed back from the renderer into the simulation.
         assert_eq!(reg.read_output_port(app.world(), e, "load_frac"), None);
+    }
+
+    #[test]
+    fn resolved_shader_slot_writes_without_re_normalizing_the_port_name() {
+        let mut app = app();
+        let e = app.world_mut().spawn(driving("load_frac")).id();
+        app.update();
+        let topology_revision = app.world().resource::<PortTopologyRevision>().0;
+        let reg = app.world().resource::<PortRegistry>().clone();
+        let slot = reg
+            .resolve_input(app.world(), e, "loadFrac")
+            .expect("the authored driven field resolves at wiring time");
+
+        assert!(reg.write_resolved(app.world_mut(), e, slot, 0.5));
+        assert_eq!(reg.read_resolved(app.world(), e, slot), Some(0.5));
+        app.update();
+        assert_eq!(
+            app.world().resource::<PortTopologyRevision>().0,
+            topology_revision,
+            "a live sample must not rescan/rebuild the shader port topology"
+        );
+        app.world_mut().clear_trackers();
+        assert!(reg.write_resolved(app.world_mut(), e, slot, 0.5));
+        assert!(
+            !app.world()
+                .entity(e)
+                .get_ref::<ShaderLook>()
+                .unwrap()
+                .is_changed(),
+            "an unchanged slot write must not schedule a shader rebind"
+        );
+        assert!(reg.write_resolved(app.world_mut(), e, slot, 0.75));
+        assert_eq!(reg.read_resolved(app.world(), e, slot), Some(0.75));
     }
 
     /// A prim with no shader is not this backend's business. Returning false is what
@@ -311,7 +383,7 @@ mod tests {
         let e = app.world_mut().spawn(driving("load_frac")).id();
         let reg = app.world().resource::<PortRegistry>().clone();
         assert!(!reg.write_port(app.world_mut(), e, "altitude", 12.0));
-        assert!(app.world().get::<ShaderLook>(e).unwrap().live.is_empty());
+        assert!(!app.world().get::<ShaderLook>(e).unwrap().has_live_values());
     }
 
     /// Holding a value must not mark `ShaderLook` changed: `rebind_changed_shader_look`

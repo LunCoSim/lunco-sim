@@ -52,12 +52,15 @@ impl BindingRevision {
         self.consumed != self.revision
     }
 
-    /// Open a new projection epoch and request rebinding.
+    /// Reopen a sealed projection epoch and request rebinding.
+    ///
+    /// An already-open epoch is stable state, not a recurring binding event.
     pub fn open_epoch(&mut self) {
-        if self.sealed {
-            self.epoch = self.epoch.wrapping_add(1);
-            self.sealed = false;
+        if !self.sealed {
+            return;
         }
+        self.epoch = self.epoch.wrapping_add(1);
+        self.sealed = false;
         self.request();
     }
 
@@ -82,5 +85,34 @@ impl BindingRevision {
         }
         self.consumed = self.revision;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BindingRevision;
+
+    #[test]
+    fn reopening_requests_once_per_sealed_epoch_transition() {
+        let mut revision = BindingRevision::default();
+
+        // The default state is already an open epoch.
+        revision.open_epoch();
+        assert_eq!(revision.epoch(), 0);
+        assert!(!revision.pending());
+
+        revision.seal_epoch();
+        assert!(revision.pending());
+        assert!(revision.take_request());
+        assert_eq!(revision.epoch(), 1);
+
+        revision.open_epoch();
+        assert!(revision.pending());
+        assert!(revision.take_request());
+        assert_eq!(revision.epoch(), 2);
+
+        revision.open_epoch();
+        assert!(!revision.pending());
+        assert_eq!(revision.epoch(), 2);
     }
 }

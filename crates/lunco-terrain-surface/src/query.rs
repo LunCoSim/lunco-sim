@@ -779,7 +779,7 @@ mod tests {
             &api_value!({"field": "slope", "x": 0.0, "z": 0.0, "half": 5.0, "res": 4}),
         ));
         assert_eq!(field(&d, "found").as_bool(), Some(true));
-        assert_eq!(field(&d, "res").as_i64(), Some(4));
+        assert_eq!(field(&d, "res").as_u64(), Some(4));
         let want = 0.1f64.atan();
         assert!((number(field(&d, "min")) - want).abs() < 1e-3, "min {d:?}");
         assert!((number(field(&d, "max")) - want).abs() < 1e-3, "max {d:?}");
@@ -834,7 +834,7 @@ mod tests {
             &world,
             &api_value!({"field": "elevation", "x": 0.0, "z": 0.0, "half": 5.0, "res": 100000}),
         ));
-        assert_eq!(field(&d, "res").as_i64(), Some(FIELD_MAX_RES as i64));
+        assert_eq!(field(&d, "res").as_u64(), Some(FIELD_MAX_RES as u64));
     }
 
     // ── TerrainRaycast ───────────────────────────────────────────────────────

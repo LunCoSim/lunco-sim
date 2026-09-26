@@ -260,19 +260,20 @@ read a body that is transiently `Kinematic` during settling.
 
 ### The cost
 
-Every co-sim endpoint is a `(Entity, port name)` addressed through the
-`PortRegistry`, which folds over registered `PortBackend`s (first match
-wins). A name read/write therefore pays, per call:
+Every authored/API endpoint remains `(Entity, port name)` and is resolved
+through `PortRegistry`, whose registered `PortBackend`s have explicit
+precedence. A one-shot name read/write therefore pays, per call:
 
 - one `world.get::<T>` **presence check per backend** until the owner is found, and
 - for the avian backend, up to **six group-presence `get`s + a name scan**
   (`find_avian_port` walked `AVIAN` groups, each gated on a component).
 
-The propagation master runs this **every tick** for every wire source and every
-target. For a rover — position/velocity read and `force_y` written each tick on
-avian bodies behind the `SimComponent` backend — that's the dominant port cost.
-The strings were already removed (0.3's `CompiledWiring`); the remaining cost is
-the per-tick backend fold + group scan.
+The fixed propagation master must not repeat this resolution each tick. Its
+`CompiledWiring` resolves endpoints when connections or port topology change,
+then reads/writes through an owning-backend slot. This removes repeated
+registry folds and dynamic-name map lookups from opted-in backends. Earlier
+Tracy attribution identified propagation as a meaningful physics cost; the slot
+path is an architectural reduction, not a measured FPS claim.
 
 The same registry also owns the generic inspection projection:
 `entity_port_infos` decorates one backend list with its owner-supplied metadata
@@ -290,55 +291,80 @@ values and is implemented by the backend that owns the port surface.
 
 FMI never exchanges by variable *name* on the hot path — it resolves names to
 integer **value references** once, then reads/writes by reference. Substrate D
-brings that to ports:
+uses the same split: strings remain the external identity; the simulation data
+plane uses process-local slots.
 
 - A backend may expose an **optional** fast path on `PortBackend`:
   `resolve_output`/`resolve_input` (name → opaque `u64` **slot**) and
-  `read_slot`/`write_slot` (exchange by slot). `None` ⇒ no fast path.
-- The registry resolves an endpoint to a `ResolvedPort { backend, slot }` once,
+  `read_slot`/`read_input_slot`/`write_slot` (exchange by slot). `None` ⇒ no
+  fast path.
+- The registry resolves an endpoint to a `ResolvedPort { backend, slot, side }` once,
   then `read_resolved`/`write_resolved` dispatch straight to the owning backend —
   **no fold, no group scan**.
+- Dynamic name/value surfaces use `PortMap<T>`: one shared name allocation is
+  indexed by `Arc<str>` and stored beside a dense value slot. Existing-name
+  sample updates do not touch topology identity. Adds/removes advance the
+  topology version even if edits restore the same name set; removed slots are
+  tombstoned rather than reused, so unrelated handles stay stable and retired
+  handles cannot alias a different name. Clear, clone, and rare compaction
+  assign a new process-local layout id. `ScalarPortMap` is the `f64` surface
+  used by `InputPorts` and `SimComponent`. `ShaderLook::live` uses the same
+  substrate with predeclared optional parameter samples, so shader wires read
+  and write by handle without a per-tick ordered-set walk or name lookup.
 - `ResolvedPort` is **process-local** (like an FMI value reference / a port slot):
   the `slot` is backend-private and MUST NOT be serialized or sent on the wire —
   resolve fresh on every peer. This keeps it inside the determinism firewall.
 
 #### Who opts in
 
-Only backends behind a multi-group scan benefit, so only they implement the fast
+Backends with dynamic maps or multi-owner presence scans implement the fast
 path:
 
-| Backend | Fast path? | Why |
+| Backend | Fast path? | Slot representation |
 |---|---|---|
-| `SimComponent` (Modelica map) | no (`None`) | registered first — a name read is already one `get` + map lookup |
+| `SimComponent` | yes | `ScalarPortMap` input/output slots |
+| `InputPorts` | yes | `ScalarPortMap` input slots |
 | **avian** (bodies/joints/sensors) | **yes** | slot = `(group_index << 16) \| port_index` into `AVIAN`; collapses the 6-group scan to one component access |
-| `Port` | no | single fixed port on one component |
-| FSW command (map) | no (for now) | map-backed; a fast path needs a name interner (slot can't carry the string) — a documented follow-up |
+| `OutputPorts` / `PortSurface` | yes | dynamic `PortMap` slot; output resolves its child `Port` once |
+| `Port` / `piloted` | yes | fixed slot `0` for the single value / derived read |
+| USD scene properties | yes | validated `ScenePropertySlot` for each light/transform field |
+| shader parameters | yes | predeclared `PortMap<Option<ParamValue>>` live-value slot |
+| celestial link outputs | yes | class-catalog slot plus fixed link-field selector |
 
 The name-based avian ops are now **derived** from resolve→slot (the old
 `find_avian_port` duplication is gone): `read_output = resolve_output ∘
 read_slot`. This is the "name-based API derived from the handle model, no
 per-backend duplication" endgame, applied where it pays.
 
-### Correctness
+### Correctness and invalidation
 
-- **Precedence-preserving.** `resolve_*` walks backends in registration order and
-  stops at the FIRST owner, so a lower-precedence fast-path backend (avian) can
-  never shadow a higher-precedence name-only owner (`SimComponent`) when a name
-  collides on one entity. If the winner has no fast path, resolution returns
-  `None` and the caller uses the name path — same backend, same result.
-  - Outputs are readable, so `read_output.is_some()` detects ownership.
-  - Inputs may be **write-only** (avian `force_y` reads `None`), so resolution
-    also accepts a backend's own `resolve_input` as the write-ownership
-    authority. Precedence holds for our registration order (the readable-input
-    backends `SimComponent`/FSW precede the write-only avian one).
-- **Stale-handle safe.** A cached handle whose component was removed/swapped since
-  the last rebuild makes `read_resolved`/`write_resolved` return `None`/`false`;
-  the propagate loop then falls back to the name path (short-circuiting so a
-  successful slot write never double-writes). Behaviour is identical to the
-  pre-resolve master.
-- **Invalidation.** Handles are cached in `CompiledWiring`, rebuilt (via
-  `RebuildOnChange`) when the `SimConnection` set changes. A component swap
-  without a wiring change is covered by the per-tick fallback above.
+- **Precedence-preserving.** `resolve_*` walks backends in registration order
+  and stops at the FIRST owner, so a lower-precedence fast-path backend can
+  never shadow a higher-precedence name-only owner when a name collides on one
+  entity. An output resolver can claim a declared port before its first sample;
+  otherwise a readable name-only owner stops resolution and retains its own
+  canonical access path.
+  - Input writes and input reads have separate resolution paths. Writes may
+    target a **write-only** port (avian `force_y` reads `None`), so
+    `resolve_input` accepts the backend's declared write ownership. A source
+    reading `inputs:*` instead uses `resolve_input_read`: it follows the first
+    readable-input owner and caches its input slot when available. This keeps a
+  same-named input and output on one entity distinct and avoids per-tick
+  registry/name scans for readable map-backed input sources.
+- Port-presence probes try the backend's resolver before building a full port
+  listing. Map-backed, Avian, scene-property, shader, and catalogued link ports
+  answer existence without allocating rows for every sibling port; list-based
+  ownership remains only for surfaces without a slot resolver. Shader authored
+  shape fingerprints are refreshed by setters, while live samples keep the
+  cached fingerprint unchanged.
+- **No stale-name retry.** A resolved locator that no longer belongs to its
+  backend is a failed read/write, not a cue for a second name lookup. This keeps
+  ownership and error reporting explicit.
+- **Invalidation.** `CompiledWiring` rebuilds when either `BoundConnection`
+  membership/content changes or `PortTopologyRevision` changes. Owner lifecycle
+  observers cover add/remove; changed-owner checks cover in-place dynamic port
+  shape edits. Numeric samples do not bump the revision. Backend owners must
+  publish every structural change through that shared revision.
 
 ### Where it's wired
 
@@ -347,13 +373,9 @@ source and every distinct target once; the accumulate/write phases exchange by
 handle. One-shot name callers (API `Get`/`SetPorts`, scripting, the inspector) are
 unchanged — they don't need resolution and pay no migration cost.
 
-### Follow-ups
+### Registration invariant
 
-- **Map-backed fast path.** A small process-local name interner would let
-  `SimComponent`/FSW resolve to a slot too (removing the fold for FSW drive-command
-  writes, which currently fall back through the avian scan). Add if profiling
-  shows it matters.
-- **Register-order invariant.** `ResolvedPort.backend` is an index into the
+- `ResolvedPort.backend` is an index into the
   registry's fixed startup registration; no backend may be registered after the
   first resolve. (All registration is in plugin `build` today.)
 

@@ -1728,9 +1728,13 @@ pub fn run() -> u8 {
         .get_resource::<lunco_cosim_core::CosimDiagnostics>()
         .map(|d| {
             let mut v: Vec<(String, String)> = d
-                .faults
-                .values()
-                .map(|b| (b.port.clone(), format!("`{}` on {:?}", b.port, b.entity)))
+                .fault_entries()
+                .map(|b| {
+                    (
+                        b.port.to_string(),
+                        format!("`{}` on {:?}", b.port, b.entity),
+                    )
+                })
                 .collect();
             // A HashMap has no order and the gate's output is compared between runs.
             v.sort();

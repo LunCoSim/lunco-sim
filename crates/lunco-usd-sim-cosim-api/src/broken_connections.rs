@@ -50,7 +50,7 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
                 .iter()
                 .map(|b| {
                     api_value!({
-                        "port": b.port.clone(),
+                        "port": b.port.as_ref(),
                         "entity_bits": b.entity.to_bits(),
                         "global_id": b.global_id.map(|g| g.get()),
                         "has_port_surface": b.has_port_surface,

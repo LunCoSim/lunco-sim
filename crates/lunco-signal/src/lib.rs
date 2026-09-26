@@ -407,24 +407,47 @@ impl SignalRegistry {
         }
     }
 
+    fn push_scalar_sample(
+        &mut self,
+        sig: SignalRef,
+        sample: ScalarSample,
+        capacity: usize,
+        resize_existing: bool,
+    ) {
+        let was_inactive = self.inactive.remove(&sig);
+        if let Some(history) = self.scalar_history.get_mut(&sig) {
+            if resize_existing && history.capacity != capacity.max(1) {
+                history.set_capacity(capacity);
+            }
+            history.push(sample);
+            if was_inactive {
+                self.catalog_revision = self.catalog_revision.wrapping_add(1);
+            }
+            return;
+        }
+
+        let was_known = self.types.contains_key(&sig);
+        let mut history = ScalarHistory::new(capacity);
+        history.push(sample);
+        self.scalar_history.insert(sig.clone(), history);
+        self.types.entry(sig).or_insert(SignalType::Scalar);
+        if !was_known || was_inactive {
+            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        }
+    }
+
     /// Push a scalar (time, value) sample. Allocates the history buffer and records the
     /// type on first sample.
     pub fn push_scalar(&mut self, sig: SignalRef, time: f64, value: f64) {
         if !value.is_finite() {
             return;
         }
-        let cap = self.capacity_default();
-        let was_known = self.types.contains_key(&sig);
-        let was_inactive = self.inactive.remove(&sig);
-        let history = self
-            .scalar_history
-            .entry(sig.clone())
-            .or_insert_with(|| ScalarHistory::new(cap));
-        history.push(ScalarSample { time, value });
-        self.types.entry(sig).or_insert(SignalType::Scalar);
-        if !was_known || was_inactive {
-            self.catalog_revision = self.catalog_revision.wrapping_add(1);
-        }
+        self.push_scalar_sample(
+            sig,
+            ScalarSample { time, value },
+            self.capacity_default(),
+            false,
+        );
     }
 
     /// Push a sample into a signal with an explicit retention depth — **this is how a
@@ -441,20 +464,7 @@ impl SignalRegistry {
         if !value.is_finite() {
             return;
         }
-        let was_known = self.types.contains_key(&sig);
-        let was_inactive = self.inactive.remove(&sig);
-        let history = self
-            .scalar_history
-            .entry(sig.clone())
-            .or_insert_with(|| ScalarHistory::new(capacity));
-        if history.capacity != capacity.max(1) {
-            history.set_capacity(capacity);
-        }
-        history.push(ScalarSample { time, value });
-        self.types.entry(sig).or_insert(SignalType::Scalar);
-        if !was_known || was_inactive {
-            self.catalog_revision = self.catalog_revision.wrapping_add(1);
-        }
+        self.push_scalar_sample(sig, ScalarSample { time, value }, capacity, true);
     }
 
     /// Retain a scalar sample when the shared runtime sampling policy says it is
@@ -556,9 +566,11 @@ impl SignalRegistry {
     /// lets archived history keep its `api/<GlobalEntityId>` key after the ECS
     /// source and its [`GlobalEntityId`] component are gone.
     pub fn associate_global_owner(&mut self, sig: &SignalRef, owner: GlobalEntityId) {
-        if self.global_owners.insert(sig.clone(), owner) != Some(owner) {
-            self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        if self.global_owners.get(sig) == Some(&owner) {
+            return;
         }
+        self.global_owners.insert(sig.clone(), owner);
+        self.catalog_revision = self.catalog_revision.wrapping_add(1);
     }
 
     /// Stable API owner captured for this signal, if its producer supplied one.
@@ -844,6 +856,9 @@ mod tests {
 
         registry.push_scalar(signal.clone(), 0.0, 1.0);
         registry.associate_global_owner(&signal, owner);
+        let revision = registry.catalog_revision();
+        registry.associate_global_owner(&signal, owner);
+        assert_eq!(registry.catalog_revision(), revision);
         registry.deactivate_entity(entity);
 
         assert_eq!(registry.global_owner(&signal), Some(owner));

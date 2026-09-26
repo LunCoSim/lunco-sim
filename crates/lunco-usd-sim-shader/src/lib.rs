@@ -411,18 +411,15 @@ fn apply_usd_shader_material_read(
                 })
         })
         .flatten();
-    let look = ShaderLook {
-        shader,
-        vertex_shader,
-        values,
-        textures,
-        no_shadow_cast,
-        driven,
-        unshared,
-        alpha,
-        double_sided,
-        ..Default::default()
-    };
+    let mut look = ShaderLook::new(shader)
+        .with_values(values)
+        .with_driven(driven);
+    look.vertex_shader = vertex_shader;
+    look.textures = textures;
+    look.no_shadow_cast = no_shadow_cast;
+    look.unshared = unshared;
+    look.alpha = alpha;
+    look.double_sided = double_sided;
     // REMOVE the `PbrLook`, don't just overlay: an entity carrying both intents
     // gets two materials from the two binders and the mesh draws TWICE.
     // ShaderLook is also the owner of the shader-parameter port backend. Publish

@@ -9,7 +9,7 @@
 //! Changes to this exchange do not need to rebuild those owners.
 
 use bevy::prelude::*;
-use lunco_cosim_core::{SimComponent, SimStatus, UsdSourcedCosim};
+use lunco_cosim_core::{ScalarPortMap, SimComponent, SimStatus, UsdSourcedCosim};
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_scripting::doc::ScriptedModel;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -57,7 +57,7 @@ fn upsert_value(dst: &mut HashMap<String, f64>, name: &str, value: f64) -> bool 
 #[inline]
 fn upsert_ports<'a>(
     dst: &mut HashMap<String, f64>,
-    src: impl Iterator<Item = (&'a String, &'a f64)>,
+    src: impl Iterator<Item = (&'a str, &'a f64)>,
 ) -> bool {
     let mut changed = false;
     for (name, val) in src {
@@ -66,15 +66,38 @@ fn upsert_ports<'a>(
     changed
 }
 
-/// Per-tick: ModelicaModel.variables → SimComponent.outputs.
-/// Lets `propagate_connections` see fresh Modelica outputs each step.
+#[inline]
+fn upsert_scalar_ports<'a>(
+    dst: &mut ScalarPortMap,
+    src: impl Iterator<Item = (&'a String, &'a f64)>,
+) -> bool {
+    let mut changed = false;
+    for (name, value) in src {
+        changed |= dst.set(name, *value);
+    }
+    changed
+}
+
+/// Publish changed Modelica snapshots to `SimComponent.outputs` before
+/// propagation. New shared surfaces receive their initial snapshot, and stable
+/// outputs remain available to every physics step.
 pub fn sync_modelica_outputs(
-    mut q: Query<(&ModelicaModel, &mut SimComponent), With<UsdSourcedCosim>>,
+    mut q: Query<
+        (&ModelicaModel, &mut SimComponent),
+        (
+            With<UsdSourcedCosim>,
+            Or<(
+                Changed<ModelicaModel>,
+                Added<SimComponent>,
+                Added<UsdSourcedCosim>,
+            )>,
+        ),
+    >,
 ) {
     for (model, mut comp) in &mut q {
         let changed = {
             let comp = comp.bypass_change_detection();
-            let mut changed = upsert_ports(&mut comp.outputs, model.variables.iter());
+            let mut changed = upsert_scalar_ports(&mut comp.outputs, model.variables.iter());
             for (k, v) in &model.inputs {
                 if !comp.inputs.contains_key(k) {
                     comp.inputs.insert(k.clone(), *v);
@@ -107,6 +130,7 @@ pub(crate) fn copy_modelica_input_values(
 ) -> bool {
     let mut changed = false;
     for (name, value) in &component.inputs {
+        let name = name.as_ref();
         if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
             changed |= upsert_value(&mut model.inputs, name, *value);
         }
@@ -120,6 +144,7 @@ pub(crate) fn copy_modelica_input_values(
     // or tutorial-specific path.
     if let Some(command_surface) = command_surface {
         for (name, value) in &command_surface.values {
+            let name = name.as_ref();
             if model.inputs.contains_key(name) || model.compiled_input_names.contains(name) {
                 changed |= upsert_value(&mut model.inputs, name, *value);
             }
@@ -157,7 +182,7 @@ pub fn sync_script_outputs(
     mut q: Query<(&ScriptedModel, &mut SimComponent), With<UsdSourcedCosim>>,
 ) {
     for (model, mut comp) in &mut q {
-        let changed = upsert_ports(
+        let changed = upsert_scalar_ports(
             &mut comp.bypass_change_detection().outputs,
             model.outputs.iter(),
         );

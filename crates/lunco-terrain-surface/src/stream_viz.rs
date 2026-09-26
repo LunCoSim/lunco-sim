@@ -1778,8 +1778,8 @@ pub struct TileShadowCache {
 /// already present so the hot re-write path (the overlay sync)
 /// doesn't allocate a `String` per call.
 pub(crate) fn set_param(look: &mut ShaderLook, name: &str, v: ParamValue) {
-    if look.values.get(name) != Some(&v) {
-        look.values.insert(name.to_string(), v);
+    if look.values().get(name) != Some(&v) {
+        look.set_value(name, v);
     }
 }
 
@@ -4343,22 +4343,22 @@ mod draw_partition_tests {
 
         assert_eq!(near.textures, far.textures);
         assert_eq!(
-            near.values.get("map_texel_size_m"),
+            near.values().get("map_texel_size_m"),
             Some(&ParamValue::F32(maps.texel_size_m))
         );
         for name in ["derived_surface_on", "derived_normal_on"] {
             assert_eq!(
-                near.values.get(name),
+                near.values().get(name),
                 Some(&ParamValue::F32(1.0)),
                 "{name} must be enabled for a derived-only look"
             );
         }
-        assert!(!near.values.contains_key("map_ratio"));
+        assert!(!near.values().contains_key("map_ratio"));
         assert_eq!(near.shader, "shaders/terrain_layered.wgsl");
         assert_eq!(far.shader, "shaders/terrain_layered.wgsl");
         for name in ["mode", "overlay_mode", "overlay_opacity", "lod_depth"] {
             assert!(
-                !near.values.contains_key(name),
+                !near.values().contains_key(name),
                 "production terrain must not carry diagnostic input {name}"
             );
         }
@@ -4385,8 +4385,8 @@ mod draw_partition_tests {
         );
 
         assert_eq!(look.shader, "lunco://shaders/terrain_debug.wgsl");
-        assert_eq!(look.values.get("lod"), Some(&ParamValue::F32(4.0)));
-        assert!(!look.values.contains_key("micro_scale"));
+        assert_eq!(look.values().get("lod"), Some(&ParamValue::F32(4.0)));
+        assert!(!look.values().contains_key("micro_scale"));
     }
 
     #[test]
@@ -4411,7 +4411,7 @@ mod draw_partition_tests {
             "authored_normal_on",
         ] {
             assert_eq!(
-                look.values.get(name),
+                look.values().get(name),
                 Some(&ParamValue::F32(0.0)),
                 "{name} must be disabled without a published map"
             );
@@ -4451,31 +4451,31 @@ mod draw_partition_tests {
         );
 
         assert_eq!(
-            look.values.get("authored_surface_on"),
+            look.values().get("authored_surface_on"),
             Some(&ParamValue::F32(1.0))
         );
         assert_eq!(
-            look.values.get("authored_normal_on"),
+            look.values().get("authored_normal_on"),
             Some(&ParamValue::F32(1.0))
         );
         assert_eq!(
-            look.values.get("derived_surface_on"),
+            look.values().get("derived_surface_on"),
             Some(&ParamValue::F32(0.0))
         );
         assert_eq!(
-            look.values.get("derived_normal_on"),
+            look.values().get("derived_normal_on"),
             Some(&ParamValue::F32(0.0))
         );
         assert_eq!(
-            look.values.get("weight_rough"),
+            look.values().get("weight_rough"),
             Some(&ParamValue::F32(authored.weight_rough))
         );
         assert_eq!(
-            look.values.get("weight_ao"),
+            look.values().get("weight_ao"),
             Some(&ParamValue::F32(authored.weight_ao))
         );
         assert_eq!(
-            look.values.get("weight_normal"),
+            look.values().get("weight_normal"),
             Some(&ParamValue::F32(authored.weight_normal))
         );
     }
@@ -4619,15 +4619,15 @@ mod draw_partition_tests {
         assert!(!look.textures.contains_key(&TextureLayer::Surface));
         assert!(!look.textures.contains_key(&TextureLayer::Normal));
         assert_eq!(
-            look.values.get("map_texel_size_m"),
+            look.values().get("map_texel_size_m"),
             Some(&ParamValue::F32(1.0))
         );
         assert_eq!(
-            look.values.get("derived_surface_on"),
+            look.values().get("derived_surface_on"),
             Some(&ParamValue::F32(0.0))
         );
         assert_eq!(
-            look.values.get("derived_normal_on"),
+            look.values().get("derived_normal_on"),
             Some(&ParamValue::F32(0.0))
         );
     }
@@ -4804,7 +4804,7 @@ mod draw_partition_tests {
             Some(&shadow_image)
         );
         assert_eq!(
-            look.values.get("shadow_cache_on"),
+            look.values().get("shadow_cache_on"),
             Some(&ParamValue::F32(1.0))
         );
     }

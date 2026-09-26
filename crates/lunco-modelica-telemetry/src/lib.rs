@@ -34,9 +34,24 @@ impl Plugin for ModelicaTelemetryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RuntimeTelemetrySessions>().add_systems(
             Update,
-            retain_modelica_runtime_state.after(ModelicaSet::HandleResponses),
+            retain_modelica_runtime_state
+                .after(ModelicaSet::HandleResponses)
+                .run_if(modelica_telemetry_inputs_changed),
         );
     }
+}
+
+/// Modelica telemetry changes only when its source sample or metadata contract
+/// changes. Keep that projection off render-only frames while still observing
+/// document and settings edits independently of solver responses.
+fn modelica_telemetry_inputs_changed(
+    models: Query<(), Or<(Changed<ModelicaModel>, Changed<ModelicaSignalLayout>)>>,
+    documents: Option<Res<DocumentRegistry<ModelicaDocument>>>,
+    settings: Option<Res<TelemetrySettings>>,
+) -> bool {
+    !models.is_empty()
+        || documents.is_some_and(|documents| documents.is_changed())
+        || settings.is_some_and(|settings| settings.is_changed())
 }
 
 /// Runtime state retained for each Modelica participant.
@@ -292,7 +307,10 @@ mod tests {
         app.insert_resource(TelemetrySettings::default());
         app.insert_resource(SignalRegistry::default());
         app.init_resource::<RuntimeTelemetrySessions>();
-        app.add_systems(Update, retain_modelica_runtime_state);
+        app.add_systems(
+            Update,
+            retain_modelica_runtime_state.run_if(modelica_telemetry_inputs_changed),
+        );
         let entity = app
             .world_mut()
             .spawn((model, ModelicaSignalLayout::default()))

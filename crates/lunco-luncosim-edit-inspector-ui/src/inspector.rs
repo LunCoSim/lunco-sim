@@ -66,7 +66,7 @@ fn report_inspector_error(world: &mut World, message: impl Into<String>) {
 fn apply_shader_parameter_edits(world: &mut World, entity: Entity, edits: &[(String, ParamValue)]) {
     if let Some(mut look) = world.get_mut::<ShaderLook>(entity) {
         for (name, value) in edits {
-            look.values.insert(name.clone(), *value);
+            look.set_value(name, *value);
         }
     }
 }
@@ -3374,15 +3374,13 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
                 // there is no second registry of "which fields are driven" to keep in
                 // step, and this covers every writer (a `.connect` wire and
                 // `horizon_shade`'s engine fields alike) without naming any of them.
-                let locked = matches!(f.ui, UiKind::Engine) || look.live.contains_key(&f.name);
+                let locked = matches!(f.ui, UiKind::Engine) || look.has_live_value(&f.name);
                 // Show the value the engine is actually pushing, not the authored one
                 // it is overriding — a locked row displaying a stale `values` entry
                 // would misreport the frame on screen.
                 let floats = look
-                    .live
-                    .get(&f.name)
-                    .or_else(|| look.values.get(&f.name))
-                    .copied()
+                    .live_value(&f.name)
+                    .or_else(|| look.values().get(&f.name).copied())
                     .or(f.default)
                     .map(|v| v.as_floats())
                     .unwrap_or_default();

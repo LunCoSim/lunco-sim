@@ -7,6 +7,7 @@
 
 use bevy::prelude::*;
 use lunco_port_core::ports::PortRegistry;
+use std::sync::Arc;
 
 use lunco_cosim_core::{
     BindingRevision, BoundConnection, BrokenConnection, ConnectionBinding, CosimDiagnostics,
@@ -229,15 +230,13 @@ pub fn bind_connections(world: &mut World) {
         let failure = BrokenConnection {
             entity,
             global_id: world.get::<lunco_core::GlobalEntityId>(entity).copied(),
-            port: port.clone(),
+            port: Arc::from(port.as_str()),
             has_port_surface: !registry.entity_ports(world, entity).is_empty(),
             dropped_value: 0.0,
         };
         let inserted = world
             .resource_mut::<CosimDiagnostics>()
-            .faults
-            .insert((entity, port.clone()), failure)
-            .is_none();
+            .record_fault(failure);
         if inserted {
             let authored_edge = world
                 .get::<Name>(edge)
@@ -314,10 +313,10 @@ mod tests {
             world.get::<ConnectionBinding>(edge),
             Some(&ConnectionBinding::Failed)
         );
-        assert_eq!(world.resource::<CosimDiagnostics>().faults.len(), 1);
+        assert_eq!(world.resource::<CosimDiagnostics>().fault_count(), 1);
         world.resource_mut::<BindingRevision>().seal_epoch();
         world.run_system_once(bind_connections).unwrap();
-        assert_eq!(world.resource::<CosimDiagnostics>().faults.len(), 1);
+        assert_eq!(world.resource::<CosimDiagnostics>().fault_count(), 1);
     }
 
     #[test]

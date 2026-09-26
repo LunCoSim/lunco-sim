@@ -159,7 +159,7 @@ impl TerrainAuthoredMaps {
         look: &ShaderLook,
         derived: Option<&TerrainDerivedMaps>,
     ) -> Self {
-        let weight = |name: &str, map_present: bool| match look.values.get(name) {
+        let weight = |name: &str, map_present: bool| match look.values().get(name) {
             Some(ParamValue::F32(value)) => *value,
             _ if map_present => 1.0,
             _ => 0.0,
@@ -168,7 +168,7 @@ impl TerrainAuthoredMaps {
         let mineral = look.textures.get(&TextureLayer::Mineral).cloned();
         let engine_layer_on = |name: &str| {
             matches!(
-                look.values.get(name),
+                look.values().get(name),
                 Some(ParamValue::F32(value)) if *value > 0.5
             )
         };

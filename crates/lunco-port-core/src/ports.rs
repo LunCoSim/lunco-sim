@@ -41,8 +41,563 @@ use bevy::prelude::*;
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
+use std::ops::{Deref, Index, IndexMut};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::InputPorts;
+
+/// Incrementally maintained identity for a set of port names.
+///
+/// The key excludes live values and is order independent, so owners can update
+/// samples without rebuilding port metadata. Insert/remove operations update
+/// this key at the point where the owner changes its declared shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PortNameSetKey {
+    sum: u64,
+    count: u64,
+}
+
+impl Default for PortNameSetKey {
+    fn default() -> Self {
+        Self {
+            sum: 0xcbf29ce484222325,
+            count: 0,
+        }
+    }
+}
+
+impl PortNameSetKey {
+    /// Add one unique name to this identity.
+    #[inline]
+    pub fn insert(&mut self, name: &str) {
+        self.insert_contribution(port_name_contribution(name));
+    }
+
+    #[inline]
+    fn insert_contribution(&mut self, contribution: u64) {
+        self.sum = self.sum.wrapping_add(contribution);
+        self.count = self.count.wrapping_add(1);
+    }
+
+    /// Remove one existing name from this identity.
+    #[inline]
+    pub fn remove(&mut self, name: &str) {
+        self.sum = self.sum.wrapping_sub(port_name_contribution(name));
+        self.count = self.count.wrapping_sub(1);
+    }
+
+    /// Finish the order-independent cache key.
+    #[inline]
+    pub fn finish(self) -> u64 {
+        self.sum ^ self.count.rotate_left(41)
+    }
+}
+
+#[inline]
+fn port_name_contribution(name: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut hasher);
+    hasher.finish().rotate_left(17)
+}
+
+/// One named value in a dynamic port surface. Retired slots are not reused until
+/// compaction changes the map's process-local layout id.
+#[derive(Clone, Debug)]
+struct PortMapSlot<T: Copy> {
+    name: Option<Arc<str>>,
+    value: Option<T>,
+}
+
+static NEXT_PORT_MAP_LAYOUT_ID: AtomicU32 = AtomicU32::new(1);
+
+fn next_port_map_layout_id() -> u32 {
+    NEXT_PORT_MAP_LAYOUT_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .unwrap_or(0)
+}
+
+/// A dynamic name-to-value map with a compact, process-local slot for hot reads.
+///
+/// Names remain the authored/API identity. Structural edits update the name
+/// index and topology key; compiled consumers resolve a name once and exchange
+/// values directly through the slot array. Existing slots survive unrelated
+/// additions/removals, while retired slots are never reused before compaction.
+/// A process-local layout id rejects handles from a clone, clear, or compaction.
+#[derive(Debug)]
+pub struct PortMap<T: Copy> {
+    by_name: HashMap<Arc<str>, usize>,
+    slots: Vec<PortMapSlot<T>>,
+    retired_slots: usize,
+    names: PortNameSetKey,
+    topology_version: u64,
+    layout_id: u32,
+}
+
+impl<T: Copy> Clone for PortMap<T> {
+    fn clone(&self) -> Self {
+        Self {
+            by_name: self.by_name.clone(),
+            slots: self.slots.clone(),
+            retired_slots: self.retired_slots,
+            names: self.names,
+            topology_version: self.topology_version,
+            layout_id: next_port_map_layout_id(),
+        }
+    }
+}
+
+impl<T: Copy> Default for PortMap<T> {
+    fn default() -> Self {
+        Self {
+            by_name: HashMap::new(),
+            slots: Vec::new(),
+            retired_slots: 0,
+            names: PortNameSetKey::default(),
+            topology_version: 0,
+            layout_id: next_port_map_layout_id(),
+        }
+    }
+}
+
+impl<T: Copy + PartialEq> PartialEq for PortMap<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len()
+            && self
+                .iter()
+                .all(|(name, value)| other.get(name).is_some_and(|other| value == other))
+    }
+}
+
+impl<T: Copy> PortMap<T> {
+    /// Insert or replace a named value. Name storage is shared between the
+    /// lookup index and its slot, so each declared name has one string buffer.
+    pub fn insert(&mut self, name: String, value: T) -> Option<T> {
+        if let Some(index) = self.by_name.get(name.as_str()).copied() {
+            let slot = self.slots.get_mut(index)?;
+            return slot.value.replace(value);
+        }
+
+        let name: Arc<str> = Arc::from(name);
+        self.names.insert(&name);
+        let index = self.allocate_slot(Arc::clone(&name), value);
+        self.by_name.insert(name, index);
+        self.topology_version = self.topology_version.wrapping_add(1);
+        None
+    }
+
+    fn allocate_slot(&mut self, name: Arc<str>, value: T) -> usize {
+        let index = self.slots.len();
+        self.slots.push(PortMapSlot {
+            name: Some(name),
+            value: Some(value),
+        });
+        index
+    }
+
+    /// Read a value by its authored name.
+    #[inline]
+    pub fn get(&self, name: &str) -> Option<&T> {
+        let index = *self.by_name.get(name)?;
+        self.slots.get(index)?.value.as_ref()
+    }
+
+    /// Mutably access a value by its authored name.
+    #[inline]
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut T> {
+        let index = *self.by_name.get(name)?;
+        self.slots.get_mut(index)?.value.as_mut()
+    }
+
+    /// Whether this surface declares `name`.
+    #[inline]
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.by_name.contains_key(name)
+    }
+
+    /// Resolve a declared name to a process-local slot handle.
+    #[inline]
+    pub fn resolve_slot(&self, name: &str) -> Option<u64> {
+        let index = *self.by_name.get(name)?;
+        let slot = self.slots.get(index)?;
+        slot.value.as_ref()?;
+        encode_port_slot(self.layout_id, index)
+    }
+
+    /// Return the process-local layout identity used by resolved slots.
+    /// Appending names preserves existing handles; clone, clear, and compaction
+    /// replace this identity.
+    #[inline]
+    pub fn layout_key(&self) -> u32 {
+        self.layout_id
+    }
+
+    /// Read by a previously resolved slot. Removing that entry retires its
+    /// handle; compaction and map replacement retire the old layout.
+    #[inline]
+    pub fn get_slot(&self, handle: u64) -> Option<&T> {
+        self.get_slot_entry(handle).map(|(_, value)| value)
+    }
+
+    /// Read the name and value at a previously resolved slot.
+    #[inline]
+    pub fn get_slot_entry(&self, handle: u64) -> Option<(&str, &T)> {
+        let (layout_id, index) = decode_port_slot(handle)?;
+        if layout_id != self.layout_id {
+            return None;
+        }
+        let slot = self.slots.get(index)?;
+        Some((slot.name.as_deref()?, slot.value.as_ref()?))
+    }
+
+    /// Mutably access a live value by a previously resolved slot.
+    #[inline]
+    pub fn get_slot_mut(&mut self, handle: u64) -> Option<&mut T> {
+        let (layout_id, index) = decode_port_slot(handle)?;
+        if layout_id != self.layout_id {
+            return None;
+        }
+        let slot = self.slots.get_mut(index)?;
+        slot.value.as_mut()
+    }
+
+    /// Remove a declared name and retire its slot without reusing its index.
+    pub fn remove(&mut self, name: &str) -> Option<T> {
+        let index = self.by_name.remove(name)?;
+        let slot = self.slots.get_mut(index)?;
+        let removed_name = slot.name.take()?;
+        let value = slot.value.take()?;
+        self.names.remove(&removed_name);
+        self.retired_slots += 1;
+        self.topology_version = self.topology_version.wrapping_add(1);
+        if self.retired_slots >= 64 && self.retired_slots > self.by_name.len() {
+            self.compact();
+        }
+        Some(value)
+    }
+
+    fn compact(&mut self) {
+        let mut slots = Vec::with_capacity(self.by_name.len());
+        let mut by_name = HashMap::with_capacity(self.by_name.len());
+        for slot in self.slots.drain(..) {
+            if let (Some(name), Some(value)) = (slot.name, slot.value) {
+                let index = slots.len();
+                by_name.insert(Arc::clone(&name), index);
+                slots.push(PortMapSlot {
+                    name: Some(name),
+                    value: Some(value),
+                });
+            }
+        }
+        self.slots = slots;
+        self.by_name = by_name;
+        self.retired_slots = 0;
+        self.layout_id = next_port_map_layout_id();
+    }
+
+    /// Remove every value and release retired storage. Repeated empty clears
+    /// are no-ops.
+    pub fn clear(&mut self) {
+        if self.by_name.is_empty() && self.slots.is_empty() {
+            return;
+        }
+        self.by_name.clear();
+        self.names = PortNameSetKey::default();
+        self.slots.clear();
+        self.retired_slots = 0;
+        self.topology_version = self.topology_version.wrapping_add(1);
+        self.layout_id = next_port_map_layout_id();
+    }
+
+    /// Number of declared names.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.by_name.len()
+    }
+
+    /// Whether the map has no declared names.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.by_name.is_empty()
+    }
+
+    /// Return the incremental topology identity for this map, including
+    /// structural edits that restore the same final set of names.
+    #[inline]
+    pub fn topology_key(&self) -> u64 {
+        self.names.finish()
+            ^ self.topology_version.rotate_left(23)
+            ^ u64::from(self.layout_id).rotate_left(47)
+    }
+
+    /// Iterate live names.
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.slots.iter().filter_map(|slot| slot.name.as_deref())
+    }
+
+    /// Iterate live values.
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.slots.iter().filter_map(|slot| slot.value.as_ref())
+    }
+
+    /// Iterate live name/value pairs.
+    pub fn iter(&self) -> PortMapIter<'_, T> {
+        PortMapIter {
+            inner: self.slots.iter().filter_map(port_map_slot_ref::<T>),
+        }
+    }
+
+    /// Mutably iterate live values.
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.slots.iter_mut().filter_map(|slot| slot.value.as_mut())
+    }
+
+    /// Mutably iterate live name/value pairs.
+    pub fn iter_mut(&mut self) -> PortMapIterMut<'_, T> {
+        PortMapIterMut {
+            inner: self.slots.iter_mut().filter_map(port_map_slot_mut::<T>),
+        }
+    }
+}
+
+const PORT_SLOT_INDEX_MASK: u64 = u32::MAX as u64;
+
+#[inline]
+fn encode_port_slot(layout_id: u32, index: usize) -> Option<u64> {
+    if layout_id == 0 {
+        return None;
+    }
+    let index = u32::try_from(index).ok()?;
+    Some((u64::from(layout_id) << 32) | u64::from(index))
+}
+
+#[inline]
+fn decode_port_slot(handle: u64) -> Option<(u32, usize)> {
+    let layout_id = (handle >> 32) as u32;
+    (layout_id != 0).then_some((layout_id, (handle & PORT_SLOT_INDEX_MASK) as usize))
+}
+
+fn port_map_slot_ref<T: Copy>(slot: &PortMapSlot<T>) -> Option<(&str, &T)> {
+    Some((slot.name.as_deref()?, slot.value.as_ref()?))
+}
+
+fn port_map_slot_mut<T: Copy>(slot: &mut PortMapSlot<T>) -> Option<(&str, &mut T)> {
+    Some((slot.name.as_deref()?, slot.value.as_mut()?))
+}
+
+type PortMapIterInner<'a, T> = std::iter::FilterMap<
+    std::slice::Iter<'a, PortMapSlot<T>>,
+    fn(&'a PortMapSlot<T>) -> Option<(&'a str, &'a T)>,
+>;
+type PortMapIterMutInner<'a, T> = std::iter::FilterMap<
+    std::slice::IterMut<'a, PortMapSlot<T>>,
+    fn(&'a mut PortMapSlot<T>) -> Option<(&'a str, &'a mut T)>,
+>;
+
+/// Iterator over the public entries of a [`PortMap`].
+#[doc(hidden)]
+pub struct PortMapIter<'a, T: Copy> {
+    inner: PortMapIterInner<'a, T>,
+}
+
+impl<'a, T: Copy> Iterator for PortMapIter<'a, T> {
+    type Item = (&'a str, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+/// Mutable iterator over the public entries of a [`PortMap`].
+#[doc(hidden)]
+pub struct PortMapIterMut<'a, T: Copy> {
+    inner: PortMapIterMutInner<'a, T>,
+}
+
+impl<'a, T: Copy> Iterator for PortMapIterMut<'a, T> {
+    type Item = (&'a str, &'a mut T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<'a, T: Copy> IntoIterator for &'a PortMap<T> {
+    type Item = (&'a str, &'a T);
+    type IntoIter = PortMapIter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T: Copy> IntoIterator for &'a mut PortMap<T> {
+    type Item = (&'a str, &'a mut T);
+    type IntoIter = PortMapIterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl<T: Copy> From<HashMap<String, T>> for PortMap<T> {
+    fn from(values: HashMap<String, T>) -> Self {
+        values.into_iter().collect()
+    }
+}
+
+impl<T: Copy> FromIterator<(String, T)> for PortMap<T> {
+    fn from_iter<I: IntoIterator<Item = (String, T)>>(iter: I) -> Self {
+        let mut map = Self::default();
+        map.extend(iter);
+        map
+    }
+}
+
+impl<T: Copy> Extend<(String, T)> for PortMap<T> {
+    fn extend<I: IntoIterator<Item = (String, T)>>(&mut self, iter: I) {
+        for (name, value) in iter {
+            self.insert(name, value);
+        }
+    }
+}
+
+impl<T: Copy> Index<&str> for PortMap<T> {
+    type Output = T;
+
+    fn index(&self, name: &str) -> &Self::Output {
+        self.get(name).expect("no entry found for key")
+    }
+}
+
+impl<T: Copy> IndexMut<&str> for PortMap<T> {
+    fn index_mut(&mut self, name: &str) -> &mut Self::Output {
+        self.get_mut(name).expect("no entry found for key")
+    }
+}
+
+/// Scalar specialization used by Modelica and command-value surfaces.
+#[derive(Clone, Debug, Reflect)]
+#[reflect(opaque)]
+pub struct ScalarPortMap(PortMap<f64>);
+
+impl Default for ScalarPortMap {
+    fn default() -> Self {
+        Self(PortMap::default())
+    }
+}
+
+impl ScalarPortMap {
+    /// Set a scalar by borrowed name and report whether its sample or topology
+    /// changed. Existing names perform no allocation.
+    #[inline]
+    pub fn set(&mut self, name: &str, value: f64) -> bool {
+        if let Some(current) = self.get_mut(name) {
+            if current.to_bits() == value.to_bits() {
+                return false;
+            }
+            *current = value;
+            return true;
+        }
+        self.insert(name.to_owned(), value);
+        true
+    }
+
+    /// Update a declared scalar without adding a missing name.
+    #[inline]
+    pub fn set_existing(&mut self, name: &str, value: f64) -> Option<bool> {
+        let current = self.get_mut(name)?;
+        let changed = current.to_bits() != value.to_bits();
+        if changed {
+            *current = value;
+        }
+        Some(changed)
+    }
+
+    /// Update a scalar by a previously resolved slot without adding a missing
+    /// name, returning `None` when the slot has been retired.
+    #[inline]
+    pub fn set_slot_existing(&mut self, slot: u64, value: f64) -> Option<bool> {
+        let current = self.get_slot_mut(slot)?;
+        let changed = current.to_bits() != value.to_bits();
+        if changed {
+            *current = value;
+        }
+        Some(changed)
+    }
+}
+
+impl Deref for ScalarPortMap {
+    type Target = PortMap<f64>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> IntoIterator for &'a ScalarPortMap {
+    type Item = (&'a str, &'a f64);
+    type IntoIter = PortMapIter<'a, f64>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut ScalarPortMap {
+    type Item = (&'a str, &'a mut f64);
+    type IntoIter = PortMapIterMut<'a, f64>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+impl std::ops::DerefMut for ScalarPortMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<HashMap<String, f64>> for ScalarPortMap {
+    fn from(values: HashMap<String, f64>) -> Self {
+        Self(values.into())
+    }
+}
+
+impl FromIterator<(String, f64)> for ScalarPortMap {
+    fn from_iter<I: IntoIterator<Item = (String, f64)>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl Extend<(String, f64)> for ScalarPortMap {
+    fn extend<I: IntoIterator<Item = (String, f64)>>(&mut self, iter: I) {
+        self.0.extend(iter);
+    }
+}
+
+impl Index<&str> for ScalarPortMap {
+    type Output = f64;
+
+    fn index(&self, name: &str) -> &Self::Output {
+        self.get(name).expect("no entry found for key")
+    }
+}
+
+impl IndexMut<&str> for ScalarPortMap {
+    fn index_mut(&mut self, name: &str) -> &mut Self::Output {
+        self.get_mut(name).expect("no entry found for key")
+    }
+}
 
 /// Durable invalidation generation for the shared runtime port surface.
 ///
@@ -294,10 +849,10 @@ pub struct PortRef {
 /// Append every `(name, value)` in `map` as a [`PortRef`] of direction `dir`.
 /// Helper for map-backed backends (e.g. Modelica `inputs`/`outputs`).
 #[inline]
-pub fn push_map(out: &mut Vec<PortRef>, map: &HashMap<String, f64>, dir: PortDirection) {
+pub fn push_map(out: &mut Vec<PortRef>, map: &PortMap<f64>, dir: PortDirection) {
     for (name, value) in map {
         out.push(PortRef {
-            name: name.clone(),
+            name: name.to_string(),
             direction: dir,
             value: *value,
         });
@@ -309,19 +864,16 @@ pub fn push_map(out: &mut Vec<PortRef>, map: &HashMap<String, f64>, dir: PortDir
 /// Values are deliberately excluded: a topology key changes only when port
 /// identity changes, so live samples can be refreshed without rebuilding the
 /// metadata rows.
-pub fn port_name_set_key<'a, I>(names: I) -> u64
+pub fn port_name_set_key<'a, I, N>(names: I) -> u64
 where
-    I: IntoIterator<Item = &'a String>,
+    I: IntoIterator<Item = &'a N>,
+    N: AsRef<str> + ?Sized + 'a,
 {
-    let mut key = 0xcbf29ce484222325u64;
-    let mut count = 0u64;
+    let mut key = PortNameSetKey::default();
     for name in names {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        name.hash(&mut hasher);
-        key = key.wrapping_add(hasher.finish().rotate_left(17));
-        count = count.wrapping_add(1);
+        key.insert(name.as_ref());
     }
-    key ^ count.rotate_left(41)
+    key.finish()
 }
 
 /// Return an order-independent cache key for a named port-to-entity map.
@@ -329,15 +881,16 @@ where
 /// Entity identity is part of a projected surface's structure: replacing the
 /// endpoint behind an unchanged name must invalidate consumers just as adding
 /// or removing the name does. Values are not part of this key.
-pub fn port_entity_map_key<'a, I>(entries: I) -> u64
+pub fn port_entity_map_key<'a, I, N>(entries: I) -> u64
 where
-    I: IntoIterator<Item = (&'a String, &'a Entity)>,
+    I: IntoIterator<Item = (&'a N, &'a Entity)>,
+    N: AsRef<str> + ?Sized + 'a,
 {
     let mut key = 0xcbf29ce484222325u64;
     let mut count = 0u64;
     for (name, entity) in entries {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        name.hash(&mut hasher);
+        name.as_ref().hash(&mut hasher);
         entity.hash(&mut hasher);
         key = key.wrapping_add(hasher.finish().rotate_left(17));
         count = count.wrapping_add(1);
@@ -385,14 +938,13 @@ pub struct PortBackend {
 
     // ── Optional resolve→slot fast path (the FMI valueReference model) ──────────
     //
-    // A backend behind a multi-group presence scan (avian: up to 6 `world.get`
-    // gating checks + a name scan per read) can expose these so a hot consumer
-    // (the propagation master) resolves an endpoint to a process-local `slot`
-    // ONCE (when wiring changes) and then exchanges by slot every tick — one
-    // component read, no cross-backend fold, no group scan. `None` ⇒ no fast
-    // path; the resolver falls back to the name-based ops above (correct for a
-    // map-backed backend registered first, whose name read already costs one
-    // `get`). See [`PortRegistry::resolve_output`].
+    // A backend with dynamic names or a multi-owner presence scan can expose
+    // these so a hot consumer (the propagation master) resolves an endpoint to
+    // a process-local `slot` ONCE and then exchanges by slot every tick — one
+    // owner access, no repeated name lookup. Input write ownership and readable
+    // input-side sources are resolved separately. `None` means the
+    // precedence-winning owner intentionally uses the named operation. See
+    // [`PortRegistry::resolve_output`].
     /// Resolve an **output** name to a backend-private `slot` (opaque `u64`),
     /// or `None` if this backend doesn't own it. Encodes causality: only an
     /// `Out`/`InOut` port resolves here.
@@ -401,22 +953,27 @@ pub struct PortBackend {
     /// `In`/`InOut` port resolves here.
     pub resolve_input: Option<fn(&World, Entity, &str) -> Option<u64>>,
     /// Read the value at a previously-resolved `slot`. `None` if the slot no
-    /// longer backs a live value (component removed) → the caller re-resolves or
-    /// skips, exactly as an absent name read would.
+    /// longer backs a live value. The shared port-topology revision requires
+    /// compiled consumers to rebuild locators at their next deterministic
+    /// boundary; a stale locator is not retried as a named read.
     pub read_slot: Option<fn(&World, Entity, u64) -> Option<f64>>,
+    /// Read the input-side value at a previously-resolved `slot`. Kept separate
+    /// from `read_slot` because one name may expose distinct input and output
+    /// values on the same entity.
+    pub read_input_slot: Option<fn(&World, Entity, u64) -> Option<f64>>,
     /// Write `value` to a previously-resolved input `slot`; `false` if it no
     /// longer backs a live input.
     pub write_slot: Option<fn(&mut World, Entity, u64, f64) -> bool>,
 }
 
 /// A process-local resolved locator for one port on one backend — the FMI
-/// *valueReference* analogue.
+/// *valueReference* analogue, including the causality side selected at resolve.
 ///
 /// `slot` is an opaque `u64` the **owning backend** encodes and decodes; it is
 /// meaningful only within this process/run and MUST NEVER be serialized or sent
 /// on the wire (resolve fresh on every peer — slots are process-local, like FMI
-/// value references). Produced by [`PortRegistry::resolve_output`] /
-/// [`resolve_input`](PortRegistry::resolve_input), consumed by
+/// value references). Produced by [`PortRegistry::resolve_output`],
+/// [`PortRegistry::resolve_input`], or [`PortRegistry::resolve_input_read`], consumed by
 /// [`read_resolved`](PortRegistry::read_resolved) /
 /// [`write_resolved`](PortRegistry::write_resolved): the resolver folds over
 /// backends ONCE, then the hot loop exchanges by slot with no re-scan.
@@ -426,6 +983,14 @@ pub struct ResolvedPort {
     backend: usize,
     /// Backend-private opaque locator.
     slot: u64,
+    /// Causality side used to resolve this locator.
+    side: ResolvedPortSide,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResolvedPortSide {
+    Input,
+    Output,
 }
 
 /// The single registry of port-bearing backends — **the** read/write/list surface
@@ -468,7 +1033,7 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
     topology_key: |world, entity| {
         world
             .get::<InputPorts>(entity)
-            .map(|inputs| port_name_set_key(inputs.values.keys()))
+            .map(|inputs| inputs.values.topology_key())
             .unwrap_or(0)
     },
     list: |world, entity, out| {
@@ -502,16 +1067,46 @@ const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
         let Some(mut inputs) = world.get_mut::<InputPorts>(entity) else {
             return false;
         };
-        let Some(slot) = inputs.values.get_mut(name) else {
+        let changed = inputs
+            .bypass_change_detection()
+            .values
+            .set_existing(name, value);
+        let Some(changed) = changed else {
             return false;
         };
-        *slot = value;
+        if changed {
+            inputs.set_changed();
+        }
         true
     },
     resolve_output: None,
-    resolve_input: None,
+    resolve_input: Some(|world, entity, name| {
+        world.get::<InputPorts>(entity)?.values.resolve_slot(name)
+    }),
     read_slot: None,
-    write_slot: None,
+    read_input_slot: Some(|world, entity, slot| {
+        world
+            .get::<InputPorts>(entity)?
+            .values
+            .get_slot(slot)
+            .copied()
+    }),
+    write_slot: Some(|world, entity, slot, value| {
+        let Some(mut inputs) = world.get_mut::<InputPorts>(entity) else {
+            return false;
+        };
+        let changed = inputs
+            .bypass_change_detection()
+            .values
+            .set_slot_existing(slot, value);
+        let Some(changed) = changed else {
+            return false;
+        };
+        if changed {
+            inputs.set_changed();
+        }
+        true
+    }),
 };
 
 impl PortRegistry {
@@ -616,26 +1211,32 @@ impl PortRegistry {
             let mut ports = Vec::new();
             (backend.list)(world, entity, &mut ports);
             out.extend(ports.into_iter().map(|port| {
+                let (slot, reader) = match port.direction {
+                    PortDirection::In => backend
+                        .resolve_input
+                        .and_then(|resolve| resolve(world, entity, &port.name))
+                        .zip(backend.read_input_slot),
+                    PortDirection::Out => backend
+                        .resolve_output
+                        .and_then(|resolve| resolve(world, entity, &port.name))
+                        .zip(backend.read_slot),
+                    PortDirection::InOut => backend
+                        .resolve_output
+                        .and_then(|resolve| resolve(world, entity, &port.name))
+                        .zip(backend.read_slot)
+                        .or_else(|| {
+                            backend
+                                .resolve_input
+                                .and_then(|resolve| resolve(world, entity, &port.name))
+                                .zip(backend.read_input_slot)
+                        }),
+                }
+                .map_or((None, None), |(slot, reader)| (Some(slot), Some(reader)));
                 (
                     PortHandle {
                         backend: backend_index,
-                        slot: match port.direction {
-                            PortDirection::In => backend
-                                .resolve_input
-                                .and_then(|resolve| resolve(world, entity, &port.name)),
-                            PortDirection::Out => backend
-                                .resolve_output
-                                .and_then(|resolve| resolve(world, entity, &port.name)),
-                            PortDirection::InOut => backend
-                                .resolve_output
-                                .and_then(|resolve| resolve(world, entity, &port.name))
-                                .or_else(|| {
-                                    backend
-                                        .resolve_input
-                                        .and_then(|resolve| resolve(world, entity, &port.name))
-                                }),
-                        },
-                        reader: backend.read_slot,
+                        slot,
+                        reader,
                     },
                     PortInfo {
                         metadata: backend
@@ -825,14 +1426,18 @@ impl PortRegistry {
     /// map-backed and authored-output participants.
     pub fn has_output_port(&self, world: &World, entity: Entity, name: &str) -> bool {
         self.backends.iter().any(|backend| {
+            if backend
+                .resolve_output
+                .is_some_and(|resolve| resolve(world, entity, name).is_some())
+            {
+                return true;
+            }
             let mut ports = Vec::new();
             (backend.list)(world, entity, &mut ports);
             ports.iter().any(|port| {
                 port.name == name
                     && matches!(port.direction, PortDirection::Out | PortDirection::InOut)
-            }) || backend
-                .resolve_output
-                .is_some_and(|resolve| resolve(world, entity, name).is_some())
+            })
         })
     }
 
@@ -840,14 +1445,18 @@ impl PortRegistry {
     /// its current value.
     pub fn has_input_port(&self, world: &World, entity: Entity, name: &str) -> bool {
         self.backends.iter().any(|backend| {
+            if backend
+                .resolve_input
+                .is_some_and(|resolve| resolve(world, entity, name).is_some())
+            {
+                return true;
+            }
             let mut ports = Vec::new();
             (backend.list)(world, entity, &mut ports);
             ports.iter().any(|port| {
                 port.name == name
                     && matches!(port.direction, PortDirection::In | PortDirection::InOut)
-            }) || backend
-                .resolve_input
-                .is_some_and(|resolve| resolve(world, entity, name).is_some())
+            })
         })
     }
 
@@ -868,16 +1477,14 @@ impl PortRegistry {
 
     /// Resolve an **output** endpoint `(entity, name)` to a [`ResolvedPort`] — a
     /// process-local handle a hot consumer caches once and reads by slot every
-    /// tick. Returns `None` when the precedence-winning owner has no fast path
-    /// (the caller then falls back to [`read_output_port`](Self::read_output_port),
-    /// which honours the same precedence).
+    /// tick. Returns `None` when the precedence-winning owner has no fast path;
+    /// that owner continues to use [`read_output_port`](Self::read_output_port)
+    /// as its canonical access path.
     ///
     /// **Precedence-correct:** walks backends in registration order and stops at
-    /// the FIRST that owns `name` — so a lower-precedence fast-path backend can
-    /// never shadow a higher-precedence name-only owner (e.g. an avian output
-    /// can't win over a `SimComponent` output of the same name on one entity).
-    /// The first owner is used whether via slot (it has a fast path) or via the
-    /// name read (it doesn't → `None` here).
+    /// the FIRST that owns `name`. A resolver can establish ownership before a
+    /// value is sampled; otherwise a readable name-only backend stops lookup so
+    /// a lower-precedence slot backend cannot shadow it.
     pub fn resolve_output(
         &self,
         world: &World,
@@ -885,10 +1492,17 @@ impl PortRegistry {
         name: &str,
     ) -> Option<ResolvedPort> {
         for (i, b) in self.backends.iter().enumerate() {
-            // A readable output reveals ownership by name (outputs are readable).
+            if let Some(resolve) = b.resolve_output {
+                if let Some(slot) = resolve(world, entity, name) {
+                    return Some(ResolvedPort {
+                        backend: i,
+                        slot,
+                        side: ResolvedPortSide::Output,
+                    });
+                }
+            }
             if (b.read_output)(world, entity, name).is_some() {
-                let slot = (b.resolve_output?)(world, entity, name)?;
-                return Some(ResolvedPort { backend: i, slot });
+                return None;
             }
         }
         None
@@ -901,31 +1515,66 @@ impl PortRegistry {
     /// readable-input probe can't detect every owner. We therefore stop at the
     /// first backend that owns the input *either* readably *or* via its own
     /// `resolve_input` (the authority for write ownership). Precedence holds for
-    /// our registration order — the only readable-input backends (`SimComponent`,
-    /// FSW) precede the write-only fast-path one (avian) — so a write-only port's
-    /// name can't shadow an earlier readable input.
+    /// our registration order — readable map-backed inputs precede the
+    /// write-only fast-path Avian inputs — so a write-only port's name can't
+    /// shadow an earlier readable input.
     pub fn resolve_input(&self, world: &World, entity: Entity, name: &str) -> Option<ResolvedPort> {
         for (i, b) in self.backends.iter().enumerate() {
-            if (b.read_input)(world, entity, name).is_some() {
-                // Earlier readable owner: use its slot if it has a fast path, else
-                // `None` → the caller's name write hits it first (precedence held).
-                let slot = (b.resolve_input?)(world, entity, name)?;
-                return Some(ResolvedPort { backend: i, slot });
-            }
             if let Some(resolve) = b.resolve_input {
                 if let Some(slot) = resolve(world, entity, name) {
-                    return Some(ResolvedPort { backend: i, slot });
+                    return Some(ResolvedPort {
+                        backend: i,
+                        slot,
+                        side: ResolvedPortSide::Input,
+                    });
                 }
+            }
+            if (b.read_input)(world, entity, name).is_some() {
+                // Earlier name-only readable owner: the caller's named write
+                // reaches it first, so a lower backend must not claim the name.
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Resolve a readable **input-side** source to a slot. This is distinct
+    /// from [`resolve_input`](Self::resolve_input), which resolves write
+    /// ownership and may legitimately select a write-only port. Resolution
+    /// follows the same first-readable-owner precedence as
+    /// [`read_input_port`](Self::read_input_port).
+    pub fn resolve_input_read(
+        &self,
+        world: &World,
+        entity: Entity,
+        name: &str,
+    ) -> Option<ResolvedPort> {
+        for (i, backend) in self.backends.iter().enumerate() {
+            if (backend.read_input)(world, entity, name).is_some() {
+                let slot = (backend.resolve_input?)(world, entity, name)?;
+                if backend.read_input_slot.is_none() {
+                    return None;
+                }
+                return Some(ResolvedPort {
+                    backend: i,
+                    slot,
+                    side: ResolvedPortSide::Input,
+                });
             }
         }
         None
     }
 
     /// Read the value at a resolved port. `None` if the slot no longer backs a
-    /// live value (e.g. its component was removed) — the caller skips or
-    /// re-resolves, exactly as an absent name read would contribute nothing.
+    /// live value. A compiled consumer rebuilds handles from the shared topology
+    /// revision; this operation never retries through name resolution.
     pub fn read_resolved(&self, world: &World, entity: Entity, r: ResolvedPort) -> Option<f64> {
-        (self.backends[r.backend].read_slot?)(world, entity, r.slot)
+        let backend = self.backends.get(r.backend)?;
+        let read = match r.side {
+            ResolvedPortSide::Input => backend.read_input_slot?,
+            ResolvedPortSide::Output => backend.read_slot?,
+        };
+        read(world, entity, r.slot)
     }
 
     /// Write to a resolved input port. `false` if the slot no longer backs a live
@@ -937,7 +1586,14 @@ impl PortRegistry {
         r: ResolvedPort,
         value: f64,
     ) -> bool {
-        match self.backends[r.backend].write_slot {
+        if r.side != ResolvedPortSide::Input {
+            return false;
+        }
+        match self
+            .backends
+            .get(r.backend)
+            .and_then(|backend| backend.write_slot)
+        {
             Some(write) => write(world, entity, r.slot, value),
             None => false,
         }
@@ -947,7 +1603,8 @@ impl PortRegistry {
 #[cfg(test)]
 mod tests {
     use super::{
-        PortBackend, PortCollisionDirection, PortDirection, PortMetadata, PortRef, PortRegistry,
+        PortBackend, PortCollisionDirection, PortDirection, PortMetadata, PortNameSetKey, PortRef,
+        PortRegistry, ScalarPortMap, port_name_set_key,
     };
     use crate::InputPorts;
     use bevy::prelude::*;
@@ -963,6 +1620,105 @@ mod tests {
             direction: PortDirection::In,
             value: 0.0,
         });
+    }
+
+    #[test]
+    fn port_name_set_key_scalar_map_tracks_name_shape_separately_from_values() {
+        let mut ports = ScalarPortMap::default();
+        let empty_key = ports.topology_key();
+        let empty_names_key = port_name_set_key(std::iter::empty::<&String>());
+
+        assert_eq!(ports.insert("thrust".into(), 1.0), None);
+        let thrust_key = ports.topology_key();
+        assert_ne!(thrust_key, empty_key);
+        let thrust_names_key = port_name_set_key(ports.keys());
+        assert_ne!(thrust_names_key, empty_names_key);
+
+        assert_eq!(ports.insert("thrust".into(), 2.0), Some(1.0));
+        assert_eq!(ports.topology_key(), thrust_key);
+        *ports.get_mut("thrust").unwrap() = 3.0;
+        assert_eq!(ports.topology_key(), thrust_key);
+        assert!(!ports.set("thrust", 3.0));
+        assert!(ports.set("thrust", 4.0));
+        assert_eq!(ports.set_existing("thrust", 4.0), Some(false));
+        assert_eq!(ports.set_existing("thrust", 5.0), Some(true));
+        assert_eq!(ports.set_existing("missing", 5.0), None);
+        assert_eq!(ports.topology_key(), thrust_key);
+
+        assert!(ports.set("torque", 4.0));
+        let both_key = ports.topology_key();
+        assert_ne!(both_key, thrust_key);
+        assert_eq!(ports.remove("torque"), Some(4.0));
+        assert_eq!(port_name_set_key(ports.keys()), thrust_names_key);
+        assert_ne!(ports.topology_key(), thrust_key);
+
+        ports.clear();
+        assert_ne!(ports.topology_key(), empty_key);
+        assert_eq!(port_name_set_key(ports.keys()), empty_names_key);
+    }
+
+    #[test]
+    fn resolved_scalar_slots_survive_unrelated_edits_and_reject_retired_entries() {
+        let mut ports = ScalarPortMap::default();
+        ports.insert("thrust".into(), 1.0);
+        let initial = ports.resolve_slot("thrust").unwrap();
+
+        *ports.get_slot_mut(initial).unwrap() = 2.0;
+        assert_eq!(ports.get("thrust"), Some(&2.0));
+        assert_eq!(ports.get_slot(initial), Some(&2.0));
+
+        ports.insert("torque".into(), 3.0);
+        assert_eq!(
+            ports.get_slot(initial),
+            Some(&2.0),
+            "other slots stay stable"
+        );
+        let after_insert = ports.resolve_slot("thrust").unwrap();
+        assert_eq!(ports.get_slot(after_insert), Some(&2.0));
+
+        let clone = ports.clone();
+        assert_eq!(
+            clone.get_slot(after_insert),
+            None,
+            "clones get distinct layouts"
+        );
+
+        assert_eq!(ports.remove("thrust"), Some(2.0));
+        assert_eq!(ports.get_slot(after_insert), None);
+        ports.insert("replacement".into(), 4.0);
+        assert_eq!(
+            ports.get_slot(after_insert),
+            None,
+            "reused slots cannot alias"
+        );
+
+        let retained = ports.resolve_slot("torque").unwrap();
+        for index in 0..64 {
+            let name = format!("transient_{index}");
+            ports.insert(name.clone(), index as f64);
+            ports.remove(&name);
+        }
+        assert_eq!(
+            ports.get_slot(retained),
+            None,
+            "compaction retires old layouts"
+        );
+        let compacted = ports.resolve_slot("torque").unwrap();
+        assert_eq!(ports.get_slot(compacted), Some(&3.0));
+    }
+
+    #[test]
+    fn port_name_set_key_is_order_independent_and_reversible() {
+        let mut key = PortNameSetKey::default();
+        key.insert("height");
+        key.insert("velocity");
+        let combined = key.finish();
+
+        let names = ["velocity".to_owned(), "height".to_owned()];
+        assert_eq!(combined, port_name_set_key(names.iter()));
+
+        key.remove("height");
+        assert_eq!(key.finish(), port_name_set_key(std::iter::once(&names[0])));
     }
 
     fn duplicate_inout_list(_world: &World, _entity: Entity, out: &mut Vec<PortRef>) {
@@ -1023,6 +1779,7 @@ mod tests {
         resolve_output: None,
         resolve_input: None,
         read_slot: None,
+        read_input_slot: None,
         write_slot: None,
     };
 
@@ -1037,6 +1794,7 @@ mod tests {
         resolve_output: None,
         resolve_input: None,
         read_slot: None,
+        read_input_slot: None,
         write_slot: None,
     };
 
@@ -1051,6 +1809,7 @@ mod tests {
         resolve_output: None,
         resolve_input: None,
         read_slot: None,
+        read_input_slot: None,
         write_slot: None,
     };
 
@@ -1065,6 +1824,7 @@ mod tests {
         resolve_output: None,
         resolve_input: None,
         read_slot: None,
+        read_input_slot: None,
         write_slot: None,
     };
 
@@ -1078,7 +1838,25 @@ mod tests {
             registry.read_input_port(&world, entity, "throttle"),
             Some(0.0)
         );
+        world.clear_trackers();
+        assert!(registry.write_port(&mut world, entity, "throttle", 0.0));
+        assert!(
+            !world
+                .entity(entity)
+                .get_ref::<InputPorts>()
+                .unwrap()
+                .is_changed(),
+            "writing an unchanged command must not redirty its endpoint"
+        );
         assert!(registry.write_port(&mut world, entity, "throttle", 0.75));
+        assert!(
+            world
+                .entity(entity)
+                .get_ref::<InputPorts>()
+                .unwrap()
+                .is_changed(),
+            "a changed command must still publish its new value"
+        );
         assert!(!registry.write_port(&mut world, entity, "undeclared", 1.0));
         assert_eq!(
             registry.read_input_port(&world, entity, "throttle"),
@@ -1091,6 +1869,84 @@ mod tests {
                 .iter()
                 .any(|port| port.name == "arm" && port.direction == super::PortDirection::In)
         );
+    }
+
+    #[test]
+    fn generic_input_resolved_slot_updates_samples_and_rejects_retired_entries() {
+        let mut world = World::new();
+        let entity = world.spawn(InputPorts::new(&["throttle"])).id();
+        let registry = PortRegistry::default();
+        let slot = registry.resolve_input(&world, entity, "throttle").unwrap();
+
+        world.clear_trackers();
+        assert!(registry.write_resolved(&mut world, entity, slot, 0.5));
+        assert_eq!(
+            registry.read_input_port(&world, entity, "throttle"),
+            Some(0.5)
+        );
+        assert!(
+            world
+                .entity(entity)
+                .get_ref::<InputPorts>()
+                .unwrap()
+                .is_changed()
+        );
+
+        world.clear_trackers();
+        assert!(registry.write_resolved(&mut world, entity, slot, 0.5));
+        assert!(
+            !world
+                .entity(entity)
+                .get_ref::<InputPorts>()
+                .unwrap()
+                .is_changed()
+        );
+
+        {
+            let mut inputs = world.get_mut::<InputPorts>(entity).unwrap();
+            inputs.values.remove("throttle");
+            inputs.values.insert("throttle".into(), 0.0);
+        }
+        assert!(
+            !registry.write_resolved(&mut world, entity, slot, 0.75),
+            "retired handles must not fall back to a name lookup"
+        );
+        let current = registry.resolve_input(&world, entity, "throttle").unwrap();
+        assert!(registry.write_resolved(&mut world, entity, current, 0.75));
+        assert_eq!(
+            registry.read_input_port(&world, entity, "throttle"),
+            Some(0.75)
+        );
+    }
+
+    #[test]
+    fn readable_input_sources_resolve_to_input_slots() {
+        let mut world = World::new();
+        let entity = world.spawn(InputPorts::new(&["throttle"])).id();
+        let registry = PortRegistry::default();
+        let slot = registry
+            .resolve_input_read(&world, entity, "throttle")
+            .expect("declared input has a readable slot");
+
+        assert_eq!(registry.read_resolved(&world, entity, slot), Some(0.0));
+        assert!(registry.write_resolved(&mut world, entity, slot, 0.75));
+        assert_eq!(registry.read_resolved(&world, entity, slot), Some(0.75));
+
+        {
+            let mut inputs = world.get_mut::<InputPorts>(entity).unwrap();
+            inputs.values.remove("throttle");
+            inputs.values.insert("throttle".into(), 0.25);
+        }
+        assert_eq!(
+            registry.read_resolved(&world, entity, slot),
+            None,
+            "a retired input slot is rejected without a name lookup"
+        );
+
+        let current = registry
+            .resolve_input_read(&world, entity, "throttle")
+            .expect("the current input surface resolves after its owner rebuilds");
+        assert_eq!(registry.read_resolved(&world, entity, current), Some(0.25));
     }
 
     #[test]
@@ -1122,6 +1978,162 @@ mod tests {
     }
 
     #[test]
+    fn input_inspection_handle_uses_the_input_slot_reader() {
+        #[derive(Component)]
+        struct ProbeInput(f64);
+
+        let mut world = World::new();
+        let entity = world.spawn(ProbeInput(0.5)).id();
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            list_entities: |world, out| {
+                out.extend(
+                    world
+                        .query_filtered::<Entity, With<ProbeInput>>()
+                        .iter(world),
+                );
+            },
+            topology_key: |world, entity| u64::from(world.get::<ProbeInput>(entity).is_some()),
+            list: |world, entity, out| {
+                if let Some(input) = world.get::<ProbeInput>(entity) {
+                    out.push(PortRef {
+                        name: "shared".into(),
+                        direction: PortDirection::In,
+                        value: input.0,
+                    });
+                }
+            },
+            metadata: None,
+            read_output: |_, _, _| None,
+            read_input: |world, entity, name| {
+                (name == "shared")
+                    .then(|| world.get::<ProbeInput>(entity).map(|input| input.0))
+                    .flatten()
+            },
+            write_input: |_, _, _, _| false,
+            resolve_output: None,
+            resolve_input: Some(|world, entity, name| {
+                (name == "shared" && world.get::<ProbeInput>(entity).is_some()).then_some(0)
+            }),
+            read_slot: Some(|_, _, _| Some(-1.0)),
+            read_input_slot: Some(|world, entity, slot| {
+                (slot == 0)
+                    .then(|| world.get::<ProbeInput>(entity).map(|input| input.0))
+                    .flatten()
+            }),
+            write_slot: None,
+        });
+
+        let (handle, info) = registry
+            .entity_port_infos_with_handles(&world, entity)
+            .pop()
+            .unwrap();
+        assert_eq!(info.name, "shared");
+        assert_eq!(
+            registry.read_port_for_handle(&world, handle, entity, "shared", PortDirection::In),
+            Some(0.5)
+        );
+    }
+
+    #[test]
+    fn resolved_port_presence_skips_full_surface_listing() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            list_entities: |_, _| {},
+            topology_key: |_, _| 0,
+            list: |_, _, _| panic!("resolved presence must not enumerate port rows"),
+            metadata: None,
+            read_output: |_, _, _| None,
+            read_input: |_, _, _| None,
+            write_input: |_, _, _, _| false,
+            resolve_output: Some(|_, _, name| (name == "signal").then_some(0)),
+            resolve_input: Some(|_, _, name| (name == "signal").then_some(0)),
+            read_slot: Some(|_, _, _| None),
+            read_input_slot: Some(|_, _, _| None),
+            write_slot: None,
+        });
+
+        assert!(registry.has_output_port(&world, entity, "signal"));
+        assert!(registry.has_input_port(&world, entity, "signal"));
+    }
+
+    #[test]
+    fn declared_output_resolves_before_its_first_sample_and_respects_owner_order() {
+        #[derive(Component)]
+        struct DeclaredOutput;
+
+        let mut world = World::new();
+        let entity = world.spawn(DeclaredOutput).id();
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            list_entities: |_, _| {},
+            topology_key: |_, _| 1,
+            list: |_, _, out| {
+                out.push(PortRef {
+                    name: "signal".into(),
+                    direction: PortDirection::Out,
+                    value: 0.0,
+                });
+            },
+            metadata: None,
+            read_output: |_, _, _| None,
+            read_input: |_, _, _| None,
+            write_input: |_, _, _, _| false,
+            resolve_output: Some(|world, entity, name| {
+                (name == "signal" && world.get::<DeclaredOutput>(entity).is_some()).then_some(7)
+            }),
+            resolve_input: None,
+            read_slot: Some(|world, entity, slot| {
+                (slot == 7 && world.get::<DeclaredOutput>(entity).is_some()).then_some(2.5)
+            }),
+            read_input_slot: None,
+            write_slot: None,
+        });
+
+        let resolved = registry
+            .resolve_output(&world, entity, "signal")
+            .expect("the declared source resolves before its first sample");
+        assert_eq!(registry.read_resolved(&world, entity, resolved), Some(2.5));
+
+        let mut precedence = PortRegistry::default();
+        precedence.register(PortBackend {
+            list_entities: |_, _| {},
+            topology_key: |_, _| 1,
+            list: |_, _, _| {},
+            metadata: None,
+            read_output: |_, _, name| (name == "signal").then_some(1.0),
+            read_input: |_, _, _| None,
+            write_input: |_, _, _, _| false,
+            resolve_output: None,
+            resolve_input: None,
+            read_slot: None,
+            read_input_slot: None,
+            write_slot: None,
+        });
+        precedence.register(PortBackend {
+            list_entities: |_, _| {},
+            topology_key: |_, _| 1,
+            list: |_, _, _| {},
+            metadata: None,
+            read_output: |_, _, name| (name == "signal").then_some(2.0),
+            read_input: |_, _, _| None,
+            write_input: |_, _, _, _| false,
+            resolve_output: Some(|_, _, name| (name == "signal").then_some(8)),
+            resolve_input: None,
+            read_slot: Some(|_, _, slot| (slot == 8).then_some(2.0)),
+            read_input_slot: None,
+            write_slot: None,
+        });
+        assert_eq!(
+            precedence.resolve_output(&world, entity, "signal"),
+            None,
+            "a lower-priority slot owner must not shadow the readable owner"
+        );
+    }
+
+    #[test]
     fn registry_discovers_backend_owned_entities_once() {
         let mut world = World::new();
         let first = world.spawn(InputPorts::new(&["first"])).id();
@@ -1146,6 +2158,7 @@ mod tests {
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
+            read_input_slot: None,
             write_slot: None,
         });
 

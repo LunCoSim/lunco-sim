@@ -705,7 +705,7 @@ pub fn on_set_object_property(
             let schema = shader_schema(&look.shader, &asset_server, &shaders);
             match shader_param_value(schema.as_ref(), &name, &cmd.value) {
                 Some(v) => {
-                    look.values.insert(name.clone(), v);
+                    look.set_value(name.clone(), v);
                     drop(look);
                     author_shader_parameter_to_usd(&mut commands, target, name, v);
                 }

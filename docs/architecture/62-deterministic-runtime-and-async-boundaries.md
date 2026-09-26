@@ -70,6 +70,10 @@ These CPU jobs no longer enter the frame's Bevy task queue directly. Selection,
 mesh upload, visibility, and residency changes still use the `Update`
 visualization cycle.
 
+Modelica runtime telemetry is event-gated after worker responses and on document
+metadata or telemetry-settings changes. Unchanged render frames do not rescan its
+variables; each recorded sample still carries the solver's landed model time.
+
 The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
 `EntityIndex` → `TimeSpineSet`. Lifecycle projection creates the ECS entities;
 the identity owner assigns their stable IDs; then the API registry publishes

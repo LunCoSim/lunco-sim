@@ -9,6 +9,8 @@
 
 use bevy::prelude::*;
 
+use crate::ports::{PortMap, ScalarPortMap};
+
 /// Register endpoint markers used by reflected commands and API schemas.
 ///
 /// The general engine plugin registers only engine-owned types. Hosts that
@@ -96,7 +98,7 @@ pub struct PortSurfacePending;
 pub struct InputPorts {
     /// Current value per accepted input-port name. Only seeded keys are
     /// writable; see the type docs.
-    pub values: std::collections::HashMap<String, f64>,
+    pub values: ScalarPortMap,
     /// Derived brake state, cached from `values["brake"] > 0.5` by the actuator
     /// so per-tick physics systems read a bool without a map lookup.
     pub brake_active: bool,
@@ -134,7 +136,7 @@ impl InputPorts {
     /// declared command is neutralized so lander thrust/attitude and RCS
     /// commands cannot survive a release.
     pub fn safe_stop(&mut self) {
-        for (name, value) in &mut self.values {
+        for (name, value) in self.values.iter_mut() {
             *value = if name == "brake" { 1.0 } else { 0.0 };
         }
         self.brake_active = self.values.get("brake").is_some_and(|v| *v > 0.5);
@@ -175,13 +177,15 @@ pub fn owning_input_ports<'w>(
 pub struct OutputPorts {
     /// Maps authored output names (for example, `"drive_left"`) to their
     /// [`Port`] entity.
-    pub ports: std::collections::HashMap<String, Entity>,
+    pub ports: PortMap<Entity>,
 }
 
 impl OutputPorts {
     /// Build from a prebuilt output-name → `Port` entity index.
-    pub fn new(ports: std::collections::HashMap<String, Entity>) -> Self {
-        Self { ports }
+    pub fn new(ports: impl Into<PortMap<Entity>>) -> Self {
+        Self {
+            ports: ports.into(),
+        }
     }
 
     /// The `Port` entity for output `name`, if this producer has one.
@@ -220,13 +224,15 @@ impl PortSurfacePort {
 #[derive(Component, Debug, Clone, Default)]
 pub struct PortSurface {
     /// Authored port name to its direction and runtime [`Port`] endpoint.
-    pub ports: std::collections::HashMap<String, PortSurfacePort>,
+    pub ports: PortMap<PortSurfacePort>,
 }
 
 impl PortSurface {
     /// Build a surface from the endpoints projected for one authored component.
-    pub fn new(ports: std::collections::HashMap<String, PortSurfacePort>) -> Self {
-        Self { ports }
+    pub fn new(ports: impl Into<PortMap<PortSurfacePort>>) -> Self {
+        Self {
+            ports: ports.into(),
+        }
     }
 
     /// Resolve one authored port name to its runtime endpoint.

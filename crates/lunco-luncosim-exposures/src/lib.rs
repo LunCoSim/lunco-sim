@@ -367,7 +367,7 @@ fn runtime_ui_facts(
             input_values.extend(
                 sim.inputs
                     .iter()
-                    .map(|(name, value)| (name.clone(), *value)),
+                    .map(|(name, value)| (name.to_string(), *value)),
             );
         }
     }
@@ -441,13 +441,13 @@ fn runtime_ui_facts(
             let outputs = sim
                 .outputs
                 .iter()
-                .map(|(name, value)| (name.clone(), HookValue::Float(*value)))
+                .map(|(name, value)| (name.to_string(), HookValue::Float(*value)))
                 .collect::<Vec<_>>();
             let public_outputs = sim
                 .outputs
                 .iter()
                 .filter(|(name, _)| public_names.is_some_and(|names| names.contains(*name)))
-                .map(|(name, value)| (name.clone(), HookValue::Float(*value)))
+                .map(|(name, value)| (name.to_string(), HookValue::Float(*value)))
                 .collect::<Vec<_>>();
             let (status, error) = sim_status_facts(&sim.status);
             let gid = q_gid
@@ -552,10 +552,14 @@ fn runtime_program_facts(
         .collect()
 }
 
-fn scalar_hook_map(values: &HashMap<String, f64>) -> HookValue {
+fn scalar_hook_map<'a, I, N>(values: I) -> HookValue
+where
+    I: IntoIterator<Item = (&'a N, &'a f64)>,
+    N: AsRef<str> + ?Sized + 'a,
+{
     let mut values = values
-        .iter()
-        .map(|(name, value)| (name.clone(), HookValue::Float(*value)))
+        .into_iter()
+        .map(|(name, value)| (name.as_ref().to_string(), HookValue::Float(*value)))
         .collect::<Vec<_>>();
     values.sort_by(|(a, _), (b, _)| a.cmp(b));
     HookValue::Map(values)

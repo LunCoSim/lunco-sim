@@ -24,6 +24,7 @@ bevy = { workspace = true, features = ["bevy_mesh", "bevy_image", "zstd_rust"] }
 # `bevy_pbr`), so this edge adds no wgpu, and it cannot cycle: `lunco-render`
 # depends on no lunco crate.
 lunco-render = { path = "../lunco-render" }
+lunco-port-core = { path = "../lunco-port-core" }
 
 [lints]
 workspace = true

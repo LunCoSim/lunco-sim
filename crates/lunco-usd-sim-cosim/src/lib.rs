@@ -1195,8 +1195,8 @@ fn process_usd_cosim_prim_read(
             lunco_core_session::NotPredictable,
             SimComponent {
                 model_name,
-                inputs,
-                outputs,
+                inputs: inputs.into(),
+                outputs: outputs.into(),
                 status: SimStatus::Error(reason.clone()),
                 ..default()
             },
@@ -1249,8 +1249,8 @@ fn process_usd_cosim_prim_read(
                 lunco_core_session::NotPredictable,
                 SimComponent {
                     model_name,
-                    inputs,
-                    outputs,
+                    inputs: inputs.into(),
+                    outputs: outputs.into(),
                     status: SimStatus::Error(reason.clone()),
                     ..default()
                 },
@@ -1295,8 +1295,8 @@ fn process_usd_cosim_prim_read(
                 lunco_core_session::NotPredictable,
                 SimComponent {
                     model_name: format!("Python:{asset_path}"),
-                    inputs,
-                    outputs,
+                    inputs: inputs.into(),
+                    outputs: outputs.into(),
                     status: SimStatus::Error(reason.clone()),
                     ..default()
                 },
@@ -1395,8 +1395,8 @@ fn process_usd_cosim_prim_read(
     commands.entity(entity).try_insert(SimComponent {
         model_name,
         parameters: Default::default(),
-        inputs,
-        outputs,
+        inputs: inputs.into(),
+        outputs: outputs.into(),
         status: SimStatus::Compiling,
         is_stepping: false,
     });
@@ -1666,8 +1666,8 @@ pub(crate) fn dispatch_loaded_modelica_sources(
         // DISPATCH FIRST, then stub. NOT `let _ = send(..)`: a closed worker
         // channel means the compile is never attempted, and a `ModelicaModel`
         // with no `last_error` and no `variables` projects `SimStatus::Compiling`
-        // *every tick* through `sync_modelica_outputs`/`modelica_status` — a
-        // state nothing can move it out of, so the model silently never steps.
+        // through `sync_modelica_outputs`/`modelica_status` — a state nothing
+        // can move it out of, so the model silently never steps.
         // The failure therefore has to live on the MODEL (`last_error`), not on
         // the component, or the next tick overwrites it. Closed-channel
         // detection is `send(..).is_err()`, the same test
@@ -1758,7 +1758,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
             });
 
         component.parameters = parameters.clone();
-        component.inputs = inputs.clone();
+        component.inputs = inputs.clone().into();
         commands.entity(entity).try_insert(ModelicaModel {
             model_name: model_name.clone(),
             source_uri: pending.asset_path.clone(),
@@ -1872,8 +1872,10 @@ pub fn dispatch_loaded_python_sources(
         let (doc_inputs, doc_outputs) = sims
             .get(entity)
             .map(|sim| {
-                let mut inputs: Vec<String> = sim.inputs.keys().cloned().collect();
-                let mut outputs: Vec<String> = sim.outputs.keys().cloned().collect();
+                let mut inputs: Vec<String> =
+                    sim.inputs.keys().map(|name| name.to_string()).collect();
+                let mut outputs: Vec<String> =
+                    sim.outputs.keys().map(|name| name.to_string()).collect();
                 inputs.sort();
                 outputs.sort();
                 (inputs, outputs)
@@ -1980,10 +1982,10 @@ pub(crate) fn wrap_modelica_into_simcomponent(
         entity_commands.try_insert(SimComponent {
             model_name: model.model_name.clone(),
             parameters: model.parameters.clone(),
-            inputs: model.inputs.clone(),
+            inputs: model.inputs.clone().into(),
             // Outputs are the SOLUTION — empty until the worker answers.
             // `sync_modelica_outputs` fills them and flips the status.
-            outputs: model.variables.clone(),
+            outputs: model.variables.clone().into(),
             status: sync::modelica_status(model),
             is_stepping: model.is_stepping,
         });
@@ -2186,6 +2188,7 @@ fn tag_cosim_opaque(
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
 impl Plugin for UsdSimCosimPlugin {
     fn build(&self, app: &mut App) {
+        lunco_usd_bevy_core::program::install_modelica_network_membership_cache(app);
         use lunco_cosim_core::schedule::{
             CosimApplySet as ApplyForcesCosimSet, CosimSet as PropagateCosimSet,
         };
@@ -3314,17 +3317,29 @@ mod tests {
             ..Default::default()
         };
         model.variables.insert("force_y".into(), 4.0);
-        let mut component = SimComponent {
+        let component = SimComponent {
             status: SimStatus::Running,
             ..Default::default()
         };
-        component.outputs.insert("force_y".into(), 4.0);
         let entity = world.spawn((model, component, UsdSourcedCosim)).id();
+
+        world
+            .run_system_cached(sync::sync_modelica_outputs)
+            .expect("initial output snapshot sync runs");
+        assert_eq!(
+            world
+                .entity(entity)
+                .get::<SimComponent>()
+                .unwrap()
+                .outputs
+                .get("force_y"),
+            Some(&4.0)
+        );
 
         world.clear_trackers();
         world
             .run_system_cached(sync::sync_modelica_outputs)
-            .expect("output sync system runs");
+            .expect("stable output sync system runs");
         assert!(
             !world
                 .entity(entity)
@@ -3340,10 +3355,9 @@ mod tests {
             .expect("model remains present")
             .variables
             .insert("force_y".into(), 5.0);
-        world.clear_trackers();
         world
             .run_system_cached(sync::sync_modelica_outputs)
-            .expect("output sync system runs");
+            .expect("changed output snapshot sync runs");
         assert!(
             world
                 .entity(entity)
@@ -3351,6 +3365,15 @@ mod tests {
                 .expect("shared component remains present")
                 .is_changed(),
             "a changed output sample must still publish a change"
+        );
+        assert_eq!(
+            world
+                .entity(entity)
+                .get::<SimComponent>()
+                .unwrap()
+                .outputs
+                .get("force_y"),
+            Some(&5.0)
         );
     }
 

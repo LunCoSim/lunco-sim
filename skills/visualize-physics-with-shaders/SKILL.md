@@ -32,6 +32,12 @@ it through `PortRegistry`, and `lunco-render-bevy`'s `SHADER_PARAM_BACKEND`
 receives it into `ShaderLook::live`, which `rebind_changed_shader_look` drains to
 the GPU. Same graph as a thruster force or a battery load.
 
+Connected names are seeded as empty slots in `ShaderLook::live()`. The compiled
+wire resolves the slot at a topology boundary and writes by handle thereafter;
+the first sample does not change the slot layout. Use `set_value` for authored
+parameters and `set_live` for engine-owned updates so topology identity changes
+only with the authored parameter shape.
+
 ## Recipe
 
 **1. Declare the parameter in the WGSL.** The engine reflects the `Material`
@@ -195,8 +201,8 @@ deferral with a known migration path, not the absence of a standard.
   filled by Rust every frame (`sun_vis`, `albedo`, `sun_dir_world`,
   `weight_rough`). A wire pointed at one of those loses the race every frame,
   silently. Pick a name the engine does not own.
-- **Driven parameters are read-only in the inspector.** Anything present in
-  `ShaderLook::live` is engine-owned and its control is disabled — editing it
+- **Driven parameters are read-only in the inspector.** An active override in
+  `ShaderLook::live()` is engine-owned and its control is disabled — editing it
   would be a lie, since the next tick overwrites whatever was typed. Seeing the
   value move is the point; editing it is not.
 - **`inputs:` is the spelling for EVERY port, not just shader parameters.** A

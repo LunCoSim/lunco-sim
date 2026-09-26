@@ -346,8 +346,8 @@ pub fn celestial_visuals_system(
             continue;
         };
         let next = ParamValue::F32(transition);
-        if look.values.get("transition") != Some(&next) {
-            look.values.insert("transition".into(), next);
+        if look.values().get("transition") != Some(&next) {
+            look.set_value("transition", next);
         }
     }
 }
