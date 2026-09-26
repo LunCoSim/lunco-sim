@@ -2793,8 +2793,7 @@ dependencies = [
 [[package]]
 name = "celestial-coords"
 version = "0.1.1-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "594a49022c6b050098689417c6ec2088e71afca4f373ba393b67d24198731010"
+source = "git+https://github.com/LunCoSim/celestial?rev=c4c6f171833c70c1f369e9d65c7042ccc5cf58b8#c4c6f171833c70c1f369e9d65c7042ccc5cf58b8"
 dependencies = [
  "celestial-core",
  "celestial-eop-data",
@@ -2806,8 +2805,7 @@ dependencies = [
 [[package]]
 name = "celestial-core"
 version = "0.1.1-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "835075a735ed05c33feab0b629a3e95bc55c9b54a04924438ed31157d1cbb43c"
+source = "git+https://github.com/LunCoSim/celestial?rev=c4c6f171833c70c1f369e9d65c7042ccc5cf58b8#c4c6f171833c70c1f369e9d65c7042ccc5cf58b8"
 dependencies = [
  "libm",
  "once_cell",
@@ -2817,18 +2815,17 @@ dependencies = [
 
 [[package]]
 name = "celestial-eop-data"
-version = "0.1.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0db7627f7cbdcaed155e66503e07025e10701a3566bc211a85e35b918bc40812"
+version = "0.1.28"
+source = "git+https://github.com/LunCoSim/celestial-eop-data?rev=3a0f7795b4be4d9965df6ec4f3b029fa1583d15e#3a0f7795b4be4d9965df6ec4f3b029fa1583d15e"
 dependencies = [
+ "chrono",
  "zstd",
 ]
 
 [[package]]
 name = "celestial-ephemeris"
 version = "0.1.1-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58994c9fbd3c56dcc5b0a1441289cf11eaabd66d57d64c727669cdadec49dd22"
+source = "git+https://github.com/LunCoSim/celestial?rev=c4c6f171833c70c1f369e9d65c7042ccc5cf58b8#c4c6f171833c70c1f369e9d65c7042ccc5cf58b8"
 dependencies = [
  "celestial-coords",
  "celestial-core",
@@ -2840,8 +2837,7 @@ dependencies = [
 [[package]]
 name = "celestial-time"
 version = "0.1.1-alpha.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64dc8dcb28d44f81c0c19de5a2c700f5920390b9cb4789a43e2e696a815a4f0e"
+source = "git+https://github.com/LunCoSim/celestial?rev=c4c6f171833c70c1f369e9d65c7042ccc5cf58b8#c4c6f171833c70c1f369e9d65c7042ccc5cf58b8"
 dependencies = [
  "celestial-core",
  "libm",

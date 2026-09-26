@@ -18,6 +18,7 @@ app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin);
 Scene-authored spacecraft motion uses ordinary USD transform `timeSamples`
 through `lunco-usd-bevy-animation`.
 
-This crate does not build on Windows MSVC because the transitive
-`celestial-eop-data` build script shells out to the Unix `date` command. The
-split keeps the rest of `lunco-celestial` portable.
+The astronomy crates are pinned to the LunCoSim-maintained
+[`celestial` fork](https://github.com/LunCoSim/celestial). Its workspace uses a
+pinned `celestial-eop-data` fork, which formats its build-time UTC date with
+Chrono and does not invoke a system `date` executable.

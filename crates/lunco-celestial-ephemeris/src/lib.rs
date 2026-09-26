@@ -4,9 +4,9 @@
 //!
 //! This crate is the heavy half of the celestial split: it pulls in
 //! `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and
-//! `celestial-core` — none of which build on Windows MSVC because
-//! `celestial-eop-data`'s `build.rs` shells out to the Unix `date`
-//! command.
+//! `celestial-core` from the pinned LunCoSim astronomy fork. Its IERS data
+//! dependency uses Chrono for its build timestamp, without an external date
+//! executable.
 //!
 //! Apps that need analytic planetary positions add [`EphemerisPlugin`]. USD
 //! scene animation remains authored as ordinary xform time samples.
