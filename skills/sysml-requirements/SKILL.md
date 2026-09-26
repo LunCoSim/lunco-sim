@@ -430,9 +430,13 @@ let facts = query("AnalyzeSysml", #{
 if facts.ok != true { throw(facts.errors); }
 ```
 
-`AnalyzeSysml` currently discovers the Twin source set and obtains its analysis
-synchronously. Use it for preflight, authoring, or explicit verification work;
-do not call it from a high-rate `on_tick` hook. Revision-stamped async analysis
+For a mounted Twin, `AnalyzeSysml` reads the identity-fenced snapshot prepared
+by the authored Twin lifecycle policy. Non-empty source sets resolve against
+the embedded standard library on the async analysis worker; an empty optional
+source set commits an empty ready snapshot without initializing that library.
+Until the snapshot is ready, the query returns an explicit preparation result.
+Use `AnalyzeSysml` for preflight, authoring, or explicit verification work; do
+not call it from a high-rate `on_tick` hook. Revision-stamped async analysis
 and admission are part of the cross-domain runtime contract in
 [`62-deterministic-runtime-and-async-boundaries.md`](../../docs/architecture/62-deterministic-runtime-and-async-boundaries.md).
 

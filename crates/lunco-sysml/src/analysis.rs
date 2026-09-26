@@ -158,7 +158,16 @@ fn build_analysis_snapshot(
         })
         .collect();
     let source_revision = lunco_hash::fnv1a64(&revision_input);
-    Arc::new(SysmlAnalysis::build(files, true, source_revision))
+    // An empty optional Twin source set has no project names to resolve. Do
+    // not initialize and clone the embedded standard-library workspace on the
+    // synchronous Twin lifecycle path; authored source sets resolve against it
+    // on the async analysis worker.
+    let includes_stdlib = !files.is_empty();
+    Arc::new(SysmlAnalysis::build(
+        files,
+        includes_stdlib,
+        source_revision,
+    ))
 }
 
 fn completion_matches(pending: &PendingAnalysis, completion: &AnalysisCompletion) -> bool {
@@ -686,6 +695,10 @@ mod tests {
 
     #[test]
     fn source_set_analysis_is_content_revisioned_and_order_independent() {
+        let empty = build_analysis_snapshot("analysis-fixture", Vec::new());
+        assert!(empty.files().is_empty());
+        assert!(!empty.includes_stdlib());
+
         let first = build_analysis_snapshot(
             "analysis-fixture",
             vec![
