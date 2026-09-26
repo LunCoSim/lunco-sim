@@ -1846,7 +1846,7 @@ const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 140.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
 const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 64.0;
-const STATUS_BAR_SCENE_PERF_GAP: f32 = 32.0;
+const STATUS_BAR_SCENE_PERF_GAP: f32 = 24.0;
 const STATUS_BAR_NET_MAX_WIDTH: f32 = 220.0;
 const STATUS_BAR_PERF_MAX_WIDTH: f32 = 480.0;
 /// Minimum compact-window budget for the essential metrics and a useful sparkline.
@@ -1888,14 +1888,14 @@ fn perf_hud_text(
     // Keep the required metrics together at the front. The width-aware
     // renderer can then discard optional p99 detail without ellipsizing the
     // FPS/frame/physics readout.
-    let mut required = format!("FPS {:>5.1} · {:>5.1}ms", fps, frame_ms);
+    let mut required = format!("FPS {:.1} · {:.1}ms", fps, frame_ms);
     if let Some(ms) = physics_ms {
-        required.push_str(&format!(" · phys {:>4.1}ms", ms));
+        required.push_str(&format!(" · phys {:.1}ms", ms));
     }
 
     let mut full = required.clone();
     if let Some(ms) = p99_ms {
-        full.push_str(&format!(" · p99 {:>5.1}ms", ms));
+        full.push_str(&format!(" · p99 {:.1}ms", ms));
     }
     (required, full)
 }
