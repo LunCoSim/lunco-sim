@@ -171,12 +171,15 @@ persistent task state as the driver-bound `this`. The native task driver owns
 task progress, dwell timing, and event waits. You sense with queries/`get` and
 act with `cmd`/`set`.
 
-### Scenario peer target and timing
+### Scenario execution target and timing
 
 The runtime assigns persistent scenario hooks to the cycles owned by the
-selected application plugins. Use `// @peer host|client|both` to choose the
-network peer. Continuous behavior may declare `// @timing simulation`; this
-records its fixed-step requirement and does not install a schedule from Rhai.
+selected application plugins. Use `// @run-on host|client|both` to choose the
+process role. `host` includes the standalone authoritative process. Continuous
+behavior may declare `// @timing simulation`; this records its fixed-step
+requirement and does not install a schedule from Rhai. Neither directive
+chooses the script's `Core`, `Application`, or `Twin` owner; Rust assigns that
+owner and the schedules that invoke it.
 `on_visualization` runs once in `PreUpdate`, after lifecycle, document, and
 terrain admission scans and time-spine projection, but before the first fixed
 tick. It runs in the Twin Visualization cycle after scene, reference, document,
@@ -187,7 +190,7 @@ and events in this phase; only `ApplyUsdTransientOps` can update the disposable
 USD view. `on_start` and `on_event` inherit the lifecycle or simulation context
 of the pass that invokes them, which is available through `execution_context()`.
 
-An unsupported peer target or timing value, or an unknown metadata directive,
+An unsupported execution target or timing value, or an unknown metadata directive,
 disables only that scenario and publishes a document diagnostic for that source
 revision. Editing the source reparses its directives before the new program
 runs. Runtime errors stay visible through the script diagnostics and do not

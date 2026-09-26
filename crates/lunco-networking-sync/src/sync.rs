@@ -3108,7 +3108,7 @@ fn setup_host_rbac(local: Res<LocalSession>, mut rbac: ResMut<lunco_core_session
 
 /// Startup invariant guard: **client-local ⊆ non-networked**.
 ///
-/// A `// @peer client` script may only issue commands that never replicate —
+/// A `// @run-on client` script may only issue commands that never replicate —
 /// otherwise the command double-applies / fights replication on a predicting
 /// client (the Case 1 rationale). The capability axis
 /// ([`lunco_core::ClientCommandPolicy`] via `mark_client_local`) and the routing
@@ -3142,7 +3142,7 @@ fn validate_client_local_channels(
                 error!(
                     "client-local invariant violated: `{name}` is marked \
                      client-local (mark_client_local) but declared on networked \
-                     channel {channel:?} — a `@peer client` script could smuggle \
+                     channel {channel:?} — a `@run-on client` script could smuggle \
                      it onto the wire. Drop the mark_client_local or the \
                      declare_channel for `{name}`."
                 );

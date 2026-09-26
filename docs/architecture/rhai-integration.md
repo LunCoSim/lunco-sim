@@ -361,8 +361,8 @@ visible hook error rather than an inferred clock.
 `sim_tick()`, `dt()`, and `elapsed_seconds()` reject calls outside the simulation
 cycle as a Rhai invocation error. A wrong-cycle call does not fault the
 simulation or another runtime cycle. Persistent scenarios may declare
-`// @peer host|client|both` and `// @timing simulation`; these validate the
-scenario's network peer target and fixed-step requirements while Rust retains schedule
+`// @run-on host|client|both` and `// @timing simulation`; these validate the
+scenario's execution target and fixed-step requirements while Rust retains schedule
 ownership. Unsupported metadata stops only that scenario and becomes a
 source-revision diagnostic. The driver reparses metadata when the document
 generation changes, so edits cannot leave stale routing attached to a program.

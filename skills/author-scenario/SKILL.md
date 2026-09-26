@@ -15,10 +15,11 @@ are task/event-driven policy. They must not define `on_tick`; that hook is
 reserved for authored tests under `assets/scenarios/tests/` to sample live
 telemetry and publish a bounded verdict. Continuous rover dynamics remain in
 fixed-step physics/Modelica. Runtime plugins install their own cycles from
-the selected application composition. A scenario may declare its network peer
-target with `// @peer host|client|both` and its cadence with
-`// @timing simulation`; these do not choose its Core/Application/Twin owner or
-install schedules. Rust assigns the owner route and retains schedule ownership.
+the selected application composition. A scenario may declare its process-role
+execution target with `// @run-on host|client|both` and its cadence with
+`// @timing simulation`; `host` includes standalone authoritative mode. These
+directives do not choose its Core/Application/Twin owner or install schedules.
+Rust assigns the owner route and retains schedule ownership.
 Unsupported metadata disables only that program and publishes a document
 diagnostic for its source revision. Keep runtime errors visible; do not catch
 and erase them as successful no-ops.

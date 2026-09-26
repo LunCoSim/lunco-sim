@@ -397,9 +397,9 @@ compositions keep terrain physics/query support but omit camera-driven LOD,
 visual-map baking, and overlays entirely. A system hidden behind a server-mode
 `run_if` still exists in that schedule and is not equivalent to omitting it.
 Application builders install the selected capabilities automatically; authors
-should not assemble Bevy schedules by hand. Rhai currently declares peer
-selection through `@peer host|client|both`, with simulation as its supported
-timing. An unknown peer target, unsupported timing, or unknown metadata
+should not assemble Bevy schedules by hand. Rhai currently declares process-role
+selection through `@run-on host|client|both`, with simulation as its supported
+timing. An unknown execution target, unsupported timing, or unknown metadata
 directive disables only that scenario and publishes one document error for its
 source generation instead of breaking the host, defaulting to host, or guessing
 a clock. Cycle and clock selection come

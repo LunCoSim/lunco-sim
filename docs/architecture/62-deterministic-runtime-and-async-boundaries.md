@@ -189,7 +189,7 @@ remain statically composed by owner crates, so an absent capability is absent
 from the host schedule and an installed cycle has a visible owner.
 
 Rhai scheduling metadata is admission data, not a request to mutate the Rust
-scheduler. A script with an unknown peer scope or unsupported timing is skipped
+scheduler. A script with an unsupported `@run-on` target or timing is skipped
 and receives a document diagnostic for that source revision; the host and its
 other scripts continue. The owner must not guess a scope or move the script to
 another clock. Runtime callback errors also remain visible and local to their
@@ -297,12 +297,12 @@ callback runs in a later cycle; discrete lifecycle hooks use a stable
 sequence-free seed.
 Nested Rhai functions inherit the current phase. Runtime owner scope
 (`Core`, `Application`, or `Twin`) is assigned by the Rust owner and remains
-independent of cycle and clock. The authored `@peer host|client|both` directive
-selects the network peer for a scenario; it does not select the runtime owner
+independent of cycle and clock. The authored `@run-on host|client|both` directive
+selects the process role for a scenario; it does not select the runtime owner
 scope. Continuous scenario behavior may state its required
 cadence with `@timing simulation`; Rust still installs and invokes the scenario
 from its owning schedules. Lifecycle hooks receive the lifecycle or simulation
-context of the pass that invokes them. Unknown peer targets, timing values, or
+context of the pass that invokes them. Unknown execution targets, timing values, or
 metadata directives skip only that scenario and publish document diagnostics
 once for the source revision. The scenario driver refreshes these directives
 from the current document generation, so a source edit cannot keep stale
