@@ -44,7 +44,7 @@ built script-free, with optional Python, and for `wasm32-unknown-unknown`.
   (`info:implementationSource = "sourceAsset"` or `"sourceCode"` authored in place)
   auto-attaches + runs on spawn.
 - **Execution scope** — host/standalone scenarios run authoritatively. A
-  client-scoped scenario may run for local presentation and prediction, but its
+  client-targeted scenario may run for local presentation and prediction, but its
   `cmd()` calls are limited to registered client-local commands or
   ownership-gated predictive controls; direct reflected writes, structural
   edits, and policy changes are rejected.
@@ -361,8 +361,8 @@ visible hook error rather than an inferred clock.
 `sim_tick()`, `dt()`, and `elapsed_seconds()` reject calls outside the simulation
 cycle as a Rhai invocation error. A wrong-cycle call does not fault the
 simulation or another runtime cycle. Persistent scenarios may declare
-`// @scope host|client|both` and `// @timing simulation`; these validate the
-scenario's peer and fixed-step requirements while Rust retains schedule
+`// @peer host|client|both` and `// @timing simulation`; these validate the
+scenario's network peer target and fixed-step requirements while Rust retains schedule
 ownership. Unsupported metadata stops only that scenario and becomes a
 source-revision diagnostic. The driver reparses metadata when the document
 generation changes, so edits cannot leave stale routing attached to a program.
@@ -405,7 +405,7 @@ authz/RBAC gate as the API
 scenario script then can't exceed its owner's authority. The luncosim caps
 (ops/depth/size) already bound runaway scripts. The exposed verb set = the
 entire capability surface — query providers are read-only, while commands carry
-the mutation contract and policy. Client-scoped scripts cannot use direct
+the mutation contract and policy. Client-targeted scripts cannot use direct
 mutation paths.
 
 ---
@@ -637,7 +637,7 @@ binding concern and is not part of the Rhai runtime contract.
   determinism + networking intact: clients receive the authoritative command
   stream, they don't run scenario logic (§6).
 - Direct reflected writes and canonical port writes are host-side tuning
-  surfaces and are authority-gated; a client-scoped script cannot use them
+  surfaces and are authority-gated; a client-targeted script cannot use them
   because they have no prediction/forwarding path. `SetPorts` is the
   persistent-hold control command; `set()` is a raw write.
 

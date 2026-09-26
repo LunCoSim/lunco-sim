@@ -1,4 +1,6 @@
 // Production scene test for standard USD motion on the Artemis mission root.
+// @peer host
+// @timing simulation
 const TEST_KIND = "headless";
 const ORION = "/Artemis2Review/Artemis2/Orion";
 const NASA_START_TDB_JD = 2461132.5824799724;

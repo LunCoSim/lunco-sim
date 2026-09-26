@@ -398,10 +398,11 @@ visual-map baking, and overlays entirely. A system hidden behind a server-mode
 `run_if` still exists in that schedule and is not equivalent to omitting it.
 Application builders install the selected capabilities automatically; authors
 should not assemble Bevy schedules by hand. Rhai currently declares peer
-selection through `@scope host|client|both`, with simulation as its supported
-timing. An unknown scope or unsupported timing disables only that scenario and
-publishes one document error for its source generation instead of breaking the
-host, defaulting to host, or guessing a clock. Cycle and clock selection come
+selection through `@peer host|client|both`, with simulation as its supported
+timing. An unknown peer target, unsupported timing, or unknown metadata
+directive disables only that scenario and publishes one document error for its
+source generation instead of breaking the host, defaulting to host, or guessing
+a clock. Cycle and clock selection come
 from the Rust owner, not a script directive. A callback error remains visible
 and local to its owner; required authoritative hooks hold/fault their owner.
 Never panic or silently report success for a failed hook.

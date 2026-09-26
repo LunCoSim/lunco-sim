@@ -146,12 +146,12 @@ impl ActiveCommandId {
     }
 }
 
-/// Commands a **client-scoped script** is allowed to issue — the presentation /
+/// Commands a **client-targeted script** is allowed to issue — the presentation /
 /// client-local surface (HUD, notifications, camera framing), which only ever
 /// mutate *this peer's* view and never authoritative sim state.
 ///
 /// A predicting client must not run scripts that mutate shared state (they'd
-/// double-apply / fight replication), so scripting blocks a client-scoped
+/// double-apply / fight replication), so scripting blocks a client-targeted
 /// scenario's `cmd()` calls by default (deny-all). A command opts INTO the
 /// client-local surface by name via [`MarkClientLocalExt::mark_client_local`],
 /// contributed by the command's OWN crate at plugin build — so the classification
@@ -166,11 +166,11 @@ pub struct ClientCommandPolicy {
 }
 
 impl ClientCommandPolicy {
-    /// Register a command name as safe for a client-scoped script to issue.
+    /// Register a command name as safe for a client-targeted script to issue.
     pub fn allow(&mut self, name: impl Into<String>) {
         self.client_local.insert(name.into());
     }
-    /// True if a client-scoped script may issue the command named `name`.
+    /// True if a client-targeted script may issue the command named `name`.
     pub fn allows(&self, name: &str) -> bool {
         self.client_local.contains(name)
     }
@@ -183,7 +183,7 @@ impl ClientCommandPolicy {
 }
 
 /// App extension: mark a command type as **client-local** — safe for a
-/// client-scoped script to issue (see [`ClientCommandPolicy`]). Call it from the
+/// client-targeted script to issue (see [`ClientCommandPolicy`]). Call it from the
 /// plugin of the crate that DEFINES the command, next to its `register_command`,
 /// so the client-local surface is assembled from each crate's own declarations.
 pub trait MarkClientLocalExt {

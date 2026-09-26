@@ -1184,7 +1184,7 @@ impl Plugin for GuidedOverlayPlugin {
         register_all_commands(app);
         register_guided_navigation(app);
         // HUD / tour / spotlight are per-client presentation — client-local, so a
-        // client-scoped guided scenario may drive them (see `ClientCommandPolicy`).
+        // client-targeted guided scenario may drive them (see `ClientCommandPolicy`).
         use lunco_core::MarkClientLocalExt;
         app.mark_client_local::<SetHint>()
             .mark_client_local::<SetObjectives>()

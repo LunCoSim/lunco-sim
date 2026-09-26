@@ -341,7 +341,8 @@ pub fn resolve_scenario_audience(
     info!("[scenario] audience: {:?}", *audience);
 }
 
-/// Where a scenario's lifecycle hooks execute. Default [`Host`](ScriptScope::Host):
+/// Which network peers execute a scenario's lifecycle hooks. Default
+/// [`Host`](ScenarioPeerTarget::Host):
 /// a predicting client must not run sim-mutating scripts (they would double-apply
 /// or fight replication — the same reason cosim/physics only step on the host).
 ///
@@ -352,27 +353,27 @@ pub fn resolve_scenario_audience(
 /// - `Both` — every peer (each peer still filtered by the same client-local rule
 ///   when it is the client).
 ///
-/// Authored via a `// @scope host|client|both` directive on one of the first
+/// Authored via a `// @peer host|client|both` directive on one of the first
 /// lines of the script source, so it rides the same channel for API-attached
 /// (`RunScenario`) and USD-embedded scenarios with no wire or schema change.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ScriptScope {
+pub enum ScenarioPeerTarget {
     #[default]
     Host,
     Client,
     Both,
-    /// A declared peer scope was not recognized; the scenario is disabled.
+    /// A declared peer target was not recognized; the scenario is disabled.
     Unsupported,
 }
 
-impl ScriptScope {
-    /// Whether a scenario with this scope should tick on the current peer.
-    pub fn runs_on(self, is_client: bool) -> bool {
+impl ScenarioPeerTarget {
+    /// Whether this scenario should execute on the current network peer.
+    pub fn runs_on_peer(self, is_client: bool) -> bool {
         match self {
-            ScriptScope::Host => !is_client,
-            ScriptScope::Client => is_client,
-            ScriptScope::Both => true,
-            ScriptScope::Unsupported => false,
+            ScenarioPeerTarget::Host => !is_client,
+            ScenarioPeerTarget::Client => is_client,
+            ScenarioPeerTarget::Both => true,
+            ScenarioPeerTarget::Unsupported => false,
         }
     }
 
@@ -398,17 +399,20 @@ pub enum ScriptTiming {
 /// Parsed, source-revision-owned scheduling metadata for one scenario.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ScenarioDirectives {
-    /// Network peer on which this scenario may execute.
-    pub scope: ScriptScope,
+    /// Network peer or peers on which this scenario may execute.
+    pub peer_target: ScenarioPeerTarget,
     /// Runtime cycle requested by this scenario.
     pub timing: ScriptTiming,
+    /// Whether an unrecognized scenario metadata directive was authored.
+    pub unsupported_directive: bool,
 }
 
 impl ScenarioDirectives {
     /// Parse known directives from the source preamble.
     ///
-    /// Unknown scope and timing values are retained as unsupported metadata so
-    /// the owner can skip this scenario and publish a document diagnostic.
+    /// Unknown peer targets, timing values, and metadata directives are
+    /// retained as unsupported metadata so the owner can skip this scenario and
+    /// publish a document diagnostic.
     pub fn from_source(src: &str) -> Self {
         let mut directives = Self::default();
         for line in src.lines().take(24) {
@@ -417,32 +421,50 @@ impl ScenarioDirectives {
                 continue;
             };
             let rest = rest.trim_start().trim_start_matches('!').trim_start();
-            if let Some(value) = rest.strip_prefix("@scope") {
-                directives.scope = match value.trim().to_ascii_lowercase().as_str() {
-                    "host" => ScriptScope::Host,
-                    "client" => ScriptScope::Client,
-                    "both" => ScriptScope::Both,
-                    _ => ScriptScope::Unsupported,
-                };
-            } else if let Some(value) = rest.strip_prefix("@timing") {
-                directives.timing = match value.trim().to_ascii_lowercase().as_str() {
-                    "simulation" => ScriptTiming::Simulation,
-                    _ => ScriptTiming::Unsupported,
-                };
+            let mut fields = rest.split_whitespace();
+            let directive = fields.next().unwrap_or_default();
+            let value = fields.next().unwrap_or_default();
+            let has_extra_value = fields.next().is_some();
+            match directive {
+                "@peer" => {
+                    directives.peer_target = if has_extra_value {
+                        ScenarioPeerTarget::Unsupported
+                    } else {
+                        match value.to_ascii_lowercase().as_str() {
+                            "host" => ScenarioPeerTarget::Host,
+                            "client" => ScenarioPeerTarget::Client,
+                            "both" => ScenarioPeerTarget::Both,
+                            _ => ScenarioPeerTarget::Unsupported,
+                        }
+                    };
+                }
+                "@timing" => {
+                    directives.timing = if !has_extra_value && value == "simulation" {
+                        ScriptTiming::Simulation
+                    } else {
+                        ScriptTiming::Unsupported
+                    };
+                }
+                _ if directive.starts_with('@') => {
+                    directives.unsupported_directive = true;
+                }
+                _ => {}
             }
         }
         directives
     }
 
     fn is_supported(self) -> bool {
-        !self.scope.is_unsupported() && self.timing != ScriptTiming::Unsupported
+        !self.peer_target.is_unsupported()
+            && self.timing != ScriptTiming::Unsupported
+            && !self.unsupported_directive
     }
 
     fn diagnostics(self) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        if self.scope.is_unsupported() {
+        if self.peer_target.is_unsupported() {
             diagnostics.push(Diagnostic::error(
-                "unknown scenario @scope directive; expected host, client, or both",
+                "unsupported scenario @peer target; expected host, client, or both",
                 None,
                 None,
             ));
@@ -450,6 +472,13 @@ impl ScenarioDirectives {
         if self.timing == ScriptTiming::Unsupported {
             diagnostics.push(Diagnostic::error(
                 "unsupported scenario @timing directive; expected simulation",
+                None,
+                None,
+            ));
+        }
+        if self.unsupported_directive {
+            diagnostics.push(Diagnostic::error(
+                "unknown scenario metadata directive; supported directives are @peer and @timing",
                 None,
                 None,
             ));
@@ -705,7 +734,7 @@ struct Fsm {
     scene_generation: u64,
     /// Source revision whose scheduling metadata is cached below.
     directives_generation: Option<u64>,
-    /// Parsed peer scope and execution timing for that source revision.
+    /// Parsed peer target and execution timing for that source revision.
     directives: ScenarioDirectives,
     /// Source generation whose unsupported directives were diagnosed.
     directives_diagnostic_generation: Option<u64>,
@@ -1022,7 +1051,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     .unwrap_or_else(|| ScenarioDirectives::from_source(&document.source));
                 let eligible = !paused
                     && directives.is_supported()
-                    && directives.scope.runs_on(is_client)
+                    && directives.peer_target.runs_on_peer(is_client)
                     && !scenario_owner_is_held(world, *entity, &held_roots);
                 if !eligible {
                     let remove_dependencies = prior
@@ -1497,7 +1526,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             u64,
             ScenarioDirectives,
         )> = Vec::new();
-        // A predicting client only ticks scenarios scoped to run there
+        // A predicting client only ticks scenarios targeted to run there
         // (`Client`/`Both`); the host ticks `Host`/`Both`. Read once — constant
         // for the whole pass.
         let is_client = matches!(
@@ -1588,7 +1617,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     // already published and the same text cannot become valid by ticking.
                     let can_compile = directives.is_supported()
                         && !paused
-                        && directives.scope.runs_on(is_client)
+                        && directives.peer_target.runs_on_peer(is_client)
                         && !scenario_owner_is_held(world, entity, &held_roots);
                     let needs_recompile = can_compile
                         && state.is_none_or(|state| {
@@ -1653,7 +1682,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     if paused {
                         continue;
                     }
-                    if !directives.scope.runs_on(is_client) {
+                    if !directives.peer_target.runs_on_peer(is_client) {
                         let active = world
                             .get_resource::<ScenarioDriver<R>>()
                             .and_then(|driver| driver.fsm.get(&entity))
@@ -1666,7 +1695,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     // anywhere inside that subtree wait with it, while unrelated
                     // scenarios keep participating in the fixed step. A peer
                     // change still reaches the owner above to stop old state.
-                    if directives.scope.runs_on(is_client)
+                    if directives.peer_target.runs_on_peer(is_client)
                         && scenario_owner_is_held(world, entity, &held_roots)
                     {
                         continue;
@@ -1789,7 +1818,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 st.directives_generation = Some(generation);
                 st.directives = directives;
                 let directive_invalid = !directives.is_supported();
-                let runs_on_peer = directives.scope.runs_on(is_client);
+                let runs_on_peer = directives.peer_target.runs_on_peer(is_client);
                 if directive_invalid || !runs_on_peer {
                     let scene_restart = reload_policy
                         == crate::doc::ScenarioReloadPolicy::Restart
@@ -2054,10 +2083,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     }
                 }
 
-                // Authoritative commands a client-scoped scenario tried (and was
+                // Authoritative commands a client-peer scenario tried (and was
                 // denied) this pass — collected in `bridge_core::cmd_value`. Surface
                 // them as ONE per-scenario warning diagnostic, not a per-tick log:
-                // the author sees, once, that a presentation-scoped script is
+                // the author sees, once, that a client-targeted script is
                 // reaching for host-owned state. Warning severity → the scenario
                 // still reports Ready (it compiled and ran fine).
                 let dropped = bridge_core::take_script_rejects();
@@ -2070,9 +2099,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 if !dropped.is_empty() {
                     diags.push(Diagnostic::warning(
                         format!(
-                            "client-scoped scenario dropped authoritative command(s): {} — \
+                            "client-targeted scenario dropped authoritative command(s): {} — \
                              the host owns shared sim state. Move these to a host scenario, \
-                             or drop the `// @scope client` directive.",
+                             or remove the `// @peer client` directive.",
                             dropped.join(", ")
                         ),
                         None,
@@ -2129,7 +2158,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             for (raw, status) in diag_updates {
                 match status {
                     // Severity-derived: an error-carrying set marks Error, a
-                    // warning-only set (e.g. a dropped client-scoped command)
+                    // warning-only set (e.g. a dropped client-peer command)
                     // stays Ready while still surfacing the notice.
                     Some(diags) => store.set_diagnostics(DocumentId::new(raw), diags),
                     None => store.set_ok(DocumentId::new(raw)),
@@ -2819,7 +2848,7 @@ fn compare_telemetry_values(
 /// queued while the gate is closed because no scenario can consume them and the
 /// readiness gate also prevents the driver pass that drains the inbox. Scene
 /// transitions clear any already-pending events before the outgoing scene is
-/// replaced. Client-scoped scenarios (`// @scope client`) therefore see events
+/// replaced. Client-targeted scenarios (`// @peer client`) therefore see events
 /// fired on the client; host-authoritative events reach them only when explicitly
 /// replicated.
 pub fn collect_script_events(
@@ -2979,31 +3008,34 @@ mod lifecycle_readiness_tests {
             ScenarioDirectives::default()
         );
         assert_eq!(
-            ScenarioDirectives::from_source("// @scope host\n// @timing simulation\n"),
+            ScenarioDirectives::from_source("// @peer host\n// @timing simulation\n"),
             ScenarioDirectives::default()
         );
         assert_eq!(
-            ScenarioDirectives::from_source("// @scope client\n").scope,
-            ScriptScope::Client
+            ScenarioDirectives::from_source("// @peer client\n").peer_target,
+            ScenarioPeerTarget::Client
         );
         assert_eq!(
-            ScenarioDirectives::from_source("// @scope both\n").scope,
-            ScriptScope::Both
+            ScenarioDirectives::from_source("// @peer both\n").peer_target,
+            ScenarioPeerTarget::Both
         );
 
-        let unknown_scope = ScenarioDirectives::from_source("// @scope clinet\n");
-        assert_eq!(unknown_scope.scope, ScriptScope::Unsupported);
-        assert_eq!(unknown_scope.timing, ScriptTiming::Simulation);
-        assert_eq!(unknown_scope.diagnostics().len(), 1);
+        let unknown_peer = ScenarioDirectives::from_source("// @peer clinet\n");
+        assert_eq!(unknown_peer.peer_target, ScenarioPeerTarget::Unsupported);
+        assert_eq!(unknown_peer.timing, ScriptTiming::Simulation);
+        assert_eq!(unknown_peer.diagnostics().len(), 1);
 
         let unknown_timing = ScenarioDirectives::from_source("// @timing presentation\n");
-        assert_eq!(unknown_timing.scope, ScriptScope::Host);
+        assert_eq!(unknown_timing.peer_target, ScenarioPeerTarget::Host);
         assert_eq!(unknown_timing.timing, ScriptTiming::Unsupported);
         assert_eq!(unknown_timing.diagnostics().len(), 1);
 
-        let invalid =
-            ScenarioDirectives::from_source("// @scope clinet\n// @timing presentation\n");
+        let invalid = ScenarioDirectives::from_source("// @peer clinet\n// @timing presentation\n");
         assert_eq!(invalid.diagnostics().len(), 2);
+
+        let unknown_directive = ScenarioDirectives::from_source("// @peerhost\n");
+        assert!(!unknown_directive.is_supported());
+        assert_eq!(unknown_directive.diagnostics().len(), 1);
     }
 
     #[test]
@@ -3203,7 +3235,7 @@ mod lifecycle_readiness_tests {
             ScriptDocument::new(
                 72,
                 ScriptLanguage::Rhai,
-                "// @scope clinet\n// @timing presentation\n",
+                "// @peer clinet\n// @timing presentation\n",
             ),
         );
         world.resource_mut::<ScriptRegistry>().insert_document(
@@ -3211,7 +3243,7 @@ mod lifecycle_readiness_tests {
             ScriptDocument::new(
                 74,
                 ScriptLanguage::Rhai,
-                "// @scope host\n// @timing simulation\n",
+                "// @peer host\n// @timing simulation\n",
             ),
         );
         world.insert_resource(DocumentDiagnostics::default());
@@ -3231,12 +3263,12 @@ mod lifecycle_readiness_tests {
         let status = world
             .resource::<DocumentDiagnostics>()
             .get(DocumentId::new(72))
-            .expect("invalid scope is visible to the document owner");
+            .expect("invalid peer metadata is visible to the document owner");
         assert_eq!(status.diagnostics.len(), 2);
         assert!(
             status.diagnostics[0]
                 .message
-                .contains("unknown scenario @scope")
+                .contains("unsupported scenario @peer")
         );
         assert!(
             status.diagnostics[1]
@@ -3662,7 +3694,7 @@ mod lifecycle_readiness_tests {
             ScriptDocument::new(
                 73,
                 ScriptLanguage::Rhai,
-                "// @scope host\n// @timing simulation\n",
+                "// @peer host\n// @timing simulation\n",
             ),
         );
         world.insert_resource(DocumentDiagnostics::default());
@@ -3685,7 +3717,7 @@ mod lifecycle_readiness_tests {
                 .resource_mut::<ScriptRegistry>()
                 .reload_external_source(
                     DocumentId::new(73),
-                    "// @scope clinet\n// @timing presentation\n",
+                    "// @peer clinet\n// @timing presentation\n",
                 )
         );
         run_scenarios(&mut world);

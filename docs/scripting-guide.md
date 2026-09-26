@@ -170,19 +170,20 @@ persistent task state as the driver-bound `this`. The native task driver owns
 task progress, dwell timing, and event waits. You sense with queries/`get` and
 act with `cmd`/`set`.
 
-### Scenario scope and timing
+### Scenario peer target and timing
 
 The runtime assigns persistent scenario hooks to the cycles owned by the
-selected application plugins. Use `// @scope host|client|both` to choose the
+selected application plugins. Use `// @peer host|client|both` to choose the
 network peer. Continuous behavior may declare `// @timing simulation`; this
 records its fixed-step requirement and does not install a schedule from Rhai.
 `on_start` and `on_event` inherit the lifecycle or simulation context of the
 pass that invokes them, which is available through `execution_context()`.
 
-An unsupported scope or timing value disables only that scenario and publishes
-a document diagnostic for that source revision. Editing the source reparses
-its directives before the new program runs. Runtime errors stay visible through
-the script diagnostics and do not become successful no-ops.
+An unsupported peer target or timing value, or an unknown metadata directive,
+disables only that scenario and publishes a document diagnostic for that source
+revision. Editing the source reparses its directives before the new program
+runs. Runtime errors stay visible through the script diagnostics and do not
+become successful no-ops.
 
 `simulation_dependencies` runs before mutable initialization and may use only
 stable identities, parameters, and its declared read surface. The top-level
@@ -401,7 +402,7 @@ You'll use these constantly (the complete table is in
 > be overridden until an explicit release; use `cmd("ReleasePort", ... )` for
 > one port or `cmd("ReleaseControl", #{target: id})` for the complete vehicle
 > command surface. Direct
-> writes are host-authoritative and unavailable to client-scoped scripts. Use `cmd`
+> writes are host-authoritative and unavailable to client-targeted scripts. Use `cmd`
 > for an *operation* with side effects
 > beyond a field write (spawning, swapping a material, anything an observer reacts to).
 
@@ -495,7 +496,7 @@ in a prelude/tool. Native `Vec3`/`Quat` operations are registered by
 > `cmd("SetPorts", #{target: id, writes: [[name, value]]})` for a persistent
 > command intent, and `cmd("ReleaseControl", #{target: id})` to apply the safe
 > state immediately. Direct
-> writes are host-authoritative and unavailable to client-scoped scripts. Use `cmd` for
+> writes are host-authoritative and unavailable to client-targeted scripts. Use `cmd` for
 > an *operation* with side effects beyond a field write (spawning, swapping a
 > material, anything an observer must react to). Settings are only reachable if
 > their type is `register_type`'d with `#[reflect(Component)]` / `#[reflect(Resource)]`.

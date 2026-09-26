@@ -12,7 +12,7 @@
 //!   command (twin / usd / modelica / cosim / rover / future) is reachable with
 //!   **zero per-command binding** — add a `#[Command]`, scripts see it for free.
 //!   Commands go through the same dispatch and authority path as any other
-//!   command; client-scoped scripts are restricted to the explicitly local or
+//!   command; client-targeted scripts are restricted to the explicitly local or
 //!   predictive command policy.
 //! - **`query(name, #{params})`** — *read*. Calls a registered read-only
 //!   `ApiQueryProvider`; the same registry is exposed through schema/catalog

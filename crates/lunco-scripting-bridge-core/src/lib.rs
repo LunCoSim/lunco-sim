@@ -391,14 +391,14 @@ thread_local! {
     /// whenever a [`WorldScope`] enters or drops, so it never leaks across evals.
     static SCRIPT_AUTHORITY: Cell<Option<SessionId>> = const { Cell::new(None) };
 
-    /// True while a **client-scoped** scenario runs on a predicting client. Its
+    /// True while a **client-targeted** scenario runs on a predicting client. Its
     /// [`cmd`] calls are then restricted to the client-local surface
     /// ([`lunco_core::ClientCommandPolicy`]) so a presentation/HUD script can't
     /// mutate authoritative sim state. Set per-pass by the scenario driver; reset
     /// with the [`WorldScope`] so it never leaks across evals.
     static SCRIPT_CLIENT_LOCAL: Cell<bool> = const { Cell::new(false) };
 
-    /// Names of authoritative commands a client-scoped scenario tried to issue
+    /// Names of authoritative commands a client-targeted scenario tried to issue
     /// and were dropped this hook (see [`cmd_value`]). The scenario driver drains
     /// this per-entity via [`take_script_rejects`] and folds it into that
     /// scenario's *diagnostics* — the drop surfaces once in the editor as an
@@ -477,20 +477,20 @@ pub fn script_authority() -> Option<SessionId> {
     SCRIPT_AUTHORITY.with(|a| a.get())
 }
 
-/// Mark the current script pass as a client-scoped scenario on a predicting
+/// Mark the current script pass as a client-targeted scenario on a predicting
 /// client, so [`cmd`] restricts it to the client-local command surface. Set by
 /// the scenario driver; reset with the [`WorldScope`].
 pub fn set_script_client_local(on: bool) {
     SCRIPT_CLIENT_LOCAL.with(|c| c.set(on));
 }
 
-/// Whether the current script is a client-scoped scenario (its `cmd()`s are
+/// Whether the current script is a client-targeted scenario (its `cmd()`s are
 /// restricted to the client-local surface).
 pub fn script_is_client_local() -> bool {
     SCRIPT_CLIENT_LOCAL.with(|c| c.get())
 }
 
-/// Take (and clear) the authoritative commands a client-scoped scenario tried to
+/// Take (and clear) the authoritative commands a client-targeted scenario tried to
 /// issue and were dropped since the last drain. The scenario driver calls this
 /// once per entity, right after its hooks, and turns any names into a single
 /// per-scenario diagnostic — so the drop is surfaced once in the editor instead
@@ -527,7 +527,7 @@ pub mod capability {
 
 /// Gate direct script mutations that do not pass through a reflected command.
 ///
-/// A client-scoped script is allowed to issue an explicitly client-local
+/// A client-targeted script is allowed to issue an explicitly client-local
 /// command through `cmd()`, or an ownership-gated predictive command such as
 /// `SetPorts`. Direct reflection has no forwarding or
 /// prediction path, so they are denied for client-local execution. This keeps
@@ -542,7 +542,7 @@ pub fn enforce_script_mutation(
     validate_simulation_entity_access(world, target_gid, capability, ScriptEntityAccess::Write)?;
     if script_is_client_local() {
         return Err(format!(
-            "'{capability}' denied: direct script mutations are not available from a client-scoped script; use an allowed typed command"
+            "'{capability}' denied: direct script mutations are not available from a client-targeted script; use an allowed typed command"
         ));
     }
     enforce_script_authority(world, capability, target_gid)
@@ -878,7 +878,7 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
             return command_result_error(id, "rejected", error);
         }
 
-        // Client-scoped scenario on a predicting client: allow ONLY the
+        // Client-targeted scenario on a predicting client: allow ONLY the
         // client-local surface (HUD / notifications / camera). Anything else is
         // an authoritative mutation the host owns — running it here would
         // double-apply or fight replication, so drop it (the host stays the sole
@@ -889,7 +889,7 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
                 .get_resource::<lunco_core::ClientCommandPolicy>()
                 .is_some_and(|p| p.allows(name));
             // Case 2 — a client script may drive what it OWNS. Beyond the static
-            // client-local surface (Case 1), a client-scoped script may issue an
+            // client-local surface (Case 1), a client-targeted script may issue an
             // **ownership-gated** command (e.g. `SetPorts`) against a target this
             // client possesses. That is the legitimate predict-own input path: the
             // command applies LOCALLY this tick (immediate client-side prediction)
@@ -923,7 +923,7 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
                 return command_result_error(
                     id,
                     "rejected",
-                    format!("`{name}` is not permitted from a client-scoped script"),
+                    format!("`{name}` is not permitted from a client-targeted script"),
                 );
             }
             // Thread a real `seq`/`tick` for a client-owned control command so it
@@ -1323,7 +1323,7 @@ pub fn get_resource_field<B: ValueBuilder>(b: &B, path: &str) -> Option<B::Value
 /// `apply`, which writes the backend-native value straight in (`native → reflect`,
 /// no JSON) — symmetric with the `reflect → native` read path. The `reflect_mut`
 /// borrow trips Bevy change-detection, so the edit replicates / re-runs dependent
-/// systems normally. Host-side scripts may use it when authorized; client-scoped
+/// systems normally. Host-side scripts may use it when authorized; client-targeted
 /// scripts are denied because this path has no prediction/forwarding contract.
 pub fn set_component_field(
     gid: u64,
@@ -2045,7 +2045,7 @@ mod tests {
     }
 
     #[test]
-    fn client_scoped_scripts_cannot_use_direct_mutation_paths() {
+    fn client_targeted_scripts_cannot_use_direct_mutation_paths() {
         let mut world = World::new();
         let _scope = WorldScope::enter(
             &mut world,
@@ -2060,8 +2060,8 @@ mod tests {
             capability::SETTING_MUTATE,
         ] {
             let error = enforce_script_mutation(&world, capability, Some(1))
-                .expect_err("client-scoped direct mutation must be rejected");
-            assert!(error.contains("client-scoped"), "{error}");
+                .expect_err("client-targeted direct mutation must be rejected");
+            assert!(error.contains("client-targeted"), "{error}");
         }
 
         assert!(script_is_client_local());
