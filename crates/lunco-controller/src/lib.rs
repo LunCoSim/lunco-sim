@@ -728,6 +728,19 @@ const INPUT_EPS: f64 = 1e-3;
 struct VesselInputState {
     ports_active: std::collections::HashMap<Entity, bool>,
     takeover_requested: std::collections::HashSet<(Entity, Entity)>,
+    order: Vec<ControllerOrder>,
+}
+
+/// One controller's deterministic key in the reusable fixed-step sort buffer.
+#[derive(Clone, Copy)]
+struct ControllerOrder {
+    key: ((bool, u64), (bool, u64), u64),
+    source: Entity,
+}
+
+/// Put admitted global identities before keys scoped to this World.
+fn controller_entity_order(entity: Entity, global_id: Option<u64>) -> (bool, u64) {
+    global_id.map_or((true, entity.to_bits()), |id| (false, id))
 }
 
 /// Fixed-tick input emission for prediction. Emits a [`lunco_cosim_core::commands::SetPorts`]
@@ -799,7 +812,30 @@ fn drive_from_bindings(
         intent_held(vessel, intent, intents, sim_intents, egui_keyboard)
     };
 
-    for (source, link, intents) in q_ctrl.iter() {
+    // Query iteration follows ECS storage layout, which can change when
+    // unrelated components move entities between archetypes. Reuse this local
+    // buffer and order control effects by stable target identity before any
+    // intent edge or SetPorts command is emitted.
+    input_state.order.clear();
+    for (source, link, _) in q_ctrl.iter() {
+        let target_id = q_vessel.get(link.target).ok().map(|(id, _)| id.get());
+        let source_id = q_vessel.get(source).ok().map(|(id, _)| id.get());
+        input_state.order.push(ControllerOrder {
+            key: (
+                controller_entity_order(link.target, target_id),
+                controller_entity_order(source, source_id),
+                source.to_bits(),
+            ),
+            source,
+        });
+    }
+    input_state.order.sort_unstable_by_key(|entry| entry.key);
+
+    for index in 0..input_state.order.len() {
+        let source = input_state.order[index].source;
+        let Ok((_, link, intents)) = q_ctrl.get(source) else {
+            continue;
+        };
         // Stage 1 (key→intent) is the shared leafwing `InputMap<UserIntent>`;
         // stage 2 maps this vessel's active intents → summed, clamped port writes.
         // The binding is authored ON THE VESSEL as a USD `Controls` child scope
@@ -1418,6 +1454,7 @@ mod input_ack_tests {
 mod tests {
     use super::*;
     use lunco_control_core::UserIntent;
+    use lunco_core::GlobalEntityId;
     use lunco_input_core::resolved_input_label;
 
     fn test_bindings() -> InputBindingsSettings {
@@ -1971,6 +2008,58 @@ mod tests {
                 .get::<ActionState<UserIntent>>()
                 .expect("avatar action state")
                 .pressed(&UserIntent::MoveForward)
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct ControlTargetOrder(Vec<u64>);
+
+    fn record_control_target_order(
+        trigger: On<lunco_cosim_core::commands::SetPorts>,
+        identities: Query<&GlobalEntityId>,
+        mut order: ResMut<ControlTargetOrder>,
+    ) {
+        if let Ok(identity) = identities.get(trigger.event().target) {
+            order.0.push(identity.get());
+        }
+    }
+
+    #[test]
+    fn fixed_step_control_commands_follow_target_global_identity_order() {
+        use lunco_core_runtime::SimTick;
+        use lunco_core_session::{NetworkRole, OwnedInputLog};
+
+        let mut app = App::new();
+        app.insert_resource(NetworkRole::Host)
+            .init_resource::<SimTick>()
+            .init_resource::<OwnedInputLog>()
+            .init_resource::<ControlTargetOrder>()
+            .add_observer(record_control_target_order)
+            .add_systems(FixedUpdate, drive_from_bindings);
+
+        // Spawn in descending identity order so ECS query order cannot accidentally
+        // make this assertion pass.
+        for gid in [200, 100] {
+            let target = app
+                .world_mut()
+                .spawn((
+                    GlobalEntityId::from_raw(gid),
+                    ControlBinding {
+                        binds: vec![(UserIntent::MoveForward, "throttle".into(), 1.0)],
+                    },
+                ))
+                .id();
+            let mut intents = ActionState::<UserIntent>::default();
+            intents.press(&UserIntent::MoveForward);
+            app.world_mut().spawn((ControlLink { target }, intents));
+        }
+
+        app.world_mut().run_schedule(FixedUpdate);
+
+        assert_eq!(
+            app.world().resource::<ControlTargetOrder>().0,
+            vec![100, 200],
+            "control effects entering the fixed-step command path must have stable target order"
         );
     }
 

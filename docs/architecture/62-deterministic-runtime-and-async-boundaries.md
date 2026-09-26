@@ -699,6 +699,9 @@ ordering includes:
   instead of through the Update-synchronized API lookup index; hosts without a
   global identity use their Bevy entity key only within that running World and
   are outside cross-session replay ordering;
+- fixed-step controller inputs: target `GlobalEntityId`, then source identity;
+  endpoints without a global identity use their Bevy entity key only within the
+  current World and are outside cross-session replay ordering;
 - telemetry delivery: simulation tick, source, name, severity, time, and a
   recursive order over the typed payload;
 - USD-connected events: instance namespace, authored event prim path, source,
