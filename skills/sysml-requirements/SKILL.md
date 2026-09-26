@@ -66,6 +66,23 @@ emittance, coating thickness, or Modelica thermal parameters. Record missing
 finish catalog and rendering adapters as generic tool gaps, not per-component
 string metadata.
 
+### Keep resolved type identity typed
+
+Use the resolver-selected `SysmlTypeRef.element` handle for type comparisons
+and joins. If a typed contract needs a SysML type, carry that reference rather
+than its name. Its `qualified_name` is for reports and source navigation only;
+two semantic types must not be treated as equal because their display names
+match. The handle is scoped to its SysML source revision and fingerprint, so
+reject values assembled from a different snapshot.
+
+For unit-bearing model data, author standard quantity-value and unit-reference
+features where the model needs them. Keep unit symbols as authored/presentation
+metadata; do not use symbol strings as identity, dimensional proof, or an
+implicit conversion rule. The current generic constraint/provider path does
+not yet resolve SysML unit definitions into dimension-safe conversion, so do
+not claim mixed-unit verification is supported until the unit catalog and
+provider boundary use resolved unit identities.
+
 For a mission Twin, apply the generic
 [mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
 alongside this parser/runtime contract. Requirements are the baselined bridge

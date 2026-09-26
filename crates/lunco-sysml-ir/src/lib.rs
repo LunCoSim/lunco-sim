@@ -16,7 +16,7 @@ use lunco_sysml_ast::{
     SysmlElementHandle, SysmlExpression, SysmlExpressionData, SysmlExpressionOperator,
     SysmlFeature, SysmlFeatureDirection, SysmlFeatureHandle, SysmlFeaturePath, SysmlMultiplicity,
     SysmlPrimitiveType, SysmlRequirementConstraintKind, SysmlSourceRef, SysmlType,
-    SysmlTypeCategory, SysmlUnsupportedExpression,
+    SysmlTypeCategory, SysmlTypeRef, SysmlUnsupportedExpression,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -70,16 +70,16 @@ pub enum IrValueType {
     Complex,
     String,
     Quantity {
-        quantity_kind: Option<String>,
+        quantity_kind: Option<SysmlTypeRef>,
     },
     Enumeration {
-        type_name: Option<String>,
+        type_name: Option<SysmlTypeRef>,
     },
     Reference {
-        type_name: Option<String>,
+        type_name: Option<SysmlTypeRef>,
     },
     Structured {
-        type_name: Option<String>,
+        type_name: Option<SysmlTypeRef>,
     },
     Unknown,
 }
@@ -1856,31 +1856,19 @@ fn ir_type_from_sysml(value: &SysmlType) -> IrType {
             None => IrValueType::Unknown,
         },
         SysmlTypeCategory::Quantity => IrValueType::Quantity {
-            quantity_kind: value
-                .quantity_kind
-                .as_ref()
-                .map(|kind| kind.qualified_name.clone()),
+            quantity_kind: value.quantity_kind.clone(),
         },
         SysmlTypeCategory::Enumeration => IrValueType::Enumeration {
-            type_name: value
-                .resolved_type
-                .as_ref()
-                .map(|value| value.qualified_name.clone()),
+            type_name: value.resolved_type.clone(),
         },
         SysmlTypeCategory::Reference => IrValueType::Reference {
-            type_name: value
-                .resolved_type
-                .as_ref()
-                .map(|value| value.qualified_name.clone()),
+            type_name: value.resolved_type.clone(),
         },
         SysmlTypeCategory::Structured
         | SysmlTypeCategory::Part
         | SysmlTypeCategory::Item
         | SysmlTypeCategory::Port => IrValueType::Structured {
-            type_name: value
-                .resolved_type
-                .as_ref()
-                .map(|value| value.qualified_name.clone()),
+            type_name: value.resolved_type.clone(),
         },
         // Collection multiplicity belongs to `IrType`; this case only means
         // the resolved element type itself is not scalar/structured.
@@ -2166,7 +2154,7 @@ pub enum IrValue {
     Boolean(bool),
     String(String),
     Enumeration {
-        type_name: Option<String>,
+        type_name: Option<SysmlTypeRef>,
         literal: String,
     },
     /// Snapshot-scoped semantic identity resolved by the SysML model.
@@ -3089,7 +3077,7 @@ enum EvaluationValue {
     Boolean(bool),
     String(String),
     Enumeration {
-        type_name: Option<String>,
+        type_name: Option<SysmlTypeRef>,
         literal: String,
     },
     Reference(SysmlElementHandle),

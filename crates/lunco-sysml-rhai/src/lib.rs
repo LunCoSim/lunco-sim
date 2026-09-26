@@ -797,7 +797,7 @@ fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
     }
     if let Some(value) = value.clone().try_cast::<SysmlEnumValue>() {
         return Some(IrValue::Enumeration {
-            type_name: value.type_ref.map(|reference| reference.qualified_name),
+            type_name: value.type_ref,
             literal: value.literal,
         });
     }
@@ -1345,8 +1345,17 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_type_with_name::<SysmlPrimitiveType>("SysmlPrimitiveType")
         .register_type_with_name::<SysmlModelicaType>("SysmlModelicaType")
         .register_type_with_name::<SysmlTypeRef>("SysmlTypeRef")
+        .register_get("element", |value: &mut SysmlTypeRef| {
+            Dynamic::from(value.element)
+        })
         .register_get("qualified_name", |value: &mut SysmlTypeRef| {
             value.qualified_name.clone()
+        })
+        .register_fn("==", |left: SysmlTypeRef, right: SysmlTypeRef| {
+            left == right
+        })
+        .register_fn("!=", |left: SysmlTypeRef, right: SysmlTypeRef| {
+            left != right
         })
         .register_type_with_name::<SysmlType>("SysmlType")
         .register_get("base", |value: &mut SysmlType| value.base.clone())
@@ -2389,6 +2398,9 @@ fn feature_path_dynamic(path: &SysmlFeaturePath) -> Dynamic {
 fn ir_type_dynamic(ty: &IrType) -> Dynamic {
     let mut value = Map::new();
     value.insert("value".into(), Dynamic::from(ir_value_type_name(&ty.value)));
+    if let Some(type_ref) = ir_value_type_reference(&ty.value) {
+        value.insert("semantic_type".into(), Dynamic::from(type_ref.clone()));
+    }
     value.insert(
         "lower".into(),
         Dynamic::from_int(ty.multiplicity.lower as i64),
@@ -2410,6 +2422,24 @@ fn ir_type_dynamic(ty: &IrType) -> Dynamic {
         ty.unit.clone().map(Dynamic::from).unwrap_or(Dynamic::UNIT),
     );
     Dynamic::from_map(value)
+}
+
+fn ir_value_type_reference(value: &IrValueType) -> Option<&SysmlTypeRef> {
+    match value {
+        IrValueType::Quantity {
+            quantity_kind: Some(type_ref),
+        }
+        | IrValueType::Enumeration {
+            type_name: Some(type_ref),
+        }
+        | IrValueType::Reference {
+            type_name: Some(type_ref),
+        }
+        | IrValueType::Structured {
+            type_name: Some(type_ref),
+        } => Some(type_ref),
+        _ => None,
+    }
 }
 
 fn ir_value_type_name(value: &IrValueType) -> &'static str {

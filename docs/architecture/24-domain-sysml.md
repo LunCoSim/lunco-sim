@@ -121,15 +121,24 @@ Griffin component model:
 - kernel primitive categories (`Boolean`, `Integer`, `Rational`, `Real`,
   `Complex`, and `String`);
 - feature multiplicity, including lower/upper bounds and ordered/unique flags;
-- direct type identity as a native `SysmlTypeRef`, with quantity-value family
-  and most-specific quantity kind classified through resolved SysML
-  inheritance (rather than a hard-coded quantity-name table);
+- direct type identity as a native `SysmlTypeRef` backed by a
+  snapshot-scoped `SysmlElementHandle`, with quantity-value family and
+  most-specific quantity kind classified through resolved SysML inheritance
+  (rather than a hard-coded quantity-name table);
 - collection cardinality kept separate from its scalar element category;
 - unit-bearing literals and typed quantity-kind references;
 - enumeration and structured-value categories;
 - part, item, and port element categories from resolved definitions;
 - an explicit Modelica mapping for scalar/quantity values, primitive arrays,
   enumerations, and structured values.
+
+The neutral constraint IR preserves `SysmlTypeRef` identity for quantity kinds,
+enumerations, references, and structured values. A qualified name is retained
+for diagnostics, source navigation, and Modelica metadata; identity equality
+uses the source-snapshot handle. Unit identity is a separate unresolved
+boundary: provider contracts and quantity values still compare unit labels,
+and no SysML unit-definition resolver currently supplies the engineering-value
+conversion catalog to the IR evaluator.
 
 Spatial values do not use a second vector implementation. The Rhai adapter
 lowers the standard `CartesianThreeVectorValue` to the existing f64 Bevy/glam

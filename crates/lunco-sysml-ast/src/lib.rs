@@ -10,6 +10,7 @@ pub mod lint_facts;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 use sysml_model::{ElementId, ElementKind, Role, Value};
 use sysml_semantics::Workspace;
@@ -845,14 +846,30 @@ pub enum SysmlTypeCategory {
     Unknown,
 }
 
-/// Identity of a resolved SysML type in its canonical root-qualified form.
+/// Identity of a resolved SysML type in one immutable source snapshot.
 ///
-/// This is not authored value text: it is a strongly typed reference to the
-/// semantic element selected by the SysML resolver. The qualified name is
-/// retained for display, source navigation, and interchange.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// `element` is authoritative for comparisons and joins. The qualified name
+/// is display/source-navigation metadata; consumers must not use it as the
+/// semantic identity of the type.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SysmlTypeRef {
+    pub element: SysmlElementHandle,
+    #[serde(default)]
     pub qualified_name: String,
+}
+
+impl PartialEq for SysmlTypeRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.element == other.element
+    }
+}
+
+impl Eq for SysmlTypeRef {}
+
+impl Hash for SysmlTypeRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.element.hash(state);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1682,7 +1699,14 @@ impl SysmlAnalysis {
             source_revision,
             source_fingerprint,
         );
-        let attributes = project_attributes(&mut workspace, &files, &elements, &type_catalog);
+        let attributes = project_attributes(
+            &mut workspace,
+            &files,
+            &elements,
+            &type_catalog,
+            source_revision,
+            source_fingerprint,
+        );
         let records = project_records(&attributes, source_revision);
         let requirements =
             project_requirements(&workspace, &project_indices, &files, &elements, &attributes);
@@ -2014,8 +2038,15 @@ fn project_constraints(
             else {
                 continue;
             };
-            let parameters =
-                project_constraint_parameters(workspace, files, elements, type_catalog, element);
+            let parameters = project_constraint_parameters(
+                workspace,
+                files,
+                elements,
+                type_catalog,
+                element,
+                source_revision,
+                source_fingerprint,
+            );
             let definition =
                 constraint_definition_target(workspace, id).map(|definition| SysmlElementHandle {
                     source_revision,
@@ -2217,6 +2248,8 @@ fn project_constraint_parameters(
     elements: &[SysmlElement],
     type_catalog: &BTreeMap<String, SysmlTypeCategory>,
     constraint: &SysmlElement,
+    source_revision: u64,
+    source_fingerprint: u64,
 ) -> Vec<SysmlFeature> {
     let quantity_roots = [
         semantic_type_id(workspace, "Quantities::ScalarQuantityValue"),
@@ -2272,7 +2305,14 @@ fn project_constraint_parameters(
             })?;
             let resolved = attribute_type_reference(workspace, element, type_span.0, type_span.1)
                 .map(|target| {
-                    resolved_type_semantics(workspace, target, &quantity_roots, &mut type_cache)
+                    resolved_type_semantics(
+                        workspace,
+                        target,
+                        &quantity_roots,
+                        &mut type_cache,
+                        source_revision,
+                        source_fingerprint,
+                    )
                 });
             let mut declared_type = SysmlType::parse_with_catalog(&type_name, type_catalog)?;
             if let Some(resolved) = &resolved {
@@ -2746,6 +2786,8 @@ fn resolved_type_semantics(
     target: ElementId,
     quantity_roots: &[Option<ElementId>; 3],
     cache: &mut HashMap<ElementId, ResolvedSysmlType>,
+    source_revision: u64,
+    source_fingerprint: u64,
 ) -> ResolvedSysmlType {
     if let Some(resolved) = cache.get(&target) {
         return resolved.clone();
@@ -2836,11 +2878,21 @@ fn resolved_type_semantics(
     };
     let resolved = ResolvedSysmlType {
         type_ref: SysmlTypeRef {
+            element: SysmlElementHandle {
+                source_revision,
+                source_fingerprint,
+                element_id: target.index() as u32,
+            },
             qualified_name: workspace.qualified_name_of(target),
         },
         category,
         primitive,
         quantity_kind: kind_id.map(|id| SysmlTypeRef {
+            element: SysmlElementHandle {
+                source_revision,
+                source_fingerprint,
+                element_id: id.index() as u32,
+            },
             qualified_name: workspace.qualified_name_of(id),
         }),
     };
@@ -2879,6 +2931,8 @@ fn project_attributes(
     files: &[SysmlFile],
     elements: &[SysmlElement],
     type_catalog: &BTreeMap<String, SysmlTypeCategory>,
+    source_revision: u64,
+    source_fingerprint: u64,
 ) -> Vec<SysmlAttribute> {
     let quantity_roots = [
         semantic_type_id(workspace, "Quantities::ScalarQuantityValue"),
@@ -2936,7 +2990,14 @@ fn project_attributes(
             let resolved = type_span
                 .and_then(|(start, end)| attribute_type_reference(workspace, element, start, end))
                 .map(|target| {
-                    resolved_type_semantics(workspace, target, &quantity_roots, &mut type_cache)
+                    resolved_type_semantics(
+                        workspace,
+                        target,
+                        &quantity_roots,
+                        &mut type_cache,
+                        source_revision,
+                        source_fingerprint,
+                    )
                 });
             let declared_type = type_name.as_deref().and_then(|type_name| {
                 let mut declared = SysmlType::parse_with_catalog(type_name, type_catalog)?;

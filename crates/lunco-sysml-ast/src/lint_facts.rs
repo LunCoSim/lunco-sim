@@ -989,7 +989,10 @@ fn type_facts(value: &SysmlType) -> H {
 }
 
 fn type_ref_facts(value: &SysmlTypeRef) -> H {
-    H::map([("qualified_name", H::str(value.qualified_name.clone()))])
+    H::map([
+        ("element", element_handle(value.element)),
+        ("qualified_name", H::str(value.qualified_name.clone())),
+    ])
 }
 
 fn subject(value: &SysmlSubject) -> H {

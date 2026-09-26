@@ -289,7 +289,10 @@ fn modelica_declaration(ty: &IrType, name: &str) -> Result<String, ModelicaLower
         IrValueType::Quantity { quantity_kind } => {
             let mut attributes = Vec::new();
             if let Some(quantity_kind) = quantity_kind {
-                attributes.push(format!("quantity=\"{}\"", modelica_string(quantity_kind)));
+                attributes.push(format!(
+                    "quantity=\"{}\"",
+                    modelica_string(&quantity_kind.qualified_name)
+                ));
             }
             if let Some(unit) = &ty.unit {
                 attributes.push(format!("unit=\"{}\"", modelica_string(unit)));
