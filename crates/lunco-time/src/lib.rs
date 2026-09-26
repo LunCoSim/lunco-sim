@@ -571,6 +571,31 @@ fn finish_fixed_tick_timing(
     }
 }
 
+/// Close the current Bevy `FixedMain` catch-up burst when a causal owner
+/// acquires a hold during a fixed tick. `project_time_transport` admits the
+/// next frame, but it cannot stop later iterations of the fixed loop already
+/// running in this frame; dropping only the unconsumed overstep preserves the
+/// tick that raised the hold and leaves the next tick for the owner boundary.
+fn close_fixed_loop_on_progress_hold(
+    transport: Res<TimeTransport>,
+    mut virtual_time: ResMut<Time<Virtual>>,
+    mut fixed_time: ResMut<Time<Fixed>>,
+    coupling: Option<Res<lunco_core_runtime::SimulationBarrier>>,
+    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
+    scene_time: Option<Res<SceneTimeState>>,
+) {
+    let causal_hold = coupling.is_some_and(|state| state.held)
+        || progress.is_some_and(|state| state.is_held())
+        || scene_time.is_some_and(|state| !state.is_ready())
+        || virtual_time.is_paused();
+    project_transport_state(
+        &transport,
+        &mut virtual_time,
+        Some(&mut fixed_time),
+        causal_hold,
+    );
+}
+
 fn begin_fixed_loop_timing(tick: Res<SimTick>, mut start: ResMut<SimulationTimingStart>) {
     start.loop_started_at = Some(Instant::now());
     start.loop_started = tick.0;
@@ -1043,6 +1068,12 @@ impl Plugin for TimePlugin {
             .add_systems(FixedFirst, begin_fixed_tick_timing)
             .add_systems(FixedLast, finish_fixed_tick_timing)
             .add_systems(
+                FixedLast,
+                close_fixed_loop_on_progress_hold
+                    .after(finish_fixed_tick_timing)
+                    .after(lunco_core_runtime::SimulationProgressAdmissionSet),
+            )
+            .add_systems(
                 PreUpdate,
                 (
                     project_time_transport.in_set(TimeSpineSet),
@@ -1293,6 +1324,54 @@ mod tests {
 
         assert_eq!(fixed.overstep(), Duration::ZERO);
         assert_eq!(fixed.elapsed(), Duration::ZERO);
+    }
+
+    #[derive(Resource, Default)]
+    struct FixedBurstCount(u32);
+
+    fn acquire_progress_during_catch_up(
+        mut count: ResMut<FixedBurstCount>,
+        mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
+    ) {
+        count.0 += 1;
+        if count.0 == 2 {
+            progress.acquire(
+                lunco_core_runtime::SimulationProgressKey {
+                    owner: lunco_core_runtime::SimulationProgressOwner::SceneReferences,
+                    operation_id: 1,
+                },
+                "Test causal admission",
+            );
+        }
+    }
+
+    #[test]
+    fn progress_admission_stops_remaining_fixed_ticks_in_the_current_frame() {
+        let mut app = App::new();
+        app.add_plugins(bevy::time::TimePlugin)
+            .add_plugins(TimePlugin)
+            .init_resource::<FixedBurstCount>()
+            .init_resource::<lunco_core_runtime::SimulationProgress>()
+            .add_systems(FixedUpdate, acquire_progress_during_catch_up);
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .set_timestep(Duration::from_secs(1));
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .advance_by(Duration::from_secs(4));
+
+        bevy::time::run_fixed_main_schedule(app.world_mut());
+
+        assert_eq!(
+            app.world().resource::<FixedBurstCount>().0,
+            2,
+            "the admission boundary preserves the tick that acquires the hold and prevents later catch-up ticks"
+        );
+        assert_eq!(
+            app.world().resource::<Time<Fixed>>().overstep(),
+            Duration::ZERO
+        );
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
     }
 
     #[test]

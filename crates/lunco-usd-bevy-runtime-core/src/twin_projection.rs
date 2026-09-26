@@ -70,7 +70,9 @@ use lunco_usd_bevy_scene::{
 use lunco_usd_bevy_stage::{
     UsdInstanceProjection, UsdStageAsset, UsdStageProjectionPlan, source::UsdSourceText,
 };
-use lunco_usd_bevy_twin::{DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake};
+use lunco_usd_bevy_twin::{
+    DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake, scene_document_for,
+};
 
 use crate::scene_runtime::TWIN_SCENE_LOAD_FAILED;
 use lunco_doc::OpenOutcome;
@@ -335,6 +337,54 @@ pub(crate) struct PendingRefSpawns {
     /// referenced closure. Without this retention the load becomes `Unused`
     /// before the async loader can publish its prepared asset.
     retained_assets: HashMap<String, Handle<UsdStageAsset>>,
+}
+
+/// One coalesced authoritative document-projection operation per document.
+/// The key uses the stable document identity; `generations` fences completion
+/// so projecting an older committed revision cannot release a newer edit.
+#[derive(Resource, Default)]
+pub(crate) struct PendingDocumentProjectionAdmissions {
+    generations: HashMap<DocumentId, u64>,
+}
+
+impl PendingDocumentProjectionAdmissions {
+    fn admit(&mut self, doc: DocumentId, generation: u64, progress: &mut SimulationProgress) {
+        let key = SimulationProgressKey::usd_document_projection(doc.raw());
+        match self.generations.get_mut(&doc) {
+            Some(target) => {
+                *target = (*target).max(generation);
+                progress.update_reason(
+                    key,
+                    format!("Project USD document {doc} generation {}", *target),
+                );
+            }
+            None => {
+                self.generations.insert(doc, generation);
+                progress.acquire(
+                    key,
+                    format!("Project USD document {doc} generation {generation}"),
+                );
+            }
+        }
+    }
+
+    fn complete(&mut self, doc: DocumentId, generation: u64, progress: &mut SimulationProgress) {
+        if self
+            .generations
+            .get(&doc)
+            .is_some_and(|target| generation >= *target)
+        {
+            self.generations.remove(&doc);
+            progress.release(SimulationProgressKey::usd_document_projection(doc.raw()));
+        }
+    }
+
+    fn clear(&mut self, progress: &mut SimulationProgress) {
+        for doc in self.generations.keys().copied().collect::<Vec<_>>() {
+            progress.release(SimulationProgressKey::usd_document_projection(doc.raw()));
+        }
+        self.generations.clear();
+    }
 }
 
 /// Preserve authored reference order when asset outcomes arrive in a different
@@ -751,12 +801,16 @@ pub(crate) fn fail_pending_instance_projection(
 /// are released through [`PendingTwinDocs::release_root`] when that Twin closes.
 pub(crate) fn reset_scene_projection_state(
     mut pending_refs: ResMut<PendingRefSpawns>,
+    mut pending_document_projections: Option<ResMut<PendingDocumentProjectionAdmissions>>,
     mut pending_instances: Option<ResMut<PendingInstanceProjections>>,
     mut progress: Option<ResMut<SimulationProgress>>,
 ) {
     if let Some(progress) = progress.as_deref_mut() {
         for key in pending_refs.held_keys.drain() {
             progress.release(key);
+        }
+        if let Some(admissions) = pending_document_projections.as_deref_mut() {
+            admissions.clear(progress);
         }
     }
     pending_refs.items.clear();
@@ -1789,6 +1843,84 @@ pub(crate) fn wake_twin_projection_on_document_changed(
     if registry.contains(trigger.event().doc) {
         wake.wake();
     }
+}
+
+/// Admit the current authoritative document generation before fixed time can
+/// advance. `DocumentRegistry` change detection avoids scanning on steady
+/// frames; the FixedLast installation catches edits issued inside a fixed
+/// Rhai/event pass, while the PreUpdate installation catches edits from UI and
+/// command cycles before the next fixed loop.
+pub(crate) fn admit_pending_primary_document_projection(world: &mut World) {
+    let Some(root) = world
+        .get_resource::<lunco_core::SceneMountState>()
+        .and_then(lunco_core::SceneMountState::active_root)
+    else {
+        return;
+    };
+    let Some(stage_id) = world
+        .get::<UsdPrimPath>(root)
+        .map(|path| path.stage_handle.id())
+    else {
+        return;
+    };
+    let Some(doc) = world
+        .get_resource::<DocBackedTwinScenes>()
+        .zip(world.get_resource::<AssetServer>())
+        .and_then(|(backed, asset_server)| scene_document_for(backed, asset_server, stage_id))
+    else {
+        return;
+    };
+    let Some(projected_generation) = world
+        .resource::<DocBackedTwinScenes>()
+        .synced_generation(doc)
+    else {
+        // Initial scene loading owns its own lifecycle hold until its first
+        // projection commits.
+        return;
+    };
+    let Some((generation, has_simulation_ops)) = world
+        .resource::<DocumentRegistry<UsdDocument>>()
+        .host(doc)
+        .map(|host| {
+            let document = host.document();
+            let generation = document.generation();
+            let has_simulation_ops = generation > projected_generation
+                && document
+                    .ops_since(projected_generation)
+                    .is_none_or(|ops| ops.iter().any(|op| !op.edit_target().is_view()));
+            (generation, has_simulation_ops)
+        })
+    else {
+        return;
+    };
+    if !has_simulation_ops {
+        return;
+    }
+
+    world.resource_scope(
+        |world, mut admissions: Mut<PendingDocumentProjectionAdmissions>| {
+            let mut progress = world.resource_mut::<SimulationProgress>();
+            admissions.admit(doc, generation, &mut progress);
+        },
+    );
+    if let Some(mut wake) = world.get_resource_mut::<TwinProjectionWake>() {
+        wake.wake();
+    }
+}
+
+/// Release the exact mounted-document projection hold only after the live
+/// stage and its ECS projection cursor both reach the admitted target revision.
+pub(crate) fn release_document_projection_progress(
+    world: &mut World,
+    doc: DocumentId,
+    generation: u64,
+) {
+    world.resource_scope(
+        |world, mut admissions: Mut<PendingDocumentProjectionAdmissions>| {
+            let mut progress = world.resource_mut::<SimulationProgress>();
+            admissions.complete(doc, generation, &mut progress);
+        },
+    );
 }
 
 /// Stage asset lifecycle events wake projection when a document edit was
@@ -3378,6 +3510,32 @@ mod tests {
             !wake.is_pending(),
             "the projection owner consumes its wake once"
         );
+    }
+
+    #[test]
+    fn document_projection_hold_coalesces_revisions_and_rejects_stale_completion() {
+        let doc = DocumentId::fresh();
+        let key = SimulationProgressKey::usd_document_projection(doc.raw());
+        let mut admissions = PendingDocumentProjectionAdmissions::default();
+        let mut progress = SimulationProgress::default();
+
+        admissions.admit(doc, 4, &mut progress);
+        admissions.admit(doc, 7, &mut progress);
+        assert_eq!(admissions.generations.get(&doc), Some(&7));
+        assert_eq!(progress.blockers().count(), 1);
+        assert_eq!(
+            progress.blockers().next().map(|blocker| blocker.key),
+            Some(key)
+        );
+
+        admissions.complete(doc, 6, &mut progress);
+        assert!(
+            progress.is_held(),
+            "an older projection cannot release the latest revision"
+        );
+
+        admissions.complete(doc, 7, &mut progress);
+        assert!(!progress.is_held());
     }
 
     /// Relationship and connection edits use live-stage authors, while composition

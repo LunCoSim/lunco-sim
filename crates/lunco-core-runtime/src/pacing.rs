@@ -17,6 +17,13 @@ use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+/// FixedLast systems that discover new causal work admitted during the current
+/// tick must publish its [`SimulationProgress`] hold in this set. The time
+/// spine closes the current Bevy fixed-loop burst after this boundary so a
+/// catch-up frame cannot start another tick before the owner prepares it.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SimulationProgressAdmissionSet;
+
 /// Stable, owner-neutral key for data that a scenario needs before activation.
 /// The producer namespace and identity are authored by the domain owner; the
 /// runtime only tracks the state published for that exact key.
@@ -488,6 +495,8 @@ pub enum SimulationProgressOwner {
     SceneLifecycle,
     /// Runtime USD reference topology admission.
     SceneReferences,
+    /// Live projection of an authored USD document revision.
+    UsdDocumentProjection,
     /// Authored terrain data and collider preparation.
     TerrainPreparation,
     /// USD document source preparation and revision admission.
@@ -538,6 +547,16 @@ impl SimulationProgressKey {
         Self {
             owner: SimulationProgressOwner::TerrainPreparation,
             operation_id: entity.to_bits(),
+        }
+    }
+
+    /// Key the single in-flight projection slot to its stable document id.
+    /// The USD owner separately fences release by projected document
+    /// generation, so a stale projection cannot release a newer revision.
+    pub const fn usd_document_projection(document_id: u64) -> Self {
+        Self {
+            owner: SimulationProgressOwner::UsdDocumentProjection,
+            operation_id: document_id,
         }
     }
 }

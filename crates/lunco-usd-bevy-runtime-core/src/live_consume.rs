@@ -305,6 +305,7 @@ fn mark_stage_projected(
 /// cached composed topology when an edit was committed in the same frame that
 /// its live entities were still being reconciled.
 fn publish_stage_projected(world: &mut World, doc: lunco_doc::DocumentId, generation: u64) {
+    crate::twin_projection::release_document_projection_progress(world, doc, generation);
     let mut data = BTreeMap::new();
     data.insert(
         "doc_id".to_string(),

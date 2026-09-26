@@ -83,6 +83,7 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.add_observer(twin_projection::wake_twin_projection_on_document_changed);
         app.init_resource::<live_consume::LiveTransformEditHints>();
         app.init_resource::<twin_projection::PendingRefSpawns>();
+        app.init_resource::<twin_projection::PendingDocumentProjectionAdmissions>();
         app.init_resource::<twin_projection::PendingInstanceProjections>();
         app.init_resource::<lunco_core_runtime::SimulationProgress>();
         app.init_resource::<live_consume::PendingStageProjections>();
@@ -93,6 +94,11 @@ impl Plugin for UsdSceneRuntimePlugin {
                 twin_projection::drain_pending_twin_docs
                     .run_if(twin_projection::pending_twin_docs_ready),
                 twin_projection::wake_twin_projection_on_stage_event,
+                twin_projection::admit_pending_primary_document_projection.run_if(
+                    bevy::ecs::schedule::common_conditions::resource_changed::<
+                        lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
+                    >,
+                ),
                 twin_projection::sync_twin_overlays.run_if(twin_projection::twin_projection_ready),
                 twin_projection::mark_pending_ref_spawns,
                 twin_projection::sync_stage_dependency_diagnostics,
@@ -109,6 +115,16 @@ impl Plugin for UsdSceneRuntimePlugin {
                 .run_if(
                     bevy::ecs::schedule::common_conditions::resource_exists::<
                         bevy::asset::Assets<lunco_usd_bevy_stage::source::UsdSourceText>,
+                    >,
+                ),
+        );
+        app.add_systems(
+            bevy::prelude::FixedLast,
+            twin_projection::admit_pending_primary_document_projection
+                .in_set(lunco_core_runtime::SimulationProgressAdmissionSet)
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::resource_changed::<
+                        lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
                     >,
                 ),
         );

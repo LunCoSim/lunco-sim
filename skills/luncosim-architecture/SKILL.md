@@ -134,6 +134,17 @@ preview and full worker result. The DEM bridge and readiness scan run in
 `PreUpdate` before `TimeSpineSet`, including while a Twin manifest scan is
 pending, so the first eligible fixed tick cannot precede terrain admission.
 UI and presentation schedules remain live.
+Persistent edits to the mounted primary USD document hold one coalesced
+`UsdDocumentProjection` key from the observed registry revision through the
+matching ECS projection commit; disposable view-layer edits do not hold world
+time when their typed operation suffix is available; an unavailable suffix is
+conservatively treated as causal. Change detection admits UI/command edits in
+`PreUpdate` and edits issued inside a fixed Rhai/event pass in `FixedLast`. The
+time spine closes leftover fixed-loop overstep after the
+`SimulationProgressAdmissionSet`, preserving the tick that issued the edit and
+preventing a catch-up tick from seeing an unprojected revision. Do not poll
+document contents on steady frames or release the hold from a stage-only cursor
+before ECS projection completes.
 Physics readiness then admits bodies and joints on fixed steps. An active USD Modelica participant remains
 readiness-held through its first successful communication point; a compiled,
 intentionally paused model is ready without being stepped. Keep that participant

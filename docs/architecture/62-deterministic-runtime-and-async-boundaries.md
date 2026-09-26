@@ -53,6 +53,18 @@ full `ScriptingSet`, and stamps each event from `MissionClock` at that exact
 may precede `on_start`; scenario inboxes do not replay pre-start edges, so
 `on_start` reads the current state from its owning subsystem.
 
+Scenario lifecycle has one readiness boundary: the optional, read-only
+`simulation_dependencies` plan declares prerequisites; after those inputs are
+committed, per-instance module initialization runs once and `on_start` runs
+once as the ready/activation callback. `on_event` handles a delivered edge in
+the scenario owner's next eligible pass. `on_start` and `on_event` inherit the
+cycle chosen by the Rust owner; event producers do not choose the consumer's
+clock. Do not add `on_init` or `on_ready` aliases: top-level initialization and
+`on_start` already own those distinct responsibilities. A stateful scenario
+also does not register callbacks in arbitrary clocks. Work in another cycle
+belongs to that cycle's owner and uses a typed, owner-scheduled hook or a
+separate script owner with its own state and inbox.
+
 `RuntimeCycleSet` names ordering lanes inside Bevy schedules. It does not by
 itself isolate CPU cost or give `Visualization` an independent cadence. Terrain
 cover reselection has an explicit 30 Hz wall-clock skip boundary, and its
@@ -316,6 +328,19 @@ An active reference spawn on the mounted primary `UsdSceneRoot` acquires a
 Its hold follows the prepared closure through live-stage authoring and ECS root
 projection. Preview and additive document references keep their own projection
 lifecycle and diagnostics; they do not hold or fault the primary simulation.
+Persistent edits to the mounted primary document also acquire a coalesced
+`UsdDocumentProjection` key as soon as the document registry revision changes.
+Change detection admits edits from UI/command cycles in `PreUpdate` before the
+time spine, and admits edits issued inside a fixed Rhai/event pass in `FixedLast`.
+The fixed clock closes any remaining catch-up overstep after that admission,
+preserving the tick that issued the edit. The key remains held until the exact
+or newer document generation is reflected in the ECS projection cursor;
+view-layer edits whose typed operation suffix is available do not hold
+simulation. If that suffix is unavailable, the owner conservatively admits the
+coarse projection as causal work. The steady-frame path does not poll document
+contents. Any `FixedLast` owner that may discover new causal work must publish
+its hold through `SimulationProgressAdmissionSet` before the clock closes the
+fixed-loop burst.
 An inactive or removed primary root releases its exact key until that operation
 has faulted. A primary closure or projection failure records a `RuntimeFault`,
 a path-addressed diagnostic, and a persistent progress hold; scene teardown

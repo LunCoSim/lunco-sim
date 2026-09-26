@@ -24,7 +24,8 @@ pub use health::{ENGINE_HEALTH_HISTORY_LEN, EngineHealthSnapshot, PhysicsHealthS
 pub use pacing::{
     FramePacingDemand, SimulationBarrier, SimulationBarrierParticipants, SimulationDependencyKey,
     SimulationDependencyStates, SimulationDependencyStatus, SimulationExecutionMode,
-    SimulationProgress, SimulationProgressBlocker, SimulationProgressKey, SimulationProgressOwner,
+    SimulationProgress, SimulationProgressAdmissionSet, SimulationProgressBlocker,
+    SimulationProgressKey, SimulationProgressOwner,
 };
 pub use sync::LockExt;
 
