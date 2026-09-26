@@ -1606,7 +1606,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     || state.attempted_dependency_revision != Some(source_dependency_revision)
                     || state.parameters_revision != *parameters_revision
                     || !directives.is_supported()
-                    || !directives.scope.runs_on(is_client)
+                    || !directives.peer_target.runs_on_peer(is_client)
                     || scenario_owner_is_held(world, *entity, &held_roots)
                 {
                     continue;
