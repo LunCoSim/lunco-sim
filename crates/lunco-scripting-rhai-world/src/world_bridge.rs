@@ -1658,14 +1658,35 @@ fn build_world_engine_base(
     // get(id, "Component.field") -> Dynamic (f64/i64/bool/string/array/map) or ().
     // The generic reflection read — built native (reflect → Dynamic, one hop).
     engine.register_fn(
+        "track_entity_read",
+        |id: i64| -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::track_simulation_entity_read(id)
+                .map(|()| true)
+                .map_err(script_runtime_error)
+        },
+    );
+    engine.register_fn(
+        "track_entity_write",
+        |id: i64| -> Result<bool, Box<EvalAltResult>> {
+            bridge_core::track_simulation_entity_write(id)
+                .map(|()| true)
+                .map_err(script_runtime_error)
+        },
+    );
+
+    engine.register_fn(
         "get",
         |id: i64, path: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
-            bridge_core::validate_simulation_port_access(
-                id as u64,
-                path.as_str(),
-                bridge_core::ScriptPortAccess::Read,
-            )
-            .map_err(script_runtime_error)?;
+            if let Some(Err(error)) = bridge_core::with_world(|world| {
+                bridge_core::validate_simulation_entity_access(
+                    world,
+                    Some(id as u64),
+                    path.as_str(),
+                    bridge_core::ScriptEntityAccess::Read,
+                )
+            }) {
+                return Err(script_runtime_error(error));
+            }
             // An unqualified name is the canonical co-simulation port spelling.
             // Resolve it before reflection: otherwise a port name that happens to
             // match a registered reflected type can be captured by the component
@@ -2341,6 +2362,11 @@ fn build_world_engine_base(
     // usd_path(id) -> exact composed USD path, or (). This is the generic
     // identity inverse used by scene-level programs; no domain name is encoded
     // in the lookup.
+    engine.register_fn("usd_path", |id: u64| -> Dynamic {
+        usd_bridge::usd_path_of(id)
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT)
+    });
     engine.register_fn("usd_path", |id: i64| -> Dynamic {
         usd_bridge::usd_path_of(id as u64)
             .map(Dynamic::from)
@@ -3917,6 +3943,27 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 None,
             )
         })?;
+        let entity_read_values = plan.remove("entity_reads").ok_or_else(|| {
+            Diagnostic::error(
+                "simulation_dependencies must include `entity_reads`",
+                None,
+                None,
+            )
+        })?;
+        let entity_write_values = plan.remove("entity_writes").ok_or_else(|| {
+            Diagnostic::error(
+                "simulation_dependencies must include `entity_writes`",
+                None,
+                None,
+            )
+        })?;
+        let query_read_values = plan.remove("query_reads").ok_or_else(|| {
+            Diagnostic::error(
+                "simulation_dependencies must include `query_reads`",
+                None,
+                None,
+            )
+        })?;
         if !plan.is_empty() {
             return Err(Diagnostic::error(
                 format!(
@@ -3951,6 +3998,62 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let parse_entity_ids = |field: &str, values: Dynamic| {
+            let values = values.into_array().map_err(|error| {
+                Diagnostic::error(
+                    format!("simulation_dependencies {field} must be an array: {error}"),
+                    None,
+                    None,
+                )
+            })?;
+            values
+                .into_iter()
+                .map(|value| {
+                    value.as_int().map_err(|error| {
+                        Diagnostic::error(
+                            format!(
+                                "simulation_dependencies {field} entries must be integer entity ids: {error}"
+                            ),
+                            None,
+                            None,
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let entity_reads = parse_entity_ids("entity_reads", entity_read_values)?;
+        let entity_writes = parse_entity_ids("entity_writes", entity_write_values)?;
+        let query_read_values = query_read_values.into_array().map_err(|error| {
+            Diagnostic::error(
+                format!("simulation_dependencies `query_reads` must be an array: {error}"),
+                None,
+                None,
+            )
+        })?;
+        let mut query_reads = query_read_values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let name = value.into_immutable_string().map_err(|error| {
+                    Diagnostic::error(
+                        format!("simulation_dependencies `query_reads[{index}]` must be a string: {error}"),
+                        None,
+                        None,
+                    )
+                })?;
+                let name = name.trim().to_owned();
+                if name.is_empty() {
+                    return Err(Diagnostic::error(
+                        format!("simulation_dependencies `query_reads[{index}]` must not be empty"),
+                        None,
+                        None,
+                    ));
+                }
+                Ok(name)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        query_reads.sort_unstable();
+        query_reads.dedup();
         let required_values = required_values.into_array().map_err(|error| {
             Diagnostic::error(
                 format!("simulation_dependencies `required_inputs` must be an array: {error}"),
@@ -4026,6 +4129,9 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         required_inputs.dedup();
         Ok(lunco_scripting::scenario::ScenarioDependencyPlan {
             modelica_entities,
+            entity_reads,
+            entity_writes,
+            query_reads,
             required_inputs,
         })
     }

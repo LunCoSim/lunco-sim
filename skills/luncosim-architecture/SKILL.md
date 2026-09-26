@@ -34,16 +34,35 @@ owner boundary in stable identity order. Keep live-world hooks and physics
 inside their deterministic schedule. A Rhai scenario that depends on Modelica
 ports or events declares the participating entity ids in
 `simulation_dependencies(me, ctx)`, where `ctx` is the validated scenario
-parameter map. The hook returns a map with `modelica_entities: [ids]` and
-`required_inputs: [#{ owner, identity }]`. The owner resolves Modelica ids once
-per source/parameter revision, requires each id to identify a live Modelica
-participant, and adds them to the shared causal barrier. An unresolved id or a
-live non-Modelica entity fails that source revision with a visible diagnostic.
+parameter map. The hook returns a map with `modelica_entities: [ids]`,
+`entity_reads: [ids]`, `entity_writes: [ids]`,
+`query_reads: ["PublicQueryName"]`, and
+`required_inputs: [#{ owner, identity }]`. All five arrays are required even
+when empty. The owner resolves all declared ids once per
+source/parameter revision. `modelica_entities` ids must identify live Modelica
+participants and grant both directions of access. Directional read/write ids
+may identify any live entity; a Modelica entity in either set also joins the
+shared causal barrier. Unresolved ids fail that source revision with a visible
+diagnostic.
 Every simulation-clock Modelica port access must be covered by the calling
 scenario's own plan, including `get`, `port`, and `query("ReadPorts", #{ api_id })`;
 aggregate barrier membership from USD wiring or another scenario does not
 authorize the read or write. The owner enforces this at the port, query,
 targeted-command, and event-delivery boundaries.
+Generic reflected reads and direct mutations also require the matching
+`entity_reads` or `entity_writes` declaration. After a typed simulation
+command materializes an entity whose id was not available during plan
+preparation, `track_entity_read(id)` or `track_entity_write(id)` adds the
+directional access in serialized simulation order before the entity is used.
+Tracked Modelica entities join the same barrier when they enter the current
+Modelica projection.
+Entity-targeted API query providers report their live target ids through
+`simulation_entity_reads`; the scripting bridge checks them against the
+scenario's read plan before execution. Broad spatial/world queries use an
+explicit coarse declaration by public provider name in `query_reads`.
+Mounted-scene USD queries without `doc_id` use the active committed Twin
+generation. Unknown query providers default to the broad declared scope, and
+broad queries cannot run while `simulation_dependencies` is resolving.
 Required input keys refer to producer namespaces registered in the generic
 `SimulationDependencyStates` resource. The scenario holds its existing
 `ScriptPreparation` key until every required input is Ready; it retries only
@@ -54,9 +73,12 @@ runs before mutable top-level initialization, so derive it from `me`, scenario
 parameters, and read-only world queries. Top-level initialization runs in its
 own `Initialization` phase after the plan commits. Dependency planning may
 resolve identities but cannot access live ports, issue commands, mutate the
-world, or emit events. Invalid, unresolved, or non-Modelica ids fail that source
-revision with a diagnostic. Unbarriered port access and Modelica event delivery
-fail visibly. Physics operations that can accumulate into shared bodies use
+world, or emit events. Invalid or unresolved ids fail that source revision
+with a diagnostic. Unbarriered port access and Modelica event delivery
+fail visibly. Connected Modelica event edges are sampled only while the
+simulation clock advances, after `SimTickSet` and before Rhai; this gives an
+initially active output its producer tick after scenario readiness. Physics
+operations that can accumulate into shared bodies use
 `PhysicsOrderKey` from the instance root and authored prim path. Joint solving,
 motor warm-start, custom prismatic correction, raycast and jointed tire forces,
 and raycast mass-property folds consume stable key order. The production
@@ -214,6 +236,12 @@ failures remain in `failed`. Put an eventual expensive terrain provider at the
 consumed `lunco-terrain-bake` kernel boundary; keep `lunco-terrain-core` projection-free
 and leave `lunco-terrain-surface` as the runtime projection owner. See
 [`native-hook-providers.md`](../../docs/architecture/native-hook-providers.md).
+
+Keep stateful per-entity Rhai scenarios on their owning Simulation lane. For a
+stateless Rhai decision at another cadence, prefer an existing owner-invoked
+hook with typed facts and context over adding more lifecycle callbacks to the
+scenario runtime. Cross-cycle results return as typed owner actions; a scenario
+`this` map never moves between cycles.
 
 Keep the workbench split at the dependency boundary: `lunco-workbench-core`
 owns renderer-independent panel/menu/perspective/registration contracts, tab

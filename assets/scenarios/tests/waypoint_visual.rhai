@@ -25,6 +25,17 @@ const SKY_INPUTS = [
     "inputs:center_roll",
 ];
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [],
+       entity_reads: [
+           find_path(ROUTE_POINT),
+           find_path(LANDING_LOCATION),
+           find_path(PREDICTED_LANDING),
+       ],
+       entity_writes: [],
+       query_reads: [], required_inputs: [] }
+}
+
 fn sky_uses_shader_defaults() {
     let record = query("QueryUsdPrim", #{
         path: SKY_SHADER,
@@ -163,10 +174,10 @@ fn predicted_landing_uses_annotation_material() {
 }
 
 fn on_start(me, ctx) {
-    this.rover = find("/WaypointVisual/Rover");
-    this.marker = find(ROUTE_POINT);
-    this.landing = find(LANDING_LOCATION);
-    this.predicted = find(PREDICTED_LANDING);
+    this.rover = find_path("/WaypointVisual/Rover");
+    this.marker = find_path(ROUTE_POINT);
+    this.landing = find_path(LANDING_LOCATION);
+    this.predicted = find_path(PREDICTED_LANDING);
     this.done = false;
     this.phase = 0;
     this.t = 0.0;

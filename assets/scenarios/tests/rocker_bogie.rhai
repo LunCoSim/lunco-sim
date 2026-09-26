@@ -26,15 +26,25 @@
 // landing transient is intentionally not used as its reference.
 const STEP_SETTLED_LOAD_FLOOR_RAD = 0.01;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [],
+       entity_reads: [
+           find_path("/RockerBogieTest/Rover/HingeL"),
+           find_path("/RockerBogieTest/Rover/HingeR"),
+       ],
+       entity_writes: [],
+       query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 10.0;   // drop onto the step, then ring down
     this.sample_s = 1.0;
     this.next_sample = 0.0;
 
-    this.hl = find("/RockerBogieTest/Rover/HingeL");
-    this.hr = find("/RockerBogieTest/Rover/HingeR");
-    this.rover = find("/RockerBogieTest/Rover");
+    this.hl = find_path("/RockerBogieTest/Rover/HingeL");
+    this.hr = find_path("/RockerBogieTest/Rover/HingeR");
+    this.rover = find_path("/RockerBogieTest/Rover");
 
     this.coupled = param(me, "coupled", -1.0);
     this.peak_l = 0.0;

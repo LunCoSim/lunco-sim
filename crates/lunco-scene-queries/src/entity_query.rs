@@ -11,7 +11,7 @@
 
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
-use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
+use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry, SimulationQueryReadScope};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::{ApiQueryError, ApiQueryResult, api_param_u64};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
@@ -26,6 +26,17 @@ pub struct QueryEntityProvider;
 impl ApiQueryProvider for QueryEntityProvider {
     fn name(&self) -> &'static str {
         "QueryEntity"
+    }
+
+    fn simulation_read_scope(&self, _params: &ApiValue) -> SimulationQueryReadScope {
+        SimulationQueryReadScope::EntityTargets
+    }
+
+    fn simulation_entity_reads(&self, params: &ApiValue) -> Vec<GlobalEntityId> {
+        api_param_u64(params, "id")
+            .map(GlobalEntityId::from_raw)
+            .into_iter()
+            .collect()
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {

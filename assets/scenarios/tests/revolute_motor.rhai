@@ -15,6 +15,14 @@
 
 const TARGET = 1.2;   // rad, commanded through the port
 
+fn simulation_dependencies(me, ctx) {
+    let hinge = find_path("/SandboxScene/Hinge");
+    #{ modelica_entities: [],
+       entity_reads: [hinge],
+       entity_writes: [hinge],
+       query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 2.0;    // confirm it is at rest BEFORE commanding
@@ -22,8 +30,8 @@ fn on_start(me, ctx) {
     this.sample_s = 1.0;
     this.next_sample = 0.0;
 
-    this.hinge = find("/SandboxScene/Hinge");
-    this.arm = find("/SandboxScene/Arm");
+    this.hinge = find_path("/SandboxScene/Hinge");
+    this.arm = find_path("/SandboxScene/Arm");
     this.at_rest = ();
     this.write_ok = false;
     this.sent = false;

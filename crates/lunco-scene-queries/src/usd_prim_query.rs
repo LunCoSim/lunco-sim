@@ -1202,6 +1202,14 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         "QueryUsdPrim"
     }
 
+    fn simulation_read_scope(&self, params: &ApiValue) -> lunco_api::SimulationQueryReadScope {
+        if params.get("doc_id").is_none() {
+            lunco_api::SimulationQueryReadScope::SceneGeneration
+        } else {
+            lunco_api::SimulationQueryReadScope::ScenarioDeclared
+        }
+    }
+
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let Some(path) = api_param_str(params, "path") else {
             return Err(ApiQueryError::new(
@@ -1241,6 +1249,14 @@ pub struct QueryUsdPrimsProvider;
 impl ApiQueryProvider for QueryUsdPrimsProvider {
     fn name(&self) -> &'static str {
         "QueryUsdPrims"
+    }
+
+    fn simulation_read_scope(&self, params: &ApiValue) -> lunco_api::SimulationQueryReadScope {
+        if params.get("doc_id").is_none() {
+            lunco_api::SimulationQueryReadScope::SceneGeneration
+        } else {
+            lunco_api::SimulationQueryReadScope::ScenarioDeclared
+        }
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {

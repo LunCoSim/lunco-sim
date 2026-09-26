@@ -92,6 +92,11 @@ fn vector_matches(value, expected) {
         && (value[2] - expected.z).abs() <= 1.0e-9
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["GetDocumentSource", "ListOpenDocuments"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.doc = ();
     this.modelica_doc = ();

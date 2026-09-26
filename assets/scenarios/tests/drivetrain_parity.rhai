@@ -51,6 +51,17 @@
 //     move", so a dead command surface cannot masquerade as parity (0 == 0).
 // If you do not see a sample table and a verdict line, the test did not run.
 
+fn simulation_dependencies(me, ctx) {
+    let raycast = find_path("/DrivetrainParity/RoverRaycast");
+    let physical = find_path("/DrivetrainParity/RoverPhysical");
+    let reads = vessel_descendants(raycast);
+    for entity in vessel_descendants(physical) {
+        reads.push(entity);
+    }
+    #{ modelica_entities: [raycast, physical],
+       entity_reads: reads, entity_writes: [], query_reads: [], required_inputs: [] }
+}
+
 // ── Local assertion helpers (stateless — `this` is NOT bound in helpers) ────
 
 /// Signed heading change in DEGREES between two forward vectors, positive to the
@@ -89,8 +100,8 @@ fn mass_props(rc, ph, mount_y) {
     let m_w = 0.0;
     let n = 0;
     for w in ["FL", "FR", "RL", "RR"] {
-        let carrier = find("/DrivetrainParity/RoverPhysical/Suspension_" + w);
-        let wheel = find("/DrivetrainParity/RoverPhysical/Suspension_" + w + "/Wheel_" + w);
+        let carrier = find_path("/DrivetrainParity/RoverPhysical/Suspension_" + w);
+        let wheel = find_path("/DrivetrainParity/RoverPhysical/Suspension_" + w + "/Wheel_" + w);
         if carrier >= 0 {
             let mc = get(carrier, "mass");
             if mc != () { m_w += mc; }
@@ -228,8 +239,12 @@ fn on_start(me, ctx) {
     this.phase = "settle";
     this.next_sample = 0.0;
 
-    this.rc = find("/DrivetrainParity/RoverRaycast");
-    this.ph = find("/DrivetrainParity/RoverPhysical");
+    this.rc = find_path("/DrivetrainParity/RoverRaycast");
+    this.ph = find_path("/DrivetrainParity/RoverPhysical");
+    this.claim_rc = ();
+    this.claim_ph = ();
+    this.drive_ack_rc = ();
+    this.drive_ack_ph = ();
 
     this.d_rc = 0.0;   this.d_ph = 0.0;
     this.p_rc = ();    this.p_ph = ();
@@ -329,6 +344,8 @@ fn on_tick(me, ctx) {
         brake(this.ph);
         if t >= this.settle_s {
             this.phase = "drive";
+            this.claim_rc = cmd("AcquireControl", #{ target: this.rc, bind_camera: false });
+            this.claim_ph = cmd("AcquireControl", #{ target: this.ph, bind_camera: false });
             // Reset the odometers here, not at t=0: the drop-and-settle motion
             // is not travel and would be charged to whichever rover bounced more.
             this.p_rc = pos_rc;
@@ -346,8 +363,10 @@ fn on_tick(me, ctx) {
 
     // ── Phase 2: full throttle, straight ────────────────────────────────────
     if this.phase == "drive" {
-        drive(this.rc, 1.0, 0.0);
-        drive(this.ph, 1.0, 0.0);
+        let command_rc = drive(this.rc, 1.0, 0.0);
+        let command_ph = drive(this.ph, 1.0, 0.0);
+        if this.drive_ack_rc == () { this.drive_ack_rc = command_rc; }
+        if this.drive_ack_ph == () { this.drive_ack_ph = command_ph; }
 
         // Distance is the STRAIGHT-RUN odometer, so it accumulates only here.
         // The position REFERENCE is advanced unconditionally at the end of the
@@ -468,6 +487,8 @@ fn on_tick(me, ctx) {
                 ymin_ph: this.ymin_ph, ymax_ph: this.ymax_ph,
                 mp:       this.mp,
                 structure_contract: this.structure_contract,
+                claim_rc: this.claim_rc, claim_ph: this.claim_ph,
+                drive_ack_rc: this.drive_ack_rc, drive_ack_ph: this.drive_ack_ph,
             });
         }
         return;
@@ -476,8 +497,8 @@ fn on_tick(me, ctx) {
 
 /// Stop the rovers if the scenario is detached or hot-reloaded mid-run.
 fn on_stop(me, ctx) {
-    let rc = find("/DrivetrainParity/RoverRaycast");
-    let ph = find("/DrivetrainParity/RoverPhysical");
+    let rc = find_path("/DrivetrainParity/RoverRaycast");
+    let ph = find_path("/DrivetrainParity/RoverPhysical");
     if rc >= 0 { brake(rc); }
     if ph >= 0 { brake(ph); }
 }
@@ -526,6 +547,17 @@ fn on_stop(me, ctx) {
 // rover at ~24 m/s; the floor catches a dead command surface.
 fn verdict(s) {
     let f = [];
+
+    f.push(t_true(s.claim_rc != () && s.claim_rc.ok == true,
+        "raycast rover control claim failed: " + s.claim_rc));
+    f.push(t_true(s.claim_ph != () && s.claim_ph.ok == true,
+        "physical rover control claim failed: " + s.claim_ph));
+    f.push(t_true(s.drive_ack_rc != () && s.drive_ack_rc.ok == true
+                  && s.drive_ack_rc.status == "applied",
+        "raycast rover SetPorts command was not applied: " + s.drive_ack_rc));
+    f.push(t_true(s.drive_ack_ph != () && s.drive_ack_ph.ok == true
+                  && s.drive_ack_ph.status == "applied",
+        "physical rover SetPorts command was not applied: " + s.drive_ack_ph));
 
     // ── The vehicle itself, before any behaviour ────────────────────────────
     // A rover that masses differently, or acts its mass at a different height,

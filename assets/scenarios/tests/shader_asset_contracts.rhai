@@ -44,6 +44,11 @@ fn schema_checks(path, fields) {
     failures
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ValidateAsset"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;

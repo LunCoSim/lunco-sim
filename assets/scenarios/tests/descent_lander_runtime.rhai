@@ -24,7 +24,7 @@ fn simulation_dependencies(me, ctx) {
             find_path("/LanderTest/Lander"),
             find_path("/LanderTest/Lander/GNC"),
         ],
-        required_inputs: [],
+        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 

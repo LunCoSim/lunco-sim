@@ -3,7 +3,7 @@
 // environment inputs still produce buoyancy when a scene authors them.
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/ModelicaBalloonEarth/EarthBalloon/Plant")], required_inputs: [] }
+    #{ modelica_entities: [find_path("/ModelicaBalloonEarth/EarthBalloon/Plant")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {

@@ -30,6 +30,11 @@
 // `emit("COMMS_WALL", "PASS"|"FAIL")` — the telemetry verdict `scene_test` reads
 // for its exit code. Link queries come from `prelude/links.rhai`.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["Links"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     // The graph is rebuilt on its own cadence and the poses have to settle first;

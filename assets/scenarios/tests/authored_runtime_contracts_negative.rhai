@@ -4,6 +4,11 @@
 
 const ROOT = "/AuthoredRuntimeContractsNegative";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["Raycast", "GroundHeight"], required_inputs: [] }
+}
+
 fn missing(record) {
     record == () || record.ok == false
 }

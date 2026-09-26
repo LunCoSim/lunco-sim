@@ -48,6 +48,11 @@ fn mentions(findings, subject) {
     false
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["LintReport"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     // The malformed leg is kinematic because this scene tests authored lint

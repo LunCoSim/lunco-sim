@@ -52,6 +52,21 @@
 // stiffer spring can flip the verdict.
 const TOL_M = 0.5;
 
+fn simulation_dependencies(me, ctx) {
+    let modelica_entities = [];
+    for path in [
+        "/PartsAttached/SkidRaycast",
+        "/PartsAttached/SkidPhysical",
+        "/PartsAttached/AckermannRaycast",
+        "/PartsAttached/AckermannPhysical",
+    ] {
+        let rover = find_path(path);
+        if rover >= 0 { modelica_entities.push(rover); }
+    }
+    #{ modelica_entities: modelica_entities, entity_reads: [],
+       entity_writes: [], query_reads: [], required_inputs: [] }
+}
+
 /// Every ECS descendant of `root`, as `#{ id, label }`. `name()` yields the
 /// presentation label; topology traversal uses the entity ids directly. Iterative rather than
 /// recursive, with a hard visit cap: a hierarchy cycle in a broken scene must
@@ -110,6 +125,7 @@ fn on_start(me, ctx) {
     // baseline radius. `parts[i]` belongs to `roots[i]`.
     this.parts = [];
     this.start_pos = [];    // rover position at baseline, for the travel check
+    this.claims = [];
     this.captured = false;
 
     print("[parts] ── nothing falls off the vehicle ────────────────────────");
@@ -166,6 +182,7 @@ fn on_tick(me, ctx) {
                 }
                 this.parts.push(list);
                 print("[parts] " + this.paths[i] + ": " + list.len() + " parts baselined");
+                this.claims.push(cmd("AcquireControl", #{ target: r, bind_camera: false }));
                 i += 1;
             }
             this.phase = "drive";
@@ -196,6 +213,7 @@ fn on_tick(me, ctx) {
             roots: this.roots,
             parts: this.parts,
             start_pos: this.start_pos,
+            claims: this.claims,
         });
     }
 }
@@ -214,6 +232,8 @@ fn verdict(s) {
 
     let i = 0;
     for r in s.roots {
+        f.push(t_true(s.claims[i] != () && s.claims[i].ok == true,
+            s.paths[i] + ": rover control claim failed: " + s.claims[i]));
         let rp = world_pos(r);
         let travelled = radius(rp, s.start_pos[i]);
         f.push(t_moved(travelled, 5.0, s.paths[i] + " travel (m)"));

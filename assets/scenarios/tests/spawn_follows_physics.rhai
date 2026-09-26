@@ -10,6 +10,11 @@
 const CHANNEL = "SPAWN_FOLLOWS_PHYSICS";
 const TITLE = "SPAWN FOLLOWS PHYSICS";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListSpawnCatalog"], required_inputs: [] }
+}
+
 fn fail(reason) {
     report_verdict([reason], TITLE, CHANNEL);
 }
@@ -18,6 +23,7 @@ fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.spawn_requested = false;
     this.balloon = -1;
+    this.balloon_access_declared = false;
     this.start_pos = ();
     this.start_render = ();
     this.sampled = false;
@@ -71,6 +77,21 @@ fn on_tick(me, ctx) {
             fail("the catalog spawn did not materialize a modelica_balloon entity");
         }
         return;
+    }
+
+    if !this.balloon_access_declared {
+        try {
+            this.balloon_access_declared = track_entity_read(this.balloon);
+        } catch (error) {
+            this.done = true;
+            fail("spawned balloon access declaration failed: " + error);
+            return;
+        }
+        if !this.balloon_access_declared {
+            this.done = true;
+            fail("spawned balloon read access was not committed");
+            return;
+        }
     }
 
     let simulation = world_pos(this.balloon);

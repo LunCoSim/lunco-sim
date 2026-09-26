@@ -45,6 +45,17 @@ const EXPECTED_FORCE = 734.1;     // newtons along the strut axis, magnitude
 const SCENE_ROOT_NAME = "Scene:twin://tests/prismatic_spring.usda";
 const SCENE_ROOT_PATH = "/PrismaticSpringTest";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [],
+       entity_reads: [
+           find_path("/PrismaticSpringTest/StrutExt"),
+           find_path("/PrismaticSpringTest/StrutComp"),
+           find_path("/PrismaticSpringTest/StrutLegLike"),
+       ],
+       entity_writes: [],
+       query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 5.0;    // free ring-down of a 4000 N/m, 2200 N·s/m strut
@@ -52,12 +63,12 @@ fn on_start(me, ctx) {
     this.next_sample = 0.0;
     this.phase = "settle";
 
-    this.ext = find("/PrismaticSpringTest/StrutExt");
-    this.comp = find("/PrismaticSpringTest/StrutComp");
-    this.bob_ext = find("/PrismaticSpringTest/BobExt");
-    this.bob_comp = find("/PrismaticSpringTest/BobComp");
-    this.leglike = find("/PrismaticSpringTest/StrutLegLike");
-    this.bob_leglike = find("/PrismaticSpringTest/BobLegLike");
+    this.ext = find_path("/PrismaticSpringTest/StrutExt");
+    this.comp = find_path("/PrismaticSpringTest/StrutComp");
+    this.bob_ext = find_path("/PrismaticSpringTest/BobExt");
+    this.bob_comp = find_path("/PrismaticSpringTest/BobComp");
+    this.leglike = find_path("/PrismaticSpringTest/StrutLegLike");
+    this.bob_leglike = find_path("/PrismaticSpringTest/BobLegLike");
     this.leglike_x0 = ();
     this.scene_root_id = find(SCENE_ROOT_NAME);
     this.scene_root_path = if this.scene_root_id >= 0 {

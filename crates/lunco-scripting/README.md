@@ -74,8 +74,9 @@ structural invalidation clock and cache the detailed USD snapshot until that
 generation changes. This keeps fixed-tick policy from repeatedly serializing
 `InspectUsdDocument`; live poses and commands remain per-tick reads/writes.
 
-The prelude also provides `usd_path(id)`, which resolves
-`QueryEntity.usd_prim_path` for canonical USD topology addressing. `name(id)`
+The Rust Rhai bridge provides `usd_path(id)`, which reads the entity's stable
+`UsdPrimPath` identity metadata for canonical USD topology addressing. It accepts
+API identities from `me` as well as signed ids returned by `find_path`. `name(id)`
 remains a human-readable presentation label and must not be used to construct
 scene paths.
 

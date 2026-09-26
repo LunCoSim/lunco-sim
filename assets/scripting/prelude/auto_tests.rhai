@@ -307,10 +307,10 @@ fn seg(prev, cur) {
     d
 }
 
-/// Resolve a prim path, or `()` — `find` returns -1 on a miss, which is a
+/// Resolve a composed prim path, or `()` — `find_path` returns -1 on a miss, which is a
 /// perfectly good array index and a perfectly bad entity id.
 fn find_or_none(path) {
-    let id = find(path);
+    let id = find_path(path);
     if id == () || id < 0 { return (); }
     id
 }

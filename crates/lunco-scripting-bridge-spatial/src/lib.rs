@@ -179,7 +179,7 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
     with_world(|world| {
         let Some(pairs) = world
             .get_resource::<ApiEntityRegistry>()
-            .map(ApiEntityRegistry::entities)
+            .map(ApiEntityRegistry::entities_by_identity)
         else {
             return b.array(Vec::new());
         };

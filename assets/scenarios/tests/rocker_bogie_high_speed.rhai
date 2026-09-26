@@ -15,6 +15,13 @@ const MAX_REVERSE_TICKS = 0;
 const MAX_SPEED_RIPPLE = 0.20;
 const MAX_HEIGHT_RIPPLE_M = 0.025;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/RockerBogieHighSpeed/Rover")],
+       entity_reads: [],
+       entity_writes: [],
+       query_reads: [], required_inputs: [] }
+}
+
 fn vdist(a, b) {
     let dx = a[0] - b[0];
     let dy = a[1] - b[1];
@@ -25,7 +32,7 @@ fn vdist(a, b) {
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
-    this.rover = find("/RockerBogieHighSpeed/Rover");
+    this.rover = find_path("/RockerBogieHighSpeed/Rover");
     this.prev = ();
     this.start = ();
     this.last_speed = ();
@@ -42,6 +49,7 @@ fn on_start(me, ctx) {
     this.max_tilt = 0.0;
     this.pose_wait_ticks = 0;
     this.done = false;
+    this.claim = ();
 
     print("[rb-high-speed] full-throttle flat-ground regression started");
 }
@@ -73,6 +81,9 @@ fn on_tick(me, ctx) {
         brake(this.rover);
         if this.t >= SETTLE_S {
             this.phase = "drive";
+            this.claim = cmd("AcquireControl", #{
+                target: this.rover, bind_camera: false,
+            });
             this.start = p;
             this.prev = p;
             print("[rb-high-speed] settled; starting 1.0 throttle at t=" + r2(this.t));
@@ -146,7 +157,8 @@ fn on_tick(me, ctx) {
                 speed_max: this.speed_max,
                 height_min: this.height_min,
                 height_max: this.height_max,
-                max_tilt: this.max_tilt
+                max_tilt: this.max_tilt,
+                claim: this.claim
             });
         }
     }
@@ -154,6 +166,8 @@ fn on_tick(me, ctx) {
 
 fn verdict(s) {
     let f = [];
+    f.push(t_true(s.claim != () && s.claim.ok == true,
+        "rover control claim failed: " + s.claim));
     let net = vdist(s.end, s.start);
     let mean = s.speed_sum / s.speed_n;
     let variance = (s.speed_sq_sum / s.speed_n) - mean * mean;

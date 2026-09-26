@@ -11,7 +11,9 @@ const ADMISSION_LANDING_PATH = "/RouteLifecycle/AdmissionLanding";
 const ADMISSION_POINT_PATH = "/RouteLifecycle/AdmissionPoint";
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path(SUBJECT_PATH)], required_inputs: [] }
+    #{ modelica_entities: [find_path(SUBJECT_PATH)], entity_reads: [], entity_writes: [],
+       query_reads: ["QueryUsdPrim", "ResolveUsdTarget", "InspectSelection", "ScriptInspect", "ScriptStatus"],
+       required_inputs: [] }
 }
 
 fn direct_points(doc) {
@@ -313,6 +315,33 @@ fn on_tick(me, ctx) {
                 + ", normals=" + ribbon_normals_match(this.doc, 3).to_string()
                 + ", anchor=" + ribbon_anchor_matches_point(this.doc, ROUTE + "/P0").to_string()
                 + ", programs=" + programs.to_string();
+            if listed != () && listed.ok && listed.programs.len() > 0 {
+                let target = find_path(ROUTE);
+                let inspect = query("ScriptInspect", #{ target: target });
+                if inspect != () {
+                    detail += ", route_scripted=" + inspect.scripted.to_string();
+                    if inspect.running != () {
+                        detail += ", route_script_running=" + inspect.running.to_string();
+                    }
+                    if inspect.state != () {
+                        detail += ", route_script_state=" + inspect.state.to_string();
+                    }
+                }
+                let status = query("ScriptStatus", #{ target: target });
+                if status != () {
+                    if status.state != () {
+                        detail += ", route_script_state=" + status.state.to_string();
+                    }
+                    if status.diagnostics != () {
+                        for diagnostic in status.diagnostics {
+                            detail += ", route_script_diagnostic=" + diagnostic.message;
+                        }
+                    }
+                    if status.error != () {
+                        detail += ", route_script_status_error=" + status.error;
+                    }
+                }
+            }
         }
         if this.phase == 2 {
             detail += "; point_count=" + point_count(this.doc).to_string()
@@ -407,6 +436,8 @@ fn on_tick(me, ctx) {
             && hud_record.attrs["lunco:ui:surfaceId"] == "program-browser"
             && hud_record.attrs["lunco:ui:visibilityMode"] == "always",
             "HUD activation is authored through the typed USD document"));
+        this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
+            "authoring runtime HUD metadata preserves the live subject projection"));
         for check in invalid_edit_checks(this.doc) { this.checks.push(check); }
         this.phase = 1;
         return;

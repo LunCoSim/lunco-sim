@@ -8,6 +8,16 @@ const TIRE = "/WheelAttachmentContract/SeparateTire";
 const SUSPENSION = "/WheelAttachmentContract/SeparateSuspension";
 const WAIT_S = 20.0;
 
+fn simulation_dependencies(me, ctx) {
+    let rover = find_path(ROOT);
+    let reads = vessel_descendants(rover);
+    reads.push(rover);
+    #{ modelica_entities: [],
+       entity_reads: reads,
+       entity_writes: [],
+       query_reads: [], required_inputs: [] }
+}
+
 fn query_ok(record) {
     record != () && record.ok != false
 }
@@ -49,8 +59,8 @@ fn authored_contract() {
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
-    this.wheel = find(WHEEL);
-    this.rover = find(ROOT);
+    this.wheel = find_path(WHEEL);
+    this.rover = find_path(ROOT);
     this.authored_ok = false;
     this.runtime_ok = false;
 }

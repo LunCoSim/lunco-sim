@@ -7,7 +7,8 @@ const ROUTE = ROOT + "/Route";
 const SUBJECT_PATH = ROOT + "/Subject";
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path(SUBJECT_PATH)], required_inputs: [] }
+    #{ modelica_entities: [find_path(SUBJECT_PATH)], entity_reads: [], entity_writes: [],
+       query_reads: ["QueryUsdPrim", "SensorOccupants"], required_inputs: [] }
 }
 
 fn event_is_within(entity, ancestor) {

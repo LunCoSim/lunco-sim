@@ -386,7 +386,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "emit",
         "emit(name, value?)",
         "bool",
-        "Fire a TelemetryEvent on the shared bus; delivered to on_event hooks on the next scenario pass. `value` may be a scalar, array, or map and keeps its typed structure.",
+        "Fire a TelemetryEvent on the shared bus; an active scenario receives it on its next eligible pass (fixed Simulation, or paused Lifecycle). The event keeps its producer tick stamp; execution_context() describes the consumer pass. `value` may be a scalar, array, or map and keeps its typed structure.",
     ),
     (
         "bind_policy",
@@ -422,13 +422,13 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "subscribe",
         "subscribe(name)",
         "()",
-        "OPTIONAL, call in on_start. Deliver ONLY the named event(s) to on_event (default = all). Skips the per-event VM entry for events you don't name. Footgun: an unnamed event won't reach on_event — omit subscribe entirely to get all.",
+        "OPTIONAL, call in on_start to filter this scenario's on_event deliveries by exact name. With no subscribe calls, all event names are delivered. Subscriptions affect event selection only; they do not select an execution cycle.",
     ),
     (
         "subscribe_prefix",
         "subscribe_prefix(prefix)",
         "()",
-        "OPTIONAL, call in on_start. Deliver every event whose name starts with `prefix` (e.g. \"enter:\" for all zone-enters). Combines with subscribe().",
+        "OPTIONAL, call in on_start to include events with this name prefix (e.g. \"enter:\"). Prefix and exact-name subscriptions combine; they do not select an execution cycle.",
     ),
     (
         "sim_tick",
@@ -842,7 +842,7 @@ const HOOKS: &[(&str, &str)] = &[
     ),
     (
         "on_start",
-        "fn on_start(me, ctx) — called once after (re)compile; `me` is the host entity id, `ctx` is the typed launch context, and `this` is persistent scenario state.",
+        "fn on_start(me, ctx) — called once after per-instance module initialization and declared-input readiness; this is the scenario's ready callback. `me` is the host entity id, `ctx` is the launch context, and `this` is persistent scenario state.",
     ),
     (
         "on_tick",
@@ -854,7 +854,7 @@ const HOOKS: &[(&str, &str)] = &[
     ),
     (
         "on_event",
-        "fn on_event(me, evt, ctx) — a TelemetryEvent arrived; evt is #{ name, source, value, severity, timestamp }, and ctx is the typed launch context. `source` = emitter gid (WHICH sensor/script fired — branch on it), `value` = payload (e.g. a zone enter's entrant gid).",
+        "fn on_event(me, evt, ctx) — react to a TelemetryEvent in this scenario's next eligible pass (fixed Simulation, or paused Lifecycle); the callback does not move to the producer's cycle. evt is #{ name, source, value, severity, timestamp, sim_secs, sim_tick }; execution_context() includes the consumer cycle and producer stamp. `source` is the emitter gid; `value` is the typed payload.",
     ),
 ];
 

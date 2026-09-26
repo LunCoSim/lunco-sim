@@ -26,6 +26,8 @@ fn simulation_dependencies(me, ctx) {
             find_path("/SandboxScene/Ackermann_Physical_1"),
             find_path("/SandboxScene/Skid_Battery_Thermal_1"),
         ],
+        entity_reads: [], entity_writes: [],
+        query_reads: ["BindingStatus", "GeneratedModelicaSource", "ListUsdAssetMetadata"],
         required_inputs: [],
     }
 }

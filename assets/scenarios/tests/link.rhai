@@ -56,6 +56,15 @@ const PERIGEE_M = 330000000.0;
 const APOGEE_M = 410000000.0;
 const C_M_S = 299792458.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [],
+       entity_reads: [find("/LinkTest/MalapertBase"), find("/LinkTest/Relay"),
+           find("/LinkTest/DSS_Goldstone")],
+       entity_writes: [],
+       query_reads: ["BodyPosition", "Links"],
+       required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     // Celestial ephemeris and link geometry follow CelestialTime; the graph is

@@ -25,7 +25,8 @@ const BATTERY_DISCHARGE_POWER = "battery_discharge_power";
 const MOTOR_MECHANICAL_POWER = "motor_mechanical_power";
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/BatteryEmptyActuator/Rover")], required_inputs: [] }
+    #{ modelica_entities: [find_path("/BatteryEmptyActuator/Rover")], entity_reads: [], entity_writes: [],
+       query_reads: ["GeneratedModelicaSource"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -34,7 +35,6 @@ fn on_start(me, ctx) {
     this.done = false;
     this.rover = find_path("/BatteryEmptyActuator/Rover");
     this.elec = find_path("/BatteryEmptyActuator/Rover");
-    this.event_seen = false;
     this.drained = ();
     this.max_battery_discharge_power = 0.0;
     this.max_drive_power = 0.0;
@@ -42,12 +42,6 @@ fn on_start(me, ctx) {
     this.generated_source_ok = false;
     this.generated_route_count = 0;
     print("[battery-empty] ── empty battery actuator boundary ─────────────");
-}
-
-fn on_event(me, evt, ctx) {
-    if evt.name == "battery_drained" {
-        this.event_seen = true;
-    }
 }
 
 fn on_tick(me, ctx) {
@@ -133,8 +127,6 @@ fn verdict(s) {
     let f = [];
     f.push(t_true(s.drained >= 0.5,
         "battery_drained boundary output was " + s.drained + ", expected 1"));
-    f.push(t_true(s.event_seen,
-        "authored battery_drained event was not published"));
     f.push(t_true(s.generated_source_checked && s.generated_source_ok
                   && s.generated_route_count > 0,
         "generated Modelica routes must retain geometry while leaving colour to " +

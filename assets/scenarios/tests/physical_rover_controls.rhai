@@ -10,7 +10,7 @@ fn simulation_dependencies(me, ctx) {
             find_path("/PhysicalRoverControls/SkidPhysical"),
             find_path("/PhysicalRoverControls/AckermannPhysical"),
         ],
-        required_inputs: [],
+        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 

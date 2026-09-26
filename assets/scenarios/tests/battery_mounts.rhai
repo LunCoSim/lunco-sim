@@ -18,7 +18,7 @@ fn simulation_dependencies(me, ctx) {
             find_path("/BatteryMountsTest/RockerBogie"),
             find_path("/BatteryMountsTest/Rucheyok"),
         ],
-        required_inputs: [],
+        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 

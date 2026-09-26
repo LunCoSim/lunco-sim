@@ -61,6 +61,11 @@ fn shader_matches(doc, red, green, blue, roughness) {
     matches
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["InspectUsdDocument", "ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.done = false;
     this.phase = 0;

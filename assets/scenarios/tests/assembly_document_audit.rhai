@@ -7,6 +7,11 @@ fn finish(checks) {
     report_verdict(checks, "ASSEMBLY DOCUMENT AUDIT", "ASSEMBLY_DOCUMENT_AUDIT");
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.done = false;
     this.phase = 0;

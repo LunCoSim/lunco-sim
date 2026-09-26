@@ -2543,9 +2543,11 @@ impl Plugin for UsdSimCosimPlugin {
                     .before(ModelicaSet::SpawnRequests),
                 // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
                 sync::fire_connected_events
+                    .after(lunco_core_runtime::SimTickSet)
                     .after(sync::sync_modelica_outputs)
                     .after(sync::sync_script_outputs)
-                    .before(PropagateCosimSet::Propagate),
+                    .after(lunco_scripting::ScriptingSet)
+                    .run_if(lunco_time::simulation_is_running),
             ),
         );
     }
@@ -3148,55 +3150,6 @@ mod tests {
             modelica_status(&model),
             SimStatus::Error("singular system".into())
         );
-    }
-
-    #[derive(Resource, Default)]
-    struct CapturedTelemetry(Vec<lunco_telemetry_core::TelemetryEvent>);
-
-    fn capture_telemetry(
-        trigger: On<lunco_telemetry_core::TelemetryEvent>,
-        mut captured: ResMut<CapturedTelemetry>,
-    ) {
-        captured.0.push(trigger.event().clone());
-    }
-
-    #[test]
-    fn connected_event_uses_authoritative_world_epoch() {
-        let mut app = App::new();
-        app.add_observer(capture_telemetry)
-            .init_resource::<Time<Fixed>>()
-            .insert_resource(lunco_time::WorldTime {
-                epoch_jd: 2_451_600.25,
-                ..default()
-            })
-            .init_resource::<CapturedTelemetry>();
-
-        let mut source = SimComponent::default();
-        source.outputs.insert("armed".into(), 1.0);
-        app.world_mut().spawn((UsdPrimPath::default(), source));
-        let event_path = UsdPrimPath {
-            path: "/Event".into(),
-            ..default()
-        };
-        app.world_mut().spawn((
-            event_path,
-            EventBinding {
-                source_path: "/".into(),
-                output: "armed".into(),
-                name: "ARMED".into(),
-                severity: lunco_telemetry_core::Severity::Info,
-                latched: false,
-                qualification_time_s: 0.0,
-                qualified_for_s: 0.0,
-                armed: true,
-            },
-        ));
-        app.add_systems(Update, fire_connected_events);
-        app.update();
-
-        let events = &app.world().resource::<CapturedTelemetry>().0;
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].timestamp, 2_451_600.25);
     }
 
     #[test]

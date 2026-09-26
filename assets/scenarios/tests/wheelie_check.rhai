@@ -23,6 +23,19 @@
 //
 // `emit("WHEELIE_CHECK", "PASS"|"FAIL")`.
 
+fn simulation_dependencies(me, ctx) {
+    let rover = find_path("/WheelieCheck/Rover");
+    #{ modelica_entities: [rover],
+       entity_reads: [
+           find_path("/WheelieCheck/Rover/BogieHingeL"),
+           find_path("/WheelieCheck/Rover/BogieHingeR"),
+           find_path("/WheelieCheck/Rover/HingeL"),
+           find_path("/WheelieCheck/Rover/HingeR"),
+       ],
+       entity_writes: [],
+       query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 4.0;     // drop and ring down before any throttle
@@ -30,17 +43,19 @@ fn on_start(me, ctx) {
     this.sample_s = 0.5;
     this.next_sample = 0.0;
 
-    this.rover = find("/WheelieCheck/Rover");
-    this.bl = find("/WheelieCheck/Rover/BogieHingeL");
-    this.br = find("/WheelieCheck/Rover/BogieHingeR");
-    this.hl = find("/WheelieCheck/Rover/HingeL");
-    this.hr = find("/WheelieCheck/Rover/HingeR");
+    this.rover = find_path("/WheelieCheck/Rover");
+    this.bl = find_path("/WheelieCheck/Rover/BogieHingeL");
+    this.br = find_path("/WheelieCheck/Rover/BogieHingeR");
+    this.hl = find_path("/WheelieCheck/Rover/HingeL");
+    this.hr = find_path("/WheelieCheck/Rover/HingeR");
 
     this.peak_bogie = 0.0;
     this.peak_rocker = 0.0;
     this.peak_tilt = 0.0;
     this.start_pos = ();
     this.phase = "settle";
+    this.possession = ();
+    this.drive_command = ();
 
     print("[wheelie] ── launch attitude, full throttle on the flat ───────────");
 }
@@ -60,12 +75,17 @@ fn on_tick(me, ctx) {
     // it into the maxima would let a landing bounce answer for a launch wheelie.
     if this.phase == "settle" && this.t >= this.settle_s {
         this.phase = "drive";
+        this.possession = cmd("AcquireControl", #{
+            target: this.rover,
+            bind_camera: false,
+        });
         this.start_pos = world_pos(this.rover);
         print("[wheelie] t=" + r2(this.t) + "s  DRIVE phase: throttle 1.0, straight");
     }
 
     if this.phase == "drive" {
-        drive(this.rover, 1.0, 0.0);
+        let command = drive(this.rover, 1.0, 0.0);
+        if this.drive_command == () { this.drive_command = command; }
 
         let b = max_abs(get(this.bl, "angle"), get(this.br, "angle"));
         let r = max_abs(get(this.hl, "angle"), get(this.hr, "angle"));
@@ -86,7 +106,8 @@ fn on_tick(me, ctx) {
         let pos = world_pos(this.rover);
         verdict(#{ bogie: this.peak_bogie, rocker: this.peak_rocker,
                    tilt: this.peak_tilt, pos: pos,
-                   travelled: seg(this.start_pos, pos) });
+                   travelled: seg(this.start_pos, pos),
+                   possession: this.possession, drive_command: this.drive_command });
     }
 }
 
@@ -111,6 +132,11 @@ fn verdict(s) {
     let f = [];
     f.push(t_bounded(s.pos, 400.0, "rover"));
     f.push(t_moved(s.travelled, 2.0, "rover under full throttle"));
+    f.push(t_true(s.possession != () && s.possession.ok == true,
+        "scenario did not acquire rover control before the drive phase: " + s.possession));
+    f.push(t_true(s.drive_command != () && s.drive_command.ok == true
+                  && s.drive_command.status == "applied",
+        "SetPorts did not apply the rover throttle command: " + s.drive_command));
     f.push(t_true(s.bogie < 0.175,
         "bogie hinge reached " + r4(s.bogie) + " rad (" + r2(s.bogie * 57.2958) +
         " deg) under throttle on FLAT ground — the ±20° stop is at 0.349, so the " +

@@ -23,6 +23,11 @@ fn find_usd_document() {
     -1
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListOpenDocuments"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.doc = -1;
     this.phase = "discover";

@@ -5,6 +5,11 @@
 // the policy assertions at the authored boundary instead of in a Rust test
 // that walks the asset tree.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["FindModel", "ListBundled", "ValidateAsset"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;

@@ -71,14 +71,25 @@ impl Default for ScenarioExecutionGate {
 pub struct ScenarioReadinessArm(pub bool);
 
 /// Language-neutral causal and data-readiness requirements declared by one
-/// prepared scenario. Entity ids identify live Modelica participants that join
-/// the fixed-step barrier; an unrelated or unresolved entity makes the plan
-/// invalid. Owner keys identify immutable inputs that must commit before
-/// initialization and `on_start` may run.
+/// prepared scenario. Modelica ids identify live participants that join the
+/// fixed-step barrier. Directional read/write ids authorize direct
+/// simulation-clock access to live entities; when one is a Modelica
+/// participant, it also joins this scenario's barrier contribution. Owner keys
+/// identify immutable inputs that must commit before initialization and the
+/// first lifecycle hook may run. Broad API query snapshots are named explicitly
+/// so the runtime can account for their reads without guessing from results.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScenarioDependencyPlan {
     /// Modelica entities whose ports or events the scenario consumes or writes.
     pub modelica_entities: Vec<i64>,
+    /// Live entities whose reflected components or ports the scenario reads.
+    pub entity_reads: Vec<i64>,
+    /// Live entities whose reflected components or ports the scenario writes.
+    pub entity_writes: Vec<i64>,
+    /// Broad API query providers whose snapshots the scenario reads during the
+    /// Simulation clock. Entity-target and committed-scene queries use their
+    /// provider-owned scopes instead.
+    pub query_reads: Vec<String>,
     /// Owner-published inputs that must be ready before activation.
     pub required_inputs: Vec<lunco_core_runtime::SimulationDependencyKey>,
 }
@@ -711,6 +722,9 @@ struct Fsm {
 
 struct PendingScenarioDependencies {
     modelica_entities: Vec<Entity>,
+    entity_reads: Vec<Entity>,
+    entity_writes: Vec<Entity>,
+    query_reads: Vec<String>,
     required_inputs: Vec<lunco_core_runtime::SimulationDependencyKey>,
     observed_revision: Option<u64>,
 }
@@ -1850,13 +1864,40 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                     .with_phase(lunco_core::RuntimePhase::DependencyPlan),
                             );
                             runtime.simulation_dependencies(entity, gid).and_then(|plan| {
-                                resolve_simulation_dependencies(world, plan.modelica_entities).map(
-                                    |modelica_entities| PendingScenarioDependencies {
-                                        modelica_entities,
-                                        required_inputs: plan.required_inputs,
-                                        observed_revision: None,
-                                    },
-                                )
+                                let modelica_entities =
+                                    resolve_simulation_dependencies(world, plan.modelica_entities)?;
+                                let entity_reads = resolve_simulation_entity_access(
+                                    world,
+                                    plan.entity_reads,
+                                    "entity_reads",
+                                )?;
+                                let entity_writes = resolve_simulation_entity_access(
+                                    world,
+                                    plan.entity_writes,
+                                    "entity_writes",
+                                )?;
+                                let mut query_reads = plan.query_reads;
+                                if query_reads.iter().any(|name| name.trim().is_empty()) {
+                                    return Err(Diagnostic::error(
+                                        "simulation_dependencies `query_reads` entries must not be empty",
+                                        None,
+                                        None,
+                                    ));
+                                }
+                                query_reads = query_reads
+                                    .into_iter()
+                                    .map(|name| name.trim().to_owned())
+                                    .collect();
+                                query_reads.sort_unstable();
+                                query_reads.dedup();
+                                Ok(PendingScenarioDependencies {
+                                    modelica_entities,
+                                    entity_reads,
+                                    entity_writes,
+                                    query_reads,
+                                    required_inputs: plan.required_inputs,
+                                    observed_revision: None,
+                                })
                             })
                         };
                         match dependency_result {
@@ -1898,9 +1939,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             if let Some(mut participants) = world.get_resource_mut::<
                                 lunco_core_runtime::SimulationBarrierParticipants,
                             >() {
-                                participants.replace_scenario_dependencies(
+                                participants.replace_scenario_plan(
                                     entity,
                                     plan.modelica_entities,
+                                    plan.entity_reads,
+                                    plan.entity_writes,
+                                    plan.query_reads,
                                 );
                             }
                             let _phase = bridge_core::ExecutionContextScope::enter(
@@ -2436,39 +2480,88 @@ fn resolve_simulation_dependencies(
     world: &World,
     ids: Vec<i64>,
 ) -> Result<Vec<Entity>, Diagnostic> {
+    let entities = resolve_live_simulation_entities(world, ids, "modelica_entities")?;
+    if entities.is_empty() {
+        return Ok(Vec::new());
+    }
+    let participants = world
+        .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+        .ok_or_else(|| {
+            Diagnostic::error(
+                "simulation_dependencies requires SimulationBarrierParticipants",
+                None,
+                None,
+            )
+        })?;
+    let mut modelica_entities = Vec::with_capacity(entities.len());
+    for (id, entity) in entities {
+        if !participants.is_modelica_participant(entity) {
+            return Err(Diagnostic::error(
+                format!(
+                    "simulation_dependencies modelica_entities contains entity {id}, but it is not a live Modelica participant"
+                ),
+                None,
+                None,
+            ));
+        }
+        modelica_entities.push(entity);
+    }
+    Ok(modelica_entities)
+}
+
+fn resolve_simulation_entity_access(
+    world: &World,
+    ids: Vec<i64>,
+    field: &str,
+) -> Result<Vec<Entity>, Diagnostic> {
+    let entities = resolve_live_simulation_entities(world, ids, field)?;
+    if entities.is_empty() {
+        return Ok(Vec::new());
+    }
+    if world
+        .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+        .is_none()
+    {
+        return Err(Diagnostic::error(
+            "simulation entity access plan requires SimulationBarrierParticipants",
+            None,
+            None,
+        ));
+    }
+    Ok(entities.into_iter().map(|(_, entity)| entity).collect())
+}
+
+fn resolve_live_simulation_entities(
+    world: &World,
+    ids: Vec<i64>,
+    field: &str,
+) -> Result<Vec<(i64, Entity)>, Diagnostic> {
     let mut ids = ids;
     ids.sort_unstable();
     ids.dedup();
-    let participants = world.get_resource::<lunco_core_runtime::SimulationBarrierParticipants>();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut entities = Vec::with_capacity(ids.len());
     for id in ids {
         let raw = u64::try_from(id).map_err(|_| {
             Diagnostic::error(
-                format!("simulation_dependencies returned invalid entity id {id}"),
+                format!("simulation_dependencies {field} contains invalid entity id {id}"),
                 None,
                 None,
             )
         })?;
         let entity = bridge_core::resolve_entity(world, raw).ok_or_else(|| {
             Diagnostic::error(
-                format!("simulation_dependencies returned unresolved entity id {id}"),
+                format!("simulation_dependencies {field} contains unresolved entity id {id}"),
                 None,
                 None,
             )
         })?;
-        if !participants.is_some_and(|participants| participants.is_modelica_participant(entity)) {
-            return Err(Diagnostic::error(
-                format!(
-                    "simulation_dependencies declared entity {id}, but it is not a live Modelica participant"
-                ),
-                None,
-                None,
-            ));
-        }
-        entities.push(entity);
+        entities.push((id, entity));
     }
-    entities.sort_unstable_by_key(|entity| entity.to_bits());
-    entities.dedup();
+    entities.sort_unstable_by_key(|(_, entity)| entity.to_bits());
+    entities.dedup_by_key(|(_, entity)| entity.to_bits());
     Ok(entities)
 }
 
@@ -3035,6 +3128,9 @@ mod lifecycle_readiness_tests {
         world.insert_resource(ScenarioDriver::with_runtime(DependencyRuntime {
             plan: ScenarioDependencyPlan {
                 modelica_entities: Vec::new(),
+                entity_reads: Vec::new(),
+                entity_writes: Vec::new(),
+                query_reads: Vec::new(),
                 required_inputs: vec![key.clone()],
             },
             calls: calls.clone(),

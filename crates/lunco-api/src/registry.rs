@@ -46,11 +46,22 @@ impl ApiEntityRegistry {
         self.bevy_to_api.get(&entity).copied()
     }
 
-    pub fn entities(&self) -> Vec<(GlobalEntityId, Entity)> {
+    /// Snapshot registered identities without imposing a stable iteration
+    /// order. Callers that expose a batch or choose a first match must sort by
+    /// `GlobalEntityId` or use [`Self::entities_by_identity`].
+    pub fn entities_unordered(&self) -> Vec<(GlobalEntityId, Entity)> {
         self.api_to_bevy
             .iter()
             .map(|(&id, &entity)| (id, entity))
             .collect()
+    }
+
+    /// Snapshot registered identities in stable ascending `GlobalEntityId`
+    /// order for observable batches and deterministic first-match selection.
+    pub fn entities_by_identity(&self) -> Vec<(GlobalEntityId, Entity)> {
+        let mut entities = self.entities_unordered();
+        entities.sort_unstable_by_key(|(id, _)| id.get());
+        entities
     }
 }
 
@@ -123,6 +134,31 @@ mod tests {
         assert_eq!(registry.resolve(&id), Some(b));
         assert_eq!(registry.api_id_for(b), Some(id));
         assert_eq!(registry.api_id_for(a), None);
-        assert_eq!(registry.entities(), vec![(id, b)]);
+        assert_eq!(registry.entities_by_identity(), vec![(id, b)]);
+    }
+
+    #[test]
+    fn stable_entity_snapshot_uses_identity_order_not_assignment_order() {
+        let low = GlobalEntityId::from_raw(11);
+        let middle = GlobalEntityId::from_raw(22);
+        let high = GlobalEntityId::from_raw(33);
+        let entries = [
+            (high, Entity::from_raw_u32(3).unwrap()),
+            (low, Entity::from_raw_u32(1).unwrap()),
+            (middle, Entity::from_raw_u32(2).unwrap()),
+        ];
+        let mut registry = ApiEntityRegistry::default();
+        for (id, entity) in entries {
+            registry.assign(entity, id);
+        }
+
+        assert_eq!(
+            registry.entities_by_identity(),
+            vec![
+                (low, Entity::from_raw_u32(1).unwrap()),
+                (middle, Entity::from_raw_u32(2).unwrap()),
+                (high, Entity::from_raw_u32(3).unwrap())
+            ]
+        );
     }
 }

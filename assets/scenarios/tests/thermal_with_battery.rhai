@@ -28,7 +28,7 @@ fn simulation_dependencies(me, ctx) {
             find_path("/ThermalWithBatteryTest/Rover"),
             find_path("/ThermalWithBatteryTest/Rover/Thermal"),
         ],
-        required_inputs: [],
+        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 

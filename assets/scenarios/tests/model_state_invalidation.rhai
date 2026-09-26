@@ -10,7 +10,8 @@ const SOURCE = "lunco://models/Oscillator.mo";
 fn simulation_dependencies(me, ctx) {
     #{
         modelica_entities: [find_path(EDITABLE), find_path(UNTOUCHED)],
-        required_inputs: [],
+        entity_reads: [], entity_writes: [],
+        query_reads: ["QueryUsdPrim", "ListOpenDocuments"], required_inputs: [],
     }
 }
 

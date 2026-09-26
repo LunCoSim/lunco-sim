@@ -140,6 +140,9 @@ membership plus static authored metadata such as program source facts and
 declared public-output names. Do not reread those facts at publication cadence,
 rescan all prims, or add a second revision/source registry. Keep simulation
 status, telemetry, outputs, and Rhai policy results live.
+Authored runtime-surface fields belong on a prim with `LunCoUiSchemaAPI`.
+Their live edits refresh exposure discovery through the stage revision; they do
+not require recreating scene entities or resetting simulation state.
 
 For camera status, Rust publishes the current camera fact and compact label
 through the generic exposure namespace. The shared

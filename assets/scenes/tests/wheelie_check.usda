@@ -2,93 +2,74 @@
 (
     defaultPrim = "WheelieCheck"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Does the rover LAUNCH FLAT? Flat ground, no step, no slope — full throttle from
-# a standstill on the tier the summer school actually drives (`rover_medium`).
-#
-#   cargo run -q -p lunco-luncosim --bin luncosim -j 2 -- test \
-#       --scene scenes/tests/wheelie_check.usda
-#
-# WHAT IT GUARDS. A wheel motor's torque lands on the wheel and its REACTION on
-# whatever the wheel hinges to — on a rocker-bogie that is a suspension link, not
-# the chassis. The middle and rear motors both react into the same free BOGIE
-# hinge, so the launch transient tries to rotate the bogie about its own pivot;
-# if the drive torque is large next to the vehicle's (lunar) weight, the bogie
-# slams to its ±20° stop, the middle wheel leaves the ground and the rover drives
-# nose-up on four wheels. `scenes/tests/rocker_bogie.usda` cannot see this: it
-# never applies throttle, and a stationary rocker-bogie sits perfectly flat.
-#
-# This is a TORQUE-SIZING test, not a suspension test. It fails when a tier is
-# authored with drive authority its own weight cannot react against.
 def Xform "WheelieCheck" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Full throttle from rest on flat ground. The suspension must stay put and all six wheels stay down — no bogie slam, no nose-up launch."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    documentation = "Full throttle from rest on flat ground. The suspension must stay put and all six wheels stay down — no bogie slam, no nose-up launch."
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-
-    # Deliberately FLAT and deliberately LONG: the rover accelerates down +Z from
-    # the origin and must not run out of ground inside the drive phase.
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
         double3 xformOp:scale = (200.0, 1.0, 400.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.4000000059604645, 0.44999998807907104)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </WheelieCheck/PhysicsMaterials/Friction_1_0>
     }
-
     over "Sun"
     {
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
-
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
+        double3 xformOp:translate = (8.0, 3.0, -6.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
         {
         }
-        uniform bool lunco:avatar = true
-        double3 lunco:cameraLookAt = (0.0, 1.0, 0.0)
-        double3 xformOp:translate = (8.0, 3.0, -6.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
-    # `rover_medium`, not the bare chassis: the torque under test is authored per
-    # TIER (`variants/rover_*.usda`), and medium is the one the school drives.
-    # Drop height as calibrated in `scenes/tests/rocker_bogie.usda` — 0.6 m of
-    # fall onto 0.4 m wheels. Move it with the wheels if they are resized.
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/variants/rover_medium.usda@</RoverMedium>
     )
     {
-        double3 xformOp:translate = (0, 1.6, 0)
+        double3 xformOp:translate = (0.0, 1.6, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
     def Scope "Scenario"
     {
         custom string lunco:scenario = "wheelie-check"
-
         def Scope "Test" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
+            prepend apiSchemas = "LunCoProgramAPI"
         )
         {
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/wheelie_check.rhai@
         }
+    }
+    def Xform "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
     }
 }

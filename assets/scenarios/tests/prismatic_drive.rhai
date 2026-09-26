@@ -19,6 +19,14 @@
 const AUTHORED_TARGET = -1.5;   // physics:targetPosition on the Lift drive
 const COMMANDED = -0.5;         // what the port is asked for, mid-run
 
+fn simulation_dependencies(me, ctx) {
+    let lift = find_path("/SandboxScene/Lift");
+    #{ modelica_entities: [],
+       entity_reads: [lift],
+       entity_writes: [lift],
+       query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.hold_s = 5.0;      // let the authored drive settle
@@ -26,8 +34,8 @@ fn on_start(me, ctx) {
     this.sample_s = 1.0;
     this.next_sample = 0.0;
 
-    this.lift = find("/SandboxScene/Lift");
-    this.platform = find("/SandboxScene/Platform");
+    this.lift = find_path("/SandboxScene/Lift");
+    this.platform = find_path("/SandboxScene/Platform");
     this.authored = ();
     this.commanded = ();
     this.sent = false;

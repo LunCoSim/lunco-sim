@@ -25,7 +25,7 @@
 // `prelude/nav.rhai` (`yaw_delta_deg`, which reports right-hand yaw POSITIVE).
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/SixWheelTest/Rover")], required_inputs: [] }
+    #{ modelica_entities: [find_path("/SixWheelTest/Rover")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
 }
 
 fn port_value(target, name, direction) {

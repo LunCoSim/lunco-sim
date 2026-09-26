@@ -190,7 +190,9 @@ impl Plugin for LunCoScriptingPlugin {
             .add_observer(scenario::arm_scenarios_after_scene_composition)
             .add_systems(
                 PreUpdate,
-                scenario::open_scenarios_when_scene_ready.after(lunco_readiness::ReadinessSet),
+                scenario::open_scenarios_when_scene_ready
+                    .after(lunco_readiness::ReadinessSet)
+                    .before(lunco_time::TimeSpineSet),
             );
 
         #[cfg(feature = "python")]

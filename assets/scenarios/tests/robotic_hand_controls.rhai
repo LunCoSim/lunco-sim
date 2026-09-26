@@ -5,7 +5,7 @@
 // command sequence and its observations; it does not calculate joint motion.
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/RoboticHandControls/Hand/Controller")], required_inputs: [] }
+    #{ modelica_entities: [find_path("/RoboticHandControls/Hand/Controller")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
 }
 
 fn issue_hand_command(state, open_value, grasp_value) {

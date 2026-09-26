@@ -12,6 +12,11 @@ fn finish(me, checks) {
     me.done = true;
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["InspectSysmlDocument", "ListOpenDocuments"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.done = false;
     this.document_phase = 0;

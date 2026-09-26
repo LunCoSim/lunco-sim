@@ -71,17 +71,26 @@ simulations deliver discrete events on the next `Update` without advancing the
 tick. The first `on_start` does not replay events from before the program
 started. Query current state from the owning subsystem for startup decisions,
 then use `on_event` for later transitions.
+Connected co-simulation event outputs are edge-detected on admitted simulation
+ticks after `SimTickSet` and the full scripting pass. During startup holds, an
+edge may occur before scenario execution opens and is not replayed to a later
+`on_start`; read the current state from its owning subsystem during startup.
+Event time comes from `MissionClock` at the producer's `SimTick`; later edges
+are delivered on an eligible scenario pass.
 
-Use `simulation_dependencies(me, ctx)` whenever a simulation-clock hook reads
-Modelica values through `get`, `port`, or `query("ReadPorts", #{ api_id })`,
-writes Modelica ports, consumes Modelica events, or depends on a committed
-cross-domain input. The owner uses the plan for startup admission and runtime
-access checks. Return both arrays, even when one is empty:
+Use `simulation_dependencies(me, ctx)` to declare simulation-clock Modelica
+port/event dependencies, generic live entities accessed through direct
+`get`, `port`, `ReadPorts`, or direct mutation, and broad API query providers.
+The owner uses the plan for startup admission and runtime access checks. Return
+all five plan arrays even when empty. Omitting a field is a source error:
 
 ```rhai
 fn simulation_dependencies(me, ctx) {
     #{
-        modelica_entities: [find("/Rover/Controller")],
+        modelica_entities: [find_path("/Rover/Controller")],
+        entity_reads: [],
+        entity_writes: [],
+        query_reads: [],
         required_inputs: [
             #{ owner: "sysml.twin-analysis", identity: ctx.twin_name },
         ],
@@ -102,8 +111,32 @@ before initialization. Declare every Modelica participant this scenario reads
 or writes through a port or whose event it consumes. The aggregate solver
 barrier is not an access grant: membership through USD connections or another
 scenario's plan does not authorize this scenario to read that participant.
-Undeclared simulation-clock access through `get`, `port`, `ReadPorts`, a
-targeted command, or an event fails with a scenario diagnostic.
+`modelica_entities` grants both read and write access to those live Modelica
+participants and adds them to the shared simulation barrier. `entity_reads`
+and `entity_writes` grant directional access to any live entity; a Modelica
+entity in either set also joins the shared barrier. Direct reflected and port
+reads require read access, while direct reflected writes, port writes, and
+structural verbs require write access.
+Entity-targeted query providers report the ids they read. Declare those target
+ids in `entity_reads` too; this includes `QueryEntity`, `QueryPhysicsState`,
+`ReadPorts`, `GetPort`, `SolarPose`, and single-entity `ListPorts` calls.
+Mounted-scene USD queries without `doc_id` use the committed Twin generation.
+For broad providers such as `EntitiesInRadius`, `Raycast`, or `CosimStatus`,
+list the public provider name in `query_reads`. This declares the provider's
+whole snapshot as a coarse dependency. Broad queries cannot run while the plan
+is being resolved. Undeclared simulation-clock access through direct `get`,
+`port`, or `ReadPorts` requires the matching direction. Targeted Modelica commands and
+Modelica event delivery require the target or producer in this scenario's own
+plan; aggregate barrier membership is not authorization.
+Hierarchy and spatial identity queries remain available for discovery. If a
+scenario uses their returned ids in direct `get`, `port`, or mutation calls, it
+must include those ids in the corresponding access set.
+
+When a typed simulation command creates an entity whose id was not available
+while the plan was prepared, call `track_entity_read(id)` or
+`track_entity_write(id)` after the command has materialized the live entity
+and before accessing it. This commits access in serialized simulation order;
+if the entity is a Modelica participant, it also joins the scenario's barrier.
 
 The reusable route marker is a translucent, unlit, shadowless annotation. Its
 unvisited colour is bright green and its visited colour is gray in standard
@@ -205,7 +238,7 @@ remain available for setup, reactions, and teardown.
 ```rhai
 fn task(me, ctx)           { seq([wait_until(|m| arrived(m, GOAL, 2.0))]); }
 fn mission(me, ctx)        { [objective("survey", #{})]; }       // optional
-fn on_start(me, ctx)       { this.i = 0; }                       // once, after (re)compile
+fn on_start(me, ctx)       { this.i = 0; }                       // once, after declared inputs are ready
 fn on_event(me, evt, ctx)  { if evt.name == "GO" { /* … */ } } // event-driven policy
 fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / detach / despawn
 // Bounded sampled observer (tests only):
@@ -227,6 +260,20 @@ fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / 
   assign it back to `this`; helper-side field assignments alone do not persist.
 - Hot-reload runs `on_stop` before installing the new program state; initialize
   all required `this` fields in the new run.
+- Scenario initialization and readiness already have distinct owners:
+  `simulation_dependencies` declares admission, the module body initializes
+  per-instance state after admission, and `on_start` is the ready callback.
+  Do not add duplicate `init`/`ready` hooks. `on_event` runs in the scenario's
+  eligible Simulation pass (or paused Lifecycle pass); a listener does not
+  select the producer's clock. Any future UI, Interaction, or Presentation
+  listener needs its own cycle owner, inbox, and state, with typed messages
+  across owners.
+- For stateless Rhai decisions outside the scenario Simulation lane, use the
+  existing owner-scheduled hook registry when that subsystem exposes a typed
+  hook. The owner supplies its facts and runtime context, then validates and
+  applies the result at its own boundary. Do not move one stateful scenario
+  instance between cycles or create per-cycle scenario callbacks for policy
+  that an owner-invoked hook can express.
 
 ## 2. The verb surface (host bridge — everything else is prelude)
 
@@ -237,7 +284,7 @@ fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / 
 | `get(id,"Comp.field")` / `set(id,"Comp.field",v)` | reflected component read / write |
 | `world_pos(id)` / `world_forward(id)` | float-origin-correct array pose (use these, never raw `Transform`) |
 | `world_pos3(id)` / `world_forward3(id)` / `world_rotation_quat(id)` | native glam `Vec3`/`Quat` pose for hot loops; lower explicitly at wire boundaries |
-| `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, `usd_path` is canonical USD topology |
+| `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, and `usd_path` reads stable USD identity metadata and is available during dependency planning |
 | `owner_of(id)` / `controller(id)` / `is_controlled(id)` | who's driving (human vs AI vs unowned) |
 | `emit(name, value?)` | fire a `TelemetryEvent` stamped with the simulator `sim_secs` and `sim_tick` (fixed-step delivery waits for a later `SimTick`; a paused simulation uses the next `Update` pass); scalar, array, and map payloads keep their typed structure. During a world-level readiness hold, the shared scenario gate is closed and events are not queued. |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | available only in simulation-cycle calls; each returns a Rhai error in paused lifecycle and one-shot REPL/tool calls |

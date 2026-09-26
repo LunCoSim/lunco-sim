@@ -5,7 +5,7 @@
 fn simulation_dependencies(me, ctx) {
     #{
         modelica_entities: [find_path("/SolarRoverTest/SolarRover")],
-        required_inputs: [],
+        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 

@@ -2,42 +2,43 @@
 (
     defaultPrim = "RockerBogieDrive"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Control fixture for rocker_bogie_drive.usda. The composed rover and terrain
-# are identical; only the authored differential engagement differs.
 def Xform "RockerBogieDrive" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
+    prepend apiSchemas = "LunCoEpochAPI"
 )
 {
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
     def Scope "Scenario"
     {
         custom string lunco:scenario = "rocker-bogie-drive-nodiff"
-
         def Scope "Drive" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
+            prepend apiSchemas = "LunCoProgramAPI"
         )
         {
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie_drive.rhai@
         }
     }
-
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.4000000059604645, 0.44999998807907104)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </RockerBogieDrive/PhysicsMaterials/Friction_1_0>
     }
-
     def Cube "Step" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
@@ -46,21 +47,25 @@ def Xform "RockerBogieDrive" (
         double3 xformOp:translate = (-1.29, 0.0, 1.2)
         double3 xformOp:scale = (0.7, 0.5, 0.7)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.6, 0.5, 0.4)]
+        color3f[] primvars:displayColor = [(0.6000000238418579, 0.5, 0.4000000059604645)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </RockerBogieDrive/PhysicsMaterials/Friction_1_0>
     }
-
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )
     {
+        double3 xformOp:translate = (0.0, 1.6, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         over "Differential"
         {
             float drive:angular:physics:stiffness = 0.0
             float drive:angular:physics:damping = 0.0
         }
-        double3 xformOp:translate = (0, 1.6, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
     }
 }

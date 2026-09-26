@@ -5,7 +5,7 @@
 // final drive values consumed by the wheel realization.
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/ModelicaDriveLaw/RoverModelica")], required_inputs: [] }
+    #{ modelica_entities: [find_path("/ModelicaDriveLaw/RoverModelica")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
 }
 
 fn port_value(target, name, direction) {

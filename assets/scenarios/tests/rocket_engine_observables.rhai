@@ -5,7 +5,7 @@
 // remain in the same path used by a real authored scene.
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/RocketEngineObservables/Engine")], required_inputs: [] }
+    #{ modelica_entities: [find_path("/RocketEngineObservables/Engine")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {

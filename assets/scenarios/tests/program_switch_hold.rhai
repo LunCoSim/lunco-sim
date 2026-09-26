@@ -16,6 +16,14 @@ fn subject(me) {
     -1
 }
 
+fn simulation_dependencies(me, ctx) {
+    let target = subject(me);
+    let entity_writes = [];
+    if target >= 0 { entity_writes.push(target); }
+    #{ modelica_entities: [], entity_reads: [],
+       entity_writes: entity_writes, query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.started = true;
     let target = subject(me);

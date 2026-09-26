@@ -399,6 +399,11 @@ fn task_redo_attribute(me) { this = apply_step(this, "redo_attribute"); }
 fn task_restore_pending_reference(me) { this = apply_step(this, "restore_pending_reference"); }
 fn task_finish(me) { this = apply_step(this, "finish"); }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.done = false;
     this.elapsed = 0.0;

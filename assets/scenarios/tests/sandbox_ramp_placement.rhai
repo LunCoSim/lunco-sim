@@ -13,6 +13,11 @@ const DRIVE_S = 28.0;
 const MIN_PROGRESS_M = 15.0;
 const MIN_RISE_M = 1.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [find_path("/SandboxRampPlacement/Skid_Raycast_1")],
+       entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
+}
+
 fn verdict(pass, reason) {
     if pass {
         emit("SANDBOX_RAMP_PLACEMENT", "PASS");
@@ -25,11 +30,13 @@ fn verdict(pass, reason) {
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.done = false;
-    this.rover = find("/SandboxRampPlacement/Skid_Raycast_1");
-    this.ramp = find("/SandboxRampPlacement/Ramp");
+    this.rover = find_path("/SandboxRampPlacement/Skid_Raycast_1");
+    this.ramp = find_path("/SandboxRampPlacement/Ramp");
     this.start = ();
     this.min_y = 0.0;
     this.max_x = 0.0;
+    this.possession = ();
+    this.drive_command = ();
     if this.rover >= 0 && this.ramp >= 0 {
         this.start = world_pos(this.rover);
         if this.start != () {
@@ -53,7 +60,13 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    drive(this.rover, 0.55, 0.0);
+    if this.possession == () {
+        this.possession = cmd("AcquireControl", #{
+            target: this.rover, bind_camera: false,
+        });
+    }
+    let command = drive(this.rover, 0.55, 0.0);
+    if this.drive_command == () { this.drive_command = command; }
     let p = world_pos(this.rover);
     if p != () {
         if p[1] < this.min_y { this.min_y = p[1]; }
@@ -63,6 +76,12 @@ fn on_tick(me, ctx) {
     if this.t >= SETTLE_S + DRIVE_S {
         this.done = true;
         drive(this.rover, 0.0, 0.0);
+        if this.possession == () || this.possession.ok != true ||
+           this.drive_command == () || this.drive_command.ok != true ||
+           this.drive_command.status != "applied" {
+            verdict(false, "rover control claim or throttle command was not applied");
+            return;
+        }
         if p == () {
             verdict(false, "rover lost its world pose during the ramp traverse");
             return;

@@ -850,22 +850,42 @@ fn resume_modelica_participants(world: &mut World) {
     }
 }
 
-/// Wait until every live solver has completed its first fixed-step exchange.
-/// A compile snapshot is not enough: it contains algebraic defaults, but the
-/// first sensor/actuator sample is produced asynchronously. Opening a scenario
-/// before that exchange makes its first thrust depend on worker wall-clock
-/// latency even though the simulation clock itself is fixed.
+/// Wait for every USD-backed solver's first fixed-step exchange and for the
+/// shared causal barrier to clear. A compile snapshot is not enough: it contains
+/// algebraic defaults, but the first sensor/actuator sample is produced
+/// asynchronously. The generic barrier also covers causal participants from
+/// adapters beyond USD without duplicating their entity list in this runner.
 fn modelica_exchanges_ready(world: &mut World) -> bool {
-    let mut q = world.query_filtered::<&ModelicaModel, With<UsdSourcedCosim>>();
-    q.iter(world).all(|model| {
-        model.last_error.is_some()
-            || (model.is_compiled
-                && !model.is_compiling
-                && !model.paused
-                && !model.is_stepping
-                && model.current_time > 0.0
-                && !model.variables.is_empty())
-    })
+    let sources_ready = {
+        let mut q = world.query_filtered::<&ModelicaModel, With<UsdSourcedCosim>>();
+        q.iter(world).all(|model| {
+            model.last_error.is_some()
+                || (model.is_compiled
+                    && !model.is_compiling
+                    && !model.paused
+                    && !model.is_stepping
+                    && model.current_time > 0.0
+                    && !model.variables.is_empty())
+        })
+    };
+    if !sources_ready {
+        return false;
+    }
+
+    // The per-source snapshot above covers USD-backed participants. The shared
+    // barrier is the generic owner for every causal participant, including
+    // models that enter through another adapter. Do not open the scene-test
+    // clock while any such result is still in flight.
+    let expected_terminal_fault = world
+        .get_resource::<lunco_core::RuntimeFaults>()
+        .is_some_and(lunco_core::RuntimeFaults::active)
+        && world
+            .get_resource::<ExpectedRuntimeFaults>()
+            .is_some_and(|expected| !expected.0.is_empty());
+    expected_terminal_fault
+        || world
+            .get_resource::<lunco_core_runtime::SimulationBarrier>()
+            .is_some_and(|barrier| !barrier.held)
 }
 
 /// Explain a bounded readiness failure with the live state that kept the gate
@@ -873,25 +893,37 @@ fn modelica_exchanges_ready(world: &mut World) -> bool {
 /// the model, terminal error, pause state, and readiness hold that blocked the
 /// scenario so the owning subsystem can be fixed.
 fn log_participant_readiness_blockers(world: &mut World) {
-    let mut models = world.query_filtered::<(
+    let mut models = world.query::<(
         Entity,
         &ModelicaModel,
         Option<&lunco_cosim_core::SimComponent>,
-    ), With<UsdSourcedCosim>>();
+    )>();
     for (entity, model, component) in models.iter(world) {
         let status = component
             .map(|component| format!("{:?}", component.status))
             .unwrap_or_else(|| "no SimComponent".into());
         warn!(
-            "[test] participant blocker entity={entity:?} model={} compiled={} compiling={} paused={} current_time={:.6} variables={} status={} error={}",
+            "[test] participant blocker entity={entity:?} model={} compiled={} compiling={} paused={} stepping={} current_time={:.6} target_time={:.6} variables={} status={} error={}",
             model.model_name,
             model.is_compiled,
             model.is_compiling,
             model.paused,
+            model.is_stepping,
             model.current_time,
+            model.target_time,
             model.variables.len(),
             status,
             model.last_error.as_deref().unwrap_or("none"),
+        );
+    }
+    if let Some(barrier) = world.get_resource::<lunco_core_runtime::SimulationBarrier>() {
+        warn!(
+            "[test] simulation barrier held={} active_participants={} shared_clock_participants={} worst_lag_secs={:.6} worst_entity={:?}",
+            barrier.held,
+            barrier.active_participants,
+            barrier.shared_clock_participants,
+            barrier.worst_lag_secs,
+            barrier.worst_entity,
         );
     }
     if let Some(state) = world.get_resource::<lunco_readiness::ReadinessState>() {

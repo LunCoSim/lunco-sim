@@ -4,6 +4,11 @@
 const TEST_KIND = "graphics";
 const WAIT_S = 3.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["TerrainLodStatus"], required_inputs: [] }
+}
+
 fn nonzero_u64(value) { value.to_string() != "0" }
 fn zero_u64(value) { value.to_string() == "0" }
 

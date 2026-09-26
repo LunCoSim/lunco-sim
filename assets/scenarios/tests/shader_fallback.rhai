@@ -2,6 +2,11 @@
 // must fail visibly; this scenario does not accept a renderer-selected material.
 const TEST_KIND = "render-contract";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["RuntimeDiagnostics"], required_inputs: [] }
+}
+
 fn query_ok(record) {
     record != () && record.ok != false
 }

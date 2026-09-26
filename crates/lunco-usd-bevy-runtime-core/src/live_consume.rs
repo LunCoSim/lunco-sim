@@ -879,6 +879,9 @@ pub(crate) fn refresh_edited_prims_live(
         if standard_preview_surface_input_edit(world, id, prim, attr) {
             continue;
         }
+        if authored_ui_metadata_attribute(world, id, prim, attr) {
+            continue;
+        }
         if curve_geometry_edit(world, id, prim, attr) {
             continue;
         }
@@ -955,6 +958,28 @@ fn standard_preview_surface_input_edit(
             view.type_name(&path).as_deref() == Some("Shader")
                 && view.text(&path, "info:id").as_deref() == Some("UsdPreviewSurface")
         })
+}
+
+/// UI metadata is consumed from the composed stage by the authored-surface
+/// exposure owner. The stage revision published after this batch invalidates
+/// that view, so rebuilding scene entities here would only disrupt unrelated
+/// simulation owners beneath the same prim.
+fn authored_ui_metadata_attribute(
+    world: &World,
+    stage_id: AssetId<UsdStageAsset>,
+    prim: &str,
+    attribute: &str,
+) -> bool {
+    if !attribute.starts_with("lunco:ui:") {
+        return false;
+    }
+    let Ok(path) = SdfPath::new(prim) else {
+        return false;
+    };
+    world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .and_then(|stages| stages.get(stage_id))
+        .is_some_and(|stage| stage.view().has_api_schema(&path, "LunCoUiSchemaAPI"))
 }
 
 /// Whether an info-only edit changes the tessellated geometry of a USD curve.

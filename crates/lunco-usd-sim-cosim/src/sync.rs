@@ -250,17 +250,19 @@ pub fn fire_connected_events(
     q_instance_root: Query<(), With<UsdInstanceRoot>>,
     q_instance_projection: Query<&UsdInstanceProjection>,
     fixed_time: Res<Time<Fixed>>,
-    world_time: Option<Res<lunco_time::WorldTime>>,
+    sim_tick: Option<Res<lunco_core_runtime::SimTick>>,
+    mission_clock: Option<Res<lunco_time::MissionClock>>,
     mut commands: Commands,
 ) {
-    // Nothing is listening: don't index the scene. This runs every FixedUpdate
-    // tick and the index below is a full scan of every cosim participant plus a
-    // fresh allocation — paid on every scene, while `LunCoEvent` prims are rare.
+    // Nothing is listening: don't index the scene. This runs on each admitted
+    // FixedUpdate tick and the index below is a full scan of every cosim
+    // participant plus a fresh allocation — paid on every scene, while
+    // `LunCoEvent` prims are rare.
     if bindings.is_empty() {
         return;
     }
-    let Some(world_time) = world_time else {
-        warn!("[usd-cosim] cannot publish a connected event without the authoritative WorldTime");
+    let (Some(sim_tick), Some(mission_clock)) = (sim_tick, mission_clock) else {
+        warn!("[usd-cosim] cannot publish a connected event without SimTick and MissionClock");
         return;
     };
     let instance_of = |entity| {
@@ -313,9 +315,9 @@ pub fn fire_connected_events(
                 source,
                 severity: binding.severity,
                 data: lunco_telemetry_core::TelemetryValue::F64(value),
-                timestamp: world_time.epoch_jd,
-                sim_secs: 0.0,
-                sim_tick: 0,
+                timestamp: mission_clock.epoch_jd(sim_tick.0),
+                sim_secs: mission_clock.sim_secs(sim_tick.0),
+                sim_tick: sim_tick.0,
             };
             // Events are observed by more than the script inbox. Sort before
             // triggering so status/API observers also see one scene-defined

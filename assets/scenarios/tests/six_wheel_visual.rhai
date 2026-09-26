@@ -2,7 +2,7 @@
 const TEST_KIND = "graphics";
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/SixWheelVisual/Rover")], required_inputs: [] }
+    #{ modelica_entities: [find_path("/SixWheelVisual/Rover")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {

@@ -9,6 +9,11 @@ fn record_for(docs, id) {
     ()
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.phase = 0;
     this.elapsed = 0.0;

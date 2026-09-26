@@ -42,7 +42,9 @@ use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
     ApiCommandEvent, authz_target_gid_value, command_result_value, validate_command_params_value,
 };
-use lunco_api::queries::{ApiVisibility, api_param_u64, execute_query_value};
+use lunco_api::queries::{
+    ApiQueryRegistry, ApiVisibility, SimulationQueryReadScope, execute_query_value,
+};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api_core::{ApiValue, api_value_from_u64};
 use lunco_command_contracts::{OpId, SessionId};
@@ -537,13 +539,112 @@ pub fn enforce_script_mutation(
     target_gid: Option<u64>,
 ) -> Result<(), String> {
     ensure_script_mutation_allowed()?;
-    validate_simulation_target_dependency(world, target_gid, capability)?;
+    validate_simulation_entity_access(world, target_gid, capability, ScriptEntityAccess::Write)?;
     if script_is_client_local() {
         return Err(format!(
             "'{capability}' denied: direct script mutations are not available from a client-scoped script; use an allowed typed command"
         ));
     }
     enforce_script_authority(world, capability, target_gid)
+}
+
+/// Direction of direct scenario access to a live entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptEntityAccess {
+    Read,
+    Write,
+}
+
+/// Enforce the scenario's committed entity access plan for simulation-clock
+/// world reads and direct writes. Modelica access stays represented by the
+/// Modelica participant set because those entities also join the fixed-step
+/// causal barrier.
+pub fn validate_simulation_entity_access(
+    world: &World,
+    target_gid: Option<u64>,
+    operation: &str,
+    access: ScriptEntityAccess,
+) -> Result<(), String> {
+    if execution_context().clock != lunco_core::RuntimeClock::Simulation {
+        return Ok(());
+    }
+    if execution_context().phase == lunco_core::RuntimePhase::DependencyPlan {
+        return Err(format!(
+            "simulation_dependencies may resolve entity ids but cannot access live entity state through {operation}"
+        ));
+    }
+    let Some(gid) = target_gid else {
+        return Ok(());
+    };
+    let Some(entity) = resolve_entity(world, gid) else {
+        return Ok(());
+    };
+    let participants = world
+        .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+        .ok_or_else(|| {
+            format!("{operation} denied: SimulationBarrierParticipants is unavailable")
+        })?;
+    let scenario = resolve_entity(world, current_self()).ok_or_else(|| {
+        format!("{operation} denied: no live scenario owns this simulation access")
+    })?;
+    let declared_access = match access {
+        ScriptEntityAccess::Read => participants.scenario_declares_read(scenario, entity),
+        ScriptEntityAccess::Write => participants.scenario_declares_write(scenario, entity),
+    };
+    let declared = declared_access
+        || (participants.is_modelica_participant(entity)
+            && participants.scenario_declares_modelica_dependency(scenario, entity));
+    if declared {
+        return Ok(());
+    };
+    let access_name = match access {
+        ScriptEntityAccess::Read => "read",
+        ScriptEntityAccess::Write => "write",
+    };
+    Err(format!(
+        "{operation} targets entity {gid} without this scenario's declared dependency for {access_name}; include it in simulation_dependencies(me, ctx)"
+    ))
+}
+
+/// Add an entity discovered during simulation execution to the calling
+/// scenario's directional access plan.
+///
+/// The entity must already be live. Modelica entities added here join the
+/// scenario barrier when they enter the current Modelica projection.
+fn track_simulation_entity_access(gid: i64, access: ScriptEntityAccess) -> Result<(), String> {
+    if execution_context().clock != lunco_core::RuntimeClock::Simulation {
+        return Err("dynamic entity access declarations require the Simulation clock".into());
+    }
+    if execution_context().phase == lunco_core::RuntimePhase::DependencyPlan {
+        return Err("simulation_dependencies cannot add runtime entity access".into());
+    }
+    let gid = u64::try_from(gid).map_err(|_| format!("invalid entity id {gid}"))?;
+    with_world(|world| {
+        let entity = resolve_entity(world, gid).ok_or_else(|| format!("unknown entity {gid}"))?;
+        let scenario = resolve_entity(world, current_self())
+            .ok_or_else(|| "no live scenario owns this simulation access".to_string())?;
+        let mut participants = world
+            .get_resource_mut::<lunco_core_runtime::SimulationBarrierParticipants>()
+            .ok_or_else(|| "SimulationBarrierParticipants is unavailable".to_string())?;
+        let added = match access {
+            ScriptEntityAccess::Read => participants.add_scenario_read(scenario, entity),
+            ScriptEntityAccess::Write => participants.add_scenario_write(scenario, entity),
+        };
+        added
+            .map(|_| ())
+            .ok_or_else(|| "the scenario access plan is not committed".to_string())
+    })
+    .ok_or_else(|| "no world in scope".to_string())?
+}
+
+/// Declare a live entity read discovered during simulation execution.
+pub fn track_simulation_entity_read(gid: i64) -> Result<(), String> {
+    track_simulation_entity_access(gid, ScriptEntityAccess::Read)
+}
+
+/// Declare a live entity write discovered during simulation execution.
+pub fn track_simulation_entity_write(gid: i64) -> Result<(), String> {
+    track_simulation_entity_access(gid, ScriptEntityAccess::Write)
 }
 
 fn validate_simulation_target_dependency(
@@ -567,9 +668,10 @@ fn validate_simulation_target_dependency(
     };
     if participants.is_modelica_participant(entity) {
         let scenario = resolve_entity(world, current_self());
-        if !scenario
-            .is_some_and(|scenario| participants.scenario_declares_dependency(scenario, entity))
-        {
+        if !scenario.is_some_and(|scenario| {
+            participants.scenario_declares_modelica_dependency(scenario, entity)
+                || participants.scenario_declares_write(scenario, entity)
+        }) {
             return Err(format!(
                 "{operation} targets Modelica entity {gid} without this scenario's declared dependency; include it in simulation_dependencies(me, ctx)"
             ));
@@ -924,14 +1026,34 @@ pub fn command_result<B: ValueBuilder>(b: &B, id: u64) -> B::Value {
 /// and provider errors are `Err`, so callers can distinguish an empty answer
 /// from a broken or unavailable query surface.
 pub fn query_value(name: &str, params: ApiValue) -> Result<Option<ApiValue>, String> {
-    let access = with_world(|world| {
-        if name != "ReadPorts" {
+    let access = with_world(|world| -> Result<(), String> {
+        if execution_context().clock != lunco_core::RuntimeClock::Simulation {
             return Ok(());
         }
-        let Some(target) = api_param_u64(&params, "api_id") else {
+        let Some(provider) = world
+            .get_resource::<ApiQueryRegistry>()
+            .and_then(|registry| registry.get(name))
+        else {
             return Ok(());
         };
-        validate_simulation_target_dependency(world, Some(target), "ReadPorts")
+        match provider.simulation_read_scope(&params) {
+            SimulationQueryReadScope::EntityTargets => {}
+            SimulationQueryReadScope::SceneGeneration => {
+                validate_simulation_scene_query_access(world, name)?;
+            }
+            SimulationQueryReadScope::ScenarioDeclared => {
+                validate_simulation_query_read(world, name)?;
+            }
+        }
+        for target in provider.simulation_entity_reads(&params) {
+            validate_simulation_entity_access(
+                world,
+                Some(target.get()),
+                name,
+                ScriptEntityAccess::Read,
+            )?;
+        }
+        Ok(())
     });
     if let Some(Err(error)) = access {
         return Err(format!("query '{name}' denied: {error}"));
@@ -982,6 +1104,58 @@ pub fn read_port(gid: u64, name: &str) -> Option<f64> {
     .flatten()
 }
 
+fn validate_simulation_scene_query_access(world: &World, operation: &str) -> Result<(), String> {
+    let context = execution_context();
+    let Some(route) = context.route else {
+        return Err(format!(
+            "{operation} denied: Simulation query requires a committed Twin scene generation"
+        ));
+    };
+    if route.scope != lunco_core::RuntimeScope::Twin
+        || route.cycle != lunco_core::RuntimeCycle::Simulation
+    {
+        return Err(format!(
+            "{operation} denied: Simulation query requires a Twin Simulation route"
+        ));
+    }
+    let coordinator = world
+        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+        .ok_or_else(|| {
+            format!("{operation} denied: scene transition coordinator is unavailable")
+        })?;
+    if coordinator.active_id().is_some()
+        || coordinator.completed_generation() != Some(route.generation)
+    {
+        return Err(format!(
+            "{operation} denied: query route generation {} is not the committed scene generation",
+            route.generation
+        ));
+    }
+    Ok(())
+}
+
+fn validate_simulation_query_read(world: &World, operation: &str) -> Result<(), String> {
+    if execution_context().phase == lunco_core::RuntimePhase::DependencyPlan {
+        return Err(format!(
+            "{operation} denied: broad API queries cannot run while simulation_dependencies is being resolved"
+        ));
+    }
+    let participants = world
+        .get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+        .ok_or_else(|| {
+            format!("{operation} denied: SimulationBarrierParticipants is unavailable")
+        })?;
+    let scenario = resolve_entity(world, current_self()).ok_or_else(|| {
+        format!("{operation} denied: no live scenario owns this simulation query")
+    })?;
+    if participants.scenario_declares_query_read(scenario, operation) {
+        return Ok(());
+    }
+    Err(format!(
+        "{operation} denied: broad simulation query is not declared; add its public name to simulation_dependencies `query_reads`"
+    ))
+}
+
 /// Direction of a scenario's direct port access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScriptPortAccess {
@@ -991,11 +1165,11 @@ pub enum ScriptPortAccess {
     Write,
 }
 
-/// Reject live-port access during dependency planning and simulation-clock
-/// access to a Modelica participant outside this scenario's plan.
+/// Reject live-port access during dependency planning and require the calling
+/// scenario's Modelica or generic entity access declaration at simulation time.
 ///
-/// A scenario declares the Modelica participants it accesses through
-/// `simulation_dependencies(me, ctx)`. USD causal edges contribute to the
+/// Modelica declarations also join the shared barrier. Generic entity
+/// declarations authorize access only; USD causal edges contribute to the
 /// shared barrier but do not authorize a scenario's access. Port access from
 /// application/presentation cycles observes committed state without joining
 /// the authoritative simulation barrier.
@@ -1030,10 +1204,14 @@ pub fn validate_simulation_port_access(
                 "simulation_dependencies may resolve entity ids but cannot read or write live port {name:?} on entity {gid}"
             ));
         }
-        validate_simulation_target_dependency(
+        validate_simulation_entity_access(
             world,
             Some(gid),
             &format!("Modelica port {name:?}"),
+            match access {
+                ScriptPortAccess::Read => ScriptEntityAccess::Read,
+                ScriptPortAccess::Write => ScriptEntityAccess::Write,
+            },
         )
     })
     .unwrap_or(Ok(()))
@@ -1324,13 +1502,14 @@ pub fn find(name: &str) -> i64 {
         let Some(registry) = world.get_resource::<ApiEntityRegistry>() else {
             return -1;
         };
-        let pairs = registry.entities();
-        for (gid, entity) in pairs {
-            if world.get::<Name>(entity).map(|n| n.as_str()) == Some(name) {
-                return gid.get() as i64;
-            }
-        }
-        -1
+        registry
+            .entities_unordered()
+            .into_iter()
+            .filter(|(_, entity)| world.get::<Name>(*entity).map(|n| n.as_str()) == Some(name))
+            .map(|(gid, _)| gid.get())
+            .min()
+            .map(|id| id as i64)
+            .unwrap_or(-1)
     })
     .unwrap_or(-1)
 }

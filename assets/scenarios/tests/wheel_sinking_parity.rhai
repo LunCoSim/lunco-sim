@@ -30,6 +30,11 @@ const DRIFT_FAIL = 8.0;        // m — healthy drive stays well under this; a
 const DRIVE_TICKS = 360;       // ~6 s at 60 Hz — crosses several collider tiles
 const SPEED = 1.2;             // m/s forward
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["TerrainHeight"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.rover = find("/Traverse/Rover");
     this.tick = 0;

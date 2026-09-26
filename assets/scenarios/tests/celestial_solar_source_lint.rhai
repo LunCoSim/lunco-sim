@@ -18,6 +18,11 @@ fn has_subject(errors, rule, subject) {
     false
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ValidateAsset"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;

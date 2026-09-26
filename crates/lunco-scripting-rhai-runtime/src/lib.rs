@@ -123,6 +123,7 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
                 PreUpdate,
                 lunco_scripting_rhai_world::world_bridge::prepare_rhai_scenario_compiles
                     .after(commands::attach_embedded_scenarios)
+                    .after(lunco_scripting::scenario::open_scenarios_when_scene_ready)
                     .before(lunco_time::TimeSpineSet),
             )
             .add_systems(

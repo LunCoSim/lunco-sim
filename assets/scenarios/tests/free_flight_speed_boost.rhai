@@ -8,6 +8,11 @@
 const WARMUP_S = 1.0;
 const MEASURE_S = 2.0;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["CausalTrace"], required_inputs: [] }
+}
+
 fn planar_distance(a, b) {
     let dx = a[0] - b[0];
     let dz = a[2] - b[2];

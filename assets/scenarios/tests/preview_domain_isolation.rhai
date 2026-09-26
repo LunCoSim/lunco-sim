@@ -6,7 +6,8 @@ const LIVE_PREVIEW = 15501;
 const FORK_PREVIEW = 15502;
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path(ROOT + "/Network")], required_inputs: [] }
+    #{ modelica_entities: [find_path(ROOT + "/Network")], entity_reads: [], entity_writes: [],
+       query_reads: ["ListOpenDocuments"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {

@@ -307,7 +307,7 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 | Persistent script state across ticks | `this` map persisted on scenario entity across ticks |
 | Temporal sequencing (wait/over-time) | Task-tree constructors in `prelude/tasks.rhai` (pure data), ticked NATIVELY on the `lunco-behavior` kernel (`lunco-scripting-rhai-core/src/task_tree.rs`) |
 | Navigation: waypoints/goals/arrival/path-follow | `nav_to`, `drive`, task trees in `prelude/nav.rhai` and `prelude/tasks.rhai` |
-| By-name entity lookup | `find(name)` verb; `name(id)` returns the presentation label and `QueryEntity` supplies the full USD path |
+| Entity identity | `find(name)` verb; `name(id)` is a presentation label; `usd_path(id)` reads the projected USD prim path from stable identity metadata |
 | Timer "after N seconds" | `wait(secs)` / `wait_until(cond)` in the native task tree |
 | Telemetry subscribe (events to script) | `on_event` hook and task `wait_for` delivery |
 

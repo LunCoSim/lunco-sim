@@ -16,7 +16,8 @@ fn simulation_dependencies(me, ctx) {
             modelica_entities.push(rover);
         }
     }
-    #{ modelica_entities: modelica_entities, required_inputs: [] }
+    #{ modelica_entities: modelica_entities, entity_reads: [], entity_writes: [],
+       query_reads: ["CosimStatus"], required_inputs: [] }
 }
 
 fn state_scalar(value) {

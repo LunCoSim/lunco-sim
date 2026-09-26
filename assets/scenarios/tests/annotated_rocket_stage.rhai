@@ -6,7 +6,7 @@
 // owned by their focused unit tests, not by this scene test.
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/AnnotatedRocketStageTest/RocketStage")], required_inputs: [] }
+    #{ modelica_entities: [find_path("/AnnotatedRocketStageTest/RocketStage")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {

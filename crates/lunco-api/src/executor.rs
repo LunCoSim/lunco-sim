@@ -995,7 +995,7 @@ fn execute_request(
         }
         ApiRequest::ListEntities => {
             let entities: Vec<ApiValue> = registry
-                .entities()
+                .entities_by_identity()
                 .into_iter()
                 .map(|(api_id, entity)| {
                     let (name, callsign, catalog_id, accepts_commands, body, usd_kind) = q_meta

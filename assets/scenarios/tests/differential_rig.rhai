@@ -22,14 +22,24 @@
 // `emit("DIFF_RIG", "PASS"|"FAIL")` — the telemetry verdict `scene_test` reads
 // for its exit code. Assertion helpers come from `prelude/auto_tests.rhai`.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [],
+       entity_reads: [
+           find_path("/DiffRigTest/Rig/HingeL"),
+           find_path("/DiffRigTest/Rig/HingeR"),
+       ],
+       entity_writes: [],
+       query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 8.0;    // drop onto the stand, then ring down
     this.sample_s = 1.0;
     this.next_sample = 0.0;
 
-    this.hl = find("/DiffRigTest/Rig/HingeL");
-    this.hr = find("/DiffRigTest/Rig/HingeR");
+    this.hl = find_path("/DiffRigTest/Rig/HingeL");
+    this.hr = find_path("/DiffRigTest/Rig/HingeR");
 
     // WHICH scene this is, DECLARED by the scene rather than sniffed. Both stages
     // reference the same rig and differ only in whether the coupling drive is

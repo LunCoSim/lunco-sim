@@ -9,7 +9,8 @@ const GRAVITY_Y = -1.62;
 const GRAVITY_TOLERANCE = 0.05;
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path(ROOT + "/Lander")], required_inputs: [] }
+    #{ modelica_entities: [find_path(ROOT + "/Lander")], entity_reads: [], entity_writes: [],
+       query_reads: ["SceneCameraAudit"], required_inputs: [] }
 }
 
 fn near(actual, expected) {

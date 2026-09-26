@@ -8,7 +8,7 @@ const SOURCE_PATH = "twin://sysml_async_analysis/analysis.sysml";
 fn simulation_dependencies(me, ctx) {
     #{
         modelica_entities: [],
-        required_inputs: [
+        entity_reads: [], entity_writes: [], query_reads: ["AnalyzeSysml"], required_inputs: [
             #{ owner: "sysml.twin-analysis", identity: twin_name() },
         ],
     }

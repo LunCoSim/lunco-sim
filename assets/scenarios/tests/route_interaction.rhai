@@ -22,6 +22,11 @@ fn report(me, passed, message) {
         "ROUTE POINTER INTERACTION", "ROUTE_POINTER_INTERACTION");
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["InspectSelection"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.phase = 0;
     this.elapsed = 0.0;

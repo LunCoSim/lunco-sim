@@ -10,7 +10,7 @@ fn simulation_dependencies(me, ctx) {
             find_path("/LanderPlumeVisual/Lander/MainPropulsion"),
             find_path("/LanderPlumeVisual/Lander/FlameCore/Photometry"),
         ],
-        required_inputs: [],
+        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 

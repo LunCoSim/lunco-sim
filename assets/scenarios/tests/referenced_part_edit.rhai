@@ -3,6 +3,11 @@ const TEST_KIND = "editor";
 const PANEL = "/ReferencedPartEdit/Panel";
 const PREVIEW = 15401;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["QueryUsdPrim"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.phase = 0; this.elapsed = 0.0; this.done = false;
     this.doc = (); this.checks = [];

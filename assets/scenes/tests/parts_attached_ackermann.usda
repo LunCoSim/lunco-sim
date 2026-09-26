@@ -2,57 +2,60 @@
 (
     defaultPrim = "PartsAttached"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
 
-# Compact attachment regression for both Ackermann drivetrain realizations.
-# The shared Rhai observer discovers the authored rover children by name, so
-# this scene and `parts_attached.usda` use one reusable behavioral contract.
 def Xform "PartsAttached" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Both Ackermann rover drivetrain variants are driven in a straight line; every descendant part must still be at its authored offset afterwards."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    documentation = "Both Ackermann rover drivetrain variants are driven in a straight line; every descendant part must still be at its authored offset afterwards."
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
         double3 xformOp:scale = (500.0, 1.0, 500.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.4000000059604645, 0.44999998807907104)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </PartsAttached/PhysicsMaterials/Friction_1_0>
     }
-
     def Xform "AckermannRaycast" (
         prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
-        variants = { string drivetrain = "raycast" }
+        variants = { string "drivetrain" = "raycast" }
     )
     {
         double3 xformOp:translate = (-25.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
     def Xform "AckermannPhysical" (
         prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
-        variants = { string drivetrain = "physical" }
+        variants = { string "drivetrain" = "physical" }
     )
     {
         double3 xformOp:translate = (25.0, 1.0, 50.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
     def Scope "Scenario" (
-        prepend apiSchemas = ["LunCoProgramAPI"]
+        prepend apiSchemas = "LunCoProgramAPI"
     )
     {
         uniform token info:implementationSource = "sourceAsset"
         uniform asset info:sourceAsset = @lunco://scenarios/tests/parts_attached.rhai@
+    }
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
     }
 }

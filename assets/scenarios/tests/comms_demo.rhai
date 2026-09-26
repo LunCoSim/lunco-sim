@@ -22,6 +22,11 @@
 //
 // `emit("COMMS_DEMO", "PASS"|"FAIL")`. Graph queries from `prelude/links.rhai`.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["Links"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     let off_cycle = invoke_hook("link.connected", [#{}]);

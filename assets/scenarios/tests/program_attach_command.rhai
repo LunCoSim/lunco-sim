@@ -5,14 +5,20 @@
 // that a user reaches from the Models palette. It is not a Rust copy of the
 // command's lowering logic.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListOpenDocuments", "QueryUsdPrim", "CosimStatus"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.sent = false;
     this.done = false;
     this.source_only_sent = false;
     this.source_only_error = false;
-    this.doc = -1;
+    this.doc = ();
     this.plant = -1;
+    this.plant_read_tracked = false;
     this.host = "/ProgramAttachTest/Ball";
 }
 
@@ -21,6 +27,11 @@ fn fail(me, message) {
         me.done = true;
         report_verdict([message], "PROGRAM ATTACH COMMAND", "PROGRAM_ATTACH_COMMAND");
     }
+}
+
+fn authored_prim_exists(doc, path) {
+    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path });
+    result != () && result.ok != false && result.active == true
 }
 
 fn on_tick(me, ctx) {
@@ -39,31 +50,36 @@ fn on_tick(me, ctx) {
                 break;
             }
         }
-        if this.doc < 0 {
+        if this.doc == () {
             if this.elapsed > 8.0 { fail(this, "no open USD document was discoverable"); }
             return;
         }
 
-        let result = assembly_edit::attach_program(this.doc, #{
-            edit_target: "@runtime@",
-            host_path: this.host,
-            name: "Plant",
-            source_asset: "lunco://models/Balloon.mo",
-            inputs: [
-                assembly_edit::program_input_connection("height", this.host + ".outputs:position_y"),
-                assembly_edit::program_input_connection("velocity", this.host + ".outputs:velocity_y"),
-                assembly_edit::program_input_default("rho0", 1.225),
-                assembly_edit::program_input_default("gravity", 1.62),
-            ],
-            outputs: [assembly_edit::program_output("netForce", [this.host + ".inputs:force_y"])],
-            realtime_safe: true,
-        });
-        if !result.ok {
-            fail(this, "AttachProgram was rejected: " + result.error);
+        let plant_path = this.host + "/Plant";
+        if authored_prim_exists(this.doc, plant_path) {
+            this.sent = true;
+        } else {
+            let result = assembly_edit::attach_program(this.doc, #{
+                edit_target: "@runtime@",
+                host_path: this.host,
+                name: "Plant",
+                source_asset: "lunco://models/Balloon.mo",
+                inputs: [
+                    assembly_edit::program_input_connection("height", this.host + ".outputs:position_y"),
+                    assembly_edit::program_input_connection("velocity", this.host + ".outputs:velocity_y"),
+                    assembly_edit::program_input_default("rho0", 1.225),
+                    assembly_edit::program_input_default("gravity", 1.62),
+                ],
+                outputs: [assembly_edit::program_output("netForce", [this.host + ".inputs:force_y"])],
+                realtime_safe: true,
+            });
+            if !result.ok {
+                fail(this, "AttachProgram was rejected: " + result.error);
+                return;
+            }
+            this.sent = true;
             return;
         }
-        this.sent = true;
-        return;
     }
 
     if this.sent && this.plant < 0 {
@@ -71,6 +87,10 @@ fn on_tick(me, ctx) {
     }
 
     if this.sent && this.plant >= 0 {
+        if !this.plant_read_tracked {
+            this.plant_read_tracked = track_entity_read(this.plant);
+            if !this.plant_read_tracked { return; }
+        }
         let ports = query("ListPorts", #{ entity: this.plant });
         let status = query("CosimStatus");
         // Entity registration and port projection are separate lifecycle edges.
@@ -94,21 +114,26 @@ fn on_tick(me, ctx) {
             }
         }
         if has_height && has_net_force && running && !this.source_only_sent {
-            let source_only = assembly_edit::attach_program(this.doc, #{
-                edit_target: "@runtime@",
-                host_path: this.host,
-                name: "SourceOnly",
-                source_asset: "lunco://models/Balloon.mo",
-                inputs: [],
-                outputs: [],
-                realtime_safe: false,
-            });
-            if !source_only.ok {
-                fail(this, "source-only AttachProgram was rejected: " + source_only.error);
+            let source_only_path = this.host + "/SourceOnly";
+            if authored_prim_exists(this.doc, source_only_path) {
+                this.source_only_sent = true;
+            } else {
+                let source_only = assembly_edit::attach_program(this.doc, #{
+                    edit_target: "@runtime@",
+                    host_path: this.host,
+                    name: "SourceOnly",
+                    source_asset: "lunco://models/Balloon.mo",
+                    inputs: [],
+                    outputs: [],
+                    realtime_safe: false,
+                });
+                if !source_only.ok {
+                    fail(this, "source-only AttachProgram was rejected: " + source_only.error);
+                    return;
+                }
+                this.source_only_sent = true;
                 return;
             }
-            this.source_only_sent = true;
-            return;
         }
         if this.source_only_sent {
             for row in status_rows {

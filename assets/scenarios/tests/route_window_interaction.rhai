@@ -16,7 +16,8 @@ const ADD_X = 1000.0;
 const ADD_Y = 700.0;
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path(SUBJECT)], required_inputs: [] }
+    #{ modelica_entities: [find_path(SUBJECT)], entity_reads: [], entity_writes: [],
+       query_reads: ["ReadExposures"], required_inputs: [] }
 }
 
 fn route_points() {

@@ -35,14 +35,21 @@
 // moment they would just touch. Authored at 0.8, so they overlap by 0.5 m.
 const TOUCH_DIST = 1.3;
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [],
+       entity_reads: [find_path("/SandboxScene/Rig/Pad")],
+       entity_writes: [],
+       query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.settle_s = 4.0;
     this.sample_s = 1.0;
     this.next_sample = 0.0;
 
-    this.hull = find("/SandboxScene/Rig/Hull");
-    this.pad = find("/SandboxScene/Rig/Pad");
+    this.hull = find_path("/SandboxScene/Rig/Hull");
+    this.pad = find_path("/SandboxScene/Rig/Pad");
 
     // WHICH scene this is, DECLARED by the scene rather than sniffed. Reading it
     // back off the Pad's own schema would make the expectation depend on the very

@@ -33,10 +33,42 @@ impl From<ApiValueError> for ApiQueryError {
     }
 }
 
+/// Simulation read footprint declared by an API query owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimulationQueryReadScope {
+    /// The provider reads live state belonging to specific stable entities.
+    EntityTargets,
+    /// The provider reads the committed scene revision bound to the Twin.
+    SceneGeneration,
+    /// The provider reads a broader owner snapshot named in the scenario plan.
+    ScenarioDeclared,
+}
+
 /// Read-only structured provider for one named API query.
 pub trait ApiQueryProvider: Send + Sync + 'static {
     /// Stable name matched against the command field of `ExecuteCommand`.
     fn name(&self) -> &'static str;
+
+    /// Return how simulation callers account for this provider's reads.
+    ///
+    /// Unspecified providers conservatively require their public name in the
+    /// scenario's `query_reads` plan. Entity owners may report target ids, and
+    /// scene owners may bind reads to the committed Twin generation.
+    fn simulation_read_scope(&self, _params: &ApiValue) -> SimulationQueryReadScope {
+        SimulationQueryReadScope::ScenarioDeclared
+    }
+
+    /// Stable live-entity identities whose state affects this query result.
+    ///
+    /// Scripting validates these reads against the active scenario's
+    /// `simulation_dependencies` plan before calling `execute`, in addition to
+    /// enforcing the provider's `simulation_read_scope`. Providers that read
+    /// one or more specific entities must report those identities here.
+    /// Queries over broader world or document snapshots use `ScenarioDeclared`;
+    /// an empty result does not describe those aggregate reads.
+    fn simulation_entity_reads(&self, _params: &ApiValue) -> Vec<lunco_core::GlobalEntityId> {
+        Vec::new()
+    }
 
     /// Execute against an immutable ECS world using typed parameters.
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult;
@@ -188,6 +220,17 @@ fn port_info_to_api_value(
 impl ApiQueryProvider for ReadPortsProvider {
     fn name(&self) -> &'static str {
         "ReadPorts"
+    }
+
+    fn simulation_read_scope(&self, _params: &ApiValue) -> SimulationQueryReadScope {
+        SimulationQueryReadScope::EntityTargets
+    }
+
+    fn simulation_entity_reads(&self, params: &ApiValue) -> Vec<lunco_core::GlobalEntityId> {
+        api_param_u64(params, "api_id")
+            .map(lunco_core::GlobalEntityId::from_raw)
+            .into_iter()
+            .collect()
     }
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {

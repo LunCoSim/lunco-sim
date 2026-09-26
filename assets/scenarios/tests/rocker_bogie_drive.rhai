@@ -7,12 +7,22 @@ const DRIVE_S = 8.0;
 const STEER_S = 6.0;
 const MIN_TRAVEL_M = 2.0;
 
+fn simulation_dependencies(me, ctx) {
+    let modelica_entities = [];
+    for path in ["/RockerBogieDrive/Rover", "/RockerBogieFlat/Rover"] {
+        let rover = find_path(path);
+        if rover >= 0 { modelica_entities.push(rover); }
+    }
+    #{ modelica_entities: modelica_entities, entity_reads: [],
+       entity_writes: [], query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
-    this.rover = find("/RockerBogieDrive/Rover");
+    this.rover = find_path("/RockerBogieDrive/Rover");
     if this.rover == () || this.rover < 0 {
-        this.rover = find("/RockerBogieFlat/Rover");
+        this.rover = find_path("/RockerBogieFlat/Rover");
     }
     this.start = ();
     this.prev = ();
@@ -21,6 +31,7 @@ fn on_start(me, ctx) {
     this.fprev = ();
     this.yaw_steer = 0.0;
     this.yaw_samples = 0;
+    this.claim = ();
     print("[rb-drive] rover gid=" + this.rover);
 }
 
@@ -44,6 +55,9 @@ fn on_tick(me, ctx) {
         brake(this.rover);
         if this.t >= SETTLE_S {
             this.phase = "drive";
+            this.claim = cmd("AcquireControl", #{
+                target: this.rover, bind_camera: false,
+            });
             this.start = p;
             this.prev = p;
             print("[rb-drive] settled; full-throttle drive started");
@@ -82,6 +96,8 @@ fn on_tick(me, ctx) {
         fails.push(t_true(this.samples > 100,
             "drive phase produced only " + this.samples + " samples"));
         fails.push(t_moved(net, MIN_TRAVEL_M, "rocker-bogie net travel"));
+        fails.push(t_true(this.claim != () && this.claim.ok == true,
+            "rover control claim failed: " + this.claim));
         fails.push(t_true(this.yaw_samples > 20,
             "steering phase produced only " + this.yaw_samples + " heading samples"));
         fails.push(t_true(this.yaw_steer.abs() > 5.0,

@@ -14,6 +14,11 @@ const ARRIVE_RADIUS = 2.0;        // "arrived" tolerance (m)
 const PROBE = 6.0;                // obstacle look-ahead distance (m)
 const TURN = 0.6;                 // steer magnitude while avoiding
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["Raycast"], required_inputs: [] }
+}
+
 fn task(me, ctx) {
     seq([
         // SENSE and AVOID are one task leaf. The native task kernel invokes the

@@ -39,6 +39,25 @@ fn first_tick_trace_value(sample) {
     }
 }
 
+fn spatial_entity_ids_are_stable(entity) {
+    let pose = query("QueryEntity", #{ id: entity });
+    let point = ();
+    try { point = pose.position; } catch (error) { return false; }
+    if point == () { return false; }
+
+    let result = query("EntitiesInRadius", #{ point: point, radius: 1000000000.0 });
+    let ids = ();
+    try { ids = result.ids; } catch (error) { return false; }
+    if ids == () || ids.len() < 2 { return false; }
+
+    let previous = ids[0];
+    for index in 1..ids.len() {
+        if ids[index] <= previous { return false; }
+        previous = ids[index];
+    }
+    true
+}
+
 fn modelica_worker_step_diagnostics() {
     let status = query("CosimStatus", #{ include_values: false });
     if status == () || status.entities == () { return (); }
@@ -73,16 +92,102 @@ fn scenario_command_succeeded(result) {
     succeeded
 }
 
+fn undeclared_broad_query_source() {
+    let source = "fn simulation_dependencies(me, ctx) {\n";
+    source += "  #{ modelica_entities: [], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }\n";
+    source += "}\n";
+    source += "fn on_start(me, ctx) {\n";
+    source += "  let status = query(\"CosimStatus\", #{ include_values: false });\n";
+    source += "  let rejected = status != () && status.ok == false && status.error.contains(\"query_reads\");\n";
+    source += "  emit(\"sensor_undeclared_broad_query_rejected\", rejected);\n";
+    source += "}\n";
+    source
+}
+
+fn start_undeclared_broad_query_probe(target) {
+    if target < 0 { return false; }
+    let result = cmd("RunScenario", #{
+        target: target,
+        source: undeclared_broad_query_source(),
+        params: #{},
+    });
+    scenario_command_succeeded(result)
+}
+
 fn invalid_modelica_dependency_source() {
     let source = "fn simulation_dependencies(me, ctx) {\n";
-    source += "  #{ modelica_entities: [ctx.declared_entity], required_inputs: [] }\n";
+    source += "  #{ modelica_entities: [ctx.declared_entity], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }\n";
     source += "}\n";
     source += "fn on_start(me, ctx) { emit(\"sensor_invalid_dependency_started\", true); }\n";
     source
 }
 
-fn start_invalid_modelica_dependency_probe() {
+fn incomplete_dependency_plan_source() {
+    let source = "fn simulation_dependencies(me, ctx) {\n";
+    source += "  #{ modelica_entities: [], query_reads: [], required_inputs: [] }\n";
+    source += "}\n";
+    source += "fn on_start(me, ctx) { emit(\"sensor_incomplete_dependency_plan_started\", true); }\n";
+    source
+}
+
+fn missing_query_read_plan_source() {
+    let source = "fn simulation_dependencies(me, ctx) {\n";
+    source += "  #{ modelica_entities: [], entity_reads: [], entity_writes: [], required_inputs: [] }\n";
+    source += "}\n";
+    source += "fn on_start(me, ctx) { emit(\"sensor_missing_query_reads_started\", true); }\n";
+    source
+}
+
+fn start_incomplete_dependency_plan_probe() {
     let target = find_path("/SandboxScene/Avatar");
+    if target < 0 { return #{ accepted: false, target: target }; }
+    let result = cmd("RunScenario", #{
+        target: target,
+        source: incomplete_dependency_plan_source(),
+        params: #{},
+    });
+    #{ accepted: scenario_command_succeeded(result), target: target }
+}
+
+fn poll_incomplete_dependency_plan(target) {
+    if target < 0 { return false; }
+    let status = query("ScriptStatus", #{ target: target });
+    if status == () || status.state != "error" || status.diagnostics == () {
+        return false;
+    }
+    for diagnostic in status.diagnostics {
+        if diagnostic.message.contains("must include `entity_reads`") {
+            return true;
+        }
+    }
+    false
+}
+
+fn start_missing_query_read_plan_probe(target) {
+    if target < 0 { return false; }
+    let result = cmd("RunScenario", #{
+        target: target,
+        source: missing_query_read_plan_source(),
+        params: #{},
+    });
+    scenario_command_succeeded(result)
+}
+
+fn poll_missing_query_read_plan(target) {
+    if target < 0 { return false; }
+    let status = query("ScriptStatus", #{ target: target });
+    if status == () || status.state != "error" || status.diagnostics == () {
+        return false;
+    }
+    for diagnostic in status.diagnostics {
+        if diagnostic.message.contains("must include `query_reads`") {
+            return true;
+        }
+    }
+    false
+}
+
+fn start_invalid_modelica_dependency_probe(target) {
     let unrelated = find_path("/SandboxScene/Box");
     if target < 0 || unrelated < 0 {
         return #{ accepted: false, target: target };
@@ -112,7 +217,7 @@ fn poll_invalid_modelica_dependency(target) {
 
 fn undeclared_modelica_access_source() {
     let source = "fn simulation_dependencies(me, ctx) {\n";
-    source += "  #{ modelica_entities: [], required_inputs: [] }\n";
+    source += "  #{ modelica_entities: [], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }\n";
     source += "}\n";
     source += "fn on_start(me, ctx) {\n";
     source += "  let result = cmd(\"SetPorts\", #{ target: ctx.modelica_target, writes: [[\"raw_acceleration_y\", 3.0]], seq: 0, tick: 0 });\n";
@@ -154,7 +259,7 @@ fn poll_undeclared_modelica_access(target) {
 
 fn modelica_event_producer_source() {
     let source = "fn simulation_dependencies(me, ctx) {\n";
-    source += "  #{ modelica_entities: [ctx.modelica_source], required_inputs: [] }\n";
+    source += "  #{ modelica_entities: [ctx.modelica_source], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }\n";
     source += "}\n";
     source += "fn on_tick(me, ctx) {\n";
     source += "  if this.sent == true { return; }\n";
@@ -166,7 +271,17 @@ fn modelica_event_producer_source() {
 
 fn undeclared_modelica_event_consumer_source() {
     let source = "fn simulation_dependencies(me, ctx) {\n";
-    source += "  #{ modelica_entities: [], required_inputs: [] }\n";
+    source += "  #{ modelica_entities: [], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }\n";
+    source += "}\n";
+    source += "fn on_start(me, ctx) {\n";
+    source += "  let rejected = false;\n";
+    source += "  try { get(ctx.generic_target, \"Transform.translation\"); } catch (error) { rejected = true; }\n";
+    source += "  emit(\"sensor_undeclared_entity_read_rejected\", rejected);\n";
+    source += "  let entity = query(\"QueryEntity\", #{ id: ctx.generic_target });\n";
+    source += "  let query_rejected = entity != () && entity.ok == false && entity.error.contains(\"without this scenario's declared dependency\");\n";
+    source += "  emit(\"sensor_undeclared_query_entity_rejected\", query_rejected);\n";
+    source += "  let write_rejected = set(ctx.generic_target, \"Transform.translation.x\", ctx.generic_target_x) == false;\n";
+    source += "  emit(\"sensor_undeclared_entity_write_rejected\", write_rejected);\n";
     source += "}\n";
     source += "fn on_event(me, evt, ctx) {\n";
     source += "  if evt.name == \"sensor_modelica_event_dependency_probe\" { emit(\"sensor_modelica_event_consumer_ran\", true); }\n";
@@ -174,8 +289,12 @@ fn undeclared_modelica_event_consumer_source() {
     source
 }
 
-fn start_undeclared_modelica_event_probe(modelica_source, receiver) {
-    if modelica_source < 0 || receiver < 0 {
+fn start_undeclared_modelica_event_probe(modelica_source, receiver, generic_target) {
+    if modelica_source < 0 || receiver < 0 || generic_target < 0 {
+        return #{ producer_accepted: false, consumer_accepted: false, receiver: receiver };
+    }
+    let generic_target_x = get(generic_target, "Transform.translation.x");
+    if generic_target_x == () {
         return #{ producer_accepted: false, consumer_accepted: false, receiver: receiver };
     }
     let producer = cmd("RunScenario", #{
@@ -186,7 +305,7 @@ fn start_undeclared_modelica_event_probe(modelica_source, receiver) {
     let consumer = cmd("RunScenario", #{
         target: receiver,
         source: undeclared_modelica_event_consumer_source(),
-        params: #{}
+        params: #{ generic_target: generic_target, generic_target_x: generic_target_x }
     });
     #{ producer_accepted: scenario_command_succeeded(producer),
        consumer_accepted: scenario_command_succeeded(consumer),
@@ -223,7 +342,12 @@ fn telemetry_history_count(name) {
 }
 
 fn scenario_actor_order_source() {
-    let source = "fn on_start(me, ctx) {\n";
+    let source = "fn simulation_dependencies(me, ctx) {\n";
+    source += "  let entity_reads = [];\n";
+    source += "  if ctx.role == \"reader\" { entity_reads.push(ctx.marker_entity); }\n";
+    source += "  #{ modelica_entities: [], entity_reads: entity_reads, entity_writes: [ctx.marker_entity], query_reads: [], required_inputs: [] }\n";
+    source += "}\n";
+    source += "fn on_start(me, ctx) {\n";
     source += "  if ctx.role == \"writer\" {\n";
     source += "    set(ctx.marker_entity, \"Transform.translation.x\", ctx.marker);\n";
     source += "  } else {\n";
@@ -294,6 +418,8 @@ fn start_scenario_actor_order_probe(me) {
 fn simulation_dependencies(me, ctx) {
     let imu = find_path("/SandboxScene/Box/IMU");
     let altimeter = find_path("/SandboxScene/Box/Altimeter/Model");
+    let box = find_path("/SandboxScene/Box");
+    let marker_entity = find_path("/SandboxScene/Box/Altimeter");
     let port_read_rejected = false;
     let mutation_rejected = false;
     try {
@@ -308,7 +434,13 @@ fn simulation_dependencies(me, ctx) {
     }
     this.dependency_port_read_rejected = port_read_rejected;
     this.dependency_mutation_rejected = mutation_rejected;
-    #{ modelica_entities: [imu, altimeter], required_inputs: [] }
+    #{ modelica_entities: [imu, altimeter],
+       entity_reads: [box, marker_entity],
+       entity_writes: [],
+       query_reads: ["EntitiesInRadius", "CosimStatus", "ScriptStatus",
+           "ListTelemetryChannels", "QueryTelemetryHistory", "SimulationTimingProfile",
+           "GetReadiness", "BindingStatus", "RuntimeDiagnostics"],
+       required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -332,16 +464,26 @@ fn on_start(me, ctx) {
     });
     this.telemetry_probe_setup_ok = scenario_command_succeeded(telemetry_probe);
     this.telemetry_probe_count = 0;
+    this.spatial_query_order_checked = false;
+    this.spatial_query_ids_ordered = false;
     this.first_tick = ();
     this.actor_identity = me;
     this.actor_order_setup_ok = start_scenario_actor_order_probe(me);
     this.actor_order_result_received = false;
     this.actor_order_passed = false;
-    let invalid_dependency_probe = start_invalid_modelica_dependency_probe();
-    this.invalid_dependency_setup_ok = invalid_dependency_probe.accepted;
-    this.invalid_dependency_target = invalid_dependency_probe.target;
+    this.invalid_dependency_setup_ok = false;
+    this.invalid_dependency_target = find_path("/SandboxScene/Box50");
     this.invalid_dependency_plan_rejected = false;
     this.invalid_dependency_started = false;
+    let dependency_schema_probe = start_incomplete_dependency_plan_probe();
+    this.dependency_schema_setup_ok = dependency_schema_probe.accepted;
+    this.dependency_schema_target = dependency_schema_probe.target;
+    this.dependency_schema_rejected = false;
+    this.dependency_schema_started = false;
+    this.query_read_schema_setup_ok = false;
+    this.query_read_schema_rejected = false;
+    this.undeclared_broad_query_setup_ok = false;
+    this.undeclared_broad_query_rejected = false;
     let undeclared_access_probe = start_undeclared_modelica_access_probe(
         find_path("/SandboxScene/Box/Altimeter"), this.imu,
     );
@@ -356,13 +498,16 @@ fn on_start(me, ctx) {
     this.undeclared_readports_rejected = false;
     let event_receiver = find_path("/SandboxScene/Box/IMU");
     let undeclared_event_probe = start_undeclared_modelica_event_probe(
-        this.altimeter, event_receiver,
+        this.altimeter, event_receiver, this.box,
     );
     this.undeclared_event_setup_ok = undeclared_event_probe.producer_accepted
         && undeclared_event_probe.consumer_accepted;
     this.undeclared_event_receiver = undeclared_event_probe.receiver;
     this.undeclared_event_rejected = false;
     this.undeclared_event_delivered = false;
+    this.undeclared_entity_read_rejected = false;
+    this.undeclared_query_entity_rejected = false;
+    this.undeclared_entity_write_rejected = false;
     this.phase = "settle";
     print("[sensors] ── raw Avian + Modelica ─────────────────────────");
 }
@@ -375,6 +520,12 @@ fn on_event(me, evt, ctx) {
     if evt.name == "sensor_invalid_dependency_started" {
         this.invalid_dependency_started = evt.value == true;
     }
+    if evt.name == "sensor_incomplete_dependency_plan_started" {
+        this.dependency_schema_started = evt.value == true;
+    }
+    if evt.name == "sensor_undeclared_broad_query_rejected" {
+        this.undeclared_broad_query_rejected = evt.value == true;
+    }
     if evt.name == "sensor_undeclared_command_rejected" {
         this.undeclared_command_result_received = true;
         this.undeclared_command_rejected = evt.value == true;
@@ -386,6 +537,15 @@ fn on_event(me, evt, ctx) {
     if evt.name == "sensor_modelica_event_consumer_ran" {
         this.undeclared_event_delivered = true;
     }
+    if evt.name == "sensor_undeclared_entity_read_rejected" {
+        this.undeclared_entity_read_rejected = evt.value == true;
+    }
+    if evt.name == "sensor_undeclared_query_entity_rejected" {
+        this.undeclared_query_entity_rejected = evt.value == true;
+    }
+    if evt.name == "sensor_undeclared_entity_write_rejected" {
+        this.undeclared_entity_write_rejected = evt.value == true;
+    }
 }
 
 fn on_tick(me, ctx) {
@@ -396,9 +556,40 @@ fn on_tick(me, ctx) {
     }
 
     this.telemetry_probe_count = telemetry_history_count(this.telemetry_probe_name);
-    if !this.invalid_dependency_plan_rejected {
+    if !this.spatial_query_order_checked && this.t >= 0.25 {
+        this.spatial_query_ids_ordered = spatial_entity_ids_are_stable(this.box);
+        this.spatial_query_order_checked = true;
+    }
+    if !this.dependency_schema_rejected {
+        this.dependency_schema_rejected = poll_incomplete_dependency_plan(
+            this.dependency_schema_target,
+        );
+    }
+    if this.dependency_schema_rejected && this.actor_order_result_received
+        && this.actor_order_passed && !this.invalid_dependency_setup_ok {
+        let target = find_path("/SandboxScene/Box50");
+        this.invalid_dependency_target = target;
+        let invalid_dependency_probe = start_invalid_modelica_dependency_probe(target);
+        this.invalid_dependency_setup_ok = invalid_dependency_probe.accepted;
+    }
+    if this.invalid_dependency_setup_ok && !this.invalid_dependency_plan_rejected {
         this.invalid_dependency_plan_rejected = poll_invalid_modelica_dependency(
             this.invalid_dependency_target,
+        );
+    }
+    if this.invalid_dependency_plan_rejected && !this.query_read_schema_setup_ok {
+        this.query_read_schema_setup_ok = start_missing_query_read_plan_probe(
+            this.dependency_schema_target,
+        );
+    }
+    if this.query_read_schema_setup_ok && !this.query_read_schema_rejected {
+        this.query_read_schema_rejected = poll_missing_query_read_plan(
+            this.dependency_schema_target,
+        );
+    }
+    if this.query_read_schema_rejected && !this.undeclared_broad_query_setup_ok {
+        this.undeclared_broad_query_setup_ok = start_undeclared_broad_query_probe(
+            this.dependency_schema_target,
         );
     }
     if !this.undeclared_access_rejected {
@@ -488,6 +679,13 @@ fn on_tick(me, ctx) {
             invalid_dependency_setup_ok: this.invalid_dependency_setup_ok,
             invalid_dependency_plan_rejected: this.invalid_dependency_plan_rejected,
             invalid_dependency_started: this.invalid_dependency_started,
+            undeclared_broad_query_setup_ok: this.undeclared_broad_query_setup_ok,
+            undeclared_broad_query_rejected: this.undeclared_broad_query_rejected,
+            dependency_schema_setup_ok: this.dependency_schema_setup_ok,
+            dependency_schema_rejected: this.dependency_schema_rejected,
+            dependency_schema_started: this.dependency_schema_started,
+            query_read_schema_setup_ok: this.query_read_schema_setup_ok,
+            query_read_schema_rejected: this.query_read_schema_rejected,
             undeclared_access_setup_ok: this.undeclared_access_setup_ok,
             undeclared_access_rejected: this.undeclared_access_rejected,
             undeclared_command_setup_ok: this.undeclared_command_setup_ok,
@@ -498,8 +696,12 @@ fn on_tick(me, ctx) {
             undeclared_event_setup_ok: this.undeclared_event_setup_ok,
             undeclared_event_rejected: this.undeclared_event_rejected,
             undeclared_event_delivered: this.undeclared_event_delivered,
+            undeclared_entity_read_rejected: this.undeclared_entity_read_rejected,
+            undeclared_query_entity_rejected: this.undeclared_query_entity_rejected,
+            undeclared_entity_write_rejected: this.undeclared_entity_write_rejected,
             telemetry_probe_setup_ok: this.telemetry_probe_setup_ok,
             telemetry_probe_count: this.telemetry_probe_count,
+            spatial_query_ids_ordered: this.spatial_query_ids_ordered,
             modelica_step_diagnostics: step_diagnostics,
             cosim_status_values_omitted: if step_report == () { false } else { step_report.compact_values_omitted },
             cosim_status_default_values_present: if step_report == () { false } else { step_report.default_values_present },
@@ -536,6 +738,8 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
         "scenario on_start ran once after a committed scene generation was available"));
     f.push(t_true(s.generation_stable == true,
         "the active scenario retained the same committed scene generation through its run"));
+    f.push(t_true(s.spatial_query_ids_ordered == true,
+        "EntitiesInRadius returned registered entity ids in ascending stable identity order"));
     f.push(t_true(s.actor_identity > 0,
         "the authored scenario host did not expose its stable GlobalEntityId"));
     f.push(t_true(s.actor_order_setup_ok == true,
@@ -548,6 +752,16 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
         "simulation_dependencies accepted a live non-Modelica entity"));
     f.push(t_true(s.invalid_dependency_started == false,
         "scenario on_start ran after its Modelica dependency plan was rejected"));
+    f.push(t_true(s.undeclared_broad_query_setup_ok == true
+        && s.undeclared_broad_query_rejected == true,
+        "a scenario read a broad simulation query without declaring its provider"));
+    f.push(t_true(s.dependency_schema_setup_ok == true
+        && s.dependency_schema_rejected == true
+        && s.dependency_schema_started == false,
+        "simulation_dependencies accepted a plan with missing directional access arrays"));
+    f.push(t_true(s.query_read_schema_setup_ok == true
+        && s.query_read_schema_rejected == true,
+        "simulation_dependencies accepted a plan without the required query_reads array"));
     f.push(t_true(s.undeclared_access_setup_ok == true,
         "the undeclared Modelica access probe did not attach"));
     f.push(t_true(s.undeclared_access_rejected == true,
@@ -563,6 +777,12 @@ fn verdict(s, dependency_port_read_rejected, dependency_mutation_rejected, first
         && s.undeclared_event_rejected == true
         && s.undeclared_event_delivered == false,
         "a scenario consumed an event from a Modelica participant it did not declare"));
+    f.push(t_true(s.undeclared_entity_read_rejected == true,
+        "a simulation scenario read a reflected entity field without declaring it"));
+    f.push(t_true(s.undeclared_query_entity_rejected == true,
+        "QueryEntity exposed another live entity without a declared dependency"));
+    f.push(t_true(s.undeclared_entity_write_rejected == true,
+        "a simulation scenario wrote a reflected entity field without declaring it"));
     f.push(t_true(s.telemetry_probe_setup_ok == true && s.telemetry_probe_count.to_float() >= 2.0,
         "the production telemetry query did not observe fixed-clock samples from the authored channel"));
     f.push(t_present(modelica_step_diagnostics, "Modelica worker step diagnostics"));

@@ -242,18 +242,71 @@ mod tests {
         let mut participants = SimulationBarrierParticipants::default();
         participants.replace([modelica_a]);
 
-        participants.replace_scenario_dependencies(scenario_a, [modelica_a]);
-        participants.replace_scenario_dependencies(scenario_b, [modelica_b]);
+        participants.replace_scenario_plan(
+            scenario_a,
+            [modelica_a],
+            [independent],
+            [independent],
+            ["EntitiesInRadius".to_owned()],
+        );
+        participants.replace_scenario_plan(
+            scenario_b,
+            [modelica_b],
+            [],
+            [],
+            std::iter::empty::<String>(),
+        );
         assert!(participants.requires_barrier(modelica_a));
         assert!(participants.requires_barrier(modelica_b));
         assert!(!participants.requires_barrier(independent));
+        assert!(participants.scenario_declares_read(scenario_a, independent));
+        assert!(participants.scenario_declares_write(scenario_a, independent));
+        assert!(participants.scenario_declares_query_read(scenario_a, "EntitiesInRadius"));
+        assert!(!participants.scenario_declares_query_read(scenario_a, "Raycast"));
 
         participants.remove_scenario_dependencies(scenario_a);
         assert!(participants.requires_barrier(modelica_a));
         assert!(participants.requires_barrier(modelica_b));
+        assert!(!participants.scenario_declares_read(scenario_a, independent));
+        assert!(!participants.scenario_declares_query_read(scenario_a, "EntitiesInRadius"));
 
         participants.remove_scenario_dependencies(scenario_b);
         assert!(!participants.requires_barrier(modelica_b));
+    }
+
+    #[test]
+    fn scenario_runtime_discovered_modelica_access_joins_its_barrier() {
+        let scenario = Entity::from_raw_u32(1).unwrap();
+        let modelica = Entity::from_raw_u32(11).unwrap();
+        let spawned_modelica = Entity::from_raw_u32(12).unwrap();
+        let mut participants = SimulationBarrierParticipants::default();
+        participants.replace(std::iter::empty());
+        participants.replace_modelica_entities([modelica, spawned_modelica]);
+        participants.replace_scenario_plan(
+            scenario,
+            [modelica],
+            [],
+            [],
+            std::iter::empty::<String>(),
+        );
+
+        assert!(participants.requires_barrier(modelica));
+        assert!(!participants.requires_barrier(spawned_modelica));
+        assert_eq!(
+            participants.add_scenario_read(scenario, spawned_modelica),
+            Some(true)
+        );
+        assert_eq!(
+            participants.add_scenario_write(scenario, spawned_modelica),
+            Some(true)
+        );
+        assert!(participants.scenario_declares_read(scenario, spawned_modelica));
+        assert!(participants.scenario_declares_write(scenario, spawned_modelica));
+        assert!(participants.requires_barrier(spawned_modelica));
+
+        participants.remove_scenario_dependencies(scenario);
+        assert!(!participants.requires_barrier(modelica));
+        assert!(!participants.requires_barrier(spawned_modelica));
     }
 
     #[test]
@@ -269,7 +322,13 @@ mod tests {
         assert!(participants.requires_barrier(modelica_a));
         assert!(participants.requires_barrier(modelica_b));
 
-        participants.replace_scenario_dependencies(scenario, [modelica_b]);
+        participants.replace_scenario_plan(
+            scenario,
+            [modelica_b],
+            [],
+            [],
+            std::iter::empty::<String>(),
+        );
         assert!(!participants.requires_barrier(modelica_a));
         assert!(participants.requires_barrier(modelica_b));
     }
@@ -400,16 +459,24 @@ pub struct SimulationBarrierParticipants {
     /// lets generic scripting validate that a declared dependency is covered
     /// by the shared fixed-step barrier without depending on Modelica types.
     pub modelica_entities: EntityHashSet,
-    /// Modelica participants named by each active scenario's typed
-    /// `simulation_dependencies` hook. Kept by scenario owner so recompiles,
-    /// detach, and despawn can replace exactly their own contribution.
-    scenario_entities: HashMap<Entity, EntityHashSet>,
+    /// Modelica and generic entity access sets named by each active scenario's
+    /// simulation_dependencies hook. The scenario owner replaces the full plan
+    /// on recompile, detach, or despawn.
+    scenario_plans: HashMap<Entity, ScenarioEntityAccess>,
     /// Flattened membership for the per-step barrier read path.
     scenario_participants: EntityHashSet,
     /// A scenario whose source revision is compiling or resolving its
     /// dependency plan. Until the plan is committed, all Modelica participants
     /// are synchronized conservatively.
     pending_scenario_plans: EntityHashSet,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ScenarioEntityAccess {
+    modelica: EntityHashSet,
+    reads: EntityHashSet,
+    writes: EntityHashSet,
+    query_reads: BTreeSet<String>,
 }
 
 /// Owner namespace for an operation that must finish before authoritative
@@ -561,9 +628,42 @@ impl SimulationBarrierParticipants {
     /// `entities` and `scenario_participants` are aggregate solver-barrier
     /// membership; neither identifies which scenario reads a participant.
     pub fn scenario_declares_dependency(&self, scenario: Entity, participant: Entity) -> bool {
-        self.scenario_entities
+        self.scenario_plans.get(&scenario).is_some_and(|plan| {
+            plan.modelica.contains(&participant) || plan.reads.contains(&participant)
+        })
+    }
+
+    /// Whether this scenario placed a Modelica entity in the shared access set.
+    pub fn scenario_declares_modelica_dependency(
+        &self,
+        scenario: Entity,
+        participant: Entity,
+    ) -> bool {
+        self.scenario_plans
             .get(&scenario)
-            .is_some_and(|entities| entities.contains(&participant))
+            .is_some_and(|plan| plan.modelica.contains(&participant))
+    }
+
+    /// Whether this scenario declared a generic live-entity read.
+    pub fn scenario_declares_read(&self, scenario: Entity, entity: Entity) -> bool {
+        self.scenario_plans
+            .get(&scenario)
+            .is_some_and(|plan| plan.reads.contains(&entity))
+    }
+
+    /// Whether this scenario declared a generic live-entity write.
+    pub fn scenario_declares_write(&self, scenario: Entity, entity: Entity) -> bool {
+        self.scenario_plans
+            .get(&scenario)
+            .is_some_and(|plan| plan.writes.contains(&entity))
+    }
+
+    /// Whether this scenario declares a provider that reads a broad owner
+    /// snapshot during simulation.
+    pub fn scenario_declares_query_read(&self, scenario: Entity, name: &str) -> bool {
+        self.scenario_plans
+            .get(&scenario)
+            .is_some_and(|plan| plan.query_reads.contains(name))
     }
 
     pub fn replace(&mut self, entities: impl IntoIterator<Item = Entity>) {
@@ -577,6 +677,7 @@ impl SimulationBarrierParticipants {
     pub fn replace_modelica_entities(&mut self, entities: impl IntoIterator<Item = Entity>) {
         self.modelica_entities.clear();
         self.modelica_entities.extend(entities);
+        self.rebuild_scenario_participants();
     }
 
     /// Hold all Modelica participants while one scenario source revision is
@@ -585,22 +686,54 @@ impl SimulationBarrierParticipants {
         self.pending_scenario_plans.insert(scenario);
     }
 
-    /// Commit one scenario's resolved dependency set and release its admission
-    /// hold. Entity membership is used only by Modelica barrier queries.
-    pub fn replace_scenario_dependencies(
+    /// Commit one scenario's resolved access plan and release its admission
+    /// hold. Directional entries join the barrier when they are Modelica
+    /// participants in the current projection.
+    pub fn replace_scenario_plan(
         &mut self,
         scenario: Entity,
-        entities: impl IntoIterator<Item = Entity>,
+        modelica: impl IntoIterator<Item = Entity>,
+        reads: impl IntoIterator<Item = Entity>,
+        writes: impl IntoIterator<Item = Entity>,
+        query_reads: impl IntoIterator<Item = String>,
     ) {
-        self.scenario_entities
-            .insert(scenario, entities.into_iter().collect());
+        self.scenario_plans.insert(
+            scenario,
+            ScenarioEntityAccess {
+                modelica: modelica.into_iter().collect(),
+                reads: reads.into_iter().collect(),
+                writes: writes.into_iter().collect(),
+                query_reads: query_reads.into_iter().collect(),
+            },
+        );
         self.pending_scenario_plans.remove(&scenario);
         self.rebuild_scenario_participants();
     }
 
+    /// Add one runtime-discovered read to a committed scenario plan.
+    ///
+    /// This covers entity identities materialized by an ordered simulation
+    /// command after the static dependency plan was resolved.
+    pub fn add_scenario_read(&mut self, scenario: Entity, entity: Entity) -> Option<bool> {
+        let inserted = self.scenario_plans.get_mut(&scenario)?.reads.insert(entity);
+        self.rebuild_scenario_participants();
+        Some(inserted)
+    }
+
+    /// Add one runtime-discovered write to a committed scenario plan.
+    pub fn add_scenario_write(&mut self, scenario: Entity, entity: Entity) -> Option<bool> {
+        let inserted = self
+            .scenario_plans
+            .get_mut(&scenario)?
+            .writes
+            .insert(entity);
+        self.rebuild_scenario_participants();
+        Some(inserted)
+    }
+
     /// Remove one scenario's dependency contribution and pending-plan hold.
     pub fn remove_scenario_dependencies(&mut self, scenario: Entity) {
-        self.scenario_entities.remove(&scenario);
+        self.scenario_plans.remove(&scenario);
         self.pending_scenario_plans.remove(&scenario);
         self.rebuild_scenario_participants();
     }
@@ -608,7 +741,7 @@ impl SimulationBarrierParticipants {
     /// Clear all scenario contributions after a shared scripting contract is
     /// replaced. The next lifecycle pass will rebuild them from current source.
     pub fn clear_scenario_dependencies(&mut self) {
-        self.scenario_entities.clear();
+        self.scenario_plans.clear();
         self.scenario_participants.clear();
         self.pending_scenario_plans.clear();
     }
@@ -621,8 +754,21 @@ impl SimulationBarrierParticipants {
 
     fn rebuild_scenario_participants(&mut self) {
         self.scenario_participants.clear();
-        for entities in self.scenario_entities.values() {
-            self.scenario_participants.extend(entities.iter().copied());
+        for plan in self.scenario_plans.values() {
+            self.scenario_participants
+                .extend(plan.modelica.iter().copied());
+            self.scenario_participants.extend(
+                plan.reads
+                    .iter()
+                    .filter(|entity| self.modelica_entities.contains(*entity))
+                    .copied(),
+            );
+            self.scenario_participants.extend(
+                plan.writes
+                    .iter()
+                    .filter(|entity| self.modelica_entities.contains(*entity))
+                    .copied(),
+            );
         }
     }
 }

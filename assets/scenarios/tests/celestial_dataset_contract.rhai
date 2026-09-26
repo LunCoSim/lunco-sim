@@ -11,6 +11,11 @@ fn metadata_body_id(dataset) {
     dataset.metadata.body.naif_id
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListDatasets"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;

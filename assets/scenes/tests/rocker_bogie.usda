@@ -2,45 +2,34 @@
 (
     defaultPrim = "RockerBogieTest"
     upAxis = "Y"
-    metersPerUnit = 1
+    metersPerUnit = 1.0
 )
-
-# G5 verification scene. The rocker-bogie rover is dropped with a STEP under its
-# left-front foot, so the left rocker is forced to pitch front-up. The authored
-# differential should drive the right rocker to pitch the opposite way, holding
-# `HingeL.angle + HingeR.angle ≈ 0` while the chassis stays near level.
-#
-#   target/debug/luncosim test --scene scenes/tests/rocker_bogie.usda
-#
-# Verify (HTTP API): GetPort on `/RockerBogieTest/Rover/HingeL` and `.../HingeR`
-# `angle` — opposite signs, near-zero sum; server logs "Resolved rocker-bogie
-# differential on /RockerBogieTest/Rover".
 
 def Xform "RockerBogieTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "The rocker-bogie rover (the kind Mars rovers use) driving over a small step. The linkage should keep the body level as one side lifts."
-    prepend apiSchemas = ["LunCoCatalogAPI"]
+    documentation = "The rocker-bogie rover (the kind Mars rovers use) driving over a small step. The linkage should keep the body level as one side lifts."
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
 )
 {
     uniform bool lunco:spawnable = false
-
+    double lunco:anchor:lat = 26.13
+    double lunco:anchor:lon = 3.63
+    double lunco:anchor:height = 0.0
+    int lunco:anchor:body = 301
+    double lunco:time:epochJd = 2461395.5
     def Cube "Ground" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTerrainAPI", "MaterialBindingAPI"]
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -0.5, 0)
+        double3 xformOp:translate = (0.0, -0.5, 0.0)
         double3 xformOp:scale = (200.0, 1.0, 200.0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.4, 0.4, 0.45)]
+        color3f[] primvars:displayColor = [(0.4000000059604645, 0.4000000059604645, 0.44999998807907104)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </RockerBogieTest/PhysicsMaterials/Friction_1_0>
     }
-
-    # The step under the left-rear foot (world x≈-1.29, z≈+1.2). Static collider
-    # (root-level, no rigid body): centred on y=0 with a 0.5 m Y scale, so its top
-    # is at y=0.25 and it lifts that foot a quarter of a metre.
     def Cube "Step" (
         prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
     )
@@ -49,51 +38,40 @@ def Xform "RockerBogieTest" (
         double3 xformOp:translate = (-1.29, 0.0, 1.2)
         double3 xformOp:scale = (0.7, 0.5, 0.7)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
-        color3f[] primvars:displayColor = [(0.6, 0.5, 0.4)]
+        color3f[] primvars:displayColor = [(0.6000000238418579, 0.5, 0.4000000059604645)]
         bool physics:collisionEnabled = true
         rel material:binding:physics = </RockerBogieTest/PhysicsMaterials/Friction_1_0>
     }
-
     over "Sun"
     {
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
     }
-
     def Camera "Avatar" (
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
     )
     {
+        uniform bool lunco:avatar = true
+        double3 lunco:cameraLookAt = (0.0, 1.6, 0.0)
+        double3 xformOp:translate = (7.0, 5.0, 8.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         def "Controls" (
             prepend references = @lunco://vessels/control_profiles.usda@</AvatarControls>
         )
         {
         }
-        uniform bool lunco:avatar = true
-        double3 lunco:cameraLookAt = (0.0, 1.6, 0.0)
-        double3 xformOp:translate = (7.0, 5.0, 8.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
-    # DROP HEIGHT IS CALIBRATED TO THE ROVER'S RIDE HEIGHT, not a round number.
-    # Every wheel centre sits 0.6 m below the chassis origin; with the 0.2625 m
-    # Perseverance wheel the settled chassis is about y = 0.86, and y = 1.6 keeps
-    # the same safe drop clearance. The step is centered on the authored rear-left
-    # axle rather than relying on the old proxy's x position.
     def Xform "Rover" (
         prepend references = @lunco://vessels/rovers/rocker_bogie.usda@</RockerBogie>
     )
     {
-        # This is a local mobility test, not an Earth-tracking scene.  The
-        # shared rover antenna is therefore scenery here: remove its dynamic
-        # links and controller so this stage does not request an Earth frame or
-        # admit unattached mechanism bodies into the rover solve.
+        double3 xformOp:translate = (0.0, 1.6, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
         over "Antenna"
         {
             over "YawHead"
             {
                 bool physics:rigidBodyEnabled = false
-
                 over "DishGimbal"
                 {
                     bool physics:rigidBodyEnabled = false
@@ -115,24 +93,22 @@ def Xform "RockerBogieTest" (
             {
             }
         }
-        double3 xformOp:translate = (0, 1.6, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
     }
-
     def Scope "Scenario"
     {
         custom string lunco:scenario = "rocker-bogie"
-
         def Scope "Test" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
+            prepend apiSchemas = "LunCoProgramAPI"
         )
         {
             uniform token info:implementationSource = "sourceAsset"
             uniform asset info:sourceAsset = @lunco://scenarios/tests/rocker_bogie.rhai@
-
-            # Which case this stage is — asserted on, not inferred from the
-            # differential this test exists to check.
             float lunco:param:coupled = 1.0
         }
+    }
+    def "SolarSystem" (
+        prepend references = @lunco://celestial/solar_system.usda@</SolarSystem>
+    )
+    {
     }
 }

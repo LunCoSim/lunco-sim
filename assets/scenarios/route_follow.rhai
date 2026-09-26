@@ -57,7 +57,8 @@ fn route_path(me) {
 fn simulation_dependencies(me, ctx) {
     let program = program_path(me);
     if program == () {
-        throw "route program path is unavailable while resolving its Modelica dependency";
+        throw "route program path is unavailable while resolving its Modelica dependency for "
+            + "scenario entity " + me.to_string() + " at USD path " + usd_path(me).to_string();
     }
     let result = query("QueryUsdPrim", #{ path: program, rels: ["inputs:subject"] });
     if result == () || result.ok == false || result.relationships == () {
@@ -67,7 +68,10 @@ fn simulation_dependencies(me, ctx) {
     if targets == () || targets.len() != 1 {
         throw "route program must have exactly one subject while resolving its Modelica dependency";
     }
-    #{ modelica_entities: [find_path(targets[0])], required_inputs: [] }
+    #{ modelica_entities: [find_path(targets[0])], entity_reads: [], entity_writes: [],
+       query_reads: ["QueryUsdPrim", "ResolveUsdTarget", "SensorOccupants", "InspectSelection",
+                     "InspectUsdDocument", "TerrainHeights"],
+       required_inputs: [] }
 }
 
 // A route point is an ordinary direct child with the standard trigger-zone

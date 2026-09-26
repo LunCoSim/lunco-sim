@@ -149,6 +149,29 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
     fn name(&self) -> &'static str {
         "ListPorts"
     }
+
+    fn simulation_read_scope(&self, params: &ApiValue) -> lunco_api::SimulationQueryReadScope {
+        if params
+            .get("api_id")
+            .or_else(|| params.get("entity"))
+            .is_some()
+        {
+            lunco_api::SimulationQueryReadScope::EntityTargets
+        } else {
+            lunco_api::SimulationQueryReadScope::ScenarioDeclared
+        }
+    }
+
+    fn simulation_entity_reads(&self, params: &ApiValue) -> Vec<lunco_core::GlobalEntityId> {
+        params
+            .get("api_id")
+            .or_else(|| params.get("entity"))
+            .and_then(api_u64)
+            .map(lunco_core::GlobalEntityId::from_raw)
+            .into_iter()
+            .collect()
+    }
+
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let ports_reg = world
             .resource::<lunco_port_core::ports::PortRegistry>()
@@ -172,7 +195,7 @@ impl lunco_api::ApiQueryProvider for ListPortsProvider {
                     "ListPorts: API entity registry is not installed",
                 )
             })?;
-        let entries = reg.entities();
+        let entries = reg.entities_by_identity();
         let mut rows = Vec::new();
         for (api_id, e) in entries {
             let ports = ports_reg.entity_port_infos(world, e);
@@ -198,6 +221,18 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
     fn name(&self) -> &'static str {
         "GetPort"
     }
+
+    fn simulation_read_scope(&self, _params: &ApiValue) -> lunco_api::SimulationQueryReadScope {
+        lunco_api::SimulationQueryReadScope::EntityTargets
+    }
+
+    fn simulation_entity_reads(&self, params: &ApiValue) -> Vec<lunco_core::GlobalEntityId> {
+        match params.get("api_id").and_then(api_u64) {
+            Some(raw) => vec![lunco_core::GlobalEntityId::from_raw(raw)],
+            None => Vec::new(),
+        }
+    }
+
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let Some(e) = resolve_param_entity(world, params)? else {
             return api_error(

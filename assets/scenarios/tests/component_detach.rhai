@@ -15,6 +15,11 @@ fn fail(me, message) {
     }
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListOpenDocuments"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     // USD edits re-project the scenario participant and may invoke on_start

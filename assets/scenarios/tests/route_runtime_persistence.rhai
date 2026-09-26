@@ -81,6 +81,11 @@ fn report_restored_waypoint_pass(me) {
     finish(this, true, "restored runtime route point retains its authored trigger override");
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["QueryUsdPrim", "ResolveUsdTarget"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;

@@ -32,15 +32,19 @@ pub fn usd_document_generation(doc_id: u64) -> Option<u64> {
 /// from `find`, whose name lookup is only a display convenience.
 pub fn find_path(path: &str) -> i64 {
     with_world(|world| {
-        let pairs = world.get_resource::<ApiEntityRegistry>()?.entities();
+        let pairs = world
+            .get_resource::<ApiEntityRegistry>()?
+            .entities_unordered();
         pairs
             .into_iter()
-            .find(|(_, entity)| {
+            .filter(|(_, entity)| {
                 world
                     .get::<lunco_usd_bevy_scene::UsdPrimPath>(*entity)
                     .is_some_and(|prim| prim.path == path)
             })
-            .map(|(id, _)| id.get() as i64)
+            .map(|(id, _)| id.get())
+            .min()
+            .map(|id| id as i64)
     })
     .flatten()
     .unwrap_or(-1)

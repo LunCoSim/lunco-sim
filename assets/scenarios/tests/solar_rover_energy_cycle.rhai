@@ -47,7 +47,7 @@ fn simulation_dependencies(me, ctx) {
             find_path("/SolarRoverTest/SolarRover/SunTrackerController"),
             find_path("/SolarRoverTest/SolarRover/Comms/EarthTrackerController"),
         ],
-        required_inputs: [],
+        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 

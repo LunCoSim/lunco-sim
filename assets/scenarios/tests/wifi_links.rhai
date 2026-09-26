@@ -1,6 +1,11 @@
 // Production/headless acceptance test for the separate rover Wi-Fi graph.
 // Direct Links must remain policy-down for rover↔rover while WifiLinks connects.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListSpawnCatalog", "WifiLinks", "Links"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.spawn_a = false;

@@ -127,6 +127,19 @@ fn parse_point(params: &ApiValue, key: &str) -> Option<bevy::math::DVec3> {
     ))
 }
 
+fn nearest_candidate_precedes(
+    candidate_id: u64,
+    candidate_distance: f64,
+    current_id: u64,
+    current_distance: f64,
+) -> bool {
+    match candidate_distance.total_cmp(&current_distance) {
+        std::cmp::Ordering::Less => true,
+        std::cmp::Ordering::Equal => candidate_id < current_id,
+        std::cmp::Ordering::Greater => false,
+    }
+}
+
 /// Closest registered entity to an active-frame point.
 pub struct NearestProvider;
 
@@ -144,7 +157,7 @@ impl ApiQueryProvider for NearestProvider {
         };
         let max = optional_f64(params, "max", "Nearest")?;
         let exclude = optional_u64(params, "exclude", "Nearest")?;
-        let entities = world.resource::<ApiEntityRegistry>().entities();
+        let entities = world.resource::<ApiEntityRegistry>().entities_unordered();
         let Some(mut poses) = SimulationPoseReadState::try_new(world) else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
@@ -163,7 +176,9 @@ impl ApiQueryProvider for NearestProvider {
             if max.is_some_and(|limit| distance > limit) {
                 continue;
             }
-            if best.as_ref().is_none_or(|current| distance < current.1) {
+            if best.as_ref().is_none_or(|current| {
+                nearest_candidate_precedes(gid.get(), distance, current.0, current.1)
+            }) {
                 best = Some((gid.get(), distance, position.0));
             }
         }
@@ -195,20 +210,21 @@ impl ApiQueryProvider for EntitiesInRadiusProvider {
         };
         let radius = optional_f64(params, "radius", "EntitiesInRadius")?.unwrap_or(0.0);
         let exclude = optional_u64(params, "exclude", "EntitiesInRadius")?;
-        let entities = world.resource::<ApiEntityRegistry>().entities();
+        let entities = world.resource::<ApiEntityRegistry>().entities_unordered();
         let Some(mut poses) = SimulationPoseReadState::try_new(world) else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "EntitiesInRadius: simulation pose query is unavailable",
             ));
         };
-        let ids: Vec<u64> = entities
+        let mut ids: Vec<u64> = entities
             .into_iter()
             .filter(|(gid, _)| exclude != Some(gid.get()))
             .filter_map(|(gid, entity)| {
                 (poses.position(world, entity)?.0.distance(point) <= radius).then_some(gid.get())
             })
             .collect();
+        ids.sort_unstable();
         let count = ids.len();
         Ok(Some(api_value!({ "count": count, "ids": ids })))
     }
@@ -348,5 +364,34 @@ mod tests {
             .expect("nearest query returns data");
         let point = data.get("point").expect("query point");
         assert_eq!(point, &api_value!([exact.x, exact.y, exact.z]));
+    }
+
+    #[test]
+    fn nearest_tie_break_is_stable_across_candidate_orders() {
+        let candidates = [(42, 3.0), (9, 3.0), (21, 2.0)];
+        let winner = |ordered: &[(u64, f64)]| {
+            ordered
+                .iter()
+                .copied()
+                .reduce(|current, candidate| {
+                    if nearest_candidate_precedes(candidate.0, candidate.1, current.0, current.1) {
+                        candidate
+                    } else {
+                        current
+                    }
+                })
+                .expect("candidate list is non-empty")
+        };
+
+        assert_eq!(winner(&candidates), (21, 2.0));
+        assert_eq!(
+            winner(&candidates.iter().rev().copied().collect::<Vec<_>>()),
+            (21, 2.0)
+        );
+        assert_eq!(
+            winner(&[(42, 3.0), (9, 3.0)]),
+            (9, 3.0),
+            "equal-distance candidates resolve to the lower stable identity"
+        );
     }
 }

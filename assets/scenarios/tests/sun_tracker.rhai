@@ -13,7 +13,7 @@ fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [
         find_path("/SunTrackerTest/SolarTower/Controller"),
         find_path("/SunTrackerTest/SpacecraftController"),
-    ], required_inputs: [] }
+    ], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {

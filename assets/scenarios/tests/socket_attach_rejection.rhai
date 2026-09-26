@@ -2,6 +2,11 @@
 // contract. The scene authors occupied, plug-kind, and joint mismatches; this
 // scenario submits all three through the same public command used by UI/API/Rhai.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ListOpenDocuments"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.doc = -1;

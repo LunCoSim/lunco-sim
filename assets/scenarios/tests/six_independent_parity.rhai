@@ -5,7 +5,7 @@
 // it does not inspect or recreate a Rust steering algorithm.
 
 fn simulation_dependencies(me, ctx) {
-    #{ modelica_entities: [find_path("/SixIndependentParity/Rover")], required_inputs: [] }
+    #{ modelica_entities: [find_path("/SixIndependentParity/Rover")], entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [] }
 }
 
 fn port_value(target, name, direction) {

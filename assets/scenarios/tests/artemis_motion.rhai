@@ -11,6 +11,11 @@ const PAUSE_PROBE_2 = "lunco.test.artemis_motion.pause_probe_2";
 const PAUSE_PROBE_3 = "lunco.test.artemis_motion.pause_probe_3";
 const PAUSE_PROBE_4 = "lunco.test.artemis_motion.pause_probe_4";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["GetReadiness"], required_inputs: [] }
+}
+
 fn finish(checks) {
     report_verdict(checks, "ARTEMIS USD MOTION", "ARTEMIS_USD_MOTION");
 }

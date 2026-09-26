@@ -5,6 +5,11 @@
 
 const BODY_PATH = "/SandboxScene/Box";
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [find(BODY_PATH)], entity_writes: [],
+       query_reads: ["RuntimeDiagnostics"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.body = find(BODY_PATH);
     this.elapsed = 0.0;

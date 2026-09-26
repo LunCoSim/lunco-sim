@@ -113,6 +113,16 @@ fn rover_specs() {
     ]
 }
 
+fn simulation_dependencies(me, ctx) {
+    let rovers = [];
+    for spec in rover_specs() {
+        let rover = find_path(spec.root);
+        if rover >= 0 { rovers.push(rover); }
+    }
+    #{ modelica_entities: rovers, entity_reads: [],
+       entity_writes: [], query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     this.phase = "settle";
@@ -124,14 +134,18 @@ fn on_start(me, ctx) {
     this.antenna_start = [];
     this.travel = [];
     this.prev = [];
+    this.claims = [];
+    this.drive_acks = [];
     for spec in this.specs {
-        this.rovers.push(find(spec.root));
-        this.antennas.push(find(spec.root + "/Antenna"));
+        this.rovers.push(find_path(spec.root));
+        this.antennas.push(find_path(spec.root + "/Antenna"));
         this.baselines.push(());
         this.rover_start.push(());
         this.antenna_start.push(());
         this.travel.push(0.0);
         this.prev.push(());
+        this.claims.push(());
+        this.drive_acks.push(());
     }
     print("[rb-antenna] ── shared hardware across power variants ────────");
     for i in 0..this.specs.len() {
@@ -159,6 +173,9 @@ fn on_tick(me, ctx) {
         if this.t >= SETTLE_S {
             this.phase = "drive";
             for i in 0..this.specs.len() {
+                this.claims[i] = cmd("AcquireControl", #{
+                    target: this.rovers[i], bind_camera: false,
+                });
                 let p = world_pos(this.rovers[i]);
                 this.baselines[i] = support_measurements(this.antennas[i], this.rovers[i]);
                 this.rover_start[i] = p;
@@ -174,7 +191,8 @@ fn on_tick(me, ctx) {
 
     for i in 0..this.specs.len() {
         let p = world_pos(this.rovers[i]);
-        drive(this.rovers[i], 1.0, 0.0);
+        let command = drive(this.rovers[i], 1.0, 0.0);
+        if this.drive_acks[i] == () { this.drive_acks[i] = command; }
         this.travel[i] += vlen(vsub(p, this.prev[i]));
         this.prev[i] = p;
     }
@@ -193,6 +211,8 @@ fn on_tick(me, ctx) {
                 antenna_start: this.antenna_start[i],
                 antenna_end: world_pos(this.antennas[i]),
                 travel: this.travel[i],
+                claim: this.claims[i],
+                drive_ack: this.drive_acks[i],
             });
         }
         verdict(snapshots);
@@ -227,6 +247,11 @@ fn variant_verdict(s) {
         label + "science camera head is disconnected from its mast"));
     f.push(t_moved(vlen(vsub(s.rover_end, s.rover_start)), 1.0,
         label + "rocker-bogie rover travel"));
+    f.push(t_true(s.claim != () && s.claim.ok == true,
+        label + "rover control claim failed: " + s.claim));
+    f.push(t_true(s.drive_ack != () && s.drive_ack.ok == true &&
+                  s.drive_ack.status == "applied",
+        label + "SetPorts command was not applied: " + s.drive_ack));
 
     let rover_offset_start = vsub(s.antenna_start, s.rover_start);
     let rover_offset_end = vsub(s.antenna_end, s.rover_end);

@@ -4,6 +4,11 @@
 //! checks command results and the read-only DiagnosticVisuals provider rather
 //! than inspecting ECS internals.
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["DiagnosticVisuals"], required_inputs: [] }
+}
+
 fn verdict(pass, reason) {
     if pass {
         emit("DIAGNOSTIC_VISUALS", "PASS");

@@ -53,6 +53,14 @@ fn mounts() {
     ]
 }
 
+fn simulation_dependencies(me, ctx) {
+    let reads = [];
+    for mount in mounts() {
+        reads.push(find_path(mount.path + "/YawJoint"));
+    }
+    #{ modelica_entities: [], entity_reads: reads, entity_writes: [], query_reads: [], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.t = 0.0;
     // Joints resolve over several ticks — avian must admit both bodies into its
@@ -67,7 +75,6 @@ fn on_start(me, ctx) {
     // reading only the last tick would call that motionless.
     this.peak = #{};
     for m in mounts() { this.peak[m.id] = 0.0; }
-    this.peak["parked"] = 0.0;
     print("[mount] ── one antenna, three hosts, one parked control ─────");
 }
 
@@ -76,12 +83,9 @@ fn on_tick(me, ctx) {
     this.t += dt();
 
     for m in mounts() {
-        let a = get(find(m.path + "/YawJoint"), "angle");
+        let a = get(find_path(m.path + "/YawJoint"), "angle");
         if a != () && a.abs() > this.peak[m.id] { this.peak[m.id] = a.abs(); }
     }
-    let pa = get(find("/AntennaMountTest/Parked/Antenna/YawJoint"), "angle");
-    if pa != () && pa.abs() > this.peak["parked"] { this.peak["parked"] = pa.abs(); }
-
     if this.t < this.settle_s { return; }
     this.phase = "done";
 
@@ -89,22 +93,22 @@ fn on_tick(me, ctx) {
     // log alone rather than needing the scene reloaded under a debugger.
     let seen = [];
     for m in mounts() {
-        let j = find(m.path + "/YawJoint");
+        let j = find_path(m.path + "/YawJoint");
         seen.push(#{
             id: m.id,
-            host: find(m.path),
+            host: find_path(m.path),
             joint: j,
             angle: get(j, "angle"),
             peak: this.peak[m.id],
         });
     }
-    let pj = find("/AntennaMountTest/Parked/Antenna/YawJoint");
+    let parked_path = "/AntennaMountTest/Parked/Antenna/YawJoint";
+    let parked_prim = query("QueryUsdPrim", #{ path: parked_path });
     verdict(#{
         mounts: seen,
-        parked_host: find("/AntennaMountTest/Parked/Antenna"),
-        parked_joint: pj,
-        parked_angle: get(pj, "angle"),
-        parked_peak: this.peak["parked"],
+        parked_host: find_path("/AntennaMountTest/Parked/Antenna"),
+        parked_joint: find_path(parked_path),
+        parked_active: parked_prim.active,
     });
 }
 
@@ -154,22 +158,18 @@ fn verdict(s) {
         "the parked control's host is not in the scene, so the control proves " +
         "nothing — an absent mount and an absent HOST read identically here."));
 
-    f.push(t_true(s.parked_angle == (),
-        "the parked control has an `angle` port, so its joint attached despite " +
-        "being deactivated. Every positive case above is therefore " +
-        "consistent with an engine that joints anything that asks, and this " +
-        "file proves nothing about authoring."));
+    f.push(t_true(s.parked_active == false,
+        "the parked control's authored YawJoint is not inactive in composed USD."));
 
-    f.push(t_true(s.parked_peak == 0.0,
-        "the parked control's dish moved (peak |angle| = " + r4(s.parked_peak) +
-        " rad) — a joint that was explicitly switched off is being simulated."));
+    f.push(t_true(s.parked_joint == -1,
+        "the authored inactive YawJoint was projected into live simulation."));
 
     print("[mount] ── results ─────────────────────────────────────────");
     for m in s.mounts {
         print("[mount]   " + m.id + "  angle=" + m.angle + "  peak=" + r4(m.peak));
     }
-    print("[mount]   parked  angle=" + s.parked_angle + " (must be ())  peak=" +
-          r4(s.parked_peak) + " (must be 0)");
+    print("[mount]   parked  active=" + s.parked_active + "  runtime entity=" +
+          s.parked_joint + " (must be absent)");
 
     report_verdict(f, "ANTENNA MOUNT", "ANTENNA_MOUNT");
 }

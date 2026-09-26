@@ -10,7 +10,7 @@ fn simulation_dependencies(me, ctx) {
             find_path("/AckermannParity/RoverRaycast"),
             find_path("/AckermannParity/RoverPhysical"),
         ],
-        required_inputs: [],
+        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 

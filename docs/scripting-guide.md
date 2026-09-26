@@ -156,8 +156,11 @@ target/debug/luncosim --api 4101
 |---|---|
 | `fn task(me, ctx)` | builds one native task tree; the kernel advances it each fixed step |
 | `fn mission(me, ctx)` | declares objective state and completion conditions |
-| `fn on_start(me, ctx)` | optional setup after (re)compile |
-| `fn on_event(me, evt, ctx)` | optional reaction to a `TelemetryEvent` |
+| `fn simulation_dependencies(me, ctx)` | read-only admission plan before per-instance initialization |
+| top-level Rhai statements | one-time initialization after declared inputs are ready |
+| `fn on_start(me, ctx)` | one-time ready callback after scene and declared-input readiness |
+| `fn on_event(me, evt, ctx)` | event reaction in the owner's next eligible pass, retaining the producer stamp |
+| `fn on_tick(me, ctx)` | optional fixed-simulation-step callback; use `task` for production behavior |
 | `fn on_stop(me, ctx)` | optional teardown on hot-reload / detach / despawn |
 
 `me` is the host entity's id. Task action and predicate leaves accept anonymous
@@ -180,6 +183,48 @@ An unsupported scope or timing value disables only that scenario and publishes
 a document diagnostic for that source revision. Editing the source reparses
 its directives before the new program runs. Runtime errors stay visible through
 the script diagnostics and do not become successful no-ops.
+
+`simulation_dependencies` runs before mutable initialization and may use only
+stable identities, parameters, and its declared read surface. The top-level
+module body then initializes per-instance scope, followed by `on_start` before
+that activation pass advances its task or tick hook. `on_start` is the current
+ready boundary: it runs after scene admission and required owner inputs are
+ready. Scenario events are delivered by the owner's eligible pass; their
+producer stamp remains visible, while `execution_context()` describes the
+consumer pass. Persistent scenario scripts currently use the Simulation timing
+lane. A single script instance must not run mutable `this` state on multiple
+cycles; UI, Interaction, and Presentation work needs its own owner and state,
+with typed messages across cycles.
+
+Keep these lifecycle stages distinct instead of adding overlapping `init` or
+`ready` aliases: dependency planning declares what must be admitted, module-body
+evaluation constructs per-instance state once those inputs are ready, and
+`on_start` runs once at the ready boundary. `on_stop` owns teardown. `on_event`
+is a reaction inside the scenario's eligible pass, not a request to run the
+same scenario on the event producer's clock. Today that means fixed Simulation
+delivery, or discrete delivery during paused Lifecycle passes. If Rhai later
+needs to react on UI, Interaction, or Presentation cycles, each cycle needs its
+own owner-scheduled inbox, typed execution context, and isolated state; messages
+or typed actions cross between those owners. Never share one mutable `this`
+map across cycles or let worker/event arrival order pick an authoritative
+simulation tick.
+
+For Rhai behavior outside the scenario Simulation lane, use the existing
+owner-scheduled hook registry when the owning subsystem exposes a suitable
+typed hook. The owner supplies its facts and `RuntimeExecutionContext`, then
+validates and applies the returned decision at that cycle's boundary. These
+hooks are stateless policies; they do not share or mutate a scenario's `this`
+map. This keeps the authoring split small: scenarios own stateful mission flow,
+and registered hooks supply owner-invoked decisions in other cycles. UI,
+Interaction, or Presentation events should reach their owning subsystem first;
+do not add a family of per-cycle scenario callbacks until a real stateful
+cross-cycle behavior requires isolated instances and typed messages.
+
+Connected co-simulation events are edge-detected on admitted simulation ticks,
+after `SimTickSet` and the full scripting pass. Startup warm-up may produce an
+event before the scenario gate opens; pre-start events are not replayed, so
+`on_start` reads current state from its owner. Later events retain their
+producer stamp and arrive on the next eligible scenario pass.
 
 ## 2. Your first script
 
@@ -319,8 +364,8 @@ fills in the everyday verbs; Part II is the complete reference.
 ```rhai
 fn task(me, ctx)          { seq([wait(1.0)]); }               // canonical progression
 fn mission(me, ctx)       { [objective("landing", #{})]; }   // optional objectives
-fn on_start(me, ctx)      { /* setup */ }                     // once, after (re)compile
-fn on_event(me, evt, ctx) { if evt.name == "GO" { /* … */ } } // a TelemetryEvent arrived
+fn on_start(me, ctx)      { /* ready-time setup */ }           // once, after admission
+fn on_event(me, evt, ctx) { if evt.name == "GO" { /* … */ } } // queued event in its owner pass
 fn on_stop(me, ctx)       { brake(me); }                      // teardown: hot-reload / detach / despawn
 ```
 
@@ -414,7 +459,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `world_rotation_quat(id)` | `Quat` \| `()` | native glam active-frame orientation |
 | `find(name)` | id (`-1` if none) | entity id by canonical `Name` |
 | `name(id)` | string \| `()` | human-readable presentation label; use `QueryEntity` for the canonical USD path |
-| `usd_path(id)` | string \| `()` | prelude helper resolving `QueryEntity.usd_prim_path` for topology addressing |
+| `usd_path(id)` | string \| `()` | identity-only lookup of the entity's projected USD prim path; safe during dependency planning, while pose/state queries wait until the plan commits |
 | `parent(id)` / `children(id)` | id \| `()` / `[id,…]` | hierarchy traversal |
 | `owner_of(id)` | session id \| `()` | which control session owns the entity; `()` if unowned |
 | `controller(id)` | string \| `()` | controlling session role, or `()` if unowned |
@@ -1330,8 +1375,9 @@ production contract is exercised by
 - **Timelines → files:** `RegisterTimeline { name, timeline: #{ steps: [...] } }` stores typed step data to `<twin>/timelines/<name>.json`; on Twin mount, `twin.lifecycle` selects indexed timeline files and requests their loading through typed commands. Discover with `ListTimelines`/`GetTimeline`; run a stored one with `RunStoredTimeline { target, name }`. The command passes native structured values to Rhai, not a JSON string.
 - **Model events → USD:** express the condition in Modelica as a 0/1 output, then connect
   it to a `def LunCoEvent` prim through `inputs:trigger.connect`. The prim supplies only
-  the bus-facing `lunco:event:name` and `lunco:event:severity`; scripts receive its rising
-  edges through `on_event`. Physical thresholds and hysteresis stay in the model.
+  the bus-facing `lunco:event:name` and `lunco:event:severity`; its rising edges are
+  sampled on admitted simulation ticks and scripts receive them through `on_event` on a
+  later eligible pass. Physical thresholds and hysteresis stay in the model.
 
 ## J. Introspection & discovery
 

@@ -49,6 +49,11 @@ fn mount_checks(path, position, rotation, direction) {
     }
 }
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["GeneratedModelicaSource"], required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;

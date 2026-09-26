@@ -46,6 +46,13 @@ The runtime uses these existing cycle families:
 | `Ui` | egui and workbench updates | host frame/input cadence |
 | `Visualization` / `Presentation` | LOD selection, render preparation, visual projection | presentation cadence or an explicitly selected visual time domain; terrain cover reselection is capped at 30 Hz using `Time<Real>` |
 
+The USD-to-telemetry bridge samples connected co-simulation event edges only
+while the virtual simulation clock advances. It runs after `SimTickSet` and the
+full `ScriptingSet`, and stamps each event from `MissionClock` at that exact
+`SimTick`. When scenario execution is held during startup, the telemetry edge
+may precede `on_start`; scenario inboxes do not replay pre-start edges, so
+`on_start` reads the current state from its owning subsystem.
+
 `RuntimeCycleSet` names ordering lanes inside Bevy schedules. It does not by
 itself isolate CPU cost or give `Visualization` an independent cadence. Terrain
 cover reselection has an explicit 30 Hz wall-clock skip boundary, and its
@@ -75,6 +82,14 @@ The owner-level `drain_ref_spawns` test makes a later reference ready before its
 authored predecessor, confirms neither prim is projected while the prefix is
 incomplete, and checks both live-stage commits follow authored order after the
 predecessor becomes ready.
+
+Once scene readiness clears, the scenario gate opens before `TimeSpineSet`; the
+Rhai owner then admits compilation and acquires its progress hold before the
+next fixed tick. That hold continues through dependency planning,
+initialization, and the first `on_start`. Earlier fixed-step warm-up can still
+produce telemetry while scenario execution is held. Those pre-start events are
+not replayed into a later script; `on_start` reads current state from the
+authoritative owner.
 
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
 Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled
@@ -527,10 +542,12 @@ asset-loading task and publish text plus source-matched AST at the asset
 boundary; tools and prelude installation reuse that AST instead of compiling on
 the update thread. The owner buffers completed artifacts until every
 currently admitted scenario compile is ready, then commits by stable actor
-identity before the time spine. A progress hold remains through dependency
-planning, top-level initialization, and the first `on_start`, so physics cannot
-consume a tick before activation. Scenario `this` state and live-world calls
-remain owned by the script activation/execution boundary. A paused Update
+identity before the time spine. After the scene readiness gate opens, the
+scenario's progress hold remains through dependency planning, top-level
+initialization, and the first `on_start`, so later fixed ticks wait for
+activation. Earlier scene warm-up ticks may run while scenario execution is
+closed, as described above. Scenario `this` state and live-world calls remain
+owned by the script activation/execution boundary. A paused Update
 activation still assigns dependency planning, initialization, and `on_start` the
 Simulation clock and current sequence; discrete events retain Lifecycle context.
 Literal transitive module sources are captured from one revisioned snapshot;
@@ -545,12 +562,18 @@ validate an author's required cadence, but it does not install or move a hook.
 Before a scenario's first lifecycle hook, a source may define the optional,
 scenario-scoped `simulation_dependencies(me, ctx)` hook. The second argument is
 the validated scenario parameter map. It returns a map with
-`modelica_entities: [global_entity_id, ...]` and
+`modelica_entities: [global_entity_id, ...]`,
+`entity_reads: [global_entity_id, ...]`,
+`entity_writes: [global_entity_id, ...]`, and
+`query_reads: ["PublicQueryName", ...]`, plus
 `required_inputs: [#{ owner: "domain.owner", identity: "stable-key" }, ...]`.
-The owner resolves the entity ids against the live registry, requires each to
-identify a live Modelica participant, and adds them to the shared simulation
-barrier. An unresolved id or a live non-Modelica entity is a terminal source
-diagnostic, not a successful barrier contribution. Each required input
+All five arrays are required even when empty, so an incomplete source cannot
+silently run with missing causal edges. The owner resolves every listed id
+against the live registry. Directional access arrays can name any live entity.
+A declared Modelica id joins the shared barrier;
+`modelica_entities` remains the direction-independent dependency for
+participants whose ports or events the scenario uses. Unresolved ids are
+terminal source diagnostics. Each required input
 names an owner registered in `SimulationDependencyStates`. A missing owner is
 a terminal diagnostic; an absent or Pending key from a registered owner keeps
 the scenario's existing activation hold until the next owner-state revision;
@@ -558,19 +581,27 @@ Ready admits initialization, and Failed reports the producer diagnostics.
 The dependency plan runs once per source/parameter revision, and readiness is
 checked again only after an owner publishes a change. Omitting the hook declares
 no Rhai dependencies; the USD causal graph still applies. The hook resolves
-identities from the composed world and parameters; commands, direct mutations,
-emitted events, and live port access are rejected in this phase. While a plan is
-pending, all Modelica participants remain synchronized and simulation time
+identities from its `me` id, parameters, and stable owner metadata. The built-in
+`usd_path(id)` reads the stable identity-to-`UsdPrimPath` index, so it can resolve
+the scenario host path during planning without reading pose or component state.
+Commands, direct mutations, emitted events, and live entity or port reads are
+rejected in this phase. While a plan is pending, all Modelica participants remain
+synchronized and simulation time
 stays held by the scenario's exact preparation key. The production sensor scene
 verifies declared Modelica reads, rejects a live port read during planning and
 a live non-Modelica id before `on_start`, and proves that one scenario cannot
 read, write, or consume events from a Modelica participant declared only by
 another scenario.
 This hook runs before mutable top-level initialization, so derive its result
-from `me`, scenario parameters, and read-only world queries rather than
-top-level initialization effects. Once all declared inputs are Ready, the owner
+from `me`, scenario parameters, identity metadata, and permitted scene-generation
+queries rather than top-level initialization effects. Once all declared inputs are Ready, the owner
 commits the Modelica participant set, runs top-level initialization in the
 `Initialization` phase, and dispatches `on_start` in stable actor order.
+After an ordered simulation command materializes a new entity, the caller can
+extend its committed directional plan with `track_entity_read` or
+`track_entity_write` before accessing that live id. A tracked id that is or
+becomes a Modelica participant also joins that scenario's barrier contribution.
+The update occurs synchronously in the caller's serialized simulation order.
 
 Current Rhai world verbs can read and mutate live ECS/port state, and `cmd()`
 effects are visible to later actors in the same pass. Their existing stable
@@ -605,14 +636,14 @@ cancellation and failure semantics in the task tree.
 The causal barrier is only sound when it contains every path by which a
 participant result can affect authoritative state. USD `SimConnection`s and
 Rhai scenario dependencies both contribute to the same barrier projection. A
-scenario that reads or writes a Modelica port, or consumes a Modelica-produced
-event that can affect its behavior, lists that producer in the
-`modelica_entities` field of `simulation_dependencies(me, ctx)`. Rhai keeps the
-selection policy; Rust resolves the returned ids, requires each to be a live
-Modelica participant, and adds that scenario's contribution to the shared
-barrier. A live non-Modelica target is a source diagnostic, not an empty
-dependency. Required owner inputs occupy
-the same plan but do not add Modelica barrier participants. While a dependency
+scenario that needs direction-independent access to a Modelica entity lists
+it in `modelica_entities`; this grants both read and write access and adds the
+participant to the shared barrier. Directional `entity_reads` and
+`entity_writes` may identify any live entity and grant only their named
+direction. If such an id is a Modelica participant, it also contributes to
+the scenario's barrier. Rhai keeps the selection policy; Rust resolves the
+returned ids against the live registry. Required owner inputs occupy the same
+plan but do not add Modelica barrier participants. While a dependency
 plan is pending, all Modelica
 participants are synchronized. After admission, direct simulation-clock access
 to an undeclared Modelica participant or event fails at the scripting owner with a
@@ -623,12 +654,33 @@ committed state without joining the authoritative barrier. Continuous
 calculations and physics remain in their domain owners.
 
 The shared barrier synchronizes solver work; it does not grant script access.
-The scripting owner checks port reads through every public script surface,
-writes, targeted commands, and event
-delivery against the calling scenario's own committed dependency plan. A
-participant in USD wiring or another scenario's plan still must be declared by
-the scenario that consumes it. This distinction keeps solver membership
-aggregate while making script dependencies attributable and reviewable.
+For Modelica participants, the scripting owner checks port reads through
+`get`, `port`, and `ReadPorts`, port writes, targeted commands, and event
+delivery against the calling scenario's own committed dependency plan.
+API query providers declare how their simulation reads are accounted for.
+Entity-targeted providers report stable ids and the bridge checks each id
+against this scenario's `entity_reads` or Modelica dependency. Mounted-scene
+queries without an explicit document id are bound to the active committed Twin
+generation; an old route or an in-progress scene transition is rejected.
+Broader providers use their public query name in `query_reads`, which declares
+the provider's full owner snapshot as a coarse read dependency. Unknown
+providers default to this conservative scope. Broad queries are rejected while
+`simulation_dependencies` is being resolved, because that plan has not yet been
+committed. This covers
+`QueryEntity`, `QueryPhysicsState`, `ReadPorts`, `GetPort`, `SolarPose`, and
+single-entity `ListPorts` calls. Provider-wide declarations do not identify a
+spatial region or make live-world hooks safe to parallelize; current stateful
+hooks remain serial until they read immutable snapshots and publish ordered
+typed actions.
+Directional `entity_reads` and `entity_writes` authorize direct reflected
+and port access; the direction-independent Modelica list authorizes both
+directions. A Modelica entity in either directional set also contributes to
+the scenario barrier. A participant in USD wiring or another scenario's
+plan still must be declared by the scenario that consumes it. Directional
+sets add barrier membership only for ids that are current Modelica
+participants; they do not make live-World evaluation safe for parallel actors.
+The typed action/replay path and finer spatial-region declarations remain open
+dependency surfaces.
 
 The composed dependency graph also defines safe parallelism. Participants in
 the same dependency layer may calculate concurrently from one immutable input
@@ -708,6 +760,10 @@ ordering includes:
   and event name;
 - serialized Modelica commands: `GlobalEntityId`, then the world-local entity
   key for local-only models;
+- API entity batches use ascending `GlobalEntityId`; scalar first-match
+  lookups choose the minimum stable identity; nearest-query ties use distance
+  then `GlobalEntityId`, and radius-query ids are returned in ascending
+  identity order;
 - connection reductions: stable connection identity before floating-point
   accumulation.
 
