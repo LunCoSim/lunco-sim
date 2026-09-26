@@ -167,10 +167,13 @@ The viewport has the same visibility requirement for gestures. Omniverse's
 from triggering multiple actions. LunCoSim's Rhai router currently arbitrates
 the unarmed route-edit and selection gestures; armed spawn, terrain, attachment,
 possession, camera, and gizmo paths still have engine-owned input consumers.
-The robust target is one pointer gesture lifecycle: the engine gathers hit and
-capture facts, a typed Rhai policy chooses one owner and action, and generic
-Rust mechanisms apply that action. A drag remains captured until release or
-cancel. The USD per-button hit policy is translated into Bevy's ordered-hit
+The editor gizmo captures a primary gesture from the current gizmo-proxy hit
+and retains preview pan suppression through release or cancellation. Other
+tools do not yet share that lifecycle. The robust target is one pointer gesture
+lifecycle: the engine gathers hit and capture facts, a typed Rhai policy chooses
+one owner and action, and generic Rust mechanisms apply that action. A drag
+remains captured until release or cancel. The USD per-button hit policy is
+translated into Bevy's ordered-hit
 contract before its picking backend runs, so a route marker may pass through
 for primary selection while remaining the actual secondary context target.
 Route target identity comes from the hit paths, not screen proximity. A

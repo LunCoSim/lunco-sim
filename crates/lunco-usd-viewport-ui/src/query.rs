@@ -5,6 +5,7 @@
 //! so headless preview consumers do not inherit the API query registry.
 
 use bevy::prelude::*;
+use bevy::window::{PrimaryWindow, Window};
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::{ApiQueryError, ApiQueryResult};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
@@ -35,6 +36,12 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
 
         let mut sessions: Vec<_> = viewport.sessions().collect();
         sessions.sort_by_key(|session| session.id().0);
+        let scale_factor = world.iter_entities().find_map(|entity| {
+            entity
+                .get::<PrimaryWindow>()
+                .and_then(|_| entity.get::<Window>())
+                .map(Window::scale_factor)
+        });
         let previews: Vec<ApiValue> = sessions
             .into_iter()
             .map(|session| {
@@ -72,6 +79,11 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                             "target": api_value!(view.orbit().target.to_array()),
                             "distance": view.orbit().distance,
                             "orthographic_scale": view.orthographic_scale(),
+                            "image_rect": view.interactive_rect().map(|rect| api_value!({
+                                "origin": api_value!(rect.origin.as_vec2().to_array()),
+                                "size": api_value!(rect.size.as_vec2().to_array()),
+                            })),
+                            "scale_factor": scale_factor,
                             "active_preset": view.active_preset.clone(),
                         })
                     })

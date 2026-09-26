@@ -157,11 +157,11 @@ pub struct InjectWindowInput {
 #[derive(Message)]
 struct PendingWindowInput(WindowInputEvent);
 
-/// The window cursor is temporarily projected for the frame that consumes an
-/// injected pointer event. Restoring the authored/native value before Bevy's
-/// winit synchronization prevents automation from asking Wayland/X11 to move
-/// the operating-system pointer while still letting systems that read
-/// `Window::cursor_position()` follow the injected gesture.
+/// Saves the native window cursor before projecting an injected pointer.
+/// During a held mouse gesture, the injected position must remain in
+/// `Window::cursor_position()` through presentation systems such as the gizmo
+/// frontend, which read it after `PostUpdate`. Restore the native value after
+/// the release frame so automation never moves the operating-system pointer.
 #[derive(Resource, Default)]
 struct InjectedCursorRestore(Option<(Entity, Option<Vec2>)>);
 
@@ -289,7 +289,13 @@ fn emit_pending_window_input(
                 if cursor_restore.0.is_none() {
                     cursor_restore.0 = Some((window, window_state.cursor_position()));
                 }
-                window_state.set_cursor_position(Some(position));
+                // This is application input, not a request to warp the native
+                // cursor. Bevy's changed-window bridge mirrors a normally
+                // changed Window back to winit, which is unsupported on
+                // Wayland and would move the user's pointer on X11.
+                window_state
+                    .bypass_change_detection()
+                    .set_cursor_position(Some(position));
                 let moved = CursorMoved {
                     window,
                     position,
@@ -308,7 +314,9 @@ fn emit_pending_window_input(
                 if cursor_restore.0.is_none() {
                     cursor_restore.0 = Some((window, window_state.cursor_position()));
                 }
-                window_state.set_cursor_position(Some(position));
+                window_state
+                    .bypass_change_detection()
+                    .set_cursor_position(Some(position));
                 let moved = CursorMoved {
                     window,
                     position,
@@ -342,12 +350,24 @@ fn emit_pending_window_input(
 fn restore_injected_cursor(
     mut cursor_restore: ResMut<InjectedCursorRestore>,
     mut windows: Query<&mut Window>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
 ) {
+    let gesture_active = mouse.as_deref().is_some_and(|buttons| {
+        buttons.any_pressed([MouseButton::Left, MouseButton::Right, MouseButton::Middle])
+            || [MouseButton::Left, MouseButton::Right, MouseButton::Middle]
+                .into_iter()
+                .any(|button| buttons.just_released(button))
+    });
+    if gesture_active {
+        return;
+    }
     let Some((window, position)) = cursor_restore.0.take() else {
         return;
     };
     if let Ok(mut window_state) = windows.get_mut(window) {
-        window_state.set_cursor_position(position);
+        window_state
+            .bypass_change_detection()
+            .set_cursor_position(position);
     }
 }
 

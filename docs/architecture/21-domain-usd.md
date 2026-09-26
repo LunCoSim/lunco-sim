@@ -843,13 +843,20 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
   measured by the viewport and shares that rectangle with preview ray
   selection, render-target sizing, and gizmo picking; toolbar coordinates are
   not treated as scene coordinates. A primary drag captured by a gizmo is
-  removed from preview camera panning. Since the gizmo library writes its final
+  removed from preview camera panning. Since the gizmo library writes its
   proxy pose in `Last` while the normal interaction transfer runs in
-  `PostUpdate`, a Last-stage final-pose snapshot runs before release cleanup
-  consumes the transaction. The default
+  `PostUpdate`, a Last-stage snapshot keeps the transaction pose current on
+  every frame and through release cleanup. The default
   `mouse_interaction` driver is disabled (Cargo `default-features = false`, only
-  `gizmo_picking_backend` kept); `drive_gizmo_drag` remains gated to focused
-  handles, unclaimed egui pointer capture, and no selection modifier.
+  `gizmo_picking_backend` kept); `drive_gizmo_drag` starts from the current
+  occlusion-aware `HoverMap` hit on a gizmo proxy, then owns that primary
+  gesture until release or cancellation. Preview pan stays suppressed for the
+  complete gesture, including after the pointer leaves the image. The owner
+  transaction snapshots in `Update` from that latched proxy before the gizmo
+  frontend consumes the drag messages in `Last`. Selection modifiers gate
+  only gesture start. `InspectUsdViewport` publishes the measured image bounds
+  and scale factor used by authored Rhai mouse tests to calculate logical
+  pointer coordinates.
 - **Undo**: Reverting a `UsdOp` in the document system automatically updates the 3D world.
 
 | Scheme | Purpose | Resolves to |

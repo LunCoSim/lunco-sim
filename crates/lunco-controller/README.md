@@ -84,6 +84,12 @@ clients, playback, and accessibility tooling. It accepts one typed
 `bevy_winit` delivery boundary. Picking, egui, focus, input bindings, and scene
 tools therefore see the same event path as hardware input.
 
+For injected pointer gestures, the controller keeps the projected cursor in
+`Window::cursor_position()` while a mouse button is held and through the release
+frame. This lets late presentation consumers such as the transform gizmo read
+the same pointer position as picking; after release, the saved native cursor
+position is restored without moving the operating-system pointer.
+
 Rhai owns gesture policy and sequencing. For example, an authored Alt-click is
 composed from `input_key_press("AltLeft")`, `input_click("primary", x, y)`,
 and `input_key_release("AltLeft")`; no waypoint or editor code is called
