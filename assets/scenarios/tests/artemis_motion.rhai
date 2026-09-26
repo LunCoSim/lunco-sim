@@ -30,6 +30,7 @@ fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.checks = [];
+    this.pause_event_context_ok = false;
     subscribe(PAUSE_PROBE_1);
     subscribe(PAUSE_PROBE_2);
     subscribe(PAUSE_PROBE_3);
@@ -121,6 +122,14 @@ fn on_event(me, evt, ctx) {
     if this.done { return; }
 
     if this.phase == 2 && evt.name == PAUSE_PROBE_1 {
+        let execution = execution_context();
+        this.pause_event_context_ok = execution.cycle == "lifecycle"
+            && execution.phase == "event"
+            && execution.clock == "none"
+            && execution.sequence == ()
+            && execution.producer != ()
+            && execution.producer.cycle == "simulation"
+            && execution.producer.sequence.to_string() == evt.sim_tick.to_string();
         // This event runs at the pause command boundary, before PostUpdate
         // publishes the just-completed fixed tick to render-time consumers.
         // Probe again on later paused updates to inspect the settled sample.
@@ -132,6 +141,8 @@ fn on_event(me, evt, ctx) {
     if this.phase == 3 && evt.name == PAUSE_PROBE_2 {
         let clock = clock_snapshot();
         let position = world_pos(this.orion);
+        this.checks.push(t_true(this.pause_event_context_ok,
+            "a paused on_event uses lifecycle context and retains its simulation producer stamp"));
         print("PAUSE_SETTLED | tick=" + sample_value(clock.sim_tick)
             + " | admitted=" + sample_value(clock.admitted_sim_elapsed_s)
             + " | world=" + sample_value(clock.world_sim_s)
