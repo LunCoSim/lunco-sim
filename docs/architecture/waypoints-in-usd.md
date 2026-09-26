@@ -75,6 +75,12 @@ controls that send a one-shot gesture or semantic edge after a source switch
 wait for that event instead of using a fixed delay or racing the hot-reload
 boundary.
 
+Route authoring does not require possession of the route subject. When the
+selected prim is a route point, the editor resolves its enclosing route scope
+and uses that program's `inputs:subject` binding only to identify the rover;
+the selected waypoint is never mistaken for the rover. If several routes are
+available, select the intended route program or subject before editing.
+
 The live scene can finish attaching its USD document after the route program's
 visualization hook. In that case the program binds its document and route paths
 on the matching `usd.document.projected` event. `on_visualization` prepares the

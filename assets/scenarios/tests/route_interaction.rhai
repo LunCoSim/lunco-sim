@@ -1,10 +1,12 @@
-// Windowed production gate for the native route-point context gesture.
-// Synthetic input still traverses Bevy picking, the Rhai interaction router,
-// the authored menu host, and the generic selection command.
+// Windowed production gate for unpossessed route edits and the native
+// route-point context gesture. Synthetic input still traverses Bevy picking,
+// the Rhai interaction router, the authored menu host, and generic selection.
 
 const TEST_KIND = "editor";
 const ROOT = "/RouteInteraction";
 const ROUTE = ROOT + "/Route";
+
+import "lunco://scripting/tools/waypoint_editor" as waypoint_editor;
 
 fn selected_only(entity) {
     if entity < 0 { return false; }
@@ -24,7 +26,8 @@ fn report(me, passed, message) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["InspectSelection"], required_inputs: [] }
+       query_reads: ["InspectSelection", "QueryUsdPrim", "ResolveUsdTarget"],
+       required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -32,6 +35,7 @@ fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.phase_elapsed = 0.0;
     this.done = false;
+    this.doc = -1;
     this.subject = -1;
     this.point = -1;
     this.marker = -1;
@@ -39,6 +43,8 @@ fn on_start(me, ctx) {
     this.secondary_pointer = ();
     this.scene_pointer_events = 0;
     this.last_event_name = "none";
+    this.added_without_possession = ();
+    this.route_children_before_edit = [];
 }
 
 fn on_event(me, event, ctx) {
@@ -76,7 +82,65 @@ fn on_tick(me, ctx) {
             || pointer_api.attrs == ()
             || pointer_api.attrs["lunco:interaction:right"] != "context"
             || this.subject < 0
-            || this.point < 0 || this.marker < 0 {
+            || this.point < 0 || this.marker < 0
+            || route.children == () || !route.children.contains(ROUTE + "/P2") {
+            return;
+        }
+        this.doc = route.doc_id;
+        this.route_children_before_edit = route.children;
+        let add = #{
+            button: "primary",
+            doc_id: this.doc,
+            scene_root_path: ROOT,
+            route_path: (),
+            selected_path: ROUTE + "/P0",
+            target_path: ROUTE + "/P0",
+            hit_path: ROUTE + "/P0",
+            prim_paths: [ROUTE + "/P0"],
+            pointer_intents: ["route.add_point"],
+            modifiers: #{ alt: true, shift: false, ctrl: false },
+            surface_world_position: point3([4.0, 0.0, -16.0], "active_physics"),
+        };
+        let added = waypoint_editor::route_pointer_action(add);
+        if added == () || added.ok != true || added.path == () {
+            report(this, false,
+                "route add failed when a waypoint was selected and the rover was not possessed");
+            return;
+        }
+        if this.route_children_before_edit.contains(added.path) {
+            report(this, false,
+                "route add reused a waypoint path that existed before the unpossessed edit");
+            return;
+        }
+        this.added_without_possession = added.path;
+        let delete_context = #{
+            doc_id: this.doc,
+            route_path: (),
+            selected_path: this.added_without_possession,
+            target_path: this.added_without_possession,
+            hit_path: this.added_without_possession,
+            prim_paths: [this.added_without_possession],
+        };
+        let deleted = waypoint_editor::on_delete(delete_context);
+        if deleted == () || deleted.ok != true
+            || deleted.path != this.added_without_possession {
+            report(this, false,
+                "route delete failed when a waypoint was selected and the rover was not possessed");
+            return;
+        }
+        this.phase = 8;
+        return;
+    }
+
+    if this.phase == 8 {
+        let route_after_delete = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: ROUTE,
+            children: true,
+        });
+        if route_after_delete == () || route_after_delete.ok == false
+            || route_after_delete.children == ()
+            || route_after_delete.children.contains(this.added_without_possession) {
             return;
         }
         let selected = cmd("SelectEntity", #{
@@ -178,7 +242,7 @@ fn on_tick(me, ctx) {
     if this.phase == 7 {
         if !selected_only(this.point) { return; }
         report(this, true,
-            "the waypoint stays unselected on right-click and selects only from its explicit menu action");
+            "the waypoint context gesture selects explicitly after unpossessed route add/delete succeeded");
     }
 }
 
