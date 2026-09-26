@@ -76,11 +76,12 @@ wait for that event instead of using a fixed delay or racing the hot-reload
 boundary.
 
 The live scene can finish attaching its USD document after the route program's
-`on_start` hook. In that case the program binds its document and route paths on
-the matching `usd.document.projected` event, then emits `program.ready`; it does
-not retain an empty document identity from early startup. Initial occupancy and
-ribbon reads wait for that binding, and the route task stays idle until the
-projection event arrives instead of retrying an unbound document each pass.
+visualization hook. In that case the program binds its document and route paths
+on the matching `usd.document.projected` event. `on_visualization` prepares the
+disposable ribbon after the scene and terrain inputs settle, without waiting
+for Modelica admission. The later `on_start` performs occupancy and control
+setup, then emits `program.ready`; the route task stays idle until its document
+binding is available instead of retrying an unbound identity each pass.
 
 When a route plan is stored separately, keep the route scope and its points in
 that file and reference or payload the scope into the scene; do not duplicate

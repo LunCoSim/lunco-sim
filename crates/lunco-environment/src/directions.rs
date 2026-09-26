@@ -293,18 +293,26 @@ pub fn publish_direction_sources_to_cosim(
                 source.mount_connector('y').expect("validated axis"),
                 source.mount_connector('z').expect("validated axis"),
             ];
-            if let Some(components) = converted.map(UnitDirection3::components) {
-                for (connector, value) in
-                    connectors
-                        .into_iter()
-                        .zip([components.x, components.y, components.z])
-                {
-                    sim.outputs.insert(connector, value);
+            let changed = {
+                let outputs = &mut sim.bypass_change_detection().outputs;
+                let mut changed = false;
+                if let Some(components) = converted.map(UnitDirection3::components) {
+                    for (connector, value) in
+                        connectors
+                            .iter()
+                            .zip([components.x, components.y, components.z])
+                    {
+                        changed |= outputs.set(connector, value);
+                    }
+                } else {
+                    for connector in &connectors {
+                        changed |= outputs.remove(connector).is_some();
+                    }
                 }
-            } else {
-                for connector in connectors {
-                    sim.outputs.remove(&connector);
-                }
+                changed
+            };
+            if changed {
+                sim.set_changed();
             }
         }
     }

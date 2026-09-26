@@ -371,9 +371,9 @@ pub fn sync_local_gravity_to_avian(
 ///
 /// Runs in [`EnvironmentSet::Apply`] (after `LocalGravity` is computed) and
 /// before cosim's propagation, so the freshly-written output is read the same
-/// tick. Writes every tick because a model's own output sync may rewrite its
-/// outputs map. In surface-gravity scenes where no provider has resolved yet,
-/// removes the gravity output rather than exposing a stale value.
+/// tick. Stable values do not allocate connector names or mark the participant
+/// changed. In surface-gravity scenes where no provider has resolved yet, the
+/// gravity outputs are removed rather than exposing stale values.
 pub fn inject_local_gravity_into_cosim(
     mut q: Query<
         (Option<&LocalGravity>, &mut lunco_cosim_core::SimComponent),
@@ -381,32 +381,36 @@ pub fn inject_local_gravity_into_cosim(
     >,
 ) {
     for (gravity, mut comp) in &mut q {
-        if let Some(gravity) = gravity {
-            comp.outputs.insert(
-                lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR.to_string(),
-                gravity.magnitude(),
-            );
-            comp.outputs.insert(
-                lunco_cosim_core::GRAVITY_X_SOURCE_CONNECTOR.to_string(),
-                gravity.0.x,
-            );
-            comp.outputs.insert(
-                lunco_cosim_core::GRAVITY_Y_SOURCE_CONNECTOR.to_string(),
-                gravity.0.y,
-            );
-            comp.outputs.insert(
-                lunco_cosim_core::GRAVITY_Z_SOURCE_CONNECTOR.to_string(),
-                gravity.0.z,
-            );
-        } else {
-            comp.outputs
-                .remove(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR);
-            comp.outputs
-                .remove(lunco_cosim_core::GRAVITY_X_SOURCE_CONNECTOR);
-            comp.outputs
-                .remove(lunco_cosim_core::GRAVITY_Y_SOURCE_CONNECTOR);
-            comp.outputs
-                .remove(lunco_cosim_core::GRAVITY_Z_SOURCE_CONNECTOR);
+        let changed = {
+            let outputs = &mut comp.bypass_change_detection().outputs;
+            if let Some(gravity) = gravity {
+                let mut changed = outputs.set(
+                    lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR,
+                    gravity.magnitude(),
+                );
+                changed |= outputs.set(lunco_cosim_core::GRAVITY_X_SOURCE_CONNECTOR, gravity.0.x);
+                changed |= outputs.set(lunco_cosim_core::GRAVITY_Y_SOURCE_CONNECTOR, gravity.0.y);
+                changed |= outputs.set(lunco_cosim_core::GRAVITY_Z_SOURCE_CONNECTOR, gravity.0.z);
+                changed
+            } else {
+                let mut changed = false;
+                changed |= outputs
+                    .remove(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR)
+                    .is_some();
+                changed |= outputs
+                    .remove(lunco_cosim_core::GRAVITY_X_SOURCE_CONNECTOR)
+                    .is_some();
+                changed |= outputs
+                    .remove(lunco_cosim_core::GRAVITY_Y_SOURCE_CONNECTOR)
+                    .is_some();
+                changed |= outputs
+                    .remove(lunco_cosim_core::GRAVITY_Z_SOURCE_CONNECTOR)
+                    .is_some();
+                changed
+            }
+        };
+        if changed {
+            comp.set_changed();
         }
     }
 }
@@ -881,6 +885,16 @@ impl Plugin for EnvironmentPlugin {
 mod tests {
     use super::*;
 
+    #[derive(Resource, Default)]
+    struct SimComponentChangeCount(usize);
+
+    fn count_sim_component_changes(
+        changed: Query<(), Changed<lunco_cosim_core::SimComponent>>,
+        mut count: ResMut<SimComponentChangeCount>,
+    ) {
+        count.0 += changed.iter().count();
+    }
+
     #[test]
     fn shadow_range_validation_rejects_invalid_explicit_values_without_clamping() {
         assert_eq!(
@@ -941,5 +955,52 @@ mod tests {
             .get::<LocalGravity>(body)
             .expect("gravity is projected onto every spatial entity");
         assert!(actual.abs_diff_eq(DVec3::new(0.0, -1.62, 0.0), 1.0e-12));
+    }
+
+    #[test]
+    fn stable_gravity_outputs_do_not_redirty_sim_component() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SimComponentChangeCount>()
+            .add_systems(
+                Update,
+                (inject_local_gravity_into_cosim, count_sim_component_changes).chain(),
+            );
+        let entity = app
+            .world_mut()
+            .spawn((
+                EnvironmentProbe,
+                LocalGravity(DVec3::new(0.0, -1.62, 0.0)),
+                lunco_cosim_core::SimComponent::default(),
+            ))
+            .id();
+
+        app.update();
+        let initial = app
+            .world()
+            .get::<lunco_cosim_core::SimComponent>(entity)
+            .unwrap();
+        let initial_magnitude = initial
+            .outputs
+            .get(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR)
+            .copied()
+            .unwrap();
+        assert!((initial_magnitude - 1.62).abs() < 1.0e-12);
+        app.world_mut().resource_mut::<SimComponentChangeCount>().0 = 0;
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<SimComponentChangeCount>().0,
+            0,
+            "identical gravity values must not invalidate the shared component"
+        );
+
+        app.world_mut().get_mut::<LocalGravity>(entity).unwrap().0 = DVec3::new(0.0, -1.63, 0.0);
+        app.update();
+        assert_eq!(
+            app.world().resource::<SimComponentChangeCount>().0,
+            1,
+            "a changed gravity sample must still invalidate the shared component"
+        );
     }
 }

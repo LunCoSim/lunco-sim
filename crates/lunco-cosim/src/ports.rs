@@ -10,7 +10,7 @@
 //! [`register_builtin_port_backends`].
 //!
 //! Built-in backends live here:
-//! - **Modelica** [`SimComponent`] — `HashMap<String, f64>` inputs/outputs.
+//! - **Modelica** [`SimComponent`] — slot-backed `PortMap<f64>` inputs/outputs.
 //! - **Avian** rigid bodies + revolute/prismatic joints — foreign components
 //!   exposed by an external spec ([`AvianPort`]/[`AvianGroup`]) rather than
 //!   `#[derive]`. Adding an avian kind is one entry in [`AVIAN`] plus its group
@@ -303,13 +303,13 @@ fn avian_write_input(world: &mut World, entity: Entity, name: &str, value: f64) 
     }
 }
 
-/// Modelica `SimComponent` — map-based `inputs`/`outputs`.
+/// Modelica `SimComponent` — slot-backed `inputs`/`outputs`.
 fn sim_component_topology_key(
     component: &SimComponent,
     declared: Option<&DeclaredOutputPorts>,
 ) -> u64 {
-    let inputs = port_name_set_key(component.inputs.keys());
-    let outputs = port_name_set_key(component.outputs.keys());
+    let inputs = component.inputs.topology_key();
+    let outputs = component.outputs.topology_key();
     let declared = declared
         .map(|ports| port_name_set_key(ports.names.iter()))
         .unwrap_or(0);
@@ -369,20 +369,59 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
             .and_then(|c| c.inputs.get(n).copied())
     },
     write_input: |w, e, n, v| {
-        if let Some(mut c) = w.get_mut::<SimComponent>(e) {
-            if c.inputs.contains_key(n) {
-                c.inputs.insert(n.to_string(), v);
+        if let Some(mut component) = w.get_mut::<SimComponent>(e) {
+            let changed = component
+                .bypass_change_detection()
+                .inputs
+                .set_existing(n, v);
+            if let Some(changed) = changed {
+                if changed {
+                    component.set_changed();
+                }
                 return true;
             }
         }
         false
     },
-    // No fast path: registered first, so a name read already hits on one
-    // `get::<SimComponent>` — resolution would not remove the map lookup.
-    resolve_output: None,
-    resolve_input: None,
-    read_slot: None,
-    write_slot: None,
+    resolve_output: Some(|world, entity, name| {
+        world
+            .get::<SimComponent>(entity)?
+            .outputs
+            .resolve_slot(name)
+    }),
+    resolve_input: Some(|world, entity, name| {
+        world.get::<SimComponent>(entity)?.inputs.resolve_slot(name)
+    }),
+    read_slot: Some(|world, entity, slot| {
+        world
+            .get::<SimComponent>(entity)?
+            .outputs
+            .get_slot(slot)
+            .copied()
+    }),
+    read_input_slot: Some(|world, entity, slot| {
+        world
+            .get::<SimComponent>(entity)?
+            .inputs
+            .get_slot(slot)
+            .copied()
+    }),
+    write_slot: Some(|world, entity, slot, value| {
+        let Some(mut component) = world.get_mut::<SimComponent>(entity) else {
+            return false;
+        };
+        let changed = component
+            .bypass_change_detection()
+            .inputs
+            .set_slot_existing(slot, value);
+        let Some(changed) = changed else {
+            return false;
+        };
+        if changed {
+            component.set_changed();
+        }
+        true
+    }),
 };
 
 /// Avian rigid bodies + revolute/prismatic joints, folded from the [`AVIAN`]
@@ -401,8 +440,27 @@ const AVIAN_BACKEND: PortBackend = PortBackend {
     resolve_output: Some(avian_resolve_output),
     resolve_input: Some(avian_resolve_input),
     read_slot: Some(avian_read_slot),
+    read_input_slot: Some(avian_read_slot),
     write_slot: Some(avian_write_slot),
 };
+
+fn write_port_value(world: &mut World, entity: Entity, value: f64) -> bool {
+    let Some(mut port) = world.get_mut::<Port>(entity) else {
+        return false;
+    };
+    let changed = {
+        let port = port.bypass_change_detection();
+        let changed = port.value.to_bits() != value.to_bits();
+        if changed {
+            port.value = value;
+        }
+        changed
+    };
+    if changed {
+        port.set_changed();
+    }
+    true
+}
 
 /// SysML/hardware [`Port`] — one bidirectional `f64` scalar named `value`.
 ///
@@ -446,21 +504,28 @@ const PORT_BACKEND: PortBackend = PortBackend {
         }
         w.get::<Port>(e).map(|p| p.value)
     },
-    write_input: |w, e, n, v| {
-        if n != PORT_NAME {
-            return false;
-        }
-        if let Some(mut p) = w.get_mut::<Port>(e) {
-            p.value = v;
-            return true;
-        }
-        false
+    write_input: |world, entity, name, value| {
+        name == PORT_NAME && write_port_value(world, entity, value)
     },
-    // Single fixed port on one component — name-based is already a single `get`.
-    resolve_output: None,
-    resolve_input: None,
-    read_slot: None,
-    write_slot: None,
+    resolve_output: Some(|world, entity, name| {
+        (name == PORT_NAME && world.get::<Port>(entity).is_some()).then_some(0)
+    }),
+    resolve_input: Some(|world, entity, name| {
+        (name == PORT_NAME && world.get::<Port>(entity).is_some()).then_some(0)
+    }),
+    read_slot: Some(|world, entity, slot| {
+        (slot == 0)
+            .then(|| world.get::<Port>(entity).map(|port| port.value))
+            .flatten()
+    }),
+    read_input_slot: Some(|world, entity, slot| {
+        (slot == 0)
+            .then(|| world.get::<Port>(entity).map(|port| port.value))
+            .flatten()
+    }),
+    write_slot: Some(|world, entity, slot, value| {
+        slot == 0 && write_port_value(world, entity, value)
+    }),
 };
 
 /// Generic runtime output surface backed by child [`Port`] entities.
@@ -498,7 +563,7 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
         for (name, port_entity) in &outputs.ports {
             if let Some(port) = world.get::<Port>(*port_entity) {
                 out.push(PortRef {
-                    name: name.clone(),
+                    name: name.to_string(),
                     direction: PortDirection::Out,
                     value: port.value,
                 });
@@ -525,14 +590,24 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
     },
     read_input: |_world, _entity, _name| None,
     write_input: |_world, _entity, _name, _value| false,
-    resolve_output: None,
+    resolve_output: Some(|world, entity, name| {
+        world.get::<OutputPorts>(entity)?.ports.resolve_slot(name)
+    }),
     resolve_input: None,
-    read_slot: None,
+    read_slot: Some(|world, entity, slot| {
+        let port_entity = world
+            .get::<OutputPorts>(entity)?
+            .ports
+            .get_slot(slot)
+            .copied()?;
+        world.get::<Port>(port_entity).map(|port| port.value)
+    }),
+    read_input_slot: None,
     write_slot: None,
 };
 
 fn output_ports_topology_key(outputs: &OutputPorts) -> u64 {
-    port_entity_map_key(outputs.ports.iter())
+    port_entity_map_key(outputs.ports.iter()) ^ outputs.ports.topology_key().rotate_left(29)
 }
 
 fn port_surface_topology_key(surface: &PortSurface) -> u64 {
@@ -542,8 +617,9 @@ fn port_surface_topology_key(surface: &PortSurface) -> u64 {
     for (name, port) in ports {
         name.hash(&mut hasher);
         port.direction.hash(&mut hasher);
+        port.endpoint.hash(&mut hasher);
     }
-    hasher.finish()
+    hasher.finish() ^ surface.ports.topology_key().rotate_left(29)
 }
 
 /// USD-authored component ports backed by child scalar [`Port`] endpoints.
@@ -570,7 +646,7 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
         for (name, authored) in ports {
             if let Some(endpoint) = world.get::<Port>(authored.endpoint) {
                 out.push(PortRef {
-                    name: name.clone(),
+                    name: name.to_string(),
                     direction: authored.direction,
                     value: endpoint.value,
                 });
@@ -624,19 +700,59 @@ const PORT_SURFACE_BACKEND: PortBackend = PortBackend {
         if !matches!(authored.direction, PortDirection::In | PortDirection::InOut) {
             return false;
         }
-        let Ok(mut endpoint) = world.get_entity_mut(authored.endpoint) else {
-            return false;
-        };
-        let Some(mut port) = endpoint.get_mut::<Port>() else {
-            return false;
-        };
-        port.value = value;
-        true
+        write_port_value(world, authored.endpoint, value)
     },
-    resolve_output: None,
-    resolve_input: None,
-    read_slot: None,
-    write_slot: None,
+    resolve_output: Some(|world, entity, name| {
+        let surface = world.get::<PortSurface>(entity)?;
+        let authored = surface.ports.get(name)?;
+        matches!(
+            authored.direction,
+            PortDirection::Out | PortDirection::InOut
+        )
+        .then(|| surface.ports.resolve_slot(name))
+        .flatten()
+    }),
+    resolve_input: Some(|world, entity, name| {
+        let surface = world.get::<PortSurface>(entity)?;
+        let authored = surface.ports.get(name)?;
+        matches!(authored.direction, PortDirection::In | PortDirection::InOut)
+            .then(|| surface.ports.resolve_slot(name))
+            .flatten()
+    }),
+    read_slot: Some(|world, entity, slot| {
+        let authored = world.get::<PortSurface>(entity)?.ports.get_slot(slot)?;
+        if !matches!(
+            authored.direction,
+            PortDirection::Out | PortDirection::InOut
+        ) {
+            return None;
+        }
+        world
+            .get::<Port>(authored.endpoint)
+            .map(|endpoint| endpoint.value)
+    }),
+    read_input_slot: Some(|world, entity, slot| {
+        let authored = world.get::<PortSurface>(entity)?.ports.get_slot(slot)?;
+        if !matches!(authored.direction, PortDirection::In | PortDirection::InOut) {
+            return None;
+        }
+        world
+            .get::<Port>(authored.endpoint)
+            .map(|endpoint| endpoint.value)
+    }),
+    write_slot: Some(|world, entity, slot, value| {
+        let Some(authored) = world
+            .get::<PortSurface>(entity)
+            .and_then(|surface| surface.ports.get_slot(slot))
+            .copied()
+        else {
+            return false;
+        };
+        if !matches!(authored.direction, PortDirection::In | PortDirection::InOut) {
+            return false;
+        }
+        write_port_value(world, authored.endpoint, value)
+    }),
 };
 
 /// Return the identity of a connection's endpoints and port directions.
@@ -707,9 +823,10 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
     read_output: |w, e, n| (n == "piloted").then(|| piloted_value(w, e)),
     read_input: |_, _, _| None,
     write_input: |_, _, _, _| false,
-    resolve_output: None,
+    resolve_output: Some(|_world, _entity, name| (name == "piloted").then_some(0)),
     resolve_input: None,
-    read_slot: None,
+    read_slot: Some(|world, entity, slot| (slot == 0).then(|| piloted_value(world, entity))),
+    read_input_slot: None,
     write_slot: None,
 };
 
@@ -741,7 +858,7 @@ pub(crate) fn check_port_owner_structure(
     mut revision: ResMut<PortTopologyRevision>,
 ) {
     for (entity, inputs) in &input_ports {
-        if state.changed::<InputPorts>(entity, port_name_set_key(inputs.values.keys())) {
+        if state.changed::<InputPorts>(entity, inputs.values.topology_key()) {
             revision.bump();
         }
     }
@@ -876,5 +993,115 @@ mod tests {
         );
         assert!(!registry.write_port(&mut world, producer, "drive_left", 0.1));
         assert_eq!(world.get::<Port>(port).unwrap().value, 0.75);
+    }
+
+    #[test]
+    fn resolved_runtime_surfaces_keep_direction_and_noop_change_detection() {
+        let mut world = World::new();
+        let output = world.spawn(Port { value: 0.75 }).id();
+        let producer = world
+            .spawn(OutputPorts::new(std::collections::HashMap::from([(
+                "drive_left".into(),
+                output,
+            )])))
+            .id();
+        let input = world.spawn(Port::default()).id();
+        let surface_output = world.spawn(Port { value: 0.25 }).id();
+        let surface = world
+            .spawn((
+                PortSurface::new(std::collections::HashMap::from([
+                    (
+                        "command".into(),
+                        lunco_port_core::PortSurfacePort::new(input, PortDirection::In),
+                    ),
+                    (
+                        "state".into(),
+                        lunco_port_core::PortSurfacePort::new(surface_output, PortDirection::Out),
+                    ),
+                ])),
+                lunco_port_core::PortSurfaceReady,
+            ))
+            .id();
+        let scalar = world.spawn(Port::default()).id();
+        let mut registry = PortRegistry::default();
+        register_builtin_port_backends(&mut registry);
+
+        let producer_slot = registry
+            .resolve_output(&world, producer, "drive_left")
+            .unwrap();
+        assert_eq!(
+            registry.read_resolved(&world, producer, producer_slot),
+            Some(0.75)
+        );
+
+        let output_slot = registry.resolve_output(&world, surface, "state").unwrap();
+        assert_eq!(
+            registry.read_resolved(&world, surface, output_slot),
+            Some(0.25)
+        );
+        assert!(
+            registry
+                .resolve_output(&world, surface, "command")
+                .is_none()
+        );
+        let input_slot = registry.resolve_input(&world, surface, "command").unwrap();
+        assert!(registry.write_resolved(&mut world, surface, input_slot, 0.5));
+        assert_eq!(world.get::<Port>(input).unwrap().value, 0.5);
+
+        let scalar_slot = registry.resolve_input(&world, scalar, PORT_NAME).unwrap();
+        world.clear_trackers();
+        assert!(registry.write_resolved(&mut world, scalar, scalar_slot, 0.0));
+        assert!(
+            !world.entity(scalar).get_ref::<Port>().unwrap().is_changed(),
+            "an unchanged scalar port value must not dirty its component"
+        );
+        assert!(registry.write_resolved(&mut world, scalar, scalar_slot, 1.0));
+        assert!(world.entity(scalar).get_ref::<Port>().unwrap().is_changed());
+    }
+
+    #[test]
+    fn sim_component_input_write_reuses_declared_name_and_only_marks_changed_samples() {
+        let mut world = World::new();
+        let entity = world
+            .spawn(SimComponent {
+                inputs: std::collections::HashMap::from([("throttle".into(), 0.5)]).into(),
+                ..Default::default()
+            })
+            .id();
+        let mut registry = PortRegistry::default();
+        register_builtin_port_backends(&mut registry);
+
+        world.clear_trackers();
+        assert!(registry.write_port(&mut world, entity, "throttle", 0.5));
+        assert!(
+            !world
+                .entity(entity)
+                .get_ref::<SimComponent>()
+                .unwrap()
+                .is_changed(),
+            "writing the same sample must not invalidate SimComponent consumers"
+        );
+
+        assert!(registry.write_port(&mut world, entity, "throttle", 0.75));
+        assert!(
+            world
+                .entity(entity)
+                .get_ref::<SimComponent>()
+                .unwrap()
+                .is_changed(),
+            "a changed sample must still invalidate SimComponent consumers"
+        );
+        assert_eq!(
+            world
+                .entity(entity)
+                .get::<SimComponent>()
+                .unwrap()
+                .inputs
+                .get("throttle"),
+            Some(&0.75)
+        );
+
+        world.clear_trackers();
+        assert!(!registry.write_port(&mut world, entity, "undeclared", 1.0));
     }
 }

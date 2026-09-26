@@ -21,6 +21,17 @@ participant so wires, the HTTP API, the inspector, rhai, and Python all read/wri
 through it without depending "up" into this engine). `lunco-cosim` owns and
 registers the built-in backends (`ports::register_builtin_port_backends`):
 
+Port names stay strings in USD, Rhai, commands, and diagnostics. Fixed-step
+`CompiledWiring` resolves output sources, readable input-side sources, and input
+targets to owning-backend slots when connections or the shared
+`PortTopologyRevision` changes; steady propagation uses dense target indices
+and those slots. A write-only input is a valid target but not a readable source.
+`PortMap<T>` provides dynamic named surfaces with layout-checked process-local
+handles. Structural edits publish a topology revision and recompile the fabric;
+stale handles are rejected rather than retried through a name path. Sparse
+`PortHolds` are iterated by borrowed names and matched once to compiled target
+indices, so the tick does not hash every target against the hold table.
+
 `PortRegistry::entity_port_infos` is the inspection projection used by the native
 Ports panel and `ReadPorts`/`ListPorts`. It preserves the backend-owned live value
 and adds the scalar type, optional unit and inclusive bounds, source, current
@@ -44,8 +55,10 @@ For bounded-cadence views, each backend also supplies an identity-only
 `topology_key`; consumers cache the `entity_port_infos` metadata while reading
 live values through the registry on each sample. Values therefore stay current
 without rebuilding the port table when only physics or solver state changes. The
-owner publishes `PortTopologyRevision` from lifecycle observers and
-change-filtered structural checks. Avian groups keep their topology key and
+owner publishes `PortTopologyRevision` from lifecycle observers and structural
+checks. Modelica's `SimComponent` maps use `ScalarPortMap`, which maintains an
+order-independent name-set key as names are inserted or removed; numeric sample
+writes do not re-hash the map. Avian groups keep their topology key and
 invalidation hook beside their membership predicate, including any optional
 backing-component presence that changes the emitted rows.
 

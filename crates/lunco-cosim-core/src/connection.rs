@@ -112,7 +112,13 @@ impl Default for SimConnection {
 #[derive(Resource, Debug, Default)]
 pub struct PortHolds {
     /// `(entity, port) → latest commanded value`.
-    holds: std::collections::HashMap<(Entity, String), f64>,
+    /// Names are indexed inside their entity so fixed-step readers can look up
+    /// a borrowed `&str` without constructing an owned tuple key.
+    holds: std::collections::HashMap<Entity, std::collections::HashMap<String, f64>>,
+    /// Changes only when a live intent is added, changed, or removed. The
+    /// propagation cache uses this to rebuild held target indices off the
+    /// steady fixed-tick path.
+    revision: u64,
 }
 
 /// A one-fixed-tick lifecycle fence for deferred control writes.
@@ -151,51 +157,145 @@ pub fn clear_control_write_fence(mut fence: ResMut<ControlWriteFence>) {
 impl PortHolds {
     /// Set the persistent intent for `port` on `entity`.
     pub fn hold(&mut self, entity: Entity, port: impl Into<String>, value: f64) {
-        self.holds.insert((entity, port.into()), value);
+        let port = port.into();
+        let ports = self.holds.entry(entity).or_default();
+        if ports
+            .get(port.as_str())
+            .is_some_and(|current| current.to_bits() == value.to_bits())
+        {
+            return;
+        }
+        ports.insert(port, value);
+        self.bump_revision();
+    }
+
+    /// Read one live intent by borrowed port name.
+    #[inline]
+    pub fn get(&self, entity: Entity, port: &str) -> Option<f64> {
+        self.holds
+            .get(&entity)
+            .and_then(|ports| ports.get(port))
+            .copied()
+    }
+
+    /// Iterate active intents without cloning names. The propagation engine
+    /// uses this to apply holds only to matching compiled targets instead of
+    /// hashing every target against the hold table on every physics tick.
+    pub fn iter(&self) -> impl Iterator<Item = (Entity, &str, f64)> + '_ {
+        self.holds.iter().flat_map(|(&entity, ports)| {
+            ports
+                .iter()
+                .map(move |(name, &value)| (entity, name.as_str(), value))
+        })
     }
 
     /// End a hold early. `true` if one was live.
     pub fn release(&mut self, entity: Entity, port: &str) -> bool {
-        self.holds.remove(&(entity, port.to_string())).is_some()
+        let Some(ports) = self.holds.get_mut(&entity) else {
+            return false;
+        };
+        let released = ports.remove(port).is_some();
+        if ports.is_empty() {
+            self.holds.remove(&entity);
+        }
+        if released {
+            self.bump_revision();
+        }
+        released
     }
 
     /// Release every persisted intent addressed to `entity`.
     pub fn clear_entity(&mut self, entity: Entity) {
-        self.holds
-            .retain(|(held_entity, _), _| *held_entity != entity);
+        if self.holds.remove(&entity).is_some() {
+            self.bump_revision();
+        }
+    }
+
+    /// Clear every intent at a scene boundary while preserving the revision
+    /// sequence observed by the propagation cache.
+    pub fn clear_all(&mut self) {
+        if !self.holds.is_empty() {
+            self.holds.clear();
+            self.bump_revision();
+        }
+    }
+
+    /// Current invalidation generation for cached hold-to-target indices.
+    #[inline]
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    #[inline]
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// Return the names of every persisted intent addressed to `entity`.
     pub fn entity_port_names(&self, entity: Entity) -> Vec<String> {
         self.holds
-            .keys()
-            .filter(|(held_entity, _)| *held_entity == entity)
-            .map(|(_, name)| name.clone())
+            .get(&entity)
+            .into_iter()
+            .flat_map(|ports| ports.keys().cloned())
             .collect()
     }
 
     /// Return every entity with at least one persisted control intent.
     pub fn held_entities(&self) -> Vec<Entity> {
-        let mut entities = self
-            .holds
-            .keys()
-            .map(|(entity, _)| *entity)
-            .collect::<Vec<_>>();
+        let mut entities = self.holds.keys().copied().collect::<Vec<_>>();
         entities.sort_by_key(|entity| entity.to_bits());
-        entities.dedup();
         entities
     }
 
-    /// The live holds, for the propagation master's per-target lookup.
+    /// Copy live holds into the flat view consumed by presentation code.
     pub fn snapshot(&self) -> std::collections::HashMap<(Entity, String), f64> {
         self.holds
             .iter()
-            .map(|(key, value)| (key.clone(), *value))
+            .flat_map(|(entity, ports)| {
+                ports
+                    .iter()
+                    .map(move |(name, value)| ((*entity, name.clone()), *value))
+            })
             .collect()
     }
 
     pub fn is_empty(&self) -> bool {
         self.holds.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod port_hold_tests {
+    use super::PortHolds;
+    use bevy::prelude::World;
+
+    #[test]
+    fn hold_revision_tracks_only_effective_intent_changes() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut holds = PortHolds::default();
+
+        holds.hold(entity, "throttle", 0.25);
+        let first = holds.revision();
+        assert_eq!(first, 1);
+        holds.hold(entity, "throttle", 0.25);
+        assert_eq!(
+            holds.revision(),
+            first,
+            "same intent keeps cached slots valid"
+        );
+
+        holds.hold(entity, "throttle", 0.5);
+        assert_ne!(holds.revision(), first);
+        assert!(holds.release(entity, "throttle"));
+        let released = holds.revision();
+        assert!(!holds.release(entity, "throttle"));
+        assert_eq!(holds.revision(), released);
+
+        holds.hold(entity, "throttle", 0.75);
+        holds.clear_all();
+        assert!(holds.is_empty());
+        assert!(holds.revision() > released);
     }
 }
 

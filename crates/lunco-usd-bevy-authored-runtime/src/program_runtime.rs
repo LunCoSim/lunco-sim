@@ -9,6 +9,7 @@ use bevy::asset::{AssetId, Assets};
 use bevy::prelude::{Entity, World, warn};
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use lunco_usd_bevy_core::program;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -26,24 +27,54 @@ pub(crate) fn refresh_program_owner(
     stage_id: AssetId<UsdStageAsset>,
     owner: Entity,
 ) {
-    let network_members = {
+    let Some(network_members) = modelica_network_members_for_stage(world, stage_id) else {
+        return;
+    };
+    refresh_program_owner_with_network_members(world, stage_id, owner, &network_members);
+}
+
+/// Return the shared Modelica membership fact for the selected stage revision.
+pub(crate) fn modelica_network_members_for_stage(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+) -> Option<Arc<HashSet<String>>> {
+    if world
+        .get_resource::<program::ModelicaNetworkMembershipCache>()
+        .is_none()
+    {
+        warn!("[usd] Modelica network membership cache is unavailable");
+        return None;
+    }
+    let (generation, members) = {
         let Some(stage_asset) = world
             .get_resource::<Assets<UsdStageAsset>>()
             .and_then(|assets| assets.get(stage_id))
         else {
             warn!(
-                "[usd] stage asset {stage_id:?} is unavailable while refreshing authored programs"
+                "[usd] stage asset {stage_id:?} is unavailable while resolving Modelica network membership"
             );
-            return;
+            return None;
         };
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-            warn!("[usd] canonical stage reader is unavailable while refreshing authored programs");
-            return;
+            warn!(
+                "[usd] canonical stage reader is unavailable while resolving Modelica network membership"
+            );
+            return None;
         };
-        let (reader, _) = stages.reader_for(stage_id, stage_asset);
-        program::modelica_network_member_paths(&reader)
+        let (reader, generation) = stages.reader_for(stage_id, stage_asset);
+        if let Some(members) = world
+            .get_resource::<program::ModelicaNetworkMembershipCache>()
+            .and_then(|cache| cache.get(stage_id, generation, None))
+        {
+            return Some(members);
+        }
+        (generation, program::modelica_network_member_paths(&reader))
     };
-    refresh_program_owner_with_network_members(world, stage_id, owner, &network_members);
+    Some(
+        world
+            .resource_mut::<program::ModelicaNetworkMembershipCache>()
+            .insert(stage_id, generation, None, members),
+    )
 }
 
 /// Refresh one owner using a membership snapshot shared by a projection batch.

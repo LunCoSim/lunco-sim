@@ -127,6 +127,10 @@ impl Default for LinkConfig {
 pub struct LinkClassCatalog {
     counts: HashMap<String, usize>,
     members: HashMap<Entity, String>,
+    /// Stable class-index order for resolved scalar link-port slots.
+    slot_classes: Vec<String>,
+    /// Encoded USD/Modelica class segment to the compact class index.
+    class_slots: HashMap<LinkClassPortSegment, usize>,
     revision: u64,
     initialized: bool,
 }
@@ -192,14 +196,30 @@ pub(crate) fn refresh_link_class_catalog(
         members.insert(entity, class.to_owned());
     }
     if counts != catalog.counts || members != catalog.members {
+        let (slot_classes, class_slots) = link_class_slots(&counts);
         catalog.counts = counts;
         catalog.members = members;
+        catalog.slot_classes = slot_classes;
+        catalog.class_slots = class_slots;
         catalog.revision = catalog.revision.wrapping_add(1);
         if let Some(topology) = topology.as_mut() {
             topology.bump();
         }
     }
     catalog.initialized = true;
+}
+
+fn link_class_slots(
+    counts: &HashMap<String, usize>,
+) -> (Vec<String>, HashMap<LinkClassPortSegment, usize>) {
+    let mut slot_classes: Vec<_> = counts.keys().cloned().collect();
+    slot_classes.sort_unstable();
+    let class_slots = slot_classes
+        .iter()
+        .enumerate()
+        .map(|(slot, class)| (LinkClassPortSegment::from_class_label(class), slot))
+        .collect();
+    (slot_classes, class_slots)
 }
 
 /// The verdict seam consulted per pair. `ctx` (a [`HookValue`] map): `a`, `b`
@@ -976,6 +996,89 @@ fn best_per_class_peers(
     best
 }
 
+fn best_peer_for_class<'a>(peers: &'a [LinkPeer], class: &str) -> Option<&'a LinkPeer> {
+    let mut best: Option<&LinkPeer> = None;
+    for peer in peers
+        .iter()
+        .filter(|peer| peer.class.as_deref() == Some(class))
+    {
+        let better = best.is_none_or(|current| match (current.connected, peer.connected) {
+            (false, true) => true,
+            (true, false) => false,
+            _ => peer.range_m < current.range_m,
+        });
+        if better {
+            best = Some(peer);
+        }
+    }
+    best
+}
+
+/// Resolve one link output to `(class slot, scalar field)` once when wiring is
+/// compiled. The catalog's sorted slot order changes only with authored class
+/// topology, which publishes the shared port revision before propagation.
+fn resolve_link_port_slot(world: &World, entity: Entity, name: &str) -> Option<u64> {
+    let (class_segment, suffix) = split_link_class_port_name(name)?;
+    let catalog = world.get_resource::<LinkClassCatalog>()?;
+    let class_slot = *catalog.class_slots.get(class_segment)?;
+    let class = catalog.slot_classes.get(class_slot)?;
+    let field = match suffix {
+        "range_m" => 0_u64,
+        "connected" => 1,
+        "elevation_deg" => 2,
+        _ => return None,
+    };
+    let authored = catalog.counts.get(class).is_some_and(|count| {
+        world
+            .get::<LinkNode>(entity)
+            .and_then(|node| node.class.as_deref())
+            != Some(class.as_str())
+            || *count > 1
+    });
+    let live_peer = world
+        .get::<LinkState>(entity)
+        .and_then(|state| best_peer_for_class(&state.peers, class));
+    let available = match field {
+        0 | 1 => authored || live_peer.is_some(),
+        2 => live_peer.is_some_and(|peer| peer.elevation_deg.is_some()),
+        _ => false,
+    };
+    if !available {
+        return None;
+    }
+    u64::try_from(class_slot)
+        .ok()?
+        .checked_mul(4)?
+        .checked_add(field)
+}
+
+fn read_link_port_slot(world: &World, entity: Entity, slot: u64) -> Option<f64> {
+    let field = slot & 3;
+    let class_slot = usize::try_from(slot >> 2).ok()?;
+    let catalog = world.get_resource::<LinkClassCatalog>()?;
+    let class = catalog.slot_classes.get(class_slot)?;
+    let authored = catalog.counts.get(class).is_some_and(|count| {
+        world
+            .get::<LinkNode>(entity)
+            .and_then(|node| node.class.as_deref())
+            != Some(class.as_str())
+            || *count > 1
+    });
+    let peer = world
+        .get::<LinkState>(entity)
+        .and_then(|state| best_peer_for_class(&state.peers, class));
+    match field {
+        0 if authored || peer.is_some() => Some(peer.map_or(0.0, |peer| peer.range_m)),
+        1 if authored || peer.is_some() => Some(if peer.is_some_and(|peer| peer.connected) {
+            1.0
+        } else {
+            0.0
+        }),
+        2 => peer.and_then(|peer| peer.elevation_deg),
+        _ => None,
+    }
+}
+
 /// The scalars a class publishes, as `(suffix, value)`.
 ///
 /// `elevation_deg` is published **only when the peer has a horizon**. A peer that
@@ -1185,6 +1288,9 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
             )
         }),
         read_output: |world, entity, name| {
+            if let Some(slot) = resolve_link_port_slot(world, entity, name) {
+                return read_link_port_slot(world, entity, slot);
+            }
             let state = world.get::<LinkState>(entity)?;
             let (class_segment, suffix) = split_link_class_port_name(name)?;
             let peers = best_per_class(state);
@@ -1196,9 +1302,10 @@ pub const LINK_PORT_BACKEND: lunco_port_core::ports::PortBackend =
         // backend that DOES own the name.
         read_input: |_, _, _| None,
         write_input: |_, _, _, _| false,
-        resolve_output: None,
+        resolve_output: Some(resolve_link_port_slot),
         resolve_input: None,
-        read_slot: None,
+        read_slot: Some(read_link_port_slot),
+        read_input_slot: None,
         write_slot: None,
     };
 
@@ -1338,11 +1445,15 @@ mod tests {
     #[test]
     fn class_ports_are_declared_before_the_first_geometry_sample() {
         let mut world = World::new();
+        let counts: HashMap<String, usize> = [("rover".into(), 1), ("base".into(), 1)]
+            .into_iter()
+            .collect();
+        let (slot_classes, class_slots) = link_class_slots(&counts);
         world.insert_resource(LinkClassCatalog {
-            counts: [("rover".into(), 1), ("base".into(), 1)]
-                .into_iter()
-                .collect(),
+            counts,
             members: Default::default(),
+            slot_classes,
+            class_slots,
             revision: 1,
             initialized: true,
         });
@@ -1362,7 +1473,28 @@ mod tests {
 
         assert!(listed.iter().any(|port| port.name == "link_base_range_m"));
         assert!(listed.iter().any(|port| port.name == "link_base_connected"));
-        assert_eq!(port(&world, rover, "link_base_range_m"), None);
+        assert_eq!(port(&world, rover, "link_base_range_m"), Some(0.0));
+
+        let range = resolve_link_port_slot(&world, rover, "link_base_range_m")
+            .expect("authored range resolves before its first sample");
+        let connected = resolve_link_port_slot(&world, rover, "link_base_connected")
+            .expect("authored connectivity resolves before its first sample");
+        assert_eq!(read_link_port_slot(&world, rover, range), Some(0.0));
+        assert_eq!(read_link_port_slot(&world, rover, connected), Some(0.0));
+
+        world.entity_mut(rover).insert(LinkState {
+            peers: vec![
+                peer(2, "base", false, 10.0, 1.0),
+                peer(3, "base", true, 20.0, 2.0),
+            ],
+        });
+        assert_eq!(read_link_port_slot(&world, rover, range), Some(20.0));
+        assert_eq!(read_link_port_slot(&world, rover, connected), Some(1.0));
+
+        let elevation = resolve_link_port_slot(&world, rover, "link_base_elevation_deg")
+            .expect("sampled elevation resolves to a scalar slot");
+        world.get_mut::<LinkState>(rover).unwrap().peers[1].elevation_deg = None;
+        assert_eq!(read_link_port_slot(&world, rover, elevation), None);
     }
 
     #[test]
@@ -1898,6 +2030,7 @@ mod tests {
             epoch_jd: 2_451_545.0,
             ..Default::default()
         });
+        world.insert_resource(WorldTime::default());
         // `drop_debounce: 1` = flip immediately, so every geometry test reads the raw
         // verdict on the sweep it runs. The debounce itself is exercised on its own.
         world.insert_resource(LinkConfig {

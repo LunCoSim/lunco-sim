@@ -3083,7 +3083,7 @@ def Scope "Rig"
                     projection_error: None,
                 },
                 lunco_cosim_core::SimComponent {
-                    outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),
+                    outputs: std::collections::HashMap::from([("soc".into(), 0.75)]).into(),
                     ..default()
                 },
             ))

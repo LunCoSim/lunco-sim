@@ -19,7 +19,6 @@ pub(super) struct WiringFactsCache(std::collections::HashMap<WiringFactsKey, Sta
 
 #[derive(Default)]
 struct StageWiringFacts {
-    modelica_members: Option<std::collections::HashSet<String>>,
     prims: std::collections::HashMap<String, PrimWiringFacts>,
 }
 
@@ -296,6 +295,7 @@ pub(super) fn request_binding_epoch_on_model_change(
     changed: Query<(Entity, &SimComponent), Changed<SimComponent>>,
     mut statuses: ResMut<BindingModelStatuses>,
     mut dirty: ResMut<BindingEpochDirty>,
+    mut revision: ResMut<lunco_cosim_core::BindingRevision>,
 ) {
     for (entity, component) in &changed {
         if statuses
@@ -305,6 +305,7 @@ pub(super) fn request_binding_epoch_on_model_change(
         {
             statuses.0.insert(entity, component.status.clone());
             dirty.0 = true;
+            revision.request();
         }
     }
 }
@@ -453,6 +454,7 @@ pub(super) fn settle_binding_epoch(
 /// provide the wiring resources and want to exercise this owner without
 /// assembling the complete application plugin graph.
 pub fn install_wiring_system(app: &mut App) {
+    lunco_usd_bevy_core::program::install_modelica_network_membership_cache(app);
     app.init_resource::<UsdWiringDirty>();
     app.init_resource::<WiringFactsCache>();
     app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
@@ -468,6 +470,7 @@ pub(super) fn rewire_usd_connections(
     mut commands: Commands,
     mut dirty: ResMut<UsdWiringDirty>,
     mut facts_cache: ResMut<WiringFactsCache>,
+    mut network_members: ResMut<lunco_usd_bevy_core::program::ModelicaNetworkMembershipCache>,
     // Wiring consumes a projected endpoint, not an initial path stub. The
     // grouped query parameter keeps this system within Bevy's arity limit;
     // the endpoint marker remains the authoritative admission contract.
@@ -637,21 +640,17 @@ pub(super) fn rewire_usd_connections(
         };
         active_cache_keys.insert(cache_key);
         let stage_facts = facts_cache.0.entry(cache_key).or_default();
-        if stage_facts.modelica_members.is_none() {
-            stage_facts.modelica_members = Some(
-                lunco_usd_bevy_core::program::modelica_network_member_paths(view),
-            );
-        }
         if !stage_facts.prims.contains_key(&prim_path.path) {
             stage_facts.prims.insert(
                 prim_path.path.clone(),
                 read_prim_wiring_facts(view, &sink_sdf),
             );
         }
-        let is_modelica_member = stage_facts
-            .modelica_members
-            .as_ref()
-            .is_some_and(|members| members.contains(&prim_path.path));
+        let is_modelica_member = network_members
+            .get_or_insert_with(id, generation, sink_instance, || {
+                lunco_usd_bevy_core::program::modelica_network_member_paths(view)
+            })
+            .contains(&prim_path.path);
         let Some(prim_facts) = stage_facts.prims.get(&prim_path.path) else {
             continue;
         };

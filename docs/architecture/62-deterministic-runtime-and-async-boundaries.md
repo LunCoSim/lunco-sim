@@ -82,6 +82,10 @@ These CPU jobs no longer enter the frame's Bevy task queue directly. Selection,
 mesh upload, visibility, and residency changes still use the `Update`
 visualization cycle.
 
+Modelica runtime telemetry is event-gated after worker responses and on document
+metadata or telemetry-settings changes. Unchanged render frames do not rescan its
+variables; each recorded sample still carries the solver's landed model time.
+
 The pre-simulation `PreUpdate` order is `Lifecycle` → `IdentityAdmission` →
 `EntityIndex` → `TimeSpineSet`. Lifecycle projection creates the ECS entities;
 the identity owner assigns their stable IDs; then the API registry publishes
@@ -589,6 +593,20 @@ behavior. All functions and hooks inherit the invocation context; the scenario
 owner assigns each callback to its Rust-owned cycle. Event handlers read both
 the event's origin stamp and the consumer's current cycle. Source metadata may
 validate an author's required cadence, but it does not install or move a hook.
+
+A compiled scenario may also define `on_visualization(me, ctx)`. The owner calls
+it once in `PreUpdate`, after the lifecycle, document, and terrain admission
+scans and time-spine projection, but before the first `FixedUpdate`. The owner
+routes it through the Twin `Visualization` cycle after scene, reference,
+document, and terrain preparation holds clear. Modelica holds do not block
+this presentation path. Its execution context has the presentation clock, no
+simulation tick, and the visualization phase. The callback may prepare
+disposable visual views; authoritative actions, top-level initialization,
+dependency planning, and `on_start` remain behind the simulation admission
+boundary. Rhai mutation guards reject world writes and events in this phase;
+only `ApplyUsdTransientOps` is available, and the USD owner directs those edits
+to the disposable view layer. A new source or scene generation admits one new
+visualization call.
 
 Before a scenario's first lifecycle hook, a source may define the optional,
 scenario-scoped `simulation_dependencies(me, ctx)` hook. The second argument is

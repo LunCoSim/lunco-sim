@@ -73,6 +73,16 @@ The generic exposure namespace is the contract. Do not create a special
 telemetry, physics, scripts, and derived capabilities all publish through the
 same registry.
 
+Runtime surface facts include the ordered owner/reason pairs from
+`SimulationProgress`. The active Twin's Rhai properties policy chooses the
+visible status wording, while the typed producer remains domain-neutral.
+Changes to these holds invalidate surface properties through the existing
+exposure refresh path, so the built-in Rhai visibility policy can temporarily
+show an authored surface during scene, terrain, script, or Modelica preparation
+before possession and before the first physics step. Once preparation clears,
+the authored `possessed` or `always` mode controls visibility again; neither
+Rust exposure code nor the HUI template adds a second visibility rule.
+
 The same rule applies to engine health. The core runtime publishes the latest
 frame and physics facts once as typed `EngineHealthSnapshot` and
 `PhysicsHealthSnapshot` resources. The engine snapshot also retains a bounded

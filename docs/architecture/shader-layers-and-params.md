@@ -60,6 +60,13 @@ commands.spawn((Mesh3d(mesh), look, Transform::from_translation(p)));
 That is the whole API. You never touch `Assets<StandardMaterial>`, and the crate you
 write this in does not link `bevy_pbr`. `lunco-render-bevy` binds it.
 
+For a runtime-authored look, read static values through `values()` and change them
+with `set_value`; the setter updates the cached port-shape identity only when a
+parameter name is added. USD-driven values use `ShaderLook::live()`, a shared
+`PortMap<Option<ParamValue>>` with slots seeded for connected names. Compiled wires
+resolve those slots once and update them directly; empty slots remain stable until
+the first sample, and live samples do not rehash authored names.
+
 ### Authoring a parameter in USD
 
 When a `ShaderLook` is backed by an authored USD material, a parameter edit

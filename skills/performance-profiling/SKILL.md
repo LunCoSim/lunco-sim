@@ -74,6 +74,40 @@ hot path, audit every writer before adding a source-owned event/revision/dirty
 set; once all writers are accounted for, prefer that signal over an
 always-evaluated `Added<T>` population query in a run condition.
 
+Keep readiness checks separate from reconciliation requests. An unresolved
+async participant may require a cheap readiness check on later frames, but a
+shared revision that wakes full topology or causal-graph work should advance
+only when topology or endpoint lifecycle facts actually change—not merely
+because readiness is still pending.
+
+`SimComponent` input/output shape is tracked by `lunco-port-core::ScalarPortMap`.
+Its identity key changes at insert/remove/clear boundaries, while numeric sample
+writes leave it stable; use borrowed-name `set` in hot publishers and strict
+`set_existing` for already-declared inputs so stable keys do not allocate. A
+strict write separates whether the name exists from whether its value changed.
+Callers that bypass Bevy change detection should mark the component changed
+only when the sample differs; generic `InputPorts` follows the same rule.
+`PortMap<T>` keeps authored names at its boundary and resolves them to dense,
+process-local slots for the fixed propagation data plane. Map-backed ports,
+static scene-property inputs, shader inputs, Avian ports, and catalogued
+link-class outputs use owner slots. Shader live values are predeclared for
+driven parameters, and authored shape fingerprints update only at structural
+setters. Every owner that can change a declared surface publishes the shared
+`PortTopologyRevision`; compiled wire handles are rebuilt on that revision or
+on connection changes, and a stale slot is never
+retried through a name lookup. Numeric samples do not invalidate the compiled
+fabric. Do not re-hash every map when `SimComponent` changes for ordinary
+physics values. `PortHolds` advances its own revision only for effective intent
+changes; rebuild its target-index projection on that revision or wiring changes
+and reuse the aligned value buffer on steady ticks. Do not probe every target
+against the hold table or clone its presentation snapshot per tick.
+Readable `inputs:*` connection sources use a distinct input-side slot reader;
+write-only inputs can be targets but never become fabricated readable sources.
+Success diagnostics use entity-indexed borrowed-name lookups and retained tick
+scratch. Compiled targets cache surface presence until topology invalidation;
+pending/broken snapshots share compiled names as `Arc<str>`, and fault warning
+keys are formatted only on first failure rather than every fixed step.
+
 For deferred USD projectors, keep one entity-work set per owner and feed it
 from the complete lifecycle boundary: identity arrival, projection readiness,
 invalidation, removal, and scene teardown. The same applies to deferred adapter
@@ -95,6 +129,9 @@ Temporary lookup indexes over immutable ECS queries should borrow path and port
 surface data instead of cloning those maps for a one-pass reconciliation.
 Build compatible per-entity indexes in one query traversal rather than running
 separate full-population passes for each index.
+When multiple USD consumers need the same composed-stage fact, put its
+generation/instance-keyed cache at the shared fact owner and reuse that cache;
+clear it at the scene teardown boundary instead of keeping consumer-local copies.
 For derived marker sets, compare current membership with the desired set and
 apply only additions/removals; unrelated rebuilds must not emit lifecycle churn.
 Removal invalidation should be qualified by the entity's authored USD identity

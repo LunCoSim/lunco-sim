@@ -8,6 +8,7 @@ description = "Backend-neutral co-simulation components, connections, diagnostic
 [dependencies]
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-port-core = { path = "../lunco-port-core" }
 
 [lints]
 workspace = true

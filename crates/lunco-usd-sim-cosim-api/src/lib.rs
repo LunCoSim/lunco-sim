@@ -653,7 +653,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     comp.map(|c| {
                         c.outputs
                             .iter()
-                            .map(|(k, v)| (k.clone(), api_value!(*v)))
+                            .map(|(k, v)| (k.to_owned(), api_value!(*v)))
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default()
@@ -664,7 +664,7 @@ impl lunco_api::ApiQueryProvider for CosimStatusProvider {
                     comp.map(|c| {
                         c.inputs
                             .iter()
-                            .map(|(k, v)| (k.clone(), api_value!(*v)))
+                            .map(|(k, v)| (k.to_owned(), api_value!(*v)))
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default()

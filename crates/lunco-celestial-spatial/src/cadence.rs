@@ -311,6 +311,7 @@ fn epoch_requires_solve(
 
 pub(crate) fn celestial_needs_solve(
     celestial: Option<Res<CelestialTime>>,
+    scene_time: Option<Res<lunco_time::SceneTimeState>>,
     solved: Res<CelestialSolvedEpoch>,
     settings: Option<Res<CelestialCadenceSettings>>,
     motion: Res<CelestialMotionBound>,
@@ -323,6 +324,12 @@ pub(crate) fn celestial_needs_solve(
     );
     if let Some(activity) = activity {
         activity.expect_open("celestial_needs_solve", step <= 0.0);
+    }
+    // The bootstrap epoch is deliberately unsolved until the scene-time policy
+    // commits its authoritative epoch. Do not interpret that sentinel as work
+    // on every render frame while scene admission is still pending.
+    if scene_time.is_some_and(|state| !state.is_ready()) {
+        return false;
     }
     // No clock yet (bare test app) — never gate; the old behaviour was to run.
     let Some(celestial) = celestial else {
@@ -427,6 +434,40 @@ mod tests {
         let step = CelestialCadenceSettings::default().max_epoch_step_jd(1.0);
         assert!(!epoch_requires_solve(10.0, 10.0, 4, 4, step));
         assert!(epoch_requires_solve(10.0, 10.0, 5, 4, step));
+    }
+
+    #[test]
+    fn celestial_solve_waits_for_scene_time_selection() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(CelestialTime {
+            epoch_jd: 2_460_000.0,
+            delta_secs: 0.0,
+        });
+        world.insert_resource(CelestialSolvedEpoch::default());
+        world.insert_resource(CelestialCadenceSettings::default());
+        world.insert_resource(CelestialMotionBound {
+            maximum_rate_rad_per_day: 1.0,
+        });
+        world.insert_resource(CelestialInputsRevision::default());
+        world.insert_resource(lunco_time::SceneTimeState {
+            transition_id: None,
+            phase: lunco_time::SceneTimePhase::Loading,
+            selection: None,
+        });
+
+        assert!(!world.run_system_once(celestial_needs_solve).unwrap());
+
+        world.resource_mut::<lunco_time::SceneTimeState>().phase =
+            lunco_time::SceneTimePhase::Ready;
+        assert!(world.run_system_once(celestial_needs_solve).unwrap());
+
+        world.remove_resource::<lunco_time::SceneTimeState>();
+        assert!(
+            world.run_system_once(celestial_needs_solve).unwrap(),
+            "hosts without scene lifecycle state keep standalone solve behavior"
+        );
     }
 
     #[test]

@@ -37,6 +37,8 @@
 //! });
 //! ```
 
+use std::sync::Arc;
+
 use bevy::prelude::*;
 
 pub mod avian;
@@ -172,7 +174,7 @@ fn reset_scene_state(
     mut revision: ResMut<BindingRevision>,
 ) {
     *diagnostics = CosimDiagnostics::default();
-    *holds = PortHolds::default();
+    holds.clear_all();
     *fence = ControlWriteFence::default();
     *revision = BindingRevision::default();
 }
@@ -532,6 +534,59 @@ mod binding_lifecycle_tests {
             .resource::<lunco_port_core::ports::PortTopologyRevision>()
             .0;
         assert_ne!(after_remove, after_shape_change);
+    }
+
+    #[test]
+    fn port_name_set_key_tracks_sim_component_topology_without_live_samples() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let entity = app.world_mut().spawn(SimComponent::default()).id();
+        app.update();
+        let after_admission = app
+            .world()
+            .resource::<lunco_port_core::ports::PortTopologyRevision>()
+            .0;
+
+        app.world_mut()
+            .get_mut::<SimComponent>(entity)
+            .unwrap()
+            .outputs
+            .insert("thrust".into(), 1.0);
+        app.update();
+        let after_port_added = app
+            .world()
+            .resource::<lunco_port_core::ports::PortTopologyRevision>()
+            .0;
+        assert_ne!(after_port_added, after_admission);
+
+        app.world_mut()
+            .get_mut::<SimComponent>(entity)
+            .unwrap()
+            .outputs
+            .insert("thrust".into(), 2.0);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<lunco_port_core::ports::PortTopologyRevision>()
+                .0,
+            after_port_added,
+            "a changed scalar sample must not invalidate the port table"
+        );
+
+        app.world_mut()
+            .get_mut::<SimComponent>(entity)
+            .unwrap()
+            .outputs
+            .remove("thrust");
+        app.update();
+        assert_ne!(
+            app.world()
+                .resource::<lunco_port_core::ports::PortTopologyRevision>()
+                .0,
+            after_port_added,
+            "removing a declared port must invalidate the port table"
+        );
     }
 
     #[test]
@@ -965,10 +1020,8 @@ mod binding_lifecycle_tests {
                 has_port_surface: true,
                 dropped_value: 1.0,
             };
-            diagnostics
-                .faults
-                .insert((entity, "drive_left".into()), broken.clone());
-            diagnostics.landed.insert((entity, "drive_right".into()));
+            diagnostics.record_fault(broken.clone());
+            diagnostics.mark_landed(entity, "drive_right");
             diagnostics.pending.push(broken.clone());
             diagnostics.broken.push(broken);
             diagnostics.report_once("target:entity:0:drive_left");
@@ -1102,24 +1155,21 @@ fn on_set_ports(
                 let global_id = world.get::<lunco_core::GlobalEntityId>(target).copied();
                 let mut diagnostics = world.resource_mut::<CosimDiagnostics>();
                 for (port, value) in &invalid_writes {
-                    let key = (target, port.clone());
-                    if diagnostics.landed.contains(&key) {
+                    if diagnostics.has_landed(target, port) {
                         continue;
                     }
-                    if let std::collections::hash_map::Entry::Vacant(entry) =
-                        diagnostics.faults.entry(key)
-                    {
+                    let inserted = diagnostics.record_fault(BrokenConnection {
+                        entity: target,
+                        global_id,
+                        port: Arc::from(port.as_str()),
+                        has_port_surface: true,
+                        dropped_value: *value,
+                    });
+                    if inserted {
                         warn!(
                             "[cosim] SetPorts targets unknown input port '{}' on {} ({:?}) — batch rejected",
                             port, label, target
                         );
-                        entry.insert(BrokenConnection {
-                            entity: target,
-                            global_id,
-                            port: port.clone(),
-                            has_port_surface: true,
-                            dropped_value: *value,
-                        });
                     }
                 }
             }
@@ -1163,13 +1213,9 @@ fn on_set_ports(
                 // drop (a backend momentarily absent mid-reload), and a port
                 // proven by `SetPorts` was not in that set at all, so its fault
                 // could come back after being cleared.
-                let diag = world.resource::<CosimDiagnostics>();
-                let key = (target, port.clone());
-                if !diag.faults.is_empty() || !diag.landed.contains(&key) {
-                    let mut diag = world.resource_mut::<CosimDiagnostics>();
-                    diag.faults.remove(&key);
-                    diag.landed.insert(key);
-                }
+                let mut diag = world.resource_mut::<CosimDiagnostics>();
+                diag.remove_fault(target, port);
+                diag.mark_landed(target, port);
                 continue;
             }
             write_error = Some(format!(
@@ -1214,7 +1260,7 @@ fn on_release_control(
     let registry = registry.clone();
     let mut input_names = holds.entity_port_names(target);
     if let Ok(command_surface) = q_inputs.get(target) {
-        input_names.extend(command_surface.values.keys().cloned());
+        input_names.extend(command_surface.values.keys().map(|name| name.to_string()));
     }
     // Remove old values before the deferred backend transaction. A queued
     // SetPorts from the outgoing owner sees the fence and cannot re-arm it.
@@ -1250,8 +1296,8 @@ fn on_release_control(
             .get::<lunco_port_core::OutputPorts>(target)
             .map(|outputs| outputs.ports.clone())
             .unwrap_or_default();
-        for (name, entity) in actuator_ports {
-            if let Some(mut port) = world.get_mut::<lunco_port_core::Port>(entity) {
+        for (name, entity) in actuator_ports.iter() {
+            if let Some(mut port) = world.get_mut::<lunco_port_core::Port>(*entity) {
                 port.value = if name == "brake" { 1.0 } else { 0.0 };
             }
         }
@@ -1287,6 +1333,7 @@ mod control_intent_tests {
     fn release_control_latches_intent_until_explicit_release() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        app.init_resource::<ActiveCommandId>();
 
         let throttle_output = app.world_mut().spawn(lunco_port_core::Port::default()).id();
         let brake_output = app.world_mut().spawn(lunco_port_core::Port::default()).id();
@@ -1422,6 +1469,7 @@ mod control_intent_tests {
     fn set_ports_allows_solver_barrier_but_rejects_user_pause() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+        app.init_resource::<ActiveCommandId>();
         let target = app
             .world_mut()
             .spawn((

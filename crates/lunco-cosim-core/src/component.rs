@@ -6,6 +6,8 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
+use crate::ScalarPortMap;
+
 /// Marks a co-simulation participant projected from a USD prim.
 ///
 /// The marker is backend-neutral: Modelica, Rhai, Python, and native physical
@@ -66,11 +68,11 @@ pub struct SimComponent {
     /// Input connectors — values received from wires or other models.
     ///
     /// These are read by the engine during `step()` to compute new outputs.
-    pub inputs: HashMap<String, f64>,
+    pub inputs: ScalarPortMap,
     /// Output connectors — values produced by the model.
     ///
     /// Other models and Avian read these through [`crate::SimConnection`] connections.
-    pub outputs: HashMap<String, f64>,
+    pub outputs: ScalarPortMap,
     /// Compile-time parameters — set before simulation starts.
     ///
     /// Unlike inputs, these typically don't change during simulation
@@ -91,8 +93,8 @@ impl Default for SimComponent {
     fn default() -> Self {
         Self {
             model_name: String::new(),
-            inputs: HashMap::default(),
-            outputs: HashMap::default(),
+            inputs: ScalarPortMap::default(),
+            outputs: ScalarPortMap::default(),
             parameters: HashMap::default(),
             status: SimStatus::Idle,
             is_stepping: false,

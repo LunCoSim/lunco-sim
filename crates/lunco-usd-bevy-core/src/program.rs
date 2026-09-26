@@ -12,14 +12,116 @@
 //! and this is the crate both sides already depend on.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
 
 // The runtime projector and the per-prim binder share this same composed read
 // contract. A prepared asset plan implements it without retaining OpenUSD
 // handles, while live edits continue to use StageView.
 use bevy::asset::{AssetId, AssetServer};
-use bevy::prelude::{Entity, World};
-use lunco_usd_bevy_stage::read::UsdReadObject;
+use bevy::prelude::{App, Entity, ResMut, Resource, World};
+use lunco_usd_bevy_stage::{UsdStageAsset, read::UsdReadObject};
 use openusd::sdf::Path as SdfPath;
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct ModelicaNetworkMembershipKey {
+    stage: AssetId<UsdStageAsset>,
+    generation: u64,
+    instance: Option<u64>,
+}
+
+/// Shared composed-stage membership facts used by program projection and
+/// connection wiring. Values are send-safe; no live OpenUSD reader is retained.
+#[derive(Resource, Default)]
+pub struct ModelicaNetworkMembershipCache {
+    entries: std::collections::HashMap<ModelicaNetworkMembershipKey, Arc<HashSet<String>>>,
+}
+
+impl ModelicaNetworkMembershipCache {
+    /// Reuse the membership set for one composed source revision and instance.
+    pub fn get(
+        &self,
+        stage: AssetId<UsdStageAsset>,
+        generation: u64,
+        instance: Option<u64>,
+    ) -> Option<Arc<HashSet<String>>> {
+        self.entries
+            .get(&ModelicaNetworkMembershipKey {
+                stage,
+                generation,
+                instance,
+            })
+            .cloned()
+    }
+
+    /// Publish one computed membership set, replacing stale generations for
+    /// the same stage and instance.
+    pub fn insert(
+        &mut self,
+        stage: AssetId<UsdStageAsset>,
+        generation: u64,
+        instance: Option<u64>,
+        members: HashSet<String>,
+    ) -> Arc<HashSet<String>> {
+        let key = ModelicaNetworkMembershipKey {
+            stage,
+            generation,
+            instance,
+        };
+        if let Some(existing) = self.entries.get(&key) {
+            return Arc::clone(existing);
+        }
+        self.entries
+            .retain(|cached, _| cached.stage != stage || cached.instance != instance);
+        let members = Arc::new(members);
+        self.entries.insert(key, Arc::clone(&members));
+        members
+    }
+
+    /// Get the cached set or compute it once for this source revision.
+    pub fn get_or_insert_with(
+        &mut self,
+        stage: AssetId<UsdStageAsset>,
+        generation: u64,
+        instance: Option<u64>,
+        build: impl FnOnce() -> HashSet<String>,
+    ) -> Arc<HashSet<String>> {
+        if let Some(members) = self.get(stage, generation, instance) {
+            return members;
+        }
+        self.insert(stage, generation, instance, build())
+    }
+
+    /// Drop all stage-derived facts at the scene replacement boundary.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+#[derive(Resource)]
+struct ModelicaNetworkMembershipLifecycleInstalled;
+
+/// Install the shared membership index and its one scene-teardown owner.
+/// Multiple USD consumers may request installation; the teardown hook is
+/// registered once for the application.
+pub fn install_modelica_network_membership_cache(app: &mut App) {
+    app.init_resource::<ModelicaNetworkMembershipCache>();
+    if app
+        .world()
+        .get_resource::<ModelicaNetworkMembershipLifecycleInstalled>()
+        .is_none()
+    {
+        app.world_mut()
+            .insert_resource(ModelicaNetworkMembershipLifecycleInstalled);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            clear_modelica_network_membership_cache,
+        );
+    }
+}
+
+fn clear_modelica_network_membership_cache(mut cache: ResMut<ModelicaNetworkMembershipCache>) {
+    cache.clear();
+}
 
 /// Why a prim that claims to be a Modelica program facet cannot be used as one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -793,6 +895,59 @@ mod tests {
                 ],
                 vec!["/Rover/Thermal/RightMass".to_string()],
             ]
+        );
+    }
+
+    #[test]
+    fn modelica_membership_cache_reuses_revision_and_replaces_stale_generation() {
+        let stage = AssetId::<UsdStageAsset>::default();
+        let mut cache = ModelicaNetworkMembershipCache::default();
+        let prepared = cache.get_or_insert_with(stage, 0, None, || {
+            HashSet::from(["/Prepared/Member".to_string()])
+        });
+        let reused = cache.get_or_insert_with(stage, 0, None, || {
+            panic!("a cached generation must not rescan the composed stage")
+        });
+        assert!(Arc::ptr_eq(&prepared, &reused));
+        assert!(reused.contains("/Prepared/Member"));
+
+        let edited = cache.get_or_insert_with(stage, 1, None, || {
+            HashSet::from(["/Live/Member".to_string()])
+        });
+        assert!(edited.contains("/Live/Member"));
+        assert_eq!(cache.entries.len(), 1);
+
+        let instance = cache.get_or_insert_with(stage, 0, Some(17), || {
+            HashSet::from(["/Instance/Member".to_string()])
+        });
+        assert!(instance.contains("/Instance/Member"));
+        assert_eq!(cache.entries.len(), 2);
+
+        cache.clear();
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn modelica_membership_cache_is_cleared_at_scene_teardown() {
+        let mut app = App::new();
+        install_modelica_network_membership_cache(&mut app);
+        install_modelica_network_membership_cache(&mut app);
+        app.world_mut()
+            .resource_mut::<ModelicaNetworkMembershipCache>()
+            .insert(
+                AssetId::<UsdStageAsset>::default(),
+                0,
+                None,
+                HashSet::from(["/Prepared/Member".to_string()]),
+            );
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        assert!(
+            app.world()
+                .resource::<ModelicaNetworkMembershipCache>()
+                .entries
+                .is_empty()
         );
     }
 }

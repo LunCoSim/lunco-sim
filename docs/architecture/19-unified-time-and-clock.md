@@ -119,9 +119,13 @@ queries advance from this one sample. Physics and Modelica continue at their
 ordinary fixed-step cadence; Modelica receives the latest target direction at
 its usual communication points through the shared BigSpace conversion.
 The celestial solve gate applies its certified angular error budget to this
-sample. The Time menu and optional sky-clock HUD expose the same rate and seek
-controls; `SetTimeTransport` still controls the separate 0.1×–64× physical
-transport.
+sample, and stays closed while a mounted scene is waiting for the required
+`scene.time.select` policy to commit its epoch. The first celestial solve then
+uses that selected sample; an unresolved bootstrap epoch must not turn the
+negative-infinity solve sentinel into per-frame celestial work. Hosts without
+scene lifecycle state retain standalone solve behavior. The Time menu and
+optional sky-clock HUD expose the same rate and seek controls;
+`SetTimeTransport` still controls the separate 0.1×–64× physical transport.
 
 Every direction input selects a source by wiring a target id to an
 EnvironmentProbe output triplet. Finite targets use their composed position;

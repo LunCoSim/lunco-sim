@@ -148,6 +148,8 @@ pub enum RuntimePhase {
     Event,
     /// Deterministic continuous behavior.
     Behavior,
+    /// One-shot presentation work in the Twin visualization cycle.
+    Visualization,
     /// Teardown or final cleanup.
     Stop,
     /// One-shot Rhai or tool evaluation.

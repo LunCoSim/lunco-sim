@@ -78,10 +78,13 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
         // `live` params are real shader params — they are merely absent from the
         // sharing key, so a freshly-built material still has to carry them.
         values: look
-            .values
+            .values()
             .iter()
-            .chain(look.live.iter())
-            .map(|(k, v)| (k.clone(), *v))
+            .map(|(name, value)| (name.clone(), *value))
+            .chain(
+                look.live_values()
+                    .map(|(name, value)| (name.to_owned(), value)),
+            )
             .collect(),
         // The same mapping `lunco-render-bevy`'s PBR binder applies to a `PbrLook`,
         // so a prim's authored transparency means the same thing on either path.
@@ -494,10 +497,10 @@ fn rebind_changed_shader_look(
                     }
                 } else {
                     existing.set_many(
-                        look.values
+                        look.values()
                             .iter()
-                            .chain(look.live.iter())
-                            .map(|(k, v)| (k.as_str(), *v)),
+                            .map(|(name, value)| (name.as_str(), *value))
+                            .chain(look.live_values()),
                     );
                 }
                 if skybox {
@@ -556,13 +559,9 @@ fn rebind_changed_shader_look(
         // `live` params moved (they are outside the key). Write them into that
         // material rather than leaving it stale: re-keying is what mints a new,
         // unprepared material every slider tick and makes the terrain flicker.
-        if same_material && !look.live.is_empty() && written.insert(handle.id()) {
+        if same_material && look.has_live_values() && written.insert(handle.id()) {
             if let Some(mut mat) = materials.get_mut(&handle) {
-                mat.set_many(
-                    look.live
-                        .iter()
-                        .map(|(name, value)| (name.as_str(), *value)),
-                );
+                mat.set_many(look.live_values());
             }
         }
     }
@@ -1361,8 +1360,7 @@ mod tests {
             .entity_mut(e)
             .get_mut::<ShaderLook>()
             .unwrap()
-            .values
-            .insert("morph_start".into(), ParamValue::F32(0.5));
+            .set_value("morph_start", ParamValue::F32(0.5));
         app.update();
         let second = material_of(&app, e);
         assert_ne!(
@@ -1377,8 +1375,7 @@ mod tests {
             .entity_mut(e)
             .get_mut::<ShaderLook>()
             .unwrap()
-            .values
-            .insert("morph_start".into(), ParamValue::F32(0.0));
+            .set_value("morph_start", ParamValue::F32(0.0));
         app.update();
         assert_eq!(material_of(&app, e), first);
         assert_eq!(app.world().resource::<Assets<ShaderMaterial>>().len(), 2);
@@ -1398,8 +1395,7 @@ mod tests {
             .entity_mut(e)
             .get_mut::<ShaderLook>()
             .expect("look")
-            .live
-            .insert("transition".into(), ParamValue::F32(0.5));
+            .set_live("transition", ParamValue::F32(0.5));
 
         app.update();
 

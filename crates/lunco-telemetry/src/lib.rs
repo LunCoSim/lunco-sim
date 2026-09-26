@@ -1508,6 +1508,7 @@ mod tests {
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
+            read_input_slot: None,
             write_slot: None,
         };
 
@@ -1543,6 +1544,7 @@ mod tests {
             resolve_output: None,
             resolve_input: None,
             read_slot: None,
+            read_input_slot: None,
             write_slot: None,
         };
 

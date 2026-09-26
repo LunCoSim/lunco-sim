@@ -7,7 +7,9 @@
 //! the shared program runtime. Keeping this work at the runtime boundary means
 //! visual-only consumers do not compile or install control behavior.
 
-use crate::program_runtime::refresh_program_owner_with_network_members;
+use crate::program_runtime::{
+    modelica_network_members_for_stage, refresh_program_owner_with_network_members,
+};
 use bevy::asset::Assets;
 use bevy::prelude::{Add, ChildOf, Commands, Component, Entity, On, Query, With, Without, World};
 use lunco_camera_core::{CameraFollow, parse_camera_follow};
@@ -19,6 +21,7 @@ use lunco_usd_bevy_stage::{
 };
 use openusd::sdf::Path as SdfPath;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// A control surface prepared from one composed USD owner.
 struct AuthoredControlSurface {
@@ -101,25 +104,14 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         .iter(world)
         .map(|(entity, path)| (entity, path.stage_handle.id(), path.path.clone()))
         .collect();
-    let mut network_members_by_stage: HashMap<_, HashSet<String>> = HashMap::new();
+    let mut network_members_by_stage: HashMap<_, Arc<HashSet<String>>> = HashMap::new();
     for (_, stage_id, _) in &owners {
-        network_members_by_stage
-            .entry(*stage_id)
-            .or_insert_with(|| {
-                let Some(stage_asset) = world
-                    .get_resource::<Assets<UsdStageAsset>>()
-                    .and_then(|assets| assets.get(*stage_id))
-                else {
-                    bevy::log::warn!("[usd] stage asset {stage_id:?} is unavailable while projecting authored programs");
-                    return HashSet::new();
-                };
-                let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-                    bevy::log::warn!("[usd] canonical stage reader is unavailable while projecting authored programs");
-                    return HashSet::new();
-                };
-                let (reader, _) = stages.reader_for(*stage_id, stage_asset);
-                lunco_usd_bevy_core::program::modelica_network_member_paths(&reader)
-            });
+        if network_members_by_stage.contains_key(stage_id) {
+            continue;
+        }
+        if let Some(members) = modelica_network_members_for_stage(world, *stage_id) {
+            network_members_by_stage.insert(*stage_id, members);
+        }
     }
 
     for (entity, stage_id, owner_path) in owners {
@@ -174,7 +166,12 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         let Some(network_members) = network_members_by_stage.get(&stage_id) else {
             continue;
         };
-        refresh_program_owner_with_network_members(world, stage_id, entity, network_members);
+        refresh_program_owner_with_network_members(
+            world,
+            stage_id,
+            entity,
+            network_members.as_ref(),
+        );
     }
 }
 

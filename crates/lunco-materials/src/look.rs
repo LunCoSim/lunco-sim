@@ -63,6 +63,7 @@
 
 use crate::dyn_params::ParamValue;
 use bevy::prelude::*;
+use lunco_port_core::ports::{PortMap, port_name_set_key};
 pub use lunco_render::SurfaceAlpha;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -108,7 +109,7 @@ pub struct ShaderLook {
     pub vertex_shader: Option<String>,
     /// **The open set.** Parameter name → value. Names come from the shader's own
     /// `struct Material`; Rust hardcodes none of them.
-    pub values: BTreeMap<String, ParamValue>,
+    values: BTreeMap<String, ParamValue>,
     /// Params that are **not part of material identity** — excluded from
     /// [`key`](Self::key), so changing one re-uses the same material and the binder
     /// writes the new value into it in place.
@@ -127,7 +128,7 @@ pub struct ShaderLook {
     /// last writer wins. Only put a value here when every look that could share
     /// this material carries the same one — i.e. it is driven by a single global
     /// resource. A per-entity value belongs in `values`.
-    pub live: BTreeMap<String, ParamValue>,
+    live: PortMap<Option<ParamValue>>,
     /// Parameter names this prim's USD authoring drives through a connection.
     ///
     /// Authored by the USD shader pass, which resolves the bound shader and so knows
@@ -139,7 +140,11 @@ pub struct ShaderLook {
     ///
     /// Not part of [`key`](Self::key): it says where values come from, not what the
     /// material looks like.
-    pub driven: BTreeSet<String>,
+    driven: BTreeSet<String>,
+    /// Cached authored port shape. Live parameter samples do not rebuild this
+    /// key; the live slot layout identity is folded in when it is read.
+    port_topology_key: u64,
+    live_value_count: usize,
     /// Named texture layers. Absent = the shader's declared absence behavior.
     pub textures: BTreeMap<TextureLayer, Handle<Image>>,
     /// Opt out of material sharing — this look gets a **private** material that the
@@ -229,11 +234,169 @@ impl ShaderLook {
         }
     }
 
+    /// Authored shader parameters keyed by WGSL field name.
+    #[inline]
+    pub fn values(&self) -> &BTreeMap<String, ParamValue> {
+        &self.values
+    }
+
+    /// Engine-updated parameter samples. Empty slots are retained so a resolved
+    /// shader input keeps the same handle before and after its first sample.
+    #[inline]
+    pub fn live(&self) -> &PortMap<Option<ParamValue>> {
+        &self.live
+    }
+
+    /// USD-connected input names, in stable sorted slot order.
+    #[inline]
+    pub fn driven(&self) -> &BTreeSet<String> {
+        &self.driven
+    }
+
+    /// Cached structural identity for the shader port surface.
+    ///
+    /// The authored-name fingerprint is recomputed only by structural setters;
+    /// the process-local live-map layout identity detects map replacement and
+    /// compaction without folding parameter names on each changed sample.
+    #[inline]
+    pub fn port_topology_key(&self) -> u64 {
+        self.port_topology_key ^ u64::from(self.live.layout_key()).rotate_left(47)
+    }
+
+    /// Whether any live parameter currently overrides its authored value.
+    #[inline]
+    pub fn has_live_values(&self) -> bool {
+        self.live_value_count > 0
+    }
+
+    /// Whether `name` has a live override.
+    #[inline]
+    pub fn has_live_value(&self, name: &str) -> bool {
+        self.live.get(name).is_some_and(Option::is_some)
+    }
+
+    /// Current live override for `name`.
+    #[inline]
+    pub fn live_value(&self, name: &str) -> Option<ParamValue> {
+        self.live.get(name).copied().flatten()
+    }
+
+    /// Iterate only active live overrides, omitting retained empty slots.
+    pub fn live_values(&self) -> impl Iterator<Item = (&str, ParamValue)> + '_ {
+        self.live
+            .iter()
+            .filter_map(|(name, value)| value.map(|value| (name, value)))
+    }
+
+    fn ensure_live_slot(&mut self, name: &str) {
+        if !self.live.contains_key(name) {
+            self.live.insert(name.to_owned(), None);
+        }
+    }
+
+    fn refresh_port_topology_key(&mut self) {
+        self.port_topology_key = port_name_set_key(self.driven.iter())
+            ^ port_name_set_key(self.values.keys()).rotate_left(23);
+    }
+
+    /// Replace the authored scalar/vector parameter set before installing the
+    /// look. Structural identity changes only when a field name is added.
+    pub fn with_values(mut self, values: BTreeMap<String, ParamValue>) -> Self {
+        let mut names_changed = false;
+        for (name, value) in values {
+            names_changed |= self.values.insert(name.clone(), value).is_none();
+            self.ensure_live_slot(&name);
+        }
+        if names_changed {
+            self.refresh_port_topology_key();
+        }
+        self
+    }
+
+    /// Replace the USD-connected input set and build its deterministic live
+    /// slots. Existing slots remain stable when another name is appended.
+    pub fn with_driven(mut self, driven: BTreeSet<String>) -> Self {
+        if self.driven != driven {
+            self.driven = driven;
+            for name in &self.driven {
+                if !self.live.contains_key(name) {
+                    self.live.insert(name.clone(), None);
+                }
+            }
+            self.refresh_port_topology_key();
+        }
+        self
+    }
+
+    /// Change an authored parameter. Updating an existing value preserves the
+    /// port topology; introducing a name adds its stable live slot.
+    pub fn set_value(&mut self, name: impl AsRef<str>, value: ParamValue) {
+        let name = name.as_ref();
+        if let Some(current) = self.values.get_mut(name) {
+            *current = value;
+            return;
+        }
+        self.values.insert(name.to_owned(), value);
+        self.ensure_live_slot(name);
+        self.refresh_port_topology_key();
+    }
+
+    /// Remove one authored parameter and update the cached port shape.
+    pub fn remove_value(&mut self, name: &str) -> Option<ParamValue> {
+        let removed = self.values.remove(name)?;
+        self.refresh_port_topology_key();
+        Some(removed)
+    }
+
+    /// Set a live parameter by borrowed name. Existing samples do not allocate;
+    /// inserting a new live-only name appends a slot without moving old handles.
+    pub fn set_live(&mut self, name: impl AsRef<str>, value: ParamValue) {
+        let name = name.as_ref();
+        if let Some(current) = self.live.get_mut(name) {
+            if *current == Some(value) {
+                return;
+            }
+            if current.is_none() {
+                self.live_value_count += 1;
+            }
+            *current = Some(value);
+        } else {
+            self.live.insert(name.to_owned(), Some(value));
+            self.live_value_count += 1;
+        }
+    }
+
+    /// Set a previously resolved live slot without a name lookup.
+    pub fn set_live_slot(&mut self, slot: u64, value: ParamValue) -> Option<bool> {
+        let current = self.live.get_slot_mut(slot)?;
+        if *current == Some(value) {
+            return Some(false);
+        }
+        if current.is_none() {
+            self.live_value_count += 1;
+        }
+        *current = Some(value);
+        Some(true)
+    }
+
+    /// Clear a live override but retain its slot for compiled readers.
+    pub fn clear_live(&mut self, name: &str) -> bool {
+        let Some(current) = self.live.get_mut(name) else {
+            return false;
+        };
+        if current.take().is_some() {
+            self.live_value_count -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Set one parameter. The name must exist in the shader's `struct Material`;
     /// an unknown name is dropped at pack time (with a warning), never silently
     /// mis-packed into a neighbouring field.
     pub fn with(mut self, name: impl Into<String>, value: ParamValue) -> Self {
-        self.values.insert(name.into(), value);
+        self.set_value(name.into(), value);
         self
     }
 
@@ -258,10 +421,6 @@ impl ShaderLook {
 
     /// Set one **live** param — outside the sharing key, written into the shared
     /// material in place. See [`live`](Self::live) for when this is legitimate.
-    pub fn set_live(&mut self, name: impl Into<String>, value: ParamValue) {
-        self.live.insert(name.into(), value);
-    }
-
     /// Material-sharing key.
     ///
     /// Floats are quantised (1e-4) so two looks a rounding error apart still share
@@ -367,6 +526,27 @@ mod tests {
     fn parameter_names_are_not_a_closed_set() {
         let look = ShaderLook::new("bespoke.wgsl")
             .with("a_name_rust_has_never_heard_of", ParamValue::F32(1.0));
-        assert!(look.values.contains_key("a_name_rust_has_never_heard_of"));
+        assert!(look.values().contains_key("a_name_rust_has_never_heard_of"));
+    }
+
+    #[test]
+    fn live_samples_keep_resolved_shader_slots_and_topology_stable() {
+        let mut look = ShaderLook::new("driven.wgsl")
+            .with("gain", ParamValue::F32(2.0))
+            .with_driven(["gain".to_owned()].into_iter().collect());
+        let topology = look.port_topology_key();
+        let slot = look.live().resolve_slot("gain").expect("driven slot");
+
+        look.set_live("gain", ParamValue::F32(4.0));
+
+        assert_eq!(look.port_topology_key(), topology);
+        assert_eq!(
+            look.live().get_slot_entry(slot).map(|(_, value)| *value),
+            Some(Some(ParamValue::F32(4.0)))
+        );
+        assert_ne!(look.clone().port_topology_key(), topology);
+
+        look.set_value("new_parameter", ParamValue::F32(1.0));
+        assert_ne!(look.port_topology_key(), topology);
     }
 }

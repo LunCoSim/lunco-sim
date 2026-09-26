@@ -97,6 +97,22 @@ revalidate identical source; see the dated note in the [200 FPS
 handover](open-200fps-performance-handover.md). No measured FPS delta is
 claimed.
 
+The 2026-09-26 Apollo startup trace found an admission feedback loop: while
+`BindingEpochDirty` stayed true for pending participants, `settle_binding_epoch`
+called `BindingRevision::open_epoch` every frame. Each call advanced the
+revision, waking both the full connection binder and causal-participant graph
+projection. Over the 25.35 s diagnostic capture, those systems ran 855 and 860
+times and consumed 523 ms and 334 ms of self time respectively. An open epoch
+is now idempotent; topology and actual Modelica lifecycle transitions request
+reconciliation. The same capture measured authored-runtime projection at 43
+calls / 1.652 s self time. Source inspection found that each projection batch
+recomputed a stage-wide Modelica membership set already computed independently
+by co-simulation wiring. Both consumers now use one shared cache in
+`lunco-usd-bevy-core::program`, keyed by stage asset, generation, and instance,
+with teardown cleanup. This removes the repeated scan by construction; a
+post-change Tracy count is still required to quantify the reduction. The trace
+included profiler and concurrent machine load and is not clean FPS acceptance.
+
 ## CPU investigation lead
 
 Two owned Apollo startup captures separated domain synthesis from publication.
@@ -165,6 +181,57 @@ send-safe snapshot and fence publication by root and stage generation.
   tracy` passed. The post-change capture's typed API `Exit` was accepted and
   port 4191 was verified closed; the existing 4163, 45552, and 37431 sessions
   were left untouched.
+- 2026-09-26, after the binding-revision and shared Modelica-membership changes,
+  a fresh Tracy-enabled Apollo run used API 43132, X11, the authored
+  `traverse_apollo15.usda` scene, and `--no-vsync --no-throttle`. Its 12.29 s
+  startup capture is
+  `summer-space-school-shared-membership-cache-optimization-20260926.tracy`
+  (347,435 zones). `/api/ready` still had 10 pending items at 12.3 s and became
+  ready at about 21 s from process launch. During this profiler run and active
+  concurrent Griffin workloads, the 240-sample `SimulationTimingProfile`
+  reported whole fixed-tick service p50/p95/p99/max of 6.66/8.94/10.92/13.09
+  ms, with six lifetime budget exceedances; fixed-loop service was
+  6.44/9.07/11.13/12.82 ms. Shared `engine.frame_time` history was
+  26.93/81.76/108.71/123.45 ms. These are contention- and instrumentation-
+  affected diagnostics, not clean startup or FPS acceptance; fixed-tick service
+  is not Avian-only physics time. The post-change capture could not be decoded
+  within a bounded CPU window, so post-change per-system counts remain
+  unverified. The owned session exited through the API and ports 43132/8086
+  were verified free; other sessions were left untouched.
+
+### 2026-09-26 — borrowed manual-hold lookup in propagation
+
+The fixed-step propagation path previously cloned the complete active
+`PortHolds` snapshot, then allocated a cloned target-name key for every lookup.
+`PortHolds` is indexed by entity and port and advances a revision only when an
+intent actually changes. Propagation resolves borrowed names into a reusable
+target-aligned value buffer when that revision or compiled wiring changes; the
+steady physics tick reads the buffer by target index. The presentation snapshot
+remains available to the port inspector. The recorded pre-change trace
+attributed 18.9 ms of self time to `propagate_connections` across 103 calls;
+this is a narrow cleanup, not an explanation for the overall FPS gap.
+
+### 2026-09-26 — resolve readable input sources and retain propagation scratch
+
+Readable `inputs:*` sources resolve independently from write-target ownership,
+preserving same-named input/output causality. Modelica and control maps, Avian,
+authored output maps, scene-property sinks, shader inputs, and catalogued
+celestial-link outputs now resolve their wired endpoints to process-local slots.
+The link reader reduces peers directly by class instead of constructing a
+temporary class map per source read. Fixed propagation and rollback share
+retained accumulator, hold, and diagnostic staging buffers; successful targets
+carry a compiled index through the hot pass and share their name only when
+updating the once-per-endpoint ledger. Terminal diagnostics share names as
+`Arc<str>`, and warning keys are formatted only on first fault. This is a
+source-level architecture change, not a measured FPS claim; clean post-change
+tests and profiling are still required.
+
+Shader-driven uniforms use predeclared `PortMap<Option<ParamValue>>` slots. The
+fixed propagation path resolves a shader input once and updates its live slot
+directly; topology fingerprints are cached by authored setters, not rebuilt by
+hashing parameter names when a sample changes. This removes the ordered-set
+slot walk and name-based live-value update from that path. It is source-level
+evidence only; no FPS gain is claimed without a clean run.
 
 ### 2026-09-24 — conservative spotlight shadow relevance
 

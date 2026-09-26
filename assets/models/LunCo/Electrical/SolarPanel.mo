@@ -7,8 +7,8 @@ model SolarPanel
   extends LunCo.Icons.SolarPanel;
   parameter Real area = 6.0 "Collecting area, m2";
   parameter Real efficiency = 0.30 "Irradiance-to-electrical conversion, 0..1";
-  parameter Real peak_power_rating_w = Modelica.Constants.inf
-    "Maximum rated electrical output, W; infinity means no nameplate limit";
+  parameter Real peak_power_rating_w = area * efficiency * 1000.0
+    "Peak output at standard test irradiance, W";
   // Module voltage at the maximum-power point. A PV module's photocurrent is set
   // by the light; this is the operating voltage that current is rated at, and it
   // is a property of the module, not of the bus it is bolted to.

@@ -74,6 +74,17 @@ impl<Source: Component, Value: Default> Default for RebuildOnChange<Source, Valu
 }
 
 impl<Source: Component, Value> RebuildOnChange<Source, Value> {
+    /// Mark the cached value stale so the next [`get_or_rebuild`] call rebuilds
+    /// it even when `Source` itself did not change.
+    ///
+    /// Use this when the cached projection also depends on a separately-owned
+    /// revision or resource. Keeping that invalidation beside the existing
+    /// source detector makes the rebuild happen at the normal deterministic
+    /// consumer boundary.
+    pub fn invalidate(&mut self) {
+        self.detector.first_check = true;
+    }
+
     /// Return the cached value, first re-running `rebuild` to recompute it **iff
     /// `Source` changed** since the last call (or this is the first call).
     /// `rebuild` gets the current value to refill in place and `&mut World` to
