@@ -330,8 +330,10 @@ projection. Preview and additive document references keep their own projection
 lifecycle and diagnostics; they do not hold or fault the primary simulation.
 Persistent edits to the mounted primary document also acquire a coalesced
 `UsdDocumentProjection` key as soon as the document registry revision changes.
-Change detection admits edits from UI/command cycles in `PreUpdate` before the
-time spine, and admits edits issued inside a fixed Rhai/event pass in `FixedLast`.
+Change detection admits edits from UI/command cycles in the shared
+`SimulationProgressAdmissionSet` after entity indexing and before the `PreUpdate`
+time spine, and admits edits issued inside a fixed Rhai/event pass in the same
+lane in `FixedLast`.
 The fixed clock closes any remaining catch-up overstep after that admission,
 preserving the tick that issued the edit. The key remains held until the exact
 or newer document generation is reflected in the ECS projection cursor;

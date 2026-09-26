@@ -139,9 +139,10 @@ Persistent edits to the mounted primary USD document hold one coalesced
 matching ECS projection commit; disposable view-layer edits do not hold world
 time when their typed operation suffix is available; an unavailable suffix is
 conservatively treated as causal. Change detection admits UI/command edits in
-`PreUpdate` and edits issued inside a fixed Rhai/event pass in `FixedLast`. The
-time spine closes leftover fixed-loop overstep after the
-`SimulationProgressAdmissionSet`, preserving the tick that issued the edit and
+the `SimulationProgressAdmissionSet` after entity indexing and before the
+`PreUpdate` time spine, and admits edits issued inside a fixed Rhai/event pass
+in that lane in `FixedLast`. The time spine closes leftover fixed-loop overstep
+after the admission lane, preserving the tick that issued the edit and
 preventing a catch-up tick from seeing an unprojected revision. Do not poll
 document contents on steady frames or release the hold from a stage-only cursor
 before ECS projection completes.

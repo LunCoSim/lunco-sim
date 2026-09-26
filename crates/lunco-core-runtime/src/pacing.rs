@@ -17,9 +17,9 @@ use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-/// FixedLast systems that discover new causal work admitted during the current
-/// tick must publish its [`SimulationProgress`] hold in this set. The time
-/// spine closes the current Bevy fixed-loop burst after this boundary so a
+/// Schedule lane for owners that discover newly admitted causal work. In
+/// `PreUpdate` it runs after entity indexing and before the time spine; in
+/// `FixedLast` it precedes closing the current Bevy fixed-loop burst so a
 /// catch-up frame cannot start another tick before the owner prepares it.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SimulationProgressAdmissionSet;

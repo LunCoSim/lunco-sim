@@ -94,11 +94,6 @@ impl Plugin for UsdSceneRuntimePlugin {
                 twin_projection::drain_pending_twin_docs
                     .run_if(twin_projection::pending_twin_docs_ready),
                 twin_projection::wake_twin_projection_on_stage_event,
-                twin_projection::admit_pending_primary_document_projection.run_if(
-                    bevy::ecs::schedule::common_conditions::resource_changed::<
-                        lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
-                    >,
-                ),
                 twin_projection::sync_twin_overlays.run_if(twin_projection::twin_projection_ready),
                 twin_projection::mark_pending_ref_spawns,
                 twin_projection::sync_stage_dependency_diagnostics,
@@ -107,6 +102,26 @@ impl Plugin for UsdSceneRuntimePlugin {
             )
                 .chain()
                 .in_set(lunco_core::RuntimeCycleSet::Lifecycle)
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::resource_exists::<
+                        bevy::asset::AssetServer,
+                    >,
+                )
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::resource_exists::<
+                        bevy::asset::Assets<lunco_usd_bevy_stage::source::UsdSourceText>,
+                    >,
+                ),
+        );
+        app.add_systems(
+            bevy::prelude::PreUpdate,
+            twin_projection::admit_pending_primary_document_projection
+                .in_set(lunco_core_runtime::SimulationProgressAdmissionSet)
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::resource_changed::<
+                        lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>,
+                    >,
+                )
                 .run_if(
                     bevy::ecs::schedule::common_conditions::resource_exists::<
                         bevy::asset::AssetServer,

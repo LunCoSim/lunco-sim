@@ -1017,7 +1017,11 @@ impl Plugin for TimePlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(
             PreUpdate,
-            TimeSpineSet.after(lunco_core::RuntimeCycleSet::EntityIndex),
+            (
+                lunco_core_runtime::SimulationProgressAdmissionSet
+                    .after(lunco_core::RuntimeCycleSet::EntityIndex),
+                TimeSpineSet.after(lunco_core_runtime::SimulationProgressAdmissionSet),
+            ),
         );
         // `SimTick` lives in `lunco-core`; `init_resource` is idempotent, so this
         // is harmless where another plugin also inserts it and makes the spine
@@ -1371,6 +1375,32 @@ mod tests {
             app.world().resource::<Time<Fixed>>().overstep(),
             Duration::ZERO
         );
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+    }
+
+    fn acquire_pre_update_progress(mut progress: ResMut<lunco_core_runtime::SimulationProgress>) {
+        progress.acquire(
+            lunco_core_runtime::SimulationProgressKey {
+                owner: lunco_core_runtime::SimulationProgressOwner::SceneReferences,
+                operation_id: 2,
+            },
+            "Test pre-update causal admission",
+        );
+    }
+
+    #[test]
+    fn pre_update_progress_admission_precedes_time_spine_projection() {
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, TimePlugin))
+            .init_resource::<lunco_core_runtime::SimulationProgress>()
+            .add_systems(
+                PreUpdate,
+                acquire_pre_update_progress
+                    .in_set(lunco_core_runtime::SimulationProgressAdmissionSet),
+            );
+
+        app.update();
+
         assert!(app.world().resource::<Time<Virtual>>().is_paused());
     }
 
