@@ -64,7 +64,7 @@ are:
 | HTTP, MCP, and Rhai command calls | `ApiCommandEvent` → `api_command_dispatcher` → typed command event | The API dispatcher sees these calls, but not direct typed triggers. |
 | UI and Rust subsystem systems | Direct typed command events via Bevy `Commands` | Capture cannot be attached only to the API dispatcher. |
 | Keyboard/gamepad vessel control | Bevy input state → `drive_from_bindings` in `FixedUpdate` → `SetPorts` before `ControlDacSet` | The effective port writes and `SimTick` are known at the fixed-step producer. Record the consumed semantic frame, not device events. |
-| Networked vessel control | Wire input → `SetPorts`; remote frames are buffered and consumed by the fixed simulation step | `InputFrame` and `OwnedInputLog` serve one-vessel prediction rollback and acknowledgement. They are not a whole-session log. |
+| Networked vessel control | Wire input → `SetPorts`; remote frames are consumed by `GlobalEntityId` and per-vessel sequence order at the fixed simulation step | `InputFrame` and `OwnedInputLog` serve one-vessel prediction rollback and acknowledgement. They are not a whole-session log. |
 | Scheduled Rhai and hook behavior | Evaluated in the caller's declared cycle against live simulation state | These outputs are derived behavior. Re-run them from the same state and inputs during replay; do not record them as independent external inputs. |
 | Async preparation and owner results | Prepared off-thread, then validated and committed by the owning lifecycle or simulation boundary | Worker completion is not an input. Replay the admitted source revision and deterministic commit order, not completion timing. |
 

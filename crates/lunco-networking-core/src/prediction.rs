@@ -1039,15 +1039,7 @@ fn apply_buffered_client_inputs(
     if !role.is_host() {
         return;
     }
-    let gids: Vec<u64> = buf
-        .pending
-        .keys()
-        .chain(buf.last_writes.keys())
-        .copied()
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    for gid in gids {
+    for gid in buffered_input_targets(&buf) {
         let Some(writes) = buf.next_for_tick(gid, 8) else {
             continue;
         };
@@ -1069,6 +1061,21 @@ fn apply_buffered_client_inputs(
             }
         });
     }
+}
+
+/// Return each vessel with a pending or latched remote frame once, in stable
+/// global-identity order. These writes enter the same fixed-step boundary; hash
+/// iteration must not decide their command-queue order.
+fn buffered_input_targets(buf: &lunco_core_session::BufferedClientInputs) -> Vec<u64> {
+    let mut gids = buf
+        .pending
+        .keys()
+        .chain(buf.last_writes.keys())
+        .copied()
+        .collect::<Vec<_>>();
+    gids.sort_unstable();
+    gids.dedup();
+    gids
 }
 
 /// Cap on the predicted-state history ring (~2 s at 60 Hz). Only the recent tail
@@ -2502,6 +2509,8 @@ register_commands!(on_set_visual_lead);
 #[cfg(test)]
 mod tests {
     use super::{PREDICT_GRACE_TICKS, predicts_locally};
+    use bevy::prelude::*;
+    use lunco_core_session::{BufferedClientInputs, NetworkRole};
 
     // Phase A: prediction membership = ownership ∧ recent local input.
     #[test]
@@ -2547,6 +2556,79 @@ mod tests {
         // that reads as "recent". It clamps to 0 → treated as just-driven, which
         // is the safe/benign direction (predict, then the next real input resets).
         assert!(predicts_locally(true, 1_000, 5, PREDICT_GRACE_TICKS));
+    }
+
+    #[test]
+    fn buffered_input_targets_use_stable_global_identity_order() {
+        #[derive(Resource, Default)]
+        struct AppliedTargets(Vec<u64>);
+
+        fn record_target_write(world: &mut World, entity: Entity, _: &str, _: f64) -> bool {
+            let Some(gid) = world
+                .get::<lunco_core::GlobalEntityId>(entity)
+                .map(|gid| gid.get())
+            else {
+                return false;
+            };
+            world.resource_mut::<AppliedTargets>().0.push(gid);
+            true
+        }
+
+        let mut app = App::new();
+        app.insert_resource(NetworkRole::Host)
+            .insert_resource(BufferedClientInputs::default())
+            .init_resource::<lunco_core_session::AppliedInputSeq>()
+            .init_resource::<lunco_core_session::SessionRegistry>()
+            .init_resource::<lunco_api::registry::ApiEntityRegistry>()
+            .init_resource::<lunco_port_core::ports::PortRegistry>()
+            .init_resource::<AppliedTargets>();
+        app.world_mut()
+            .resource_mut::<lunco_port_core::ports::PortRegistry>()
+            .register(lunco_port_core::ports::PortBackend {
+                list_entities: |_, _| {},
+                topology_key: |_, _| 0,
+                list: |_, _, _| {},
+                metadata: None,
+                read_output: |_, _, _| None,
+                read_input: |_, _, _| None,
+                write_input: record_target_write,
+                resolve_output: None,
+                resolve_input: None,
+                read_slot: None,
+                write_slot: None,
+            });
+
+        for gid in [30, 10, 20, 5] {
+            let entity = app
+                .world_mut()
+                .spawn(lunco_core::GlobalEntityId::from_raw(gid))
+                .id();
+            app.world_mut()
+                .resource_mut::<lunco_api::registry::ApiEntityRegistry>()
+                .assign(entity, lunco_core::GlobalEntityId::from_raw(gid));
+        }
+        {
+            let mut inputs = app.world_mut().resource_mut::<BufferedClientInputs>();
+            inputs.pending.insert(
+                30,
+                [(1, vec![("frame".into(), 30.0)])].into_iter().collect(),
+            );
+            inputs.pending.insert(
+                10,
+                [(1, vec![("frame".into(), 10.0)])].into_iter().collect(),
+            );
+            inputs.pending.insert(
+                20,
+                [(1, vec![("frame".into(), 20.0)])].into_iter().collect(),
+            );
+            inputs.last_writes.insert(5, vec![("frame".into(), 5.0)]);
+            inputs.last_writes.insert(20, vec![("frame".into(), 20.0)]);
+        }
+        app.add_systems(FixedFirst, super::apply_buffered_client_inputs);
+
+        app.world_mut().run_schedule(FixedFirst);
+
+        assert_eq!(app.world().resource::<AppliedTargets>().0, [5, 10, 20, 30]);
     }
 }
 
