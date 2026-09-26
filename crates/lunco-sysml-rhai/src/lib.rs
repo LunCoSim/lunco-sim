@@ -18,7 +18,7 @@ use lunco_sysml_ir::{
     BindingContract, BindingProvider, CompiledConstraint, ConstraintIr, DiagnosticSeverity,
     EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
     IrDiagnosticCode, IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
-    IrStandardFunction, IrType, IrValue, IrValueType, ObservationState,
+    IrStandardFunction, IrType, IrValue, IrValueType, ObservationProvenance, ObservationState,
     RequiredConstraintEvaluation, RequiredConstraintIr, RequiredConstraintParameterBinding,
     RequirementAuditCode, RequirementAuditFinding, RequirementAuditPolicy, RequirementAuditReport,
     RequirementAuditSeverity, RequirementConstraintIrReport, RequirementEvaluationReport,
@@ -617,6 +617,28 @@ fn evaluation_context_from_dynamic(
             .get("time_basis")
             .and_then(|value| value.clone().into_string().ok());
         let source_revision = record.get("source_revision").and_then(dynamic_u64);
+        let provenance = match &provider {
+            BindingProvider::SourceLiteral => Some(ObservationProvenance::SysmlSource {
+                source_revision: source_revision.unwrap_or_else(|| analysis.source_revision()),
+                source_fingerprint: analysis.source_fingerprint(),
+            }),
+            BindingProvider::Usd => {
+                record
+                    .get("stage_generation")
+                    .and_then(dynamic_u64)
+                    .map(|stage_generation| ObservationProvenance::UsdStage {
+                        document_id: record.get("doc_id").and_then(dynamic_u64),
+                        document_generation: record
+                            .get("document_generation")
+                            .and_then(dynamic_u64),
+                        stage_generation,
+                    })
+            }
+            BindingProvider::Modelica
+            | BindingProvider::Telemetry
+            | BindingProvider::Derived
+            | BindingProvider::External => None,
+        };
         let contract = if let Some(dynamic_contract) = record.get("contract") {
             let Some(contract_record) = dynamic_contract.clone().try_cast::<Map>() else {
                 diagnostics.push(IrDiagnostic {
@@ -673,8 +695,37 @@ fn evaluation_context_from_dynamic(
             frame,
             time_basis,
             source_revision,
+            provenance,
             contract,
         });
+    }
+    let mut usd_document_snapshots = HashMap::new();
+    for observation in &mut context.observations {
+        let Some(ObservationProvenance::UsdStage {
+            document_id,
+            document_generation,
+            stage_generation,
+        }) = observation.provenance.as_ref()
+        else {
+            continue;
+        };
+        let snapshot = (*document_generation, *stage_generation);
+        match usd_document_snapshots.get(document_id) {
+            Some(previous) if previous != &snapshot => {
+                observation.state = ObservationState::Stale;
+                diagnostics.push(IrDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: IrDiagnosticCode::ObservationSnapshotMismatch,
+                    source: feature_path_source(analysis, &observation.path),
+                    message: "USD observations for one document came from different document or composed-stage generations"
+                        .to_owned(),
+                });
+            }
+            Some(_) => {}
+            None => {
+                usd_document_snapshots.insert(*document_id, snapshot);
+            }
+        }
     }
     (context, diagnostics)
 }

@@ -47,7 +47,25 @@ impl Plugin for UsdQueriesPlugin {
         registry.register(InspectUsdEditSessionProvider);
         registry.register(ResolveUsdTargetProvider);
         registry.register(SyncUsdDocumentProvider);
+        registry.register(AvianMeshCollisionApproximationsProvider);
         registry.register(PlanNurbsCollisionProxyProvider);
+    }
+}
+
+/// Report the mesh approximation tokens implemented by the active Avian USD
+/// adapter. Authoring tools consume this capability query instead of keeping
+/// their own token allow-lists.
+pub struct AvianMeshCollisionApproximationsProvider;
+
+impl ApiQueryProvider for AvianMeshCollisionApproximationsProvider {
+    fn name(&self) -> &'static str {
+        "AvianMeshCollisionApproximations"
+    }
+
+    fn execute(&self, _world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let approximations =
+            AvianMeshApproximation::ALL.map(|mode| mode.as_usd_approximation().as_token());
+        query_ok(api_value!({ "approximations": approximations }))
     }
 }
 

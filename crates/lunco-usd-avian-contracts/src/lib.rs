@@ -26,8 +26,9 @@ pub enum AvianMeshApproximation {
     TriangleMesh,
     ConvexHull,
     ConvexDecomposition,
-    /// Current Avian realization: an axis-aligned box in the mesh's local
-    /// frame, computed from the source vertex bounds.
+    /// An oriented box fitted to the mesh vertices in the mesh's local frame.
+    /// The current principal-axis fitting algorithm is deterministic but does
+    /// not guarantee the globally minimum-volume box.
     BoundingCube,
 }
 

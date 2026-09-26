@@ -7,6 +7,8 @@ model SolarPanel
   extends LunCo.Icons.SolarPanel;
   parameter Real area = 6.0 "Collecting area, m2";
   parameter Real efficiency = 0.30 "Irradiance-to-electrical conversion, 0..1";
+  parameter Real peak_power_rating_w = Modelica.Constants.inf
+    "Maximum rated electrical output, W; infinity means no nameplate limit";
   // Module voltage at the maximum-power point. A PV module's photocurrent is set
   // by the light; this is the operating voltage that current is rated at, and it
   // is a property of the module, not of the bus it is bolted to.
@@ -44,7 +46,9 @@ equation
   // whole operating range — that is the defining characteristic of a
   // photovoltaic device, and it is why panels are rated by short-circuit current.
   // `p.i` is negative because current LEAVES the panel into the node.
-  available_power_w = area * efficiency * irradiance * cos_incidence;
+  available_power_w = min(
+    max(area * efficiency * irradiance * cos_incidence, 0.0),
+    max(peak_power_rating_w, 0.0));
   p.i = -available_power_w / v_mp;
 
   // Delivered power FOLLOWS from the current and the bus voltage it actually

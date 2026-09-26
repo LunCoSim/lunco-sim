@@ -2216,6 +2216,22 @@ pub enum ObservationState {
     ProviderError,
 }
 
+/// Revision identity for the immutable source snapshot that produced an
+/// observation. Provider-specific revision fields stay in a tagged value so
+/// document, composed-stage, and source revisions cannot be confused.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ObservationProvenance {
+    SysmlSource {
+        source_revision: u64,
+        source_fingerprint: u64,
+    },
+    UsdStage {
+        document_id: Option<u64>,
+        document_generation: Option<u64>,
+        stage_generation: u64,
+    },
+}
+
 /// One observation with its provider state and optional typed value.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FeatureObservation {
@@ -2232,6 +2248,8 @@ pub struct FeatureObservation {
     pub time_basis: Option<String>,
     #[serde(default)]
     pub source_revision: Option<u64>,
+    #[serde(default)]
+    pub provenance: Option<ObservationProvenance>,
     #[serde(default)]
     pub contract: Option<BindingContract>,
 }

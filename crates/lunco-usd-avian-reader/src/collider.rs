@@ -664,32 +664,12 @@ pub fn build_collider_from_usd_at_scale(
                 })?
             }
             AvianMeshApproximation::BoundingCube => {
-                let mut min = DVec3::splat(f64::INFINITY);
-                let mut max = DVec3::splat(f64::NEG_INFINITY);
-                for vertex in &verts {
-                    min = min.min(*vertex);
-                    max = max.max(*vertex);
-                }
-                if !min.is_finite()
-                    || !max.is_finite()
-                    || (max.x - min.x) <= f64::EPSILON
-                    || (max.y - min.y) <= f64::EPSILON
-                    || (max.z - min.z) <= f64::EPSILON
-                {
-                    return Err(ColliderProjectionError::Backend {
+                let corners = fit_bounding_cube(&verts).map_err(|detail| {
+                    ColliderProjectionError::Backend {
                         prim: sdf_path.to_string(),
-                        detail: "authored boundingCube approximation needs nonzero extent on all three local axes".to_owned(),
-                    });
-                }
-                let corners = (0..8)
-                    .map(|bits| {
-                        DVec3::new(
-                            if bits & 1 == 0 { min.x } else { max.x },
-                            if bits & 2 == 0 { min.y } else { max.y },
-                            if bits & 4 == 0 { min.z } else { max.z },
-                        )
-                    })
-                    .collect();
+                        detail: format!("authored boundingCube approximation {detail}"),
+                    }
+                })?;
                 Collider::convex_hull(corners).ok_or_else(|| ColliderProjectionError::Backend {
                     prim: sdf_path.to_string(),
                     detail: "authored boundingCube approximation could not be built".to_owned(),
@@ -929,6 +909,34 @@ fn validate_derived_nurbs_proxy(
     Ok(())
 }
 
+/// Fit a local oriented box to the mesh vertices and return its eight corners.
+/// The principal-axis fit is deterministic but is not a global minimum-volume
+/// solver; keep that distinction in the adapter capability documentation.
+fn fit_bounding_cube(vertices: &[DVec3]) -> Result<Vec<DVec3>, &'static str> {
+    if vertices.len() < 4 || vertices.iter().any(|vertex| !vertex.is_finite()) {
+        return Err("needs at least four finite mesh vertices");
+    }
+    let (pose, cuboid) = avian3d::parry::utils::obb(vertices);
+    let half = cuboid.half_extents;
+    if !half.is_finite()
+        || half.x <= f64::EPSILON
+        || half.y <= f64::EPSILON
+        || half.z <= f64::EPSILON
+    {
+        return Err("needs nonzero fitted extent on all three box axes");
+    }
+    Ok((0..8)
+        .map(|bits| {
+            let local = DVec3::new(
+                if bits & 1 == 0 { -half.x } else { half.x },
+                if bits & 2 == 0 { -half.y } else { half.y },
+                if bits & 4 == 0 { -half.z } else { half.z },
+            );
+            pose.transform_point(local)
+        })
+        .collect())
+}
+
 /// Pre-applies a prim's composed USD scale to a freshly-built intrinsic collider so
 /// it is correct from frame 0, matching what Avian's `update_collider_scale` will
 /// compute. See [`build_collider_from_usd`] for why this is the *only* place
@@ -960,4 +968,57 @@ fn validate_derived_nurbs_proxy(
 fn apply_collider_scale(mut collider: Collider, scale: Vec3) -> Collider {
     collider.set_scale(scale.as_dvec3(), 10);
     collider
+}
+
+#[cfg(test)]
+mod bounding_cube_tests {
+    use super::fit_bounding_cube;
+    use bevy::math::{DQuat, DVec3};
+
+    fn pairwise_distances(points: &[DVec3]) -> Vec<f64> {
+        let mut distances = Vec::new();
+        for left in 0..points.len() {
+            for right in (left + 1)..points.len() {
+                distances.push(points[left].distance(points[right]));
+            }
+        }
+        distances.sort_by(f64::total_cmp);
+        distances
+    }
+
+    #[test]
+    fn bounding_cube_fits_a_rotated_box_instead_of_its_axis_aligned_bounds() {
+        let rotation = DQuat::from_rotation_y(0.63);
+        let source: Vec<DVec3> = (0..8)
+            .map(|bits| {
+                let local = DVec3::new(
+                    if bits & 1 == 0 { -2.0 } else { 2.0 },
+                    if bits & 2 == 0 { -1.0 } else { 1.0 },
+                    if bits & 4 == 0 { -0.5 } else { 0.5 },
+                );
+                rotation * local
+            })
+            .collect();
+        let fitted = fit_bounding_cube(&source).expect("non-degenerate box fits");
+
+        assert_eq!(fitted.len(), 8);
+        let source_distances = pairwise_distances(&source);
+        let fitted_distances = pairwise_distances(&fitted);
+        for (source, fitted) in source_distances.iter().zip(fitted_distances) {
+            assert!((source - fitted).abs() < 1.0e-8);
+        }
+        let source_aabb_volume = {
+            let min = source.iter().copied().reduce(DVec3::min).unwrap();
+            let max = source.iter().copied().reduce(DVec3::max).unwrap();
+            let size = max - min;
+            size.x * size.y * size.z
+        };
+        assert!(source_aabb_volume > 8.0);
+    }
+
+    #[test]
+    fn bounding_cube_rejects_degenerate_mesh_geometry() {
+        let line = [DVec3::ZERO, DVec3::X, DVec3::Y, DVec3::ZERO];
+        assert!(fit_bounding_cube(&line).is_err());
+    }
 }
