@@ -32,6 +32,52 @@ pub enum AvianMeshApproximation {
     BoundingCube,
 }
 
+/// Geometry representation produced by one implemented USD mesh mode.
+///
+/// This describes the adapter output rather than the USD token. Keeping the
+/// distinction explicit lets authoring tools explain both what was selected
+/// and what the solver will receive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvianCookedMeshGeometry {
+    TriangleMesh,
+    ConvexHull,
+    ConvexHullCompound,
+}
+
+impl AvianCookedMeshGeometry {
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::TriangleMesh => "triangle_mesh",
+            Self::ConvexHull => "convex_hull",
+            Self::ConvexHullCompound => "convex_hull_compound",
+        }
+    }
+}
+
+/// Rigid-body classes compatible with a cooked mesh mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvianMeshBodySupport {
+    AnyRigidBody,
+    StaticOrKinematicOnly,
+}
+
+impl AvianMeshBodySupport {
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::AnyRigidBody => "any_rigid_body",
+            Self::StaticOrKinematicOnly => "static_or_kinematic_only",
+        }
+    }
+}
+
+/// Complete runtime contract for an implemented USD mesh approximation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvianMeshApproximationCapability {
+    pub approximation: AvianMeshApproximation,
+    pub geometry: AvianCookedMeshGeometry,
+    pub body_support: AvianMeshBodySupport,
+}
+
 impl AvianMeshApproximation {
     /// Implemented USD modes, in the stable order used by authoring tools.
     pub const ALL: [Self; 4] = [
@@ -52,6 +98,30 @@ impl AvianMeshApproximation {
 
     pub const fn requires_static_or_kinematic_body(self) -> bool {
         matches!(self, Self::TriangleMesh)
+    }
+
+    /// Runtime geometry and body restrictions used by both projection and
+    /// authoring capability queries.
+    pub const fn capability(self) -> AvianMeshApproximationCapability {
+        let (geometry, body_support) = match self {
+            Self::TriangleMesh => (
+                AvianCookedMeshGeometry::TriangleMesh,
+                AvianMeshBodySupport::StaticOrKinematicOnly,
+            ),
+            Self::ConvexHull | Self::BoundingCube => (
+                AvianCookedMeshGeometry::ConvexHull,
+                AvianMeshBodySupport::AnyRigidBody,
+            ),
+            Self::ConvexDecomposition => (
+                AvianCookedMeshGeometry::ConvexHullCompound,
+                AvianMeshBodySupport::AnyRigidBody,
+            ),
+        };
+        AvianMeshApproximationCapability {
+            approximation: self,
+            geometry,
+            body_support,
+        }
     }
 }
 

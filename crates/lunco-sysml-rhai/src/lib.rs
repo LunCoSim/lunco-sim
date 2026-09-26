@@ -1688,19 +1688,27 @@ fn typed_literal_dynamic(
         let base = declared
             .map(|value| value.base.rsplit("::").next().unwrap_or(&value.base))
             .unwrap_or_default();
+        // A structured value such as one Position is itself a collection of
+        // scalar components, but Position[n] is a collection of structured
+        // values. Only collapse the former into a native vector/quaternion/
+        // transform; cardinality must not be mistaken for structure.
+        let declared_scalar = declared
+            .is_none_or(|value| value.dimensions.is_empty() && !value.multiplicity.is_collection());
         let element_type = sysml_element_type(declared);
         let values: Vec<Dynamic> = elements
             .iter()
             .map(|element| typed_literal_dynamic(element, element_type.as_ref()))
             .collect::<Option<_>>()?;
-        if matches!(
-            base,
-            "Vec2"
-                | "CartesianTwoVectorValue"
-                | "CartesianVectorValue"
-                | "NumericalVectorValue"
-                | "VectorValue"
-        ) && values.len() == 2
+        if declared_scalar
+            && matches!(
+                base,
+                "Vec2"
+                    | "CartesianTwoVectorValue"
+                    | "CartesianVectorValue"
+                    | "NumericalVectorValue"
+                    | "VectorValue"
+            )
+            && values.len() == 2
         {
             let coordinates = values
                 .iter()
@@ -1709,18 +1717,20 @@ fn typed_literal_dynamic(
             let vector = DVec2::new(coordinates[0], coordinates[1]);
             return vector.is_finite().then_some(Dynamic::from(vector));
         }
-        if matches!(
-            base,
-            "Vec3"
-                | "Position"
-                | "Direction"
-                | "Dimensions"
-                | "CartesianThreeVectorValue"
-                | "ThreeVectorValue"
-                | "CartesianVectorValue"
-                | "NumericalVectorValue"
-                | "VectorValue"
-        ) && values.len() == 3
+        if declared_scalar
+            && matches!(
+                base,
+                "Vec3"
+                    | "Position"
+                    | "Direction"
+                    | "Dimensions"
+                    | "CartesianThreeVectorValue"
+                    | "ThreeVectorValue"
+                    | "CartesianVectorValue"
+                    | "NumericalVectorValue"
+                    | "VectorValue"
+            )
+            && values.len() == 3
         {
             let coordinates = values
                 .iter()
@@ -1728,7 +1738,7 @@ fn typed_literal_dynamic(
                 .collect::<Option<Vec<_>>>()?;
             return finite_vec3(coordinates[0], coordinates[1], coordinates[2]);
         }
-        if matches!(base, "Quat" | "Quaternion") && values.len() == 4 {
+        if declared_scalar && matches!(base, "Quat" | "Quaternion") && values.len() == 4 {
             let components = values
                 .iter()
                 .map(numeric_dynamic_f64)
@@ -1740,7 +1750,7 @@ fn typed_literal_dynamic(
                 components[3],
             ));
         }
-        if base == "Transform" && values.len() == 3 {
+        if declared_scalar && base == "Transform" && values.len() == 3 {
             return native_transform(&values);
         }
         return Some(Dynamic::from_array(values));

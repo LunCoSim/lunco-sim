@@ -38,6 +38,17 @@ IR. Rhai selects providers, queries observations, orchestrates behavior, and
 formats evidence. A verification registry selects a scene and script but does
 not duplicate requirement text or thresholds.
 
+### Preserve declared collection shape
+
+Read model values through the typed `SysmlModel.value` projection. A structured
+`Position` literal may lower to one native `DVec3`, while a declared
+`Position[n]` collection must remain an array of native `DVec3` values. The
+generic Rust projection distinguishes vector components from declared
+multiplicity. Do not recover missing model values by walking `AnalyzeSysml`
+AST records, parsing string encodings, or rebuilding arrays in Twin Rhai. If a
+declared shape is missing, fix the shared typed projection and keep the Twin
+policy declarative.
+
 For mission models with material-dependent structural, pressure, thermal, or
 electrical behavior, follow the
 [physical-material data gate](../interactive-component-authoring/references/mission-engineering-quality.md#physical-materials-and-engineering-properties).

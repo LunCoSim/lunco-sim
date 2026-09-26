@@ -52,9 +52,9 @@ impl Plugin for UsdQueriesPlugin {
     }
 }
 
-/// Report the mesh approximation tokens implemented by the active Avian USD
-/// adapter. Authoring tools consume this capability query instead of keeping
-/// their own token allow-lists.
+/// Report the mesh approximation modes implemented by the active Avian USD
+/// adapter, including cooked geometry and rigid-body compatibility. Authoring
+/// tools consume this capability query instead of keeping mode rules locally.
 pub struct AvianMeshCollisionApproximationsProvider;
 
 impl ApiQueryProvider for AvianMeshCollisionApproximationsProvider {
@@ -63,10 +63,24 @@ impl ApiQueryProvider for AvianMeshCollisionApproximationsProvider {
     }
 
     fn execute(&self, _world: &World, _params: &ApiValue) -> ApiQueryResult {
-        let approximations =
-            AvianMeshApproximation::ALL.map(|mode| mode.as_usd_approximation().as_token());
-        query_ok(api_value!({ "approximations": approximations }))
+        query_ok(api_value!({ "modes": avian_mesh_approximation_capabilities() }))
     }
+}
+
+fn avian_mesh_approximation_capabilities() -> ApiValue {
+    ApiValue::Array(
+        AvianMeshApproximation::ALL
+            .into_iter()
+            .map(|mode| {
+                let capability = mode.capability();
+                api_value!({
+                    "token": mode.as_usd_approximation().as_token(),
+                    "geometry": capability.geometry.as_token(),
+                    "body_support": capability.body_support.as_token(),
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Plan a source-derived collision mesh for an explicit NURBS prim. This is a
@@ -299,8 +313,7 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
             "proxy_path": proxy.to_string(),
             "create_prim": create_prim,
             "approximation": approximation.as_usd_approximation().as_token(),
-            "supported_approximations": AvianMeshApproximation::ALL
-                .map(|mode| mode.as_usd_approximation().as_token()),
+            "modes": avian_mesh_approximation_capabilities(),
             "schemas": schemas,
             "deviation_tolerance_m": cooked.deviation_tolerance_m,
             "refinement_deviation_m": cooked.refinement_deviation_m,

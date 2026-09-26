@@ -1062,8 +1062,14 @@ fn _mesh_shape_attribute_ops(edit_target, shape, points, face_counts,
     }
     if collision_approximation != () {
         let capabilities = query("AvianMeshCollisionApproximations", #{});
-        if !query_ok(capabilities) || capabilities.approximations == ()
-            || !capabilities.approximations.contains(collision_approximation) {
+        if !query_ok(capabilities) || capabilities.modes == () {
+            return plan_error("mesh collision approximation is not implemented by the active Avian USD adapter");
+        }
+        let supported = false;
+        for mode in capabilities.modes {
+            if mode.token == collision_approximation { supported = true; }
+        }
+        if !supported {
             return plan_error("mesh collision approximation is not implemented by the active Avian USD adapter");
         }
     }

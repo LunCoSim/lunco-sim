@@ -137,6 +137,13 @@ lowers the standard `CartesianThreeVectorValue` to the existing f64 Bevy/glam
 shared Rhai math bridge. Bevy f32 render transforms remain a later projection
 boundary, never the SysML requirement representation.
 
+The typed `SysmlModel.value` projection preserves declared collection shape:
+a structured `Position` value lowers to one native `DVec3`, while a declared
+`Position[n]` lowers to an array of native `DVec3` values. The projection uses
+the declared type and multiplicity to distinguish the vector's three scalar
+components from the collection of vectors. Twin Rhai must consume this typed
+value rather than reconstructing it from `AnalyzeSysml` syntax records.
+
 Unit-bearing coordinates remain arrays of typed scalar `Quantity` values in
 the generic SysML-to-Rhai bridge. A geometry policy may lower a
 `LengthValue[3]` to `DVec3` only after it resolves and validates each

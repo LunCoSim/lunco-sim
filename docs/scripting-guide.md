@@ -1057,9 +1057,13 @@ needs its individual error. Do not recreate a Rhai cache around these reads;
 the native provider owns the snapshot boundary and generation check.
 
 For USD mesh collider authoring, query
-`AvianMeshCollisionApproximations` to get the approximation tokens implemented
-by the active physics adapter. Authoring tools should validate against this
-provider instead of maintaining a second list of supported modes.
+`AvianMeshCollisionApproximations`. Its `modes` records contain the standard
+USD `token`, cooked `geometry` representation, and `body_support` restriction.
+For example, `none` produces a triangle mesh and supports only static or
+kinematic bodies; convex modes support dynamic bodies. Authoring tools should
+use these records instead of maintaining a second token list or duplicating
+the runtime body-kind rules. `PlanNurbsCollisionProxy` returns the same mode
+records with its geometry proposal.
 
 For numeric authoring evidence, use the built-in `authoring_measurements`
 Rhai library. It evaluates explicit requirements over the same composed USD

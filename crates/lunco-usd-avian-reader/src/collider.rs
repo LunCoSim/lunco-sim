@@ -87,6 +87,15 @@ pub enum ColliderGeometryPart {
         /// Hull vertices in the collider prim's local frame.
         vertices: Vec<[f64; 3]>,
     },
+    /// Exact sphere used by the scaled Avian collider.
+    Sphere { radius: f64 },
+    /// Exact Y-axis cylinder used by the scaled Avian collider.
+    Cylinder { radius: f64, half_height: f64 },
+    /// Exact Y-axis cone used by the scaled Avian collider.
+    Cone { radius: f64, half_height: f64 },
+    /// Exact capsule; `half_segment` is half the central segment length,
+    /// excluding the hemispherical caps.
+    Capsule { radius: f64, half_segment: f64 },
 }
 
 /// Collision geometry produced by the same USD-to-Avian reader used at runtime.
@@ -177,12 +186,13 @@ pub fn authored_collider_from_usd_at_scale(
     Ok(collider)
 }
 
-/// Cook a mesh or cube collision prim and return the geometry Avian will use.
-/// Each convex-decomposition member remains a separate part so callers cannot
-/// accidentally fill the gaps between disconnected hulls.
+/// Cook an explicitly authored collision prim and return the shape Avian uses.
+/// Analytic primitives stay analytic; mesh and convex parts retain their
+/// backend-cooked topology. Each convex-decomposition member stays separate.
 pub fn authored_collider_geometry_from_usd(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     sdf_path: &SdfPath,
+    scale: Vec3,
 ) -> Result<Option<AuthoredColliderGeometry>, ColliderProjectionError> {
     if !reader.has_api_schema(sdf_path, ptok::API_COLLISION) {
         return Ok(None);
@@ -200,14 +210,14 @@ pub fn authored_collider_geometry_from_usd(
     let Some(type_name) = reader.type_name(sdf_path) else {
         return Ok(None);
     };
-    if !matches!(type_name.as_str(), "Mesh" | "Cube") {
+    if !matches!(
+        type_name.as_str(),
+        "Mesh" | "Cube" | "Sphere" | "Cylinder" | "Cone" | "Capsule" | "Plane"
+    ) {
         return Ok(None);
     }
 
-    // The stage transform is applied by the query after this local cook. This
-    // avoids applying the prim scale once in Avian and again in the composed
-    // transform used to return canonical-stage coordinates.
-    let collider = authored_collider_from_usd_at_scale(reader, sdf_path, Vec3::ONE)?;
+    let collider = authored_collider_from_usd_at_scale(reader, sdf_path, scale)?;
     let approximation = if type_name == "Mesh" {
         Some(
             read_mesh_collision_approximation(reader, sdf_path).map_err(|error| {
@@ -231,7 +241,10 @@ fn collider_geometry_parts(
     collider: &Collider,
     prim: &SdfPath,
 ) -> Result<Vec<ColliderGeometryPart>, ColliderProjectionError> {
-    let shape = collider.shape();
+    // `shape_scaled` is the effective backend shape after authored Xform scale
+    // has been cooked. Returning the intrinsic shape would make non-uniformly
+    // scaled primitives disagree with the collider Avian actually queries.
+    let shape = collider.shape_scaled();
     if let Some(mesh) = shape.as_trimesh() {
         return Ok(vec![ColliderGeometryPart::TriangleMesh {
             vertices: mesh
@@ -263,6 +276,29 @@ fn collider_geometry_parts(
             })
             .collect();
         return Ok(vec![ColliderGeometryPart::ConvexHull { vertices }]);
+    }
+    if let Some(ball) = shape.as_ball() {
+        return Ok(vec![ColliderGeometryPart::Sphere {
+            radius: f64::from(ball.radius),
+        }]);
+    }
+    if let Some(cylinder) = shape.as_cylinder() {
+        return Ok(vec![ColliderGeometryPart::Cylinder {
+            radius: f64::from(cylinder.radius),
+            half_height: f64::from(cylinder.half_height),
+        }]);
+    }
+    if let Some(cone) = shape.as_cone() {
+        return Ok(vec![ColliderGeometryPart::Cone {
+            radius: f64::from(cone.radius),
+            half_height: f64::from(cone.half_height),
+        }]);
+    }
+    if let Some(capsule) = shape.as_capsule() {
+        return Ok(vec![ColliderGeometryPart::Capsule {
+            radius: f64::from(capsule.radius),
+            half_segment: f64::from(capsule.half_height()),
+        }]);
     }
     if let Some(compound) = shape.as_compound() {
         let mut parts = Vec::with_capacity(compound.shapes().len());
