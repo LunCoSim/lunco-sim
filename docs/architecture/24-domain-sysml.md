@@ -530,7 +530,10 @@ sources from the manifest and file facts, then requests each through the typed
 `LoadTwinSysmlSource` command. Rust validates the active Twin, asset authority,
 and indexed path, then opens the selected sources through the async document
 loader; a full source browser remains a UI concern. An empty source set is an
-informational policy result, since SysML is optional for a Twin.
+informational policy result, since SysML is optional for a Twin. It commits an
+empty ready analysis without initializing the embedded standard library;
+non-empty Twin source sets resolve against that library on the async analysis
+worker.
 
 ### Verification ownership
 
