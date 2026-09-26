@@ -528,13 +528,13 @@ pub fn compile_constraint_by_handle(
 /// the reusable definition selected by its resolved typing relationship.
 fn apply_constraint_usage_bindings(
     analysis: &SysmlAnalysis,
-    membership: &lunco_sysml_ast::SysmlRequirementConstraint,
+    usage_handle: SysmlElementHandle,
     compiled: &mut CompiledConstraint,
 ) {
     let Some(usage) = analysis
         .constraints()
         .iter()
-        .find(|constraint| constraint.element.handle == membership.usage.handle)
+        .find(|constraint| constraint.element.handle == usage_handle)
     else {
         return;
     };
@@ -2278,6 +2278,30 @@ pub struct RequiredConstraintEvaluation {
     pub evaluation: EvaluationReport,
 }
 
+/// One compiled `require` membership with any standard feature-value bindings
+/// applied from its constraint usage. The compiled dependencies are therefore
+/// the exact provider feature paths the evaluator expects for this requirement
+/// usage, rather than the reusable definition's unbound formal parameters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RequiredConstraintIr {
+    /// Snapshot-scoped identity of the membership usage.
+    pub membership: SysmlElementHandle,
+    /// Resolved reusable definition when the usage names one.
+    pub definition: Option<SysmlElementHandle>,
+    /// Constraint IR compiled in the context of this requirement usage.
+    pub compiled: CompiledConstraint,
+}
+
+/// Compiled required constraints for one requirement in an immutable source
+/// snapshot. This is the provider-facing view of the exact bound constraints
+/// that `evaluate_requirement` evaluates.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RequirementConstraintIrReport {
+    pub requirement: SysmlElementHandle,
+    pub constraints: Vec<RequiredConstraintIr>,
+    pub diagnostics: Vec<IrDiagnostic>,
+}
+
 /// Aggregate result of evaluating a requirement's standard `require`
 /// memberships against one provider observation snapshot.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2519,6 +2543,73 @@ pub fn evaluate_constraint(
 /// semantic handles. Optional verification identity is checked against the
 /// typed `verify` relationship in the same source snapshot. Assumptions are
 /// not acceptance predicates and are therefore not included in the aggregate.
+pub fn compile_required_constraints(
+    analysis: &SysmlAnalysis,
+    requirement: SysmlElementHandle,
+) -> RequirementConstraintIrReport {
+    let mut report = RequirementConstraintIrReport {
+        requirement,
+        constraints: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    if !handle_belongs_to_analysis(analysis, requirement) {
+        report.diagnostics.push(IrDiagnostic {
+            severity: DiagnosticSeverity::Error,
+            code: IrDiagnosticCode::RequirementNotFound,
+            source: None,
+            message: "requirement handle is not present in this SysML source snapshot".to_owned(),
+        });
+        return report;
+    }
+    let Some(requirement_record) = analysis
+        .requirements()
+        .iter()
+        .find(|record| record.element.handle == requirement)
+    else {
+        report.diagnostics.push(IrDiagnostic {
+            severity: DiagnosticSeverity::Error,
+            code: IrDiagnosticCode::RequirementNotFound,
+            source: None,
+            message: "element handle does not identify a requirement record".to_owned(),
+        });
+        return report;
+    };
+
+    for membership in requirement_record
+        .constraints
+        .iter()
+        .filter(|membership| membership.kind == SysmlRequirementConstraintKind::Require)
+    {
+        let target = membership
+            .definition
+            .as_ref()
+            .map(|definition| definition.handle)
+            .unwrap_or(membership.usage.handle);
+        let mut compiled = compile_constraint_by_handle(analysis, target);
+        if membership.definition.is_some() {
+            apply_constraint_usage_bindings(analysis, membership.usage.handle, &mut compiled);
+        }
+        report.constraints.push(RequiredConstraintIr {
+            membership: membership.usage.handle,
+            definition: membership
+                .definition
+                .as_ref()
+                .map(|definition| definition.handle),
+            compiled,
+        });
+    }
+
+    if report.constraints.is_empty() {
+        report.diagnostics.push(IrDiagnostic {
+            severity: DiagnosticSeverity::Warning,
+            code: IrDiagnosticCode::RequirementHasNoRequiredConstraints,
+            source: Some(element_source(&requirement_record.element)),
+            message: "requirement has no executable require membership".to_owned(),
+        });
+    }
+    report
+}
+
 pub fn evaluate_requirement(
     analysis: &SysmlAnalysis,
     requirement: SysmlElementHandle,
@@ -2582,42 +2673,18 @@ pub fn evaluate_requirement(
         }
     }
 
-    let required = requirement_record
-        .constraints
-        .iter()
-        .filter(|membership| membership.kind == SysmlRequirementConstraintKind::Require)
-        .collect::<Vec<_>>();
-    if required.is_empty() {
+    let compiled = compile_required_constraints(analysis, requirement);
+    report.diagnostics.extend(compiled.diagnostics.clone());
+    if compiled.constraints.is_empty() {
         report.verdict = VerificationVerdict::Inconclusive;
-        report.diagnostics.push(IrDiagnostic {
-            severity: DiagnosticSeverity::Warning,
-            code: IrDiagnosticCode::RequirementHasNoRequiredConstraints,
-            source: Some(element_source(&requirement_record.element)),
-            message: "requirement has no executable require membership".to_owned(),
-        });
         return report;
     }
 
-    let compiled = required
-        .iter()
-        .map(|membership| {
-            let target = membership
-                .definition
-                .as_ref()
-                .map(|definition| definition.handle)
-                .unwrap_or(membership.usage.handle);
-            let mut compiled = compile_constraint_by_handle(analysis, target);
-            if membership.definition.is_some() {
-                apply_constraint_usage_bindings(analysis, membership, &mut compiled);
-            }
-            (*membership, target, compiled)
-        })
-        .collect::<Vec<_>>();
-
     let mut observed = HashSet::new();
     let allowed_paths = compiled
+        .constraints
         .iter()
-        .filter_map(|(_, _, compiled)| compiled.constraint.as_ref())
+        .filter_map(|compiled| compiled.compiled.constraint.as_ref())
         .flat_map(|constraint| constraint.dependencies.iter())
         .collect::<HashSet<_>>();
     for observation in &context.observations {
@@ -2653,8 +2720,9 @@ pub fn evaluate_requirement(
         }
     }
 
-    for (membership, _, compiled_constraint) in compiled {
+    for compiled_constraint in compiled.constraints {
         let scoped_context = compiled_constraint
+            .compiled
             .constraint
             .as_ref()
             .map(|constraint| EvaluationContext {
@@ -2667,12 +2735,13 @@ pub fn evaluate_requirement(
             })
             .unwrap_or_default();
         report.constraints.push(RequiredConstraintEvaluation {
-            membership: membership.usage.handle,
-            definition: membership
-                .definition
-                .as_ref()
-                .map(|definition| definition.handle),
-            evaluation: evaluate_constraint(&compiled_constraint, &scoped_context, options),
+            membership: compiled_constraint.membership,
+            definition: compiled_constraint.definition,
+            evaluation: evaluate_constraint(
+                &compiled_constraint.compiled,
+                &scoped_context,
+                options,
+            ),
         });
     }
 

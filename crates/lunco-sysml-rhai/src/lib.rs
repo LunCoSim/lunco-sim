@@ -19,10 +19,11 @@ use lunco_sysml_ir::{
     EvaluationContext, EvaluationOptions, EvaluationReport, FeatureObservation, IrDiagnostic,
     IrDiagnosticCode, IrExpression, IrExpressionKind, IrFeatureDirection, IrOperator, IrParameter,
     IrStandardFunction, IrType, IrValue, IrValueType, ObservationState,
-    RequiredConstraintEvaluation, RequirementAuditCode, RequirementAuditFinding,
-    RequirementAuditPolicy, RequirementAuditReport, RequirementAuditSeverity,
-    RequirementEvaluationReport, VerificationVerdict, audit_requirements,
-    compile_constraint_by_name, evaluate_constraint, evaluate_requirement,
+    RequiredConstraintEvaluation, RequiredConstraintIr, RequirementAuditCode,
+    RequirementAuditFinding, RequirementAuditPolicy, RequirementAuditReport,
+    RequirementAuditSeverity, RequirementConstraintIrReport, RequirementEvaluationReport,
+    VerificationVerdict, audit_requirements, compile_constraint_by_name,
+    compile_required_constraints, evaluate_constraint, evaluate_requirement,
 };
 use lunco_sysml_modelica::{lower_constraint, supports_standard_function_lowering};
 use rhai::{Array, Dynamic, Engine, Map};
@@ -173,6 +174,57 @@ fn model_attribute(model: &mut SysmlModelValue, name: &str) -> Dynamic {
         .unwrap_or(Dynamic::UNIT)
 }
 
+fn model_source_literal_observation(
+    model: &mut SysmlModelValue,
+    attribute: SysmlAttribute,
+) -> Dynamic {
+    let path = SysmlFeaturePath::single(attribute.handle);
+    let mut observation = Map::new();
+    observation.insert("path".into(), feature_path_dynamic(&path));
+    observation.insert("provider".into(), Dynamic::from("source_literal"));
+    observation.insert(
+        "source_revision".into(),
+        Dynamic::from(model.analysis.source_revision()),
+    );
+    if !path.belongs_to(
+        model.analysis.source_revision(),
+        model.analysis.source_fingerprint(),
+    ) {
+        observation.insert("state".into(), Dynamic::from("invalid"));
+        observation.insert(
+            "detail".into(),
+            Dynamic::from("SysML attribute belongs to a different source snapshot"),
+        );
+        return Dynamic::from_map(observation);
+    }
+    match typed_attribute_value_dynamic(&attribute) {
+        Some(value) if dynamic_ir_value(&value).is_some() => {
+            observation.insert("state".into(), Dynamic::from("value"));
+            observation.insert("value".into(), value.clone());
+            if let Some(quantity) = value.clone().try_cast::<SysmlQuantityValue>() {
+                observation.insert("unit".into(), Dynamic::from(quantity.unit));
+            }
+        }
+        Some(_) => {
+            observation.insert("state".into(), Dynamic::from("invalid"));
+            observation.insert(
+                "detail".into(),
+                Dynamic::from(
+                    "SysML source literal cannot be represented by the scalar constraint evaluator",
+                ),
+            );
+        }
+        None => {
+            observation.insert("state".into(), Dynamic::from("unavailable"));
+            observation.insert(
+                "detail".into(),
+                Dynamic::from("SysML attribute has no resolved literal value"),
+            );
+        }
+    }
+    Dynamic::from_map(observation)
+}
+
 fn model_value(model: &mut SysmlModelValue, name: &str) -> Dynamic {
     model
         .analysis
@@ -231,6 +283,14 @@ fn model_verifications(model: &mut SysmlModelValue) -> Dynamic {
 
 pub fn constraint_ir_value(model: &mut SysmlModelValue, name: &str) -> Dynamic {
     compiled_constraint_dynamic(&compile_constraint_by_name(&model.analysis, name))
+}
+
+fn required_constraint_irs_value(
+    model: &mut SysmlModelValue,
+    requirement: SysmlRequirementValue,
+) -> Dynamic {
+    let compiled = compile_required_constraints(&model.analysis, requirement.inner.element.handle);
+    requirement_constraint_ir_dynamic(&compiled)
 }
 
 fn standard_functions_dynamic() -> Dynamic {
@@ -1379,12 +1439,17 @@ pub fn register_sysml_types(engine: &mut Engine) {
             model.analysis.source_fingerprint()
         })
         .register_fn("attribute", model_attribute)
+        .register_fn(
+            "source_literal_observation",
+            model_source_literal_observation,
+        )
         .register_fn("value", model_value)
         .register_fn("requirement", model_requirement)
         .register_fn("verification", model_verification)
         .register_fn("requirements", model_requirements)
         .register_fn("verifications", model_verifications)
         .register_fn("constraint_ir", constraint_ir_value)
+        .register_fn("required_constraint_irs", required_constraint_irs_value)
         .register_fn("modelica_constraint", modelica_constraint_value)
         .register_fn("evaluate_constraint", evaluate_constraint_value)
         .register_fn("evaluate_requirement", evaluate_requirement_value)
@@ -1978,6 +2043,49 @@ fn compiled_constraint_dynamic(compiled: &CompiledConstraint) -> Dynamic {
     } else {
         value.insert("constraint".into(), Dynamic::UNIT);
     }
+    Dynamic::from_map(value)
+}
+
+fn requirement_constraint_ir_dynamic(report: &RequirementConstraintIrReport) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("requirement".into(), Dynamic::from(report.requirement));
+    value.insert(
+        "constraints".into(),
+        Dynamic::from_array(
+            report
+                .constraints
+                .iter()
+                .map(required_constraint_ir_dynamic)
+                .collect(),
+        ),
+    );
+    value.insert(
+        "diagnostics".into(),
+        Dynamic::from_array(
+            report
+                .diagnostics
+                .iter()
+                .map(ir_diagnostic_dynamic)
+                .collect(),
+        ),
+    );
+    Dynamic::from_map(value)
+}
+
+fn required_constraint_ir_dynamic(required: &RequiredConstraintIr) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("membership".into(), Dynamic::from(required.membership));
+    value.insert(
+        "definition".into(),
+        required
+            .definition
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT),
+    );
+    value.insert(
+        "compiled".into(),
+        compiled_constraint_dynamic(&required.compiled),
+    );
     Dynamic::from_map(value)
 }
 

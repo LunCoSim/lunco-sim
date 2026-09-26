@@ -589,6 +589,39 @@ fn constraint_ir(source_model, name) {
     source_model.constraint_ir(name)
 }
 
+// Resolve one required constraint through the requirement usage, including
+// standard feature-value bindings authored on that usage. The returned IR's
+// dependencies are the provider paths consumed by evaluate_requirement.
+fn required_constraint_ir(source_model, requirement, constraint_name) {
+    if source_model == () || !sysml_model_is(source_model) {
+        return #{ok: false, valid: false,
+            error: "resolved SysML requirement model is unavailable"};
+    }
+    if requirement == () || constraint_name == () || constraint_name == "" {
+        return #{ok: false, valid: false,
+            error: "required constraint identity is incomplete"};
+    }
+    let compiled = source_model.required_constraint_irs(requirement);
+    if compiled == () || compiled.constraints == () {
+        return #{ok: false, valid: false,
+            error: "required constraint IR is unavailable",
+            diagnostics: if compiled == () { [] } else { compiled.diagnostics }};
+    }
+    for membership in compiled.constraints {
+        let value = membership.compiled;
+        if value == () || value.constraint == ()
+            || value.constraint.qualified_name != constraint_name {
+            continue;
+        }
+        return #{ok: value.valid == true, valid: value.valid == true,
+            constraint: value.constraint, diagnostics: value.diagnostics};
+    }
+    #{ok: false, valid: false,
+        error: "constraint is not a required constraint of " + requirement.qualified_name
+            + ": " + constraint_name,
+        diagnostics: compiled.diagnostics}
+}
+
 // Resolve a scalar constraint input to its snapshot-scoped SysML feature path
 // once, at the provider boundary. Callers pass the formal input's source name
 // to select it, but evaluation receives only typed paths and observations.
@@ -646,11 +679,16 @@ fn scalar_constraint_observations(ir, inputs) {
     observations
 }
 
-fn _constraint_observations(model, check) {
+fn _constraint_observations(model, check, requirement) {
     if check.constraint == () || check.constraint == "" {
         return #{ok: false, error: "SysML constraint identity is missing"};
     }
-    let ir = model.constraint_ir(check.constraint);
+    let ir = if check.kind == "required_constraints" {
+        let typed_requirement = model.requirement(requirement);
+        required_constraint_ir(model, typed_requirement, check.constraint)
+    } else {
+        model.constraint_ir(check.constraint)
+    };
     if ir == () || ir.valid != true || ir.constraint == () {
         let message = "SysML constraint is unavailable or invalid: " + check.constraint;
         if ir != () && ir.diagnostics != () && ir.diagnostics.len() > 0 {
@@ -821,7 +859,7 @@ fn _check_constraint(report, check, model) {
             error: membership.error,
             source_revision: report.source_revision};
     }
-    let bound = _constraint_observations(model, check);
+    let bound = _constraint_observations(model, check, membership.requirement);
     if bound.ok != true {
         return #{ok: false, id: check.id, component: check.component,
             requirement: check.requirement, verification: check.verification,
