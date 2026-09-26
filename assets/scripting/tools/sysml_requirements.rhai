@@ -582,6 +582,71 @@ fn required_constraints_check(id, component, requirement, verification,
     check
 }
 
+fn constraint_ir(name) {
+    let source_model = model();
+    if source_model == () || !sysml_model_is(source_model) {
+        return #{ok: false, error: "resolved SysML constraint model is unavailable"};
+    }
+    source_model.constraint_ir(name)
+}
+
+// Resolve a scalar constraint input to its snapshot-scoped SysML feature path
+// once, at the provider boundary. Callers pass the formal input's source name
+// to select it, but evaluation receives only typed paths and observations.
+fn scalar_constraint_observation(ir, input_name, observation) {
+    let invalid = #{path: [], provider: "derived", state: "invalid",
+        detail: "constraint input could not be resolved to a typed SysML feature path"};
+    if ir == () || ir.ok != true || ir.constraint == ()
+        || ir.constraint.parameters == () || ir.constraint.dependencies == () {
+        return invalid;
+    }
+
+    let parameter = ();
+    for candidate in ir.constraint.parameters {
+        if candidate.name == input_name || candidate.qualified_name == input_name {
+            if parameter != () { return invalid; }
+            parameter = candidate;
+        }
+    }
+    if parameter == () || (parameter.direction != "in" && parameter.direction != "inout") {
+        return invalid;
+    }
+
+    let dependencies = [];
+    for path in ir.constraint.dependencies {
+        if path.len() > 0 && path[0] == parameter.feature {
+            dependencies.push(path);
+        }
+    }
+    if dependencies.len() != 1 || dependencies[0].len() != 1 {
+        return invalid;
+    }
+
+    let result = if type_of(observation) == "map" {
+        observation
+    } else if observation == () {
+        #{state: "unavailable"}
+    } else {
+        #{state: "value", value: observation}
+    };
+    let path = dependencies[0];
+    if result.path != () && result.path != path { return invalid; }
+    result.path = path;
+    result
+}
+
+fn scalar_constraint_observations(ir, inputs) {
+    let observations = [];
+    for input in inputs {
+        if type_of(input) != "array" || input.len() != 2 {
+            observations.push(scalar_constraint_observation(ir, "", ()));
+        } else {
+            observations.push(scalar_constraint_observation(ir, input[0], input[1]));
+        }
+    }
+    observations
+}
+
 fn _constraint_observations(model, check) {
     if check.constraint == () || check.constraint == "" {
         return #{ok: false, error: "SysML constraint identity is missing"};
