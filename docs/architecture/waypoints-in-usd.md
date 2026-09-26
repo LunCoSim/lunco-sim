@@ -80,6 +80,8 @@ selected prim is a route point, the editor resolves its enclosing route scope
 and uses that program's `inputs:subject` binding only to identify the rover;
 the selected waypoint is never mistaken for the rover. If several routes are
 available, select the intended route program or subject before editing.
+Delete accepts a selected route point when the command has no pointer target;
+when pointer paths are present, they remain authoritative.
 
 The live scene can finish attaching its USD document after the route program's
 visualization hook. In that case the program binds its document and route paths
