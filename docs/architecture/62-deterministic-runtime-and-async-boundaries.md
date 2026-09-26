@@ -217,7 +217,12 @@ values, while `lunco-core` supplies the Bevy `RuntimeCycleSet` labels. Rhai gets
 a read-only `execution_context()` view beside the existing `clock_snapshot()`.
 Registered hooks receive one typed `HookInvocation`; isolated Rhai hooks expose
 its context as an immutable `runtime_context` map, and native providers receive
-the same map through ABI v2. A Rust hook owner with no classified cycle uses
+the same map through ABI v2. Before a registered hook runs, the shared hook
+registry validates that a selected clock matches the owner cycle, clocked
+contexts carry a finite non-negative time sample, discrete contexts carry no
+elapsed sample, and Core/Application routes use generation zero. Invalid
+context is a hook error; the registry does not guess or replace the clock. A
+Rust hook owner with no classified cycle uses
 `invoke_unclassified`; scheduled owners supply `invoke_with_context` from their
 cycle inputs. The scheduled `readiness.action` policy is classified as
 `Core/Simulation/Behavior`, with `Time<Fixed>` elapsed time and the latest

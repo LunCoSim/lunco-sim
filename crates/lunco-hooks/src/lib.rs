@@ -47,8 +47,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
 pub use lunco_runtime_context::{
-    RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeProducerStamp,
-    RuntimeRoute, RuntimeScope,
+    RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimeExecutionContextError,
+    RuntimePhase, RuntimeProducerStamp, RuntimeRoute, RuntimeScope,
 };
 
 // ── Neutral value ────────────────────────────────────────────────────────────
@@ -1015,6 +1015,11 @@ pub fn invoke_with_context(
 /// result types.
 pub fn invoke(id: &str, invocation: &HookInvocation<'_>) -> Option<HookResult> {
     let hook = get(id)?;
+    if let Err(error) = invocation.context.validate() {
+        return Some(Err(HookError(format!(
+            "hook '{id}' received an invalid runtime execution context: {error}"
+        ))));
+    }
     if let Some(contract) = descriptor(id) {
         if invocation.args.len() != contract.parameters.len() {
             return Some(Err(HookError(format!(
@@ -1223,6 +1228,7 @@ pub fn catalog() -> Vec<HookCatalogEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A native (Rust) hook that returns the sum of two int args — proves the
     /// registry works with a non-scripted `ScriptHook` too.
@@ -1240,6 +1246,15 @@ mod tests {
                 .and_then(HookValue::as_i64)
                 .unwrap_or(0);
             Ok(HookValue::Int(a + b))
+        }
+    }
+
+    struct CountCallsHook(Arc<AtomicUsize>);
+
+    impl ScriptHook for CountCallsHook {
+        fn invoke(&self, _invocation: &HookInvocation<'_>) -> HookResult {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(HookValue::Unit)
         }
     }
 
@@ -1269,6 +1284,38 @@ mod tests {
 
         unregister("test.add");
         assert!(get("test.add").is_none());
+    }
+
+    #[test]
+    fn invalid_clock_context_is_rejected_before_hook_execution() {
+        const ID: &str = "test.invalid-runtime-context";
+        let calls = Arc::new(AtomicUsize::new(0));
+        register(RegisteredHook {
+            id: ID.into(),
+            backend: "rust".into(),
+            deterministic: true,
+            hook: Arc::new(CountCallsHook(Arc::clone(&calls))),
+        });
+
+        let invalid = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::application(RuntimeCycle::Ui)),
+            phase: RuntimePhase::Evaluation,
+            clock: RuntimeClock::Simulation,
+            time_seconds: Some(1.0),
+            delta_seconds: Some(1.0 / 60.0),
+            sequence: Some(1),
+            producer: None,
+        };
+        let result = invoke_with_context(ID, &[], invalid).expect("hook is installed");
+        let error = result.expect_err("mismatched clock must fault the invocation");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the runtime cycle")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        unregister(ID);
     }
 
     #[test]

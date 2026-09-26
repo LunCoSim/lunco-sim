@@ -355,7 +355,9 @@ phase and one-shot REPL/tool evaluation. Rhai reads it with
 Registered hook functions receive the same context in their immutable
 `runtime_context` map. When a Rhai callback invokes another registered hook,
 `invoke_hook` forwards the active scope context rather than starting an
-unclassified call.
+unclassified call. The shared hook registry validates the cycle/clock pairing
+and time samples before calling a Rhai or native provider; invalid context is a
+visible hook error rather than an inferred clock.
 `sim_tick()`, `dt()`, and `elapsed_seconds()` reject calls outside the simulation
 cycle as a Rhai invocation error. A wrong-cycle call does not fault the
 simulation or another runtime cycle. Persistent scenarios may declare

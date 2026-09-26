@@ -279,6 +279,9 @@ Rhai calls. Scenario hooks and one-shot REPL/tool calls use their owning
 contexts; `execution_context()` exposes a read-only Rhai map. Generic hook
 calls carry `HookInvocation`; nested `invoke_hook` forwards its active context,
 and an isolated Rhai hook reads it from the immutable `runtime_context` map.
+The shared hook registry rejects a clock that does not belong to its cycle,
+missing or invalid clock samples, and non-zero Core/Application generations
+before invoking either Rhai or native policy.
 `twin.lifecycle` uses the mounted Twin's `TwinId` as its `Twin/Lifecycle`
 generation, with explicit `Start`, `Event`, or `Stop` phase and no elapsed
 clock; `policy_status().lifecycle.runtime_context` exposes the exact stamp.

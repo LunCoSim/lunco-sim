@@ -7,8 +7,8 @@
 use bevy::ecs::schedule::SystemSet;
 
 pub use lunco_runtime_context::{
-    RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeProducerStamp,
-    RuntimeRoute, RuntimeScope,
+    RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimeExecutionContextError,
+    RuntimePhase, RuntimeProducerStamp, RuntimeRoute, RuntimeScope,
 };
 
 /// Shared Bevy ordering anchors for runtime cycles.

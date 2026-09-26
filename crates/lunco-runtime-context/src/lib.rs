@@ -199,6 +199,46 @@ pub struct RuntimeExecutionContext {
     pub producer: Option<RuntimeProducerStamp>,
 }
 
+/// Why an owner-supplied runtime context cannot be used for an invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeExecutionContextError {
+    /// An unclassified context contains facts that require a classified owner.
+    UnclassifiedContainsOwnerFacts,
+    /// A selected clock has no current time sample.
+    ClockMissingTimeSample,
+    /// A discrete invocation contains a clock time or delta.
+    DiscreteContextContainsClockSample,
+    /// The selected clock does not belong to the invocation cycle.
+    ClockDoesNotMatchCycle,
+    /// A Core or Application route carries a non-zero owner generation.
+    InvalidRouteGeneration,
+    /// The supplied time sample is negative or not finite.
+    InvalidTimeSample,
+    /// The supplied delta is negative or not finite.
+    InvalidDeltaSample,
+}
+
+impl std::fmt::Display for RuntimeExecutionContextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let detail = match self {
+            Self::UnclassifiedContainsOwnerFacts => {
+                "an unclassified context cannot carry owner, clock, sequence, or producer facts"
+            }
+            Self::ClockMissingTimeSample => "a selected clock requires a time sample",
+            Self::DiscreteContextContainsClockSample => {
+                "a discrete context cannot carry a time or delta sample"
+            }
+            Self::ClockDoesNotMatchCycle => "the selected clock does not match the runtime cycle",
+            Self::InvalidRouteGeneration => "Core and Application routes must use generation zero",
+            Self::InvalidTimeSample => "the time sample must be finite and non-negative",
+            Self::InvalidDeltaSample => "the delta sample must be finite and non-negative",
+        };
+        f.write_str(detail)
+    }
+}
+
+impl std::error::Error for RuntimeExecutionContextError {}
+
 impl RuntimeExecutionContext {
     /// Context for an operation whose owner has not classified its cycle.
     /// Time-sensitive APIs reject this context instead of guessing.
@@ -224,6 +264,90 @@ impl RuntimeExecutionContext {
         Self {
             producer: Some(producer),
             ..self
+        }
+    }
+
+    /// Validate clock samples and ensure a selected clock belongs to its cycle.
+    ///
+    /// Discrete contexts use [`RuntimeClock::None`] and carry no elapsed-time
+    /// values. A selected clock requires a finite, non-negative time sample.
+    /// Deltas are optional for event callbacks that retain a clock identity and
+    /// current sequence without claiming an exact elapsed interval.
+    pub fn validate(self) -> Result<(), RuntimeExecutionContextError> {
+        if self.route.is_none() {
+            return if self.phase == RuntimePhase::Unclassified
+                && self.clock == RuntimeClock::None
+                && self.time_seconds.is_none()
+                && self.delta_seconds.is_none()
+                && self.sequence.is_none()
+                && self.producer.is_none()
+            {
+                Ok(())
+            } else {
+                Err(RuntimeExecutionContextError::UnclassifiedContainsOwnerFacts)
+            };
+        }
+
+        if self
+            .time_seconds
+            .is_some_and(|time| !time.is_finite() || time < 0.0)
+        {
+            return Err(RuntimeExecutionContextError::InvalidTimeSample);
+        }
+        if self
+            .delta_seconds
+            .is_some_and(|delta| !delta.is_finite() || delta < 0.0)
+        {
+            return Err(RuntimeExecutionContextError::InvalidDeltaSample);
+        }
+
+        let Some(route) = self.route else {
+            return Err(RuntimeExecutionContextError::UnclassifiedContainsOwnerFacts);
+        };
+        if route.scope != RuntimeScope::Twin && route.generation != 0 {
+            return Err(RuntimeExecutionContextError::InvalidRouteGeneration);
+        }
+        match self.clock {
+            RuntimeClock::None => {
+                if self.time_seconds.is_some() || self.delta_seconds.is_some() {
+                    return Err(RuntimeExecutionContextError::DiscreteContextContainsClockSample);
+                }
+            }
+            clock => {
+                if self.time_seconds.is_none() {
+                    return Err(RuntimeExecutionContextError::ClockMissingTimeSample);
+                }
+                let matches_cycle = clock_matches_cycle(clock, route.cycle);
+                if !matches_cycle {
+                    return Err(RuntimeExecutionContextError::ClockDoesNotMatchCycle);
+                }
+            }
+        }
+
+        if let Some(producer) = self.producer {
+            if producer.route.scope != RuntimeScope::Twin && producer.route.generation != 0 {
+                return Err(RuntimeExecutionContextError::InvalidRouteGeneration);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn clock_matches_cycle(clock: RuntimeClock, cycle: RuntimeCycle) -> bool {
+    match clock {
+        RuntimeClock::None => true,
+        RuntimeClock::Simulation => cycle == RuntimeCycle::Simulation,
+        RuntimeClock::Interaction => cycle == RuntimeCycle::Interaction,
+        RuntimeClock::Application => matches!(
+            cycle,
+            RuntimeCycle::Command | RuntimeCycle::Repl | RuntimeCycle::Telemetry | RuntimeCycle::Ui
+        ),
+        RuntimeClock::Presentation => {
+            matches!(
+                cycle,
+                RuntimeCycle::Presentation | RuntimeCycle::Visualization
+            )
         }
     }
 }
@@ -253,5 +377,93 @@ mod tests {
     #[test]
     fn unclassified_context_does_not_invent_an_owner_route() {
         assert_eq!(RuntimeExecutionContext::unclassified().route, None);
+        assert!(RuntimeExecutionContext::unclassified().validate().is_ok());
+    }
+
+    #[test]
+    fn validates_clocked_contexts_against_their_cycle_and_sample() {
+        let simulation = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::twin(RuntimeCycle::Simulation, 17)),
+            phase: RuntimePhase::Event,
+            clock: RuntimeClock::Simulation,
+            time_seconds: Some(2.5),
+            delta_seconds: None,
+            sequence: Some(250),
+            producer: None,
+        };
+        assert!(simulation.validate().is_ok());
+
+        let application = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::application(RuntimeCycle::Repl)),
+            phase: RuntimePhase::Evaluation,
+            clock: RuntimeClock::Application,
+            time_seconds: Some(8.0),
+            delta_seconds: None,
+            sequence: Some(3),
+            producer: None,
+        };
+        assert!(application.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_a_missing_or_mismatched_clock_sample() {
+        let missing_time = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::application(RuntimeCycle::Repl)),
+            phase: RuntimePhase::Evaluation,
+            clock: RuntimeClock::Application,
+            time_seconds: None,
+            delta_seconds: None,
+            sequence: Some(3),
+            producer: None,
+        };
+        assert_eq!(
+            missing_time.validate(),
+            Err(RuntimeExecutionContextError::ClockMissingTimeSample)
+        );
+
+        let wrong_cycle = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::application(RuntimeCycle::Ui)),
+            phase: RuntimePhase::Evaluation,
+            clock: RuntimeClock::Simulation,
+            time_seconds: Some(8.0),
+            delta_seconds: Some(0.01),
+            sequence: Some(3),
+            producer: None,
+        };
+        assert_eq!(
+            wrong_cycle.validate(),
+            Err(RuntimeExecutionContextError::ClockDoesNotMatchCycle)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_samples_and_clock_data_on_discrete_contexts() {
+        let invalid_time = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::core(RuntimeCycle::Simulation)),
+            phase: RuntimePhase::Behavior,
+            clock: RuntimeClock::Simulation,
+            time_seconds: Some(f64::NAN),
+            delta_seconds: Some(0.01),
+            sequence: Some(1),
+            producer: None,
+        };
+        assert_eq!(
+            invalid_time.validate(),
+            Err(RuntimeExecutionContextError::InvalidTimeSample)
+        );
+
+        let discrete_with_time = RuntimeExecutionContext {
+            route: Some(RuntimeRoute::twin(RuntimeCycle::Lifecycle, 2)),
+            phase: RuntimePhase::Preparation,
+            clock: RuntimeClock::None,
+            time_seconds: Some(1.0),
+            delta_seconds: None,
+            sequence: None,
+            producer: None,
+        };
+        assert_eq!(
+            discrete_with_time.validate(),
+            Err(RuntimeExecutionContextError::DiscreteContextContainsClockSample)
+        );
     }
 }

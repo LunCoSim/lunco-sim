@@ -50,8 +50,8 @@ pub use commands::{
     EditIntent, MarkClientLocalExt, SpawnEntity,
 };
 pub use cycles::{
-    RuntimeClock, RuntimeCycle, RuntimeCycleSet, RuntimeExecutionContext, RuntimePhase,
-    RuntimeProducerStamp, RuntimeRoute, RuntimeScope,
+    RuntimeClock, RuntimeCycle, RuntimeCycleSet, RuntimeExecutionContext,
+    RuntimeExecutionContextError, RuntimePhase, RuntimeProducerStamp, RuntimeRoute, RuntimeScope,
 };
 pub use derived::RebuildOnChange;
 pub use events::{CommandOccurred, RuntimeError, SubsystemStateChanged, trigger_runtime_error};
