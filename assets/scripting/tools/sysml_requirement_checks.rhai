@@ -6,11 +6,11 @@ import "sysml_requirements" as sysml_requirements;
 
 fn source_text_list(source, qualified_name) {
     let values = sysml_requirements::native_value(source, qualified_name);
-    if values == () || type_of(values) != "array" { return []; }
+    if values == () || !array_is(values) { return []; }
     let identifiers = [];
     for value in values {
-        if type_of(value) == "EnumValue" { identifiers.push(value.literal); }
-        else if type_of(value) == "string" { identifiers.push(value); }
+        if sysml_enum_is(value) { identifiers.push(value.literal); }
+        else if string_is(value) { identifiers.push(value); }
         else { return []; }
     }
     identifiers
@@ -18,10 +18,10 @@ fn source_text_list(source, qualified_name) {
 
 fn source_enum_identifiers(source, qualified_name) {
     let values = sysml_requirements::native_value(source, qualified_name);
-    if values == () || type_of(values) != "array" { return []; }
+    if values == () || !array_is(values) { return []; }
     let identifiers = [];
     for value in values {
-        if type_of(value) != "EnumValue" { return []; }
+        if !sysml_enum_is(value) { return []; }
         identifiers.push(value.literal);
     }
     identifiers
@@ -29,8 +29,8 @@ fn source_enum_identifiers(source, qualified_name) {
 
 fn source_position_list(source, qualified_name) {
     let values = sysml_requirements::native_value(source, qualified_name);
-    if values == () || type_of(values) != "array" { return []; }
-    for value in values { if type_of(value) != "Vec3" { return []; } }
+    if values == () || !array_is(values) { return []; }
+    for value in values { if !vec3_is_native(value) { return []; } }
     values
 }
 

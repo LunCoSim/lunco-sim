@@ -8,7 +8,7 @@
 //! importing the large visual adapter or duplicating its supported modes.
 
 use bevy::math::{DMat4, DQuat, DVec3};
-use lunco_usd_avian_contracts::AvianMeshApproximation;
+use lunco_usd_avian_contracts::{AvianMeshApproximation, BoundingCubeFitError, fit_bounding_cube};
 use lunco_usd_bevy_stage::{
     Purpose, StageView, UsdReadObject, effective_purpose, stage_convention,
 };
@@ -83,6 +83,10 @@ pub enum CollisionAabbError {
         prim: String,
         approximation: CollisionApprox,
     },
+    InvalidBoundingCube {
+        prim: String,
+        error: BoundingCubeFitError,
+    },
 }
 
 impl std::fmt::Display for CollisionAabbError {
@@ -110,6 +114,12 @@ impl std::fmt::Display for CollisionAabbError {
                 "{prim} uses unsupported physics:approximation `{}` for exact collision geometry",
                 approximation.as_token()
             ),
+            Self::InvalidBoundingCube { prim, error } => {
+                write!(
+                    f,
+                    "{prim} has invalid boundingCube source geometry: {error}"
+                )
+            }
         }
     }
 }
@@ -352,21 +362,12 @@ fn local_shape_corners(
             .map(|[x, y, z]| DVec3::new(x as f64, y as f64, z as f64))
             .collect::<Vec<_>>();
         let vertices = if approximation == Some(AvianMeshApproximation::BoundingCube) {
-            let mut min = DVec3::splat(f64::INFINITY);
-            let mut max = DVec3::splat(f64::NEG_INFINITY);
-            for vertex in vertices {
-                min = min.min(vertex);
-                max = max.max(vertex);
-            }
-            (0..8)
-                .map(|bits| {
-                    DVec3::new(
-                        if bits & 1 == 0 { min.x } else { max.x },
-                        if bits & 2 == 0 { min.y } else { max.y },
-                        if bits & 4 == 0 { min.z } else { max.z },
-                    )
-                })
-                .collect()
+            fit_bounding_cube(&vertices)
+                .map_err(|error| CollisionAabbError::InvalidBoundingCube {
+                    prim: path.as_str().to_owned(),
+                    error,
+                })?
+                .into()
         } else {
             vertices
         };
