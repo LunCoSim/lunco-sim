@@ -196,3 +196,10 @@ improve UI timing by silently discarding authoritative overstep. If both
 wall-clock physics cadence and UI isolation are required, measure the whole
 simulation-owner boundary and consume immutable snapshots from the UI/render
 side; separate cycle labels alone do not provide thread isolation.
+
+For exclusive systems that borrow `&mut World`, inspect individual Tracy event
+timestamps and durations, not just aggregate averages. Align long calls with
+Twin-open and readiness milestones: one startup outlier can stall UI even when
+the same system is nearly free on settled frames. If the outer system is hot,
+attribute time to its internal owner operations before choosing an async
+boundary or cache.

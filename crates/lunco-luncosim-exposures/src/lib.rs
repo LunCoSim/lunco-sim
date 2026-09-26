@@ -592,6 +592,9 @@ fn simulation_progress_facts(
                     lunco_core_runtime::SimulationProgressOwner::SceneReferences => {
                         "SceneReferences"
                     }
+                    lunco_core_runtime::SimulationProgressOwner::UsdDocumentProjection => {
+                        "UsdDocumentProjection"
+                    }
                     lunco_core_runtime::SimulationProgressOwner::TerrainPreparation => {
                         "TerrainPreparation"
                     }
