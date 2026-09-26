@@ -123,11 +123,15 @@ fn on_event(me, evt, ctx) {
 
     if this.phase == 2 && evt.name == PAUSE_PROBE_1 {
         let execution = execution_context();
-        this.pause_event_context_ok = execution.cycle == "lifecycle"
+        this.pause_event_context_ok = execution.scope == "twin"
+            && execution.generation != ()
+            && execution.cycle == "lifecycle"
             && execution.phase == "event"
             && execution.clock == "none"
             && execution.sequence == ()
             && execution.producer != ()
+            && execution.producer.scope == "twin"
+            && execution.producer.generation == execution.generation
             && execution.producer.cycle == "simulation"
             && execution.producer.sequence.to_string() == evt.sim_tick.to_string();
         // This event runs at the pause command boundary, before PostUpdate

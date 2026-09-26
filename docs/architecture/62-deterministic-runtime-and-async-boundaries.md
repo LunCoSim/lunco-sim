@@ -291,14 +291,17 @@ clock or consumer sequence and preserve the telemetry event's simulation
 producer route and tick. Event RNG uses that producer sequence even when its
 callback runs in a later cycle; discrete lifecycle hooks use a stable
 sequence-free seed.
-Nested Rhai functions inherit the current phase. Peer selection uses the
-scenario's `@scope host|client|both` directive. Continuous scenario behavior may
-state its required cadence with `@timing simulation`; Rust still installs and
-invokes the scenario from its owning schedules. Lifecycle hooks receive the
-lifecycle or simulation context of the pass that invokes them. Unknown scope or
-timing values skip only that scenario and publish document diagnostics once
-for the source revision. The scenario driver refreshes these directives from the
-current document generation, so a source edit cannot keep stale routing state.
+Nested Rhai functions inherit the current phase. Runtime owner scope
+(`Core`, `Application`, or `Twin`) is assigned by the Rust owner and remains
+independent of cycle and clock. The authored `@scope host|client|both`
+directive selects the network peer for a scenario; it does not select the
+runtime owner scope. Continuous scenario behavior may state its required
+cadence with `@timing simulation`; Rust still installs and invokes the scenario
+from its owning schedules. Lifecycle hooks receive the lifecycle or simulation
+context of the pass that invokes them. Unknown peer-scope or timing values skip
+only that scenario and publish document diagnostics once for the source
+revision. The scenario driver refreshes these directives from the current
+document generation, so a source edit cannot keep stale routing state.
 
 Host setup installs cycle owners automatically from the selected application
 composition/features; scenario authors do not manually assemble Bevy schedules.
