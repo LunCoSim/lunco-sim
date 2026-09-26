@@ -20,6 +20,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
 lunco-luncosim-simulation = { path = "../lunco-luncosim-simulation", default-features = false }
 lunco-luncosim-services = { path = "../lunco-luncosim-services", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }
 lunco-scripting-rhai = { path = "../lunco-scripting-rhai" }

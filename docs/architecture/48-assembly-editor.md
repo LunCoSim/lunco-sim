@@ -392,9 +392,12 @@ active document or constructs another resolver/cache.
 `InspectUsdViewport` is the read-only presentation query for the same
 headful session. It reports the focused preview/view pair and every explicit
 preview lease with its document, edit target, projected generation, and
-independent view ids. An agent correlates this typed state with
-`CaptureScreenshot` and `view_image` before editing what the user has open;
-the tab label is never treated as document identity.
+independent view ids. Each view also reports its measured image rectangle in
+physical pixels and the primary window scale factor when available; Rhai mouse
+tests can derive logical coordinates from the live dock layout. An agent
+correlates this typed state with `CaptureScreenshot` and `view_image` before
+editing what the user has open; the tab label is never treated as document
+identity.
 
 `InspectUsdSelection` is the read-only authoring-context query for one explicit
 open preview (or the focused preview when `preview` is omitted). It reports
@@ -536,14 +539,16 @@ before testing handles, keeping rendered and interactive coordinates identical.
 The singleton and separate preview-tab renderers both record
 `SceneTarget::Offscreen` ownership in `ScenePickGate`; this preserves the
 global live-scene egui guard while allowing part selection and handle drags
-inside the focused preview surface. While a focused gizmo handle owns a
-primary drag, the same gate suppresses the preview camera's competing primary
-pan path, leaving the drag in gizmo mode. The resolved offscreen target remains
-stable even while the preview image reports an egui pointer gesture, so the
-gizmo stream is not interrupted on held-drag frames. The gizmo picking backend
-uses the fractional layer above its scene camera so the preview capture cannot
-mask the handle, while ordinary egui chrome still masks the scene. No second USD
-gizmo, cursor transform, or panel-local input gate is introduced.
+inside the focused preview surface. On the press frame, the editor reads the
+current occlusion-aware `HoverMap` hit for a gizmo proxy; it does not wait for
+the gizmo frontend's `Last`-stage focus flag or the previous frame's resolved
+offscreen target. That exact hit starts a primary gesture capture. The same
+gate suppresses the preview camera's competing pan path through release or
+cancellation, even when the cursor leaves the image, so ownership cannot switch
+mid-drag. The gizmo picking backend uses the fractional layer above its scene
+camera so preview capture cannot mask the handle, while ordinary egui chrome
+still masks the scene. No second USD gizmo, cursor transform, or panel-local
+input gate is introduced.
 
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc_id` and returns each typed proposal, its explicit scope, generation

@@ -72,8 +72,10 @@ Release gizmo handle → live: TransformEntity; USD: one ApplyUsdOps change set
                      → owner state restored or projected, then the session ends
 ```
 
-While a focused gizmo handle owns a primary drag, the preview camera does not
-consume that same drag as a pan gesture.
+On the press frame, the editor captures the current occlusion-aware gizmo-proxy
+hit and retains primary-pointer ownership through release or cancellation. The
+preview camera cannot consume that gesture as a pan, including after the cursor
+leaves the image.
 
 The presentation owner is selected by `UsdViewportState` and the workbench's
 measured preview image rectangle: a visible focused USD preview camera receives
@@ -93,17 +95,19 @@ not calculate deltas, subtract a parent rotation, read `GlobalTransform` as a
 physics pose, or write Avian `Position`/`Rotation` directly. The canonical flow
 is:
 
-1. **`capture_gizmo_start`** — resolve the focused USD preview lease first. A
-   preview snapshots its local `Transform`; a live entity reads
+1. **`drive_gizmo_drag` / `capture_gizmo_start`** — the current hover-map hit
+   latches the proxy before the preview pan pass. The following `Update` system
+   resolves the focused USD preview lease. A preview snapshots its local
+   `Transform`; a live entity reads
    `SimulationPoseQuery`, snapshots the active frame/body state, and becomes
    kinematic.
 2. **`apply_gizmo_proxy_drag`** — live poses use
    `render_pose_to_grid_absolute` and
    `position_in_grid_to_parent_local`/`rotation_in_grid_to_parent_local`;
    preview poses use Bevy's `GlobalTransform::reparented_to`.
-3. **`capture_final_gizmo_pose`** — snapshot the proxy's final `Last`-schedule
-   write before release cleanup, because the normal interaction transfer runs
-   earlier in `PostUpdate`.
+3. **`capture_final_gizmo_pose`** — snapshot the proxy after its `Last`-schedule
+   write on every transaction frame, including release, because the normal
+   interaction transfer runs earlier in `PostUpdate`.
 4. **`restore_gizmo_dynamic`** — the live owner restores body/interpolation
    state and commits `TransformEntity`; the USD owner restores on Escape or
    stale preview revision, or commits changed local channels as one

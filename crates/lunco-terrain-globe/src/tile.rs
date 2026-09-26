@@ -5,7 +5,9 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy_mesh::{Indices, PrimitiveTopology};
 use lunco_materials::ATTRIBUTE_GLOBE_DIRECTION;
-use lunco_terrain_core::{HeightSource, square_boundary_posting_spacing};
+use lunco_terrain_core::{
+    HeightSource, square_boundary_posting_spacing, square_boundary_sample_coordinate,
+};
 
 /// The exact local DEM footprint in the body's tangent-plane coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,6 +58,8 @@ pub fn create_quadsphere_tile_mesh(
     let mut normals = Vec::new();
     let mut indices = Vec::new();
     let mut directions = Vec::new();
+    let boundary_grid = patch
+        .and_then(|patch| HandoffBoundaryGrid::new(patch.handoff, patch.boundary_grid_resolution));
     let tiles_at_level = 1 << level;
     let step = 2.0 / tiles_at_level as f64;
     let start_u = -1.0 + (i as f64) * step;
@@ -117,26 +121,37 @@ pub fn create_quadsphere_tile_mesh(
             if dirs.iter().all(|&d| patch.handoff.contains(d)) {
                 continue;
             }
-            // The outside of an axis-aligned square is four disjoint convex
-            // regions: left, right, bottom-between-sides, and top-between-sides.
-            // The back hemisphere is a fifth disjoint region because gnomonic
-            // coordinates are defined only in front of the tangent plane.
-            // Clipping the source triangle to each region removes only the DEM
-            // square without dropping the far side of the body or overlapping
-            // corner polygons.
-            for region in 0..5u8 {
-                let polygon = clip_triangle_to_region(&dirs, &patch.handoff, region);
-                let polygon = subdivide_handoff_boundary(
-                    &polygon,
+
+            let polygons = if let Some(boundary_grid) = &boundary_grid {
+                let Some(bounds) = triangle_bounds_in_square(
                     &dirs,
-                    &patch.handoff,
-                    patch.boundary_grid_resolution,
-                );
-                if polygon.len() < 3 {
+                    &boundary_grid.outer_handoff,
+                    boundary_grid.outer_extent,
+                ) else {
+                    let first = clipped_positions.len() as u32;
+                    for dir in dirs {
+                        let (position, normal) =
+                            surface_vertex(dir, radius, tile_center, Some(&patch));
+                        clipped_positions.push(position);
+                        clipped_normals.push(normal);
+                        clipped_directions.push(dir);
+                    }
+                    clipped_indices.extend_from_slice(&[first, first + 1, first + 2]);
                     continue;
-                }
-                for k in 1..polygon.len() - 1 {
-                    let triangle = [polygon[0], polygon[k], polygon[k + 1]];
+                };
+                clip_triangle_to_handoff_regions(&dirs, &patch.handoff, boundary_grid, bounds)
+            } else {
+                (0..5u8)
+                    .map(|region| {
+                        (
+                            clip_triangle_to_region(&dirs, &patch.handoff, region),
+                            false,
+                        )
+                    })
+                    .collect()
+            };
+            for (polygon, interior_fan) in polygons {
+                for triangle in triangulate_clipped_polygon(&polygon, interior_fan) {
                     let first = clipped_positions.len() as u32;
                     for v in triangle {
                         let dir = interpolate_dir(&dirs, v.bary);
@@ -180,6 +195,37 @@ pub fn create_quadsphere_tile_mesh(
 #[derive(Clone, Copy)]
 struct ClipVertex {
     bary: [f64; 3],
+}
+
+struct HandoffBoundaryGrid {
+    posting_spacing: f64,
+    inner_samples: Vec<f64>,
+    outer_extent: f64,
+    outer_handoff: GlobeHandoff,
+    outer_samples: Vec<f64>,
+}
+
+impl HandoffBoundaryGrid {
+    fn new(handoff: GlobeHandoff, resolution: usize) -> Option<Self> {
+        let posting_spacing = square_boundary_posting_spacing(handoff.half_extent, resolution)?;
+        let inner_samples = square_boundary_sample_coordinates(handoff.half_extent, resolution);
+        let outer_extent = handoff.half_extent + posting_spacing;
+        let outer_handoff = GlobeHandoff {
+            half_extent: outer_extent,
+            ..handoff
+        };
+        let mut outer_samples = Vec::with_capacity(inner_samples.len() + 2);
+        outer_samples.push(-outer_extent);
+        outer_samples.extend(inner_samples.iter().copied());
+        outer_samples.push(outer_extent);
+        Some(Self {
+            posting_spacing,
+            inner_samples,
+            outer_extent,
+            outer_handoff,
+            outer_samples,
+        })
+    }
 }
 
 impl GlobeHandoff {
@@ -390,26 +436,195 @@ fn interpolate_dir(dirs: &[DVec3; 3], bary: [f64; 3]) -> DVec3 {
     (dirs[0] * bary[0] + dirs[1] * bary[1] + dirs[2] * bary[2]).normalize()
 }
 
-/// Add source-posting vertices along the square cutout boundary. The globe and
-/// local surface then use the same sampled boundary curve instead of joining
-/// different polylines whose endpoints merely happen to coincide.
-fn subdivide_handoff_boundary(
+fn triangle_bounds_in_square(
+    dirs: &[DVec3; 3],
+    handoff: &GlobeHandoff,
+    extent: f64,
+) -> Option<[f64; 4]> {
+    let polygon = clip_triangle_to_rectangle(dirs, handoff, [-extent, extent, -extent, extent]);
+    if polygon.len() < 3 {
+        return None;
+    }
+    let mut bounds = [
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for vertex in polygon {
+        let [x, z] = handoff.coordinates(interpolate_dir(dirs, vertex.bary))?;
+        bounds[0] = bounds[0].min(x);
+        bounds[1] = bounds[1].max(x);
+        bounds[2] = bounds[2].min(z);
+        bounds[3] = bounds[3].max(z);
+    }
+    Some(bounds)
+}
+
+fn clip_triangle_to_handoff_regions(
+    dirs: &[DVec3; 3],
+    handoff: &GlobeHandoff,
+    boundary_grid: &HandoffBoundaryGrid,
+    bounds: [f64; 4],
+) -> Vec<(Vec<ClipVertex>, bool)> {
+    let inner_extent = handoff.half_extent;
+    let outer_extent = boundary_grid.outer_extent;
+    let outer_handoff = &boundary_grid.outer_handoff;
+    let mut polygons = Vec::with_capacity(13);
+
+    // Keep the globe outside the posting collar in the existing disjoint
+    // regions, including the hemisphere behind the gnomonic tangent plane.
+    for region in 0..5u8 {
+        let clipped = clip_triangle_to_region(dirs, outer_handoff, region);
+        if clipped.len() < 3 {
+            continue;
+        }
+        let polygon = subdivide_square_boundary_at_samples(
+            &clipped,
+            dirs,
+            outer_handoff,
+            outer_extent,
+            &boundary_grid.outer_samples,
+        );
+        let split = polygon.len() > clipped.len();
+        polygons.push((polygon, split));
+    }
+
+    // Refine the one-posting source continuation as four edge strips and four
+    // corner cells. Each piece stays near posting scale, so edge relief cannot
+    // fan across a coarse globe cell.
+    let inner_samples = &boundary_grid.inner_samples;
+    let z_intervals = sample_interval_range(inner_samples, bounds[2], bounds[3]);
+    let x_intervals = sample_interval_range(inner_samples, bounds[0], bounds[1]);
+    let left_strip = bounds[0] <= -inner_extent && bounds[1] >= -outer_extent;
+    let right_strip = bounds[1] >= inner_extent && bounds[0] <= outer_extent;
+    let bottom_strip = bounds[2] <= -inner_extent && bounds[3] >= -outer_extent;
+    let top_strip = bounds[3] >= inner_extent && bounds[2] <= outer_extent;
+    let mut collar_rectangles = Vec::with_capacity(2 * (z_intervals.len() + x_intervals.len()) + 4);
+    for index in z_intervals {
+        let min_z = inner_samples[index];
+        let max_z = inner_samples[index + 1];
+        if left_strip {
+            collar_rectangles.push([-outer_extent, -inner_extent, min_z, max_z]);
+        }
+        if right_strip {
+            collar_rectangles.push([inner_extent, outer_extent, min_z, max_z]);
+        }
+    }
+    for index in x_intervals {
+        let min_x = inner_samples[index];
+        let max_x = inner_samples[index + 1];
+        if bottom_strip {
+            collar_rectangles.push([min_x, max_x, -outer_extent, -inner_extent]);
+        }
+        if top_strip {
+            collar_rectangles.push([min_x, max_x, inner_extent, outer_extent]);
+        }
+    }
+    for [min_x, max_x, min_z, max_z] in [
+        [-outer_extent, -inner_extent, -outer_extent, -inner_extent],
+        [inner_extent, outer_extent, -outer_extent, -inner_extent],
+        [-outer_extent, -inner_extent, inner_extent, outer_extent],
+        [inner_extent, outer_extent, inner_extent, outer_extent],
+    ] {
+        if bounds_intersect_rectangle(bounds, [min_x, max_x, min_z, max_z]) {
+            collar_rectangles.push([min_x, max_x, min_z, max_z]);
+        }
+    }
+    for [min_x, max_x, min_z, max_z] in collar_rectangles {
+        let clipped = clip_triangle_to_rectangle(dirs, handoff, [min_x, max_x, min_z, max_z]);
+        if clipped.len() < 3 {
+            continue;
+        }
+        let inner_split = subdivide_square_boundary(
+            &clipped,
+            dirs,
+            handoff,
+            inner_extent,
+            &boundary_grid.inner_samples,
+        );
+        let outer_split = subdivide_square_boundary_at_samples(
+            &inner_split,
+            dirs,
+            outer_handoff,
+            outer_extent,
+            &boundary_grid.outer_samples,
+        );
+        let polygon =
+            subdivide_polygon_edges(&outer_split, dirs, handoff, boundary_grid.posting_spacing);
+        polygons.push((polygon, true));
+    }
+    polygons
+}
+
+fn sample_interval_range(samples: &[f64], min: f64, max: f64) -> std::ops::Range<usize> {
+    if samples.len() < 2 || max < samples[0] || min > samples[samples.len() - 1] {
+        return 0..0;
+    }
+    let min = min.max(samples[0]);
+    let max = max.min(samples[samples.len() - 1]);
+    let first = samples
+        .partition_point(|sample| *sample < min)
+        .saturating_sub(1)
+        .min(samples.len() - 2);
+    let end = samples
+        .partition_point(|sample| *sample <= max)
+        .min(samples.len() - 1)
+        .max(first + 1);
+    first..end
+}
+
+fn bounds_intersect_rectangle(bounds: [f64; 4], [min_x, max_x, min_z, max_z]: [f64; 4]) -> bool {
+    bounds[1] >= min_x && bounds[0] <= max_x && bounds[3] >= min_z && bounds[2] <= max_z
+}
+
+fn clip_triangle_to_rectangle(
+    dirs: &[DVec3; 3],
+    handoff: &GlobeHandoff,
+    [min_x, max_x, min_z, max_z]: [f64; 4],
+) -> Vec<ClipVertex> {
+    clip_triangle_to_half_planes(
+        dirs,
+        handoff,
+        0,
+        &[
+            (0.0, 0.0, 0.0), // front hemisphere
+            (-1.0, 0.0, min_x),
+            (1.0, 0.0, -max_x),
+            (0.0, -1.0, min_z),
+            (0.0, 1.0, -max_z),
+        ],
+    )
+}
+
+fn subdivide_square_boundary(
     polygon: &[ClipVertex],
     dirs: &[DVec3; 3],
     handoff: &GlobeHandoff,
-    grid_resolution: usize,
+    extent: f64,
+    samples: &[f64],
 ) -> Vec<ClipVertex> {
-    if polygon.len() < 2 || grid_resolution < 2 {
+    subdivide_square_boundary_at_samples(polygon, dirs, handoff, extent, samples)
+}
+
+fn square_boundary_sample_coordinates(extent: f64, grid_resolution: usize) -> Vec<f64> {
+    (0..grid_resolution)
+        .filter_map(|index| square_boundary_sample_coordinate(index, grid_resolution, extent))
+        .collect()
+}
+
+fn subdivide_square_boundary_at_samples(
+    polygon: &[ClipVertex],
+    dirs: &[DVec3; 3],
+    handoff: &GlobeHandoff,
+    extent: f64,
+    samples: &[f64],
+) -> Vec<ClipVertex> {
+    if polygon.len() < 2 {
         return polygon.to_vec();
     }
 
-    let half_extent = handoff.half_extent as f32;
-    let spacing = (2.0_f32 * half_extent) / (grid_resolution as f32 - 1.0);
-    let spacing_m = spacing as f64;
-    if !spacing_m.is_finite() || spacing_m <= 0.0 {
-        return polygon.to_vec();
-    }
-
+    let tolerance = extent.abs().max(1.0) * 1.0e-9;
     let mut subdivided = Vec::with_capacity(polygon.len());
     for (index, start) in polygon.iter().copied().enumerate() {
         let end = polygon[(index + 1) % polygon.len()];
@@ -421,62 +636,87 @@ fn subdivide_handoff_boundary(
         let Some([end_x, end_z]) = handoff.coordinates(interpolate_dir(dirs, end.bary)) else {
             continue;
         };
-        let tolerance = handoff.half_extent.abs().max(1.0) * 1.0e-9;
-        let on_x_side = (start_x.abs() - handoff.half_extent).abs() <= tolerance
-            && (end_x.abs() - handoff.half_extent).abs() <= tolerance
+        let on_x_side = (start_x.abs() - extent).abs() <= tolerance
+            && (end_x.abs() - extent).abs() <= tolerance
             && start_x.signum() == end_x.signum();
-        let on_z_side = (start_z.abs() - handoff.half_extent).abs() <= tolerance
-            && (end_z.abs() - handoff.half_extent).abs() <= tolerance
+        let on_z_side = (start_z.abs() - extent).abs() <= tolerance
+            && (end_z.abs() - extent).abs() <= tolerance
             && start_z.signum() == end_z.signum();
-        let (axis, start_value, end_value) = if on_x_side {
-            (1, start_z, end_z)
+        let (start_value, end_value, a, b) = if on_x_side {
+            (start_z, end_z, 0.0, 1.0)
         } else if on_z_side {
-            (0, start_x, end_x)
+            (start_x, end_x, 1.0, 0.0)
         } else {
             continue;
         };
+
         let min_value = start_value.min(end_value);
         let max_value = start_value.max(end_value);
-        let tolerance = spacing_m * 1.0e-9;
-        let first_sample = ((min_value + handoff.half_extent) / spacing_m)
-            .ceil()
-            .clamp(0.0, grid_resolution as f64 - 1.0) as usize;
-        let last_sample = ((max_value + handoff.half_extent) / spacing_m)
-            .floor()
-            .clamp(0.0, grid_resolution as f64 - 1.0) as usize;
-        if first_sample > last_sample {
+        let segment_tolerance = extent.abs().max(1.0) * 1.0e-9;
+        let first_sample =
+            samples.partition_point(|target| *target <= min_value + segment_tolerance);
+        let end_sample = samples.partition_point(|target| *target < max_value - segment_tolerance);
+        let add_sample = |target: f64, subdivided: &mut Vec<ClipVertex>| {
+            // Gnomonic square boundaries are linear half-planes in the
+            // unnormalised barycentric direction, so this intersection is
+            // exact along the source triangle edge.
+            let c = -target;
+            let fs = region_value(start, dirs, handoff, 0, a, b, c);
+            let fe = region_value(end, dirs, handoff, 0, a, b, c);
+            let denominator = fs - fe;
+            if !denominator.is_finite() || denominator.abs() <= f64::EPSILON {
+                return;
+            }
+            let t = (fs / denominator).clamp(0.0, 1.0);
+            subdivided.push(ClipVertex {
+                bary: std::array::from_fn(|component| {
+                    start.bary[component] + (end.bary[component] - start.bary[component]) * t
+                }),
+            });
+        };
+        if first_sample >= end_sample {
             continue;
         }
+        if end_value > start_value {
+            for &target in &samples[first_sample..end_sample] {
+                add_sample(target, &mut subdivided);
+            }
+        } else {
+            for &target in samples[first_sample..end_sample].iter().rev() {
+                add_sample(target, &mut subdivided);
+            }
+        }
+    }
+    subdivided
+}
 
-        let increasing = end_value > start_value;
-        let sample_count = last_sample - first_sample + 1;
-        for offset in 0..sample_count {
-            let sample = if increasing {
-                first_sample + offset
-            } else {
-                last_sample - offset
-            };
-            let target = (-half_extent + sample as f32 * spacing) as f64;
-            if target <= min_value + tolerance || target >= max_value - tolerance {
-                continue;
-            }
-            let mut low = 0.0;
-            let mut high = 1.0;
-            for _ in 0..48 {
-                let middle = (low + high) * 0.5;
-                let bary = std::array::from_fn(|component| {
-                    start.bary[component] + (end.bary[component] - start.bary[component]) * middle
-                });
-                let Some(coordinates) = handoff.coordinates(interpolate_dir(dirs, bary)) else {
-                    break;
-                };
-                if (coordinates[axis] < target) == increasing {
-                    low = middle;
-                } else {
-                    high = middle;
-                }
-            }
-            let t = (low + high) * 0.5;
+fn subdivide_polygon_edges(
+    polygon: &[ClipVertex],
+    dirs: &[DVec3; 3],
+    handoff: &GlobeHandoff,
+    max_edge_length: f64,
+) -> Vec<ClipVertex> {
+    if polygon.len() < 2 || !max_edge_length.is_finite() || max_edge_length <= 0.0 {
+        return polygon.to_vec();
+    }
+    let mut subdivided = Vec::with_capacity(polygon.len());
+    for (index, start) in polygon.iter().copied().enumerate() {
+        let end = polygon[(index + 1) % polygon.len()];
+        subdivided.push(start);
+        let Some([start_x, start_z]) = handoff.coordinates(interpolate_dir(dirs, start.bary))
+        else {
+            continue;
+        };
+        let Some([end_x, end_z]) = handoff.coordinates(interpolate_dir(dirs, end.bary)) else {
+            continue;
+        };
+        let length = (end_x - start_x).hypot(end_z - start_z);
+        if !length.is_finite() || length <= max_edge_length {
+            continue;
+        }
+        let segments = (length / max_edge_length).ceil() as usize;
+        for segment in 1..segments {
+            let t = segment as f64 / segments as f64;
             subdivided.push(ClipVertex {
                 bary: std::array::from_fn(|component| {
                     start.bary[component] + (end.bary[component] - start.bary[component]) * t
@@ -485,6 +725,101 @@ fn subdivide_handoff_boundary(
         }
     }
     subdivided
+}
+
+fn clip_triangle_to_half_planes(
+    dirs: &[DVec3; 3],
+    handoff: &GlobeHandoff,
+    region: u8,
+    cuts: &[(f64, f64, f64)],
+) -> Vec<ClipVertex> {
+    let mut polygon = vec![
+        ClipVertex {
+            bary: [1.0, 0.0, 0.0],
+        },
+        ClipVertex {
+            bary: [0.0, 1.0, 0.0],
+        },
+        ClipVertex {
+            bary: [0.0, 0.0, 1.0],
+        },
+    ];
+    for &(a, b, c) in cuts {
+        if polygon.is_empty() {
+            break;
+        }
+        let mut next = Vec::with_capacity(polygon.len() + 1);
+        let Some(mut start) = polygon.last().copied() else {
+            break;
+        };
+        let mut fs = region_value(start, dirs, handoff, region, a, b, c);
+        for &end in &polygon {
+            let fe = region_value(end, dirs, handoff, region, a, b, c);
+            let start_inside = fs <= 0.0;
+            let end_inside = fe <= 0.0;
+            if start_inside != end_inside {
+                let t = fs / (fs - fe);
+                next.push(ClipVertex {
+                    bary: std::array::from_fn(|component| {
+                        start.bary[component] + (end.bary[component] - start.bary[component]) * t
+                    }),
+                });
+            }
+            if end_inside {
+                next.push(end);
+            }
+            start = end;
+            fs = fe;
+        }
+        polygon = next;
+    }
+    polygon
+}
+
+fn triangulate_clipped_polygon(polygon: &[ClipVertex], interior_fan: bool) -> Vec<[ClipVertex; 3]> {
+    if polygon.len() < 3 {
+        return Vec::new();
+    }
+    if interior_fan {
+        if let Some(center) = polygon_centroid(polygon) {
+            return (0..polygon.len())
+                .map(|index| [center, polygon[index], polygon[(index + 1) % polygon.len()]])
+                .collect();
+        }
+    }
+    (1..polygon.len() - 1)
+        .map(|index| [polygon[0], polygon[index], polygon[index + 1]])
+        .collect()
+}
+
+/// Find the area centroid in the original triangle's barycentric plane. A
+/// clipped polygon with posting samples along the DEM edge must not use that
+/// edge's first corner as the fan hub: doing so stretches every inserted edge
+/// segment into long triangles across the coarse globe cell.
+fn polygon_centroid(polygon: &[ClipVertex]) -> Option<ClipVertex> {
+    if polygon.len() < 3 {
+        return None;
+    }
+    let mut twice_area = 0.0;
+    let mut weighted_x = 0.0;
+    let mut weighted_y = 0.0;
+    for index in 0..polygon.len() {
+        let a = polygon[index].bary;
+        let b = polygon[(index + 1) % polygon.len()].bary;
+        let cross = a[1] * b[2] - b[1] * a[2];
+        twice_area += cross;
+        weighted_x += (a[1] + b[1]) * cross;
+        weighted_y += (a[2] + b[2]) * cross;
+    }
+    if !twice_area.is_finite() || twice_area.abs() <= f64::EPSILON {
+        return None;
+    }
+    let x = weighted_x / (3.0 * twice_area);
+    let y = weighted_y / (3.0 * twice_area);
+    let bary = [1.0 - x - y, x, y];
+    bary.iter()
+        .all(|value| value.is_finite())
+        .then_some(ClipVertex { bary })
 }
 
 /// Conservative tile-level rejection for the full source handoff. The patch
@@ -516,17 +851,6 @@ fn clip_triangle_to_region(
     handoff: &GlobeHandoff,
     region: u8,
 ) -> Vec<ClipVertex> {
-    let mut polygon = vec![
-        ClipVertex {
-            bary: [1.0, 0.0, 0.0],
-        },
-        ClipVertex {
-            bary: [0.0, 1.0, 0.0],
-        },
-        ClipVertex {
-            bary: [0.0, 0.0, 1.0],
-        },
-    ];
     let cuts: &[(f64, f64, f64)] = match region {
         0 => &[
             (0.0, 0.0, 0.0), // denominator >= 0
@@ -551,35 +875,7 @@ fn clip_triangle_to_region(
         4 => &[(0.0, 0.0, 0.0)], // denominator <= 0: the back hemisphere
         _ => &[],
     };
-    for &(a, b, c) in cuts {
-        let mut next = Vec::new();
-        for pair in polygon.windows(2).chain(std::iter::once(
-            &[polygon[polygon.len() - 1], polygon[0]][..],
-        )) {
-            let start = pair[0];
-            let end = pair[1];
-            let fs = region_value(start, dirs, handoff, region, a, b, c);
-            let fe = region_value(end, dirs, handoff, region, a, b, c);
-            let start_inside = fs <= 0.0;
-            let end_inside = fe <= 0.0;
-            if start_inside != end_inside {
-                let t = fs / (fs - fe);
-                next.push(ClipVertex {
-                    bary: std::array::from_fn(|i| {
-                        start.bary[i] + (end.bary[i] - start.bary[i]) * t
-                    }),
-                });
-            }
-            if end_inside {
-                next.push(end);
-            }
-        }
-        polygon = next;
-        if polygon.is_empty() {
-            break;
-        }
-    }
-    polygon
+    clip_triangle_to_half_planes(dirs, handoff, region, cuts)
 }
 
 fn region_value(
@@ -617,6 +913,16 @@ fn region_value(
 mod tests {
     use super::*;
     use bevy::mesh::VertexAttributeValues;
+
+    #[test]
+    fn posting_collar_interval_search_scales_with_the_local_triangle_bounds() {
+        let samples = square_boundary_sample_coordinates(500.0, 513);
+        let narrow = sample_interval_range(&samples, samples[256], samples[259]);
+        let broad = sample_interval_range(&samples, samples[0], samples[512]);
+
+        assert!(narrow.len() <= 5);
+        assert_eq!(broad.len(), 512);
+    }
 
     fn handoff(half_extent: f64) -> GlobeHandoff {
         GlobeHandoff {
@@ -819,6 +1125,18 @@ mod tests {
             half_extent: 1_200.0,
             blend_m: 1_200.0,
         };
+        let boundary_grid = HandoffBoundaryGrid::new(handoff, 17).expect("measured boundary");
+        let uncut_triangle = vec![
+            ClipVertex {
+                bary: [1.0, 0.0, 0.0],
+            },
+            ClipVertex {
+                bary: [0.0, 1.0, 0.0],
+            },
+            ClipVertex {
+                bary: [0.0, 0.0, 1.0],
+            },
+        ];
         let point_in_polygon = |bary: [f64; 3], polygon: &[ClipVertex]| {
             let point = [bary[1], bary[2]];
             polygon.iter().enumerate().all(|(index, vertex)| {
@@ -861,12 +1179,28 @@ mod tests {
                                     ]
                                 };
                                 for dirs in triangles {
-                                    let polygons = (0..5u8)
-                                        .map(|region| {
-                                            clip_triangle_to_region(&dirs, &handoff, region)
-                                        })
-                                        .filter(|polygon| polygon.len() >= 3)
-                                        .collect::<Vec<_>>();
+                                    let polygons = if dirs
+                                        .iter()
+                                        .all(|direction| handoff.contains(*direction))
+                                    {
+                                        Vec::new()
+                                    } else if let Some(bounds) = triangle_bounds_in_square(
+                                        &dirs,
+                                        &boundary_grid.outer_handoff,
+                                        boundary_grid.outer_extent,
+                                    ) {
+                                        clip_triangle_to_handoff_regions(
+                                            &dirs,
+                                            &handoff,
+                                            &boundary_grid,
+                                            bounds,
+                                        )
+                                        .into_iter()
+                                        .map(|(polygon, _)| polygon)
+                                        .collect::<Vec<_>>()
+                                    } else {
+                                        vec![uncut_triangle.clone()]
+                                    };
                                     for b0 in 1..12 {
                                         for b1 in 1..12 - b0 {
                                             let bary = [
@@ -910,6 +1244,77 @@ mod tests {
     }
 
     #[test]
+    fn posting_collar_clipping_keeps_every_triangle_point_outside_the_site_square() {
+        let handoff = GlobeHandoff {
+            dir: DVec3::X,
+            east: DVec3::Z,
+            north: DVec3::Y,
+            radius_m: 100.0,
+            site_radius_m: 100.0,
+            half_extent: 10.0,
+            blend_m: 50.0,
+        };
+        let direction_at = |x: f64, z: f64| {
+            (handoff.dir
+                + handoff.east * (x / handoff.site_radius_m)
+                + handoff.north * (z / handoff.site_radius_m))
+                .normalize()
+        };
+        let dirs = [
+            direction_at(-100.0, -100.0),
+            direction_at(100.0, -100.0),
+            direction_at(0.0, 100.0),
+        ];
+        let boundary_grid = HandoffBoundaryGrid::new(handoff, 9).expect("measured boundary");
+        let bounds = triangle_bounds_in_square(
+            &dirs,
+            &boundary_grid.outer_handoff,
+            boundary_grid.outer_extent,
+        )
+        .expect("triangle crosses the handoff square");
+        let polygons = clip_triangle_to_handoff_regions(&dirs, &handoff, &boundary_grid, bounds);
+        let point_in_polygon = |bary: [f64; 3], polygon: &[ClipVertex]| {
+            let point = [bary[1], bary[2]];
+            polygon.iter().enumerate().all(|(index, vertex)| {
+                let next = polygon[(index + 1) % polygon.len()].bary;
+                let a = [vertex.bary[1], vertex.bary[2]];
+                let b = [next[1], next[2]];
+                (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0]) >= -1.0e-12
+            })
+        };
+
+        for denominator in 2..32 {
+            for first in 1..denominator {
+                for second in 1..denominator - first {
+                    let bary = [
+                        first as f64 / denominator as f64,
+                        second as f64 / denominator as f64,
+                        1.0 - (first + second) as f64 / denominator as f64,
+                    ];
+                    let direction = interpolate_dir(&dirs, bary);
+                    let Some([x, z]) = handoff.coordinates(direction) else {
+                        continue;
+                    };
+                    if (x.abs() - handoff.half_extent).abs() < 0.1
+                        || (z.abs() - handoff.half_extent).abs() < 0.1
+                    {
+                        continue;
+                    }
+                    let covered = polygons
+                        .iter()
+                        .any(|(polygon, _)| point_in_polygon(bary, polygon));
+                    let inside_site =
+                        x.abs() < handoff.half_extent && z.abs() < handoff.half_extent;
+                    assert_eq!(
+                        covered, !inside_site,
+                        "posting-collar clipping mismatch at tangent point ({x}, {z}), bary={bary:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn clipped_site_boundary_uses_authored_grid_samples() {
         let handoff = handoff(10.0);
         let dirs = [
@@ -918,7 +1323,9 @@ mod tests {
             DVec3::new(1.0, 0.3, 0.3).normalize(),
         ];
         let grid_resolution = 9;
-        let spacing_m = 2.5;
+        let spacing_m = square_boundary_posting_spacing(handoff.half_extent, grid_resolution)
+            .expect("measured posting spacing");
+        let samples = square_boundary_sample_coordinates(handoff.half_extent, grid_resolution);
         let mut boundary_segments = 0;
         let mut inserted_samples = 0;
 
@@ -927,7 +1334,13 @@ mod tests {
             if original.len() < 3 {
                 continue;
             }
-            let polygon = subdivide_handoff_boundary(&original, &dirs, &handoff, grid_resolution);
+            let polygon = subdivide_square_boundary(
+                &original,
+                &dirs,
+                &handoff,
+                handoff.half_extent,
+                &samples,
+            );
             for inserted in polygon.iter().filter(|vertex| {
                 !original.iter().any(|original| {
                     original
@@ -986,6 +1399,153 @@ mod tests {
     }
 
     #[test]
+    fn posting_collar_regions_cover_the_seam_once_with_posting_scale_edges() {
+        let mut handoff = handoff(20.0);
+        handoff.radius_m = 1_000.0;
+        handoff.site_radius_m = 1_000.0;
+        let direction_at = |x: f64, z: f64| {
+            (handoff.dir
+                + handoff.east * (x / handoff.site_radius_m)
+                + handoff.north * (z / handoff.site_radius_m))
+                .normalize()
+        };
+        let dirs = [
+            direction_at(-80.0, -50.0),
+            direction_at(80.0, -50.0),
+            direction_at(0.0, 90.0),
+        ];
+        let grid_resolution = 5;
+        let boundary_grid =
+            HandoffBoundaryGrid::new(handoff, grid_resolution).expect("measured posting spacing");
+        let spacing = boundary_grid.posting_spacing;
+        let inner_samples =
+            square_boundary_sample_coordinates(handoff.half_extent, grid_resolution);
+        let bounds = triangle_bounds_in_square(
+            &dirs,
+            &boundary_grid.outer_handoff,
+            boundary_grid.outer_extent,
+        )
+        .expect("triangle crosses the handoff square");
+        let polygons = clip_triangle_to_handoff_regions(&dirs, &handoff, &boundary_grid, bounds);
+        let point_in_polygon = |bary: [f64; 3], polygon: &[ClipVertex]| {
+            let point = [bary[1], bary[2]];
+            polygon.iter().enumerate().all(|(index, vertex)| {
+                let next = polygon[(index + 1) % polygon.len()].bary;
+                let a = [vertex.bary[1], vertex.bary[2]];
+                let b = [next[1], next[2]];
+                (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0]) >= -1.0e-12
+            })
+        };
+
+        assert!(polygons.iter().any(|(_, fan)| *fan));
+        for x_step in 1..40 {
+            for y_step in 1..40 - x_step {
+                let bary = [
+                    x_step as f64 / 40.0,
+                    y_step as f64 / 40.0,
+                    1.0 - (x_step + y_step) as f64 / 40.0,
+                ];
+                let Some([x, z]) = handoff.coordinates(interpolate_dir(&dirs, bary)) else {
+                    continue;
+                };
+                if (x.abs() - handoff.half_extent).abs() < 0.1
+                    || (z.abs() - handoff.half_extent).abs() < 0.1
+                    || inner_samples
+                        .iter()
+                        .any(|sample| (x - sample).abs() < 0.1 || (z - sample).abs() < 0.1)
+                {
+                    continue;
+                }
+                let covered = polygons
+                    .iter()
+                    .filter(|(polygon, _)| point_in_polygon(bary, polygon))
+                    .count();
+                let in_dem = x.abs() < handoff.half_extent && z.abs() < handoff.half_extent;
+                assert_eq!(covered, usize::from(!in_dem), "x={x}, z={z}, bary={bary:?}");
+            }
+        }
+
+        let outer_extent = handoff.half_extent + spacing;
+        for (polygon, interior_fan) in polygons.iter().filter(|(_, fan)| *fan) {
+            for triangle in triangulate_clipped_polygon(polygon, *interior_fan) {
+                let positions = triangle.map(|vertex| {
+                    handoff
+                        .coordinates(interpolate_dir(&dirs, vertex.bary))
+                        .expect("collar vertices are in front of the tangent plane")
+                });
+                if positions.iter().any(|[x, z]| {
+                    x.abs() > outer_extent + 1.0e-6 || z.abs() > outer_extent + 1.0e-6
+                }) {
+                    continue;
+                }
+                for edge in 0..3 {
+                    let a = positions[edge];
+                    let b = positions[(edge + 1) % 3];
+                    assert!(
+                        (a[0] - b[0]).hypot(a[1] - b[1])
+                            <= spacing * std::f64::consts::SQRT_2 * 1.01,
+                        "collar triangle edge exceeds one posting cell: {a:?} to {b:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn posting_split_polygon_triangulates_from_its_interior() {
+        let polygon = [
+            ClipVertex {
+                bary: [1.0, 0.0, 0.0],
+            },
+            ClipVertex {
+                bary: [0.75, 0.25, 0.0],
+            },
+            ClipVertex {
+                bary: [0.5, 0.5, 0.0],
+            },
+            ClipVertex {
+                bary: [0.25, 0.75, 0.0],
+            },
+            ClipVertex {
+                bary: [0.0, 1.0, 0.0],
+            },
+            ClipVertex {
+                bary: [0.0, 0.5, 0.5],
+            },
+        ];
+        let center = polygon_centroid(&polygon).expect("non-degenerate clipped polygon");
+        let center_2d = [center.bary[1], center.bary[2]];
+        assert!(center_2d[0] > 0.0 && center_2d[0] < 1.0);
+        assert!(center_2d[1] > 0.0 && center_2d[1] < 0.5);
+
+        let signed_area = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+            (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        };
+        let triangles_area: f64 = (0..polygon.len())
+            .map(|index| {
+                let a = [polygon[index].bary[1], polygon[index].bary[2]];
+                let b = [
+                    polygon[(index + 1) % polygon.len()].bary[1],
+                    polygon[(index + 1) % polygon.len()].bary[2],
+                ];
+                let area = signed_area(center_2d, a, b);
+                assert!(area > 0.0, "interior fan reversed an edge: {area}");
+                area * 0.5
+            })
+            .sum();
+        let polygon_area = 0.5
+            * polygon
+                .iter()
+                .enumerate()
+                .map(|(index, vertex)| {
+                    let next = polygon[(index + 1) % polygon.len()].bary;
+                    vertex.bary[1] * next[2] - next[1] * vertex.bary[2]
+                })
+                .sum::<f64>();
+        assert!((triangles_area - polygon_area).abs() < 1.0e-12);
+    }
+
+    #[test]
     fn adjacent_cutout_regions_share_grid_aligned_square_corners() {
         let handoff = handoff(10.0);
         let dirs = [
@@ -1002,7 +1562,9 @@ mod tests {
         };
 
         let right = clip_triangle_to_region(&dirs, &handoff, 1);
-        let right = subdivide_handoff_boundary(&right, &dirs, &handoff, 9);
+        let samples = square_boundary_sample_coordinates(handoff.half_extent, 9);
+        let right =
+            subdivide_square_boundary(&right, &dirs, &handoff, handoff.half_extent, &samples);
         let top = clip_triangle_to_region(&dirs, &handoff, 3);
 
         assert!(

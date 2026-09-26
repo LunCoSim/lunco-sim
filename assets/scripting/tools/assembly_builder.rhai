@@ -1060,12 +1060,12 @@ fn _mesh_shape_attribute_ops(edit_target, shape, points, face_counts,
             return plan_error("mesh face index is outside the point array");
         }
     }
-    if collision_approximation != ()
-        && collision_approximation != "convexHull"
-        && collision_approximation != "convexDecomposition"
-        && collision_approximation != "boundingCube"
-        && collision_approximation != "none" {
-        return plan_error("unsupported USD mesh collision approximation");
+    if collision_approximation != () {
+        let capabilities = query("AvianMeshCollisionApproximations", #{});
+        if !query_ok(capabilities) || capabilities.approximations == ()
+            || !capabilities.approximations.contains(collision_approximation) {
+            return plan_error("mesh collision approximation is not implemented by the active Avian USD adapter");
+        }
     }
     let ops = [#{ SetAttribute: #{
         edit_target: edit_target, path: shape, name: "points",
@@ -2225,7 +2225,11 @@ fn query_ok(record) {
 // stage.
 fn composed_query(doc, params) {
     let scoped = params;
-    scoped.doc_id = doc;
+    // The query provider uses an explicit document when one is supplied and
+    // the unique mounted stage otherwise. Rhai Unit means "no document"; do
+    // not serialize it as an explicit doc_id because the typed provider
+    // correctly rejects non-numeric document identities.
+    if doc != () { scoped.doc_id = doc; }
     let record = query("QueryUsdPrim", scoped);
     if query_ok(record) {
         return record;

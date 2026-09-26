@@ -92,6 +92,16 @@ calculation for sky materials. Camera pose changes
 refresh the direction while CelestialTime is paused. Continuous renderer data
 stays in Rust; author the background and material binding in USD.
 
+The globe's resident mesh cap defaults to 72 MiB. A Twin can override it in
+`twin.toml` with the positive integer byte setting
+`[settings] "celestial.globe_lod.max_resident_mesh_bytes" = 100663296`.
+The application applies the override when the active Twin settings change,
+not in the frame loop. An invalid value is reported and holds globe LOD
+reconciliation; correct the Twin setting before diagnosing a coverage failure.
+For a terrain-to-globe join, fixed-detail selection follows the projected DEM
+square's one-posting perimeter band. The DEM interior and distant globe use
+camera LOD; do not spread seam tessellation across the full blend collar.
+
 ## High-profile near detail
 
 Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and

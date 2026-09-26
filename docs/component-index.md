@@ -11,7 +11,7 @@ All physical equations, conservation laws, and component dynamics live in `asset
 ### 1.1 Electrical Power Subsystem (`LunCo.Electrical`)
 - **[Pin.mo](../assets/models/LunCo/Electrical/Pin.mo)**: Acausal electrical pin connector (`Real v; flow Real i;`, enforcing Kirchhoff's Current Law $\sum i = 0$).
 - **[Battery.mo](../assets/models/LunCo/Electrical/Battery.mo)**: Pack capacity, fixed authored initial state, bounded State-of-Charge integration, internal-resistance voltage sag ($V = V_{\text{nom}} + I R$ with the signed pin-current convention), and a 0.1% usable-storage reserve signal for the empty-boundary event.
-- **[SolarPanel.mo](../assets/models/LunCo/Electrical/SolarPanel.mo)**: Triple-junction solar cell array power generation ($P_{\text{solar}} = \text{area} \cdot \eta \cdot \Phi_{\text{sun}}$).
+- **[SolarPanel.mo](../assets/models/LunCo/Electrical/SolarPanel.mo)**: Solar array generation from collecting area, efficiency, irradiance, and incidence; a finite nameplate rating caps output while the default infinite rating leaves generic arrays uncapped.
 - **[DCMotor.mo](../assets/models/LunCo/Electrical/DCMotor.mo)**: Electrical facet of a USD/Avian hub drive; demand-controlled bus current, electrical draw, and winding heat. The shaft torque, speed, reduction, and contact mechanics remain owned by the USD/Avian drivetrain.
 - **[PDU.mo](../assets/models/LunCo/Electrical/PDU.mo)**: EPS Power Distribution Unit, 28V regulated main bus, and under-voltage load shedding.
 - **[OnboardComputer.mo](../assets/models/LunCo/Electrical/OnboardComputer.mo)**: Flight computer baseline power draw ($P_{\text{base}} = 12\text{ W}$) + active GNC processing load ($P_{\text{gnc}} = 8\text{ W}$).

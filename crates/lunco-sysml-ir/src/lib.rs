@@ -530,19 +530,19 @@ fn apply_constraint_usage_bindings(
     analysis: &SysmlAnalysis,
     usage_handle: SysmlElementHandle,
     compiled: &mut CompiledConstraint,
-) {
+) -> Vec<RequiredConstraintParameterBinding> {
     let Some(usage) = analysis
         .constraints()
         .iter()
         .find(|constraint| constraint.element.handle == usage_handle)
     else {
-        return;
+        return Vec::new();
     };
     if usage.bindings.is_empty() {
-        return;
+        return Vec::new();
     }
     let Some(target) = compiled.constraint.as_ref() else {
-        return;
+        return Vec::new();
     };
 
     let mut diagnostics = Vec::new();
@@ -610,7 +610,7 @@ fn apply_constraint_usage_bindings(
     }
 
     let Some(target) = compiled.constraint.as_mut() else {
-        return;
+        return Vec::new();
     };
     for (formal, actual) in &bindings {
         for expression in &mut target.expressions {
@@ -629,6 +629,10 @@ fn apply_constraint_usage_bindings(
         &target.expressions,
     );
     compiled.diagnostics.extend(diagnostics);
+    bindings
+        .into_iter()
+        .map(|(parameter, value)| RequiredConstraintParameterBinding { parameter, value })
+        .collect()
 }
 
 fn fingerprint_bound_constraint(
@@ -2212,6 +2216,22 @@ pub enum ObservationState {
     ProviderError,
 }
 
+/// Revision identity for the immutable source snapshot that produced an
+/// observation. Provider-specific revision fields stay in a tagged value so
+/// document, composed-stage, and source revisions cannot be confused.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ObservationProvenance {
+    SysmlSource {
+        source_revision: u64,
+        source_fingerprint: u64,
+    },
+    UsdStage {
+        document_id: Option<u64>,
+        document_generation: Option<u64>,
+        stage_generation: u64,
+    },
+}
+
 /// One observation with its provider state and optional typed value.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FeatureObservation {
@@ -2228,6 +2248,8 @@ pub struct FeatureObservation {
     pub time_basis: Option<String>,
     #[serde(default)]
     pub source_revision: Option<u64>,
+    #[serde(default)]
+    pub provenance: Option<ObservationProvenance>,
     #[serde(default)]
     pub contract: Option<BindingContract>,
 }
@@ -2278,6 +2300,15 @@ pub struct RequiredConstraintEvaluation {
     pub evaluation: EvaluationReport,
 }
 
+/// One resolved source value bound to a formal parameter at a constraint usage.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RequiredConstraintParameterBinding {
+    /// Formal input or inout parameter selected by the usage redefinition.
+    pub parameter: SysmlFeatureHandle,
+    /// Resolved typed value expression authored at the constraint usage.
+    pub value: IrExpression,
+}
+
 /// One compiled `require` membership with any standard feature-value bindings
 /// applied from its constraint usage. The compiled dependencies are therefore
 /// the exact provider feature paths the evaluator expects for this requirement
@@ -2290,6 +2321,9 @@ pub struct RequiredConstraintIr {
     pub definition: Option<SysmlElementHandle>,
     /// Constraint IR compiled in the context of this requirement usage.
     pub compiled: CompiledConstraint,
+    /// Typed usage-site values for formal constraint parameters.
+    #[serde(default)]
+    pub parameter_bindings: Vec<RequiredConstraintParameterBinding>,
 }
 
 /// Compiled required constraints for one requirement in an immutable source
@@ -2586,9 +2620,11 @@ pub fn compile_required_constraints(
             .map(|definition| definition.handle)
             .unwrap_or(membership.usage.handle);
         let mut compiled = compile_constraint_by_handle(analysis, target);
-        if membership.definition.is_some() {
-            apply_constraint_usage_bindings(analysis, membership.usage.handle, &mut compiled);
-        }
+        let parameter_bindings = if membership.definition.is_some() {
+            apply_constraint_usage_bindings(analysis, membership.usage.handle, &mut compiled)
+        } else {
+            Vec::new()
+        };
         report.constraints.push(RequiredConstraintIr {
             membership: membership.usage.handle,
             definition: membership
@@ -2596,6 +2632,7 @@ pub fn compile_required_constraints(
                 .as_ref()
                 .map(|definition| definition.handle),
             compiled,
+            parameter_bindings,
         });
     }
 

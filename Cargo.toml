@@ -299,6 +299,11 @@ description = "Initialize multi-crate workspace architecture for vessel control 
 license = "Apache-2.0"
 
 [workspace.dependencies]
+# Keep all astronomy consumers on one reviewed fork revision. Its workspace
+# pins the fixed `celestial-eop-data` build dependency.
+celestial-core = { git = "https://github.com/LunCoSim/celestial", rev = "c4c6f171833c70c1f369e9d65c7042ccc5cf58b8" }
+celestial-ephemeris = { git = "https://github.com/LunCoSim/celestial", rev = "c4c6f171833c70c1f369e9d65c7042ccc5cf58b8" }
+celestial-time = { git = "https://github.com/LunCoSim/celestial", rev = "c4c6f171833c70c1f369e9d65c7042ccc5cf58b8" }
 # Slim Bevy: drop everything Modelica/rover workbench provably doesn't
 # use. Defaults pull bevy_audio/vorbis (no audio in the apps),
 # bevy_text/bevy_ui*/bevy_sprite* (egui replaces UI + 2D),

@@ -22,6 +22,7 @@ use avian3d::prelude::{
 };
 use bevy::camera::RenderTarget;
 use bevy::math::{DVec3, Rect};
+use bevy::picking::{hover::HoverMap, pointer::PointerId};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use lunco_doc::DocumentId;
@@ -32,7 +33,7 @@ use lunco_usd_viewport_core::{UsdPreviewId, UsdViewportState};
 use lunco_usd_viewport_runtime::{USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID};
 use lunco_viewport_core::PanelRect;
 use lunco_viewport_core::SceneViewport;
-use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
+use lunco_workbench_core::scene_pick::ScenePickGate;
 use lunco_workbench_core::viewport::PanelRects;
 use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
@@ -78,6 +79,19 @@ struct GizmoVisibilityState {
 struct GizmoDragSession {
     /// Real entities whose pre-drag state is owned by this session.
     targets: HashSet<Entity>,
+}
+
+/// Owns a primary-pointer gesture that began on a gizmo proxy.
+///
+/// The proxy is selected from Bevy's current occlusion-aware hover map on the
+/// press frame. Keeping the capture until release prevents preview panning from
+/// taking over when the pointer leaves the image. A cancelled preview gesture
+/// continues blocking pan until release so ownership never transfers midway.
+#[derive(Resource, Default)]
+struct GizmoPointerCapture {
+    proxy: Option<Entity>,
+    preview: bool,
+    cancelled: bool,
 }
 
 /// The authoritative owner of a gizmo transaction.
@@ -444,17 +458,15 @@ fn apply_gizmo_proxy_drag(
     }
 }
 
-/// Capture the transform-gizmo crate's final proxy write before the release
-/// cleanup consumes the drag transaction.
+/// Snapshot the render-space proxy after the gizmo frontend writes it.
 ///
 /// `transform-gizmo-bevy::update_gizmos` runs in `Last`, after the unpausable
-/// interaction schedule that normally transfers active drags. On the release
-/// frame it clears `GizmoTarget::is_active` immediately after writing the last
-/// proxy pose, so `apply_gizmo_proxy_drag` cannot see that write. Snapshotting
-/// the proxy here keeps the transaction's current pose authoritative without
-/// touching the real entity or adding a competing transform writer.
+/// interaction schedule that normally transfers active drags. This snapshot
+/// keeps the transaction current with that later write and preserves the
+/// release-frame pose after the frontend clears its transient active flag. It
+/// does not write the real entity or compete with the proxy transform writer.
 fn capture_final_gizmo_pose(
-    q_proxies: Query<(&Transform, &GizmoProxy, &GizmoTarget)>,
+    q_proxies: Query<(&Transform, &GizmoProxy)>,
     mut q_drag: Query<&mut GizmoDragState, Without<GizmoProxy>>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
@@ -462,8 +474,8 @@ fn capture_final_gizmo_pose(
     q_globals: Query<&GlobalTransform, Without<GizmoProxy>>,
     session: Res<GizmoDragSession>,
 ) {
-    for (proxy_tf, link, gizmo_target) in &q_proxies {
-        if gizmo_target.is_active() || !session.targets.contains(&link.target) {
+    for (proxy_tf, link) in &q_proxies {
+        if !session.targets.contains(&link.target) {
             continue;
         }
         let Ok(mut drag) = q_drag.get_mut(link.target) else {
@@ -570,7 +582,9 @@ fn preview_drag_owner(
 
 /// Makes the selected entity kinematic and freezes the coordinate system when gizmo drag starts.
 fn capture_gizmo_start(
-    gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
+    gizmo_targets: Query<(Entity, &GizmoProxy)>,
+    pointer_capture: Res<GizmoPointerCapture>,
+    gizmo_options: Res<GizmoOptions>,
     viewport: Option<Res<UsdViewportState>>,
     q_paths: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
@@ -587,15 +601,17 @@ fn capture_gizmo_start(
     mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
     mut commands: Commands,
 ) {
+    let Some(captured_proxy) = pointer_capture.proxy else {
+        return;
+    };
     let mut captured_live_any = false;
-    for (link, gizmo_target) in gizmo_targets.iter() {
-        let entity = link.target;
-        if !gizmo_target.is_active() {
+    for (proxy, link) in gizmo_targets.iter() {
+        if !gizmo_options.group_targets && proxy != captured_proxy {
             continue;
         }
+        let entity = link.target;
         // `GizmoDragState` is inserted through deferred commands. The session is
-        // the synchronous guard; without it, every Last pass before the insert
-        // flushes captures and reopens the physics hold.
+        // the synchronous guard against duplicate capture within this schedule.
         if session.targets.contains(&entity) {
             continue;
         }
@@ -697,7 +713,6 @@ fn capture_gizmo_start(
 /// transactions emit one existing [`lunco_usd_core::commands::ApplyUsdOps`]
 /// change set. Each owner keeps its authoritative persistence boundary.
 fn restore_gizmo_dynamic(
-    gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     viewport: Option<Res<UsdViewportState>>,
@@ -712,6 +727,7 @@ fn restore_gizmo_dynamic(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     mut session: ResMut<GizmoDragSession>,
+    pointer_capture: Option<Res<GizmoPointerCapture>>,
     mut physics_holds: ResMut<lunco_physics::PhysicsHolds>,
     mut commands: Commands,
 ) {
@@ -721,19 +737,19 @@ fn restore_gizmo_dynamic(
         .is_some_and(|buttons| buttons.just_released(MouseButton::Left));
     let cancelled = keys
         .as_deref()
-        .is_some_and(|buttons| buttons.just_pressed(KeyCode::Escape));
+        .is_some_and(|buttons| buttons.just_pressed(KeyCode::Escape))
+        || pointer_capture
+            .as_deref()
+            .is_some_and(|capture| capture.cancelled);
     for (entity, drag) in q_drag.iter() {
         if !session.targets.contains(&entity) {
             continue;
         }
-        // `GizmoTarget::is_active` is the transform-gizmo crate's authoritative
-        // interaction state.  Do not combine it with raw mouse state here:
-        // `Last` is deliberately later than input processing, and doing so can
-        // release a target during the same engagement frame, hiding the gizmo
-        // and preventing the next drag while paused.
-        let active = gizmo_targets
-            .iter()
-            .any(|(link, gt)| link.target == entity && gt.is_active());
+        // Pointer capture owns every target in this transaction, independently
+        // of the gizmo frontend's `Last`-stage active-state update.
+        let active = pointer_capture
+            .as_deref()
+            .is_some_and(|capture| capture.proxy.is_some());
         if active && !released && !cancelled {
             continue;
         }
@@ -761,8 +777,8 @@ fn restore_gizmo_dynamic(
         let cancel_transaction = cancelled || frame_changed || stale_preview;
 
         info!(
-            "GIZMO: drag ended for {:?}, restoring coordinate systems",
-            entity
+            "GIZMO: drag ended for {:?}, from {:?} to {:?}, restoring coordinate systems",
+            entity, drag.original_position, drag.current_position,
         );
 
         if matches!(&drag.owner, GizmoDragOwner::UsdPreview { .. }) {
@@ -985,25 +1001,21 @@ fn restore_gizmo_dynamic(
 }
 
 /// App-owned replacement for transform-gizmo-bevy's default `mouse_interaction`
-/// driver (disabled via Cargo features). The crate's version wrote
-/// `GizmoDragStarted`/`GizmoDragging` on EVERY left press/hold — so the
-/// **left-click** selection used to arm a drag as soon as the gizmo rendered ON
-/// the object (its handles under the cursor). Requiring a focused, hovered
-/// handle keeps replace/extend/remove selection gestures separate; a left-drag
-/// on a handle still moves the object (the gizmo only engages when `hovered`,
-/// i.e. the cursor is actually over a handle).
-/// The raw egui focus flag is global because it protects the live scene; the
-/// focused USD preview is admitted separately only when the scene-pick gate
-/// assigns the pointer to its offscreen surface.
+/// driver (disabled via Cargo features). Handle capture starts from the current
+/// occlusion-aware hit map rather than `GizmoTarget::is_focused`, which the
+/// frontend updates later in `Last`. The capture then remains owned through
+/// release or cancellation, including when the cursor leaves a USD preview.
 fn drive_gizmo_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
     mut gate: Option<ResMut<ScenePickGate>>,
+    hover_map: Res<HoverMap>,
     windows: Query<&Window, With<PrimaryWindow>>,
     viewport: Option<Res<UsdViewportState>>,
     panel_rects: Option<Res<PanelRects>>,
-    q_targets: Query<&GizmoTarget>,
+    q_proxies: Query<(), With<GizmoProxy>>,
+    mut capture: ResMut<GizmoPointerCapture>,
     mut drag_started: MessageWriter<GizmoDragStarted>,
     mut dragging: MessageWriter<GizmoDragging>,
 ) {
@@ -1016,40 +1028,87 @@ fn drive_gizmo_drag(
             panel_rects.as_deref(),
         ))
         .is_some_and(|(cursor, rect)| rect_to_logical(rect, scale_factor).contains(cursor));
-    let preview_owns_pointer = preview_pointer
-        && gate
-            .as_deref()
-            .and_then(ScenePickGate::resolved)
-            .is_some_and(|target| matches!(target, SceneTarget::Offscreen(_)));
     let modifier_held = keys.any_pressed([
         KeyCode::ShiftLeft,
         KeyCode::ShiftRight,
         KeyCode::ControlLeft,
         KeyCode::ControlRight,
     ]);
-    let gizmo_pointer_capture = preview_owns_pointer
-        && mouse.pressed(MouseButton::Left)
-        && !modifier_held
-        && q_targets.iter().any(|target| target.is_focused());
-    if let Some(gate) = gate.as_deref_mut() {
-        gate.set_tool_pointer_capture(gizmo_pointer_capture);
-    }
-    let live_owns_pointer = !egui_focus.wants_pointer && !preview_pointer;
+    capture.cancelled = false;
 
-    if (!live_owns_pointer && !preview_owns_pointer)
-        || modifier_held
-        || !q_targets.iter().any(|target| target.is_focused())
-    {
-        // Selection and gizmo interaction are two edges: the first click
-        // creates/shows the target, and only a later click over a handle may
-        // arm the drag. This remains true while physics is paused; a bare
-        // click must never make the selected body start moving.
-        return;
+    let released = mouse.just_released(MouseButton::Left);
+    let pressed = mouse.pressed(MouseButton::Left);
+    let mut owns_preview_pan = capture.preview;
+    let mut send_drag = false;
+    let mut send_drag_started = false;
+
+    if let Some(proxy) = capture.proxy {
+        if released {
+            capture.proxy = None;
+            capture.preview = false;
+        } else if keys.just_pressed(KeyCode::Escape)
+            || (!pressed && !released)
+            || q_proxies.get(proxy).is_err()
+        {
+            // Treat focus loss or a disappearing proxy as cancellation. Keep
+            // the preview pan lock while the button remains held so ownership
+            // cannot jump from a gizmo into the camera halfway through input.
+            capture.cancelled = true;
+            capture.proxy = None;
+            if !pressed {
+                capture.preview = false;
+            }
+        } else {
+            send_drag = true;
+        }
+    } else if capture.preview {
+        // A cancelled preview drag remains consumed until its matching release.
+        if released || (!pressed && !released) {
+            capture.preview = false;
+        }
+    } else if mouse.just_pressed(MouseButton::Left) && !modifier_held {
+        let pointer_owner_allowed = if preview_pointer {
+            true
+        } else {
+            !egui_focus.wants_pointer
+        };
+        if pointer_owner_allowed {
+            let proxy = hover_map
+                .get(&PointerId::Mouse)
+                .into_iter()
+                .flat_map(|hits| hits.iter())
+                .filter_map(|(entity, hit)| {
+                    (hit.depth.is_finite() && q_proxies.get(*entity).is_ok())
+                        .then_some((*entity, hit.depth))
+                })
+                .min_by(|(entity_a, depth_a), (entity_b, depth_b)| {
+                    depth_a
+                        .total_cmp(depth_b)
+                        .then_with(|| entity_a.to_bits().cmp(&entity_b.to_bits()))
+                })
+                .map(|(entity, _)| entity);
+            if let Some(proxy) = proxy {
+                capture.proxy = Some(proxy);
+                capture.preview = preview_pointer;
+                owns_preview_pan = preview_pointer;
+                send_drag_started = true;
+                send_drag = pressed;
+            }
+        }
     }
-    if mouse.just_pressed(MouseButton::Left) {
+
+    // The gate is reset before the egui viewport pass each frame. Preserve the
+    // preview capture on the release/cancel frame so egui cannot apply the
+    // accumulated primary drag delta as a camera pan.
+    owns_preview_pan |= capture.preview;
+    if let Some(gate) = gate.as_deref_mut() {
+        gate.set_tool_pointer_capture(owns_preview_pan);
+    }
+
+    if send_drag_started {
         drag_started.write_default();
     }
-    if mouse.pressed(MouseButton::Left) {
+    if send_drag {
         dragging.write_default();
     }
 }
@@ -1201,16 +1260,13 @@ impl Plugin for SceneEditGizmoPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin)
             .init_resource::<GizmoDragSession>()
+            .init_resource::<GizmoPointerCapture>()
             .init_resource::<GizmoVisibilityState>();
 
         app.add_systems(Startup, configure_gizmo_modes);
         app.add_systems(
             Last,
-            (
-                capture_gizmo_start,
-                capture_final_gizmo_pose.after(capture_gizmo_start),
-                restore_gizmo_dynamic.after(capture_final_gizmo_pose),
-            ),
+            (capture_final_gizmo_pose, restore_gizmo_dynamic).chain(),
         );
         app.add_systems(
             lunco_time::InteractionSchedule,
@@ -1239,7 +1295,14 @@ impl Plugin for SceneEditGizmoPlugin {
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(despawn_gizmo_proxies),
         );
-        app.add_systems(Update, drive_gizmo_drag);
+        app.add_systems(
+            Update,
+            (
+                drive_gizmo_drag,
+                capture_gizmo_start.after(drive_gizmo_drag),
+            )
+                .chain(),
+        );
         app.add_systems(Update, sync_gizmo_dragging_marker);
     }
 }

@@ -22,8 +22,12 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::*;
 use lunco_materials::{ShaderLook, ShaderLookReady};
 use lunco_render::SceneCamera;
-use lunco_terrain_core::{CompositeHeightSource, HeightSource, Square, normal_at_bounded};
-use lunco_terrain_globe::quad_sphere::{cube_to_sphere, subdivide_face, tile_center_uv};
+use lunco_terrain_core::{
+    CompositeHeightSource, HeightSource, Square, normal_at_bounded, square_boundary_posting_spacing,
+};
+use lunco_terrain_globe::quad_sphere::{
+    LodRefinementRegion, balance_cube_sphere_lod, cube_to_sphere, subdivide_face, tile_center_uv,
+};
 use lunco_terrain_globe::{
     GlobeHandoff as GlobeHandoffGeometry, GlobeSurfacePatch, TerrainTile, TileCoord,
     create_quadsphere_tile_mesh,
@@ -355,6 +359,19 @@ impl GlobeHandoff {
         }
     }
 
+    fn lod_refinement_regions(&self, tile_resolution: u32) -> Vec<LodRefinementRegion> {
+        handoff_lod_refinement_regions(
+            self.dir,
+            self.east,
+            self.north,
+            self.radius_m,
+            self.site_radius_m,
+            self.half_extent,
+            self.boundary_grid_resolution,
+            tile_resolution,
+        )
+    }
+
     fn patch(&self) -> GlobeSurfacePatch<'_> {
         GlobeSurfacePatch {
             handoff: self.geometry(),
@@ -414,7 +431,7 @@ pub(crate) struct GlobeTiles {
     last_selection_handoff: Option<GlobeHandoff>,
     last_selection_resident_revision: u64,
     resident_revision: u64,
-    last_selection_lod_key: Option<(u64, u32, u64)>,
+    last_selection_lod_key: Option<(u64, u32, u64, u32)>,
     /// CPU mesh builds queued away from the frame thread. The task result is
     /// installed into `Assets<Mesh>` only after it is ready; tile selection and
     /// visibility remain owned by this reconciler.
@@ -461,6 +478,7 @@ fn hierarchy_changed(
 /// existing hierarchy catches movement from a parent grid without scanning all
 /// scene transforms; the body/grid queries cover authored LOD and handoff edits.
 pub(crate) fn globe_lod_update_due(
+    budget: Res<GlobeLodBudget>,
     viewport: Res<SceneViewport>,
     parents: Query<&ChildOf>,
     changed_transforms: Query<(), Changed<Transform>>,
@@ -474,6 +492,15 @@ pub(crate) fn globe_lod_update_due(
     ready: Query<(), Added<ShaderLookReady>>,
     mut removed_ready: RemovedComponents<ShaderLookReady>,
 ) -> bool {
+    // A Twin setting can hold globe reconciliation when its resident-mesh
+    // budget is invalid. Valid budget edits are change-driven invalidations.
+    if !budget.resident_mesh_budget_valid {
+        return false;
+    }
+    if budget.is_changed() {
+        return true;
+    }
+
     // `SceneViewport` is mutably borrowed by the camera reconciler every frame,
     // so its resource change tick is not an invalidation signal. The active
     // camera value is compared with the camera entity recorded on each body's
@@ -532,6 +559,11 @@ pub struct GlobeLodBudget {
     pub despawn_tiles_per_frame: usize,
     /// Approximate mesh bytes allowed for resident and retiring tile entities.
     pub max_resident_mesh_bytes: usize,
+    /// Whether the active Twin's resident mesh budget was valid.
+    ///
+    /// The application adapter clears this when a Twin supplies a malformed
+    /// override, holding globe reconciliation until the setting is corrected.
+    pub resident_mesh_budget_valid: bool,
     /// Approximate bytes retained by the reusable mesh-handle cache.
     pub max_cached_mesh_bytes: usize,
     /// Fresh mesh bytes allowed in one frame, independent of entity count.
@@ -544,7 +576,8 @@ impl Default for GlobeLodBudget {
             spawn_tiles_per_frame: 16,
             mesh_uploads_per_frame: 4,
             despawn_tiles_per_frame: 32,
-            max_resident_mesh_bytes: 64 * 1024 * 1024,
+            max_resident_mesh_bytes: 72 * 1024 * 1024,
+            resident_mesh_budget_valid: true,
             max_cached_mesh_bytes: 16 * 1024 * 1024,
             max_fresh_mesh_bytes_per_frame: 4 * 1024 * 1024,
         }
@@ -571,7 +604,7 @@ fn tile_dist2(coord: &TileCoord, radius_m: f64, camera_body_local: DVec3) -> f64
 }
 
 /// Conservative CPU/GPU accounting for the mesh layout produced by
-/// `create_quadsphere_tile_mesh` (position, normal, UV and u32 indices).
+/// `create_quadsphere_tile_mesh` (position, normal, globe direction and indices).
 fn tile_mesh_bytes(res: u32) -> usize {
     let side = res as usize + 1;
     let vertices = side.saturating_mul(side);
@@ -579,8 +612,55 @@ fn tile_mesh_bytes(res: u32) -> usize {
         .saturating_mul(res as usize)
         .saturating_mul(6);
     vertices
-        .saturating_mul((3 + 3 + 2) * std::mem::size_of::<f32>())
+        .saturating_mul((3 + 3 + 3) * std::mem::size_of::<f32>())
         .saturating_add(indices.saturating_mul(std::mem::size_of::<u32>()))
+}
+
+/// Maximum LOD whose tile arc size still exceeds the handoff's target scale.
+fn refinement_lod_for_arc_size(radius_m: f64, max_tile_size_m: f64) -> u32 {
+    assert!(radius_m.is_finite() && radius_m > 0.0);
+    assert!(max_tile_size_m.is_finite() && max_tile_size_m > 0.0);
+    let mut max_lod = 0;
+    let mut tile_size_m = radius_m * std::f64::consts::FRAC_PI_2;
+    while tile_size_m > max_tile_size_m {
+        assert!(max_lod < 30, "globe handoff exceeds tile-index precision");
+        tile_size_m *= 0.5;
+        max_lod += 1;
+    }
+    max_lod
+}
+
+fn handoff_lod_refinement_regions(
+    center_direction: DVec3,
+    east: DVec3,
+    north: DVec3,
+    radius_m: f64,
+    site_radius_m: f64,
+    half_extent_m: f64,
+    boundary_grid_resolution: usize,
+    tile_resolution: u32,
+) -> Vec<LodRefinementRegion> {
+    let posting_m = square_boundary_posting_spacing(half_extent_m, boundary_grid_resolution);
+    let collar_posting_m = posting_m.unwrap_or(0.0);
+    let outer_extent_m = half_extent_m + collar_posting_m;
+    let outer_corner_radius_m = std::f64::consts::SQRT_2 * outer_extent_m;
+    let local_radius_m = radius_m * (outer_corner_radius_m / site_radius_m).atan();
+    let local_tile_size_m = posting_m
+        .map(|posting_m| posting_m * f64::from(tile_resolution) * 3.0)
+        .unwrap_or_else(|| (half_extent_m * 0.5).max(1.0));
+    let local_max_lod = refinement_lod_for_arc_size(radius_m, local_tile_size_m);
+    let center = center_direction * radius_m;
+    vec![LodRefinementRegion {
+        center,
+        radius_m: local_radius_m,
+        east,
+        north,
+        site_radius_m,
+        half_extent_m,
+        width_m: collar_posting_m,
+        max_tile_size_m: local_tile_size_m,
+        max_lod: local_max_lod,
+    }]
 }
 
 fn evict_unused_mesh_cache(tiles: &mut GlobeTiles, budget: &GlobeLodBudget) {
@@ -975,6 +1055,7 @@ pub(crate) fn update_globe_lod(
             lod.radius_m.to_bits(),
             lod.max_lod,
             lod.lod_distance_factor.to_bits(),
+            lod.res,
         );
         let selection_needs_rebuild = tiles.last_selection_cam.is_none_or(|previous| {
             let altitude = (camera_body_local.length() - lod.radius_m).abs().max(1.0);
@@ -987,6 +1068,10 @@ pub(crate) fn update_globe_lod(
         let resident_coverage = resident_coverage(&tiles.resident);
         let desired = if selection_needs_rebuild {
             let mut desired = HashSet::new();
+            let refinement_regions = handoff.map(|handoff| handoff.lod_refinement_regions(lod.res));
+            let refinement_regions: &[LodRefinementRegion] = refinement_regions
+                .as_ref()
+                .map_or(&[][..], |regions| regions.as_slice());
             for face in 0..6u8 {
                 subdivide_face(
                     &mut desired,
@@ -1000,6 +1085,29 @@ pub(crate) fn update_globe_lod(
                     lod.radius_m,
                     lod.max_lod,
                     lod.lod_distance_factor,
+                    refinement_regions,
+                );
+            }
+            let max_level = desired.iter().map(|tile| tile.level).max().unwrap_or(0);
+            balance_cube_sphere_lod(&mut desired, body_ent, max_level);
+            if tiles.last_selection_handoff.as_ref() != handoff {
+                let deepest_level = desired.iter().map(|tile| tile.level).max().unwrap_or(0);
+                debug!(
+                    "globe LOD handoff cover: body={body_ent:?} blend_m={:.0} detail_bound_m={:.0} boundary_tile_m={:.1} boundary_max_lod={} leaves={} deepest_level={deepest_level}",
+                    handoff.map(|value| value.blend_m).unwrap_or(0.0),
+                    refinement_regions
+                        .first()
+                        .map(|region| region.radius_m)
+                        .unwrap_or(0.0),
+                    refinement_regions
+                        .first()
+                        .map(|region| region.max_tile_size_m)
+                        .unwrap_or(0.0),
+                    refinement_regions
+                        .first()
+                        .map(|region| region.max_lod)
+                        .unwrap_or(0),
+                    desired.len()
                 );
             }
             tiles.desired = desired.clone();
@@ -1266,48 +1374,6 @@ pub(crate) fn update_globe_lod(
         tiles.last_solve_cam = settled.then_some(camera_body_local);
         tiles.last_solve_camera = settled.then_some(camera_entity);
         tiles.last_solve_handoff = handoff.cloned();
-
-        // `LUNCO_LOD_VALIDATE=1`: assert the resident set still covers the
-        // whole sphere after this frame's spawn/retire pass (the invariant
-        // the budgeted streaming must never break). Ground truth for hole
-        // reports — API-side entity censuses are ambiguous (registry lag,
-        // retiring-tile overlap, cross-body name collisions).
-        if std::env::var("LUNCO_LOD_VALIDATE").is_ok() {
-            let resident: HashSet<TileCoord> = tiles.resident.keys().copied().collect();
-            fn covered(
-                set: &HashSet<TileCoord>,
-                body: Entity,
-                face: u8,
-                level: u32,
-                i: i32,
-                j: i32,
-            ) -> bool {
-                if set.contains(&TileCoord {
-                    body,
-                    face,
-                    level,
-                    i,
-                    j,
-                }) {
-                    return true;
-                }
-                if level > 12 {
-                    return false;
-                }
-                (0..2).all(|di| {
-                    (0..2).all(|dj| covered(set, body, face, level + 1, i * 2 + di, j * 2 + dj))
-                })
-            }
-            for face in 0..6u8 {
-                if !covered(&resident, body_ent, face, 0, 0, 0) {
-                    warn!(
-                        "globe LOD hole: body {body_ent} face {face} uncovered ({} resident, {} retiring)",
-                        resident.len(),
-                        tiles.retiring.len()
-                    );
-                }
-            }
-        }
     }
 }
 
@@ -1315,6 +1381,210 @@ pub(crate) fn update_globe_lod(
 mod tests {
     use super::*;
     use bevy::ecs::system::SystemState;
+
+    #[test]
+    fn handoff_refinement_is_confined_to_the_dem_boundary() {
+        let radius_m: f64 = 1_737_400.0;
+        let half_extent_m: f64 = 501.0;
+        let site_radius_m = radius_m - 1_917.0;
+        let posting_m = square_boundary_posting_spacing(half_extent_m, 512)
+            .expect("valid authored DEM boundary spacing");
+        let regions = handoff_lod_refinement_regions(
+            DVec3::X,
+            DVec3::Z,
+            DVec3::Y,
+            radius_m,
+            site_radius_m,
+            half_extent_m,
+            512,
+            32,
+        );
+
+        assert_eq!(regions.len(), 1);
+        assert!(regions[0].radius_m < 1_000.0);
+        assert_eq!(regions[0].half_extent_m, half_extent_m);
+        assert_eq!(regions[0].width_m, posting_m);
+        assert!(regions[0].max_tile_size_m <= posting_m * 32.0 * 3.0);
+        assert_eq!(regions[0].max_lod, 14);
+    }
+
+    #[test]
+    fn handoff_refines_the_boundary_band_without_forcing_detail_across_the_dem_interior() {
+        let radius_m: f64 = 1_737_400.0;
+        let half_extent_m = 501.0;
+        let site_radius_m = radius_m - 1_917.0;
+        let regions = handoff_lod_refinement_regions(
+            DVec3::X,
+            DVec3::Z,
+            DVec3::Y,
+            radius_m,
+            site_radius_m,
+            half_extent_m,
+            512,
+            32,
+        );
+        let max_level = regions[0].max_lod;
+        let body = Entity::from_bits(1);
+        let mut desired = HashSet::new();
+        for face in 0..6u8 {
+            subdivide_face(
+                &mut desired,
+                &HashSet::new(),
+                body,
+                face,
+                0,
+                0,
+                0,
+                DVec3::splat(1.0e12),
+                radius_m,
+                max_level,
+                2.0,
+                &regions,
+            );
+        }
+        balance_cube_sphere_lod(&mut desired, body, max_level);
+
+        let selected_level = |u: f64, v: f64| {
+            (0..=max_level)
+                .rev()
+                .find(|level| {
+                    let count = 1_i32 << level;
+                    let i =
+                        (((u + 1.0) * 0.5 * f64::from(count)).floor() as i32).clamp(0, count - 1);
+                    let j =
+                        (((v + 1.0) * 0.5 * f64::from(count)).floor() as i32).clamp(0, count - 1);
+                    desired.contains(&TileCoord {
+                        body,
+                        face: 0,
+                        level: *level,
+                        i,
+                        j,
+                    })
+                })
+                .expect("selected direction is covered by the globe")
+        };
+
+        assert!(selected_level(0.0, 0.0) < max_level);
+        assert_eq!(
+            selected_level(0.0, half_extent_m / site_radius_m),
+            max_level
+        );
+    }
+
+    #[test]
+    fn handoff_and_surface_camera_lod_fit_within_the_tile_budget() {
+        let radius_m: f64 = 1_737_400.0;
+        let half_extent_m = 501.0;
+        let site_radius_m = radius_m - 1_917.0;
+        let posting_m = square_boundary_posting_spacing(half_extent_m, 512)
+            .expect("valid authored DEM boundary spacing");
+        let center_direction = DVec3::new(1.0, 0.49, -0.064).normalize();
+        let east = DVec3::Y.cross(center_direction).normalize();
+        let north = center_direction.cross(east).normalize();
+        let regions = handoff_lod_refinement_regions(
+            center_direction,
+            east,
+            north,
+            radius_m,
+            site_radius_m,
+            half_extent_m,
+            512,
+            32,
+        );
+
+        let local = regions.first().expect("DEM boundary region");
+        assert_eq!(regions.len(), 1);
+        assert_eq!(local.max_lod, 14);
+        assert!(local.radius_m < 1_000.0);
+        assert_eq!(local.half_extent_m, half_extent_m);
+        assert_eq!(local.width_m, posting_m);
+        assert!(local.max_tile_size_m <= posting_m * 32.0 * 3.0);
+
+        let body = Entity::from_bits(1);
+        let mut desired = HashSet::new();
+        for face in 0..6u8 {
+            subdivide_face(
+                &mut desired,
+                &HashSet::new(),
+                body,
+                face,
+                0,
+                0,
+                0,
+                center_direction * site_radius_m,
+                radius_m,
+                8,
+                2.0,
+                &regions,
+            );
+        }
+        let max_level = desired.iter().map(|tile| tile.level).max().unwrap_or(0);
+        balance_cube_sphere_lod(&mut desired, body, max_level);
+        let estimated_resident_bytes = desired.len().saturating_mul(tile_mesh_bytes(32));
+        assert!(
+            desired.len() < 600,
+            "boundary-only refinement produced {} tiles",
+            desired.len()
+        );
+        assert!(
+            estimated_resident_bytes < GlobeLodBudget::default().max_resident_mesh_bytes,
+            "handoff cover needs {estimated_resident_bytes} bytes for {} tiles",
+            desired.len()
+        );
+
+        fn leaf_at(
+            leaves: &HashSet<TileCoord>,
+            body: Entity,
+            face: u8,
+            x: i32,
+            y: i32,
+            max_level: u32,
+        ) -> Option<TileCoord> {
+            (0..=max_level).rev().find_map(|level| {
+                let scale = 1_i32 << (max_level - level);
+                leaves
+                    .get(&TileCoord {
+                        body,
+                        face,
+                        level,
+                        i: x / scale,
+                        j: y / scale,
+                    })
+                    .copied()
+            })
+        }
+
+        let extent = 1_i32 << local.max_lod;
+        for tile in &desired {
+            let scale = 1_i32 << (local.max_lod - tile.level);
+            let x0 = tile.i * scale;
+            let y0 = tile.j * scale;
+            let x1 = x0 + scale;
+            let y1 = y0 + scale;
+            let neighbours = [
+                (x1 < extent).then(|| (x1, y0 + scale / 2)),
+                (x0 > 0).then(|| (x0 - 1, y0 + scale / 2)),
+                (y1 < extent).then(|| (x0 + scale / 2, y1)),
+                (y0 > 0).then(|| (x0 + scale / 2, y0 - 1)),
+            ];
+            for (x, y) in neighbours.into_iter().flatten() {
+                let neighbour = leaf_at(&desired, body, tile.face, x, y, local.max_lod)
+                    .expect("same-face neighbor is covered");
+                assert!(
+                    tile.level.abs_diff(neighbour.level) <= 1,
+                    "handoff LOD jumps from face {} level {} ({}, {}) to face {} level {} ({}, {})",
+                    tile.face,
+                    tile.level,
+                    tile.i,
+                    tile.j,
+                    neighbour.face,
+                    neighbour.level,
+                    neighbour.i,
+                    neighbour.j,
+                );
+            }
+        }
+    }
 
     #[test]
     fn cross_body_lod_camera_uses_the_authoritative_big_space_pose() {

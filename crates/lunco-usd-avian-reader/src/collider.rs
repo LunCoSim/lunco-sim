@@ -2,7 +2,7 @@ use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_usd_avian_contracts::AvianMeshApproximation;
+use lunco_usd_avian_contracts::{AvianMeshApproximation, fit_bounding_cube};
 use lunco_usd_bevy_mesh::build_nurbs_collision_mesh_to_tolerance;
 use lunco_usd_bevy_scene::{
     ShapeDims, read_mesh_collision_approximation, read_primitive_axis, read_shape_dims,
@@ -664,35 +664,17 @@ pub fn build_collider_from_usd_at_scale(
                 })?
             }
             AvianMeshApproximation::BoundingCube => {
-                let mut min = DVec3::splat(f64::INFINITY);
-                let mut max = DVec3::splat(f64::NEG_INFINITY);
-                for vertex in &verts {
-                    min = min.min(*vertex);
-                    max = max.max(*vertex);
-                }
-                if !min.is_finite()
-                    || !max.is_finite()
-                    || (max.x - min.x) <= f64::EPSILON
-                    || (max.y - min.y) <= f64::EPSILON
-                    || (max.z - min.z) <= f64::EPSILON
-                {
-                    return Err(ColliderProjectionError::Backend {
+                let corners = fit_bounding_cube(&verts).map_err(|error| {
+                    ColliderProjectionError::Backend {
                         prim: sdf_path.to_string(),
-                        detail: "authored boundingCube approximation needs nonzero extent on all three local axes".to_owned(),
-                    });
-                }
-                let corners = (0..8)
-                    .map(|bits| {
-                        DVec3::new(
-                            if bits & 1 == 0 { min.x } else { max.x },
-                            if bits & 2 == 0 { min.y } else { max.y },
-                            if bits & 4 == 0 { min.z } else { max.z },
-                        )
-                    })
-                    .collect();
-                Collider::convex_hull(corners).ok_or_else(|| ColliderProjectionError::Backend {
-                    prim: sdf_path.to_string(),
-                    detail: "authored boundingCube approximation could not be built".to_owned(),
+                        detail: format!("authored boundingCube approximation {error}"),
+                    }
+                })?;
+                Collider::convex_hull(corners.to_vec()).ok_or_else(|| {
+                    ColliderProjectionError::Backend {
+                        prim: sdf_path.to_string(),
+                        detail: "authored boundingCube approximation could not be built".to_owned(),
+                    }
                 })?
             }
         };

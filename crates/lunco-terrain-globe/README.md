@@ -20,8 +20,15 @@ whole celestial bodies seen from orbit.
 > the site DEM inside its exact georeferenced square, a one-posting C1 collar that
 > fades measured edge relief onto the body-curved datum, and the globe height
 > outside it. `lunco-celestial` wires the retained surface oracle into the globe
-> tile builder; no globe shell is left underneath the DEM footprint. See the
-> design narrative in
+> tile builder; no globe shell is left underneath the DEM footprint. Globe
+> collar geometry is divided into one-posting edge and corner cells, so the
+> measured boundary relief stays local instead of stretching across a coarse
+> globe cell. Handoff refinement is limited to tiles whose projected bounds
+> cross a one-posting band around the DEM square; the rest uses camera-driven
+> globe LOD. Globe detail approaches three DEM postings apart at the seam,
+> independent of camera distance. Tile selection is cached and mesh baking is
+> asynchronous, so detail is not rebuilt every frame. See
+> the design narrative in
 > [`docs/architecture/terrain-substrate.md`](../../docs/architecture/terrain-substrate.md).
 
 ## Responsibility

@@ -614,7 +614,9 @@ fn required_constraint_ir(source_model, requirement, constraint_name) {
             continue;
         }
         return #{ok: value.valid == true, valid: value.valid == true,
-            constraint: value.constraint, diagnostics: value.diagnostics};
+            constraint: value.constraint,
+            parameter_bindings: membership.parameter_bindings,
+            diagnostics: value.diagnostics};
     }
     #{ok: false, valid: false,
         error: "constraint is not a required constraint of " + requirement.qualified_name
@@ -650,8 +652,35 @@ fn scalar_constraint_observation(ir, input_name, observation) {
             dependencies.push(path);
         }
     }
-    if dependencies.len() != 1 || dependencies[0].len() != 1 {
+    let path = ();
+    if dependencies.len() == 1 {
+        path = dependencies[0];
+    } else if dependencies.len() > 1 {
         return invalid;
+    } else {
+        let binding = ();
+        if ir.parameter_bindings != () {
+            for candidate in ir.parameter_bindings {
+                if candidate.parameter == parameter.feature {
+                    if binding != () { return invalid; }
+                    binding = candidate;
+                }
+            }
+        }
+        if binding == () || binding.value == ()
+            || binding.value.kind != "feature_reference" || binding.value.path == () {
+            return invalid;
+        }
+        let bound_dependencies = [];
+        for dependency in ir.constraint.dependencies {
+            if dependency == binding.value.path {
+                bound_dependencies.push(dependency);
+            }
+        }
+        if bound_dependencies.len() != 1 {
+            return invalid;
+        }
+        path = bound_dependencies[0];
     }
 
     let result = if type_of(observation) == "map" {
@@ -661,7 +690,6 @@ fn scalar_constraint_observation(ir, input_name, observation) {
     } else {
         #{state: "value", value: observation}
     };
-    let path = dependencies[0];
     if result.path != () && result.path != path { return invalid; }
     result.path = path;
     result
@@ -677,6 +705,28 @@ fn scalar_constraint_observations(ir, inputs) {
         }
     }
     observations
+}
+
+// Compile a constraint through the requirement usage that owns it. Standard
+// usage-level feature bindings are applied before provider inputs are mapped,
+// so observations follow source features instead of disconnected parameter
+// names.
+fn required_constraint_input_observations(source_model, requirement, constraint_name, inputs) {
+    let ir = required_constraint_ir(source_model, requirement, constraint_name);
+    if ir == () || ir.ok != true || ir.constraint == () {
+        let requirement_name = if requirement == () {
+            "<missing requirement>"
+        } else { requirement.qualified_name };
+        let detail = if ir == () { "required SysML constraint IR is unavailable" }
+            else if ir.error != () { ir.error }
+            else if ir.diagnostics != () && ir.diagnostics.len() > 0 {
+                ir.diagnostics[0].message
+            } else { "required SysML constraint IR is invalid" };
+        return [#{path: [], provider: "derived", state: "invalid",
+            detail: detail + "; requirement: " + requirement_name
+                + "; constraint: " + constraint_name}];
+    }
+    scalar_constraint_observations(ir, inputs)
 }
 
 fn _constraint_observations(model, check, requirement) {
@@ -1509,7 +1559,8 @@ fn source_with_constraints(names) {
 // requirement details remain available through source_with_selection().
 fn _compact_requirement_identity(record) {
     let name = _record_name(record);
-    #{element: #{qualified_name: name, handle: record.element.handle}, qualified_name: name,
+    #{element: #{qualified_name: name, short_name: record.element.short_name,
+          handle: record.element.handle}, qualified_name: name,
       kind: record.kind}
 }
 
@@ -1629,7 +1680,9 @@ fn _source_projection(names, requirement_names, verification_names,
     }
 
     let report = #{path: analyzed.path, kind: analyzed.kind,
-        ok: analyzed.ok, errors: analyzed.errors, warnings: analyzed.warnings,
+        ok: analyzed.ok,
+        errors: if analyzed.errors == () { [] } else { analyzed.errors },
+        warnings: if analyzed.warnings == () { [] } else { analyzed.warnings },
         source_files: analyzed.analysis.source_files,
         source_revision: analyzed.analysis.source_revision,
         source_page_count: if analyzed.source_page_count == () { 1 } else { analyzed.source_page_count },
@@ -1674,11 +1727,17 @@ fn _source_projection(names, requirement_names, verification_names,
         report.verification_registry_errors = ["active Twin contract is unavailable"];
         return report;
     }
-    report.components = contract.components;
-    report.component_registry_errors = contract.component_errors;
-    report.verification_registry = contract.verification_cases;
-    report.verification_registry_errors = contract.verification_errors;
-    for error in contract.sysml_source_errors {
+    report.components = if contract.components == () { [] } else { contract.components };
+    report.component_registry_errors = if contract.component_errors == () {
+        []
+    } else { contract.component_errors };
+    report.verification_registry = if contract.verification_cases == () {
+        []
+    } else { contract.verification_cases };
+    report.verification_registry_errors = if contract.verification_errors == () {
+        []
+    } else { contract.verification_errors };
+    for error in if contract.sysml_source_errors == () { [] } else { contract.sysml_source_errors } {
         let message = "Twin SysML source set: " + error;
         report.errors.push(message);
     }
@@ -1849,15 +1908,32 @@ fn provenance(report, requirement_handle) {
     provenance_for_requirement(report, requirement_handle)
 }
 
+// AnalyzeSysml crosses the generic HookValue boundary, where a native
+// SysmlElementHandle is represented by its typed identity fields. Preserve the
+// native handle in Rhai/model operations and lower it only for this API query.
+fn _element_handle_query_record(handle) {
+    if handle == () { return (); }
+    if type_of(handle) == "SysmlElementHandle" {
+        return #{element_id: handle.element_id,
+            source_revision: handle.source_revision,
+            source_fingerprint: handle.source_fingerprint};
+    }
+    if type_of(handle) == "map"
+        && handle.element_id != ()
+        && handle.source_revision != ()
+        && handle.source_fingerprint != () {
+        return handle;
+    }
+    ()
+}
+
 fn provenance_for_requirement(report, requirement_handle) {
     if type_of(report) != "map" || report.path == () || report.path == "" {
         return #{ok: false,
             error: _report_error(report, "SysML source report is unavailable")};
     }
-    if type_of(requirement_handle) != "map"
-        || requirement_handle.element_id == ()
-        || requirement_handle.source_revision == ()
-        || requirement_handle.source_fingerprint == () {
+    let handle_record = _element_handle_query_record(requirement_handle);
+    if handle_record == () {
         return #{ok: false,
             error: "SysML provenance requires a source-scoped requirement element handle"};
     }
@@ -1865,7 +1941,7 @@ fn provenance_for_requirement(report, requirement_handle) {
     let requirement_links = query("AnalyzeSysml", #{
         path: report.path,
         tables: ["references"],
-        reference_target_handles: [requirement_handle],
+        reference_target_handles: [handle_record],
         reference_from_features: ["targetRequirement"]
     });
     if requirement_links == () || requirement_links.analysis == ()

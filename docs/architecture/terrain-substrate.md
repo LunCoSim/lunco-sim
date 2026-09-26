@@ -564,15 +564,30 @@ re-stamp swap). Only the avian collider + Bevy mesh derive stays in
    strip from those same posting-linear heights into their band-limited interior;
    their boundary remains fixed during geomorph. Both sides derive boundary
    normals at the native posting spacing, so coarse tile shading stays continuous
-   with the globe at grazing light angles. This keeps coarse terrain tiles joined
+   with the globe at grazing light angles. The globe's one-posting collar is
+   clipped into posting-sized edge and corner cells, so measured boundary relief
+   cannot fan across a coarse globe cell. This keeps coarse terrain tiles joined
    to the globe even where corner relief changes sharply between samples.
    The strip is generated in the existing async tile bake and content-addressed
    cache, with no per-frame boundary sampling. Globe tiles throughout the collar
    receive the same handoff, including tiles that do not cross the cutout, so
-   neighboring tile edges stay continuous. This keeps the merge registered at
+   neighboring tile edges stay continuous. Handoff refinement selects tiles
+   whose projected bounds cross a one-posting band around the authored DEM
+   square; the DEM interior and the rest of the globe stay at camera-driven LOD.
+   At the seam, globe tile vertices approach three DEM postings apart. The
+   selected tile cover remains cached, and mesh generation uses the existing
+   asynchronous bake path without carrying that density across the entire
+   physical blend collar.
+   This keeps the merge registered at
    nonzero site elevations. There is no shell sink, guessed wall, or second
    terrain source. Full lat/lon↔XZ reprojection for non-equirectangular DEMs
    remains deferred.
+   The resident globe mesh cap defaults to 72 MiB and can be overridden per
+   Twin with `[settings] "celestial.globe_lod.max_resident_mesh_bytes" = 100663296`.
+   The application reads it only when the active Twin changes; an omitted key
+   uses the host's `GlobeLodBudget` default. The value must be a positive integer
+   byte count. An invalid value is reported and pauses globe LOD reconciliation
+   until corrected, keeping the last valid tile cover visible.
 6. **Tile bake cache** — **partly done**: visual tile meshes are
    content-addressed on disk (`tile_cache`, keyed on `SurfaceOracle::surface_key`
    + tile coord), so a warm reload of the same composed surface streams instead

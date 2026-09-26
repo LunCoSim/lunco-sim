@@ -561,11 +561,18 @@ and separate preview tabs publish `SceneTarget::Offscreen` through the shared
 `ScenePickGate`; the maintained gizmo picking backend consumes the same
 rectangle used by rendering before testing handles. This admits a handle drag
 despite the global egui focus flag while keeping live-scene input excluded.
-The resolved offscreen target is retained while the preview image reports an
-egui-held gesture, so a valid gizmo drag remains owned across frames.
+The editor uses the current occlusion-aware hit map for a gizmo proxy on the
+press frame instead of waiting for the gizmo focus flag that updates later in
+the frame. It latches that primary gesture through release or cancellation;
+preview pan stays suppressed even after the pointer leaves the image.
 The gizmo hit layer is above the preview capture layer, preserving handle hover
 without allowing the preview to leak input to the live scene.
 Do not add panel-specific cursor math or a second gizmo driver.
+For editor mouse automation, use the existing `input_pointer_*` Rhai helpers and
+derive logical coordinates from `InspectUsdViewport`'s measured `image_rect`
+and `scale_factor`. The production regression is in
+`assets/scenarios/tests/assembly_property_editor.rhai` and checks both a gizmo
+drag and a blank-area camera pan.
 The presentation helpers are in
 [`assembly_ui.rhai`](../../assets/scripting/tools/assembly_ui.rhai): use
 `panel_templates(preview, doc, edit_target)` to discover the nine existing

@@ -15,6 +15,8 @@ use lunco_usd_bevy_core::program::{
 use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_usd_bevy_stage::read::UsdReadObject;
 
+const TWIN_GLOBE_LOD_RESIDENT_MESH_BUDGET: &str = "celestial.globe_lod.max_resident_mesh_bytes";
+
 /// Install the application-level scripting and policy integration.
 pub struct LunCoSimRuntimePlugin {
     /// Whether the host has no presentation surface and should acknowledge
@@ -41,6 +43,25 @@ impl Plugin for LunCoSimRuntimePlugin {
         });
         app.add_plugins(lunco_scripting_rhai_runtime::LunCoScriptingRhaiRuntimePlugin)
             .add_plugins(lunco_scripting_rhai::LunCoScriptingRhaiPlugin);
+
+        app.add_systems(
+            PreUpdate,
+            sync_twin_globe_lod_mesh_budget.run_if(
+                bevy::ecs::schedule::common_conditions::resource_exists::<
+                    lunco_workspace::WorkspaceResource,
+                >
+                    .and_then(
+                        bevy::ecs::schedule::common_conditions::resource_exists::<
+                            lunco_celestial_spatial::GlobeLodBudget,
+                        >,
+                    )
+                    .and_then(
+                        bevy::ecs::schedule::common_conditions::resource_changed::<
+                            lunco_workspace::WorkspaceResource,
+                        >,
+                    ),
+            ),
+        );
 
         register_all_commands(app);
 
@@ -89,6 +110,68 @@ impl Plugin for LunCoSimRuntimePlugin {
                 replay_scenario_journal_timeline,
             ),
         );
+    }
+}
+
+/// Apply the active Twin's globe mesh limit before presentation systems run.
+/// Workspace changes are the only trigger; steady frames do no settings work.
+fn sync_twin_globe_lod_mesh_budget(
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    budget: Option<ResMut<lunco_celestial_spatial::GlobeLodBudget>>,
+    mut engine_default: Local<Option<usize>>,
+    mut last_error: Local<Option<String>>,
+) {
+    let (Some(workspace), Some(mut budget)) = (workspace, budget) else {
+        return;
+    };
+    let default = *engine_default.get_or_insert(budget.max_resident_mesh_bytes);
+    let active_twin = workspace.active_twin.and_then(|id| workspace.twin(id));
+    let setting = active_twin
+        .and_then(|twin| twin.manifest.as_ref())
+        .and_then(|manifest| manifest.setting(TWIN_GLOBE_LOD_RESIDENT_MESH_BUDGET));
+    let twin_name = active_twin
+        .and_then(|twin| twin.manifest.as_ref())
+        .map(|manifest| manifest.name.as_str())
+        .unwrap_or("<no active Twin>");
+
+    match parse_twin_globe_lod_mesh_budget(setting, default) {
+        Ok(bytes) => {
+            if budget.max_resident_mesh_bytes != bytes || !budget.resident_mesh_budget_valid {
+                budget.max_resident_mesh_bytes = bytes;
+                budget.resident_mesh_budget_valid = true;
+            }
+            *last_error = None;
+        }
+        Err(message) => {
+            if last_error.as_deref() != Some(message.as_str()) {
+                bevy::log::error!(
+                    "Twin '{twin_name}' has invalid `{TWIN_GLOBE_LOD_RESIDENT_MESH_BUDGET}`: {message}; globe LOD is held until the setting is fixed"
+                );
+                *last_error = Some(message);
+            }
+            if budget.resident_mesh_budget_valid {
+                budget.resident_mesh_budget_valid = false;
+            }
+        }
+    }
+}
+
+fn parse_twin_globe_lod_mesh_budget(
+    setting: Option<&lunco_workspace::TwinSettingValue>,
+    default: usize,
+) -> Result<usize, String> {
+    match setting {
+        None => Ok(default),
+        Some(lunco_workspace::TwinSettingValue::Integer(bytes)) if *bytes > 0 => {
+            usize::try_from(*bytes)
+                .map_err(|_| format!("value {bytes} does not fit this platform's address size"))
+        }
+        Some(lunco_workspace::TwinSettingValue::Integer(bytes)) => Err(format!(
+            "expected a positive integer number of bytes, got {bytes}"
+        )),
+        Some(value) => Err(format!(
+            "expected a positive integer number of bytes, got {value:?}"
+        )),
     }
 }
 
@@ -669,6 +752,133 @@ mod tests {
 
     fn count_policy_projection(mut runs: ResMut<PolicyProjectionRuns>) {
         runs.0 += 1;
+    }
+
+    #[test]
+    fn twin_globe_mesh_budget_uses_positive_integer_bytes() {
+        use lunco_workspace::TwinSettingValue;
+
+        let default = 72 * 1024 * 1024;
+        assert_eq!(parse_twin_globe_lod_mesh_budget(None, default), Ok(default));
+        assert_eq!(
+            parse_twin_globe_lod_mesh_budget(
+                Some(&TwinSettingValue::Integer(96 * 1024 * 1024)),
+                default,
+            ),
+            Ok(96 * 1024 * 1024),
+        );
+        assert!(
+            parse_twin_globe_lod_mesh_budget(Some(&TwinSettingValue::Integer(0)), default,)
+                .is_err()
+        );
+        assert!(
+            parse_twin_globe_lod_mesh_budget(Some(&TwinSettingValue::Integer(-1)), default,)
+                .is_err()
+        );
+        assert!(
+            parse_twin_globe_lod_mesh_budget(Some(&TwinSettingValue::Number(96.0)), default,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn active_twin_globe_mesh_budget_applies_and_invalidates_on_workspace_changes() {
+        use lunco_workspace::{TwinMode, WorkspaceResource};
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time is after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "luncosim-globe-budget-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create temporary Twin directory");
+        std::fs::write(
+            root.join("twin.toml"),
+            format!(
+                "name = \"budget-test\"\nversion = \"0.1.0\"\n\n[settings]\n\"{TWIN_GLOBE_LOD_RESIDENT_MESH_BUDGET}\" = {}\n",
+                96 * 1024 * 1024,
+            ),
+        )
+        .expect("write temporary Twin manifest");
+        let TwinMode::Twin(twin) = TwinMode::open(&root).expect("open temporary Twin") else {
+            panic!("manifest should open as a Twin");
+        };
+
+        let mut app = App::new();
+        app.init_resource::<WorkspaceResource>()
+            .init_resource::<lunco_celestial_spatial::GlobeLodBudget>()
+            .add_systems(
+                PreUpdate,
+                sync_twin_globe_lod_mesh_budget.run_if(
+                    bevy::ecs::schedule::common_conditions::resource_exists::<WorkspaceResource>
+                        .and_then(
+                            bevy::ecs::schedule::common_conditions::resource_exists::<
+                                lunco_celestial_spatial::GlobeLodBudget,
+                            >,
+                        )
+                        .and_then(
+                            bevy::ecs::schedule::common_conditions::resource_changed::<
+                                WorkspaceResource,
+                            >,
+                        ),
+                ),
+            );
+        app.update();
+        let twin_id = app
+            .world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .add_twin(twin);
+        app.update();
+        {
+            let budget = app
+                .world()
+                .resource::<lunco_celestial_spatial::GlobeLodBudget>();
+            assert_eq!(budget.max_resident_mesh_bytes, 96 * 1024 * 1024);
+            assert!(budget.resident_mesh_budget_valid);
+        }
+
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .twin_mut(twin_id)
+            .expect("active Twin remains mounted")
+            .manifest
+            .as_mut()
+            .expect("Twin has manifest")
+            .set_setting(
+                TWIN_GLOBE_LOD_RESIDENT_MESH_BUDGET,
+                lunco_workspace::TwinSettingValue::Number(128.0),
+            )
+            .expect("setting key and finite number are valid Twin scalars");
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<lunco_celestial_spatial::GlobeLodBudget>()
+                .resident_mesh_budget_valid
+        );
+
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .twin_mut(twin_id)
+            .expect("active Twin remains mounted")
+            .manifest
+            .as_mut()
+            .expect("Twin has manifest")
+            .set_setting(
+                TWIN_GLOBE_LOD_RESIDENT_MESH_BUDGET,
+                lunco_workspace::TwinSettingValue::Integer(128 * 1024 * 1024),
+            )
+            .expect("setting key and integer are valid Twin scalars");
+        app.update();
+        let budget = app
+            .world()
+            .resource::<lunco_celestial_spatial::GlobeLodBudget>();
+        assert_eq!(budget.max_resident_mesh_bytes, 128 * 1024 * 1024);
+        assert!(budget.resident_mesh_budget_valid);
+
+        drop(app);
+        std::fs::remove_dir_all(root).expect("remove temporary Twin directory");
     }
 
     #[test]

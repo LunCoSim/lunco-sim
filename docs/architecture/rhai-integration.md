@@ -553,18 +553,21 @@ input_key_release("AltLeft");
 The Rust mechanism emits the same aggregate `WindowEvent` and typed
 `KeyboardInput`/`CursorMoved`/`MouseButtonInput`/`MouseWheel` messages produced
 by the Bevy winit backend. It does not move the operating-system pointer; the
-injected `CursorMoved` message and the frame-local `Window::cursor_position()`
-projection are the application-level pointer input, avoiding platform-specific
-cursor-lock restrictions.
+injected `CursorMoved` message and `Window::cursor_position()` projection are
+the application-level pointer input, avoiding platform-specific cursor-lock
+restrictions. The projected position remains available while a mouse button is
+held and through the release frame, so late presentation systems such as the
+transform gizmo consume the same position as picking. The controller restores
+the saved native window cursor afterward.
 That means egui, picking, focus, input bindings, and scene tools all observe
 one canonical path. Rhai owns sequences, chords, drag workflows, and retries;
 Rust owns only event validation and fan-out. The command accepts logical window
 coordinates and is local to the primary window; it is not a direct scene-edit
 or semantic-control shortcut.
 
-Follow-up TODO: harden the frame-local cursor projection against multi-window
-and backend-specific input behavior, with production acceptance on Wayland,
-X11, and Windows before treating automated drag workflows as a stable contract.
+The input bridge currently targets the primary window. Validate the gesture
+lifecycle on Wayland, X11, and Windows before treating cross-platform
+automation as a stable contract.
 
 ---
 
