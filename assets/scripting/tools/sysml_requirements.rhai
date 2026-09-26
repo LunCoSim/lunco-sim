@@ -582,8 +582,7 @@ fn required_constraints_check(id, component, requirement, verification,
     check
 }
 
-fn constraint_ir(name) {
-    let source_model = model();
+fn constraint_ir(source_model, name) {
     if source_model == () || !sysml_model_is(source_model) {
         return #{ok: false, error: "resolved SysML constraint model is unavailable"};
     }
