@@ -56,28 +56,43 @@ Authored document operations reuse the journal's `EntryId`, inverse,
 change-set, and merge machinery. The transient session-input stream has a
 different record shape and lifecycle; it is not a second authored journal.
 
-The typed command surface does not currently have one universal ingress.
-HTTP, MCP, and Rhai calls use the API dispatcher; UI and subsystem code can
-also trigger registered typed command events directly.
-`CommandOccurred` projects only the command type name; it does not retain
-parameters, target, origin, scene generation, tick, or sequence. The dispatcher
-alone therefore cannot be the whole-session replay boundary.
+The typed command surface has no universal ingress. The audited runtime paths
+are:
 
-Replay must capture external authoritative inputs at their owning ingress,
-before projection, with a scene generation, target identity, effective
-`SimTick`, and stable per-tick sequence. Capture must distinguish external
-inputs from commands derived by deterministic Rhai/hooks: replaying both the
-input and its derived command would apply the same effect twice. High-rate
-controls should use semantic per-tick input frames instead of one persistent
-journal entry per frame.
+| Producer | Current path | Replay implication |
+|---|---|---|
+| HTTP, MCP, and Rhai command calls | `ApiCommandEvent` → `api_command_dispatcher` → typed command event | The API dispatcher sees these calls, but not direct typed triggers. |
+| UI and Rust subsystem systems | Direct typed command events via Bevy `Commands` | Capture cannot be attached only to the API dispatcher. |
+| Keyboard/gamepad vessel control | Bevy input state → `drive_from_bindings` in `FixedUpdate` → `SetPorts` before `ControlDacSet` | The effective port writes and `SimTick` are known at the fixed-step producer. Record the consumed semantic frame, not device events. |
+| Networked vessel control | Wire input → `SetPorts`; remote frames are buffered and consumed by the fixed simulation step | `InputFrame` and `OwnedInputLog` serve one-vessel prediction rollback and acknowledgement. They are not a whole-session log. |
+| Scheduled Rhai and hook behavior | Evaluated in the caller's declared cycle against live simulation state | These outputs are derived behavior. Re-run them from the same state and inputs during replay; do not record them as independent external inputs. |
+| Async preparation and owner results | Prepared off-thread, then validated and committed by the owning lifecycle or simulation boundary | Worker completion is not an input. Replay the admitted source revision and deterministic commit order, not completion timing. |
+
+`CommandOccurred` projects only the command type name; it does not retain
+parameters, target, origin, scene generation, tick, or sequence. A generic
+event observer therefore does not by itself provide replay data, even though it
+sees typed command events from direct and API paths.
+
+The session stream must capture external authoritative inputs at the boundary
+where they become eligible for simulation, before domain projection, with a
+scene generation, stable target identity, effective `SimTick`, and stable
+per-tick sequence. This is later than UI/API request arrival when a request is
+assigned to a simulation tick. High-rate controls should be semantic per-tick
+frames; discrete actions should retain their typed action and target. Capture
+must distinguish external inputs from commands derived by deterministic
+Rhai/hooks, since replaying both an input and its derived command would apply
+the same effect twice.
 
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and
 cannot reproduce a live session by itself. A session replay input stream must
 cover those transient inputs without recording authored document edits a
-second time. This capture and replay path is not implemented yet. Its design
-must inventory every actual ingress before selecting an integration point; it
-cannot assume that `api_command_dispatcher` observes every typed command.
+second time. This capture and replay path is not implemented yet. The ingress
+inventory rules out treating `api_command_dispatcher`, `CommandOccurred`, or
+the network rollback buffer as the whole-session boundary. The implementation
+needs an explicit typed simulation-input contract that all supported external
+simulation producers can submit to and the fixed-step owner can order and
+consume.
 
 ## The authored-document model — one write path (record → project)
 
