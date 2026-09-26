@@ -89,13 +89,15 @@ use lunco_usd_avian_reader::collider::{
     AuthoredColliderGeometry, ColliderGeometryPart, authored_collider_geometry_from_usd,
 };
 use lunco_usd_bevy_scene::UsdSceneRoot;
-use lunco_usd_bevy_scene::collision::{ObjectAabb, collision_aabb, prim_geometry_aabb};
+use lunco_usd_bevy_scene::collision::{
+    ObjectAabb, collision_aabb, geometry_world_matrix_d, prim_geometry_aabb,
+};
 use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_quat};
 use lunco_usd_bevy_stage::read::UsdRead;
 use lunco_usd_bevy_stage::view::StageView;
 use lunco_usd_bevy_stage::{
     MaterialPurpose, UsdStageAsset, canonical::CanonicalStages, effective_purpose,
-    is_descendant_or_self, resolve_bound_shader, stage_convention, world_transform,
+    is_descendant_or_self, resolve_bound_shader, stage_convention,
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, canonical_stage_for_document, scene_document_for};
 use lunco_usd_document::document::UsdDocument;
@@ -250,16 +252,12 @@ fn collider_geometry_api_value(
     view: &StageView<'_>,
     prim: &SdfPath,
     geometry: &AuthoredColliderGeometry,
-    transform: Transform,
+    rigid_transform: DMat4,
 ) -> Result<ApiValue, String> {
-    let rigid_transform = DMat4::from_rotation_translation(
-        transform.rotation.as_dquat(),
-        transform.translation.as_dvec3(),
-    );
     let cooked_parts = geometry
         .parts
         .iter()
-        .map(|part| collider_part_api_value(&rigid_transform, &transform, part))
+        .map(|part| collider_part_api_value(&rigid_transform, &rigid_transform, part))
         .collect::<Vec<_>>();
     let type_name = view.type_name(prim).unwrap_or_default();
     let approximation = geometry.approximation.map_or(ApiValue::Unit, |mode| {
@@ -292,7 +290,7 @@ fn collider_geometry_api_value(
 
 fn collider_part_api_value(
     geometry_to_stage: &DMat4,
-    collider_transform: &Transform,
+    collider_transform: &DMat4,
     part: &ColliderGeometryPart,
 ) -> ApiValue {
     match part {
@@ -370,26 +368,31 @@ fn collider_part_api_value(
     }
 }
 
-fn collider_pose_api_value(transform: &Transform) -> ApiValue {
+fn collider_pose_api_value(transform: &DMat4) -> ApiValue {
+    let (_, rotation, translation) = transform.to_scale_rotation_translation();
     api_value!({
         "translation_m": api_value!([
-            transform.translation.x,
-            transform.translation.y,
-            transform.translation.z,
+            translation.x,
+            translation.y,
+            translation.z,
         ]),
         "rotation_wxyz": api_value!([
-            transform.rotation.w,
-            transform.rotation.x,
-            transform.rotation.y,
-            transform.rotation.z,
+            rotation.w,
+            rotation.x,
+            rotation.y,
+            rotation.z,
         ]),
     })
 }
 
-fn collider_transform_in_stage(view: &StageView<'_>, prim: &SdfPath) -> Result<Transform, String> {
-    let mut transform = world_transform(view, prim).map_err(|error| {
+fn collider_transform_in_stage(
+    view: &StageView<'_>,
+    prim: &SdfPath,
+) -> Result<(DMat4, Vec3), String> {
+    let transform = geometry_world_matrix_d(view, prim).map_err(|error| {
         format!("QueryUsdPrim: invalid collider transform at `{prim}`: {error}")
     })?;
+    let (scale, mut rotation, translation) = transform.to_scale_rotation_translation();
     let type_name = view.type_name(prim).unwrap_or_default();
     if matches!(
         type_name.as_str(),
@@ -400,9 +403,13 @@ fn collider_transform_in_stage(view: &StageView<'_>, prim: &SdfPath) -> Result<T
         let convention = stage_convention(view).map_err(|error| {
             format!("QueryUsdPrim: invalid stage convention at `{prim}`: {error}")
         })?;
-        transform.rotation *= convention.orient(usd_axis_to_quat(axis));
+        let axis_rotation = convention.orient_d(usd_axis_to_quat(axis).as_dquat());
+        rotation *= axis_rotation;
     }
-    Ok(transform)
+    Ok((
+        DMat4::from_rotation_translation(rotation, translation),
+        scale.as_vec3(),
+    ))
 }
 
 fn collider_point_api_value(transform: &DMat4, point: &[f64; 3]) -> ApiValue {
@@ -1185,10 +1192,10 @@ fn read_prim_from_view(
         if !view.has_api_schema(prim, physics_tokens::API_COLLISION) {
             Some(ApiValue::Unit)
         } else {
-            let transform = collider_transform_in_stage(view, prim).map_err(|error| {
+            let (transform, scale) = collider_transform_in_stage(view, prim).map_err(|error| {
                 format!("QueryUsdPrim: invalid collision geometry at `{path}`: {error}")
             })?;
-            match authored_collider_geometry_from_usd(view, prim, transform.scale) {
+            match authored_collider_geometry_from_usd(view, prim, scale) {
                 Ok(Some(geometry)) => Some(collider_geometry_api_value(
                     view, prim, &geometry, transform,
                 )?),

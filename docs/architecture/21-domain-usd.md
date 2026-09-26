@@ -533,7 +533,10 @@ shapes. Triangle meshes retain topology; convex shapes return cooked hull
 vertices; convex decomposition retains separate parts; analytic primitives
 return exact dimensions and an explicit collider-local-to-stage pose. Mesh
 vertices therefore describe the realized collider, not an authored source
-mesh passed through unchanged. `collision_bounds` reports a composed AABB and a `fidelity` value;
+mesh passed through unchanged. The composed collider pose stays in double
+precision through the stage transform; only scale crosses Avian's `f32`
+collider API boundary. `collision_bounds` reports a composed AABB and a
+`fidelity` value;
 `exact` means its extrema match the collision geometry, while
 `conservative_geometry_envelope` identifies bounds derived from source-mesh
 envelopes for convex decomposition or local bounds for curved primitives.
