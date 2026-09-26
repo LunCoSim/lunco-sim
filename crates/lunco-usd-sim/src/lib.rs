@@ -2779,6 +2779,19 @@ fn install_authored_sun_state_seed(app: &mut App) {
     );
 }
 
+/// Avoids marking `EnvironmentDirections` changed on every update when the
+/// celestial source already owns the sun direction.
+fn clear_authored_sun_direction_if_present(
+    directions: &mut ResMut<lunco_environment::EnvironmentDirections>,
+) {
+    if directions
+        .get_named(lunco_environment::SUN_DIRECTION_SOURCE)
+        .is_some()
+    {
+        directions.set_named(lunco_environment::SUN_DIRECTION_SOURCE, None);
+    }
+}
+
 /// Select the static authored-light source only after the active scene root's
 /// celestial projection confirms that no celestial source owns it. A celestial
 /// source is authoritative even when its declaration or ephemeris is invalid;
@@ -2836,7 +2849,7 @@ fn seed_authored_sun_state(
         return;
     };
     if source_classification.has_source {
-        directions.set_named(lunco_environment::SUN_DIRECTION_SOURCE, None);
+        clear_authored_sun_direction_if_present(&mut directions);
         if authored_seed_revision
             .take()
             .is_some_and(|revision| sun_state.revision == revision)
@@ -2901,6 +2914,89 @@ fn seed_authored_sun_state(
     );
     sun_state.publish(Some(light.illuminance));
     *authored_seed_revision = Some(sun_state.revision);
+}
+
+#[cfg(test)]
+mod authored_sun_direction_tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct DirectionChangeObserved(bool);
+
+    fn clear_authored_sun_direction(
+        mut directions: ResMut<lunco_environment::EnvironmentDirections>,
+    ) {
+        super::clear_authored_sun_direction_if_present(&mut directions);
+    }
+
+    fn seed_authored_sun_direction(
+        mut directions: ResMut<lunco_environment::EnvironmentDirections>,
+    ) {
+        let direction = lunco_spatial::coords::UnitDirection3::normalized(bevy::math::DVec3::NEG_Z)
+            .expect("negative Z is a valid direction");
+        directions.set_named(
+            lunco_environment::SUN_DIRECTION_SOURCE,
+            Some(lunco_environment::FramedDirection {
+                frame: Entity::PLACEHOLDER,
+                direction,
+            }),
+        );
+    }
+
+    fn record_direction_change(
+        directions: Res<lunco_environment::EnvironmentDirections>,
+        mut observed: ResMut<DirectionChangeObserved>,
+    ) {
+        observed.0 = directions.is_changed();
+    }
+
+    #[test]
+    fn clearing_an_absent_sun_ray_does_not_mark_directions_changed() {
+        let mut app = App::new();
+        app.init_resource::<lunco_environment::EnvironmentDirections>()
+            .init_resource::<DirectionChangeObserved>()
+            .add_systems(
+                Update,
+                (clear_authored_sun_direction, record_direction_change).chain(),
+            );
+
+        app.update();
+        app.world_mut().resource_mut::<DirectionChangeObserved>().0 = false;
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<lunco_environment::EnvironmentDirections>()
+                .get_named(lunco_environment::SUN_DIRECTION_SOURCE)
+                .is_none()
+        );
+        assert!(!app.world().resource::<DirectionChangeObserved>().0);
+    }
+
+    #[test]
+    fn clearing_a_present_sun_ray_removes_it() {
+        let mut app = App::new();
+        app.init_resource::<lunco_environment::EnvironmentDirections>()
+            .init_resource::<DirectionChangeObserved>()
+            .add_systems(
+                Update,
+                (
+                    seed_authored_sun_direction,
+                    clear_authored_sun_direction,
+                    record_direction_change,
+                )
+                    .chain(),
+            );
+
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<lunco_environment::EnvironmentDirections>()
+                .get_named(lunco_environment::SUN_DIRECTION_SOURCE)
+                .is_none()
+        );
+    }
 }
 
 /// Queue prim identity before its render projection becomes available.
