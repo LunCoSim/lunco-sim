@@ -157,6 +157,7 @@ target/debug/luncosim --api 4101
 | `fn task(me, ctx)` | builds one native task tree; the kernel advances it each fixed step |
 | `fn mission(me, ctx)` | declares objective state and completion conditions |
 | `fn simulation_dependencies(me, ctx)` | read-only admission plan before per-instance initialization |
+| `fn on_visualization(me, ctx)` | one-shot presentation preparation after scene/document/terrain inputs settle |
 | top-level Rhai statements | one-time initialization after declared inputs are ready |
 | `fn on_start(me, ctx)` | one-time ready callback after scene and declared-input readiness |
 | `fn on_event(me, evt, ctx)` | event reaction in the owner's next eligible pass, retaining the producer stamp |
@@ -176,8 +177,15 @@ The runtime assigns persistent scenario hooks to the cycles owned by the
 selected application plugins. Use `// @scope host|client|both` to choose the
 network peer. Continuous behavior may declare `// @timing simulation`; this
 records its fixed-step requirement and does not install a schedule from Rhai.
-`on_start` and `on_event` inherit the lifecycle or simulation context of the
-pass that invokes them, which is available through `execution_context()`.
+`on_visualization` runs once in `PreUpdate`, after lifecycle, document, and
+terrain admission scans and time-spine projection, but before the first fixed
+tick. It runs in the Twin Visualization cycle after scene, reference, document,
+and terrain preparation holds clear; Modelica holds do not block it. Its context
+uses presentation time and has no simulation tick, so it can prepare disposable
+visual state while Modelica participants are loading. Rhai blocks world writes
+and events in this phase; only `ApplyUsdTransientOps` can update the disposable
+USD view. `on_start` and `on_event` inherit the lifecycle or simulation context
+of the pass that invokes them, which is available through `execution_context()`.
 
 An unsupported scope or timing value disables only that scenario and publishes
 a document diagnostic for that source revision. Editing the source reparses
