@@ -210,6 +210,35 @@ screen distance is never used to guess which waypoint was clicked. The adapter
 translates authored hit behavior into Bevy's backend contract; it does not
 choose a route action or tool owner.
 
+Pass-through hits can still emit a Bevy pointer event. The shared dispatcher
+stops that hit's ancestor propagation before click de-duplication, leaving the
+lower blocking or context target eligible to receive the same gesture. The
+move preview and its Dome child author pass-through behavior for both buttons
+so their visual overlap cannot consume waypoint selection or context clicks.
+
+Selecting a route point from its context menu enables placement with the next
+ordinary primary scene hit. The selected point path remains its identity;
+the editor writes a `SetTranslate` opinion to `@runtime@` and leaves selection,
+the route program, and the live subject intact. Pointer movement is coalesced
+per screen position and sent through the typed UI hook. While the selected point
+is valid, Rhai creates a translucent `Xform` and Dome in the disposable `@view@`
+layer. The Dome copies the selected marker's authored radius and local offset;
+each hover update changes only the preview root transform. The terrain-sampled
+ribbon is rebuilt after commit, not on each hover event, so preview work does
+not batch-sample terrain or resample curve geometry.
+
+The point context menu adds `Add point before` and `Add point after` when the
+route has at least two active points. Each inserts a new ordinary marker and
+authors USD `primOrder` on the route scope in the same runtime operation group;
+existing point paths and route-progress identities do not change. Interior
+insertions use the adjacent-point midpoint. Endpoint insertions extend the
+neighboring segment by its authored length. A single-point route has no
+direction to infer, so the menu does not offer these actions yet. Right-clicking
+the ribbon opens `Add route point here`; its generated `BasisCurves` prim
+receives the standard pointer-interaction API in `@view@`, and the action uses
+the ribbon hit's world position, snapping its height to terrain when the
+terrain query has a support point.
+
 Rhai owns the gesture's meaning and returns typed semantic actions. Rust owns
 pointer sampling, ordered hit testing, capture, continuous gizmo handle math,
 and generic action application. In particular, a gizmo drag can be exposed to
@@ -223,17 +252,19 @@ the hit prim's registered `LunCoPointerInteractionAPI` marks that button as
 `context`. The shared Rhai router gives route editing first refusal and then
 dispatches generic selection for eligible primary gestures. Only the explicit
 “Select route point” menu action selects the point and enables its transform
-gizmo. The windowed `route_interaction` production gate requires the fixture
-root in the live editor, opens the route menu through policy, then clicks its
-Delete row through the production editor input path and checks that selection
-stays unchanged. The menu carries the document, enclosing route, and canonical
-point as its action context, so its later delete callback does not depend on
-viewport query scope or rover possession. When a controlled rover remains
-selected, a route-bearing pointer target takes precedence over that stale
-selection; this lets right-click target the route point actually under the
-pointer. The production `route_lifecycle` gate covers that route selection
-precedence. Moving a point still resolves its target from the original pointer
-context.
+gizmo. The popup host registers its foreground egui bounds as chrome in
+`ScenePickGate`; this lets menu rows own clicks that overlap the selected
+point's transform handles. The windowed `route_interaction` production gate
+requires the fixture root in the live editor, verifies possessed right-click
+context on the waypoint, previews and commits a native click-to-move, then
+uses the production menu input path to delete the moved point. The menu carries
+the document, enclosing route, and canonical point as its action context, so
+its delete callback does not depend on viewport query scope or rover
+possession. When a controlled rover remains selected, a route-bearing pointer
+target takes precedence over that stale selection; this lets right-click target
+the route point actually under the pointer. The production `route_lifecycle`
+gate covers route selection precedence, hover ghost placement, insertion
+order, and ribbon context policy.
 
 Pointer and menu tool hooks use the bounded UI queue, which runs after Bevy
 picking in `PreUpdate` and before fixed simulation. General `RunRhai` requests

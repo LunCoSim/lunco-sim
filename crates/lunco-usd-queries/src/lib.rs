@@ -1111,7 +1111,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             );
         };
         let edit_target = lunco_usd_document::document::LayerId::new(raw_target);
-        if !edit_target.is_root() && !edit_target.is_runtime() {
+        if !edit_target.is_root() && !edit_target.is_runtime() && !edit_target.is_view() {
             return query_error(
                 ApiErrorCode::DeserializationError,
                 format!("unknown USD edit target `{raw_target}`"),
@@ -1161,7 +1161,8 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             .composed_arc()
             .spec(&path)
             .is_some_and(|spec| spec.ty == openusd::sdf::SpecType::Prim)
-            || authored_in_document;
+            || authored_in_document
+            || authored_here;
         let document_layer_response = || {
             query_ok(api_value!({
                 "doc_id": doc.raw(),
@@ -1227,7 +1228,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                     }).collect::<Vec<_>>(),
                 }));
             }
-            if authored_in_document {
+            if authored_here || authored_in_document {
                 return document_layer_response();
             }
             if under_arc {
@@ -1237,7 +1238,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                 );
             }
         } else if under_arc {
-            if authored_in_document {
+            if authored_here || authored_in_document {
                 return document_layer_response();
             }
             return query_error(

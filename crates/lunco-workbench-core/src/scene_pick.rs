@@ -66,7 +66,7 @@ impl ScenePickGate {
         }
     }
 
-    /// Record a docked chrome panel's blocked region in egui points.
+    /// Record a chrome surface's body and interactive card region in egui points.
     pub fn record_chrome_panel(&mut self, body: egui::Rect, card: egui::Rect) {
         self.chrome_cards.push((body, card));
     }
@@ -353,6 +353,33 @@ mod tests {
                 None,
             ),
             Some(SceneTarget::MainViewport)
+        );
+    }
+
+    #[test]
+    fn foreground_menu_overlay_owns_pointer_inside_scene_leaf() {
+        let menu = rect((620.0, 210.0), (760.0, 340.0));
+        let mut state = hovering((700.0, 280.0));
+        state.over_egui = true;
+        assert_eq!(
+            resolve_scene_target(
+                hovering((800.0, 280.0)),
+                Some(SceneTarget::MainViewport),
+                &[(menu, menu)],
+                None,
+                None,
+            ),
+            Some(SceneTarget::MainViewport)
+        );
+        assert_eq!(
+            resolve_scene_target(
+                state,
+                Some(SceneTarget::MainViewport),
+                &[(menu, menu)],
+                None,
+                None,
+            ),
+            None
         );
     }
 

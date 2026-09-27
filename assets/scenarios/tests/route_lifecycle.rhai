@@ -41,6 +41,13 @@ fn direct_points(doc) {
 
 fn point_count(doc) { direct_points(doc).len() }
 
+fn child_index(paths, target) {
+    for i in 0..paths.len() {
+        if paths[i] == target { return i; }
+    }
+    -1
+}
+
 fn route_revision(doc) {
     let result = query("QueryUsdPrim", #{ doc_id: doc, path: ROUTE });
     if result == () || result.ok == false { return (); }
@@ -258,6 +265,7 @@ fn on_start(me, ctx) {
     this.doc = -1;
     this.phase = 0;
     this.elapsed = 0.0;
+    this.route_read_attempts = 0;
     this.done = false;
     this.checks = [];
     if !is_unattended() {
@@ -708,6 +716,35 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(authored != () && authored.ok != false
             && authored.authored_here == true,
             "a nested route-point spawn is authored in the runtime layer of the canonical document"));
+        let ribbon_policy = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: RIBBON_GEOMETRY,
+            attrs: ["lunco:interaction:left", "lunco:interaction:right"],
+            schemas: true,
+        });
+        if ribbon_policy == () || ribbon_policy.ok == false
+            || ribbon_policy.api_schemas == () || ribbon_policy.attrs == ()
+            || !ribbon_policy.api_schemas.contains("LunCoPointerInteractionAPI")
+            || ribbon_policy.attrs["lunco:interaction:left"] != "pass_through"
+            || ribbon_policy.attrs["lunco:interaction:right"] != "context" { return; }
+        this.checks.push(t_true(ribbon_policy != () && ribbon_policy.ok != false
+            && ribbon_policy.api_schemas != ()
+            && ribbon_policy.api_schemas.contains("LunCoPointerInteractionAPI")
+            && ribbon_policy.attrs != ()
+            && ribbon_policy.attrs["lunco:interaction:left"] == "pass_through"
+            && ribbon_policy.attrs["lunco:interaction:right"] == "context",
+            "the view-layer ribbon passes primary hits through and accepts secondary context"));
+        let ribbon_context = context(this.doc, RIBBON_GEOMETRY, ());
+        ribbon_context.button = "secondary";
+        ribbon_context.pointer_intents = ["route.context"];
+        ribbon_context.pointer_policy = #{ right: "context" };
+        ribbon_context.prim_paths = [
+            RIBBON_GEOMETRY, ROUTE + "/RouteRibbon", ROUTE, ROOT,
+        ];
+        let ribbon_action = waypoint_editor::route_pointer_action(ribbon_context);
+        this.checks.push(t_true(ribbon_action.handled == true
+            && ribbon_action.path == RIBBON_GEOMETRY,
+            "right-clicking the route ribbon routes to its authored add-point menu policy"));
         let secondary = context(this.doc, this.new_point, ());
         secondary.button = "secondary";
         secondary.modifiers = #{ alt: false, shift: false, ctrl: false };
@@ -762,19 +799,96 @@ fn on_tick(me, ctx) {
         let selected_nested = waypoint_editor::context_route_point(nested, ROUTE);
         this.checks.push(t_true(selected_nested == this.new_point,
             "secondary-click resolves nested marker visuals to the canonical route point"));
-        let moved = waypoint_editor::on_move(context(this.doc, this.new_point, [4.0, 1.0, -32.0]));
-        this.checks.push(t_true(moved.ok == true && moved.path == this.new_point,
-            "route-point move is a typed USD edit"));
+        let destination = [6.0, 1.0, -36.0];
+        let preview = #{
+            doc_id: this.doc,
+            scene_root_path: ROOT,
+            route_path: ROUTE,
+            selected_path: this.new_point,
+            surface_world_position: point3(destination, "active_physics"),
+            world_position: point3(destination, "active_physics"),
+        };
+        let shown = waypoint_editor::on_pointer_move(preview);
+        let ghost = query("ResolveUsdTarget", #{
+            doc_id: this.doc,
+            path: ROUTE + "/MovePreview",
+            edit_target: "@view@",
+        });
+        this.checks.push(t_true(shown.ok == true && ghost != ()
+            && ghost.ok != false && ghost.authored_here == true,
+            "selected-point hover creates a disposable move ghost in the view layer"));
+        this.move_preview_expected = destination;
+        this.phase = 210;
+        return;
+    }
+
+    if this.phase == 210 {
+        let ghost_position = point_position(this.doc, ROUTE + "/MovePreview");
+        if ghost_position == () { return; }
+        this.checks.push(t_true(ghost_position == this.move_preview_expected,
+            "the projected move ghost follows the pointer at " + ghost_position.to_string()));
+        let marker_visual = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: this.new_point + "/Dome",
+            attrs: ["radius", "xformOp:translate"],
+        });
+        let ghost_visual = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: ROUTE + "/MovePreview/Dome",
+            attrs: ["radius", "xformOp:translate"],
+        });
+        this.checks.push(t_true(marker_visual != () && marker_visual.ok != false
+            && ghost_visual != () && ghost_visual.ok != false
+            && marker_visual.attrs != () && ghost_visual.attrs != ()
+            && marker_visual.attrs["radius"] != ()
+            && ghost_visual.attrs["radius"] != ()
+            && marker_visual.attrs["xformOp:translate"] != ()
+            && ghost_visual.attrs["xformOp:translate"] != ()
+            && marker_visual.attrs["radius"] == ghost_visual.attrs["radius"]
+            && marker_visual.attrs["xformOp:translate"]
+                == ghost_visual.attrs["xformOp:translate"],
+            "the ghost uses the selected marker's authored radius and dome offset"));
+        let destination = this.move_preview_expected;
+        let place = context(this.doc, (), destination);
+        place.route_path = ROUTE;
+        place.selected_path = this.new_point;
+        place.target_path = ();
+        place.hit_path = ();
+        place.prim_paths = [];
+        place.pointer_intents = ["selection.replace"];
+        place.modifiers = #{ alt: false, shift: false, ctrl: false };
+        let moved = scene_interaction::on_pointer(place);
+        this.checks.push(t_true(moved.ok == true && moved.handled == true
+            && moved.path == this.new_point,
+            "the next scene hit moves the selected route point before generic selection"));
         this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
-            "adding and moving a point preserve the live subject identity"));
+            "moving a selected point preserves the live subject identity"));
+        this.phase = 211;
+        return;
+    }
+
+    if this.phase == 211 {
+        let position = point_position(this.doc, this.new_point);
+        let ghost = query("ResolveUsdTarget", #{
+            doc_id: this.doc,
+            path: ROUTE + "/MovePreview",
+            edit_target: "@view@",
+        });
+        if position == () || position[0] != 6.0 || position[2] != -36.0
+            || ribbon_count(this.doc) != 4 { return; }
+        this.checks.push(t_true(ghost == () || ghost.ok == false
+            || ghost.authored_here != true,
+            "committing the move removes its transient ghost"));
         this.phase = 3;
         return;
     }
 
     if this.phase == 3 {
         let position = point_position(this.doc, this.new_point);
-        if position == () || position[0] != 4.0 || ribbon_count(this.doc) != 4 { return; }
-        this.checks.push(t_true(true, "moving a point refreshes the reusable ribbon in place"));
+        if position == () || position[0] != 6.0 || position[2] != -36.0
+            || ribbon_count(this.doc) != 4 { return; }
+        this.checks.push(t_true(true,
+            "moving a selected point refreshes the reusable ribbon in place"));
         let deleted = waypoint_editor::on_delete(context(this.doc, this.new_point, ()));
         this.checks.push(t_true(deleted.ok == true && deleted.path == this.new_point,
             "delete removes an authored route point"));
@@ -1083,6 +1197,110 @@ fn on_tick(me, ctx) {
         if !has_path(this.doc, ALTERNATE_ROUTE + "/P1") { return; }
         this.checks.push(t_true(point_count(this.doc) == 2,
             "editing the alternate program does not mutate the first route"));
+        let route_read = waypoint_editor::route_positions(this.doc, ALTERNATE_ROUTE);
+        if route_read.ok != true || route_read.paths.len() < 2 {
+            this.route_read_attempts += 1;
+            if this.route_read_attempts < 120 { return; }
+            let children = query("QueryUsdPrim", #{
+                doc_id: this.doc, path: ALTERNATE_ROUTE, children: true,
+            });
+            let p0 = query("ResolveUsdTarget", #{
+                doc_id: this.doc, path: ALTERNATE_ROUTE + "/P0/Trigger",
+                edit_target: "@root@",
+            });
+            let p1 = query("ResolveUsdTarget", #{
+                doc_id: this.doc, path: ALTERNATE_ROUTE + "/P1/Trigger",
+                edit_target: "@root@",
+            });
+            this.checks.push(t_true(false,
+                "alternate route read did not settle: route=" + route_read.to_string()
+                + "; children=" + children.to_string()
+                + "; P0=" + p0.to_string() + "; P1=" + p1.to_string()));
+            finish(this);
+            return;
+        }
+        this.checks.push(t_true(route_read.paths.contains(ALTERNATE_ROUTE + "/P0")
+            && route_read.paths.contains(ALTERNATE_ROUTE + "/P1"),
+            "route queries include referenced children and newer local children"));
+        let before_context = context(this.doc, ALTERNATE_ROUTE + "/P1", ());
+        before_context.route_path = ALTERNATE_ROUTE;
+        let before = waypoint_editor::on_insert_before(before_context);
+        this.checks.push(t_true(before.ok == true && before.path == ALTERNATE_ROUTE + "/P2",
+            "Add point before creates an ordinary point with a stable new path"));
+        if before.ok != true { finish(this); return; }
+        this.insert_before_path = before.path;
+        this.phase = 141;
+        return;
+    }
+
+    if this.phase == 141 {
+        let children = query("QueryUsdPrim", #{
+            doc_id: this.doc, path: ALTERNATE_ROUTE, children: true,
+        });
+        if children == () || children.ok == false || children.children == ()
+            || !children.children.contains(this.insert_before_path) { return; }
+        let before_index = child_index(children.children, this.insert_before_path);
+        let target_index = child_index(children.children, ALTERNATE_ROUTE + "/P1");
+        this.checks.push(t_true(before_index >= 0 && target_index > before_index,
+            "USD primOrder places an inserted waypoint before its target"));
+        let before_position = point_position(this.doc, this.insert_before_path);
+        this.checks.push(t_true(before_position != () && before_position[2] == -12.0,
+            "Add point before places the new marker at the adjacent-point midpoint"));
+        let after_context = context(this.doc, ALTERNATE_ROUTE + "/P1", ());
+        after_context.route_path = ALTERNATE_ROUTE;
+        let after = waypoint_editor::on_insert_after(after_context);
+        this.checks.push(t_true(after.ok == true && after.path == ALTERNATE_ROUTE + "/P3",
+            "Add point after creates the next stable route-point path"));
+        if after.ok != true { finish(this); return; }
+        this.insert_after_path = after.path;
+        this.phase = 142;
+        return;
+    }
+
+    if this.phase == 142 {
+        let children = query("QueryUsdPrim", #{
+            doc_id: this.doc, path: ALTERNATE_ROUTE, children: true,
+        });
+        if children == () || children.ok == false || children.children == ()
+            || !children.children.contains(this.insert_after_path) { return; }
+        let target_index = child_index(children.children, ALTERNATE_ROUTE + "/P1");
+        let after_index = child_index(children.children, this.insert_after_path);
+        this.checks.push(t_true(target_index >= 0 && after_index > target_index,
+            "USD primOrder places an inserted waypoint after its target"));
+        let after_position = point_position(this.doc, this.insert_after_path);
+        this.checks.push(t_true(after_position != () && after_position[2] == -20.0,
+            "Add point after extends the final segment by its authored length"));
+        let ribbon_context = context(
+            this.doc, ALTERNATE_ROUTE + "/RouteRibbon/Geometry", [14.0, 1.0, -25.0],
+        );
+        ribbon_context.route_path = ();
+        let ribbon_add = waypoint_editor::on_add_here(ribbon_context);
+        this.checks.push(t_true(ribbon_add.ok == true
+            && ribbon_add.path == ALTERNATE_ROUTE + "/P4",
+            "the ribbon context action adds a route point at its typed pointer position"));
+        if ribbon_add.ok != true { finish(this); return; }
+        this.ribbon_added_path = ribbon_add.path;
+        this.phase = 142.5;
+        return;
+    }
+
+    if this.phase == 142.5 {
+        let children = query("QueryUsdPrim", #{
+            doc_id: this.doc, path: ALTERNATE_ROUTE, children: true,
+        });
+        if children == () || children.ok == false || children.children == ()
+            || !children.children.contains(this.ribbon_added_path) { return; }
+        let inserted_index = child_index(children.children, this.ribbon_added_path);
+        let last_route_point_index = child_index(children.children, this.insert_after_path);
+        let position = point_position(this.doc, this.ribbon_added_path);
+        this.checks.push(t_true(inserted_index > last_route_point_index
+            && position != () && position[0] == 14.0 && position[2] == -25.0,
+            "the ribbon action appends after the route and preserves its pointer coordinates"));
+        this.phase = 143;
+        return;
+    }
+
+    if this.phase == 143 {
         let primary_program = program_editor::list(this.doc, ROUTE);
         if primary_program == () || !primary_program.ok
             || primary_program.programs.len() == 0 { return; }

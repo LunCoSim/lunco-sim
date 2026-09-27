@@ -2147,10 +2147,11 @@ pub(crate) fn wake_twin_projection_on_stage_event(
 /// (the Avian joint builder and the cosim wire reconcile) re-read on a subtree
 /// refresh, so the incremental path fully reconciles them.
 ///
-/// `SetApiSchemas` and `SetPrimKind` use live authoring too.  A schema edit
-/// refreshes only the affected prim subtree so physical ECS components are
-/// rebuilt at the smallest safe scope; kind is identity metadata and needs no
-/// ECS refresh.  Neither operation tears down unrelated simulation state.
+/// `SetApiSchemas`, `SetPrimKind`, and `SetPrimOrder` use live authoring too. A
+/// schema edit refreshes only the affected prim subtree so physical ECS
+/// components are rebuilt at the smallest safe scope; kind and child-order
+/// metadata need no ECS refresh. None of these operations tears down unrelated
+/// simulation state.
 ///
 /// Active state is structural, but the generic structural reconciler already
 /// owns exactly that operation: it despawns an inactive subtree and spawns it
@@ -2226,6 +2227,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
         | UsdOp::SetRelationship { path, .. }
         | UsdOp::SetConnection { path, .. }
         | UsdOp::SetApiSchemas { path, .. }
+        | UsdOp::SetPrimOrder { path, .. }
         | UsdOp::SetPrimKind { path, .. }
         | UsdOp::SetActive { path, .. }
         | UsdOp::ClearActive { path, .. } => Some(path.clone()),
@@ -2740,6 +2742,22 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // intact.
             if authored && !incremental_api_schemas(schemas) {
                 refresh_prim_subtree(world, scene_id, path);
+            }
+        }
+        UsdOp::SetPrimOrder { path, order, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            match world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|stages| stages.get(scene_id))
+            {
+                Some(cs) => {
+                    if let Err(error) = cs.projector().author_prim_order(&sp, order.as_deref()) {
+                        warn!("[twin] author child order at {path}: {error}");
+                    }
+                }
+                None => warn!("[twin] no canonical stage while ordering children at {path}"),
             }
         }
         UsdOp::SetPrimKind { path, kind, .. } => {
@@ -3781,6 +3799,11 @@ mod tests {
             name: "inputs:v".into(),
             type_name: "float".into(),
             sources: vec![],
+        }));
+        assert!(!op_needs_rebuild(&UsdOp::SetPrimOrder {
+            edit_target: et.clone(),
+            path: "/W/Route".into(),
+            order: Some(vec!["P1".into(), "P0".into()]),
         }));
         // Physical API schemas are authored live and refresh only the affected
         // prim subtree, so unrelated scripts and bodies keep running.

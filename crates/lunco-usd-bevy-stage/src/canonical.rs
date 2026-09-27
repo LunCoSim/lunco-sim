@@ -725,6 +725,46 @@ impl CanonicalStage {
             .map_err(|e| anyhow::anyhow!("author apiSchemas at {prim}: {e}"))
     }
 
+    /// Author standard USD child ordering on the live stage. This changes the
+    /// composed order seen by readers while leaving each child's path and
+    /// projected ECS identity intact.
+    pub(crate) fn author_prim_order(
+        &self,
+        prim: &SdfPath,
+        order: Option<&[String]>,
+    ) -> anyhow::Result<()> {
+        let prim_spec = self
+            .stage
+            .override_prim(prim.clone())
+            .map_err(|error| anyhow::anyhow!("override prim before ordering {prim}: {error}"))?;
+        match order {
+            Some(order) => {
+                let tokens = order
+                    .iter()
+                    .cloned()
+                    .map(openusd::tf::Token::from)
+                    .collect::<Vec<_>>();
+                prim_spec
+                    .set_metadata(
+                        openusd::sdf::FieldKey::PrimOrder.as_str(),
+                        openusd::sdf::Value::TokenVec(tokens),
+                    )
+                    .map(|_| ())
+                    .map_err(|error| anyhow::anyhow!("author child order at {prim}: {error}"))
+            }
+            None => self
+                .stage
+                .batch_edit(&[self.scene_layer.as_str()], |edits| {
+                    edits[0]
+                        .data_mut()
+                        .erase_field(prim, openusd::sdf::FieldKey::PrimOrder.as_str());
+                    Ok(())
+                })
+                .map(|_| ())
+                .map_err(|error| anyhow::anyhow!("clear child order at {prim}: {error}")),
+        }
+    }
+
     /// Author the USD `kind` metadata on the live stage.  Kind is identity
     /// metadata, not composition, so it can be replayed without rebuilding the
     /// entire scene.  Passing `None` clears the local opinion and reveals the
@@ -986,6 +1026,15 @@ impl StageProjector<'_> {
     /// schemas.
     pub fn author_api_schemas(&self, prim: &SdfPath, schemas: &[String]) -> anyhow::Result<()> {
         self.0.author_api_schemas(prim, schemas)
+    }
+
+    /// Replay a `SetPrimOrder` op on the live stage.
+    pub fn author_prim_order(
+        &self,
+        prim: &SdfPath,
+        order: Option<&[String]>,
+    ) -> anyhow::Result<()> {
+        self.0.author_prim_order(prim, order)
     }
 
     /// Replay a `SetPrimKind` op on the live stage.
@@ -1489,6 +1538,46 @@ mod authoring_tests {
         assert!(
             !cs.view().has_prim(&r2),
             "the removed prim is gone from the stage"
+        );
+    }
+
+    #[test]
+    fn authoring_prim_order_changes_composed_child_order_without_rekeying_paths() {
+        let scene = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Scope \"Route\"\n    {\n        def Xform \"P0\" {}\n        def Xform \"P1\" {}\n        def Xform \"P2\" {}\n    }\n}\n";
+        let recipe = StageRecipe::from_source("route-order.usda", scene);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let route = SdfPath::new("/World/Route").unwrap();
+        let expected = ["P2", "P0", "P1"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+
+        cs.projector()
+            .author_prim_order(&route, Some(&expected))
+            .expect("author native child order");
+        assert_eq!(
+            UsdRead::children(&cs.view(), &route)
+                .iter()
+                .map(|path| path.name().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(
+            cs.drain_changes()
+                .iter()
+                .any(|change| change.resynced.iter().any(|path| path == &route)),
+            "child order authors a parent resync"
+        );
+
+        cs.projector()
+            .author_prim_order(&route, None)
+            .expect("clear native child order");
+        assert_eq!(
+            UsdRead::children(&cs.view(), &route)
+                .iter()
+                .map(|path| path.name().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>(),
+            ["P0", "P1", "P2"].map(str::to_owned)
         );
     }
 

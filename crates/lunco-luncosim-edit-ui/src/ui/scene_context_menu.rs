@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 use lunco_scripting_rhai_core::ui_bridge::{ScriptMenuItem, ScriptUiRequest};
+use lunco_workbench_core::scene_pick::ScenePickGate;
 
 #[derive(Clone, Debug)]
 struct PendingMenu {
@@ -45,6 +46,7 @@ pub fn on_script_ui_request(
 pub fn draw_scene_context_menu(
     mut egui_contexts: EguiContexts,
     mut state: ResMut<SceneContextMenuState>,
+    mut scene_pick: ResMut<ScenePickGate>,
     mut commands: Commands,
 ) {
     let Some(menu) = state.pending.clone() else {
@@ -76,6 +78,11 @@ pub fn draw_scene_context_menu(
                 }
             });
         });
+    // A foreground egui Area can sit inside the 3D scene leaf. Register its
+    // exact painted bounds as chrome so ordered scene/gizmo hits cannot also
+    // claim a menu click.
+    let menu_rect = response.response.rect;
+    scene_pick.record_chrome_panel(menu_rect, menu_rect);
 
     if let Some(item) = selected {
         commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
