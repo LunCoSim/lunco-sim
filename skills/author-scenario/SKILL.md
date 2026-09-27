@@ -44,12 +44,15 @@ operation command. The reusable `waypoint_editor` tool authors ordinary USD
 route points, whether their route scope is inline or composed from a separate
 route-plan asset. It uses a local `active=false` opinion when a point comes from
 a reference arc, and updates the disposable ribbon in the document's `@view@`
-layer under the selected route scope from the committed USD route. A route
-program can use `on_visualization(me, ctx)` to prepare that view after terrain
-and document preparation while Modelica compilation is pending. This one-shot
-callback runs in `PreUpdate`, after the time spine and before the first fixed
-tick, top-level initialization, or `on_start`; use the host id,
-parameters, and read-only queries. Rhai blocks world writes and events there;
+layer under the selected route scope from the committed USD route. An edit can
+use the selected route point to resolve its enclosing route and does not require
+rover possession; multiple routes still require an explicit route or subject
+selection. A route program can use `on_visualization(me, ctx)` to prepare that
+view after terrain and document preparation while Modelica compilation is
+pending. This one-shot callback runs in `PreUpdate`, after the time spine and
+before the first fixed tick, top-level initialization, or `on_start`; use the
+host id, parameters, and read-only queries. Rhai blocks world writes and
+events there;
 `ApplyUsdTransientOps` is the only available command and always edits the
 disposable view layer. Keeping the ribbon under that scope
 preserves the route points' USD parent frame. The subject and route owner remain live:

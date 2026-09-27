@@ -207,9 +207,11 @@ fn route_edit_path(context) {
         // Callers may carry a selected program identity rather than its
         // containing route scope. Normalize both forms at this policy
         // boundary so a program prim can never become an AddPrim parent.
-        return canonical_route_path(
+        let route = canonical_route_path(
             context["doc_id"], explicit, subject_path(context),
         );
+        if route != () { return route; }
+        return canonical_route_path(context["doc_id"], explicit, ());
     }
     let doc = context["doc_id"];
     let subject = subject_path(context);
@@ -226,6 +228,13 @@ fn route_edit_path(context) {
     for path in selected {
         let route = route_for_path(doc, path, subject);
         if route != () { return route; }
+        // Selection can name a route point. In that case it is the route
+        // identity for an edit, not the vehicle referenced by the program's
+        // inputs:subject relationship. Resolve the enclosing route from the
+        // selected path before treating possession or subject selection as a
+        // prerequisite.
+        let selected_route = route_for_path(doc, path, ());
+        if selected_route != () { return selected_route; }
     }
 
     // Twin-authored bindings may expose one or more programs from the subject
