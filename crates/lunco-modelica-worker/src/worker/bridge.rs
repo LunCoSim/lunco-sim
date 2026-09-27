@@ -351,6 +351,7 @@ pub fn spawn_modelica_requests(
             model.paused = true;
             model.is_compiled = false;
             model.is_stepping = false;
+            model.live_solver_snapshot = None;
             model.last_error = Some(error.clone());
             if first_report {
                 if let Some(faults) = faults.as_deref_mut() {
@@ -449,6 +450,7 @@ pub fn spawn_modelica_requests(
             );
             model.paused = true;
             model.is_compiled = false;
+            model.live_solver_snapshot = None;
             model.last_error = Some(error.clone());
             if let Some(faults) = faults.as_deref_mut() {
                 faults.raise(
@@ -487,6 +489,7 @@ pub fn spawn_modelica_requests(
         } else {
             model.paused = true;
             model.is_compiled = false;
+            model.live_solver_snapshot = None;
             model.last_error = Some("Modelica worker channel closed".to_string());
             if let Some(faults) = faults.as_deref_mut() {
                 faults.raise(
@@ -692,6 +695,7 @@ pub fn handle_modelica_responses(
                 model.is_stepping = false;
                 model.paused = true;
                 model.is_compiled = false;
+                model.live_solver_snapshot = None;
                 model.last_error = Some(detail);
                 continue;
             }
@@ -775,6 +779,18 @@ pub fn handle_modelica_responses(
                 }
             }
 
+            // Retain the worker's resolved plan only after session fencing.
+            // Compile results also pass the source-generation check above;
+            // step-transaction failures below clear the snapshot before this
+            // system returns. Failures cannot leave facts for a dead stepper.
+            if result.error.is_some() {
+                model.live_solver_snapshot = None;
+            } else if lifecycle_result {
+                model.live_solver_snapshot = result.live_solver_snapshot.clone();
+            } else if let Some(snapshot) = result.live_solver_snapshot.as_ref() {
+                model.live_solver_snapshot = Some(snapshot.clone());
+            }
+
             // Pipe `experiment(...)` annotations into the runner only after
             // both worker session and source revision have been validated.
             if result.is_new_model && result.error.is_none() {
@@ -827,6 +843,7 @@ pub fn handle_modelica_responses(
                     model.is_stepping = false;
                     model.paused = true;
                     model.is_compiled = false;
+                    model.live_solver_snapshot = None;
                     model.last_error = Some(detail);
                     continue;
                 };
@@ -856,6 +873,7 @@ pub fn handle_modelica_responses(
                     model.is_stepping = false;
                     model.paused = true;
                     model.is_compiled = false;
+                    model.live_solver_snapshot = None;
                     model.last_error = Some(detail);
                     continue;
                 }
@@ -1167,6 +1185,7 @@ pub fn handle_modelica_responses(
                 if let Err(error) = model.reset_communication_schedule() {
                     model.paused = true;
                     model.is_compiled = false;
+                    model.live_solver_snapshot = None;
                     model.last_error = Some(error.clone());
                     if let Some(faults) = faults.as_deref_mut() {
                         faults.raise(
@@ -1242,11 +1261,95 @@ mod compile_fault_tests {
     #[derive(Resource, Default)]
     struct CapturedCompileRequests(Vec<CompileRequested>);
 
+    fn test_solver_snapshot() -> lunco_modelica_runtime::ModelicaLiveSolverSnapshot {
+        lunco_modelica_runtime::ModelicaLiveSolverSnapshot {
+            solver_id: "rk4".to_owned(),
+            capabilities: lunco_modelica_runtime::ModelicaSolverCapabilities {
+                usable_live: true,
+                fixed_step: true,
+                deterministic: true,
+            },
+            profile: lunco_modelica_runtime::ModelicaRuntimeProfile {
+                live: true,
+                predicted: false,
+            },
+            parameters: lunco_modelica_runtime::ModelicaSolverParameters {
+                atol: 1.0e-8,
+                rtol: 1.0e-8,
+                h0: Some(1.0 / 60.0),
+                t_start: 0.0,
+                t_end: f64::from(u32::MAX),
+            },
+            parameter_overrides: vec![("mass".to_owned(), 2.0)],
+        }
+    }
+
     fn capture_compile_requests(
         mut requests: MessageReader<CompileRequested>,
         mut captured: ResMut<CapturedCompileRequests>,
     ) {
         captured.0.extend(requests.read().cloned());
+    }
+
+    #[test]
+    fn accepted_worker_solver_plan_is_retained_and_failed_lifecycle_clears_it() {
+        let mut app = App::new();
+        app.add_message::<ModelicaNotice>()
+            .init_resource::<SimSampleStream>()
+            .add_systems(Update, handle_modelica_responses);
+
+        let (tx_result, rx_result) = crossbeam_channel::unbounded();
+        let (tx_command, _rx_command) = crossbeam_channel::unbounded();
+        app.insert_resource(ModelicaChannels {
+            tx: tx_command,
+            rx: rx_result,
+        });
+        let snapshot = test_solver_snapshot();
+        let entity = app
+            .world_mut()
+            .spawn(ModelicaModel {
+                model_name: "Plant".to_owned(),
+                session_id: 1,
+                is_compiling: true,
+                ..Default::default()
+            })
+            .id();
+
+        tx_result
+            .send(ModelicaResult {
+                entity,
+                session_id: 1,
+                is_new_model: true,
+                live_solver_snapshot: Some(snapshot.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(Update);
+        assert_eq!(
+            app.world()
+                .get::<ModelicaModel>(entity)
+                .unwrap()
+                .live_solver_snapshot,
+            Some(snapshot)
+        );
+
+        tx_result
+            .send(ModelicaResult {
+                entity,
+                session_id: 1,
+                is_new_model: true,
+                error: Some("compile failed".to_owned()),
+                ..Default::default()
+            })
+            .unwrap();
+        app.world_mut().run_schedule(Update);
+        assert_eq!(
+            app.world()
+                .get::<ModelicaModel>(entity)
+                .unwrap()
+                .live_solver_snapshot,
+            None
+        );
     }
 
     #[test]
@@ -1379,6 +1482,7 @@ mod compile_fault_tests {
                 entity,
                 session_id: 4,
                 is_new_model: true,
+                live_solver_snapshot: Some(test_solver_snapshot()),
                 ..Default::default()
             })
             .unwrap();
@@ -1401,6 +1505,7 @@ mod compile_fault_tests {
         assert!(!model.is_compiled);
         assert!(!model.is_compiling);
         assert!(model.resume_after_compile);
+        assert!(model.live_solver_snapshot.is_none());
         assert_eq!(model.pending_generation, compile_generation);
         assert_eq!(
             app.world()

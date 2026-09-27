@@ -195,6 +195,11 @@ pub struct ModelicaResult {
     /// Browser worker transports may not expose their internal queue depth.
     #[serde(default)]
     pub worker_backlog_count: Option<u64>,
+    /// Resolved live solver and exact backend-neutral settings used by the
+    /// worker for this model session. Present on successful compile, reset,
+    /// parameter-update, and step results.
+    #[serde(default)]
+    pub live_solver_snapshot: Option<ModelicaLiveSolverSnapshot>,
 }
 
 impl Default for ModelicaResult {
@@ -222,8 +227,63 @@ impl Default for ModelicaResult {
             compile_diagnostics: Vec::new(),
             worker_step_duration_ns: None,
             worker_backlog_count: None,
+            live_solver_snapshot: None,
         }
     }
+}
+
+/// The registered solver capabilities selected for one live Modelica model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelicaSolverCapabilities {
+    /// The backend declares that it is safe inside the frame loop.
+    pub usable_live: bool,
+    /// The backend declares that it follows the caller's fixed step sequence.
+    pub fixed_step: bool,
+    /// The backend declares reproducible results for identical inputs.
+    pub deterministic: bool,
+}
+
+/// Runtime context used to resolve a live Modelica solver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelicaRuntimeProfile {
+    /// The model is stepped by the live frame-loop co-simulation path.
+    pub live: bool,
+    /// The model drives a client-predicted body.
+    pub predicted: bool,
+}
+
+/// Backend-neutral numerical settings passed to the resolved live solver.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelicaSolverParameters {
+    /// Absolute error tolerance.
+    pub atol: f64,
+    /// Relative error tolerance.
+    pub rtol: f64,
+    /// Initial or maximum internal solver step.
+    pub h0: Option<f64>,
+    /// Solver time window start.
+    pub t_start: f64,
+    /// Solver time window end.
+    pub t_end: f64,
+}
+
+/// Admitted live solver facts retained by a `ModelicaModel`.
+///
+/// Parameter overrides are sorted by name and retain their native `f64`
+/// values. The snapshot is emitted by the same worker plan used to construct
+/// the live stepper, so capture cannot recompute a different solver choice.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelicaLiveSolverSnapshot {
+    /// Canonical id of the registered backend selected for this model.
+    pub solver_id: String,
+    /// Capabilities declared by the selected backend.
+    pub capabilities: ModelicaSolverCapabilities,
+    /// Live and prediction requirements used for resolution.
+    pub profile: ModelicaRuntimeProfile,
+    /// Numerical settings passed to the backend option translator.
+    pub parameters: ModelicaSolverParameters,
+    /// Sorted instance overrides passed into DAE lowering.
+    pub parameter_overrides: Vec<(String, f64)>,
 }
 
 /// Bounded aggregate diagnostics for the live Modelica step handoff.
@@ -349,6 +409,9 @@ pub struct ModelicaModel {
     pub is_compiled: bool,
     #[reflect(ignore)]
     pub compiled_generation: u64,
+    /// Exact live solver plan that produced the installed stepper.
+    #[reflect(ignore)]
+    pub live_solver_snapshot: Option<ModelicaLiveSolverSnapshot>,
     #[reflect(ignore)]
     pub pending_generation: u64,
     #[reflect(ignore)]
@@ -379,6 +442,7 @@ impl Default for ModelicaModel {
             is_compiling: false,
             is_compiled: false,
             compiled_generation: 0,
+            live_solver_snapshot: None,
             pending_generation: 0,
             resume_after_compile: false,
         }

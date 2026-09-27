@@ -533,6 +533,17 @@ model remains held with its run intent for the current revision. The scene
 admission hold still needs to include reference closure, Modelica preparation,
 Rhai activation, and physics readiness in one transaction.
 
+Successful Modelica worker results carry `ModelicaLiveSolverSnapshot` from the
+same resolved `LiveBuildPlan` that constructed the stepper. It retains the
+solver id, declared capabilities, live/predicted profile, exact backend-neutral
+solver parameters, and sorted instance parameter overrides. The response bridge
+stores it on `ModelicaModel` after worker-session fencing; new compile results
+also pass the source-generation check, and failed compile or step results clear
+the snapshot. The existing `compiled_generation` remains a separate source
+revision fact for a baseline collector to compare against the current document.
+A session-wide baseline collector and initial authoritative-state snapshot
+still need to consume these owner facts.
+
 Generated domain projection follows the same path: it publishes the validated
 source and interface, the document owner links a generated Modelica document,
 and the next lifecycle admission emits `CompileRequested`. Projection does not

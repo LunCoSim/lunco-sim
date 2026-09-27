@@ -465,7 +465,31 @@ typed queues before that is safe.
 - `lunco-core::BuildIdentity` is shared across hosts. `LunCoSimRuntimePlugin`
   installs the stamped build constants when the host has not supplied an
   identity, so headless and GUI baselines can name the software revision.
-  Solver/runtime snapshots and the composite collector remain unimplemented.
+  The live solver facts snapshot is implemented; initial runtime-state capture
+  and the composite collector remain unimplemented.
+
+### D9 replay-baseline live Modelica solver snapshot (2026-09-27)
+
+- `ModelicaLiveSolverSnapshot` now travels in `ModelicaResult` and is retained
+  by `ModelicaModel`. The worker builds it from the same `LiveBuildPlan` as the
+  stepper: canonical solver id, registered capabilities, live/predicted
+  profile, backend-neutral f64 settings, and name-ordered instance overrides.
+- Native and browser worker paths retain it in the compiled-model cache and
+  return it on successful compile, reset, parameter-update, and Step results,
+  including Step auto-init. A new compile clears the old snapshot; the Bevy
+  bridge applies it after session fencing; new compile results also pass the
+  source-generation check, and failures clear the snapshot.
+- `cargo test -p lunco-modelica-worker solver -j 4` passed 3 tests, including
+  resolved-plan settings/override order and response-owner retention/clearing.
+  `cargo test -p lunco-modelica-worker stale_compile_result_keeps_active_model_held_for_current_revision -j 4`
+  passed and confirms a stale result carrying a snapshot is not retained.
+- `cargo check -p lunco-modelica-worker --target wasm32-unknown-unknown -j 4`
+  passed. It emitted dead-code warnings in the unchanged
+  `lunco-assets-runtime::scripting::collect_toml_sources` and
+  `lunco-modelica-core::modelica_lint::MAX_ACTIVE_LINTS`.
+- The source snapshot does not include initial live variable/input state and
+  does not assemble active model source with its full compile dependency
+  closure. Baseline collection, durable storage, and playback remain open.
 
 ## Runtime and repository constraints
 
