@@ -252,7 +252,7 @@ fn intent_targets_route_subject(me, evt, state) {
     if subject >= 0 && evt.source == subject
         && (state.selected || route_is_selected(me)) { return true; }
     evt.value != () && evt.value["target_gid"] != ()
-        && evt.value["target_gid"] == evt.source
+        && evt.value["target_gid"].to_string() == evt.source.to_string()
         && (state.selected || route_is_selected(me))
 }
 

@@ -343,6 +343,59 @@ impl ApiQueryProvider for ReadinessProvider {
     }
 }
 
+/// `ReadSessionInputStream` exposes the bounded typed input capture to API
+/// clients and authored Rhai acceptance tests.
+pub struct ReadSessionInputStreamProvider;
+
+impl ApiQueryProvider for ReadSessionInputStreamProvider {
+    fn name(&self) -> &'static str {
+        "ReadSessionInputStream"
+    }
+
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let Some(stream) = world.get_resource::<lunco_core_session::SessionInputStream>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "ReadSessionInputStream: SessionInputStream resource is not present",
+            ));
+        };
+        let record_count = u64::try_from(stream.records().len()).map_err(|_| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "ReadSessionInputStream: record count exceeds the API integer range",
+            )
+        })?;
+        let record_limit = u64::try_from(stream.record_limit()).map_err(|_| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "ReadSessionInputStream: record limit exceeds the API integer range",
+            )
+        })?;
+        let records = stream
+            .records()
+            .iter()
+            .map(api_value_from_serializable)
+            .collect::<Result<Vec<_>, _>>()?;
+        let state = match stream.state() {
+            lunco_core_session::SessionInputStreamState::Idle => "idle",
+            lunco_core_session::SessionInputStreamState::Recording => "recording",
+            lunco_core_session::SessionInputStreamState::Complete => "complete",
+            lunco_core_session::SessionInputStreamState::Failed => "failed",
+        };
+
+        Ok(Some(ApiValue::map([
+            ("state", ApiValue::str(state)),
+            ("record_count", api_value_from_u64(record_count)),
+            ("record_limit", api_value_from_u64(record_limit)),
+            (
+                "failure",
+                stream.failure().map_or(ApiValue::Unit, ApiValue::str),
+            ),
+            ("records", ApiValue::Array(records)),
+        ])))
+    }
+}
+
 /// `ReadExposures` — reads the generic engine capability snapshot consumed by
 /// runtime UI surfaces, egui, telemetry tools, and remote clients.
 ///
@@ -432,6 +485,7 @@ pub fn register_builtin_queries(registry: &mut ApiQueryRegistry) {
     // Readiness status — backs `GET /api/ready`. Always available; degrades to
     // `readiness_tracked: false` when the readiness substrate isn't installed.
     registry.register(ReadinessProvider);
+    registry.register(ReadSessionInputStreamProvider);
     registry.register(ReadExposuresProvider);
 }
 
@@ -577,6 +631,66 @@ mod tests {
         let mut registry = ApiQueryRegistry::default();
         register_builtin_queries(&mut registry);
         assert!(registry.get("ReadExposures").is_some());
+        assert!(registry.get("ReadSessionInputStream").is_some());
+    }
+
+    #[test]
+    fn session_input_query_returns_the_retained_typed_capture() {
+        let mut stream = lunco_core_session::SessionInputStream::default();
+        stream.begin(4).expect("bounded capture starts");
+        stream
+            .append(lunco_core_session::SessionInputRecord {
+                producer: lunco_core_session::SessionInputProducer::PhysicalController {
+                    session_id: lunco_command_contracts::SessionId(9),
+                },
+                target: lunco_core::GlobalEntityId::from_raw(42),
+                scene_generation: 3,
+                effective_tick: 12,
+                sequence: 2,
+                payload: lunco_core_session::SessionInputPayload::PhysicalIntentFrame {
+                    intent_ids: vec!["forward".to_owned()],
+                },
+            })
+            .expect("admitted input is retained");
+        stream.finish();
+
+        let mut world = World::new();
+        world.insert_resource(stream);
+        let data = ReadSessionInputStreamProvider
+            .execute(&world, &ApiValue::Unit)
+            .expect("session input query succeeds")
+            .expect("session input query returns data");
+
+        assert_eq!(data.get("state"), Some(&ApiValue::str("complete")));
+        assert_eq!(data.get("record_count"), Some(&api_value_from_u64(1)));
+        let Some(ApiValue::Array(records)) = data.get("records") else {
+            panic!("session input query returns a records array");
+        };
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0]
+                .get("producer")
+                .and_then(|producer| producer.get("kind")),
+            Some(&ApiValue::str("physical_controller"))
+        );
+        assert_eq!(
+            records[0].get("effective_tick"),
+            Some(&api_value_from_u64(12))
+        );
+        assert_eq!(
+            records[0]
+                .get("payload")
+                .and_then(|payload| payload.get("kind")),
+            Some(&ApiValue::str("physical_intent_frame"))
+        );
+        let Some(ApiValue::Array(intent_ids)) = records[0]
+            .get("payload")
+            .and_then(|payload| payload.get("value"))
+            .and_then(|value| value.get("intent_ids"))
+        else {
+            panic!("physical-frame payload retains its canonical intent array");
+        };
+        assert_eq!(intent_ids.len(), 1);
     }
 
     #[test]

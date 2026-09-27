@@ -152,6 +152,12 @@ The test is what the number means. If it is a dimension, scale the prim. If it i
 parameter the appearance is a function of, wire it to a shader —
 [`visualize-physics-with-shaders`](../../skills/visualize-physics-with-shaders/SKILL.md).
 
+For simulation-driven effects, separate authored wiring evidence from dynamic
+and rendered evidence. A composed USD query can prove that ports reach the
+shader and light, but only a successful model run proves that the values change
+with the simulation; visual inspection proves the effect is actually visible.
+The plume skill describes the idle/burn readback and acceptance checks.
+
 ## Binding authored policy to the runtime
 
 `LunCoProgramAPI` names its implementation one of two ways, mirroring `UsdShade.Shader`'s own

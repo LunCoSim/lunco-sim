@@ -14,8 +14,10 @@
 //! [`NetworkRole`]/[`NetStatus`] gate systems across cosim, sandbox, scripting,
 //! autopilot, workbench and the usd projections; [`SessionRegistry`]/
 //! [`SessionRbac`]/[`AuthorityRole`] are the possession/RBAC substrate read by
-//! avatar, controller, autopilot and the mission-control UI; the input logs
-//! ([`OwnedInputLog`], [`BufferedClientInputs`], [`AppliedInputSeq`],
+//! avatar, controller, autopilot and the mission-control UI; the pending
+//! session-input queue, ordered fixed-tick commit boundary, and bounded capture
+//! stream are owned here while domain crates supply payload consumers; prediction
+//! logs ([`OwnedInputLog`], [`BufferedClientInputs`], [`AppliedInputSeq`],
 //! [`LocalDriveInput`]) are written by `lunco-controller` every frame;
 //! [`NetConnectRequest`]/[`NetDisconnectRequest`] are fired by the workbench's
 //! Network menu; the replication/prediction markers ([`NetReplicate`],
@@ -596,6 +598,579 @@ pub struct VesselInputLog {
 /// Empty on host/standalone.
 #[derive(Resource, Default)]
 pub struct OwnedInputLog(pub HashMap<u64, VesselInputLog>);
+
+/// Semantic input admitted at a fixed-step boundary for whole-session capture.
+///
+/// This stream has a different lifetime and record shape from
+/// [`OwnedInputLog`], which exists only for per-vessel prediction rollback.
+/// Session records retain stable identities and semantic names rather than ECS
+/// entity bits or controller-local masks.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SessionInputRecord {
+    /// Typed producer identity available at the admission boundary.
+    pub producer: SessionInputProducer,
+    /// Stable target identity for this input.
+    pub target: lunco_core::GlobalEntityId,
+    /// Committed scene generation that admitted the target.
+    pub scene_generation: u64,
+    /// Fixed simulation tick at which the input was consumed.
+    pub effective_tick: u64,
+    /// Shared per-tick sequence assigned at session-input admission.
+    pub sequence: u64,
+    /// Typed semantic input payload.
+    pub payload: SessionInputPayload,
+}
+
+/// Producer class and identity retained with an admitted session input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SessionInputProducer {
+    /// Physical controller attached to the local input session.
+    PhysicalController { session_id: SessionId },
+    /// Command accepted through the external API transport. The caller assigns
+    /// a nonzero identity that remains stable for that client across a session.
+    ApiTransport { producer_id: u64 },
+    /// Rhai command; Twin actor identity is retained when the caller has one.
+    /// Actorless Rhai producers supply a stable nonzero identity.
+    Rhai {
+        route: Option<lunco_core::RuntimeRoute>,
+        actor: Option<lunco_core::GlobalEntityId>,
+        producer_id: Option<u64>,
+    },
+    /// In-process typed command with a caller assigned stable identity.
+    DirectCommand { producer_id: u64 },
+}
+
+impl SessionInputProducer {
+    /// Serialized producer class used by API and telemetry projections.
+    pub const fn kind(self) -> &'static str {
+        match self {
+            Self::PhysicalController { .. } => "physical_controller",
+            Self::ApiTransport { .. } => "api_transport",
+            Self::Rhai { .. } => "rhai",
+            Self::DirectCommand { .. } => "direct_command",
+        }
+    }
+
+    /// Caller-assigned stable identity, when the producer is not identified by
+    /// its physical session or Twin actor.
+    pub const fn stable_id(self) -> Option<u64> {
+        match self {
+            Self::ApiTransport { producer_id } | Self::DirectCommand { producer_id } => {
+                Some(producer_id)
+            }
+            Self::Rhai { producer_id, .. } => producer_id,
+            Self::PhysicalController { .. } => None,
+        }
+    }
+}
+
+/// Stable payloads accepted by the session-input stream.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SessionInputPayload {
+    /// Complete held-intent state sampled from a physical controller at one
+    /// fixed tick. Names use the canonical `UserIntent` spelling.
+    PhysicalIntentFrame { intent_ids: Vec<String> },
+    /// Admitted level-triggered intent change supplied by an API, Rhai, or
+    /// direct typed command.
+    SimulatedIntentChange {
+        /// Canonical shared intent name.
+        intent: String,
+        /// Whether the producer held or released the intent.
+        held: bool,
+        /// Correlation id from the admitted typed command.
+        correlation_id: u64,
+    },
+    /// Admitted discrete semantic edge supplied by an API, Rhai, or direct
+    /// typed command.
+    SemanticIntentEdge {
+        /// Canonical shared intent name.
+        intent: String,
+        /// `pressed`, `released`, or `pulse`.
+        edge: String,
+        /// Correlation id from the admitted typed command.
+        correlation_id: u64,
+    },
+}
+
+/// Maximum number of typed session inputs that may wait for their fixed-tick
+/// commit boundary.
+pub const MAX_PENDING_SESSION_INPUTS: usize = 4096;
+
+/// Admitted input waiting for its effective fixed tick. The serializable
+/// record is the replay contract; `origin` carries the live command context to
+/// observers that need it while committing this in-process admission.
+#[derive(Clone, Debug)]
+pub struct PendingSessionInput {
+    record: SessionInputRecord,
+    origin: Option<lunco_core::CommandOrigin>,
+}
+
+impl PendingSessionInput {
+    /// Stable record ordered at admission.
+    pub fn record(&self) -> &SessionInputRecord {
+        &self.record
+    }
+
+    /// Classified live command origin, when the input came through Rhai/API.
+    pub fn origin(&self) -> Option<lunco_core::CommandOrigin> {
+        self.origin
+    }
+}
+
+/// Shared bounded queue for typed inputs that commit at a fixed simulation
+/// tick. All producers use the control-core allocator so their sequence space
+/// is shared even when they live in different domain crates.
+#[derive(Resource, Debug, Default)]
+pub struct PendingSessionInputs {
+    pending: VecDeque<PendingSessionInput>,
+}
+
+impl PendingSessionInputs {
+    /// Admit one input with a stable target, generation, producer, and future
+    /// fixed tick. Queue capacity is checked before consuming a sequence.
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit(
+        &mut self,
+        order: &mut lunco_control_core::SimulationInputOrderAllocator,
+        producer: SessionInputProducer,
+        target: lunco_core::GlobalEntityId,
+        scene_generation: u64,
+        effective_tick: u64,
+        payload: SessionInputPayload,
+        origin: Option<lunco_core::CommandOrigin>,
+    ) -> Result<lunco_control_core::SimulationInputOrder, String> {
+        if self.pending.len() >= MAX_PENDING_SESSION_INPUTS {
+            return Err(format!(
+                "session input admission queue is full ({MAX_PENDING_SESSION_INPUTS} records)"
+            ));
+        }
+        if matches!(&payload, SessionInputPayload::PhysicalIntentFrame { .. }) {
+            return Err(
+                "physical intent frames are admitted at their consuming fixed tick and cannot be deferred"
+                    .to_owned(),
+            );
+        }
+        match &payload {
+            SessionInputPayload::SimulatedIntentChange { intent, .. }
+                if lunco_control_core::parse_user_intent(intent).is_none() =>
+            {
+                return Err(format!("unknown semantic intent '{intent}'"));
+            }
+            SessionInputPayload::SemanticIntentEdge { intent, edge, .. } => {
+                if lunco_control_core::parse_user_intent(intent).is_none() {
+                    return Err(format!("unknown semantic intent '{intent}'"));
+                }
+                if lunco_control_core::SemanticIntentEdgeKind::parse(edge).is_none() {
+                    return Err(format!("unknown semantic edge '{edge}'"));
+                }
+            }
+            _ => {}
+        }
+        if target.get() == 0 {
+            return Err("session input requires a stable nonzero target identity".to_owned());
+        }
+        if scene_generation == 0 {
+            return Err("session input requires a committed scene generation".to_owned());
+        }
+        match producer {
+            SessionInputProducer::ApiTransport { producer_id }
+            | SessionInputProducer::DirectCommand { producer_id }
+                if producer_id == 0 =>
+            {
+                return Err("session input producer identity must be nonzero".to_owned());
+            }
+            SessionInputProducer::PhysicalController { .. } => {
+                return Err(
+                    "physical controller inputs are admitted at their consuming fixed tick"
+                        .to_owned(),
+                );
+            }
+            SessionInputProducer::Rhai { route: None, .. } => {
+                return Err("Rhai session input requires a classified runtime route".to_owned());
+            }
+            SessionInputProducer::Rhai {
+                actor: Some(actor), ..
+            } if actor.get() == 0 => {
+                return Err("Rhai session input actor identity must be nonzero".to_owned());
+            }
+            SessionInputProducer::Rhai {
+                actor: Some(_),
+                producer_id: Some(_),
+                ..
+            } => {
+                return Err(
+                    "Rhai session input uses its actor identity; omit producer_id".to_owned(),
+                );
+            }
+            SessionInputProducer::Rhai {
+                actor: None,
+                producer_id: None,
+                ..
+            } => {
+                return Err("actorless Rhai session input requires producer_id".to_owned());
+            }
+            SessionInputProducer::Rhai {
+                actor: None,
+                producer_id: Some(0),
+                ..
+            } => {
+                return Err(
+                    "actorless Rhai session input producer identity must be nonzero".to_owned(),
+                );
+            }
+            _ => {}
+        }
+
+        let admission = order.assign_order(scene_generation, effective_tick)?;
+        self.pending.push_back(PendingSessionInput {
+            record: SessionInputRecord {
+                producer,
+                target,
+                scene_generation,
+                effective_tick,
+                sequence: admission.sequence,
+                payload,
+            },
+            origin,
+        });
+        Ok(admission)
+    }
+
+    /// Whether the queue has no pending inputs.
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// Number of admitted inputs waiting for a fixed-tick commit.
+    pub fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Pending entries in their current queue order, for owner diagnostics.
+    pub fn entries(&self) -> impl Iterator<Item = &PendingSessionInput> {
+        self.pending.iter()
+    }
+
+    /// Take inputs whose tick is due, preserving their shared admission order.
+    pub fn take_due(&mut self, tick: u64) -> Vec<PendingSessionInput> {
+        self.pending
+            .make_contiguous()
+            .sort_by_key(|input| (input.record.effective_tick, input.record.sequence));
+        let ready_count = self
+            .pending
+            .iter()
+            .take_while(|input| input.record.effective_tick <= tick)
+            .count();
+        self.pending.drain(..ready_count).collect()
+    }
+
+    /// Discard queued inputs when their scene generation is torn down.
+    pub fn clear(&mut self) {
+        self.pending.clear();
+    }
+}
+
+/// One admitted input resolved and published at its authoritative fixed tick.
+/// The entity is an ephemeral live-world handle; the record keeps the stable id.
+#[derive(Event, Clone, Debug)]
+pub struct SessionInputCommit {
+    record: SessionInputRecord,
+    target: Entity,
+    origin: Option<lunco_core::CommandOrigin>,
+}
+
+impl SessionInputCommit {
+    /// Stable record admitted for this commit boundary.
+    pub fn record(&self) -> &SessionInputRecord {
+        &self.record
+    }
+
+    /// Target entity resolved from the record's stable `GlobalEntityId`.
+    pub fn target(&self) -> Entity {
+        self.target
+    }
+
+    /// Live command origin retained for the owner that consumes this action.
+    pub fn origin(&self) -> Option<lunco_core::CommandOrigin> {
+        self.origin
+    }
+}
+
+/// Ordering boundary for session-input commits and later fixed-step producers.
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SessionInputCommitSet;
+
+/// Drain due inputs in their shared `(effective_tick, sequence)` order, capture
+/// each accepted record, and synchronously publish its typed owner event before
+/// the next input or fixed-step producer can run.
+pub fn commit_due_session_inputs(world: &mut World) {
+    let Some(tick) = world
+        .get_resource::<lunco_core_runtime::SimTick>()
+        .map(|tick| tick.0)
+    else {
+        world.resource_mut::<PendingSessionInputs>().clear();
+        report_session_input_error(
+            world,
+            "pending session input cannot be committed without SimTick".to_owned(),
+        );
+        return;
+    };
+    let Some(scene_generation) = world
+        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+        .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
+    else {
+        world.resource_mut::<PendingSessionInputs>().clear();
+        report_session_input_error(
+            world,
+            "pending session input cannot be committed without a scene generation".to_owned(),
+        );
+        return;
+    };
+    let due = world.resource_mut::<PendingSessionInputs>().take_due(tick);
+    if due.is_empty() {
+        return;
+    }
+
+    let mut entities_by_gid = HashMap::<lunco_core::GlobalEntityId, Option<Entity>>::new();
+    let mut query = world.query::<(Entity, &lunco_core::GlobalEntityId)>();
+    for (entity, gid) in query.iter(world) {
+        entities_by_gid
+            .entry(*gid)
+            .and_modify(|existing| *existing = None)
+            .or_insert(Some(entity));
+    }
+
+    for input in due {
+        let record = input.record().clone();
+        if record.effective_tick != tick {
+            report_session_input_error(
+                world,
+                format!(
+                    "session input assigned to tick {} missed its commit boundary at tick {tick}",
+                    record.effective_tick
+                ),
+            );
+            continue;
+        }
+        if record.scene_generation != scene_generation {
+            report_session_input_error(
+                world,
+                format!(
+                    "session input belongs to scene generation {}, current generation is {scene_generation}",
+                    record.scene_generation
+                ),
+            );
+            continue;
+        }
+        let Some(target) = entities_by_gid.get(&record.target) else {
+            report_session_input_error(
+                world,
+                format!(
+                    "session input target {} no longer resolves to its admitted GlobalEntityId",
+                    record.target
+                ),
+            );
+            continue;
+        };
+        let Some(target) = *target else {
+            report_session_input_error(
+                world,
+                format!(
+                    "session input target {} resolves to multiple entities",
+                    record.target
+                ),
+            );
+            continue;
+        };
+
+        let recording_error =
+            if let Some(mut stream) = world.get_resource_mut::<SessionInputStream>() {
+                if stream.is_recording() {
+                    stream.append(record.clone()).err()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        if let Some(message) = recording_error {
+            world.trigger(lunco_core::RuntimeError {
+                name: "session-input-recording".to_owned(),
+                message,
+            });
+            world.flush();
+        }
+
+        world.trigger(SessionInputCommit {
+            record,
+            target,
+            origin: input.origin(),
+        });
+        world.flush();
+    }
+}
+
+fn report_session_input_error(world: &mut World, message: String) {
+    world.trigger(lunco_core::RuntimeError {
+        name: "session-input-admission".to_owned(),
+        message,
+    });
+    world.flush();
+}
+
+/// Lifecycle of the bounded in-memory session-input capture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionInputStreamState {
+    /// Capture has not started or was cleared.
+    #[default]
+    Idle,
+    /// Inputs are being appended in admitted fixed-step order.
+    Recording,
+    /// Capture stopped without losing any admitted records.
+    Complete,
+    /// Capture stopped because its record contract could no longer be met.
+    Failed,
+}
+
+/// Bounded append-only capture of admitted whole-session input records.
+///
+/// This is separate from [`OwnedInputLog`]: the latter is a rolling network
+/// rollback buffer of resolved vessel port writes, while this stream retains
+/// semantic inputs for recording and replay.
+#[derive(Resource, Debug, Default)]
+pub struct SessionInputStream {
+    state: SessionInputStreamState,
+    record_limit: usize,
+    records: Vec<SessionInputRecord>,
+    last_order: Option<(u64, u64, u64)>,
+    failure: Option<String>,
+}
+
+/// Runtime bound applied to one session-input capture.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct SessionInputStreamSettings {
+    /// Maximum semantic records retained by one capture.
+    pub max_records_per_capture: usize,
+}
+
+impl Default for SessionInputStreamSettings {
+    fn default() -> Self {
+        Self {
+            max_records_per_capture: 65_536,
+        }
+    }
+}
+
+impl SessionInputStream {
+    /// Begin a capture with an explicit record bound. A completed or failed
+    /// capture must be cleared before another can begin.
+    pub fn begin(&mut self, record_limit: usize) -> Result<(), String> {
+        if self.state == SessionInputStreamState::Recording {
+            return Err("session input capture is already recording".to_owned());
+        }
+        if self.state != SessionInputStreamState::Idle {
+            return Err("session input capture must be cleared before recording again".to_owned());
+        }
+        if record_limit == 0 {
+            return Err("session input capture record limit must be positive".to_owned());
+        }
+        self.record_limit = record_limit;
+        self.last_order = None;
+        self.failure = None;
+        self.state = SessionInputStreamState::Recording;
+        Ok(())
+    }
+
+    /// Whether this stream currently accepts admitted inputs.
+    pub fn is_recording(&self) -> bool {
+        self.state == SessionInputStreamState::Recording
+    }
+
+    /// Current capture lifecycle state.
+    pub fn state(&self) -> SessionInputStreamState {
+        self.state
+    }
+
+    /// Retained records in their authoritative admission order.
+    pub fn records(&self) -> &[SessionInputRecord] {
+        &self.records
+    }
+
+    /// The terminal recording error, when capture failed.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
+    /// Maximum number of records accepted by the current capture.
+    pub fn record_limit(&self) -> usize {
+        self.record_limit
+    }
+
+    /// Append one record or stop capture visibly if the bounded stream can no
+    /// longer retain the authoritative input sequence.
+    pub fn append(&mut self, record: SessionInputRecord) -> Result<(), String> {
+        if !self.is_recording() {
+            return Err("session input capture is not recording".to_owned());
+        }
+
+        let order = (
+            record.scene_generation,
+            record.effective_tick,
+            record.sequence,
+        );
+        let failure = if record.target.get() == 0 {
+            Some("session input record has no stable target identity".to_owned())
+        } else if record.scene_generation == 0 {
+            Some("session input record has no committed scene generation".to_owned())
+        } else if record.sequence == 0 {
+            Some("session input record has no admitted per-tick sequence".to_owned())
+        } else if self.records.len() >= self.record_limit {
+            Some(format!(
+                "session input capture reached its {} record limit",
+                self.record_limit
+            ))
+        } else if self.last_order.is_some_and(|previous| order <= previous) {
+            Some(format!(
+                "session input order must increase; received generation {}, tick {}, sequence {} after {:?}",
+                order.0, order.1, order.2, self.last_order
+            ))
+        } else {
+            None
+        };
+
+        if let Some(message) = failure {
+            self.failure = Some(message.clone());
+            self.state = SessionInputStreamState::Failed;
+            return Err(message);
+        }
+
+        self.last_order = Some(order);
+        self.records.push(record);
+        Ok(())
+    }
+
+    /// Finish a recording without discarding its records.
+    pub fn finish(&mut self) {
+        if self.is_recording() {
+            self.state = SessionInputStreamState::Complete;
+        }
+    }
+
+    /// Discard all retained records and return to the idle state.
+    pub fn clear(&mut self) -> Result<(), String> {
+        if self.is_recording() {
+            return Err("active session input capture must be stopped before clearing".to_owned());
+        }
+        self.state = SessionInputStreamState::Idle;
+        self.record_limit = 0;
+        self.records.clear();
+        self.last_order = None;
+        self.failure = None;
+        Ok(())
+    }
+}
 
 /// CLIENT-side latest local drive input per owned gid `(throttle, steer)`, captured
 /// from the outbound `SetPorts` in `record_control_input`. The render-lead
@@ -2101,4 +2676,274 @@ mod tests {
     // `tests/authz_hook.rs` (its own test binary), because it registers under the
     // process-global `AUTHORIZE_HOOK` id — doing so in this binary would race the
     // other `authorize()` unit tests running on parallel threads.
+}
+
+#[cfg(test)]
+mod session_input_stream_tests {
+    use super::{
+        PendingSessionInputs, SessionInputPayload, SessionInputProducer, SessionInputRecord,
+        SessionInputStream, SessionInputStreamState,
+    };
+    use lunco_command_contracts::SessionId;
+
+    fn physical_record(tick: u64, sequence: u64) -> SessionInputRecord {
+        SessionInputRecord {
+            producer: super::SessionInputProducer::PhysicalController {
+                session_id: SessionId(7),
+            },
+            target: lunco_core::GlobalEntityId::from_raw(42),
+            scene_generation: 3,
+            effective_tick: tick,
+            sequence,
+            payload: SessionInputPayload::PhysicalIntentFrame {
+                intent_ids: vec!["forward".to_owned()],
+            },
+        }
+    }
+
+    #[test]
+    fn capture_fails_visibly_instead_of_reordering_or_dropping_records() {
+        let mut stream = SessionInputStream::default();
+        stream.begin(3).expect("capture starts");
+        stream
+            .append(physical_record(10, 1))
+            .expect("first record retained");
+        stream
+            .append(physical_record(10, 2))
+            .expect("next ordered record retained");
+
+        let error = stream
+            .append(physical_record(10, 2))
+            .expect_err("duplicate admission order must fail capture");
+        assert!(error.contains("order must increase"));
+        assert_eq!(stream.state(), SessionInputStreamState::Failed);
+        assert_eq!(stream.records().len(), 2);
+        assert_eq!(stream.failure(), Some(error.as_str()));
+    }
+
+    #[test]
+    fn bounded_capture_stops_without_silently_evicting_admitted_inputs() {
+        let mut stream = SessionInputStream::default();
+        stream.begin(1).expect("capture starts");
+        stream
+            .append(physical_record(10, 1))
+            .expect("first record retained");
+
+        let error = stream
+            .append(physical_record(11, 1))
+            .expect_err("capacity overflow must be visible");
+        assert!(error.contains("record limit"));
+        assert_eq!(stream.state(), SessionInputStreamState::Failed);
+        assert_eq!(stream.records(), &[physical_record(10, 1)]);
+    }
+
+    #[test]
+    fn pending_session_inputs_share_order_and_drain_at_their_effective_tick() {
+        let mut pending = PendingSessionInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
+        let target = lunco_core::GlobalEntityId::from_raw(42);
+        let producer = SessionInputProducer::DirectCommand { producer_id: 7 };
+        let payload = SessionInputPayload::SimulatedIntentChange {
+            intent: "forward".to_owned(),
+            held: true,
+            correlation_id: 19,
+        };
+
+        let first = pending
+            .admit(&mut order, producer, target, 3, 10, payload.clone(), None)
+            .expect("first typed input is admitted");
+        let second = pending
+            .admit(&mut order, producer, target, 3, 11, payload, None)
+            .expect("next-tick input is admitted");
+
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 1);
+        assert_eq!(pending.len(), 2);
+        let due = pending.take_due(10);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].record().effective_tick, 10);
+        assert_eq!(due[0].record().sequence, first.sequence);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.take_due(11)[0].record().sequence, second.sequence);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn pending_session_inputs_reject_physical_frames_without_spending_order() {
+        let mut pending = PendingSessionInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
+        let error = pending
+            .admit(
+                &mut order,
+                SessionInputProducer::PhysicalController {
+                    session_id: SessionId(7),
+                },
+                lunco_core::GlobalEntityId::from_raw(42),
+                3,
+                10,
+                SessionInputPayload::PhysicalIntentFrame {
+                    intent_ids: vec!["forward".to_owned()],
+                },
+                None,
+            )
+            .expect_err("physical frames enter at their consuming fixed tick");
+
+        assert!(error.contains("cannot be deferred"));
+        let next = order
+            .assign_order(3, 10)
+            .expect("rejected payload must not consume a sequence");
+        assert_eq!(next.sequence, 1);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn pending_session_inputs_reject_invalid_payloads_before_assigning_order() {
+        let mut pending = PendingSessionInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
+        let invalid = pending
+            .admit(
+                &mut order,
+                SessionInputProducer::DirectCommand { producer_id: 7 },
+                lunco_core::GlobalEntityId::from_raw(42),
+                3,
+                10,
+                SessionInputPayload::SimulatedIntentChange {
+                    intent: "invented-intent".to_owned(),
+                    held: true,
+                    correlation_id: 9,
+                },
+                None,
+            )
+            .expect_err("unknown semantic intent is rejected at admission");
+
+        assert!(invalid.contains("unknown semantic intent"));
+        let next = order
+            .assign_order(3, 10)
+            .expect("rejected payload must not consume a sequence");
+        assert_eq!(next.sequence, 1);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn session_input_commit_waits_while_simulation_is_paused() {
+        use bevy::prelude::{App, FixedUpdate, MinimalPlugins, Mut, Time, Virtual};
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, crate::LunCoCoreSessionPlugin));
+        app.init_resource::<lunco_core_runtime::SimTick>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>();
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimTick>()
+            .0 = 10;
+
+        let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
+        let path = "paused-input-test.usda".to_owned();
+        let root_prim = "/World".to_owned();
+        assert_eq!(
+            coordinator.admit(lunco_core::SceneTransitionRequest::load(
+                path.clone(),
+                root_prim.clone(),
+            )),
+            lunco_core::SceneTransitionAdmission::Admitted
+        );
+        coordinator.take_admitted().expect("admitted scene request");
+        let generation = coordinator.start(lunco_core::SceneTransition::Load { path, root_prim });
+        assert!(coordinator.complete(generation));
+        app.insert_resource(coordinator);
+
+        let target = lunco_core::GlobalEntityId::from_raw(42);
+        app.world_mut().spawn(target);
+        app.world_mut()
+            .resource_mut::<SessionInputStream>()
+            .begin(4)
+            .expect("capture starts");
+        app.world_mut()
+            .resource_scope(|world, mut pending: Mut<PendingSessionInputs>| {
+                let mut order =
+                    world.resource_mut::<lunco_control_core::SimulationInputOrderAllocator>();
+                pending
+                    .admit(
+                        &mut order,
+                        SessionInputProducer::DirectCommand { producer_id: 7 },
+                        target,
+                        generation.get(),
+                        10,
+                        SessionInputPayload::SimulatedIntentChange {
+                            intent: "action".to_owned(),
+                            held: true,
+                            correlation_id: 9,
+                        },
+                        None,
+                    )
+                    .expect("valid session input is admitted");
+            });
+
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(app.world().resource::<PendingSessionInputs>().len(), 1);
+        assert!(
+            app.world()
+                .resource::<SessionInputStream>()
+                .records()
+                .is_empty()
+        );
+
+        app.world_mut().resource_mut::<Time<Virtual>>().unpause();
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+        assert!(app.world().resource::<Time<Virtual>>().relative_speed_f64() > 0.0);
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().resource::<PendingSessionInputs>().is_empty());
+        let records = app.world().resource::<SessionInputStream>().records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].effective_tick, 10);
+    }
+
+    #[test]
+    fn a_new_capture_requires_explicit_disposal_of_previous_records() {
+        let mut stream = SessionInputStream::default();
+        stream.begin(2).expect("capture starts");
+        stream
+            .append(physical_record(10, 1))
+            .expect("record retained");
+        stream.finish();
+
+        assert!(stream.begin(2).is_err());
+        stream.clear().expect("completed capture can be cleared");
+        stream.begin(2).expect("new capture starts after clear");
+        assert_eq!(stream.state(), SessionInputStreamState::Recording);
+    }
+
+    #[test]
+    fn empty_completed_or_failed_capture_requires_explicit_clear_before_restart() {
+        let mut stream = SessionInputStream::default();
+        stream.begin(2).expect("capture starts");
+        stream.finish();
+        assert!(stream.records().is_empty());
+        assert!(
+            stream
+                .begin(2)
+                .expect_err("empty completed capture still requires clear")
+                .contains("must be cleared")
+        );
+
+        stream.clear().expect("completed capture can be cleared");
+        stream.begin(2).expect("capture starts after clear");
+        let mut invalid = physical_record(10, 1);
+        invalid.target = lunco_core::GlobalEntityId::from_raw(0);
+        stream
+            .append(invalid)
+            .expect_err("invalid identity fails the empty capture");
+        assert_eq!(stream.state(), SessionInputStreamState::Failed);
+        assert!(stream.records().is_empty());
+        assert!(
+            stream
+                .begin(2)
+                .expect_err("empty failed capture still requires clear")
+                .contains("must be cleared")
+        );
+
+        stream.clear().expect("failed capture can be cleared");
+        stream.begin(2).expect("capture restarts after clear");
+        assert!(stream.is_recording());
+    }
 }

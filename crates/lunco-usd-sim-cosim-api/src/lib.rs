@@ -40,6 +40,101 @@ fn api_u64(value: &ApiValue) -> Option<u64> {
     }
 }
 
+fn causal_origin_value(
+    origin: Option<lunco_core::CommandOrigin>,
+    producer_id: Option<u64>,
+) -> ApiValue {
+    use lunco_core::{CommandOrigin, RuntimeCycle, RuntimePhase, RuntimeScope};
+
+    let Some(origin) = origin else {
+        return producer_id.map_or(
+            ApiValue::Unit,
+            |producer_id| api_value!({ "kind": "direct_command", "producer_id": producer_id }),
+        );
+    };
+    let fields = match origin {
+        CommandOrigin::ApiTransport => {
+            vec![("kind".to_owned(), ApiValue::Str("api_transport".to_owned()))]
+        }
+        CommandOrigin::Rhai { context, actor } => {
+            let mut fields = vec![("kind".to_owned(), ApiValue::Str("rhai".to_owned()))];
+            if let Some(actor) = actor {
+                fields.push(("actor_id".to_owned(), ApiValue::UInt(actor.get())));
+            }
+            fields.push((
+                "phase".to_owned(),
+                ApiValue::Str(
+                    match context.phase {
+                        RuntimePhase::Unclassified => "unclassified",
+                        RuntimePhase::Preparation => "preparation",
+                        RuntimePhase::DependencyPlan => "dependency_plan",
+                        RuntimePhase::Initialization => "initialization",
+                        RuntimePhase::Start => "start",
+                        RuntimePhase::Event => "event",
+                        RuntimePhase::Behavior => "behavior",
+                        RuntimePhase::Visualization => "visualization",
+                        RuntimePhase::Stop => "stop",
+                        RuntimePhase::Evaluation => "evaluation",
+                        RuntimePhase::Command => "command",
+                    }
+                    .to_owned(),
+                ),
+            ));
+            if let Some(route) = context.route {
+                fields.push((
+                    "scope".to_owned(),
+                    ApiValue::Str(
+                        match route.scope {
+                            RuntimeScope::Core => "core",
+                            RuntimeScope::Application => "application",
+                            RuntimeScope::Twin => "twin",
+                        }
+                        .to_owned(),
+                    ),
+                ));
+                fields.push((
+                    "cycle".to_owned(),
+                    ApiValue::Str(
+                        match route.cycle {
+                            RuntimeCycle::Lifecycle => "lifecycle",
+                            RuntimeCycle::Simulation => "simulation",
+                            RuntimeCycle::Interaction => "interaction",
+                            RuntimeCycle::Command => "command",
+                            RuntimeCycle::Repl => "repl",
+                            RuntimeCycle::Telemetry => "telemetry",
+                            RuntimeCycle::Ui => "ui",
+                            RuntimeCycle::Presentation => "presentation",
+                            RuntimeCycle::Visualization => "visualization",
+                        }
+                        .to_owned(),
+                    ),
+                ));
+                fields.push(("generation".to_owned(), ApiValue::UInt(route.generation)));
+            }
+            if let Some(sequence) = context.sequence {
+                fields.push(("sequence".to_owned(), ApiValue::UInt(sequence)));
+            }
+            fields
+        }
+    };
+    let mut fields = fields;
+    if let Some(producer_id) = producer_id {
+        fields.push(("producer_id".to_owned(), ApiValue::UInt(producer_id)));
+    }
+    ApiValue::Map(fields)
+}
+
+fn causal_admission_value(admission: Option<lunco_control_core::SimulationInputOrder>) -> ApiValue {
+    let Some(admission) = admission else {
+        return ApiValue::Unit;
+    };
+    api_value!({
+        "scene_generation": admission.scene_generation,
+        "effective_tick": admission.effective_tick,
+        "sequence": admission.sequence,
+    })
+}
+
 /// Registers all co-simulation API query providers when an API registry exists.
 pub struct UsdSimCosimApiPlugin;
 
@@ -305,7 +400,8 @@ fn causal_endpoint_api_value(world: &World, entity: Entity) -> ApiValue {
 /// `target` accepts the stable API id. `correlation_id` selects one recorded
 /// edge; when omitted, the newest edge for the target is selected for a useful
 /// operator default. The response includes the selected `correlation_id` so a
-/// caller can repeat the exact inspection.
+/// caller can repeat the exact inspection, plus API/Rhai producer origin when
+/// the edge came through the typed command dispatcher.
 pub struct CausalTraceProvider;
 
 impl lunco_api::ApiQueryProvider for CausalTraceProvider {
@@ -561,6 +657,8 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
             "correlation_id": record.correlation_id,
             "intent": record.intent.canonical_name(),
             "edge": record.kind.as_str(),
+            "origin": causal_origin_value(record.origin, record.producer_id),
+            "admission": causal_admission_value(record.admission),
             "control_binding": {
                 "matched_intent": !binding_entries.is_empty(),
                 "ports": binding_entries,

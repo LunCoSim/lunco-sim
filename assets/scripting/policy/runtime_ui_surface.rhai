@@ -21,6 +21,12 @@ fn preparation_active(facts) {
 }
 
 fn runtime_ui_surface(facts) {
+    if runtime_context.scope != "application"
+        || runtime_context.cycle != "ui"
+        || runtime_context.phase != "preparation"
+        || runtime_context.clock != "application" {
+        throw "runtime.ui.visibility requires Application/Ui/Preparation context";
+    }
     let visible = if preparation_active(facts) {
         true
     } else if !facts.available {

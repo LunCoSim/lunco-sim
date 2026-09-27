@@ -62,6 +62,7 @@ impl Plugin for RuntimeExposuresPlugin {
                 Update,
                 publish_exposure
                     .after(mark_exposure_dirty)
+                    .in_set(lunco_core::RuntimeCycleSet::Ui)
                     .run_if(exposure_publish_due),
             )
             .add_systems(
@@ -158,6 +159,37 @@ const LUNAR_MAP_SETTING_KEY: &str = "ui.lunar_map";
 const RUNTIME_UI_VISIBILITY_HOOK: &str = "runtime.ui.visibility";
 const RUNTIME_UI_PROPERTIES_HOOK: &str = "runtime.ui.properties";
 
+fn runtime_ui_execution_context(time: &Time<Real>) -> lunco_core::RuntimeExecutionContext {
+    lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::application(
+            lunco_core::RuntimeCycle::Ui,
+        )),
+        phase: lunco_core::RuntimePhase::Preparation,
+        clock: lunco_core::RuntimeClock::Application,
+        time_seconds: Some(time.elapsed_secs_f64()),
+        delta_seconds: Some(time.delta_secs_f64()),
+        sequence: None,
+        producer: None,
+    }
+}
+
+fn presentation_execution_context(
+    time: &Time<Real>,
+    phase: lunco_core::RuntimePhase,
+) -> lunco_core::RuntimeExecutionContext {
+    lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::application(
+            lunco_core::RuntimeCycle::Presentation,
+        )),
+        phase,
+        clock: lunco_core::RuntimeClock::Presentation,
+        time_seconds: Some(time.elapsed_secs_f64()),
+        delta_seconds: Some(time.delta_secs_f64()),
+        sequence: None,
+        producer: None,
+    }
+}
+
 lunco_hooks::declare_hook! {
     id: RUNTIME_UI_VISIBILITY_HOOK,
     owner: "lunco-luncosim-exposures",
@@ -183,9 +215,16 @@ lunco_hooks::declare_hook! {
 /// Ask the active Twin's Rhai policy whether a subject-scoped surface is
 /// visible. The engine passes one owned, typed fact map; no product or model
 /// name is interpreted here.
-fn runtime_ui_visibility(facts: &HookValue, surface_id: &str) -> bool {
-    match lunco_hooks::invoke_unclassified(RUNTIME_UI_VISIBILITY_HOOK, std::slice::from_ref(facts))
-    {
+fn runtime_ui_visibility(
+    facts: &HookValue,
+    surface_id: &str,
+    context: lunco_core::RuntimeExecutionContext,
+) -> bool {
+    match lunco_hooks::invoke_with_context(
+        RUNTIME_UI_VISIBILITY_HOOK,
+        std::slice::from_ref(facts),
+        context,
+    ) {
         Some(Ok(HookValue::Map(values))) => {
             let visible = values
                 .iter()
@@ -234,10 +273,16 @@ fn runtime_ui_visibility(facts: &HookValue, surface_id: &str) -> bool {
 /// Ask the active Twin's Rhai policy for presentation properties. Scalar values
 /// drive ordinary template bindings; arrays and maps remain typed so generic
 /// HUI collection hosts can reconcile authored rows without numbered slots.
-fn runtime_ui_properties(facts: &HookValue, surface_id: &str) -> Vec<(String, ExposureValue)> {
-    let Some(result) =
-        lunco_hooks::invoke_unclassified(RUNTIME_UI_PROPERTIES_HOOK, std::slice::from_ref(facts))
-    else {
+fn runtime_ui_properties(
+    facts: &HookValue,
+    surface_id: &str,
+    context: lunco_core::RuntimeExecutionContext,
+) -> Vec<(String, ExposureValue)> {
+    let Some(result) = lunco_hooks::invoke_with_context(
+        RUNTIME_UI_PROPERTIES_HOOK,
+        std::slice::from_ref(facts),
+        context,
+    ) else {
         warn!(
             surface_id,
             hook = RUNTIME_UI_PROPERTIES_HOOK,
@@ -1460,7 +1505,12 @@ mod exposure_tests {
             last_error: None,
         };
         let mut exposures = EngineExposures::default();
-        publish_camera_exposure(&mut exposures, &status);
+        let time = Time::<Real>::default();
+        publish_camera_exposure(
+            &mut exposures,
+            &status,
+            presentation_execution_context(&time, lunco_core::RuntimePhase::Initialization),
+        );
         let surface = exposures
             .surfaces
             .get("camera-status")
@@ -1478,6 +1528,7 @@ mod exposure_tests {
     fn camera_status_event_updates_the_retained_exposure() {
         let mut app = App::new();
         app.init_resource::<EngineExposures>()
+            .insert_resource(Time::<Real>::default())
             .insert_resource(
                 lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus {
                     active_name: Some("/World/Close".into()),
@@ -1722,6 +1773,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
 }
 
 pub(crate) fn publish_exposure(
+    time: Res<Time<Real>>,
     queries: ExposureQueries,
     geo: GeodeticHud,
     mut runtime: ExposureRuntime,
@@ -1732,6 +1784,7 @@ pub(crate) fn publish_exposure(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
 ) {
+    let runtime_context = runtime_ui_execution_context(&time);
     if let Some(overlay) = overlays.overlay.as_deref() {
         if seminar.overlay != Some(*overlay) {
             info!(
@@ -1805,6 +1858,7 @@ pub(crate) fn publish_exposure(
             runtime.local_session.0,
             &queries.inputs,
             overlays.simulation_progress.as_deref(),
+            runtime_context,
         );
         retired_surface_ids.clear();
     }
@@ -1934,7 +1988,11 @@ pub(crate) fn publish_exposure(
                     &[],
                     overlays.simulation_progress.as_deref(),
                 );
-                ui.visible(runtime_ui_visibility(&facts, &surface.surface_id));
+                ui.visible(runtime_ui_visibility(
+                    &facts,
+                    &surface.surface_id,
+                    runtime_context,
+                ));
                 let telemetry = resolve_authored_telemetry(
                     vessel.entity,
                     &runtime.signals,
@@ -2387,6 +2445,7 @@ fn publish_runtime_surface_exposures(
     local_session: lunco_command_contracts::SessionId,
     q_inputs: &Query<&InputPorts>,
     progress: Option<&lunco_core_runtime::SimulationProgress>,
+    runtime_context: lunco_core::RuntimeExecutionContext,
 ) {
     for surface_id in retired_surface_ids {
         let mut ui = exposures.writer(surface_id);
@@ -2436,6 +2495,7 @@ fn publish_runtime_surface_exposures(
             stages,
             canonical,
             progress,
+            runtime_context,
         );
     }
 }
@@ -2467,6 +2527,7 @@ fn publish_selected_control_exposure(
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     progress: Option<&lunco_core_runtime::SimulationProgress>,
+    runtime_context: lunco_core::RuntimeExecutionContext,
 ) {
     let facts = runtime_ui_facts(
         namespace,
@@ -2495,8 +2556,8 @@ fn publish_selected_control_exposure(
         telemetry,
         progress,
     );
-    let visible = runtime_ui_visibility(&facts, namespace);
-    let properties = runtime_ui_properties(&facts, namespace);
+    let visible = runtime_ui_visibility(&facts, namespace, runtime_context);
+    let properties = runtime_ui_properties(&facts, namespace, runtime_context);
     let mut ui = exposures.writer(namespace);
     ui.subject(subject);
     ui.visible(visible);
@@ -2777,24 +2838,35 @@ fn publish_runtime_overlay_exposures(
 /// cadence: a camera switch must not be rediscovered by a per-tick poll.
 pub(crate) fn on_camera_selection_status_changed(
     _trigger: On<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatusChanged>,
+    time: Res<Time<Real>>,
     status: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
     mut exposures: ResMut<EngineExposures>,
 ) {
-    publish_camera_exposure(&mut exposures, &status);
+    publish_camera_exposure(
+        &mut exposures,
+        &status,
+        presentation_execution_context(&time, lunco_core::RuntimePhase::Event),
+    );
 }
 
 /// Seed the retained camera surface once when the host starts. Subsequent
 /// updates arrive only through `CameraSelectionStatusChanged`.
 pub(crate) fn publish_initial_camera_exposure(
+    time: Res<Time<Real>>,
     status: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
     mut exposures: ResMut<EngineExposures>,
 ) {
-    publish_camera_exposure(&mut exposures, &status);
+    publish_camera_exposure(
+        &mut exposures,
+        &status,
+        presentation_execution_context(&time, lunco_core::RuntimePhase::Initialization),
+    );
 }
 
 fn publish_camera_exposure(
     exposures: &mut EngineExposures,
     status: &lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus,
+    runtime_context: lunco_core::RuntimeExecutionContext,
 ) {
     // Keep the full path as the authoritative fact for Rhai/diagnostics, and
     // derive one deterministic identity label for compact status surfaces.
@@ -2836,7 +2908,7 @@ fn publish_camera_exposure(
                 .map_or(HookValue::Unit, |error| HookValue::str(error.clone())),
         ),
     ]);
-    let properties = runtime_ui_properties(&facts, "camera-status");
+    let properties = runtime_ui_properties(&facts, "camera-status", runtime_context);
     let mut ui = exposures.writer("camera-status");
     ui.visible(true);
     ui.clear_properties();

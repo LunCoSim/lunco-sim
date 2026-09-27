@@ -10,6 +10,7 @@ description = "Shared render-look configuration for LunCoSim: lunar sun shadows,
 # It is data/components only — NOT the `bevy_pbr` render pipeline — so this crate
 # stays cheap and can sit below every 3D crate without dragging in rendering.
 bevy = { workspace = true, features = ["bevy_light"] }
+lunco-core = { path = "../lunco-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-hooks = { path = "../lunco-hooks" }
 serde = { workspace = true }

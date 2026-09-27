@@ -289,8 +289,15 @@ ordered held commands, and do not add a vehicle-specific Rust action path.
 The helper returns the edge command `id`. Use it with
 `query("CausalTrace", #{target: target, correlation_id: edge.id})` to inspect
 the current authored binding, selected public port owner, connection/native
-joint admission, and measured channels. This is a diagnostic snapshot; an
-empty or pending stage means the path is incomplete.
+joint admission, measured channels, and the edge's classified producer origin.
+Rhai-origin records include the owner cycle, generation, logical sequence, and
+the stable actor id when issued by a Twin scenario. Twin scenario helper calls
+omit `producer_id`; actorless application Rhai and API/direct typed callers
+supply a stable nonzero ID. External discrete edges include their committed
+scene generation, effective tick, and per-tick sequence; deterministic Rhai
+simulation edges have no external admission stamp. This is a diagnostic
+snapshot; an empty or pending stage means the path is incomplete. The bounded
+trace is not a session replay log.
 
 ## The recipe (checklist)
 

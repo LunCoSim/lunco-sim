@@ -94,7 +94,7 @@ The rendering bridge.
 ### **Typed Command** (The Pulse)
 A discrete instruction event.
 - **Self-Describing**: Commands are typed structs (derived with `#[Command]`) and carry their own parameters and documentation, discovered via reflection.
-- **Feedback**: Every command execution triggers an acknowledgment result (`Result<Ack, String>`) for verification.
+- **Feedback**: Result-returning commands preserve success, typed rejection (`Reject`), or handler failure (`String`) for verification.
 
 Typed camera commands in `lunco-camera-core` express generic rig operations;
 typed control commands in `lunco-control-core` express producer/target
@@ -364,8 +364,12 @@ correlation id and publishes the same id in `intent.edge.value.correlation_id`.
 Pass that id with the target to the read-only `CausalTrace` query. The query
 joins the semantic edge to the authored control binding, selected
 `PortRegistry` owner, USD connection/native-joint admission, and current
-`SignalRegistry` measurements; it is diagnostic composition, not another
-control or telemetry path.
+`SignalRegistry` measurements. Its classified Rhai origin includes the owner
+route, phase, generation, logical sequence, and scenario actor id. External
+discrete edges also include the committed scene generation, effective tick,
+and per-tick sequence. Deterministic Rhai simulation edges carry no external
+admission stamp. The query is diagnostic composition, not another control or
+telemetry path.
 
 Control authority has two independent layers. The generic session layer's
 `SessionRegistry` answers *which session controls which stable target id*; the
@@ -469,8 +473,30 @@ Text fields retain keyboard ownership until that explicit scene press.
 ### 6.8 Atomic semantic intent edges
 
 Held controls and discrete actions use separate contracts. `SimulateIntent` is
-the level-triggered API/Rhai command for a target-scoped held intent. For a
-single transition, use `SimulateIntentEdge` with `edge` set to `pressed`,
+the level-triggered command for a target-scoped held intent. External API,
+application-Rhai, and direct typed commands targeting a fixed-simulation entity
+require a stable target id and committed scene generation, then enter the
+bounded `lunco-core-session::PendingSessionInputs` queue for the next
+`SimTick`. Held changes and discrete edges receive order from the shared
+`lunco-control-core::SimulationInputOrderAllocator`,
+which resets at scene teardown. The acknowledgement returns a correlation
+id, producer id, and admission stamp; fixed-step commit publishes `intent.hold`
+with the same producer id and stamp. API and direct typed producers supply a
+nonzero `producer_id` stable for that caller's session. Actorless application
+Rhai supplies one too; Twin Rhai uses its stable actor identity. Deterministic
+Simulation Rhai changes remain in their owning pass, and local-embodiment
+interaction input remains on the interaction cadence.
+
+The bounded queue and its scene-teardown lifecycle belong to
+`lunco-core-session::PendingSessionInputs`. At the fixed-tick boundary,
+core-session validates and captures each due record, then publishes its typed
+commit event in sequence order while simulation time is running; paused input
+remains queued for its admitted tick after play resumes. The controller applies
+the semantic payload variants. Runtime spawns and physical-frame admission have
+not joined that commit boundary, so total cross-domain effect order remains
+open.
+
+For a single transition, use `SimulateIntentEdge` with `edge` set to `pressed`,
 `released`, or `pulse`:
 
 ```rhai
@@ -483,9 +509,11 @@ The controller validates the shared `UserIntent` vocabulary and emits one
 mutate the Twin. Authored Rhai/Modelica policy consumes the edge and decides
 whether it means a latch, release, toggle, or other action. Rhai `on_event`
 hooks receive the same edge on the existing telemetry bus as `intent.edge`,
-with `value.intent`, `value.edge`, and `value.target_gid`; the event source is
-also the target gid. The target remains subject to the normal command authority
-policy, so two spawned vehicles cannot receive one another's edge.
+with typed `value.correlation_id`, `value.intent`, `value.edge`, and
+`value.target_gid`; API/direct/actorless Rhai events also include
+`value.producer_kind` and `value.producer_id`. The event source is also the
+target gid. The target remains subject to the normal command authority policy,
+so two spawned vehicles cannot receive one another's edge.
 
 ### 6.9 Editor keyboard input
 

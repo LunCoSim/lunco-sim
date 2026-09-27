@@ -122,6 +122,27 @@ impl std::fmt::Display for UserIntent {
 }
 
 impl UserIntent {
+    /// Every semantic intent in stable enum vocabulary order.
+    pub const ALL: [Self; 17] = [
+        Self::MoveForward,
+        Self::MoveBackward,
+        Self::MoveLeft,
+        Self::MoveRight,
+        Self::MoveUp,
+        Self::MoveDown,
+        Self::SpeedBoost,
+        Self::Look,
+        Self::Zoom,
+        Self::Action,
+        Self::Thrust,
+        Self::Brake,
+        Self::Release,
+        Self::SwitchMode,
+        Self::Pause,
+        Self::Cancel,
+        Self::DeleteSelection,
+    ];
+
     /// Canonical lower-case name used by authored bindings and event payloads.
     pub const fn canonical_name(self) -> &'static str {
         match self {
@@ -166,6 +187,16 @@ pub enum SemanticIntentEdgeKind {
 }
 
 impl SemanticIntentEdgeKind {
+    /// Parse the command spelling for one semantic edge.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "pressed" | "press" => Some(Self::Pressed),
+            "released" | "release" => Some(Self::Released),
+            "pulse" => Some(Self::Pulse),
+            _ => None,
+        }
+    }
+
     /// Canonical wire/script spelling for this edge kind.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -182,12 +213,76 @@ impl std::fmt::Display for SemanticIntentEdgeKind {
     }
 }
 
+/// Admission stamp for an external semantic input consumed at a fixed tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub struct SimulationInputOrder {
+    /// Successfully admitted scene generation that owns the target.
+    pub scene_generation: u64,
+    /// Fixed simulation tick at which the input becomes visible.
+    pub effective_tick: u64,
+    /// Stable order among inputs assigned to the same tick.
+    pub sequence: u64,
+}
+
+/// Shared per-tick order source for admitted simulation inputs.
+///
+/// Producers in different crates use this resource so their records do not
+/// invent independent sequence spaces. It assigns order only; owners still
+/// validate and commit their typed payloads at the appropriate simulation
+/// boundary.
+#[derive(Resource, Debug, Default)]
+pub struct SimulationInputOrderAllocator {
+    sequence_tick: Option<u64>,
+    next_sequence: u64,
+}
+
+impl SimulationInputOrderAllocator {
+    /// Assign the next sequence for an admitted scene generation and tick.
+    pub fn assign_order(
+        &mut self,
+        scene_generation: u64,
+        effective_tick: u64,
+    ) -> Result<SimulationInputOrder, String> {
+        let sequence = match self.sequence_tick {
+            Some(tick) if effective_tick < tick => {
+                return Err(format!(
+                    "simulation input tick moved backwards from {tick} to {effective_tick}"
+                ));
+            }
+            Some(tick) if effective_tick == tick => self
+                .next_sequence
+                .checked_add(1)
+                .ok_or_else(|| "simulation input sequence exhausted".to_owned())?,
+            _ => 1,
+        };
+        self.sequence_tick = Some(effective_tick);
+        self.next_sequence = sequence;
+
+        Ok(SimulationInputOrder {
+            scene_generation,
+            effective_tick,
+            sequence,
+        })
+    }
+
+    /// Reset ordering state when the outgoing scene is torn down.
+    pub fn reset(&mut self) {
+        self.sequence_tick = None;
+        self.next_sequence = 0;
+    }
+}
+
+fn reset_simulation_input_order(mut order: ResMut<SimulationInputOrderAllocator>) {
+    order.reset();
+}
+
 /// A target-scoped semantic edge emitted by the controller contract.
 ///
-/// This event carries intent identity and target identity only. It does not
-/// choose a vehicle port or mutate a domain; authored policy consumes it and
-/// may issue the existing `SetPorts` command if that is the intended effect.
-#[derive(Event, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+/// This event carries intent, target, correlation, and classified producer
+/// provenance. It does not choose a vehicle port or mutate a domain; authored
+/// policy consumes it and may issue the existing `SetPorts` command if that is
+/// the intended effect.
+#[derive(Event, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct SemanticIntentEdge {
     /// The entity whose authored semantic control surface receives the edge.
     pub target: Entity,
@@ -199,6 +294,16 @@ pub struct SemanticIntentEdge {
     /// inspection. Physical input edges mint an id locally; API/Rhai dispatch
     /// reuses the active command id.
     pub correlation_id: u64,
+    /// Caller-assigned stable identity for API, direct typed, or actorless Rhai
+    /// producers. Twin actor identity remains in `origin`.
+    pub producer_id: Option<u64>,
+    /// Classified API/Rhai producer for commands routed through the typed
+    /// dispatcher. Direct controller and Bevy producers leave this absent.
+    #[reflect(ignore)]
+    pub origin: Option<lunco_core::CommandOrigin>,
+    /// Fixed-tick admission for externally submitted edges. Deterministic
+    /// simulation hooks emit derived edges without an admission stamp.
+    pub admission: Option<SimulationInputOrder>,
 }
 
 /// One bounded semantic edge retained for causal inspection.
@@ -207,7 +312,7 @@ pub struct SemanticIntentEdge {
 /// observations (port owner, connection, admission, and measurements) belong
 /// to their existing owners and are composed by the `CausalTrace` API query;
 /// keeping them out of this ledger avoids a second routing or telemetry store.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CausalTraceRecord {
     /// The command/operation id that identifies this action.
     pub correlation_id: u64,
@@ -219,6 +324,13 @@ pub struct CausalTraceRecord {
     pub intent: UserIntent,
     /// The delivered edge kind.
     pub kind: SemanticIntentEdgeKind,
+    /// Producer classification retained from the typed semantic edge.
+    pub origin: Option<lunco_core::CommandOrigin>,
+    /// Caller-assigned stable identity when the producer is API, direct typed,
+    /// or actorless Rhai.
+    pub producer_id: Option<u64>,
+    /// Fixed-tick admission stamp when the edge came through external ingress.
+    pub admission: Option<SimulationInputOrder>,
 }
 
 /// Bounded, scene-scoped semantic edge ledger used by the causal trace query.
@@ -245,6 +357,9 @@ impl CausalTrace {
             target_gid,
             intent: edge.intent,
             kind: edge.kind,
+            origin: edge.origin,
+            producer_id: edge.producer_id,
+            admission: edge.admission,
         });
         while self.records.len() > Self::MAX_RECORDS {
             self.records.pop_front();
@@ -559,6 +674,8 @@ impl Plugin for LunCoControlPlugin {
         app.add_plugins(InputManagerPlugin::<UserIntent>::default())
             .init_resource::<EguiFocus>()
             .init_resource::<CausalTrace>()
+            .init_resource::<SimulationInputOrderAllocator>()
+            .add_systems(lunco_core::SceneTeardown, reset_simulation_input_order)
             .register_type::<UserIntent>()
             .register_type::<SemanticIntentEdgeKind>()
             .register_type::<SemanticIntentEdge>()
@@ -568,7 +685,51 @@ impl Plugin for LunCoControlPlugin {
 
 #[cfg(test)]
 mod tests {
-    use super::{ControlBinding, UserIntent, parse_user_intent};
+    use super::{
+        ControlBinding, LunCoControlPlugin, SimulationInputOrderAllocator, UserIntent,
+        parse_user_intent,
+    };
+    use bevy::prelude::*;
+
+    #[test]
+    fn simulation_input_order_allocator_shares_sequences_per_tick_and_resets_forward() {
+        let mut allocator = SimulationInputOrderAllocator::default();
+        assert_eq!(allocator.assign_order(3, 10).unwrap().sequence, 1);
+        assert_eq!(allocator.assign_order(3, 10).unwrap().sequence, 2);
+        assert_eq!(allocator.assign_order(3, 11).unwrap().sequence, 1);
+        assert!(allocator.assign_order(3, 10).is_err());
+    }
+
+    #[test]
+    fn scene_teardown_resets_simulation_input_order_allocator() {
+        let mut app = App::new();
+        app.add_plugins(LunCoControlPlugin);
+        let order = app
+            .world_mut()
+            .resource_mut::<SimulationInputOrderAllocator>()
+            .assign_order(1, 24)
+            .expect("first admitted input");
+        assert_eq!(order.sequence, 1);
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<SimulationInputOrderAllocator>()
+                .assign_order(1, 24)
+                .expect("second admitted input")
+                .sequence,
+            2
+        );
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<SimulationInputOrderAllocator>()
+                .assign_order(2, 1)
+                .expect("the next scene starts a new order stream")
+                .sequence,
+            1
+        );
+    }
 
     /// Intent parsing accepts exactly the authored control vocabulary and rejects
     /// former aliases instead of silently changing their meaning.

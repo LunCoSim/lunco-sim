@@ -871,6 +871,7 @@ struct RuntimeUiCollectionHost;
 /// becomes active the Twin policy may select any currently visible surfaces by
 /// stable authored ID.
 fn update_runtime_ui_recording_contract(
+    time: Res<Time<Real>>,
     exposures: Res<EngineExposures>,
     manifest_state: Res<RuntimeUiManifestState>,
     recording: Option<Res<RuntimeUiCaptureState>>,
@@ -922,7 +923,11 @@ fn update_runtime_ui_recording_contract(
         ("recording_active", HookValue::Bool(true)),
     ]);
 
-    let result = lunco_hooks::invoke_unclassified("runtime.ui.recording", &[facts]);
+    let result = lunco_hooks::invoke_with_context(
+        "runtime.ui.recording",
+        &[facts],
+        runtime_ui_recording_context(&time),
+    );
     let Some(result) = result else {
         return;
     };
@@ -969,6 +974,20 @@ fn update_runtime_ui_recording_contract(
         contract
             .required_namespaces
             .insert(surface.namespace.clone());
+    }
+}
+
+fn runtime_ui_recording_context(time: &Time<Real>) -> lunco_core::RuntimeExecutionContext {
+    lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::application(
+            lunco_core::RuntimeCycle::Ui,
+        )),
+        phase: lunco_core::RuntimePhase::Preparation,
+        clock: lunco_core::RuntimeClock::Application,
+        time_seconds: Some(time.elapsed_secs_f64()),
+        delta_seconds: Some(time.delta_secs_f64()),
+        sequence: None,
+        producer: None,
     }
 }
 
@@ -2522,8 +2541,104 @@ fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
 mod tests {
     use super::*;
     use bevy::camera::NormalizedRenderTarget;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::picking::pointer::{Location, PointerId};
     use lunco_workbench_core::scene_pick::EguiPointerState;
+    use std::sync::Once;
+
+    struct TestRuntimeUiRecordingPolicy;
+
+    impl lunco_hooks::ScriptHook for TestRuntimeUiRecordingPolicy {
+        fn invoke(&self, invocation: &lunco_hooks::HookInvocation<'_>) -> lunco_hooks::HookResult {
+            let context = invocation.context;
+            if context.route
+                != Some(lunco_core::RuntimeRoute::application(
+                    lunco_core::RuntimeCycle::Ui,
+                ))
+                || context.phase != lunco_core::RuntimePhase::Preparation
+                || context.clock != lunco_core::RuntimeClock::Application
+                || context.time_seconds.is_none()
+                || context.delta_seconds.is_none()
+                || context.sequence.is_some()
+                || context.producer.is_some()
+                || context.validate().is_err()
+            {
+                return Err(lunco_hooks::HookError(
+                    "runtime UI recording policy requires Application/Ui/Preparation context"
+                        .into(),
+                ));
+            }
+            let facts = invocation
+                .args
+                .first()
+                .ok_or_else(|| lunco_hooks::HookError("missing recording facts".into()))?;
+            let recording_active = facts.get("recording_active").and_then(HookValue::as_bool);
+            let visible_surface_ids = facts.get("visible_surface_ids");
+            if recording_active != Some(true)
+                || visible_surface_ids != Some(&HookValue::Array(vec![HookValue::str("capture")]))
+            {
+                return Err(lunco_hooks::HookError(
+                    "runtime UI recording facts were not prepared for the active surface".into(),
+                ));
+            }
+            Ok(HookValue::Array(vec![HookValue::str("capture")]))
+        }
+    }
+
+    fn install_runtime_ui_recording_test_policy() {
+        static INSTALLED: Once = Once::new();
+        INSTALLED.call_once(|| {
+            lunco_hooks::register(lunco_hooks::RegisteredHook {
+                id: "runtime.ui.recording".into(),
+                backend: "test".into(),
+                deterministic: false,
+                hook: std::sync::Arc::new(TestRuntimeUiRecordingPolicy),
+            });
+        });
+    }
+
+    #[test]
+    fn runtime_ui_recording_policy_receives_owner_ui_context() {
+        install_runtime_ui_recording_test_policy();
+
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "kind": "lunco.runtime-ui-manifest.v1",
+                "surfaces": [{
+                    "id": "capture",
+                    "template": "ui/capture.html",
+                    "stylesheet": "ui/capture.css",
+                    "namespace": "capture-surface",
+                    "placement": {"mode": "viewport"}
+                }]
+            }"#,
+        )
+        .expect("inline runtime UI manifest should parse");
+
+        let mut exposures = EngineExposures::default();
+        exposures.writer("capture-surface").visible(true);
+
+        let mut app = App::new();
+        app.insert_resource(Time::<Real>::default())
+            .insert_resource(exposures)
+            .insert_resource(RuntimeUiManifestState {
+                manifest: Some(manifest),
+                ..Default::default()
+            })
+            .insert_resource(RuntimeUiCaptureState { active: true })
+            .init_resource::<RuntimeUiRecordingContract>();
+
+        app.world_mut()
+            .run_system_once(update_runtime_ui_recording_contract)
+            .expect("recording contract system should run");
+
+        let contract = app.world().resource::<RuntimeUiRecordingContract>();
+        assert_eq!(
+            contract.required_namespaces,
+            ["capture-surface".to_owned()].into()
+        );
+        assert!(contract.error.is_none());
+    }
 
     #[test]
     fn manifest_accepts_viewport_dock_and_window_surfaces() {

@@ -254,6 +254,7 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_name = &func.sig.ident;
     let fn_vis = &func.vis;
     let fn_body = &func.block;
+    let fn_output = &func.sig.output;
 
     // Dropping the author's first parameter (the `skip(1)` below) is INTENTIONAL,
     // not an oversight: we re-emit it ourselves as a canonical
@@ -299,9 +300,11 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
     let register_fn_name = Ident::new(&format!("__register_{}", fn_name), fn_name.span());
     let project_fn_name = Ident::new(&format!("__project_{}", fn_name), fn_name.span());
 
-    // A handler with a return type (`-> Result<Ack, String>`) opts into
-    // result recording: the wrapper runs the body, then — if a transport
-    // set the active request id — records the outcome in `CommandResults`.
+    // A handler with a return type opts into result recording: the wrapper runs
+    // the body with its declared return type, then — if a transport set the
+    // active request id — records the typed outcome in `CommandResults`.
+    // `Result<Ack, String>` records handler failure; `Result<Ack, Reject>`
+    // records a command rejection.
     // Void handlers (the common, fire-and-forget case) keep the lean
     // passthrough wrapper with no extra params or resource access.
     let returns_result = !matches!(func.sig.output, syn::ReturnType::Default);
@@ -316,9 +319,9 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
                 __lunco_active_id: bevy::prelude::Res<::lunco_core::ActiveCommandId>,
             ) {
                 let cmd = trigger.event();
-                let __lunco_outcome = (|| #fn_body)();
+                let __lunco_outcome = (|| #fn_output #fn_body)();
                 if let Some(__id) = __lunco_active_id.get() {
-                    __lunco_cmd_results.record(__id, __lunco_outcome);
+                    __lunco_cmd_results.record_handler_result(__id, __lunco_outcome);
                 }
             }
         }
@@ -339,10 +342,12 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
         /// Project this typed command onto the shared script/telemetry event bus.
         #fn_vis fn #project_fn_name(
             _trigger: bevy::prelude::On<#cmd_type>,
+            active_command: Option<bevy::prelude::Res<::lunco_core::ActiveCommandId>>,
             mut commands: bevy::prelude::Commands,
         ) {
             commands.trigger(::lunco_core::CommandOccurred {
                 name: stringify!(#cmd_type).to_string(),
+                origin: active_command.and_then(|active| active.origin()),
             });
         }
 

@@ -101,6 +101,7 @@ mod tests {
 
         app.world_mut().trigger(lunco_core::CommandOccurred {
             name: "SetValue".into(),
+            origin: None,
         });
         app.world_mut().trigger(lunco_core::RuntimeError {
             name: "load-failed".into(),

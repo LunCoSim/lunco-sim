@@ -31,7 +31,12 @@ For discrete controls, use `intent_pulse(target, intent)` or
 `intent_edge(target, intent, "pressed"|"released"|"pulse")` from the control
 prelude. This emits one target-scoped semantic edge and the `intent.edge` event;
 the Twin's Rhai/Modelica policy decides whether to latch, release, toggle, or
-actuate it. Keep `SimulateIntent`/`SetPorts` for held and continuous values.
+actuate it. External `SimulateIntent` held changes for fixed-simulation targets
+are admitted at the next tick and publish `intent.hold`; Simulation Rhai holds
+remain derived behavior. API and direct typed commands supply a nonzero stable
+`producer_id`; Twin scenarios use their actor identity, while actorless
+application Rhai supplies its own. Keep `SetPorts` for direct continuous
+values.
 
 For UI automation, use the native input helpers from `prelude/input.rhai`.
 They compose typed Bevy window events rather than calling an editor or scene
@@ -178,12 +183,15 @@ persistent task state as the driver-bound `this`. The native task driver owns
 task progress, dwell timing, and event waits. You sense with queries/`get` and
 act with `cmd`/`set`.
 
-### Scenario peer target and timing
+### Scenario execution target and timing
 
 The runtime assigns persistent scenario hooks to the cycles owned by the
 selected application plugins. Use `// @peer host|client|both` to choose the
-network peer. Continuous behavior may declare `// @timing simulation`; this
-records its fixed-step requirement and does not install a schedule from Rhai.
+network peer. `host` includes the standalone authoritative process. Continuous
+behavior may declare `// @timing simulation`; this records its fixed-step
+requirement and does not install a schedule from Rhai. Neither directive
+chooses the script's `Core`, `Application`, or `Twin` owner; Rust assigns that
+owner and the schedules that invoke it.
 `on_visualization` runs once in `PreUpdate`, after lifecycle, document, and
 terrain admission scans and time-spine projection, but before the first fixed
 tick. It runs in the Twin Visualization cycle after scene, reference, document,
@@ -194,7 +202,7 @@ and events in this phase; only `ApplyUsdTransientOps` can update the disposable
 USD view. `on_start` and `on_event` inherit the lifecycle or simulation context
 of the pass that invokes them, which is available through `execution_context()`.
 
-An unsupported peer target or timing value, or an unknown metadata directive,
+An unsupported execution target or timing value, or an unknown metadata directive,
 disables only that scenario and publishes a document diagnostic for that source
 revision. Editing the source reparses its directives before the new program
 runs. Runtime errors stay visible through the script diagnostics and do not
@@ -526,7 +534,7 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 - **Vector math:** `vsub`/`vadd`/`vlen`/`norm_squared`/`vdot`/`vcross`/`vnorm`/`vscale`/`clamp`, `distance`, `arrived`. Use `norm_squared(v)` for the squared Euclidean norm of one vector; it accepts native `Vec3` or a three-number array. Use native `Vec3`/`Quat` (`world_pos3`, `world_forward3`, `world_rotation_quat`) in hot loops; arrays are the explicit USD/telemetry interchange form and are lowered with `vec3_array`/`quat_array`.
 - **Navigation:** `drive(rover, fwd, steer)`, `brake(rover)`, `steer_to`, `nav_to(entity, target, speed, radius)`.
 - **Discrete controls:** `intent_edge(target, intent, edge)` and `intent_pulse(target, intent)` emit one atomic `pressed`, `released`, or `pulse` edge; handle `intent.edge` in `on_event`.
-- **Causal control inspection:** `query("CausalTrace", #{target: id, correlation_id: edge.id})` joins one semantic edge to its binding, selected port owner, USD/Avian admission state, and current measurements.
+- **Causal control inspection:** `query("CausalTrace", #{target: id, correlation_id: edge.id})` joins one semantic edge to its binding, selected port owner, USD/Avian admission state, current measurements, producer origin, and optional fixed-tick admission stamp.
 - **Sensing:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Connectivity / routing** ([`links.rhai`](../assets/scripting/prelude/links.rhai)): `links()` (the live link graph — `#{nodes, adj, edges, groups}` from `query("Links")`), `reachable(from, to)`, `link_path(from, to)`, `link_path_names(from, to)`, `can_reach(rover, station)`. The Rust kernel computes only link GEOMETRY at a tunable cadence and publishes the graph; **routing is pure rhai policy** — call it at decision time (e.g. in `on_event` on `link.los`), not every tick. Nodes are identified by **GID** — the same id `find()` returns — and every helper takes either a GID (that node) or a `lunco:link:class` string (the GROUP with that role), so `can_reach(find("…/Comms"), "earth")` means "any Earth station" while each station stays separately addressable. A class is a shared role, never an identity: three DSN complexes all author `class = "earth"`. See [doc 49](./architecture/49-connectivity-link-kernel.md).
 - **Collision events:** `collision_pair`/`collision_other`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).
@@ -1080,7 +1088,9 @@ For example, `none` produces a triangle mesh and supports only static or
 kinematic bodies; convex modes support dynamic bodies. Authoring tools should
 use these records instead of maintaining a second token list or duplicating
 the runtime body-kind rules. `PlanNurbsCollisionProxy` returns the same mode
-records with its geometry proposal.
+records with its geometry proposal. Its required `max_refinement_delta_m`
+parameter is a positive canonical-metre threshold for sampled change between
+successive tessellations, not a certified bound on exact NURBS surface error.
 
 For numeric authoring evidence, use the built-in `authoring_measurements`
 Rhai library. It evaluates explicit requirements over the same composed USD

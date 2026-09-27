@@ -174,7 +174,7 @@ generation and makes the cache refresh deterministic.
 | `cmd(name, #{params})` → `#{ id: u64, ... }` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
 | `command_result(id: u64)` → `#{ id: u64, ... }` | read | read the terminal result for an admitted or deferred command |
 | `query(name, #{params})` | read | invoke a read-only structured provider; data is direct, no-data is `()`, errors are `#{ok:false,error}` |
-| `query("CausalTrace", #{target: gid, correlation_id: id})` | read | inspect one semantic edge through its authored binding, selected port owner, USD/Avian admission, and current measured channels |
+| `query("CausalTrace", #{target: gid, correlation_id: id})` | read | inspect one semantic edge through its authored binding, selected port owner, USD/Avian admission, current measured channels, producer origin, and optional fixed-tick admission stamp |
 | `world_pos(id)` → `[x,y,z]` | read | float-origin-correct world position |
 | `world_forward(id)` → `[x,y,z]` | read | world heading (only read rhai can't derive itself) |
 | `get(id, "Comp.field")` | read | generic reflected component-field read |
@@ -249,8 +249,9 @@ authoring through explicit document ids).
   application roots add `lunco-api-transport` separately when they expose HTTP
   or the browser bridge.
 - wasm needs `--cfg getrandom_backend="wasm_js"` (set by `build_web.sh`).
-- A `Result`-returning `#[on_command]` records to `CommandResults` — that resource
-  must exist.
+- A result-returning `#[on_command]` records its declared outcome in
+  `CommandResults`: `Result<Ack, Reject>` is `rejected`, while
+  `Result<Ack, String>` is `failed`. That resource must exist.
 
 ### Deferred (design-only / separate scope)
 
@@ -362,7 +363,7 @@ visible hook error rather than an inferred clock.
 cycle as a Rhai invocation error. A wrong-cycle call does not fault the
 simulation or another runtime cycle. Persistent scenarios may declare
 `// @peer host|client|both` and `// @timing simulation`; these validate the
-scenario's network peer target and fixed-step requirements while Rust retains schedule
+scenario's execution target and fixed-step requirements while Rust retains schedule
 ownership. Unsupported metadata stops only that scenario and becomes a
 source-revision diagnostic. The driver reparses metadata when the document
 generation changes, so edits cannot leave stale routing attached to a program.
@@ -460,6 +461,14 @@ fn on_event(me, evt, ctx) {
 `pulse`. The controller only validates and publishes the semantic edge;
 authored policy owns its meaning and any port writes. Keep `SimulateIntent` or
 `SetPorts` for level-triggered and continuous control.
+
+An externally issued `SimulateIntent` for a fixed-simulation target is applied
+at its admitted next fixed tick and published as `intent.hold`, carrying the
+command correlation id, producer class/id, and input-order stamp. API and direct
+typed callers provide a nonzero `producer_id` that stays stable for that
+producer's session. Actorless application Rhai provides one; Twin Rhai uses its
+stable actor identity. A Rhai Simulation command remains derived behavior in its
+current pass.
 
 The exact node contract is documented in
 [`rhai-task-tree.md`](rhai-task-tree.md): every node has an explicit `kind`,
@@ -760,7 +769,7 @@ ground-station/ROS interop):
   (`:57`) — "discrete notification of a system state change." `sim_secs` and
   `sim_tick` are stamped from the shared simulation clock; `timestamp` is the
   derived TDB epoch label.
-- `TelemetryValue` (F64/I64/Bool/String/Array/Map, serde) (`:41`) — the typed payload value; structured event parameters do not need string parsing.
+- `TelemetryValue` (F64/I64/U64/Bool/String/Array/Map, serde) (`:41`) — the typed payload value; structured event parameters do not need string parsing.
 - `Severity` (YAMCS 5-tier) (`:25`); `SampledParameter` (`:101`) — continuous data;
   `Parameter { name, unit, path }` (`:87`) — reflection-path monitor source for the
   lunco-telemetry sampling engine.

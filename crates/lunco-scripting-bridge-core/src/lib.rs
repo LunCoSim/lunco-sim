@@ -985,6 +985,11 @@ pub fn cmd_value(name: &str, mut params: ApiValue) -> ApiValue {
             params,
             id,
             correlation_id: None,
+            origin: Some(lunco_core::CommandOrigin::Rhai {
+                context: execution_context(),
+                actor: (current_self() != 0)
+                    .then(|| lunco_core::GlobalEntityId::from_raw(current_self())),
+            }),
         });
         // The dispatcher and the typed handler both use `commands.queue`: the
         // first flush runs the reflected command, while the handler's queued
@@ -1917,6 +1922,8 @@ mod tests {
     /// a local/host launch (`None` authority) stays ungated.
     #[test]
     fn scripted_cmd_gated_by_authority() {
+        use std::sync::{Arc, Mutex};
+
         #[lunco_core::Command(default)]
         struct ScriptOpenCommand {}
 
@@ -1936,6 +1943,11 @@ mod tests {
         world.init_resource::<SessionRbac>();
         world.init_resource::<CommandPolicyRegistry>();
         world.init_resource::<CommandResults>();
+        let observed_origins = Arc::new(Mutex::new(Vec::new()));
+        let origin_sink = Arc::clone(&observed_origins);
+        world.add_observer(move |trigger: On<ApiCommandEvent>| {
+            origin_sink.lock().unwrap().push(trigger.event().origin);
+        });
 
         // An authenticated Observer (server-issued token) that owns nothing.
         world.resource_mut::<SessionRbac>().sessions.insert(
@@ -1953,6 +1965,7 @@ mod tests {
             &mut world,
             lunco_core::RuntimeExecutionContext::unclassified(),
         );
+        rng_begin(77, None, 0);
 
         // (1) Local/host launch → ungated. No observer is registered for the
         // valid command, so it dispatches as a fire-and-forget no-op and reports
@@ -1987,6 +2000,13 @@ mod tests {
         set_script_authority(Some(SessionId(999)));
         let r = cmd_value("ScriptOpenCommand", HookValue::Map(Vec::new()));
         assert_eq!(map_value(&r, "ok"), Some(&HookValue::Bool(false)));
+
+        assert!(observed_origins.lock().unwrap().contains(&Some(
+            lunco_core::CommandOrigin::Rhai {
+                context: lunco_core::RuntimeExecutionContext::unclassified(),
+                actor: Some(lunco_core::GlobalEntityId::from_raw(77)),
+            }
+        )));
     }
 
     #[test]

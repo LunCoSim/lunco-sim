@@ -79,6 +79,7 @@ pub(crate) fn on_select_entity_target(
     inspector_target.part = None;
     commands.trigger(lunco_core::CommandOccurred {
         name: "SelectEntity".to_string(),
+        origin: None,
     });
 }
 

@@ -104,16 +104,57 @@ one-shot API/Rhai write remains deterministic across fixed ticks. Use
 vehicle state; the keyboard path continues to emit its resolved binding batch
 and therefore replaces or neutralizes its own values as intents change.
 
+The fixed-step vessel controller captures physical `ActionState<UserIntent>` into
+a by-value `PhysicalIntentFrame` semantic snapshot. Admission requires the
+local input `SessionId`, the target's stable `GlobalEntityId`, and a committed
+scene generation; the frame also carries the current `SimTick` and a sequence
+from the `lunco-control-core::SimulationInputOrderAllocator` used by external
+semantic inputs. Admitted external semantic payloads wait in the bounded
+`lunco-core-session::PendingSessionInputs` resource, whose owner clears it on
+scene teardown. The session coordinator resolves stable targets, captures the
+record, and publishes its typed commit event at the assigned fixed tick while
+simulation time is running; a pause leaves it queued until play resumes. The
+controller applies its semantic payloads before physical input sampling. The
+allocator resets on scene teardown
+so producers share one per-tick sequence across scene generations. Missing
+admission facts and duplicate target/session order keys hold the input with a
+structured runtime error; ordering never falls back to Bevy `Entity` bits.
+API/Rhai holds remain separately sourced until the binding evaluates an intent.
+When `SessionInputStream` capture is active, the admitted frame is retained as
+a bounded record of sorted canonical intent ids, producer session, stable
+target, scene generation, tick, and shared sequence. Admitted external
+`SimulateIntent` and `SimulateIntentEdge` changes are also retained with their
+typed payload, correlation id, producer class and stable producer id, and
+admission stamp.
+`StartSessionInputCapture`,
+`StopSessionInputCapture`, and `ClearSessionInputCapture` control the in-memory
+capture; `ReadSessionInputStream` exposes its typed state and records. The frame
+itself is still discarded after translation. API, direct typed, and actorless
+Rhai callers provide a stable nonzero `producer_id`; Twin Rhai uses its actor
+identity. The stream is not durably written or played back.
+
+`SimulateIntent` remains the level-triggered held-control command. External
+commands targeting fixed-simulation state enter the bounded input queue for the
+next fixed tick and share a per-tick sequence with discrete edges. The
+acknowledgement and `intent.hold` event expose the same correlation id and
+admission stamp. Simulation-clock Rhai changes stay in their owning pass, and
+local-embodiment input stays on the interaction cadence.
+
 For discrete actions, use `SimulateIntentEdge` (or the Rhai
 `intent_edge`/`intent_pulse` helpers) with a target and `pressed`, `released`,
 or `pulse`. The controller emits one typed `SemanticIntentEdge` and mirrors it
 onto the existing `intent.edge` telemetry/event bus with the target gid,
-canonical intent, edge kind, and `correlation_id`. Use that id with the
-read-only `CausalTrace` query to inspect the authored binding, selected
-`PortRegistry` owner, USD/Avian admission, and current measured channels. It
-does not choose a port or action policy;
-the consuming Twin's Rhai/Modelica layer does that. This avoids requiring
-callers to emulate a pulse with two ordered `SimulateIntent` writes.
+canonical intent, edge kind, and `correlation_id`. External API, application-
+Rhai, and direct typed submissions receive the committed scene generation,
+next fixed `SimTick`, and per-tick sequence; the fixed-step owner validates the
+target and generation before delivery. The `intent.edge` payload and read-only
+`CausalTrace` expose that admission stamp. Simulation-clock Rhai edges remain
+derived behavior and do not enter external admission. Use the edge id with
+`CausalTrace` to inspect the authored binding, selected `PortRegistry` owner,
+USD/Avian admission, and current measured channels. The command does not choose
+a port or action policy; the consuming Twin's Rhai/Modelica layer does that.
+This avoids requiring callers to emulate a pulse with two ordered
+`SimulateIntent` writes.
 
 Keyboard and simulated control intents use the same target-scoped edge. Generic
 route guidance consumes a pressed or pulsed non-`Action` edge as a manual

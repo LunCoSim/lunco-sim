@@ -2475,10 +2475,11 @@ mod collider_parity_tests {
     //! live `StageView` over the canonical stage. Exercises the geometry read
     //! (the highest-risk physics read), including the mesh-approximation selector.
 
-    use super::{ColliderBuildOutcome, build_collider_from_usd};
+    use super::{ColliderBuildOutcome, ColliderProjectionError, build_collider_from_usd};
     use bevy::math::DVec3;
     use lunco_usd_bevy_stage::canonical::CanonicalStage;
     use lunco_usd_compose::recipe::StageRecipe;
+    use openusd::schemas::physics::CollisionApprox;
     use openusd::sdf::Path as SdfPath;
 
     fn stage_from_source(source: &str) -> CanonicalStage {
@@ -2539,7 +2540,10 @@ mod collider_parity_tests {
         assert!(build_collider_from_usd(&view, &SdfPath::new("/BadHull").unwrap()).is_err());
         assert!(matches!(
             build_collider_from_usd(&view, &SdfPath::new("/BoundingCube").unwrap()),
-            Ok(ColliderBuildOutcome::Built(_))
+            Err(ColliderProjectionError::UnsupportedApproximation {
+                approximation: CollisionApprox::BoundingCube,
+                ..
+            })
         ));
     }
 

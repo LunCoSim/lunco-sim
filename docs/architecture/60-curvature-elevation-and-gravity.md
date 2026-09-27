@@ -21,8 +21,11 @@ h_in + sag
 This preserves every DEM sample and applies only the physical body-curvature
 transform. The DEM square is a hard data boundary: the terrain renderer emits no
 fabricated outer wall, and the globe renderer owns the surface outside it. The
-boundary continuation preserves the measured one-sided edge slope over one
-raster posting before the source blend reaches the globe.
+boundary continuation preserves the measured one-sided edge slope, then returns
+edge relief to the curved border datum over one site half-extent outside the
+square. The wider shoulder avoids a steep drop where individual edge samples
+differ from the perimeter datum. The body-scale collar then blends that datum
+to the mean-radius globe.
 
 This applies to absolute and relative DEMs. An absolute sample near −1917 m
 remains at its authored datum; it is not blended toward zero or another guessed

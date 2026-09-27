@@ -204,6 +204,13 @@ fn sync_marker_states(doc, route, visited) {
 fn route_edit_path(context) {
     let explicit = context["route_path"];
     if explicit != () && explicit != "" {
+        // Context-menu actions carry the exact point and route resolved by the
+        // original pointer event. Validate that pairing against the canonical
+        // document so the later menu callback does not need to rediscover a
+        // viewport query scope that no longer exists.
+        if context_route_point(context, explicit) != () {
+            return explicit;
+        }
         // Callers may carry a selected program identity rather than its
         // containing route scope. Normalize both forms at this policy
         // boundary so a program prim can never become an AddPrim parent.
@@ -217,24 +224,40 @@ fn route_edit_path(context) {
     let subject = subject_path(context);
     if doc == () { return (); }
 
-    // A selected program is the unambiguous route identity. This is also how
-    // the dynamic program HUD selects between several programs controlling the
-    // same subject; no scene-root or vehicle-name convention is involved.
-    let selected = [
-        context["selected_path"],
+    // A pointer target is the route identity for this gesture. A possessed
+    // rover can remain selected from an earlier edit, so resolving selection
+    // first can route a click on another program's waypoint to the wrong route.
+    let pointer_targets = [
         context["target_path"],
         context["hit_path"],
     ];
-    for path in selected {
+    for path in pointer_targets {
         let route = route_for_path(doc, path, subject);
         if route != () { return route; }
-        // Selection can name a route point. In that case it is the route
-        // identity for an edit, not the vehicle referenced by the program's
-        // inputs:subject relationship. Resolve the enclosing route from the
-        // selected path before treating possession or subject selection as a
-        // prerequisite.
-        let selected_route = route_for_path(doc, path, ());
-        if selected_route != () { return selected_route; }
+        let pointer_route = route_for_path(doc, path, ());
+        if pointer_route != () { return pointer_route; }
+    }
+    if context["prim_paths"] != () {
+        for path in context["prim_paths"] {
+            let route = route_for_path(doc, path, subject);
+            if route != () { return route; }
+            let pointer_route = route_for_path(doc, path, ());
+            if pointer_route != () { return pointer_route; }
+        }
+    }
+
+    // With no route-bearing pointer target, an explicitly selected program or
+    // waypoint still chooses the route for terrain add and other selection-led
+    // edits. A selected program is the unambiguous route identity for the
+    // dynamic program HUD when several programs control the same subject.
+    let selected = context["selected_path"];
+    let selected_route = route_for_path(doc, selected, subject);
+    if selected_route != () { return selected_route; }
+    let selected_point_route = route_for_path(doc, selected, ());
+    if selected_point_route != () { return selected_point_route; }
+    if selected != () && is_route_program(doc, selected, subject) {
+        let program_route = route_parent_path(selected);
+        if program_route != () { return program_route; }
     }
 
     // Twin-authored bindings may expose one or more programs from the subject
@@ -1028,18 +1051,26 @@ fn on_context(context) {
     if context.screen_position == () {
         return failure("context click has no screen position");
     }
+    let action_context = #{
+        doc_id: context["doc_id"],
+        route_path: route,
+        selected_path: point,
+        target_path: point,
+        hit_path: point,
+        prim_paths: [point],
+    };
     let opened = open_context_menu(context.screen_position, [
         #{
             label: "Select route point",
             tool: "waypoint_editor",
             hook: "on_select",
-            args: context,
+            args: action_context,
         },
         #{
             label: "Delete route point",
             tool: "waypoint_editor",
             hook: "on_delete",
-            args: context,
+            args: action_context,
         },
     ]);
     if !opened { return failure("the scene context-menu host is unavailable"); }

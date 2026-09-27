@@ -30,7 +30,10 @@ impl Plugin for LunCoCoreSessionPlugin {
             .init_resource::<SessionRbac>()
             .init_resource::<CommandPolicyRegistry>()
             .init_resource::<PendingReplicatedSpawns>()
+            .init_resource::<PendingSessionInputs>()
             .init_resource::<OwnedInputLog>()
+            .init_resource::<SessionInputStream>()
+            .init_resource::<SessionInputStreamSettings>()
             .init_resource::<BufferedClientInputs>()
             .init_resource::<LocalDriveInput>()
             .init_resource::<AppliedInputSeq>()
@@ -38,6 +41,15 @@ impl Plugin for LunCoCoreSessionPlugin {
             .add_systems(
                 PreUpdate,
                 assign_global_entity_ids.in_set(lunco_core::RuntimeCycleSet::IdentityAdmission),
+            )
+            .add_systems(
+                FixedUpdate,
+                commit_due_session_inputs
+                    .in_set(SessionInputCommitSet)
+                    .after(lunco_core_runtime::SimTickSet)
+                    .before(lunco_core_runtime::ControlDacSet)
+                    .run_if(lunco_time::simulation_is_running)
+                    .run_if(lunco_core_runtime::not_rolling_back),
             )
             .add_systems(FixedFirst, sync_applied_seq_owners);
         commands::register_all_commands(app);
@@ -50,6 +62,7 @@ fn reset_session_scene_state(
     mut buffered: ResMut<BufferedClientInputs>,
     mut local_drive: ResMut<LocalDriveInput>,
     mut applied: ResMut<AppliedInputSeq>,
+    mut pending_session_inputs: ResMut<PendingSessionInputs>,
 ) {
     owned.0.clear();
     buffered.pending.clear();
@@ -57,6 +70,7 @@ fn reset_session_scene_state(
     buffered.last_writes.clear();
     local_drive.0.clear();
     applied.retain_gids(|_| false);
+    pending_session_inputs.clear();
 }
 
 /// Keep input acknowledgements keyed to the current authoritative owner.
@@ -141,6 +155,7 @@ mod tests {
         assert!(world.get_resource::<NetStatus>().is_some());
         assert!(world.get_resource::<SessionRegistry>().is_some());
         assert!(world.get_resource::<PendingReplicatedSpawns>().is_some());
+        assert!(world.get_resource::<PendingSessionInputs>().is_some());
         assert!(world.get_resource::<OwnedInputLog>().is_some());
         assert!(world.get_resource::<AppliedInputSeq>().is_some());
     }
@@ -188,6 +203,24 @@ mod tests {
         app.world_mut()
             .resource_mut::<AppliedInputSeq>()
             .record(1, None, 1);
+        app.world_mut()
+            .resource_scope(|_world, mut pending: Mut<PendingSessionInputs>| {
+                pending
+                    .admit(
+                        &mut lunco_control_core::SimulationInputOrderAllocator::default(),
+                        SessionInputProducer::DirectCommand { producer_id: 7 },
+                        lunco_core::GlobalEntityId::from_raw(42),
+                        3,
+                        10,
+                        SessionInputPayload::SimulatedIntentChange {
+                            intent: "forward".to_owned(),
+                            held: true,
+                            correlation_id: 9,
+                        },
+                        None,
+                    )
+                    .expect("session input is queued before teardown")
+            });
 
         app.world_mut().run_schedule(lunco_core::SceneTeardown);
 
@@ -198,5 +231,6 @@ mod tests {
         assert!(buffered.last_writes.is_empty());
         assert!(app.world().resource::<LocalDriveInput>().0.is_empty());
         assert!(app.world().resource::<AppliedInputSeq>().is_empty());
+        assert!(app.world().resource::<PendingSessionInputs>().is_empty());
     }
 }

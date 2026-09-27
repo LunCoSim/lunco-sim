@@ -2,8 +2,8 @@ use avian3d::physics_transform::{Position, Rotation};
 use avian3d::prelude::*;
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_usd_avian_contracts::{AvianMeshApproximation, fit_bounding_cube};
-use lunco_usd_bevy_mesh::build_nurbs_collision_mesh_to_tolerance;
+use lunco_usd_avian_contracts::AvianMeshApproximation;
+use lunco_usd_bevy_mesh::build_nurbs_collision_mesh_with_refinement_limit;
 use lunco_usd_bevy_scene::{
     ShapeDims, read_mesh_collision_approximation, read_primitive_axis, read_shape_dims,
     read_usd_mesh_indexed, read_usd_mesh_topology, usd_axis_to_quat, usd_plane_surface_vertices,
@@ -699,20 +699,6 @@ pub fn build_collider_from_usd_at_scale(
                     }
                 })?
             }
-            AvianMeshApproximation::BoundingCube => {
-                let corners = fit_bounding_cube(&verts).map_err(|error| {
-                    ColliderProjectionError::Backend {
-                        prim: sdf_path.to_string(),
-                        detail: format!("authored boundingCube approximation {error}"),
-                    }
-                })?;
-                Collider::convex_hull(corners.to_vec()).ok_or_else(|| {
-                    ColliderProjectionError::Backend {
-                        prim: sdf_path.to_string(),
-                        detail: "authored boundingCube approximation could not be built".to_owned(),
-                    }
-                })?
-            }
         };
         return Ok(ColliderBuildOutcome::Built(apply_collider_scale(
             collider, scale,
@@ -836,26 +822,25 @@ fn validate_derived_nurbs_proxy(
             .integer(proxy, name)
             .and_then(|value| usize::try_from(value).ok())
     };
-    let deviation_tolerance_m = match reader.attr_value(proxy, "lunco:derived:deviationToleranceM")
+    let max_refinement_delta_m = match reader.attr_value(proxy, "lunco:derived:maxRefinementDeltaM")
     {
         Some(SdfValue::Double(value)) if value.is_finite() && value > 0.0 => value,
         _ => {
             return Err(fail(
-                "derived NURBS deviationToleranceM is missing, invalid, or not authored as double"
+                "derived NURBS maxRefinementDeltaM is missing, invalid, or not authored as double"
                     .to_owned(),
             ));
         }
     };
-    let refinement_deviation_m =
-        match reader.attr_value(proxy, "lunco:derived:refinementDeviationM") {
-            Some(SdfValue::Double(value)) if value.is_finite() && value >= 0.0 => value,
-            _ => {
-                return Err(fail(
-                "derived NURBS refinementDeviationM is missing, invalid, or not authored as double"
+    let refinement_delta_m = match reader.attr_value(proxy, "lunco:derived:refinementDeltaM") {
+        Some(SdfValue::Double(value)) if value.is_finite() && value >= 0.0 => value,
+        _ => {
+            return Err(fail(
+                "derived NURBS refinementDeltaM is missing, invalid, or not authored as double"
                     .to_owned(),
             ));
-            }
-        };
+        }
+    };
     let expected_fingerprint = match reader.attr_value(proxy, "lunco:derived:geometryFingerprint") {
         Some(SdfValue::Uint64(value)) => value,
         _ => {
@@ -864,10 +849,10 @@ fn validate_derived_nurbs_proxy(
             ));
         }
     };
-    let expected = build_nurbs_collision_mesh_to_tolerance(reader, source, deviation_tolerance_m)
+    let expected = build_nurbs_collision_mesh_with_refinement_limit(reader, source, max_refinement_delta_m)
         .map_err(|error| {
             fail(format!(
-                "derived NURBS source `{source}` can no longer meet its authored cook tolerance: {error}"
+                "derived NURBS source `{source}` can no longer meet its authored refinement limit: {error}"
             ))
         })?;
     let (
@@ -891,12 +876,12 @@ fn validate_derived_nurbs_proxy(
         && v_subdivisions == selected.v_subdivisions
         && trim_curve_samples == selected.trim_curve_samples
         && trim_grid_subdivisions == selected.trim_grid_subdivisions;
-    let measurement_tolerance = 1.0e-12 * refinement_deviation_m.abs().max(1.0);
+    let measurement_tolerance = 1.0e-12 * refinement_delta_m.abs().max(1.0);
     if !selected_matches
-        || (expected.refinement_deviation_m - refinement_deviation_m).abs() > measurement_tolerance
+        || (expected.refinement_delta_m - refinement_delta_m).abs() > measurement_tolerance
     {
         return Err(fail(
-            "derived NURBS tolerance result or selected resolution does not match the source recook"
+            "derived NURBS refinement result or selected resolution does not match the source recook"
                 .to_owned(),
         ));
     }

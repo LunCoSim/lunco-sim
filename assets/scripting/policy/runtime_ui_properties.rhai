@@ -112,6 +112,21 @@ fn camera_ui_properties(facts) {
 }
 
 fn runtime_ui_properties(facts) {
+    let ui_owner = runtime_context.scope == "application"
+        && runtime_context.cycle == "ui"
+        && runtime_context.phase == "preparation"
+        && runtime_context.clock == "application";
+    let presentation_start = runtime_context.scope == "application"
+        && runtime_context.cycle == "presentation"
+        && runtime_context.phase == "initialization"
+        && runtime_context.clock == "presentation";
+    let presentation_event = runtime_context.scope == "application"
+        && runtime_context.cycle == "presentation"
+        && runtime_context.phase == "event"
+        && runtime_context.clock == "presentation";
+    if !ui_owner && !presentation_start && !presentation_event {
+        throw "runtime.ui.properties requires Application/Ui/Preparation or Application/Presentation initialization/event context";
+    }
     if facts.surface_id == "camera-status" {
         return camera_ui_properties(facts);
     }

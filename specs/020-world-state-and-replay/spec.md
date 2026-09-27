@@ -7,15 +7,41 @@
   `DomainKind::{Usd, Modelica, Script, Shader, Experiment, ObstacleField, ToolLibrary, Timeline}`,
   each with its inverse, undo/redo, cross-peer merge, `to_bytes` persistence, and **document-level**
   replay (journal → document → scene projection).
-- **NOT built — US3 (Deterministic Replay):** there is **no Input Log**. `#[Command]`s are not
+- **NOT built — US3 (Deterministic Replay):** there is no complete whole-session input log. `#[Command]`s are not
   journaled. HTTP, MCP, and Rhai transport calls use `api_command_dispatcher`, but UI and subsystem
   code can also trigger registered typed command events directly. The generated `CommandOccurred`
-  projection carries only the command type name; it has no parameters, target, origin, scene generation,
-  tick, or sequence. The existing bounded per-vessel `InputFrame` log retains all latched `SetPorts`
+  projection carries API transport or Rhai execution origin; scenario Rhai origins include the
+  stable actor `GlobalEntityId`. The fact still lacks typed command parameters, target, admitted
+  scene generation, effective tick, and per-tick sequence; direct typed triggers remain unclassified.
+  External API, application-Rhai, and direct typed `SimulateIntentEdge` submissions, plus external
+  held/released `SimulateIntent` changes for fixed-simulation targets, share a bounded input queue.
+  Admission assigns the committed scene generation, effective `SimTick`, and shared per-tick
+  sequence before fixed-step delivery; the owner validates generation and target again at commit.
+  Edge acknowledgements, `CausalTrace`, and `intent.edge` retain edge correlation and admission;
+  held-command acknowledgements and `intent.hold` retain the same held-input correlation and stamp.
+  The fixed-step controller also captures physical `ActionState<UserIntent>` as a by-value semantic
+  frame. Admission requires the local input `SessionId`, target `GlobalEntityId`, and committed
+  scene generation; it receives the current `SimTick` and a sequence from the shared per-tick
+  allocator before control translation. Missing admission facts or duplicate target/session order
+  keys hold the input with a structured runtime error instead of using world-local entity bits.
+  When explicitly active, `SessionInputStream` retains a bounded record of sorted canonical intent
+  ids plus producer, target, generation, tick, and sequence. Typed commands start, stop, or clear
+  capture, and `ReadSessionInputStream` returns the record stream through the typed API.
+  Deterministic simulation-Rhai actions remain derived behavior, and local-embodiment input remains
+  on the interaction cadence.
+  This capture is in memory and records physical intent frames plus admitted `SimulateIntent` and
+  `SimulateIntentEdge` payloads; it has no durable writer or playback consumer. Other typed command
+  payloads and distinct API-client/direct-producer identity remain outside capture. `SpawnEntity` is
+  owner-dependent: a document-backed Twin records the resulting `ApplyUsdOps` in its document
+  journal, while a raw-file scene uses direct ECS spawning plus `NetSpawn`. Neither path records
+  producer and effective tick as a session input, and runtime-spawn identity remains outside the
+  input stream.
+  The existing bounded per-vessel `InputFrame` log retains all latched `SetPorts`
   setpoints for opt-in owned-body prediction rollback; it is not a persistent whole-session input log. Therefore
   runtime actions such as `SpawnEntity`, `AcquireControl`, `DriveRover`, `SetPorts`, terrain spawn, and
-  time control cannot be reconstructed as a session from the current Twin journal. Reopening a Twin
-  restores *document* state only. See
+  time control cannot be reconstructed as a session from the current Twin journal. A document-backed
+  spawn's authored result can be restored as document state without reconstructing when or by whom it
+  was requested in a running session. Reopening a Twin restores *document* state only. See
   [`docs/architecture/command-journal.md`](../../docs/architecture/command-journal.md) for the separate
   authored-document and session-input lifecycles.
 - **NOT built — US1/US2/US4/US5:** no ECS `WorldSnapshot`, no `PeriodicSave`, no MCAP/ROSbag export or
@@ -41,13 +67,14 @@ As a CI/CD operator running 10,000 parallel Monte Carlo simulations in a headles
 - The engine supports a `PeriodicSave` resource triggerable via CLI flags (e.g., `--autosave-interval 3600`), dumping state to disk gracefully without interrupting the headless TDD verifier.
 
 ### User Story 3 - Deterministic Replay (Priority: P1)
-As a test engineer, I want the simulation to produce **bit-identical** results when given the same inputs and random seed, so that I can reliably reproduce and debug any run.
+As a test engineer, I want the simulation to reproduce the same authoritative tick and input ordering from a recorded run, so that I can reliably reproduce and debug a run on a supported deterministic execution profile.
 
 **Acceptance Criteria:**
-- The simulation records a minimal **Input Log** (timestamped commands, random seeds, scenario parameters) alongside each run.
-- Replaying the Input Log with the same engine version produces exactly the same entity states at every frame.
-- Determinism is enforced by: fixed-timestep physics (`004`), deterministic system ordering, and seeded RNG for all stochastic processes (sensor noise, packet loss).
-- Divergence detection: The replay engine can optionally compare live state to a recorded checksum and flag the exact frame where divergence occurs.
+- The simulation records external authoritative inputs with their source type, stable source and target identities, admitted scene generation, effective simulation tick, and stable per-tick sequence. The log also identifies the admitted Twin/source revisions, engine build, solver profile, and random seeds needed to interpret the run.
+- Replay submits those inputs through the same typed owner boundaries in the same order. Deterministic Rhai, Modelica, and physics behavior is re-derived from the recorded inputs; derived commands and worker completion timing are not recorded as additional inputs.
+- Exact state equality is claimed only for engine and domain profiles that declare deterministic numerical behavior. A profile that cannot promise bitwise equality, including adaptive numerical solvers or unsupported cross-platform execution, reports that limit instead of presenting bitwise equality as guaranteed.
+- For a profile that declares deterministic numerical behavior, enforce fixed-timestep physics (`004`), deterministic system ordering, and seeded RNG for all stochastic processes (sensor noise, packet loss).
+- Divergence detection: the replay engine can compare typed state digests at simulation-tick boundaries and report the first divergent tick and affected owner. A digest is not used as a substitute for the ordered input log.
 
 ### User Story 4 - MCAP / ROSbag Export (Priority: P2)
 As an autonomy engineer, I want the simulation to dump its historical state into an MCAP or ROSbag file, so I can visualize the entire run in Foxglove Studio or Rviz.

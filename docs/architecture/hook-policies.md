@@ -110,6 +110,22 @@ The production Rhai test verifies declarations, the High default, representative
 values for each profile, and failure for an unknown id in
 `assets/scripting/tests/test_hook_policies.rhai`.
 
+`RenderQualityPolicyPlugin` invokes both profile hooks from
+`Application/Presentation/Initialization` at startup and
+`Application/Presentation/Preparation` when a committed policy revision makes
+the catalog stale. Both calls sample `Time<Real>`; the refresh remains in the
+host `Update` schedule. The render recovery owner invokes
+`render.shadow_quality` from `Application/Presentation/Preparation` in
+`PostUpdate` when its shadow configuration changes. Its focused owner test
+checks the typed route, phase, clock, and time samples received by the hook.
+
+The event-driven `usd.component_refresh` owner runs during Lifecycle
+Preparation. A changed mounted-Twin document supplies its active or committed
+Twin generation; a preview-only document supplies the Application route. The
+owner rejects an installed policy call when a mounted Twin has no lifecycle
+generation. Its Rust owner test checks both routes, and the production
+hook-policy test verifies that the authored policy rejects an off-cycle call.
+
 The application startup policy is run once when the simulation starts. It may
 install a generic lifecycle hook such as `twin.lifecycle`. The active Twin
 invokes that hook for `startup`, `reload`, and `close`; the application policy
@@ -283,6 +299,30 @@ whose policy is valid in one cycle should reject other contexts. For example,
 the latest `SimTick`; its policy rejects lifecycle, UI, and REPL calls. Test
 both the production owner path and an intentional off-cycle call in authored
 Rhai.
+
+The camera runtime invokes `camera.default_presentation` as
+`Application/Presentation/Preparation`, sampling elapsed and delta time from
+`Time<Real>`. Standalone-camera selection and authored-camera validation both
+use this owner context. The Rhai policy rejects calls from another route or
+cycle; the `RuntimeCycleSet::Presentation` labels do not create a separate
+schedule or cadence. The production hook-policy test checks off-cycle
+rejection, and `test_camera_presentation_owner.rhai` reads the active camera
+through `ReadExposures` in the windowed application.
+
+The runtime UI recording-contract selector invokes `runtime.ui.recording` as
+`Application/Ui/Preparation` with the `Time<Real>` Application clock. It runs
+after retained UI placement when its owner revisions change; its production
+hook-policy test rejects REPL invocation, and the focused owner test verifies
+the scheduled call's context and selected visible surface.
+
+The `runtime.ui.visibility` and `runtime.ui.properties` policies receive
+`Application/Ui/Preparation` from the `publish_exposure` owner. Camera-status
+properties receive `Application/Presentation/Initialization` at startup and
+`Application/Presentation/Event` when camera status changes. Their production
+hook-policy checks reject unowned REPL calls, and the camera exposure owner
+test covers the startup projection. The production `route_lifecycle` gate also
+checks the visible `program-browser` exposure and its typed program collection
+after authored UI metadata is admitted.
 
 The `synth.acausal-network` and `synth.actuator-wrench` source generators run
 as `Twin/Lifecycle/Preparation` with the active-or-committed scene generation

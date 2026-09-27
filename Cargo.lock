@@ -7056,6 +7056,7 @@ dependencies = [
  "lunco-control-core",
  "lunco-core",
  "lunco-core-runtime",
+ "lunco-core-session",
  "lunco-exposure-core",
  "lunco-hooks",
  "lunco-port-core",
@@ -7542,6 +7543,7 @@ dependencies = [
  "lunco-core-session",
  "lunco-cosim",
  "lunco-cosim-core",
+ "lunco-embodiment-core",
  "lunco-hooks",
  "lunco-input-core",
  "lunco-port-core",
@@ -7579,9 +7581,12 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-command-contracts",
+ "lunco-control-core",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-hooks",
  "lunco-port-core",
+ "lunco-time",
  "serde",
 ]
 
@@ -8999,6 +9004,7 @@ name = "lunco-render"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "lunco-core",
  "lunco-hooks",
  "lunco-settings",
  "serde",
@@ -9029,6 +9035,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "lunco-core",
  "lunco-exposure-core",
  "lunco-hooks",
  "lunco-render",

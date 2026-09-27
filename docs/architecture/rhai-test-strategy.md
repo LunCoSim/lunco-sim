@@ -230,9 +230,11 @@ requested scene opened: the editor runner also checks that the scene's USD root
 is present in the live entity registry before waiting for its verdict. The
 `route_interaction` scene observes the secondary click through the public
 `scene.pointer` event, checks its `route.context` intent and authored USD
-pointer policy, verifies prior selection remains unchanged, and then invokes
-the explicit menu action that selects the waypoint. Rust tests retain generic
-typed selection-command and gizmo mechanisms; Rhai owns route/selection policy.
+pointer policy while a rover is possessed, verifies the existing selection
+and possession remain unchanged, and then deletes the waypoint through the
+native menu action. Its fixture authors the local avatar camera required for
+the real possession path. Rust tests retain generic typed selection-command
+and gizmo mechanisms; Rhai owns route/selection policy.
 
 Dynamic asset construction follows the same boundary. The generic
 `assembly_component_builder` scene starts from an empty USDA frame and checks
