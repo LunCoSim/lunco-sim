@@ -42,13 +42,15 @@ have no actor. `SimulateIntentEdge` preserves origin through
 generation, and sequence.
 
 External API, application-Rhai, and direct typed `SimulateIntentEdge` calls
-now enter a bounded controller queue. Admission requires a stable target id, a
-committed scene generation, and the fixed simulation tick; it assigns the next
-tick and per-tick sequence. The fixed-step owner checks that the stamp is due
-and that generation and target still match before emitting the edge ahead of
-control propagation. `CausalTrace`, `intent.edge`, and the API acknowledgement
-carry the correlation id and admission stamp. The acknowledgement correlation
-id lets clients query the exact edge while later edges are being emitted.
+now enter the bounded `lunco-core-session::PendingSessionInputs` queue. The
+controller remains the semantic payload consumer. Admission requires a stable
+target id, a committed scene generation, and the fixed simulation tick; it
+assigns the next tick and per-tick sequence. The fixed-step owner checks that
+the stamp is due and that generation and target still match before emitting
+the edge ahead of control propagation. `CausalTrace`, `intent.edge`, and the
+API acknowledgement carry the correlation id and admission stamp. The
+acknowledgement correlation id lets clients query the exact edge while later
+edges are being emitted.
 Simulation-clock Rhai edges stay in their deterministic hook pass and carry no
 external-input stamp.
 
@@ -194,23 +196,24 @@ this task. No performance measurement was taken.
   gone. Port 47123 was left untouched. No visual or performance acceptance was
   run.
 
-Next D9 work is to establish one shared typed admission/commit owner before
-adding runtime-spawn capture. The shared per-tick order allocator now lives in
-`lunco-control-core`, while `PendingSemanticInputs` and its consumer remain
-private to `lunco-controller`; there is not yet one ordered commit coordinator
-across input types. Raw-file `SpawnEntity` currently creates ECS entities in
-the command observer, and the session identity owner assigns their root ids on
-a later `PreUpdate`. A
-replayable runtime spawn needs a fixed-tick admission record with the scene-root
-and active-frame `GlobalEntityId`s, catalog entry, original `f64` pose,
-producer provenance, correlation id, and a reserved spawned-root id. Its action
-and capture record must commit in the same stable per-tick order as held
-intents, edges, and physical frames. Preserve the existing network replication
-contract by inserting that reserved id on the spawned root. Document-backed
-spawns remain `ApplyUsdOps` entries in the Twin journal and must not be
-duplicated in the session stream. See the owner and record-shape requirements
-in [`command-journal.md`](../architecture/command-journal.md). Durable
-recording/playback and supported-profile divergence evidence remain open.
+The next D9 step is a typed commit coordinator across input types. The bounded
+queue and scene-teardown clearing now belong to `lunco-core-session`; it
+assigns order through `SimulationInputOrderAllocator`, while the controller
+currently validates and commits semantic edges and held changes. Physical
+frames still enter at their consuming fixed tick, and runtime spawn is not yet
+admitted to this queue. Raw-file `SpawnEntity` currently creates ECS entities
+in the command observer, and the session identity owner assigns their root ids
+on a later `PreUpdate`. A replayable runtime spawn needs a fixed-tick admission
+record with the scene-root and active-frame `GlobalEntityId`s, catalog entry,
+original `f64` pose, producer provenance, correlation id, and a reserved
+spawned-root id. Its action and capture record must commit in the same stable
+per-tick order as held intents, edges, and physical frames. Preserve the
+existing network replication contract by inserting that reserved id on the
+spawned root. Document-backed spawns remain `ApplyUsdOps` entries in the Twin
+journal and must not be duplicated in the session stream. See the owner and
+record-shape requirements in [`command-journal.md`](../architecture/command-journal.md).
+Durable recording/playback and supported-profile divergence evidence remain
+open.
 
 ### D14: owner context for camera, runtime UI, render, and USD projection policies
 
@@ -280,14 +283,47 @@ typed queues before that is safe.
 - `git show --check HEAD~2..HEAD` passed for the two integrated commits.
   The route-context test is a windowed UI acceptance and was not run in this
   review; no visual or performance result is claimed.
-- The shared order allocator is now owned by `lunco-control-core`, with
-  scene-teardown reset there. It still has only controller consumers; runtime
-  spawn admission must use it and join one ordered commit/capture coordinator
-  before D9 can claim a total cross-input order.
+- The shared order allocator is owned by `lunco-control-core`, with
+  scene-teardown reset there. Core-session now owns the bounded pending input
+  queue that uses it; the controller still commits semantic payloads, while a
+  cross-domain commit coordinator and runtime-spawn admission remain open.
 - After that extraction, `cargo test -p lunco-control-core -p lunco-controller -j 4`
   passed all 7 control-core and 24 controller tests, including same-tick
   sequence sharing by external semantic input and physical frames, forward-tick
   reset, and scene-teardown reset.
+
+### D9 shared session-input queue continuation (2026-09-27)
+
+- Moved pending semantic payload storage and scene-teardown clearing from the
+  controller into `lunco-core-session::PendingSessionInputs`. The bounded queue
+  stores only stable target identity, producer, origin, scene generation,
+  effective tick, sequence, and the typed session payload; the controller
+  resolves the live target and commits admitted semantic actions. Physical
+  frames remain admitted at the consuming fixed tick and cannot be deferred
+  through this external queue.
+- `cargo test -p lunco-core-session -p lunco-controller -j 4` passed after the
+  move: 24 controller tests, 38 core-session unit tests, and 2 authz integration
+  tests. The added queue tests cover shared sequence assignment across ticks,
+  due-tick draining, physical-frame rejection without sequence consumption,
+  plugin ownership, and teardown clearing.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4` passed. On the rebuilt
+  production binary, a live API session on owned port 4178 attached
+  `simulate_intent_input_admission.rhai` to the authored skid rover and sent an
+  API `SimulateIntent` from producer 8181. The acknowledgement, `intent.hold`,
+  and completed `ReadSessionInputStream` record matched correlation 1 and
+  `{scene_generation: 1, effective_tick: 1051, sequence: 1}`; the observer
+  reported `TESTS_OK 11` and `SIMULATE INTENT INPUT ADMISSION: PASS`. API `Exit`
+  closed port 4178 and process 1074468 is gone.
+- The attempted production scene-test runner on
+  `physical_rover_controls.usda` was stopped before verdict after the existing
+  scenario repeatedly rejected the joint-angle read at
+  `physical_rover_controls.rhai:212` because its `simulation_dependencies`
+  omits that entity. This independent fixture issue does not affect the focused
+  API observer, but the full vehicle scene-test verdict was not obtained.
+- `python3 scripts/validate_skills.py` passed with 43 skills. The change does
+  not centralize effects across runtime spawns and semantic controls, add
+  durable replay, or close physical-frame replay. No visual or performance
+  acceptance was run.
 
 ## Runtime and repository constraints
 

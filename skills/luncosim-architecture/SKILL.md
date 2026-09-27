@@ -113,7 +113,11 @@ snapshot. Admission requires the local input `SessionId`, target
 the frame with those identities, the current `SimTick`, and a sequence from
 the shared `lunco-control-core::SimulationInputOrderAllocator` before
 controller translation. The allocator resets on scene teardown so producers
-share one per-tick order space. Missing facts or duplicate
+share one per-tick order space. Admitted external semantic payloads wait in
+`lunco-core-session::PendingSessionInputs`; core-session clears that queue on
+scene teardown, and the controller validates and commits semantic payloads at
+their assigned tick. The queue does not centralize commits across runtime
+spawns and other typed actions. Missing facts or duplicate
 target/session order keys hold input with a structured runtime error; ordering
 does not fall back to Bevy `Entity` bits. The frame is discarded after
 translation, while an active `SessionInputStream` capture retains sorted

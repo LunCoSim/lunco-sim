@@ -14,8 +14,10 @@
 //! [`NetworkRole`]/[`NetStatus`] gate systems across cosim, sandbox, scripting,
 //! autopilot, workbench and the usd projections; [`SessionRegistry`]/
 //! [`SessionRbac`]/[`AuthorityRole`] are the possession/RBAC substrate read by
-//! avatar, controller, autopilot and the mission-control UI; the input logs
-//! ([`OwnedInputLog`], [`BufferedClientInputs`], [`AppliedInputSeq`],
+//! avatar, controller, autopilot and the mission-control UI; the pending
+//! session-input queue and bounded capture stream are owned here while the
+//! controller supplies their current semantic producer/consumer; prediction
+//! logs ([`OwnedInputLog`], [`BufferedClientInputs`], [`AppliedInputSeq`],
 //! [`LocalDriveInput`]) are written by `lunco-controller` every frame;
 //! [`NetConnectRequest`]/[`NetDisconnectRequest`] are fired by the workbench's
 //! Network menu; the replication/prediction markers ([`NetReplicate`],
@@ -613,7 +615,7 @@ pub struct SessionInputRecord {
     pub scene_generation: u64,
     /// Fixed simulation tick at which the input was consumed.
     pub effective_tick: u64,
-    /// Shared per-tick sequence assigned at the controller admission boundary.
+    /// Shared per-tick sequence assigned at session-input admission.
     pub sequence: u64,
     /// Typed semantic input payload.
     pub payload: SessionInputPayload,
@@ -690,6 +692,138 @@ pub enum SessionInputPayload {
         /// Correlation id from the admitted typed command.
         correlation_id: u64,
     },
+}
+
+/// Maximum number of typed session inputs that may wait for their fixed-tick
+/// commit boundary.
+pub const MAX_PENDING_SESSION_INPUTS: usize = 4096;
+
+/// Admitted input waiting for its effective fixed tick. The serializable
+/// record is the replay contract; `origin` carries the live command context to
+/// observers that need it while committing this in-process admission.
+#[derive(Clone, Debug)]
+pub struct PendingSessionInput {
+    record: SessionInputRecord,
+    origin: Option<lunco_core::CommandOrigin>,
+}
+
+impl PendingSessionInput {
+    /// Stable record ordered at admission.
+    pub fn record(&self) -> &SessionInputRecord {
+        &self.record
+    }
+
+    /// Classified live command origin, when the input came through Rhai/API.
+    pub fn origin(&self) -> Option<lunco_core::CommandOrigin> {
+        self.origin
+    }
+}
+
+/// Shared bounded queue for typed inputs that commit at a fixed simulation
+/// tick. All producers use the control-core allocator so their sequence space
+/// is shared even when they live in different domain crates.
+#[derive(Resource, Debug, Default)]
+pub struct PendingSessionInputs {
+    pending: VecDeque<PendingSessionInput>,
+}
+
+impl PendingSessionInputs {
+    /// Admit one input with a stable target, generation, producer, and future
+    /// fixed tick. Queue capacity is checked before consuming a sequence.
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit(
+        &mut self,
+        order: &mut lunco_control_core::SimulationInputOrderAllocator,
+        producer: SessionInputProducer,
+        target: lunco_core::GlobalEntityId,
+        scene_generation: u64,
+        effective_tick: u64,
+        payload: SessionInputPayload,
+        origin: Option<lunco_core::CommandOrigin>,
+    ) -> Result<lunco_control_core::SimulationInputOrder, String> {
+        if self.pending.len() >= MAX_PENDING_SESSION_INPUTS {
+            return Err(format!(
+                "session input admission queue is full ({MAX_PENDING_SESSION_INPUTS} records)"
+            ));
+        }
+        if matches!(&payload, SessionInputPayload::PhysicalIntentFrame { .. }) {
+            return Err(
+                "physical intent frames are admitted at their consuming fixed tick and cannot be deferred"
+                    .to_owned(),
+            );
+        }
+        if target.get() == 0 {
+            return Err("session input requires a stable nonzero target identity".to_owned());
+        }
+        if scene_generation == 0 {
+            return Err("session input requires a committed scene generation".to_owned());
+        }
+        match producer {
+            SessionInputProducer::ApiTransport { producer_id }
+            | SessionInputProducer::DirectCommand { producer_id }
+                if producer_id == 0 =>
+            {
+                return Err("session input producer identity must be nonzero".to_owned());
+            }
+            SessionInputProducer::Rhai {
+                actor: None,
+                producer_id: Some(0),
+                ..
+            } => {
+                return Err(
+                    "actorless Rhai session input producer identity must be nonzero".to_owned(),
+                );
+            }
+            _ => {}
+        }
+
+        let admission = order.assign_order(scene_generation, effective_tick)?;
+        self.pending.push_back(PendingSessionInput {
+            record: SessionInputRecord {
+                producer,
+                target,
+                scene_generation,
+                effective_tick,
+                sequence: admission.sequence,
+                payload,
+            },
+            origin,
+        });
+        Ok(admission)
+    }
+
+    /// Whether the queue has no pending inputs.
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// Number of admitted inputs waiting for a fixed-tick commit.
+    pub fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Pending entries in their current queue order, for owner diagnostics.
+    pub fn entries(&self) -> impl Iterator<Item = &PendingSessionInput> {
+        self.pending.iter()
+    }
+
+    /// Take inputs whose tick is due, preserving their shared admission order.
+    pub fn take_due(&mut self, tick: u64) -> Vec<PendingSessionInput> {
+        self.pending
+            .make_contiguous()
+            .sort_by_key(|input| (input.record.effective_tick, input.record.sequence));
+        let ready_count = self
+            .pending
+            .iter()
+            .take_while(|input| input.record.effective_tick <= tick)
+            .count();
+        self.pending.drain(..ready_count).collect()
+    }
+
+    /// Discard queued inputs when their scene generation is torn down.
+    pub fn clear(&mut self) {
+        self.pending.clear();
+    }
 }
 
 /// Lifecycle of the bounded in-memory session-input capture.
@@ -2353,7 +2487,8 @@ mod tests {
 #[cfg(test)]
 mod session_input_stream_tests {
     use super::{
-        SessionInputPayload, SessionInputRecord, SessionInputStream, SessionInputStreamState,
+        PendingSessionInputs, SessionInputPayload, SessionInputProducer, SessionInputRecord,
+        SessionInputStream, SessionInputStreamState,
     };
     use lunco_command_contracts::SessionId;
 
@@ -2406,6 +2541,65 @@ mod session_input_stream_tests {
         assert!(error.contains("record limit"));
         assert_eq!(stream.state(), SessionInputStreamState::Failed);
         assert_eq!(stream.records(), &[physical_record(10, 1)]);
+    }
+
+    #[test]
+    fn pending_session_inputs_share_order_and_drain_at_their_effective_tick() {
+        let mut pending = PendingSessionInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
+        let target = lunco_core::GlobalEntityId::from_raw(42);
+        let producer = SessionInputProducer::DirectCommand { producer_id: 7 };
+        let payload = SessionInputPayload::SimulatedIntentChange {
+            intent: "forward".to_owned(),
+            held: true,
+            correlation_id: 19,
+        };
+
+        let first = pending
+            .admit(&mut order, producer, target, 3, 10, payload.clone(), None)
+            .expect("first typed input is admitted");
+        let second = pending
+            .admit(&mut order, producer, target, 3, 11, payload, None)
+            .expect("next-tick input is admitted");
+
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 1);
+        assert_eq!(pending.len(), 2);
+        let due = pending.take_due(10);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].record().effective_tick, 10);
+        assert_eq!(due[0].record().sequence, first.sequence);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.take_due(11)[0].record().sequence, second.sequence);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn pending_session_inputs_reject_physical_frames_without_spending_order() {
+        let mut pending = PendingSessionInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
+        let error = pending
+            .admit(
+                &mut order,
+                SessionInputProducer::PhysicalController {
+                    session_id: SessionId(7),
+                },
+                lunco_core::GlobalEntityId::from_raw(42),
+                3,
+                10,
+                SessionInputPayload::PhysicalIntentFrame {
+                    intent_ids: vec!["forward".to_owned()],
+                },
+                None,
+            )
+            .expect_err("physical frames enter at their consuming fixed tick");
+
+        assert!(error.contains("cannot be deferred"));
+        let next = order
+            .assign_order(3, 10)
+            .expect("rejected payload must not consume a sequence");
+        assert_eq!(next.sequence, 1);
+        assert!(pending.is_empty());
     }
 
     #[test]

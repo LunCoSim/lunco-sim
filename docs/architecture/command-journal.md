@@ -90,15 +90,16 @@ remain outside the API dispatcher.
 `SimulateIntentEdge` copies the reflected command origin onto its
 `SemanticIntentEdge`. The bounded `CausalTrace` query now exposes API transport
 origin or Rhai scope, cycle, phase, generation, sequence, scenario actor id,
-and explicit producer id for that discrete edge. API, application-Rhai, and direct typed submissions
-also enter a bounded controller queue. Admission requires a stable target id, a
-completed scene generation, and a fixed simulation clock; it assigns the next
-tick and a per-tick sequence. The fixed-step owner validates generation and
+and explicit producer id for that discrete edge. API, application-Rhai, and
+direct typed submissions enter the bounded `PendingSessionInputs` queue owned
+by `lunco-core-session`. Admission requires a stable target id, a completed
+scene generation, and a fixed simulation clock; it assigns the next tick and a
+per-tick sequence. The controller fixed-step consumer validates generation and
 target again, then emits the semantic edge before control propagation.
 `SimulationInputOrderAllocator` in `lunco-control-core` owns that per-tick
-sequence across producers and resets on scene teardown; each owner's pending
-queue still needs a shared commit coordinator before a total cross-type effect
-order is guaranteed.
+sequence across producers and resets on scene teardown. A central cross-domain
+commit owner for runtime spawns and other typed actions remains necessary before
+one total effect order is guaranteed.
 `CausalTrace` and `intent.edge` retain that producer id and admission stamp.
 The command acknowledgement includes the same `producer_id`, `correlation_id`,
 and optional admission fields, so a client can query this exact edge after later

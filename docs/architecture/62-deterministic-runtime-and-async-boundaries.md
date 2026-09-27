@@ -402,12 +402,15 @@ The exact existing phase anchors and FMI-style exchange are documented in
 asynchronous completion never selects the visible simulation tick.
 
 External `SimulateIntentEdge` and `SimulateIntent` commands targeting fixed
-simulation state enter one bounded controller queue. The owner assigns the next
-fixed tick and a shared per-tick sequence, then validates scene generation and
-stable target identity again before applying the action ahead of control
+simulation state enter the bounded `lunco-core-session::PendingSessionInputs`
+queue. The session owner assigns the next fixed tick and a shared per-tick
+sequence; the controller validates scene generation and resolves the stable
+target identity again before applying semantic actions ahead of control
 propagation. The held-state commit publishes `intent.hold`; edge delivery also
-records its `CausalTrace`. Simulation-clock Rhai actions stay in their derived
-behavior pass, and local-embodiment input stays on the interaction cadence.
+records its `CausalTrace`. A shared admission queue does not yet centralize
+commits across semantic input, physical frames, and runtime spawns.
+Simulation-clock Rhai actions stay in their derived behavior pass, and
+local-embodiment input stays on the interaction cadence.
 
 ## 4. Async preparation, priority, and result commit
 

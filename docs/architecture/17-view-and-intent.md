@@ -476,8 +476,9 @@ Held controls and discrete actions use separate contracts. `SimulateIntent` is
 the level-triggered command for a target-scoped held intent. External API,
 application-Rhai, and direct typed commands targeting a fixed-simulation entity
 require a stable target id and committed scene generation, then enter the
-bounded controller queue for the next `SimTick`. Held changes and discrete
-edges receive order from the shared `lunco-control-core::SimulationInputOrderAllocator`,
+bounded `lunco-core-session::PendingSessionInputs` queue for the next
+`SimTick`. Held changes and discrete edges receive order from the shared
+`lunco-control-core::SimulationInputOrderAllocator`,
 which resets at scene teardown. The acknowledgement returns a correlation
 id, producer id, and admission stamp; fixed-step commit publishes `intent.hold`
 with the same producer id and stamp. API and direct typed producers supply a
@@ -485,6 +486,13 @@ nonzero `producer_id` stable for that caller's session. Actorless application
 Rhai supplies one too; Twin Rhai uses its stable actor identity. Deterministic
 Simulation Rhai changes remain in their owning pass, and local-embodiment
 interaction input remains on the interaction cadence.
+
+The bounded queue and its scene-teardown lifecycle belong to
+`lunco-core-session::PendingSessionInputs`; the controller no longer owns a
+private semantic-input queue. The controller currently consumes and commits
+the semantic payload variants at the assigned fixed tick. The shared queue
+establishes one admission sequence, but a central cross-domain commit owner for
+runtime spawns and other typed actions remains open.
 
 For a single transition, use `SimulateIntentEdge` with `edge` set to `pressed`,
 `released`, or `pulse`:

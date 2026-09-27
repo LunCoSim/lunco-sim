@@ -7581,6 +7581,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "lunco-command-contracts",
+ "lunco-control-core",
  "lunco-core",
  "lunco-hooks",
  "lunco-port-core",
