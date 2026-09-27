@@ -248,9 +248,23 @@ Relevant changes rescan only that stage; missing batches, plan replacement, or
 generation gaps use a full extraction. Unrelated stage edits also skip policy
 asset resolution and registry installation. Live canonical reads remain on
 their owning thread. The async-prepared projection plan indexes prims by
-composed schema type, so startup policy extraction visits only `LunCoPolicy`
-prims instead of rebuilding paths and type lookups across the entire prepared
-stage on the UI thread.
+composed schema type and applied API schema. Startup policy extraction visits
+only `LunCoPolicy` prims, and simulation topology extraction visits only
+physics joints, wheel attachments, and vehicle roots. Initial simulation
+topology, per-prim candidate sets, and authored vehicle output ports are
+prepared from the immutable plan on `AsyncComputeTaskPool`; one indexed query
+finds joint, attachment, vehicle-root, simulation-schema, and `lunco:` property
+candidates and carries their composed type, API-schema, and property-prefix
+facts into topology classification. A live refresh uses one composed traversal
+for the same union query. The per-prim projector skips entities without a
+simulation API or authored `lunco:` property, while still marking them complete
+for readiness accounting. `UsdSceneChangeBatch`
+keeps topology current: resynced paths that match an indexed source or
+currently carry a joint, attachment, or vehicle-root schema, and info changes
+on indexed sources, require a refresh. Unrelated resyncs and info changes only
+advance the cached generation. A prepared result is accepted only after
+checking intervening changes; qualifying live-stage changes use the canonical
+owner thread.
 
 A newly authored `SetAttribute` uses `RemoveAttribute` as its inverse, so adding
 attributes to a growing runtime layer does not serialize the entire layer into
@@ -533,9 +547,11 @@ from the shared `lunco-usd-sim-core` contract. Path, visual-projection, and
 processed-marker lifecycle observers queue only affected entities; one initial
 discovery covers prims present before plugin installation. The update gate reads
 that set instead of querying all projected prims on idle frames, and stage
-topology is refreshed only for stages represented in the current batch. Live
-USD invalidation requeues the affected prim, while `SceneTeardown` retires the
-scene-owned queue.
+topology is prepared only for stages represented in the current batch. Initial
+topology and candidate indexes run on a worker; live topology refresh follows
+`UsdSceneChangeBatch` and is limited to resynced joint/attachment sources and
+info changes to indexed topology paths. Live USD invalidation requeues the
+affected prim, while `SceneTeardown` retires the scene-owned work and cache.
 
 Authored controls and generic executable programs are resolved by the separate
 `UsdAuthoredRuntimePlugin` after visual projection. It observes

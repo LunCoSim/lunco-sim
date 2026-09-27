@@ -114,7 +114,16 @@ pub(crate) fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAss
         let Some(cs) = stages.get(id) else { return };
         let view = cs.view();
         let mut topology = crate::StageJointTopology::default();
-        crate::collect_joint_scan_read(&view, &mut topology);
+        let candidates = view.prim_schema_facts_matching(
+            crate::JOINT_TOPOLOGY_TYPES,
+            &[
+                crate::WHEEL_ATTACHMENT_API,
+                crate::VEHICLE_CONTEXT_API,
+                crate::VEHICLE_WHEEL_API,
+            ],
+            "",
+        );
+        crate::collect_joint_scan_read(&view, &mut topology, &candidates);
         for (entity, path, physical) in &rows {
             let Ok(sp) = SdfPath::new(path) else { continue };
             if topology.invalid_wheel_attachments.contains(path) {

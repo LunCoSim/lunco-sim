@@ -33,7 +33,7 @@ pub use projection_plan::{UsdPrimProjectionPlan, UsdStageProjectionPlan};
 pub use purpose::{
     Purpose, effective_purpose, is_descendant_or_self, resolve_stage_prim_path, stage_default_prim,
 };
-pub use read::{UsdRead, UsdReadObject, UsdReadSource};
+pub use read::{UsdRead, UsdReadObject, UsdReadPrimFacts, UsdReadSource};
 pub use transform::{
     RESET_XFORM_STACK, TransformReadError, compose_xform_order_at, euler_xyz_deg_to_quat,
     grid_translation_d_at, local_transform_at, local_transform_matrix_d_at,

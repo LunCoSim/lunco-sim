@@ -11,7 +11,7 @@ pub mod wheel_params;
 pub use lint::{append_gear_drive_facts, append_wheel_attachment_facts};
 pub use wheel_params::{
     SuspensionParams, WheelAttachmentBinding, WheelAttachmentTopology, WheelParams,
-    collect_wheel_attachment_topology,
+    collect_wheel_attachment_topology, collect_wheel_attachment_topology_from_paths,
 };
 
 /// The authored angular drive values of one PhysX gear joint.

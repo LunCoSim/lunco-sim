@@ -124,6 +124,22 @@ steps such as wrapping a Modelica model into its shared port surface. Keep a
 single bootstrap discovery for entities predating plugin installation, and
 retry only work whose authoritative stage/readiness input is still pending.
 The idle run condition should inspect the owner set, not scan the population.
+When initial preparation already builds composed type or API-schema indexes,
+run one-time topology and vehicle-output extraction against the prepared reader
+on a worker and use its indexed candidate query. Combine overlapping schema
+queries and property-prefix checks into one candidate traversal, so live
+canonical readers do not walk the stage once per consumer. Return each
+candidate's type, API-schema, and property-prefix facts with its path so later
+classification does not repeat native schema reads. Build per-prim candidate
+sets and authored vehicle-port lists from the prepared snapshot; skip extraction
+for unrelated entities while preserving their readiness marker. Do
+not materialize every prim path on the UI thread to find a small set of joints,
+attachments, vehicle roots, or policy prims. Live canonical edits keep using
+their owning-thread reader. Invalidate cached topology from
+`UsdSceneChangeBatch`: resynced paths that match an indexed source or currently
+carry a relevant schema, and info changes on indexed source prims, require
+refresh; unrelated paths only advance the cached generation. Check intervening
+changes before accepting prepared worker output.
 
 For whole-index projectors such as USD telemetry, use one initial bootstrap,
 then coalesce relevant insert/remove observers into an invalidation flag. Keep

@@ -16,7 +16,7 @@ use bevy::prelude::Transform;
 use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::Stage;
 
-use crate::{MaterialPurpose, StageView, UsdRead};
+use crate::{MaterialPurpose, StageView, UsdRead, UsdReadPrimFacts};
 use lunco_usd_compose::recipe::StageRecipe;
 use lunco_usd_data::metadata::AttrUiHint;
 
@@ -96,6 +96,8 @@ pub struct UsdStageProjectionPlan {
     pub children: HashMap<String, Vec<usize>>,
     /// Composed schema type → prim indices, built while the load is prepared.
     type_indices: HashMap<String, Vec<usize>>,
+    /// Composed applied API schema → prim indices, built with the type index.
+    api_schema_indices: HashMap<String, Vec<usize>>,
     collections: HashMap<(String, String), Vec<String>>,
     prim_indices: HashMap<String, usize>,
     stage_metadata: HashMap<String, Value>,
@@ -270,6 +272,12 @@ impl UsdStageProjectionPlan {
             if let Some(type_name) = &prim.type_name {
                 plan.type_indices
                     .entry(type_name.clone())
+                    .or_default()
+                    .push(index);
+            }
+            for schema in &prim.api_schemas {
+                plan.api_schema_indices
+                    .entry(schema.clone())
                     .or_default()
                     .push(index);
             }
@@ -498,6 +506,73 @@ impl UsdRead for UsdStageProjectionPlan {
         self.prims
             .iter()
             .filter_map(|prim| SdfPath::new(&prim.path).ok())
+            .collect()
+    }
+
+    fn prim_paths_matching(&self, type_names: &[&str], api_schemas: &[&str]) -> Vec<SdfPath> {
+        let mut indices = Vec::new();
+        for type_name in type_names {
+            indices.extend(
+                self.type_indices
+                    .get(*type_name)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
+        }
+        for schema in api_schemas {
+            indices.extend(
+                self.api_schema_indices
+                    .get(*schema)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            );
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+            .into_iter()
+            .filter_map(|index| self.prims.get(index))
+            .filter_map(|prim| SdfPath::new(&prim.path).ok())
+            .collect()
+    }
+
+    fn prim_schema_facts_matching(
+        &self,
+        type_names: &[&str],
+        api_schemas: &[&str],
+        attr_prefix: &str,
+    ) -> Vec<UsdReadPrimFacts> {
+        if type_names.is_empty() && api_schemas.is_empty() && attr_prefix.is_empty() {
+            return Vec::new();
+        }
+        self.prims
+            .iter()
+            .filter_map(|prim| {
+                let matches_type = prim
+                    .type_name
+                    .as_deref()
+                    .is_some_and(|name| type_names.contains(&name));
+                let matches_api = prim
+                    .api_schemas
+                    .iter()
+                    .any(|name| api_schemas.contains(&name.as_str()));
+                let has_attr_prefix = !attr_prefix.is_empty()
+                    && prim
+                        .property_names
+                        .iter()
+                        .any(|name| name.starts_with(attr_prefix));
+                if !matches_type && !matches_api && !has_attr_prefix {
+                    return None;
+                }
+                Some(UsdReadPrimFacts {
+                    path: SdfPath::new(&prim.path).ok()?,
+                    type_name: prim.type_name.clone(),
+                    api_schemas: prim.api_schemas.clone(),
+                    has_attr_prefix,
+                })
+            })
             .collect()
     }
 
