@@ -84,6 +84,10 @@ pub struct CanonicalStage {
     resolver_revision: std::cell::Cell<u64>,
     /// Bumped by the drain step on each observed change (debug / asserts).
     pub generation: u64,
+    /// Prepared snapshot known to describe this live stage at the recorded
+    /// generation. Any later live edit makes the snapshot stale by advancing
+    /// `generation`.
+    prepared_plan: Option<(Arc<crate::UsdStageProjectionPlan>, u64)>,
 }
 
 impl CanonicalStage {
@@ -123,6 +127,7 @@ impl CanonicalStage {
             resolver_identity: NEXT_CANONICAL_STAGE_ID.fetch_add(1, Ordering::Relaxed),
             resolver_revision: std::cell::Cell::new(0),
             generation: 0,
+            prepared_plan: None,
         }
     }
 
@@ -1105,6 +1110,38 @@ impl CanonicalStages {
         self.by_asset.get_mut(&asset)
     }
 
+    /// Bind a prepared snapshot to the live stage only when the caller has
+    /// built that stage from the same recipe. The binding remains current until
+    /// a live edit advances the stage generation.
+    pub fn mark_prepared_plan_snapshot(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+        plan: Arc<crate::UsdStageProjectionPlan>,
+    ) -> bool {
+        let Some(stage) = self.get_mut(asset) else {
+            return false;
+        };
+        stage.prepared_plan = Some((plan, stage.generation));
+        true
+    }
+
+    /// Whether `plan` is the exact prepared snapshot from which the current
+    /// live-stage generation was built.
+    pub fn prepared_plan_is_current(
+        &self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+        plan: &Arc<crate::UsdStageProjectionPlan>,
+    ) -> bool {
+        self.get(asset).is_some_and(|stage| {
+            stage
+                .prepared_plan
+                .as_ref()
+                .is_some_and(|(prepared, generation)| {
+                    *generation == stage.generation && Arc::ptr_eq(prepared, plan)
+                })
+        })
+    }
+
     /// Select the one composed read surface for an asset generation.
     ///
     /// A stage at generation zero is still the unedited load transaction, so the
@@ -1288,8 +1325,21 @@ pub fn sync_canonical_stages(
                 let Some(recipe) = asset.recipe.as_ref() else {
                     continue;
                 };
+                let prepared_plan_current =
+                    stages.prepared_plan_is_current(*id, &asset.projection_plan);
+                let generation = stages.get(*id).map_or(0, CanonicalStage::generation);
+                let _sync_span = bevy::log::info_span!(
+                    "usd_canonical_stage_asset_sync",
+                    generation,
+                    prepared_plan_current
+                )
+                .entered();
+                if prepared_plan_current {
+                    continue;
+                }
                 match CanonicalStage::from_recipe(recipe) {
-                    Ok(cs) => {
+                    Ok(mut cs) => {
+                        cs.prepared_plan = Some((asset.projection_plan.clone(), cs.generation));
                         bevy::log::info!(
                             "[canonical] reopened live CanonicalStage for {:?} ({} prims)",
                             id,

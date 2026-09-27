@@ -124,6 +124,13 @@ registered reset owners, and swaps the stage and plan together. An active stage
 holds its exact simulation-progress key through that commit. `UsdStageAsset`
 shares its immutable `StageRecipe` through `Arc`, so ordinary asset and
 pending-job snapshots do not copy the layer closure on the app thread.
+When the live stage and prepared plan were built from that same recipe, the
+canonical owner records the exact plan identity at the stage generation. The
+asset `Modified` notification then reuses the already-open stage instead of
+opening it again. Prepared topology facts can be committed at that nonzero
+generation while it remains the recorded snapshot generation; any later live
+edit invalidates that equivalence, so consumers require complete change history
+or perform their normal live-stage reconciliation.
 
 Default Twin scene admission uses `AsyncWorkAdmission` to parse the exact
 `UsdSourceText` revision and serialize the restored persistent document
@@ -564,11 +571,16 @@ non-transform info changes to indexed topology paths. Transform-only info
 changes advance the cached generation without rebuilding joint topology;
 structural resyncs and mixed edits still refresh it. Live USD invalidation
 requeues the affected prim, while `SceneTeardown` retires the scene-owned work
-and cache. A completed prepared-plan task is discarded when the live topology
-index already proves the same canonical generation current; a late worker
-result cannot cause a second whole-stage refresh. Tracy's
-`usd_sim_prepared_topology_cache` span records whether this owner-level check
-found that current-generation proof.
+and cache. A completed prepared-plan task uses a nonzero canonical generation
+without rescanning only when the canonical owner confirms that exact plan is
+still the live stage's recorded snapshot. Otherwise it needs complete change
+history or the conservative live refresh. A task is discarded when the live
+topology index already proves the same canonical generation current; a late
+worker result cannot cause a second whole-stage refresh. Tracy's
+`usd_canonical_stage_asset_sync` span records plan reuse at the asset boundary;
+`usd_sim_prepared_topology_cache` records whether the prepared topology task
+can use its snapshot at the current generation. Pair it with
+`usd_sim_joint_topology_scan` to verify that this path did not repeat extraction.
 
 Authored controls and generic executable programs are resolved by the separate
 `UsdAuthoredRuntimePlugin` after visual projection. It observes

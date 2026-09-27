@@ -420,10 +420,12 @@ fn poll_prepared_joint_topology(
                 && current.simulation_candidates_ready
                 && current.canonical_generation == Some(generation)
         });
+        let prepared_plan_is_current = canonical.prepared_plan_is_current(stage, &plan);
         let cache_span = bevy::log::info_span!(
             "usd_sim_prepared_topology_cache",
             generation,
-            cache_current = cache_is_current
+            cache_current = cache_is_current,
+            prepared_plan_current = prepared_plan_is_current
         )
         .entered();
         if cache_is_current {
@@ -449,7 +451,8 @@ fn poll_prepared_joint_topology(
                 .filter(|path| prepared.source_paths.contains(*path))
                 .count()
         });
-        let generation_without_history = generation > 0 && change_history.is_none();
+        let generation_without_history =
+            generation > 0 && change_history.is_none() && !prepared_plan_is_current;
         let stale = relevant_resyncs > 0 || relevant_info_changes > 0 || generation_without_history;
         let _validation_span = bevy::log::info_span!(
             "usd_sim_prepared_topology_reconcile",
@@ -457,7 +460,8 @@ fn poll_prepared_joint_topology(
             history_present = change_history.is_some(),
             relevant_resyncs,
             relevant_info_changes,
-            generation_without_history
+            generation_without_history,
+            prepared_plan_current = prepared_plan_is_current
         )
         .entered();
         if stale {

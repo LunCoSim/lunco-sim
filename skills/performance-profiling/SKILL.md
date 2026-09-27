@@ -131,10 +131,16 @@ When initial candidate processing spans many owners, queue the bootstrap IDs
 once and drain a fixed-size batch in stable entity order per app update; keep
 the remainder queued so a large scene cannot monopolize one UI frame.
 When a worker prepares facts for a composed plan, result commit must use the
-same prepared-plan identity for any derived cache. Generation-zero ordinary
-and runtime-instance plans stay on that cached read surface; only later live
-canonical generations use generation-keyed main-thread extraction. Otherwise
-a cache-key mismatch can repeat a full-stage scan during result publication.
+same prepared-plan identity for any derived cache. If the canonical owner
+records that exact plan as the source of the current live-stage generation,
+prepared facts remain valid at that nonzero generation until a live edit
+advances it. Later generations require complete change history or
+generation-keyed main-thread extraction. Otherwise a cache-key mismatch can
+repeat a full-stage scan during result publication.
+For dependent-stage refresh, pair `usd_canonical_stage_asset_sync` with
+`usd_sim_prepared_topology_cache` and `usd_sim_joint_topology_scan` to verify
+that publishing the new asset plan neither reopens the canonical stage nor
+repeats its prepared topology extraction.
 When initial preparation already builds composed type or API-schema indexes,
 run one-time topology and vehicle-output extraction against the prepared reader
 on a worker and use its indexed candidate query. Combine overlapping schema

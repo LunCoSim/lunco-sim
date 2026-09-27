@@ -2205,12 +2205,24 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                         true
                     });
                 if replaced {
-                    if let Some(mut asset) = world
+                    let recipe = Arc::new(recipe);
+                    let projection_plan = Arc::new(projection_plan);
+                    let asset_updated = if let Some(mut asset) = world
                         .resource_mut::<Assets<UsdStageAsset>>()
                         .get_mut(completion.stage)
                     {
-                        asset.recipe = Some(Arc::new(recipe));
-                        asset.projection_plan = Arc::new(projection_plan);
+                        asset.recipe = Some(recipe);
+                        asset.projection_plan = Arc::clone(&projection_plan);
+                        true
+                    } else {
+                        false
+                    };
+                    if asset_updated {
+                        if let Some(mut stages) = world
+                            .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>(
+                        ) {
+                            stages.mark_prepared_plan_snapshot(completion.stage, projection_plan);
+                        }
                     }
                     let _span =
                         bevy::log::info_span!("usd_twin_projection_dependent_visual_refresh")
