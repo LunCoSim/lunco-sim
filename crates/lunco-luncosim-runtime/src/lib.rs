@@ -316,10 +316,7 @@ fn append_usd_policies(
     out: &mut Vec<AuthoredPolicy>,
     policy_prim_paths: &mut std::collections::HashSet<String>,
 ) {
-    for prim in reader.prim_paths() {
-        if reader.type_name(&prim).as_deref() != Some(LUNCO_POLICY_TYPE) {
-            continue;
-        }
+    for prim in reader.prim_paths_matching(&[LUNCO_POLICY_TYPE], &[]) {
         policy_prim_paths.insert(prim.to_string());
         append_authored_policy(
             stage_id,

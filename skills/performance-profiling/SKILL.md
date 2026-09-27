@@ -268,6 +268,11 @@ duplicate-child identity checks scoped to the parent being admitted after the
 budget check; preparing keys for every queued parent can turn a small projection
 slice into a full-queue UI stall.
 
+For live composed-stage discovery of a known USD type, use the typed
+`UsdReadObject::prim_paths_matching` query. It preserves live traversal
+semantics while avoiding a full materialized path list followed by a separate
+type lookup for every prim.
+
 Dependent USD-stage refresh is owner work behind `sync_twin_overlays`. Snapshot
 the base/runtime revisions, serialize each persistent source snapshot once on
 bounded workers, share its bytes across dependent stages, and coalesce changed
