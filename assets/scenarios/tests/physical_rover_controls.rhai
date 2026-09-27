@@ -5,12 +5,30 @@
 // Rust realizes the generic ports, contacts, joints, and body state.
 
 fn simulation_dependencies(me, ctx) {
+    let skid = find_path("/PhysicalRoverControls/SkidPhysical");
+    let ackermann = find_path("/PhysicalRoverControls/AckermannPhysical");
+    let steering_fl = find_path("/PhysicalRoverControls/AckermannPhysical/Steering_FL_Hinge");
+    let steering_fr = find_path("/PhysicalRoverControls/AckermannPhysical/Steering_FR_Hinge");
+    let wheel_fl = find_path("/PhysicalRoverControls/AckermannPhysical/Suspension_FL/Wheel_FL");
+    let wheel_fr = find_path("/PhysicalRoverControls/AckermannPhysical/Suspension_FR/Wheel_FR");
+    let modelica_entities = [];
+    let entity_reads = [];
+    let entity_writes = [];
+    for entity in [skid, ackermann] {
+        if entity >= 0 {
+            modelica_entities.push(entity);
+            entity_reads.push(entity);
+            entity_writes.push(entity);
+        }
+    }
+    for entity in [steering_fl, steering_fr, wheel_fl, wheel_fr] {
+        if entity >= 0 { entity_reads.push(entity); }
+    }
     #{
-        modelica_entities: [
-            find_path("/PhysicalRoverControls/SkidPhysical"),
-            find_path("/PhysicalRoverControls/AckermannPhysical"),
-        ],
-        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
+        modelica_entities: modelica_entities,
+        entity_reads: entity_reads,
+        entity_writes: entity_writes,
+        query_reads: ["ReadPorts"], required_inputs: [],
     }
 }
 

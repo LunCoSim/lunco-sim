@@ -318,16 +318,45 @@ typed queues before that is safe.
   the observer reported `TESTS_OK 11` and
   `SIMULATE INTENT INPUT ADMISSION: PASS`. API `Exit` closed port 4192 and
   process 1183357 is gone.
-- A separate production scene-test verdict for
-  `physical_rover_controls.usda` remains unavailable. The earlier runner
-  attempt was stopped after its existing scenario repeatedly rejected the
-  joint-angle read at `physical_rover_controls.rhai:212` because its
-  `simulation_dependencies` omits that entity. The current API observer checks
-  session-input admission and capture only; it is not a full vehicle scene
-  verdict.
+- The vehicle scene's dependency plan and physical input capture are now
+  covered by separate production checks. The exact scene-test gate passed
+  `physical_rover_controls` (`TESTS_OK 33`, 2,220 ticks) after declaring the
+  steering-hinge and front-wheel reads. A headful API observer on port 4196
+  passed `physical_input_stream_capture.rhai` (`TESTS_OK 1`), retaining 15
+  configured-forward physical-controller frames in a completed 21-record
+  stream, with no `ScriptStatus` diagnostics.
 - `cargo test -p lunco-core-session -p lunco-controller -p lunco-scene-commands -p lunco-luncosim-edit-core -j 4` passed: 24 controller, 43 core-session, 5 edit-core, and 12 scene-command tests, plus 1 observer and 2 authz integration tests.
 - `cargo build -p lunco-luncosim --bin luncosim -j 4` passed. Production `spawn_follows_physics` passed (`TESTS_OK 4`) in the scene runner and through an owned API session loading the raw-file scene. The API run captured one spawn at tick 3, sequence 1, verified producer, exact pose, correlation, scene root, active frame, and reserved root identity, and rejected an overflowing quaternion before admission. API `Exit` stopped the owned process and closed port 4196.
-- `python3 scripts/validate_skills.py` passed before the final skill wording update; rerun it before handoff. Raw spawns and semantic controls now share the queue and capture stream. Physical frames remain controller-boundary admissions; other typed commands, durable replay, physical-frame playback, and supported-profile divergence remain open. No visual or performance acceptance was run.
+- Raw spawns and semantic controls share the queue and capture stream. Physical
+  frames remain controller-boundary admissions; direct-command producer
+  acceptance, other typed commands, durable recording/playback, physical-frame
+  playback, and supported-profile divergence remain open. No visual or
+  performance acceptance was run.
+
+### D3 vehicle dependencies and D9 physical input capture (2026-09-27)
+
+- `assets/scenarios/tests/physical_rover_controls.rhai` now declares its live
+  dependency surface: `ReadPorts`, reads of both rover control entities, both
+  Ackermann steering hinges and front wheels, and writes to both rover controls.
+  The exact production scene-test gate passed
+  `physical_rover_controls PASS`, `TESTS_OK 33`, and 2,220 fixed ticks on the
+  current production binary. Its log had no undeclared-dependency diagnostic.
+- Added `physical_input_stream_capture.rhai` as a headful production observer
+  attached with `RunScenarioAsset` to `physical_rover_controls.usda`. On owned
+  port 4196 it started capture, acquired the skid control, resolved the
+  configured forward binding, injected press/release through the native-window
+  event path, then asserted a retained physical-controller frame for that
+  stable target with scene generation, effective tick, and sequence. Result:
+  `TESTS_OK 1`, 15 matching frames in a completed 21-record stream, and
+  `ScriptStatus` `ok:true` with no diagnostics. This covers the application
+  input mapping and controller path; it does not claim external hardware input.
+- The task-owned API process (PID 1510869) exited through API `Exit`; PID and
+  port 4196 were confirmed gone. No Rust source changed, so the existing
+  production binary was reused. The earlier requested checkout-local Cargo
+  cleanup was already completed; it was not repeated.
+- Direct-command producer acceptance, other typed command payloads, durable
+  recording/playback, physical-frame playback, supported-profile divergence,
+  remaining cross-domain causal closure, and performance evidence remain open.
 
 ## Runtime and repository constraints
 
