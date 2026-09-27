@@ -870,11 +870,13 @@ fixed-step owner stamps the frame with those identities, the current `SimTick`,
 and the shared per-tick input sequence before combining physical and simulated
 holds for control translation. Capture also retains that frame as sorted
 canonical intent ids with its producer session and admission stamp. The shared
-stream has a record bound, stops visibly on overflow or invalid order, and is
-observable through `ReadSessionInputStream`. Physical frames are admitted at
-their consuming controller boundary and cannot be deferred by the external
-queue. Capture remains in memory only; other typed commands, durable writing,
-and playback remain open.
+stream has a record bound, validates canonical payload names, stable stamps,
+and producer/payload pairing before retention, and stops visibly on invalid
+input, overflow, or invalid order. It is observable through
+`ReadSessionInputStream`. Physical frames are admitted at their consuming
+controller boundary and cannot be deferred by the external queue. Capture
+remains in memory only; other typed commands, durable writing, and playback
+remain open.
 
 Floating-point addition is order dependent. Every reduction that contributes
 to authoritative state needs a stable input order. Parallel physics is

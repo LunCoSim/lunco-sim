@@ -19,8 +19,10 @@ recovery copies, and the previous stashes remain intact. The five local heads
 share the tip containing this handover update. The D9 direct-command owner
 test commit `211d7d495` was merged into local `main` as
 `7c65820584b846df914cc88f4204bf6340e085bc`; all five heads were fast-forwarded
-to the handover follow-up. No push was made. The evidence below stays tied to
-the individual builds and source revisions named in each section.
+to the handover follow-up. The merge's first parent was `a0dde5fcb`, the then-
+current `origin/main`, which is retained in local `main`. No push was made. The
+evidence below stays tied to the individual builds and source revisions named
+in each section.
 
 ## Active user objective
 
@@ -372,6 +374,20 @@ typed queues before that is safe.
   payloads, durable recording/playback, physical-frame playback,
   supported-profile divergence, cross-domain causal closure, and
   performance evidence remain open.
+
+### D9 session-record validation continuation (2026-09-27)
+
+- `SessionInputRecord::validate` centralizes stable stamp, canonical semantic
+  name, physical-frame ordering, runtime-spawn pose, and producer/payload
+  pairing checks. `PendingSessionInputs::admit` uses the same validation before
+  allocating order, with physical frames reserved for their consuming tick.
+  `SessionInputStream::append` validates before retention and moves capture to
+  `Failed` on malformed input without dropping earlier records.
+- `cargo test -p lunco-core-session
+  capture_fails_closed_on_invalid_payload_and_producer_pairing -j 4` passed.
+  The package suite passed 44 unit tests and 2 authorization integration
+  tests. Durable recording/playback, broader typed commands, physical-frame
+  playback, and full cross-domain causal closure remain open.
 
 ## Runtime and repository constraints
 

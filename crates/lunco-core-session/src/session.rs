@@ -621,6 +621,23 @@ pub struct SessionInputRecord {
     pub payload: SessionInputPayload,
 }
 
+impl SessionInputRecord {
+    /// Validate the stable identity, producer, ordering stamp, and payload
+    /// contract before retaining or replaying this record.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.sequence == 0 {
+            return Err("session input record has no admitted per-tick sequence".to_owned());
+        }
+        validate_session_input(
+            self.producer,
+            self.target,
+            self.scene_generation,
+            &self.payload,
+            true,
+        )
+    }
+}
+
 /// Producer class and identity retained with an admitted session input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -766,6 +783,189 @@ pub enum SessionInputPayload {
     },
 }
 
+fn validate_session_input(
+    producer: SessionInputProducer,
+    target: lunco_core::GlobalEntityId,
+    scene_generation: u64,
+    payload: &SessionInputPayload,
+    allow_physical_frame: bool,
+) -> Result<(), String> {
+    if matches!(payload, SessionInputPayload::PhysicalIntentFrame { .. }) && !allow_physical_frame {
+        return Err(
+            "physical intent frames are admitted at their consuming fixed tick and cannot be deferred"
+                .to_owned(),
+        );
+    }
+
+    match payload {
+        SessionInputPayload::PhysicalIntentFrame { intent_ids } => {
+            let mut previous = None;
+            for intent_id in intent_ids {
+                let Some(intent) = lunco_control_core::parse_user_intent(intent_id) else {
+                    return Err(format!(
+                        "physical intent frame contains unknown intent '{intent_id}'"
+                    ));
+                };
+                if intent.canonical_name() != intent_id {
+                    return Err(format!(
+                        "physical intent frame must use canonical intent names; found '{intent_id}'"
+                    ));
+                }
+                if previous.is_some_and(|previous: &str| previous >= intent_id.as_str()) {
+                    return Err(
+                        "physical intent frame intent ids must be strictly sorted and unique"
+                            .to_owned(),
+                    );
+                }
+                previous = Some(intent_id.as_str());
+            }
+        }
+        SessionInputPayload::SimulatedIntentChange { intent, .. }
+        | SessionInputPayload::SemanticIntentEdge { intent, .. } => {
+            let Some(parsed) = lunco_control_core::parse_user_intent(intent) else {
+                return Err(format!("unknown semantic intent '{intent}'"));
+            };
+            if parsed.canonical_name() != intent {
+                return Err(format!(
+                    "session input intent must use canonical name '{}'",
+                    parsed.canonical_name()
+                ));
+            }
+            if let SessionInputPayload::SemanticIntentEdge { edge, .. } = payload {
+                let Some(parsed) = lunco_control_core::SemanticIntentEdgeKind::parse(edge) else {
+                    return Err(format!(
+                        "unknown semantic edge '{edge}'; expected pressed, released, or pulse"
+                    ));
+                };
+                if parsed.as_str() != edge {
+                    return Err(format!(
+                        "session input edge must use canonical name '{}'",
+                        parsed.as_str()
+                    ));
+                }
+            }
+        }
+        SessionInputPayload::RuntimeSpawn {
+            entry_id,
+            active_frame,
+            requested_position,
+            requested_rotation,
+            correlation_id,
+            spawned_root,
+        } => {
+            if entry_id.trim().is_empty() {
+                return Err("runtime spawn requires a catalog entry id".to_owned());
+            }
+            if active_frame.get() == 0 {
+                return Err("runtime spawn requires a stable active-frame identity".to_owned());
+            }
+            if requested_position.iter().any(|value| !value.is_finite()) {
+                return Err("runtime spawn position must be finite".to_owned());
+            }
+            if let Some(rotation) = requested_rotation {
+                let norm_squared = DQuat::from_array(*rotation).length_squared();
+                if rotation.iter().any(|value| !value.is_finite())
+                    || !norm_squared.is_finite()
+                    || norm_squared == 0.0
+                {
+                    return Err(
+                        "runtime spawn rotation must have a finite, nonzero magnitude".to_owned(),
+                    );
+                }
+            }
+            if *correlation_id == 0 {
+                return Err("runtime spawn requires a nonzero correlation id".to_owned());
+            }
+            if spawned_root.get() == 0 {
+                return Err("runtime spawn requires a reserved root identity".to_owned());
+            }
+        }
+    }
+
+    if target.get() == 0 {
+        return Err("session input requires a stable nonzero target identity".to_owned());
+    }
+    if scene_generation == 0 {
+        return Err("session input requires a committed scene generation".to_owned());
+    }
+
+    match producer {
+        SessionInputProducer::ApiTransport { producer_id }
+        | SessionInputProducer::DirectCommand { producer_id }
+            if producer_id == 0 =>
+        {
+            return Err("session input producer identity must be nonzero".to_owned());
+        }
+        SessionInputProducer::PhysicalController { .. } if !allow_physical_frame => {
+            return Err(
+                "physical controller inputs are admitted at their consuming fixed tick".to_owned(),
+            );
+        }
+        SessionInputProducer::Rhai { route: None, .. } => {
+            return Err("Rhai session input requires a classified runtime route".to_owned());
+        }
+        SessionInputProducer::Rhai {
+            route: Some(route),
+            actor: None,
+            ..
+        } if route.scope == lunco_core::RuntimeScope::Twin => {
+            return Err("Twin Rhai session input requires a stable actor identity".to_owned());
+        }
+        SessionInputProducer::Rhai {
+            actor: Some(actor), ..
+        } if actor.get() == 0 => {
+            return Err("Rhai session input actor identity must be nonzero".to_owned());
+        }
+        SessionInputProducer::Rhai {
+            actor: Some(_),
+            producer_id: Some(_),
+            ..
+        } => {
+            return Err("Rhai session input uses its actor identity; omit producer_id".to_owned());
+        }
+        SessionInputProducer::Rhai {
+            actor: None,
+            producer_id: None,
+            ..
+        } => {
+            return Err("actorless Rhai session input requires producer_id".to_owned());
+        }
+        SessionInputProducer::Rhai {
+            actor: None,
+            producer_id: Some(0),
+            ..
+        } => {
+            return Err(
+                "actorless Rhai session input producer identity must be nonzero".to_owned(),
+            );
+        }
+        _ => {}
+    }
+
+    match (producer, payload) {
+        (
+            SessionInputProducer::PhysicalController { .. },
+            SessionInputPayload::PhysicalIntentFrame { .. },
+        )
+        | (
+            SessionInputProducer::ApiTransport { .. }
+            | SessionInputProducer::DirectCommand { .. }
+            | SessionInputProducer::Rhai { .. },
+            SessionInputPayload::SimulatedIntentChange { .. }
+            | SessionInputPayload::SemanticIntentEdge { .. }
+            | SessionInputPayload::RuntimeSpawn { .. },
+        ) => {}
+        (SessionInputProducer::PhysicalController { .. }, _) => {
+            return Err("physical controller producer requires a physical intent frame".to_owned());
+        }
+        (_, SessionInputPayload::PhysicalIntentFrame { .. }) => {
+            return Err("physical intent frame requires a physical controller producer".to_owned());
+        }
+    }
+
+    Ok(())
+}
+
 /// Maximum number of typed session inputs that may wait for their fixed-tick
 /// commit boundary.
 pub const MAX_PENDING_SESSION_INPUTS: usize = 4096;
@@ -841,118 +1041,7 @@ impl PendingSessionInputs {
                 "session input admission queue is full ({MAX_PENDING_SESSION_INPUTS} records)"
             ));
         }
-        if matches!(&payload, SessionInputPayload::PhysicalIntentFrame { .. }) {
-            return Err(
-                "physical intent frames are admitted at their consuming fixed tick and cannot be deferred"
-                    .to_owned(),
-            );
-        }
-        match &payload {
-            SessionInputPayload::SimulatedIntentChange { intent, .. }
-                if lunco_control_core::parse_user_intent(intent).is_none() =>
-            {
-                return Err(format!("unknown semantic intent '{intent}'"));
-            }
-            SessionInputPayload::SemanticIntentEdge { intent, edge, .. } => {
-                if lunco_control_core::parse_user_intent(intent).is_none() {
-                    return Err(format!("unknown semantic intent '{intent}'"));
-                }
-                if lunco_control_core::SemanticIntentEdgeKind::parse(edge).is_none() {
-                    return Err(format!("unknown semantic edge '{edge}'"));
-                }
-            }
-            SessionInputPayload::RuntimeSpawn {
-                entry_id,
-                active_frame,
-                requested_position,
-                requested_rotation,
-                correlation_id,
-                spawned_root,
-            } => {
-                if entry_id.trim().is_empty() {
-                    return Err("runtime spawn requires a catalog entry id".to_owned());
-                }
-                if active_frame.get() == 0 {
-                    return Err("runtime spawn requires a stable active-frame identity".to_owned());
-                }
-                if requested_position.iter().any(|value| !value.is_finite()) {
-                    return Err("runtime spawn position must be finite".to_owned());
-                }
-                if let Some(rotation) = requested_rotation {
-                    let norm_squared = DQuat::from_array(*rotation).length_squared();
-                    if rotation.iter().any(|value| !value.is_finite())
-                        || !norm_squared.is_finite()
-                        || norm_squared == 0.0
-                    {
-                        return Err(
-                            "runtime spawn rotation must have a finite, nonzero magnitude"
-                                .to_owned(),
-                        );
-                    }
-                }
-                if *correlation_id == 0 {
-                    return Err("runtime spawn requires a nonzero correlation id".to_owned());
-                }
-                if spawned_root.get() == 0 {
-                    return Err("runtime spawn requires a reserved root identity".to_owned());
-                }
-            }
-            _ => {}
-        }
-        if target.get() == 0 {
-            return Err("session input requires a stable nonzero target identity".to_owned());
-        }
-        if scene_generation == 0 {
-            return Err("session input requires a committed scene generation".to_owned());
-        }
-        match producer {
-            SessionInputProducer::ApiTransport { producer_id }
-            | SessionInputProducer::DirectCommand { producer_id }
-                if producer_id == 0 =>
-            {
-                return Err("session input producer identity must be nonzero".to_owned());
-            }
-            SessionInputProducer::PhysicalController { .. } => {
-                return Err(
-                    "physical controller inputs are admitted at their consuming fixed tick"
-                        .to_owned(),
-                );
-            }
-            SessionInputProducer::Rhai { route: None, .. } => {
-                return Err("Rhai session input requires a classified runtime route".to_owned());
-            }
-            SessionInputProducer::Rhai {
-                actor: Some(actor), ..
-            } if actor.get() == 0 => {
-                return Err("Rhai session input actor identity must be nonzero".to_owned());
-            }
-            SessionInputProducer::Rhai {
-                actor: Some(_),
-                producer_id: Some(_),
-                ..
-            } => {
-                return Err(
-                    "Rhai session input uses its actor identity; omit producer_id".to_owned(),
-                );
-            }
-            SessionInputProducer::Rhai {
-                actor: None,
-                producer_id: None,
-                ..
-            } => {
-                return Err("actorless Rhai session input requires producer_id".to_owned());
-            }
-            SessionInputProducer::Rhai {
-                actor: None,
-                producer_id: Some(0),
-                ..
-            } => {
-                return Err(
-                    "actorless Rhai session input producer identity must be nonzero".to_owned(),
-                );
-            }
-            _ => {}
-        }
+        validate_session_input(producer, target, scene_generation, &payload, false)?;
 
         let admission = order.assign_order(scene_generation, effective_tick)?;
         self.pending.push_back(PendingSessionInput {
@@ -1274,25 +1363,27 @@ impl SessionInputStream {
             record.effective_tick,
             record.sequence,
         );
-        let failure = if record.target.get() == 0 {
-            Some("session input record has no stable target identity".to_owned())
-        } else if record.scene_generation == 0 {
-            Some("session input record has no committed scene generation".to_owned())
-        } else if record.sequence == 0 {
-            Some("session input record has no admitted per-tick sequence".to_owned())
-        } else if self.records.len() >= self.record_limit {
-            Some(format!(
-                "session input capture reached its {} record limit",
-                self.record_limit
-            ))
-        } else if self.last_order.is_some_and(|previous| order <= previous) {
-            Some(format!(
-                "session input order must increase; received generation {}, tick {}, sequence {} after {:?}",
-                order.0, order.1, order.2, self.last_order
-            ))
-        } else {
-            None
-        };
+        let failure = record
+            .validate()
+            .err()
+            .or_else(|| {
+                (self.records.len() >= self.record_limit).then(|| {
+                    format!(
+                        "session input capture reached its {} record limit",
+                        self.record_limit
+                    )
+                })
+            })
+            .or_else(|| {
+                self.last_order
+                    .filter(|previous| order <= *previous)
+                    .map(|previous| {
+                        format!(
+                            "session input order must increase; received generation {}, tick {}, sequence {} after {:?}",
+                            order.0, order.1, order.2, previous
+                        )
+                    })
+            });
 
         if let Some(message) = failure {
             self.failure = Some(message.clone());
@@ -2873,6 +2964,32 @@ mod session_input_stream_tests {
         assert_eq!(stream.state(), SessionInputStreamState::Failed);
         assert_eq!(stream.records().len(), 2);
         assert_eq!(stream.failure(), Some(error.as_str()));
+    }
+
+    #[test]
+    fn capture_fails_closed_on_invalid_payload_and_producer_pairing() {
+        let mut invalid_payload = physical_record(10, 1);
+        invalid_payload.payload = SessionInputPayload::PhysicalIntentFrame {
+            intent_ids: vec!["unknown-intent".to_owned()],
+        };
+        let mut mismatched_producer = physical_record(10, 1);
+        mismatched_producer.producer = SessionInputProducer::DirectCommand { producer_id: 7 };
+
+        for (record, expected_error) in [
+            (invalid_payload, "unknown intent"),
+            (mismatched_producer, "physical intent frame requires"),
+        ] {
+            let mut stream = SessionInputStream::default();
+            stream.begin(4).expect("capture starts");
+
+            let error = stream
+                .append(record)
+                .expect_err("invalid input must stop capture before retention");
+            assert!(error.contains(expected_error), "{error}");
+            assert_eq!(stream.state(), SessionInputStreamState::Failed);
+            assert!(stream.records().is_empty());
+            assert_eq!(stream.failure(), Some(error.as_str()));
+        }
     }
 
     #[test]
