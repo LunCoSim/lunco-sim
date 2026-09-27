@@ -13,7 +13,8 @@ pub const MAX_SESSION_INPUT_RECORDS: usize = 65_536;
 pub const MAX_SESSION_INPUT_ARCHIVE_BYTES: usize = 16 * 1024 * 1024;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"LCSINP\0\0";
-const ARCHIVE_VERSION: u16 = 1;
+const ARCHIVE_VERSION: u16 = 2;
+const FIRST_ARCHIVE_VERSION: u16 = 1;
 const HEADER_BYTES: usize = 8 + 2 + 4 + 4;
 const MAX_ARCHIVE_PAYLOAD_BYTES: usize = MAX_SESSION_INPUT_ARCHIVE_BYTES - HEADER_BYTES;
 
@@ -32,6 +33,9 @@ enum ArchiveProducer {
     },
     DirectCommand {
         producer_id: u64,
+    },
+    LocalUser {
+        session_id: SessionId,
     },
 }
 
@@ -57,6 +61,11 @@ enum ArchivePayload {
         requested_rotation: Option<[f64; 4]>,
         correlation_id: u64,
         spawned_root: lunco_core::GlobalEntityId,
+    },
+    ModelicaInputChange {
+        name: String,
+        value: f64,
+        correlation_id: u64,
     },
 }
 
@@ -90,6 +99,9 @@ impl From<&SessionInputRecord> for ArchiveRecord {
             },
             crate::SessionInputProducer::DirectCommand { producer_id } => {
                 ArchiveProducer::DirectCommand { producer_id }
+            }
+            crate::SessionInputProducer::LocalUser { session_id } => {
+                ArchiveProducer::LocalUser { session_id }
             }
         };
         let payload = match &record.payload {
@@ -131,6 +143,15 @@ impl From<&SessionInputRecord> for ArchiveRecord {
                 correlation_id: *correlation_id,
                 spawned_root: *spawned_root,
             },
+            crate::SessionInputPayload::ModelicaInputChange {
+                name,
+                value,
+                correlation_id,
+            } => ArchivePayload::ModelicaInputChange {
+                name: name.clone(),
+                value: *value,
+                correlation_id: *correlation_id,
+            },
         };
 
         Self {
@@ -164,6 +185,9 @@ impl From<ArchiveRecord> for SessionInputRecord {
             },
             ArchiveProducer::DirectCommand { producer_id } => {
                 crate::SessionInputProducer::DirectCommand { producer_id }
+            }
+            ArchiveProducer::LocalUser { session_id } => {
+                crate::SessionInputProducer::LocalUser { session_id }
             }
         };
         let payload = match record.payload {
@@ -202,6 +226,15 @@ impl From<ArchiveRecord> for SessionInputRecord {
                 requested_rotation,
                 correlation_id,
                 spawned_root,
+            },
+            ArchivePayload::ModelicaInputChange {
+                name,
+                value,
+                correlation_id,
+            } => crate::SessionInputPayload::ModelicaInputChange {
+                name,
+                value,
+                correlation_id,
             },
         };
 
@@ -299,7 +332,7 @@ impl SessionInputCaptureArchive {
         }
 
         let version = u16::from_le_bytes([bytes[8], bytes[9]]);
-        if version != ARCHIVE_VERSION {
+        if !(FIRST_ARCHIVE_VERSION..=ARCHIVE_VERSION).contains(&version) {
             return Err(format!(
                 "session input archive version {version} is unsupported"
             ));
@@ -329,6 +362,17 @@ impl SessionInputCaptureArchive {
                 .map_err(|error| format!("session input archive decode failed: {error}"))?;
         if consumed != payload_length {
             return Err("session input archive payload contains trailing data".to_owned());
+        }
+        if version == FIRST_ARCHIVE_VERSION
+            && wire_records.iter().any(|record| {
+                matches!(&record.producer, ArchiveProducer::LocalUser { .. })
+                    || matches!(&record.payload, ArchivePayload::ModelicaInputChange { .. })
+            })
+        {
+            return Err(
+                "session input archive version one contains a version two record variant"
+                    .to_owned(),
+            );
         }
         if wire_records.len() != record_count {
             return Err(format!(
@@ -409,6 +453,9 @@ fn estimated_encoded_record_bytes(record: &SessionInputRecord) -> usize {
         }
         crate::SessionInputPayload::RuntimeSpawn { entry_id, .. } => {
             add_text(FIXED_RECORD_BOUND, entry_id)
+        }
+        crate::SessionInputPayload::ModelicaInputChange { name, .. } => {
+            add_text(FIXED_RECORD_BOUND, name)
         }
     }
 }
@@ -638,6 +685,20 @@ mod tests {
                     correlation_id: 303,
                 },
             },
+            SessionInputRecord {
+                producer: SessionInputProducer::LocalUser {
+                    session_id: SessionId::LOCAL,
+                },
+                target: lunco_core::GlobalEntityId::from_raw(42),
+                scene_generation: 3,
+                effective_tick: 14,
+                sequence: 1,
+                payload: SessionInputPayload::ModelicaInputChange {
+                    name: "drive_torque".to_owned(),
+                    value: 12.5,
+                    correlation_id: 304,
+                },
+            },
         ]
     }
 
@@ -680,6 +741,60 @@ mod tests {
         assert_eq!(
             *requested_rotation,
             Some([0.0, 0.0, 0.125, 0.992_156_741_649_221_5])
+        );
+    }
+
+    #[test]
+    fn session_input_capture_archive_decodes_existing_version_one_records() {
+        let legacy_records: Vec<_> = valid_records().into_iter().take(5).collect();
+        let wire_records: Vec<_> = legacy_records.iter().map(ArchiveRecord::from).collect();
+        let mut bytes = encode_wire_records(&wire_records);
+        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
+
+        let decoded = SessionInputCaptureArchive::from_bytes(&bytes)
+            .expect("version one records remain readable after appending variants");
+        assert_eq!(decoded.records(), legacy_records.as_slice());
+    }
+
+    #[test]
+    fn session_input_capture_archive_rejects_version_two_variants_in_version_one() {
+        let record = ArchiveRecord {
+            producer: ArchiveProducer::LocalUser {
+                session_id: SessionId::LOCAL,
+            },
+            target: lunco_core::GlobalEntityId::from_raw(42),
+            scene_generation: 3,
+            effective_tick: 14,
+            sequence: 1,
+            payload: ArchivePayload::ModelicaInputChange {
+                name: "drive_torque".to_owned(),
+                value: 12.5,
+                correlation_id: 304,
+            },
+        };
+        let mut bytes = encode_wire_records(&[record]);
+        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
+
+        assert!(
+            SessionInputCaptureArchive::from_bytes(&bytes)
+                .expect_err("version one cannot claim variants introduced by version two")
+                .contains("version two record variant")
+        );
+    }
+
+    #[test]
+    fn modelica_input_capture_rejects_invalid_values() {
+        let mut record = valid_records().pop().expect("Modelica input record");
+        record.payload = SessionInputPayload::ModelicaInputChange {
+            name: "drive_torque".to_owned(),
+            value: f64::NAN,
+            correlation_id: 304,
+        };
+
+        assert!(
+            SessionInputCaptureArchive::new(vec![record])
+                .expect_err("non-finite inputs are not replayable")
+                .contains("must be finite")
         );
     }
 

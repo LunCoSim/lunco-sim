@@ -333,7 +333,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | | `AttachProgram` | Attach a source-backed program with explicit scalar ports, defaults, and USD connections. |
 | **Time** | `ControlAnimation` | Play/pause/scrub/rate the USD animation preview (independent of the physics clock). |
 | **Modelica** | `CompileModel` | Compile a specific class in a document. |
-| | `SetModelInput` | Inject one discrete input value through the shared Modelica input path. |
+| | `SetModelInput` | Select a live Modelica participant with `target_gid` from `ListEntities`, or an editor model with `doc_id`; admit live inputs to the next fixed tick. Live API callers supply a stable nonzero `producer_id`, and the acknowledgement returns its target, correlation, and admission stamp. Editor-only models use their immediate input path. |
 | | `RunActiveModel` | Start/Resume simulation of the active model. |
 | | `PauseActiveModel` | Pause simulation. |
 | | `ResetActiveModel` | Reset simulation to `t=0`. |

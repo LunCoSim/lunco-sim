@@ -984,7 +984,8 @@ fn commit_controller_session_input(
                     .to_owned(),
             });
         }
-        lunco_core_session::SessionInputPayload::RuntimeSpawn { .. } => {}
+        lunco_core_session::SessionInputPayload::RuntimeSpawn { .. }
+        | lunco_core_session::SessionInputPayload::ModelicaInputChange { .. } => {}
     }
 }
 

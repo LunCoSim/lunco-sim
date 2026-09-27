@@ -35,6 +35,9 @@ import { listSkills, readSkill } from './skills.js';
 
 const SERVER_NAME = 'lunco-mcp-server';
 const SERVER_VERSION = '0.6.0';
+// The stdio MCP process is one stable producer for the lifetime of its
+// connection. Live Modelica input captures require caller identity.
+const SESSION_INPUT_PRODUCER_ID = process.pid;
 
 // MCP Server instance
 const server = new Server(
@@ -221,15 +224,17 @@ const STATIC_TOOLS = [
   },
   {
     name: 'set_input',
-    description: "Push a runtime input value into a compiled model's stepper. Takes effect on the next sim step — no recompile, no pause needed. Returns `{ok: true, doc, name, value}` on success, or a structured error (`EntityNotFound` for unknown / uncompiled doc, `DeserializationError` listing the known input names if `name` is not declared). Use `describe_model` first if unsure of names. Bounds-clamping is the caller's responsibility; out-of-range values are accepted.",
+    description: "Set a finite Modelica input on a live participant or editor document. Select a live participant with `target_gid` from `list_entities`, or an editor document with `doc`. Live writes require this MCP connection's stable producer identity and are admitted to the next fixed tick, returning their correlation and admission stamp. Editor-only writes apply immediately. Values are not clamped to authored port ranges; the caller applies bounds.",
     inputSchema: {
       type: 'object',
       properties: {
-        doc: { type: 'integer', description: 'Document id (0 = active).' },
+        doc: { type: 'integer', description: 'Editor document id (0 = active).' },
+        target_gid: { type: 'integer', description: 'Stable live entity id from `list_entities`.' },
         name: { type: 'string', description: 'Input variable name (e.g. "valve").' },
         value: { type: 'number', description: 'New value.' },
       },
-      required: ['doc', 'name', 'value'],
+      required: ['name', 'value'],
+      anyOf: [{ required: ['doc'] }, { required: ['target_gid'] }],
     },
   },
   // ── Multi-class compile + source visibility (spec 033 P0) ─────────────
@@ -855,17 +860,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'set_input': {
-        const { doc, name: input_name, value } = args ?? {};
-        if (doc === undefined || !input_name || value === undefined) {
+        const { doc, target_gid, name: input_name, value } = args ?? {};
+        if ((doc === undefined) === (target_gid === undefined) || !input_name || value === undefined) {
           return {
-            content: [{ type: 'text', text: 'Error: `doc`, `name`, and `value` are required' }],
+            content: [{ type: 'text', text: 'Error: provide exactly one of `doc` or `target_gid`, plus `name` and `value`' }],
             isError: true,
           };
         }
         const result = await executeCommand('SetModelInput', {
-          doc,
+          doc_id: doc ?? 0,
+          target_gid: target_gid ?? null,
           name: input_name,
           value,
+          producer_id: SESSION_INPUT_PRODUCER_ID,
         });
         if (result.error) {
           return {

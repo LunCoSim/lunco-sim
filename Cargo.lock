@@ -8471,6 +8471,7 @@ dependencies = [
  "lunco-assets-path",
  "lunco-assets-runtime",
  "lunco-command-contracts",
+ "lunco-control-core",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-core-session",

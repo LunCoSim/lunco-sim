@@ -27,15 +27,21 @@
   scene generation; it receives the current `SimTick` and a sequence from the shared per-tick
   allocator before control translation. Missing admission facts or duplicate target/session order
   keys hold the input with a structured runtime error instead of using world-local entity bits.
-  When explicitly active, `SessionInputStream` retains bounded physical, semantic, and raw-spawn
-  records with their typed producer identity, stable target, generation, tick, sequence, and payload.
+  When explicitly active, `SessionInputStream` retains bounded physical, semantic, Modelica-input,
+  and raw-spawn records with their typed producer identity, stable target, generation, tick,
+  sequence, and payload. Live external `SetModelInput` and local UI writes carry the exact `f64`
+  value and command correlation into the Modelica owner at their admitted fixed tick; producer
+  provenance is retained as the stable caller id for API, direct, and actorless
+  Rhai producers, the Twin Rhai route and actor identity, or the local peer
+  `SessionId`.
   `SessionInputRecord::validate` checks canonical payload names, stable stamps, producer/payload
   pairing, and spawn-pose invariants before retention. A malformed record, capacity limit, or order
   violation stops capture visibly while preserving prior records. Typed commands start, stop, or
   clear capture, and `ReadSessionInputStream` returns the records through the typed API.
   Deterministic simulation-Rhai actions remain derived behavior, and local-embodiment input remains
   on the interaction cadence. Other typed command payloads remain outside capture. Runtime capture
-  is memory-backed and has a bounded, versioned binary record-archive codec. Native hosts can export
+  is memory-backed and has a bounded, version 2 binary record-archive codec that continues to read
+  version 1 records. Native hosts can export
   one verified archive per completed capture through bounded background admission and the storage
   I/O pool; failed exports can be retried. There is no baseline manifest or playback consumer. The
   per-vessel `InputFrame` log

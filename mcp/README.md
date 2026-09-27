@@ -94,7 +94,7 @@ These tools are always available:
 | `snapshot_variables` | One-shot read of current parameter / input / variable values from a running **live** sim (not FastRun batch results — use `GetExperimentResult` for those) |
 | `GetExperimentResult` | Read a completed **FastRun/RunExperiment** trajectory programmatically: returns `times` + `series` (var → values). Target by `experiment_id`, or `doc` for that doc's latest run. Optional `variables` filter and `max_points` strided downsample (last sample always kept). The programmatic counterpart to the UI's CSV export — call via `execute_command` |
 | `ListRuns` | List experiments (optionally `doc`-filtered), newest first. Each row is self-describing: `experiment_id`, `name`, `state`, `has_result`, plus **`overrides`** (`{name:value}`) and **`bounds`** (`t_start/t_end/dt/tolerance/solver`) so a sweep's runs map back to their inputs. Call via `execute_command` |
-| `set_input` | Push a runtime input value into a compiled model. Returns `{ok}` or structured error listing known input names |
+| `set_input` | Set an input by live `target_gid` or editor `doc`; live writes return the fixed-tick correlation and admission stamp |
 | `find_model` | Fuzzy search across bundled / Twin / source libraries / open docs. Returns ranked URIs with relevance scores |
 | `cosim_status` | Snapshot every USD-driven cosim entity (`UsdSourcedCosim`): position, velocity, Modelica state, propagated `force_y`. Probe-the-running-sim alternative to log polling |
 | `load_scene` | Reload (or replace) the active USD scene at runtime. Despawns existing USD prims + cosim wires, force-reads the file from disk, spawns a fresh root. Use after editing a `.usda` to pick up changes without restarting |

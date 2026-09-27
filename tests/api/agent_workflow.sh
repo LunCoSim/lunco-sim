@@ -219,10 +219,11 @@ echo
 
 # ── 7. set_input — happy path. Use the authored RocketStage boundary ──
 echo "🎛  7. set_input(doc_id=$DOC_ID, name=\"valve_opening\", value=0.5)"
-RESP=$(cmd "SetModelInput" "{\"doc_id\":$DOC_ID,\"name\":\"valve_opening\",\"value\":0.5}")
-OK=$(echo "$RESP" | jq -r '.data.ok // empty')
-if [ "$OK" = "true" ]; then
-    echo "  ✅ set_input ok=true"
+RESP=$(cmd "SetModelInput" "{\"doc_id\":$DOC_ID,\"name\":\"valve_opening\",\"value\":0.5,\"producer_id\":4101}")
+ACK=$(echo "$RESP" | jq -r --argjson doc "$DOC_ID" \
+    'select(.data.doc_id == $doc and .data.name == "valve_opening" and .data.value == 0.5 and .data.correlation_id > 0) | .data')
+if [ -n "$ACK" ]; then
+    echo "  ✅ set_input acknowledged: $ACK"
     PASS=$((PASS+1))
 else
     echo "  ❌ set_input failed:"
@@ -235,7 +236,7 @@ echo
 # The HTTP transport renders `ApiResponse::Error { message }` as
 # `{"error": "<message>"}` (not `.message`), so we read `.error` here.
 echo "🎛  8. set_input(doc_id=$DOC_ID, name=\"valve.openin\" /* typo */, value=0.5)"
-RESP=$(cmd "SetModelInput" "{\"doc_id\":$DOC_ID,\"name\":\"valve.openin\",\"value\":0.5}")
+RESP=$(cmd "SetModelInput" "{\"doc_id\":$DOC_ID,\"name\":\"valve.openin\",\"value\":0.5,\"producer_id\":4101}")
 ERR=$(echo "$RESP" | jq -r '.error // .message // empty')
 if echo "$ERR" | grep -q "valve_opening"; then
     echo "  ✅ error lists the valid name: $ERR"

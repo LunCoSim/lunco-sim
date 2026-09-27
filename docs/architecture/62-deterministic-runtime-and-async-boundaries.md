@@ -875,16 +875,19 @@ one running world. It does not provide cross-session replay identity. Any actor
 or model included in a cross-peer/replay guarantee needs its stable
 `GlobalEntityId` or another source-owned, replicated identity.
 
-External held-input changes, discrete edges, and raw-file runtime spawns share
-the bounded session-owned ingress queue and assigned per-tick sequence. While
+External held-input changes, discrete edges, live `SetModelInput` changes, and
+raw-file runtime spawns share the bounded session-owned ingress queue and
+assigned per-tick sequence. `SetModelInput` identifies live participants by
+stable `target_gid`; editor-only documents keep their document selector. While
 capture is active, `SessionInputStream` retains their typed payloads,
 correlation ids, producer class and stable caller ID, target, committed
 generation, tick, and sequence. Spawn records additionally retain the scene
 root, active frame, catalog entry, exact `f64` pose, and reserved spawned-root
 `GlobalEntityId`. API and direct typed commands require a nonzero
 `producer_id`; actorless Rhai requires one, while Twin Rhai retains its route
-and actor identity. Document-backed spawns remain `ApplyUsdOps` in the Twin
-journal. The fixed-step controller captures physical
+and actor identity. Modelica records retain the declared input name, exact
+`f64` value, and command correlation. Document-backed spawns remain
+`ApplyUsdOps` in the Twin journal. The fixed-step controller captures physical
 `ActionState<UserIntent>` into a
 by-value `PhysicalIntentFrame` semantic snapshot. When the controller and
 target have stable `GlobalEntityId`s and a committed scene generation, the

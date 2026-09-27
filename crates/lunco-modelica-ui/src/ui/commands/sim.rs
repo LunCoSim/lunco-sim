@@ -5,8 +5,9 @@ use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_modelica_ui_core::SetModelicaParameter;
 
-// The actual mutation (`apply_set_model_input`) + its error type are UI-free and
-// live in `crate::model_commands`; UI code calls that owning module directly.
+// The shared admission and application owner is UI-free and lives in
+// `crate::model_commands`; this adapter sends canvas and telemetry changes
+// through that same fixed-tick path.
 
 /// Apply a canvas control-widget write through the same model-input path as
 /// the API command.
@@ -25,7 +26,25 @@ pub(crate) fn on_set_model_input_requested(
     let name = trigger.name.clone();
     let value = trigger.value;
     commands.queue(move |world: &mut World| {
-        if let Err(err) = crate::model_commands::apply_set_model_input(world, doc, &name, value) {
+        let local_producer = world
+            .get_resource::<lunco_core_session::LocalSession>()
+            .map(
+                |local| lunco_core_session::SessionInputProducer::LocalUser {
+                    session_id: local.0,
+                },
+            );
+        let result = crate::model_commands::execute_set_model_input(
+            world,
+            doc,
+            None,
+            &name,
+            value,
+            None,
+            None,
+            lunco_command_contracts::OpId::new().0,
+            local_producer,
+        );
+        if let Err(err) = result {
             bevy::log::warn!(
                 "[CanvasDiagram] in-canvas input write failed: name={} value={} err={err:?}",
                 name,

@@ -144,6 +144,7 @@ impl Plugin for ModelicaCorePlugin {
         // Register it here so headless and workbench hosts expose the same
         // reflected command contract.
         model_commands::register_all_commands(app);
+        app.add_observer(model_commands::commit_session_input);
         #[cfg(feature = "api")]
         app.register_deferred_command::<model_commands::SetModelInput>();
         app.init_resource::<lunco_core_session::CommandPolicyRegistry>();

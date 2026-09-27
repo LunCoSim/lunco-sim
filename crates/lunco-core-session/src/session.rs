@@ -659,6 +659,8 @@ pub enum SessionInputProducer {
     },
     /// In-process typed command with a caller assigned stable identity.
     DirectCommand { producer_id: u64 },
+    /// Local user interaction associated with the current peer session.
+    LocalUser { session_id: SessionId },
 }
 
 impl SessionInputProducer {
@@ -726,6 +728,7 @@ impl SessionInputProducer {
             Self::ApiTransport { .. } => "api_transport",
             Self::Rhai { .. } => "rhai",
             Self::DirectCommand { .. } => "direct_command",
+            Self::LocalUser { .. } => "local_user",
         }
     }
 
@@ -737,7 +740,7 @@ impl SessionInputProducer {
                 Some(producer_id)
             }
             Self::Rhai { producer_id, .. } => producer_id,
-            Self::PhysicalController { .. } => None,
+            Self::PhysicalController { .. } | Self::LocalUser { .. } => None,
         }
     }
 }
@@ -783,6 +786,15 @@ pub enum SessionInputPayload {
         correlation_id: u64,
         /// Identity reserved by the session owner for the spawned runtime root.
         spawned_root: lunco_core::GlobalEntityId,
+    },
+    /// Discrete Modelica input change admitted for a fixed simulation tick.
+    ModelicaInputChange {
+        /// Declared Modelica input or scalar port name.
+        name: String,
+        /// Exact authored/runtime input value retained as `f64`.
+        value: f64,
+        /// Correlation id from the command or local interaction.
+        correlation_id: u64,
     },
 }
 
@@ -883,6 +895,21 @@ fn validate_session_input(
                 return Err("runtime spawn requires a reserved root identity".to_owned());
             }
         }
+        SessionInputPayload::ModelicaInputChange {
+            name,
+            value,
+            correlation_id,
+        } => {
+            if name.trim().is_empty() {
+                return Err("Modelica input change requires a non-empty input name".to_owned());
+            }
+            if !value.is_finite() {
+                return Err("Modelica input change value must be finite".to_owned());
+            }
+            if *correlation_id == 0 {
+                return Err("Modelica input change requires a nonzero correlation id".to_owned());
+            }
+        }
     }
 
     if target.get() == 0 {
@@ -957,12 +984,22 @@ fn validate_session_input(
             SessionInputPayload::SimulatedIntentChange { .. }
             | SessionInputPayload::SemanticIntentEdge { .. }
             | SessionInputPayload::RuntimeSpawn { .. },
+        )
+        | (
+            SessionInputProducer::ApiTransport { .. }
+            | SessionInputProducer::DirectCommand { .. }
+            | SessionInputProducer::Rhai { .. }
+            | SessionInputProducer::LocalUser { .. },
+            SessionInputPayload::ModelicaInputChange { .. },
         ) => {}
         (SessionInputProducer::PhysicalController { .. }, _) => {
             return Err("physical controller producer requires a physical intent frame".to_owned());
         }
         (_, SessionInputPayload::PhysicalIntentFrame { .. }) => {
             return Err("physical intent frame requires a physical controller producer".to_owned());
+        }
+        (SessionInputProducer::LocalUser { .. }, _) => {
+            return Err("local user session inputs require a Modelica input change".to_owned());
         }
     }
 
