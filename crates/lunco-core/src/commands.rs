@@ -307,6 +307,10 @@ pub struct SpawnEntity {
     /// [`bevy::prelude::Quat`] is a render/local-transform representation, not a
     /// simulation-frame interchange type.
     pub rotation: Option<[f64; 4]>,
+    /// Stable producer identity required for raw-file runtime admission from
+    /// API, direct typed, and actorless Rhai callers. Twin Rhai uses its actor
+    /// identity and omits this field.
+    pub producer_id: Option<u64>,
 }
 
 impl Default for SpawnEntity {
@@ -315,6 +319,7 @@ impl Default for SpawnEntity {
             entry_id: String::new(),
             position: [0.0; 3],
             rotation: None,
+            producer_id: None,
         }
     }
 }

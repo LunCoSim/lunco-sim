@@ -410,9 +410,16 @@ run while simulation time is running. A pause leaves admitted inputs queued for
 the next running fixed tick. The controller applies semantic actions at that
 boundary. The held-state commit publishes `intent.hold`; edge delivery also
 records its `CausalTrace`.
-Physical-frame admission and runtime spawns have not joined this commit path.
-Simulation-clock Rhai actions stay in their derived behavior pass, and
-local-embodiment input stays on the interaction cadence.
+Raw-file runtime `SpawnEntity` requests use the same queue and order allocator.
+Their records retain producer provenance, correlation, stable scene-root and
+active-frame identities, original f64 pose, and a reserved root identity. The
+scene-command owner revalidates those facts and commits the spawn at its
+assigned tick before identity admission; `NetSpawn` uses the reserved identity.
+Document-backed spawns remain `ApplyUsdOps` entries in the Twin journal and do
+not also enter the session stream. Physical-frame snapshots are sampled and
+captured at their consuming fixed tick with the same per-tick allocator after
+queued session events. Simulation-clock Rhai actions stay in their derived
+behavior pass, and local-embodiment input stays on the interaction cadence.
 
 ## 4. Async preparation, priority, and result commit
 
@@ -842,12 +849,16 @@ one running world. It does not provide cross-session replay identity. Any actor
 or model included in a cross-peer/replay guarantee needs its stable
 `GlobalEntityId` or another source-owned, replicated identity.
 
-External held-input changes and discrete edges share one assigned per-tick
-sequence. While capture is active, `SessionInputStream` retains their typed
-payloads, correlation ids, producer class and stable caller ID, target,
-committed generation, tick, and sequence. API and direct typed commands require
-a nonzero `producer_id`; actorless Rhai requires one, while Twin Rhai retains its
-route and actor identity. The fixed-step controller captures physical
+External held-input changes, discrete edges, and raw-file runtime spawns share
+the bounded session-owned ingress queue and assigned per-tick sequence. While
+capture is active, `SessionInputStream` retains their typed payloads,
+correlation ids, producer class and stable caller ID, target, committed
+generation, tick, and sequence. Spawn records additionally retain the scene
+root, active frame, catalog entry, exact `f64` pose, and reserved spawned-root
+`GlobalEntityId`. API and direct typed commands require a nonzero
+`producer_id`; actorless Rhai requires one, while Twin Rhai retains its route
+and actor identity. Document-backed spawns remain `ApplyUsdOps` in the Twin
+journal. The fixed-step controller captures physical
 `ActionState<UserIntent>` into a
 by-value `PhysicalIntentFrame` semantic snapshot. When the controller and
 target have stable `GlobalEntityId`s and a committed scene generation, the
@@ -856,8 +867,10 @@ and the shared per-tick input sequence before combining physical and simulated
 holds for control translation. Capture also retains that frame as sorted
 canonical intent ids with its producer session and admission stamp. The shared
 stream has a record bound, stops visibly on overflow or invalid order, and is
-observable through `ReadSessionInputStream`. It remains in memory only; other
-typed commands, durable writing, and playback remain open.
+observable through `ReadSessionInputStream`. Physical frames are admitted at
+their consuming controller boundary and cannot be deferred by the external
+queue. Capture remains in memory only; other typed commands, durable writing,
+and playback remain open.
 
 Floating-point addition is order dependent. Every reduction that contributes
 to authoritative state needs a stable input order. Parallel physics is

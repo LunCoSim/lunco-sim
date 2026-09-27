@@ -78,8 +78,10 @@ the input with a structured runtime error; ordering does not fall back to Bevy
 `SessionInputStream` retains physical frames and admitted external
 `SimulateIntent`/`SimulateIntentEdge` payloads in memory, with producer class,
 stable producer id or Rhai route and actor, stable target, generation, tick,
-sequence, and correlation where applicable. Other commands, runtime spawns,
-durable writing, and playback are still outside this capture.
+sequence, and correlation where applicable. Raw-file `SpawnEntity` admissions
+also share this stream and fixed-tick queue. Document-backed spawns remain
+authored `ApplyUsdOps` in the Twin journal. Other commands, durable writing,
+and playback remain outside this capture.
 
 Verification for this increment:
 
@@ -197,23 +199,19 @@ this task. No performance measurement was taken.
 The session-owned commit coordinator now drains external semantic inputs at
 their assigned fixed tick, validates target and scene stamps, captures records,
 and publishes typed commit events synchronously in `(effective_tick, sequence)`
-order. The controller applies held and edge payloads; `drive_from_bindings` is
-ordered after this commit set. Physical frames still enter directly at their
-consuming fixed tick, and runtime spawn is not yet admitted to the shared queue.
-
-The next D9 step is to admit raw-file runtime spawns into this coordinator.
-`SpawnEntity` currently creates ECS entities in its command observer, and the
-session identity owner assigns their root ids on a later `PreUpdate`. A
-replayable runtime spawn needs a fixed-tick admission record with the scene-root
-and active-frame `GlobalEntityId`s, catalog entry, original `f64` pose, producer
-provenance, correlation id, and a reserved spawned-root id. Its action and
-capture record must commit in the same stable per-tick order as held intents,
-edges, and physical frames. Preserve the existing network replication contract
-by inserting that reserved id on the spawned root. Document-backed spawns
-remain `ApplyUsdOps` entries in the Twin journal and must not be duplicated in
-the session stream. See the owner and record-shape requirements in
-[`command-journal.md`](../architecture/command-journal.md). Durable
-recording/playback and supported-profile divergence evidence remain open.
+order. Raw-file runtime spawns also commit at their assigned fixed tick and
+order. Spawn records retain producer, scene-root and active-frame identities,
+catalog entry, exact `f64` pose, correlation, and reserved root GID; the commit
+inserts that identity before normal admission and network replication. The
+canonical `WorldGrid` uses deterministic content provenance so its active-frame
+identity is stable. Document-backed spawns remain `ApplyUsdOps` entries in the
+Twin journal. The controller applies held and edge payloads;
+`drive_from_bindings` is ordered after this commit set. Physical frames enter
+at their consuming fixed tick through the controller boundary and share the
+per-tick allocator, but are not deferred through the external queue. See
+[`command-journal.md`](../architecture/command-journal.md) for the owner and
+record shape. Other typed command payloads, durable recording/playback, and
+supported-profile divergence evidence remain open.
 
 ### D14: owner context for camera, runtime UI, render, and USD projection policies
 
@@ -285,8 +283,9 @@ typed queues before that is safe.
   review; no visual or performance result is claimed.
 - The shared order allocator is owned by `lunco-control-core`, with
   scene-teardown reset there. Core-session owns the bounded queue and ordered
-  fixed-tick commit boundary; the controller applies semantic payloads.
-  Runtime-spawn and physical-frame admission remain outside that coordinator.
+  fixed-tick commit boundary; the controller applies semantic payloads and
+  admits physical frames at their consuming tick. Raw runtime spawns enter the
+  same queue; physical frames remain controller-boundary admissions.
 - After that extraction, `cargo test -p lunco-control-core -p lunco-controller -j 4`
   passed all 7 control-core and 24 controller tests, including same-tick
   sequence sharing by external semantic input and physical frames, forward-tick
@@ -326,10 +325,9 @@ typed queues before that is safe.
   `simulation_dependencies` omits that entity. The current API observer checks
   session-input admission and capture only; it is not a full vehicle scene
   verdict.
-- `python3 scripts/validate_skills.py` passed with 43 skills. The change does
-  not centralize effects across runtime spawns and semantic controls, add
-  durable replay, or close physical-frame replay. No visual or performance
-  acceptance was run.
+- `cargo test -p lunco-core-session -p lunco-controller -p lunco-scene-commands -p lunco-luncosim-edit-core -j 4` passed: 24 controller, 43 core-session, 5 edit-core, and 12 scene-command tests, plus 1 observer and 2 authz integration tests.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4` passed. Production `spawn_follows_physics` passed (`TESTS_OK 4`) in the scene runner and through an owned API session loading the raw-file scene. The API run captured one spawn at tick 3, sequence 1, verified producer, exact pose, correlation, scene root, active frame, and reserved root identity, and rejected an overflowing quaternion before admission. API `Exit` stopped the owned process and closed port 4196.
+- `python3 scripts/validate_skills.py` passed before the final skill wording update; rerun it before handoff. Raw spawns and semantic controls now share the queue and capture stream. Physical frames remain controller-boundary admissions; other typed commands, durable replay, physical-frame playback, and supported-profile divergence remain open. No visual or performance acceptance was run.
 
 ## Runtime and repository constraints
 

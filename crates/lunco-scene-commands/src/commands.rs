@@ -10,13 +10,15 @@
 //!   the gizmo.
 
 use avian3d::prelude::{AngularVelocity, LinearVelocity, RigidBody};
+use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_command_contracts::{Ack, OpId};
+use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_core::{Command, SpawnEntity, on_command, register_commands};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
+use lunco_hooks::HookValue;
 use lunco_scene_catalog::catalog::{SpawnAnchor, SpawnCatalog, SpawnSource, spawn_usd_entry};
 use lunco_scene_command_contracts::{DeleteEntity, MoveEntity, TransformEntity};
 use lunco_scene_selection::SelectedEntities;
@@ -368,52 +370,77 @@ fn runtime_spawn_ops(
     (prim_path, ops)
 }
 
+#[derive(SystemParam)]
+struct SpawnCommandAdmission<'w, 's> {
+    catalog: Res<'w, SpawnCatalog>,
+    asset_server: Res<'w, AssetServer>,
+    active_frame: Res<'w, lunco_spatial::ActivePhysicsFrame>,
+    q_scene_root: Query<'w, 's, (Entity, &'static UsdPrimPath), With<UsdSceneRoot>>,
+    q_parents: Query<'w, 's, &'static ChildOf>,
+    q_grids: Query<'w, 's, &'static Grid>,
+    q_spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
+    q_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
+    role: Res<'w, lunco_core_session::NetworkRole>,
+    backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    active_command: Res<'w, lunco_core::ActiveCommandId>,
+    scene: Option<Res<'w, lunco_core::SceneTransitionCoordinator>>,
+    tick: Option<Res<'w, lunco_core_runtime::SimTick>>,
+    order: ResMut<'w, lunco_control_core::SimulationInputOrderAllocator>,
+    pending: ResMut<'w, lunco_core_session::PendingSessionInputs>,
+}
+
 #[on_command(SpawnEntity)]
 pub fn on_spawn_entity_command(
     trigger: On<SpawnEntity>,
     mut commands: Commands,
-    catalog: Res<SpawnCatalog>,
-    asset_server: Res<AssetServer>,
-    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
-    q_scene_root: Query<(Entity, &UsdPrimPath), With<UsdSceneRoot>>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    role: Res<lunco_core_session::NetworkRole>,
-    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
-) {
+    mut admission: SpawnCommandAdmission,
+) -> Result<Ack, Reject> {
     let cmd = trigger.event();
 
     // On a pure client, spawning is the host's job: the command is captured and
     // sent to the host, which spawns the authoritative rover and replicates it
     // back (arriving via `apply_replicated_spawns`). Don't spawn locally, or the
     // client would get a duplicate with no server identity.
-    if matches!(*role, lunco_core_session::NetworkRole::Client) {
-        return;
+    if matches!(*admission.role, lunco_core_session::NetworkRole::Client) {
+        return Ok(Ack::new(OpId::new()));
     }
 
-    let entry = match catalog.get(&cmd.entry_id) {
+    let entry = match admission.catalog.get(&cmd.entry_id) {
         Some(e) => e,
         None => {
-            warn!("SPAWN_ENTITY: unknown entry '{}'", cmd.entry_id);
-            return;
+            return Err(Reject::InvalidOp(format!(
+                "SPAWN_ENTITY: unknown entry '{}'",
+                cmd.entry_id
+            )));
         }
     };
 
-    if q_grids.get(active_frame.0).is_err() {
-        warn!(
-            active_frame = ?active_frame.0,
-            "SPAWN_ENTITY: active physics frame is not a BigSpace Grid"
-        );
-        return;
+    if admission.q_grids.get(admission.active_frame.0).is_err() {
+        return Err(Reject::InvalidOp(format!(
+            "SPAWN_ENTITY: active physics frame {:?} is not a BigSpace Grid",
+            admission.active_frame.0
+        )));
     }
-    let Ok((scene_root, scene_root_prim)) = q_scene_root.single() else {
-        warn!(
+    let Ok((scene_root, scene_root_prim)) = admission.q_scene_root.single() else {
+        return Err(Reject::InvalidOp(format!(
             "SPAWN_ENTITY: expected one mounted scene root for '{}'",
             cmd.entry_id
-        );
-        return;
+        )));
     };
+    let scene_root_gid = admission.q_ids.get(scene_root).copied().map_err(|_| {
+        Reject::InvalidOp(
+            "SPAWN_ENTITY: mounted scene root has no stable GlobalEntityId".to_owned(),
+        )
+    })?;
+    let active_frame_gid = admission
+        .q_ids
+        .get(admission.active_frame.0)
+        .copied()
+        .map_err(|_| {
+            Reject::InvalidOp(
+                "SPAWN_ENTITY: active physics frame has no stable GlobalEntityId".to_owned(),
+            )
+        })?;
 
     // The public command is expressed in the semantic active physics frame.
     // Convert once to the mounted scene root's local frame, which is the actual
@@ -430,38 +457,35 @@ pub fn on_spawn_entity_command(
         requested_position,
         requested_rotation,
         scene_root,
-        active_frame.0,
-        &q_parents,
-        &q_grids,
-        &q_spatial,
+        admission.active_frame.0,
+        &admission.q_parents,
+        &admission.q_grids,
+        &admission.q_spatial,
     ) else {
-        warn!(
-            ?scene_root,
-            active_frame = ?active_frame.0,
-            "SPAWN_ENTITY: scene root is not attached to the active physics frame"
-        );
-        return;
+        return Err(Reject::InvalidOp(format!(
+            "SPAWN_ENTITY: scene root {scene_root:?} is not attached to active frame {:?}",
+            admission.active_frame.0
+        )));
     };
     if !position.is_finite() || !rotation.is_finite() {
-        warn!("SPAWN_ENTITY: non-finite pose for '{}'", cmd.entry_id);
-        return;
+        return Err(Reject::InvalidOp(format!(
+            "SPAWN_ENTITY: non-finite pose for '{}'",
+            cmd.entry_id
+        )));
     }
-    let Ok(scene_grid) = q_grids.get(scene_root) else {
-        warn!(
-            ?scene_root,
-            "SPAWN_ENTITY: scene root is not a BigSpace Grid"
-        );
-        return;
-    };
-    let (spawn_cell, spawn_local_position) = scene_grid.translation_to_grid(position);
+    if admission.q_grids.get(scene_root).is_err() {
+        return Err(Reject::InvalidOp(format!(
+            "SPAWN_ENTITY: scene root {scene_root:?} is not a BigSpace Grid"
+        )));
+    }
 
     // A document-backed running scene is projected from USD. Author the spawn
     // there and let that ONE projection instantiate it. This is also the one
     // journal/network/reload path. Raw-file/headless scenes have no document to
     // author into and therefore use the direct ECS + NetSpawn path below.
     if let Some(doc) = lunco_usd_bevy_twin::scene_document_for(
-        &backed,
-        &asset_server,
+        &admission.backed,
+        &admission.asset_server,
         scene_root_prim.stage_handle.id(),
     ) {
         let SpawnSource::UsdFile(asset_path) = &entry.source;
@@ -479,13 +503,249 @@ pub fn on_spawn_entity_command(
             label: format!("Spawn {}", entry.display_name),
             ops,
         });
-        return;
+        return Ok(Ack::new(OpId::new()));
     }
 
-    info!(
-        "SPAWN_ENTITY: directly instantiating {} at {:?}",
-        cmd.entry_id, position
-    );
+    let producer = lunco_core_session::SessionInputProducer::from_command_origin(
+        admission.active_command.origin(),
+        cmd.producer_id,
+        "SpawnEntity",
+    )
+    .map_err(Reject::InvalidOp)?;
+    let scene_generation = admission
+        .scene
+        .as_deref()
+        .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
+        .ok_or_else(|| {
+            Reject::InvalidOp(
+                "SPAWN_ENTITY: runtime admission requires a committed scene generation".to_owned(),
+            )
+        })?;
+    let effective_tick = admission
+        .tick
+        .as_deref()
+        .map(|tick| tick.0)
+        .ok_or_else(|| {
+            Reject::InvalidOp("SPAWN_ENTITY: runtime admission requires SimTick".to_owned())
+        })?
+        .checked_add(1)
+        .ok_or_else(|| {
+            Reject::InvalidOp("SPAWN_ENTITY: effective simulation tick exhausted".to_owned())
+        })?;
+    let correlation_id = admission
+        .active_command
+        .get()
+        .unwrap_or_else(|| OpId::new().0);
+    if correlation_id == 0 {
+        return Err(Reject::InvalidOp(
+            "SPAWN_ENTITY: command correlation id must be nonzero".to_owned(),
+        ));
+    }
+    let spawned_root = admission
+        .pending
+        .reserve_runtime_spawn_root_id(admission.q_ids.iter().copied())
+        .map_err(Reject::InvalidOp)?;
+    let input_admission = admission
+        .pending
+        .admit(
+            &mut admission.order,
+            producer,
+            scene_root_gid,
+            scene_generation,
+            effective_tick,
+            lunco_core_session::SessionInputPayload::RuntimeSpawn {
+                entry_id: cmd.entry_id.clone(),
+                active_frame: active_frame_gid,
+                requested_position: cmd.position,
+                requested_rotation: cmd.rotation,
+                correlation_id,
+                spawned_root,
+            },
+            admission.active_command.origin(),
+        )
+        .map_err(Reject::InvalidOp)?;
+
+    Ok(Ack::with_data(
+        OpId::new(),
+        HookValue::map([
+            ("entry_id", HookValue::str(cmd.entry_id.clone())),
+            ("correlation_id", HookValue::UInt(correlation_id)),
+            ("producer_kind", HookValue::str(producer.kind())),
+            (
+                "producer_id",
+                producer
+                    .stable_id()
+                    .map_or(HookValue::Unit, HookValue::UInt),
+            ),
+            (
+                "admission",
+                HookValue::map([
+                    (
+                        "scene_generation",
+                        HookValue::UInt(input_admission.scene_generation),
+                    ),
+                    (
+                        "effective_tick",
+                        HookValue::UInt(input_admission.effective_tick),
+                    ),
+                    ("sequence", HookValue::UInt(input_admission.sequence)),
+                    ("scene_root_gid", HookValue::UInt(scene_root_gid.get())),
+                    ("active_frame_gid", HookValue::UInt(active_frame_gid.get())),
+                    ("spawned_root_gid", HookValue::UInt(spawned_root.get())),
+                ]),
+            ),
+        ]),
+    ))
+}
+
+/// Apply an admitted raw-file runtime spawn at its assigned fixed tick. The
+/// session coordinator has already revalidated the scene-root target and the
+/// referenced active-frame identity; this owner checks its spatial/catalog
+/// contracts, creates the root, and attaches the reserved identity before the
+/// next identity-admission pass.
+fn commit_runtime_spawn(
+    trigger: On<lunco_core_session::SessionInputCommit>,
+    mut commands: Commands,
+    catalog: Res<SpawnCatalog>,
+    asset_server: Res<AssetServer>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
+    role: Res<lunco_core_session::NetworkRole>,
+    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    q_scene_root: Query<(Entity, &UsdPrimPath), With<UsdSceneRoot>>,
+    q_ids: Query<&lunco_core::GlobalEntityId>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+) {
+    let record = trigger.event().record();
+    let lunco_core_session::SessionInputPayload::RuntimeSpawn {
+        entry_id,
+        active_frame: frame_gid,
+        requested_position,
+        requested_rotation,
+        correlation_id,
+        spawned_root,
+    } = &record.payload
+    else {
+        return;
+    };
+
+    let reject = |commands: &mut Commands, message: String| {
+        commands.trigger(lunco_core::RuntimeError {
+            name: "runtime-spawn-commit".to_owned(),
+            message,
+        });
+    };
+
+    if !role.is_authoritative() {
+        reject(
+            &mut commands,
+            "runtime spawn reached a non-authoritative session".to_owned(),
+        );
+        return;
+    }
+    if q_ids.iter().any(|gid| gid == spawned_root) {
+        reject(
+            &mut commands,
+            format!("reserved runtime spawn identity {spawned_root} is already live"),
+        );
+        return;
+    }
+    let Ok((scene_root, root_prim)) = q_scene_root.get(trigger.event().target()) else {
+        reject(
+            &mut commands,
+            format!(
+                "runtime spawn target {} is no longer the admitted USD scene root",
+                record.target
+            ),
+        );
+        return;
+    };
+    if q_ids.get(scene_root).ok().copied() != Some(record.target) {
+        reject(
+            &mut commands,
+            "runtime spawn scene root identity changed before commit".to_owned(),
+        );
+        return;
+    }
+    if q_ids.get(active_frame.0).ok().copied() != Some(*frame_gid) {
+        reject(
+            &mut commands,
+            format!(
+                "runtime spawn active physics frame no longer matches admitted identity {frame_gid}"
+            ),
+        );
+        return;
+    }
+    if q_grids.get(active_frame.0).is_err() {
+        reject(
+            &mut commands,
+            "runtime spawn active physics frame is not a BigSpace Grid".to_owned(),
+        );
+        return;
+    }
+    if lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, root_prim.stage_handle.id())
+        .is_some()
+    {
+        reject(
+            &mut commands,
+            "runtime spawn target became document-backed before its fixed-tick commit".to_owned(),
+        );
+        return;
+    }
+    let Some(entry) = catalog.get(entry_id) else {
+        reject(
+            &mut commands,
+            format!("runtime spawn catalog entry '{entry_id}' is no longer available"),
+        );
+        return;
+    };
+
+    let requested_position = DVec3::from_array(*requested_position);
+    let requested_rotation = requested_rotation
+        .map(DQuat::from_array)
+        .unwrap_or(DQuat::IDENTITY)
+        .normalize();
+    if !requested_position.is_finite() || !requested_rotation.is_finite() {
+        reject(
+            &mut commands,
+            format!("runtime spawn '{entry_id}' has a non-finite admitted pose"),
+        );
+        return;
+    }
+    let Some((position, rotation)) = lunco_spatial::coords::pose_in_parent_local(
+        requested_position,
+        requested_rotation,
+        scene_root,
+        active_frame.0,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    ) else {
+        reject(
+            &mut commands,
+            format!(
+                "runtime spawn scene root {scene_root:?} is not attached to active frame {:?}",
+                active_frame.0
+            ),
+        );
+        return;
+    };
+    if !position.is_finite() || !rotation.is_finite() {
+        reject(
+            &mut commands,
+            format!("runtime spawn '{entry_id}' resolved to a non-finite pose"),
+        );
+        return;
+    }
+    let Ok(scene_grid) = q_grids.get(scene_root) else {
+        reject(
+            &mut commands,
+            "runtime spawn scene root is not a BigSpace Grid".to_owned(),
+        );
+        return;
+    };
+    let (spawn_cell, spawn_local_position) = scene_grid.translation_to_grid(position);
     let result = spawn_usd_entry(
         &mut commands,
         &asset_server,
@@ -495,19 +755,23 @@ pub fn on_spawn_entity_command(
         rotation.as_quat(),
         SpawnAnchor::scene_root(scene_root),
     );
-
-    // Networked identity (gap G2): `spawn_usd_entry` already carries the shared
-    // runtime identity fence, so this caller only adds its replication contract
-    // and the host's spawn journal. Keeping the fence in the constructor is
-    // what makes palette spawns and authored runtime instances identical.
-    commands.entity(result.root_entity).try_insert((
+    commands.entity(result.root_entity).insert((
+        *spawned_root,
         lunco_core_session::NetReplicate,
         lunco_core_session::NetSpawn {
-            entry_id: cmd.entry_id.clone(),
+            entry_id: entry_id.clone(),
             position: requested_position,
             rotation: requested_rotation,
         },
     ));
+    info!(
+        entry_id,
+        correlation_id,
+        effective_tick = record.effective_tick,
+        sequence = record.sequence,
+        spawned_root_gid = spawned_root.get(),
+        "SPAWN_ENTITY: committed admitted runtime spawn"
+    );
 }
 
 /// Client: instantiate rovers the host has replicated to us (M1 content
@@ -2099,6 +2363,7 @@ impl Plugin for SpawnCommandPlugin {
         // verb is available consistently through the HTTP API, Rhai, and
         // `discover_schema`.
         register_all_commands(app);
+        app.add_observer(commit_runtime_spawn);
         app.add_systems(Update, reconcile_stable_scene_selection);
         // The read-only scene surface is a separate production package, so query
         // changes do not rebuild this much larger mutation layer.
@@ -2150,6 +2415,7 @@ mod tests {
             entry_id: "test".to_string(),
             position: [0.0; 3],
             rotation: None,
+            producer_id: None,
         };
         assert_eq!(cmd.entry_id, "test");
     }

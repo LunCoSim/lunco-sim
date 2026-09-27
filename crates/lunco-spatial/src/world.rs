@@ -4,7 +4,9 @@
 //! ## Why this exists
 //!
 //! The live 3D world is a `BigSpace` root + a canonical `Grid` (the `WorldGrid`)
-//! + exactly one persistent origin-tracking `Grid`. Per
+//! + exactly one persistent origin-tracking `Grid`. `WorldGrid` also carries
+//! deterministic content provenance so session inputs can retain and validate
+//! the active coordinate frame by `GlobalEntityId`. Per
 //! `docs/architecture/21-domain-usd.md` the
 //! Grid is the *rendered projection of the active stage*: switching scenes
 //! **re-points** the Grid at new content, it does not rebuild the root. So the
@@ -33,7 +35,8 @@ use lunco_core::{DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics};
 
 /// Marks the one canonical `Grid` scenes mount under. Consumers query for this
 /// marker rather than picking "the first `Grid`" — there may be other grids
-/// (celestial scales, preview viewports); this is *the* world grid.
+/// (celestial scales, preview viewports); this is *the* world grid. Its
+/// deterministic provenance gives session records a stable frame identity.
 #[derive(Component, Debug, Default, Clone, Copy, Reflect)]
 #[reflect(Component)]
 pub struct WorldGrid;
@@ -220,6 +223,7 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
         .spawn((
             cfg.grid(),
             WorldGrid,
+            lunco_core::identity::content("lunco", "world-shell", "/WorldGrid"),
             CellCoord::default(),
             Transform::default(),
             GlobalTransform::default(),

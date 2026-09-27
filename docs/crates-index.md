@@ -20,7 +20,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-interaction-core`** | Renderer-independent cursor interaction contract: registered USD button policy, semantic single-owner possession arbitration, editor tool gates, drag state, and the affected-entity marker consumed by scene, avatar, and camera runtimes. |
 | **`lunco-port-core`** | Shared co-simulation port substrate: `Port`, slot-backed `PortMap<T>`/`ScalarPortMap`, incremental topology identity, endpoint/control-surface components, `PortRegistry`, backend registration and resolution, shared topology invalidation, metadata, collision reporting, and process-local resolved handles. It is independent of the general engine core. |
 | **`lunco-spatial`** | BigSpace spatial substrate: f64 coordinate/frame helpers, the persistent `WorldRoot`/`WorldGrid` shell, atomic grid migration, hierarchy invariants, spatial markers, and the vehicle-neutral navigation law. It depends on `lunco-core` for the shared runtime-diagnostic resource, but core does not depend on spatial. |
-| **`lunco-core-session`** | Always-on session and authority substrate: network role/status, `SessionRegistry`, generic `ClaimControl`/`ReleaseControlClaim` transitions, `ControlAuthorityChanged`, RBAC policy, prediction markers/input watermarks, and session-dependent identity admission. |
+| **`lunco-core-session`** | Always-on session and authority substrate: network role/status, `SessionRegistry`, generic `ClaimControl`/`ReleaseControlClaim` transitions, `ControlAuthorityChanged`, RBAC policy, prediction markers/input watermarks, bounded fixed-tick `PendingSessionInputs` with stable producer classification and reserved runtime-spawn identities, ordered typed commit events, capture, and session-dependent identity admission. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, recents, generic active-Twin setting persistence (`SetTwinSetting` / `ResetTwinSetting`), and Twin-entry command payloads such as `rename::RenameTwinEntry`. |
 | **`lunco-workspace-api`** | API adapter for Workspace-owned queries (`ListOpenDocuments`, `ListRecentFiles`, `ListTwin`, `ReadActiveTwinContract`), installable by windowed, headless, or offscreen hosts without making the data-only Workspace crate depend on the API layer. |
@@ -332,18 +332,20 @@ the domain projection remains in `lunco-luncosim-exposures`.
 Owns the shared scalar port substrate (`Port`, endpoint/control-surface components, `PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction. It is independent of `lunco-core`, so changes to engine-only core types do not rebuild the port implementation.
 
 **`lunco-spatial`**
-Owns the BigSpace-specific boundary: arbitrary-grid f64 pose composition/conversion, the persistent world shell, atomic grid migration, `ActivePhysicsFrame`, spatial markers, hierarchy invariants, and the vehicle-neutral navigation law. It depends on `lunco-core` for shared runtime diagnostics; the dependency direction is one-way, so changing spatial code does not rebuild core.
+Owns the BigSpace-specific boundary: arbitrary-grid f64 pose composition/conversion, the persistent world shell, atomic grid migration, `ActivePhysicsFrame`, spatial markers, hierarchy invariants, and the vehicle-neutral navigation law. The canonical `WorldGrid` carries deterministic content provenance so session records can identify the active coordinate frame. It depends on `lunco-core` for shared identity and runtime-diagnostic contracts; the dependency direction is one-way, so changing spatial code does not rebuild core.
 
 **`lunco-core-session`**
 The session/authority layer above `lunco-core`. It owns network role and status,
 session registries and profiles, possession/RBAC policy, prediction markers and
-input watermarks, the bounded `PendingSessionInputs` queue for future fixed-tick
-semantic inputs, and the identity-admission systems that need the current
-authority role. The queue assigns order through the shared
-`lunco-control-core::SimulationInputOrderAllocator`. Its fixed-step coordinator
-validates scene stamps and stable targets, captures admitted records, and
-publishes typed commit events in sequence order for domain owners to apply
-while the simulation clock is running. Hosts that need session behavior add
+input watermarks, the bounded `PendingSessionInputs` queue for fixed-tick
+semantic controls and raw-file runtime spawns, stable command-producer
+classification, reserved spawn-root identity allocation, and identity
+admission that needs the current authority role. The queue assigns order
+through the shared `lunco-control-core::SimulationInputOrderAllocator`. Its
+fixed-step coordinator validates scene stamps and stable targets, captures
+admitted records, and publishes typed commit events in sequence order for the
+controller and scene-command owners to apply while the simulation clock is
+running. Hosts that need session behavior add
 `LunCoCoreSessionPlugin` after `LunCoCoreRuntimePlugin` and install `TimePlugin`;
 headless consumers that only need core primitives do not compile this policy
 layer.
