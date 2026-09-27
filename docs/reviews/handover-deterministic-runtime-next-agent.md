@@ -3,16 +3,21 @@
 **Prepared:** 2026-09-27
 **Workspace:** `/home/rod/Documents/luncosim-workspace/lunar-soil`
 **Branch:** `codex/lunar-soil`
-**D27 code integration commit:** `b41f7c6e9bf70a6a78fa5a3b6392a085c1122877`
+**D3/D9 acceptance commit:** `b1747728e`
+**Local main merge commit:** `da7b244d044e0fc466944510c0d8780da80b51cc`
 
-The D9 session-input commit boundary is committed as `b41f7c6e9` and was
-fast-forwarded to local `main`, `tutorials`, `usd`, and `optimization`. All five
-heads matched at that integration point. The `tutorials` worktree's celestial
-LOD edits and the `optimization` worktree's unrelated source, documentation,
-and profiling edits were preserved; the tutorial architecture edit in doc 62
-was combined with the session-input update and passes `git diff --check`. No
-push was made and no merge is active. Evidence below stays tied to the
-individual builds and source revisions named in each section.
+The D9 session-input boundary at `4acf09915` had previously been integrated
+across the local worktrees. The 2026-09-27 D3/D9 acceptance commit
+`b1747728e` was then merged into local `main` as `da7b244d`; that merge also
+retains the newer `main` commits through `c7807d1ca`. The `tutorials`, `usd`,
+and `optimization` worktrees have now been fast-forwarded with their unrelated
+edits preserved. The tutorial celestial LOD changes stayed in place; the USD
+status-bar edit and optimization source, documentation, and profiling edits
+were reapplied successfully after fast-forwarding. New task-scoped stashes hold
+recovery copies, and the previous stashes remain intact. The five local heads
+share the tip containing this handover update. No push was made. The evidence
+below stays tied to the individual builds and source revisions named in each
+section.
 
 ## Active user objective
 
