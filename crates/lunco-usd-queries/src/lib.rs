@@ -14,7 +14,7 @@ use lunco_api_core::{ApiErrorCode, ApiValue, api_value, api_value_from_serializa
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
 use lunco_usd_avian_contracts::AvianMeshApproximation;
-use lunco_usd_bevy_mesh::build_nurbs_collision_mesh_to_tolerance;
+use lunco_usd_bevy_mesh::build_nurbs_collision_mesh_with_refinement_limit;
 use lunco_usd_bevy_stage::{UsdRead, stage_convention};
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, canonical_stage_for_document};
 use lunco_usd_data::usd_data::UsdDataExt;
@@ -52,9 +52,9 @@ impl Plugin for UsdQueriesPlugin {
     }
 }
 
-/// Report the mesh approximation tokens implemented by the active Avian USD
-/// adapter. Authoring tools consume this capability query instead of keeping
-/// their own token allow-lists.
+/// Report the mesh approximation modes implemented by the active Avian USD
+/// adapter, including cooked geometry and rigid-body compatibility. Authoring
+/// tools consume this capability query instead of keeping mode rules locally.
 pub struct AvianMeshCollisionApproximationsProvider;
 
 impl ApiQueryProvider for AvianMeshCollisionApproximationsProvider {
@@ -63,10 +63,24 @@ impl ApiQueryProvider for AvianMeshCollisionApproximationsProvider {
     }
 
     fn execute(&self, _world: &World, _params: &ApiValue) -> ApiQueryResult {
-        let approximations =
-            AvianMeshApproximation::ALL.map(|mode| mode.as_usd_approximation().as_token());
-        query_ok(api_value!({ "approximations": approximations }))
+        query_ok(api_value!({ "modes": avian_mesh_approximation_capabilities() }))
     }
+}
+
+fn avian_mesh_approximation_capabilities() -> ApiValue {
+    ApiValue::Array(
+        AvianMeshApproximation::ALL
+            .into_iter()
+            .map(|mode| {
+                let capability = mode.capability();
+                api_value!({
+                    "token": mode.as_usd_approximation().as_token(),
+                    "geometry": capability.geometry.as_token(),
+                    "body_support": capability.body_support.as_token(),
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Plan a source-derived collision mesh for an explicit NURBS prim. This is a
@@ -255,26 +269,30 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
             }
         }
 
-        let Some(deviation_tolerance_m) = api_param_f64(params, "deviation_tolerance_m") else {
+        let Some(max_refinement_delta_m) = api_param_f64(params, "max_refinement_delta_m") else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "PlanNurbsCollisionProxy: positive `deviation_tolerance_m` in canonical metres is required",
+                "PlanNurbsCollisionProxy: positive `max_refinement_delta_m` in canonical metres is required",
             ));
         };
-        let cooked = build_nurbs_collision_mesh_to_tolerance(&view, &source, deviation_tolerance_m)
-            .map_err(|error| {
-                let code = match &error {
-                    lunco_usd_bevy_mesh::NurbsCollisionCookError::InvalidTolerance
-                    | lunco_usd_bevy_mesh::NurbsCollisionCookError::InvalidSurface => {
-                        ApiErrorCode::DeserializationError
-                    }
-                    _ => ApiErrorCode::CommandRejected,
-                };
-                ApiQueryError::new(
-                    code,
-                    format!("PlanNurbsCollisionProxy: `{source}`: {error}"),
-                )
-            })?;
+        let cooked = build_nurbs_collision_mesh_with_refinement_limit(
+            &view,
+            &source,
+            max_refinement_delta_m,
+        )
+        .map_err(|error| {
+            let code = match &error {
+                lunco_usd_bevy_mesh::NurbsCollisionCookError::InvalidRefinementLimit
+                | lunco_usd_bevy_mesh::NurbsCollisionCookError::InvalidSurface => {
+                    ApiErrorCode::DeserializationError
+                }
+                _ => ApiErrorCode::CommandRejected,
+            };
+            ApiQueryError::new(
+                code,
+                format!("PlanNurbsCollisionProxy: `{source}`: {error}"),
+            )
+        })?;
         let convention = stage_convention(&view).map_err(|error| {
             ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
@@ -299,11 +317,10 @@ impl ApiQueryProvider for PlanNurbsCollisionProxyProvider {
             "proxy_path": proxy.to_string(),
             "create_prim": create_prim,
             "approximation": approximation.as_usd_approximation().as_token(),
-            "supported_approximations": AvianMeshApproximation::ALL
-                .map(|mode| mode.as_usd_approximation().as_token()),
+            "modes": avian_mesh_approximation_capabilities(),
             "schemas": schemas,
-            "deviation_tolerance_m": cooked.deviation_tolerance_m,
-            "refinement_deviation_m": cooked.refinement_deviation_m,
+            "max_refinement_delta_m": cooked.max_refinement_delta_m,
+            "refinement_delta_m": cooked.refinement_delta_m,
             "u_subdivisions": cooked.tessellation.u_subdivisions as i64,
             "v_subdivisions": cooked.tessellation.v_subdivisions as i64,
             "trim_curve_samples": cooked.tessellation.trim_curve_samples as i64,

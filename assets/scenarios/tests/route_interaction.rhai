@@ -115,11 +115,7 @@ fn on_tick(me, ctx) {
         this.added_without_possession = added.path;
         let delete_context = #{
             doc_id: this.doc,
-            route_path: (),
             selected_path: this.added_without_possession,
-            target_path: this.added_without_possession,
-            hit_path: this.added_without_possession,
-            prim_paths: [this.added_without_possession],
         };
         let deleted = waypoint_editor::on_delete(delete_context);
         if deleted == () || deleted.ok != true

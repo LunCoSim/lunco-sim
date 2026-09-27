@@ -7,9 +7,11 @@
 //! and Rhai can share one stable read-side contract.
 
 pub mod lint_facts;
+mod unit_resolution;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 use sysml_model::{ElementId, ElementKind, Role, Value};
 use sysml_semantics::Workspace;
@@ -845,14 +847,30 @@ pub enum SysmlTypeCategory {
     Unknown,
 }
 
-/// Identity of a resolved SysML type in its canonical root-qualified form.
+/// Identity of a resolved SysML type in one immutable source snapshot.
 ///
-/// This is not authored value text: it is a strongly typed reference to the
-/// semantic element selected by the SysML resolver. The qualified name is
-/// retained for display, source navigation, and interchange.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// `element` is authoritative for comparisons and joins. The qualified name
+/// is display/source-navigation metadata; consumers must not use it as the
+/// semantic identity of the type.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SysmlTypeRef {
+    pub element: SysmlElementHandle,
+    #[serde(default)]
     pub qualified_name: String,
+}
+
+impl PartialEq for SysmlTypeRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.element == other.element
+    }
+}
+
+impl Eq for SysmlTypeRef {}
+
+impl Hash for SysmlTypeRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.element.hash(state);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -974,9 +992,6 @@ pub struct SysmlType {
     /// resolved inheritance chain, when the declared type has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantity_kind: Option<SysmlTypeRef>,
-    /// Unit attached to an authored quantity literal, when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
 }
 
 impl SysmlType {
@@ -1033,7 +1048,6 @@ impl SysmlType {
             primitive,
             multiplicity,
             quantity_kind: None,
-            unit: None,
         })
     }
 
@@ -1170,17 +1184,76 @@ impl SysmlLiteralKind {
     }
 }
 
-/// A quantity literal kept in a native, unit-aware form for language
-/// adapters.  The numeric payload remains the validated f64 wrapper used by
-/// the source projection, so non-finite values cannot cross the boundary.
+/// A source quantity literal with its authored unit spelling.
+///
+/// `unit_symbol` is lexical source data, not a resolved engineering unit or
+/// dimensional identity. Consumers must resolve it before numeric use.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlQuantityValue {
     pub value: SysmlNumber,
-    /// Authored unit symbol. Unit definition, dimensional compatibility, and
-    /// conversion are resolved separately from this lossless source spelling.
-    pub unit: String,
+    /// Authored unit suffix, when the source literal contains one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_symbol: Option<String>,
+    /// Resolved SysML measurement-unit feature, when the source snapshot
+    /// resolves the authored suffix to a typed measurement reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement_reference: Option<SysmlMeasurementReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantity_kind: Option<SysmlTypeRef>,
+}
+
+/// A resolved SysML measurement unit selected by a quantity literal.
+///
+/// `feature` is the semantic identity of the unit usage. The qualified name
+/// and declared type support navigation and downstream unit-definition
+/// projection; neither is used as identity.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SysmlMeasurementReference {
+    pub feature: SysmlFeatureHandle,
+    pub qualified_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_type: Option<SysmlTypeRef>,
+    /// Resolved linear unit definition projected from the standard SysML
+    /// measurement-unit semantics. Measurement scales that need an affine or
+    /// nonlinear mapping do not populate this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_definition: Option<SysmlUnitDefinition>,
+}
+
+/// SI conversion semantics resolved from a SysML `MeasurementUnit`.
+///
+/// The source feature handle remains the unit's identity; this record carries
+/// only the generic dimension and affine conversion needed by engineering
+/// values. `offset_to_si` is zero for SysML `MeasurementUnit` definitions,
+/// whose standard conversion contract is linear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlUnitDefinition {
+    /// SI base exponents in length, mass, time, current, temperature, amount,
+    /// and luminous-intensity order.
+    pub dimension: [i8; 7],
+    /// Multiplicative conversion from the authored unit to coherent SI.
+    pub scale_to_si: SysmlNumber,
+    /// Additive conversion to coherent SI.
+    pub offset_to_si: SysmlNumber,
+    /// Whether the SysML unit-conversion scale is declared exact.
+    #[serde(default)]
+    pub scale_is_exact: bool,
+}
+
+impl PartialEq for SysmlMeasurementReference {
+    fn eq(&self, other: &Self) -> bool {
+        self.feature == other.feature
+    }
+}
+
+impl Eq for SysmlMeasurementReference {}
+
+impl Hash for SysmlMeasurementReference {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.feature.hash(state);
+    }
 }
 
 /// A typed enumeration literal.  The literal name is intentionally not
@@ -1224,9 +1297,12 @@ pub struct SysmlLiteral {
     /// Unquoted string projection when the literal is a String.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub string_value: Option<String>,
-    /// Unit suffix when the literal is a quantity value, for example `m`.
+    /// Authored unit suffix, for example `m`; this is source spelling only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
+    pub unit_symbol: Option<String>,
+    /// Resolved semantic unit reference for a unit-bearing quantity literal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement_reference: Option<SysmlMeasurementReference>,
     /// Nested values when the initializer is a literal vector/tuple.
     ///
     /// This is deliberately a recursive lossless projection rather than a
@@ -1266,10 +1342,11 @@ impl SysmlLiteral {
                     .collect::<Option<Vec<_>>>()?,
             ));
         }
-        if let (Some(value), Some(unit)) = (self.number_value, self.unit.as_ref()) {
+        if let (Some(value), Some(unit_symbol)) = (self.number_value, self.unit_symbol.as_ref()) {
             return Some(SysmlValue::Quantity(SysmlQuantityValue {
                 value,
-                unit: unit.clone(),
+                unit_symbol: Some(unit_symbol.clone()),
+                measurement_reference: self.measurement_reference.clone(),
                 quantity_kind: None,
             }));
         }
@@ -1682,7 +1759,14 @@ impl SysmlAnalysis {
             source_revision,
             source_fingerprint,
         );
-        let attributes = project_attributes(&mut workspace, &files, &elements, &type_catalog);
+        let attributes = project_attributes(
+            &mut workspace,
+            &files,
+            &elements,
+            &type_catalog,
+            source_revision,
+            source_fingerprint,
+        );
         let records = project_records(&attributes, source_revision);
         let requirements =
             project_requirements(&workspace, &project_indices, &files, &elements, &attributes);
@@ -2014,8 +2098,15 @@ fn project_constraints(
             else {
                 continue;
             };
-            let parameters =
-                project_constraint_parameters(workspace, files, elements, type_catalog, element);
+            let parameters = project_constraint_parameters(
+                workspace,
+                files,
+                elements,
+                type_catalog,
+                element,
+                source_revision,
+                source_fingerprint,
+            );
             let definition =
                 constraint_definition_target(workspace, id).map(|definition| SysmlElementHandle {
                     source_revision,
@@ -2217,6 +2308,8 @@ fn project_constraint_parameters(
     elements: &[SysmlElement],
     type_catalog: &BTreeMap<String, SysmlTypeCategory>,
     constraint: &SysmlElement,
+    source_revision: u64,
+    source_fingerprint: u64,
 ) -> Vec<SysmlFeature> {
     let quantity_roots = [
         semantic_type_id(workspace, "Quantities::ScalarQuantityValue"),
@@ -2272,7 +2365,14 @@ fn project_constraint_parameters(
             })?;
             let resolved = attribute_type_reference(workspace, element, type_span.0, type_span.1)
                 .map(|target| {
-                    resolved_type_semantics(workspace, target, &quantity_roots, &mut type_cache)
+                    resolved_type_semantics(
+                        workspace,
+                        target,
+                        &quantity_roots,
+                        &mut type_cache,
+                        source_revision,
+                        source_fingerprint,
+                    )
                 });
             let mut declared_type = SysmlType::parse_with_catalog(&type_name, type_catalog)?;
             if let Some(resolved) = &resolved {
@@ -2746,6 +2846,8 @@ fn resolved_type_semantics(
     target: ElementId,
     quantity_roots: &[Option<ElementId>; 3],
     cache: &mut HashMap<ElementId, ResolvedSysmlType>,
+    source_revision: u64,
+    source_fingerprint: u64,
 ) -> ResolvedSysmlType {
     if let Some(resolved) = cache.get(&target) {
         return resolved.clone();
@@ -2836,11 +2938,21 @@ fn resolved_type_semantics(
     };
     let resolved = ResolvedSysmlType {
         type_ref: SysmlTypeRef {
+            element: SysmlElementHandle {
+                source_revision,
+                source_fingerprint,
+                element_id: target.index() as u32,
+            },
             qualified_name: workspace.qualified_name_of(target),
         },
         category,
         primitive,
         quantity_kind: kind_id.map(|id| SysmlTypeRef {
+            element: SysmlElementHandle {
+                source_revision,
+                source_fingerprint,
+                element_id: id.index() as u32,
+            },
             qualified_name: workspace.qualified_name_of(id),
         }),
     };
@@ -2874,11 +2986,82 @@ fn attribute_type_reference(
         .then_some(target)
 }
 
+fn resolved_measurement_reference(
+    workspace: &mut Workspace,
+    unit_resolver: &mut unit_resolution::SysmlUnitResolver,
+    file_index: usize,
+    source_start: usize,
+    source_end: usize,
+    measurement_reference_root: Option<ElementId>,
+    source_revision: u64,
+    source_fingerprint: u64,
+) -> Option<SysmlMeasurementReference> {
+    let start = u32::try_from(source_start).ok()?;
+    let end = u32::try_from(source_end).ok()?;
+    let candidates = workspace
+        .references()
+        .iter()
+        .filter(|reference| {
+            reference.file == file_index
+                && u32::from(reference.name_range.start()) >= start
+                && u32::from(reference.name_range.end()) <= end
+        })
+        .map(|reference| reference.target)
+        .collect::<Vec<_>>();
+    let mut resolved = candidates.into_iter().filter_map(|target| {
+        let unit_type = workspace.model().type_of(target)?;
+        let measurement_reference_root = measurement_reference_root?;
+        let mut pending = vec![unit_type];
+        let mut seen = HashSet::new();
+        let mut is_measurement_unit = false;
+        while let Some(candidate) = pending.pop() {
+            if !seen.insert(candidate) {
+                continue;
+            }
+            if candidate == measurement_reference_root {
+                is_measurement_unit = true;
+                break;
+            }
+            pending.extend(workspace.supertypes(candidate));
+        }
+        if !is_measurement_unit || !workspace.model().kind(target).is_a(ElementKind::Feature) {
+            return None;
+        }
+        Some(SysmlMeasurementReference {
+            feature: SysmlFeatureHandle {
+                element: SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: target.index() as u32,
+                },
+            },
+            qualified_name: workspace.qualified_name_of(target),
+            short_name: workspace
+                .model()
+                .declared_short_name(target)
+                .map(str::to_owned),
+            declared_type: Some(SysmlTypeRef {
+                element: SysmlElementHandle {
+                    source_revision,
+                    source_fingerprint,
+                    element_id: unit_type.index() as u32,
+                },
+                qualified_name: workspace.qualified_name_of(unit_type),
+            }),
+            unit_definition: unit_resolver.definition(target),
+        })
+    });
+    let reference = resolved.next()?;
+    resolved.next().is_none().then_some(reference)
+}
+
 fn project_attributes(
     workspace: &mut Workspace,
     files: &[SysmlFile],
     elements: &[SysmlElement],
     type_catalog: &BTreeMap<String, SysmlTypeCategory>,
+    source_revision: u64,
+    source_fingerprint: u64,
 ) -> Vec<SysmlAttribute> {
     let quantity_roots = [
         semantic_type_id(workspace, "Quantities::ScalarQuantityValue"),
@@ -2886,6 +3069,11 @@ fn project_attributes(
         semantic_type_id(workspace, "Quantities::TensorQuantityValue"),
     ];
     let mut type_cache = HashMap::new();
+    let scalar_measurement_reference_root = semantic_type_id(
+        workspace,
+        "MeasurementReferences::ScalarMeasurementReference",
+    );
+    let mut unit_resolver = unit_resolution::SysmlUnitResolver::new(workspace);
     elements
         .iter()
         .filter(|element| element.kind == "AttributeDefinition" || element.kind == "AttributeUsage")
@@ -2936,7 +3124,14 @@ fn project_attributes(
             let resolved = type_span
                 .and_then(|(start, end)| attribute_type_reference(workspace, element, start, end))
                 .map(|target| {
-                    resolved_type_semantics(workspace, target, &quantity_roots, &mut type_cache)
+                    resolved_type_semantics(
+                        workspace,
+                        target,
+                        &quantity_roots,
+                        &mut type_cache,
+                        source_revision,
+                        source_fingerprint,
+                    )
                 });
             let declared_type = type_name.as_deref().and_then(|type_name| {
                 let mut declared = SysmlType::parse_with_catalog(type_name, type_catalog)?;
@@ -2945,11 +3140,30 @@ fn project_attributes(
                 }
                 Some(declared)
             });
-            let value = rest
-                .split_once('=')
-                .map(|(_, tail)| tail.trim().trim_end_matches(';').trim())
-                .filter(|literal| !literal.is_empty())
-                .map(parse_literal);
+            let value = declaration.find('=').and_then(|equals| {
+                let tail = &declaration[equals + 1..];
+                let leading = tail.len() - tail.trim_start().len();
+                let literal = tail.trim().trim_end_matches(';').trim();
+                if literal.is_empty() {
+                    return None;
+                }
+                let source_start = element.start as usize + equals + 1 + leading;
+                let file_index = (0..workspace.file_count())
+                    .find(|&index| workspace.file_name(index) == element.file)?;
+                let mut parsed = parse_literal(literal);
+                bind_literal_measurement_references(
+                    &mut parsed,
+                    literal,
+                    source_start,
+                    file_index,
+                    scalar_measurement_reference_root,
+                    &mut unit_resolver,
+                    workspace,
+                    source_revision,
+                    source_fingerprint,
+                );
+                Some(parsed)
+            });
             let owner = element
                 .qualified_name
                 .rsplit_once("::")
@@ -3009,8 +3223,8 @@ fn project_records(attributes: &[SysmlAttribute], revision: u64) -> Vec<SysmlRec
 fn parse_literal(literal: &str) -> SysmlLiteral {
     let literal = literal.trim();
     let elements = parse_vector_literal(literal);
-    let (number_text, number_value, unit) = parse_number_with_unit(literal);
-    let integer_value = if unit.is_none() {
+    let (number_text, number_value, unit_symbol, _) = parse_number_with_unit(literal);
+    let integer_value = if unit_symbol.is_none() {
         literal.parse::<i64>().ok()
     } else {
         None
@@ -3023,7 +3237,7 @@ fn parse_literal(literal: &str) -> SysmlLiteral {
     let string_value = parse_string_literal(literal);
     let literal_kind = if elements.is_some() {
         SysmlLiteralKind::Collection
-    } else if unit.is_some() {
+    } else if unit_symbol.is_some() {
         SysmlLiteralKind::Quantity
     } else if integer_value.is_some() {
         SysmlLiteralKind::Integer
@@ -3045,14 +3259,81 @@ fn parse_literal(literal: &str) -> SysmlLiteral {
         integer_value,
         boolean_value,
         string_value,
-        unit,
+        unit_symbol,
+        measurement_reference: None,
         elements,
     }
 }
 
-fn parse_number_with_unit(literal: &str) -> (Option<String>, Option<SysmlNumber>, Option<String>) {
+fn bind_literal_measurement_references(
+    projected: &mut SysmlLiteral,
+    literal: &str,
+    source_start: usize,
+    file_index: usize,
+    measurement_reference_root: Option<ElementId>,
+    unit_resolver: &mut unit_resolution::SysmlUnitResolver,
+    workspace: &mut Workspace,
+    source_revision: u64,
+    source_fingerprint: u64,
+) {
+    let leading = literal.len() - literal.trim_start().len();
+    let source_start = source_start + leading;
+    let literal = literal.trim();
+    if let Some(elements) = &mut projected.elements {
+        let Some(inner) = literal
+            .strip_prefix('[')
+            .or_else(|| literal.strip_prefix('('))
+            .and_then(|value| value.get(..value.len().saturating_sub(1)))
+        else {
+            return;
+        };
+        let Some(parts) = split_top_level_comma_ranges(inner) else {
+            return;
+        };
+        if parts.len() != elements.len() {
+            return;
+        }
+        for (element, (part, offset)) in elements.iter_mut().zip(parts) {
+            bind_literal_measurement_references(
+                element,
+                part,
+                source_start + 1 + offset,
+                file_index,
+                measurement_reference_root,
+                unit_resolver,
+                workspace,
+                source_revision,
+                source_fingerprint,
+            );
+        }
+        return;
+    }
+
+    let (_, _, _, Some((unit_start, unit_end))) = parse_number_with_unit(literal) else {
+        return;
+    };
+    projected.measurement_reference = resolved_measurement_reference(
+        workspace,
+        unit_resolver,
+        file_index,
+        source_start + unit_start,
+        source_start + unit_end,
+        measurement_reference_root,
+        source_revision,
+        source_fingerprint,
+    );
+}
+
+fn parse_number_with_unit(
+    literal: &str,
+) -> (
+    Option<String>,
+    Option<SysmlNumber>,
+    Option<String>,
+    Option<(usize, usize)>,
+) {
     if let Some(value) = literal.parse::<f64>().ok().and_then(SysmlNumber::new) {
-        return (Some(literal.to_owned()), Some(value), None);
+        return (Some(literal.to_owned()), Some(value), None, None);
     }
 
     if let Some(open) = literal.find('[') {
@@ -3061,7 +3342,12 @@ fn parse_number_with_unit(literal: &str) -> (Option<String>, Option<SysmlNumber>
             let unit = literal[open + 1..literal.len() - 1].trim();
             if !unit.is_empty() {
                 if let Some(value) = number.parse::<f64>().ok().and_then(SysmlNumber::new) {
-                    return (Some(number.to_owned()), Some(value), Some(unit.to_owned()));
+                    return (
+                        Some(number.to_owned()),
+                        Some(value),
+                        Some(unit.to_owned()),
+                        Some((open + 1, literal.len() - 1)),
+                    );
                 }
             }
         }
@@ -3072,10 +3358,18 @@ fn parse_number_with_unit(literal: &str) -> (Option<String>, Option<SysmlNumber>
     let unit = parts.next().unwrap_or_default();
     if !number.is_empty() && !unit.is_empty() && parts.next().is_none() {
         if let Some(value) = number.parse::<f64>().ok().and_then(SysmlNumber::new) {
-            return (Some(number.to_owned()), Some(value), Some(unit.to_owned()));
+            let Some(start) = literal.find(unit) else {
+                return (None, None, None, None);
+            };
+            return (
+                Some(number.to_owned()),
+                Some(value),
+                Some(unit.to_owned()),
+                Some((start, start + unit.len())),
+            );
         }
     }
-    (None, None, None)
+    (None, None, None, None)
 }
 
 fn parse_string_literal(literal: &str) -> Option<String> {
@@ -3137,6 +3431,16 @@ fn has_top_level_comma(value: &str) -> bool {
 
 /// Split a collection body at commas that are not nested or quoted.
 fn split_top_level_commas(value: &str) -> Option<Vec<&str>> {
+    Some(
+        split_top_level_comma_ranges(value)?
+            .into_iter()
+            .map(|(part, _)| part)
+            .collect(),
+    )
+}
+
+/// Split a collection body while preserving each trimmed value's byte offset.
+fn split_top_level_comma_ranges(value: &str) -> Option<Vec<(&str, usize)>> {
     let mut parts = Vec::new();
     let mut start = 0;
     let mut depth = 0_u32;
@@ -3160,11 +3464,13 @@ fn split_top_level_commas(value: &str) -> Option<Vec<&str>> {
             '[' | '(' => depth = depth.checked_add(1)?,
             ']' | ')' => depth = depth.checked_sub(1)?,
             ',' if depth == 0 => {
-                let part = value[start..index].trim();
+                let raw = &value[start..index];
+                let leading = raw.len() - raw.trim_start().len();
+                let part = raw.trim();
                 if part.is_empty() {
                     return None;
                 }
-                parts.push(part);
+                parts.push((part, start + leading));
                 start = index + character.len_utf8();
             }
             _ => {}
@@ -3174,9 +3480,11 @@ fn split_top_level_commas(value: &str) -> Option<Vec<&str>> {
     if quote || depth != 0 {
         return None;
     }
-    let tail = value[start..].trim();
+    let raw_tail = &value[start..];
+    let leading = raw_tail.len() - raw_tail.trim_start().len();
+    let tail = raw_tail.trim();
     if !tail.is_empty() {
-        parts.push(tail);
+        parts.push((tail, start + leading));
     } else if !value.trim().is_empty() {
         return None;
     }

@@ -6,13 +6,15 @@
 
 use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
+use lunco_engineering_values::{Dimension, Quantity, Unit, UnitScaleExactness};
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraintKind, SysmlDiagnostic, SysmlElement,
     SysmlElementHandle, SysmlEnumValue, SysmlExpression, SysmlExpressionKind,
     SysmlExpressionOperator, SysmlFeature, SysmlFeatureDirection, SysmlFeatureHandle,
-    SysmlFeaturePath, SysmlFunctionReference, SysmlModelicaType, SysmlMultiplicity,
-    SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlStandardConstant,
-    SysmlSubject, SysmlType, SysmlTypeCategory, SysmlTypeRef, SysmlUnsupportedExpression,
+    SysmlFeaturePath, SysmlFunctionReference, SysmlMeasurementReference, SysmlModelicaType,
+    SysmlMultiplicity, SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord, SysmlSourceRef,
+    SysmlStandardConstant, SysmlSubject, SysmlType, SysmlTypeCategory, SysmlTypeRef,
+    SysmlUnsupportedExpression,
 };
 use lunco_sysml_ir::{
     BindingContract, BindingProvider, CompiledConstraint, ConstraintIr, DiagnosticSeverity,
@@ -201,9 +203,13 @@ fn model_source_literal_observation(
         Some(value) if dynamic_ir_value(&value).is_some() => {
             observation.insert("state".into(), Dynamic::from("value"));
             observation.insert("value".into(), value.clone());
-            if let Some(quantity) = value.clone().try_cast::<SysmlQuantityValue>() {
-                observation.insert("unit".into(), Dynamic::from(quantity.unit));
-            }
+        }
+        Some(value) if value.clone().is::<SysmlQuantityValue>() => {
+            observation.insert("state".into(), Dynamic::from("unavailable"));
+            observation.insert(
+                "detail".into(),
+                Dynamic::from("SysML quantity literal has no resolved engineering Unit"),
+            );
         }
         Some(_) => {
             observation.insert("state".into(), Dynamic::from("invalid"));
@@ -600,16 +606,37 @@ fn evaluation_context_from_dynamic(
             });
             continue;
         };
-        let value = record
-            .get("value")
-            .and_then(dynamic_ir_value)
-            .or_else(|| (state == ObservationState::Value).then_some(IrValue::Null));
+        let resolved_value = record.get("value").and_then(dynamic_ir_value);
+        if state == ObservationState::Value
+            && record.contains_key("value")
+            && resolved_value.is_none()
+        {
+            diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ObservationValueInvalid,
+                source: source.clone(),
+                message: format!(
+                    "value for `{feature_name}` is not a typed SysML IR value; quantities must carry a resolved EngineeringUnit"
+                ),
+            });
+            continue;
+        }
+        let value =
+            resolved_value.or_else(|| (state == ObservationState::Value).then_some(IrValue::Null));
         let detail = record
             .get("detail")
             .and_then(|value| value.clone().into_string().ok());
-        let unit = record
-            .get("unit")
-            .and_then(|value| value.clone().into_string().ok());
+        if record.get("unit").is_some() {
+            diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ObservationValueInvalid,
+                source: source.clone(),
+                message: format!(
+                    "observation for `{feature_name}` cannot carry separate unit metadata; use a typed Quantity value"
+                ),
+            });
+            continue;
+        }
         let frame = record
             .get("frame")
             .and_then(|value| value.clone().into_string().ok());
@@ -664,6 +691,20 @@ fn evaluation_context_from_dynamic(
                 });
                 continue;
             };
+            if contract_record
+                .get("unit")
+                .is_some_and(|value| value.clone().try_cast::<Unit>().is_none())
+            {
+                diagnostics.push(IrDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: IrDiagnosticCode::InvalidBindingContract,
+                    source: source.clone(),
+                    message: format!(
+                        "unit in the binding contract for `{feature_name}` must be a resolved EngineeringUnit"
+                    ),
+                });
+                continue;
+            }
             Some(BindingContract {
                 path: path.clone(),
                 provider: contract_provider,
@@ -673,7 +714,7 @@ fn evaluation_context_from_dynamic(
                     .unwrap_or(true),
                 unit: contract_record
                     .get("unit")
-                    .and_then(|value| value.clone().into_string().ok()),
+                    .and_then(|value| value.clone().try_cast::<Unit>()),
                 frame: contract_record
                     .get("frame")
                     .and_then(|value| value.clone().into_string().ok()),
@@ -691,7 +732,6 @@ fn evaluation_context_from_dynamic(
             state,
             value,
             detail,
-            unit,
             frame,
             time_basis,
             source_revision,
@@ -780,6 +820,19 @@ fn feature_path_source(
 }
 
 fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
+    if value.is_unit() {
+        return Some(IrValue::Null);
+    }
+    if let Some(value) = value.clone().try_cast::<Quantity>() {
+        return Some(IrValue::Quantity(value));
+    }
+    if let Some(value) = value.clone().try_cast::<SysmlQuantityValue>() {
+        let reference = value.measurement_reference.as_ref()?;
+        let unit = engineering_unit_from_reference(reference)?;
+        return Quantity::with_unit(value.value.as_f64(), unit)
+            .ok()
+            .map(IrValue::Quantity);
+    }
     if let Ok(value) = value.as_bool() {
         return Some(IrValue::Boolean(value));
     }
@@ -797,7 +850,7 @@ fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
     }
     if let Some(value) = value.clone().try_cast::<SysmlEnumValue>() {
         return Some(IrValue::Enumeration {
-            type_name: value.type_ref.map(|reference| reference.qualified_name),
+            type_name: value.type_ref,
             literal: value.literal,
         });
     }
@@ -810,21 +863,26 @@ fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
     }
     let map = value.clone().try_cast::<Map>()?;
     let nested = map.get("value").and_then(dynamic_ir_value)?;
-    if let Some(unit) = map
-        .get("unit")
-        .and_then(|value| value.clone().into_string().ok())
-    {
-        let scalar = match nested {
-            IrValue::Integer(value) => value as f64,
-            IrValue::Real(value) => value,
-            _ => return None,
-        };
-        return scalar.is_finite().then_some(IrValue::Quantity {
-            value: scalar,
-            unit,
-        });
+    if map.contains_key("unit") {
+        return None;
     }
     Some(nested)
+}
+
+fn engineering_unit_from_reference(reference: &SysmlMeasurementReference) -> Option<Unit> {
+    let definition = reference.unit_definition?;
+    Unit::new_with_exactness(
+        reference.qualified_name.clone(),
+        Dimension(definition.dimension),
+        definition.scale_to_si.as_f64(),
+        definition.offset_to_si.as_f64(),
+        if definition.scale_is_exact {
+            UnitScaleExactness::Exact
+        } else {
+            UnitScaleExactness::Approximate
+        },
+    )
+    .ok()
 }
 
 fn dynamic_u64(value: &Dynamic) -> Option<u64> {
@@ -1345,8 +1403,17 @@ pub fn register_sysml_types(engine: &mut Engine) {
         .register_type_with_name::<SysmlPrimitiveType>("SysmlPrimitiveType")
         .register_type_with_name::<SysmlModelicaType>("SysmlModelicaType")
         .register_type_with_name::<SysmlTypeRef>("SysmlTypeRef")
+        .register_get("element", |value: &mut SysmlTypeRef| {
+            Dynamic::from(value.element)
+        })
         .register_get("qualified_name", |value: &mut SysmlTypeRef| {
             value.qualified_name.clone()
+        })
+        .register_fn("==", |left: SysmlTypeRef, right: SysmlTypeRef| {
+            left == right
+        })
+        .register_fn("!=", |left: SysmlTypeRef, right: SysmlTypeRef| {
+            left != right
         })
         .register_type_with_name::<SysmlType>("SysmlType")
         .register_get("base", |value: &mut SysmlType| value.base.clone())
@@ -1386,9 +1453,6 @@ pub fn register_sysml_types(engine: &mut Engine) {
                 .clone()
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT)
-        })
-        .register_get("unit", |value: &mut SysmlType| {
-            value.unit.clone().unwrap_or_default()
         })
         .register_get("modelica_type", |value: &mut SysmlType| {
             value.modelica_type()
@@ -1432,13 +1496,27 @@ pub fn register_sysml_types(engine: &mut Engine) {
         })
         .register_get("ordered", |value: &mut SysmlMultiplicity| value.ordered)
         .register_get("unique", |value: &mut SysmlMultiplicity| value.unique)
-        .register_type_with_name::<SysmlQuantityValue>("Quantity")
+        .register_type_with_name::<SysmlQuantityValue>("SysmlQuantityLiteral")
         .register_get("value", |quantity: &mut SysmlQuantityValue| {
             quantity.value.as_f64()
         })
-        .register_get("unit", |quantity: &mut SysmlQuantityValue| {
-            quantity.unit.clone()
+        .register_get("unit_symbol", |quantity: &mut SysmlQuantityValue| {
+            quantity
+                .unit_symbol
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
         })
+        .register_get(
+            "measurement_reference",
+            |quantity: &mut SysmlQuantityValue| {
+                quantity
+                    .measurement_reference
+                    .clone()
+                    .map(Dynamic::from)
+                    .unwrap_or(Dynamic::UNIT)
+            },
+        )
         .register_get("kind", |quantity: &mut SysmlQuantityValue| {
             quantity
                 .quantity_kind
@@ -1446,6 +1524,39 @@ pub fn register_sysml_types(engine: &mut Engine) {
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT)
         })
+        .register_type_with_name::<SysmlMeasurementReference>("SysmlMeasurementReference")
+        .register_get("feature", |reference: &mut SysmlMeasurementReference| {
+            Dynamic::from(reference.feature)
+        })
+        .register_get(
+            "qualified_name",
+            |reference: &mut SysmlMeasurementReference| reference.qualified_name.clone(),
+        )
+        .register_get("short_name", |reference: &mut SysmlMeasurementReference| {
+            reference
+                .short_name
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get(
+            "declared_type",
+            |reference: &mut SysmlMeasurementReference| {
+                reference
+                    .declared_type
+                    .clone()
+                    .map(Dynamic::from)
+                    .unwrap_or(Dynamic::UNIT)
+            },
+        )
+        .register_get(
+            "engineering_unit",
+            |reference: &mut SysmlMeasurementReference| {
+                engineering_unit_from_reference(reference)
+                    .map(Dynamic::from)
+                    .unwrap_or(Dynamic::UNIT)
+            },
+        )
         .register_type_with_name::<SysmlEnumValue>("EnumValue")
         .register_get("type_ref", |value: &mut SysmlEnumValue| {
             value
@@ -1688,19 +1799,27 @@ fn typed_literal_dynamic(
         let base = declared
             .map(|value| value.base.rsplit("::").next().unwrap_or(&value.base))
             .unwrap_or_default();
+        // A structured value such as one Position is itself a collection of
+        // scalar components, but Position[n] is a collection of structured
+        // values. Only collapse the former into a native vector/quaternion/
+        // transform; cardinality must not be mistaken for structure.
+        let declared_scalar = declared
+            .is_none_or(|value| value.dimensions.is_empty() && !value.multiplicity.is_collection());
         let element_type = sysml_element_type(declared);
         let values: Vec<Dynamic> = elements
             .iter()
             .map(|element| typed_literal_dynamic(element, element_type.as_ref()))
             .collect::<Option<_>>()?;
-        if matches!(
-            base,
-            "Vec2"
-                | "CartesianTwoVectorValue"
-                | "CartesianVectorValue"
-                | "NumericalVectorValue"
-                | "VectorValue"
-        ) && values.len() == 2
+        if declared_scalar
+            && matches!(
+                base,
+                "Vec2"
+                    | "CartesianTwoVectorValue"
+                    | "CartesianVectorValue"
+                    | "NumericalVectorValue"
+                    | "VectorValue"
+            )
+            && values.len() == 2
         {
             let coordinates = values
                 .iter()
@@ -1709,18 +1828,20 @@ fn typed_literal_dynamic(
             let vector = DVec2::new(coordinates[0], coordinates[1]);
             return vector.is_finite().then_some(Dynamic::from(vector));
         }
-        if matches!(
-            base,
-            "Vec3"
-                | "Position"
-                | "Direction"
-                | "Dimensions"
-                | "CartesianThreeVectorValue"
-                | "ThreeVectorValue"
-                | "CartesianVectorValue"
-                | "NumericalVectorValue"
-                | "VectorValue"
-        ) && values.len() == 3
+        if declared_scalar
+            && matches!(
+                base,
+                "Vec3"
+                    | "Position"
+                    | "Direction"
+                    | "Dimensions"
+                    | "CartesianThreeVectorValue"
+                    | "ThreeVectorValue"
+                    | "CartesianVectorValue"
+                    | "NumericalVectorValue"
+                    | "VectorValue"
+            )
+            && values.len() == 3
         {
             let coordinates = values
                 .iter()
@@ -1728,7 +1849,7 @@ fn typed_literal_dynamic(
                 .collect::<Option<Vec<_>>>()?;
             return finite_vec3(coordinates[0], coordinates[1], coordinates[2]);
         }
-        if matches!(base, "Quat" | "Quaternion") && values.len() == 4 {
+        if declared_scalar && matches!(base, "Quat" | "Quaternion") && values.len() == 4 {
             let components = values
                 .iter()
                 .map(numeric_dynamic_f64)
@@ -1740,24 +1861,21 @@ fn typed_literal_dynamic(
                 components[3],
             ));
         }
-        if base == "Transform" && values.len() == 3 {
+        if declared_scalar && base == "Transform" && values.len() == 3 {
             return native_transform(&values);
         }
         return Some(Dynamic::from_array(values));
     }
 
-    if literal.unit.is_some()
+    if literal.unit_symbol.is_some()
         || declared.is_some_and(|value| {
             value.value_category == lunco_sysml_ast::SysmlTypeCategory::Quantity
         })
     {
         return Some(Dynamic::from(SysmlQuantityValue {
             value: literal.number_value?,
-            unit: literal
-                .unit
-                .clone()
-                .or_else(|| declared.and_then(|value| value.unit.clone()))
-                .unwrap_or_default(),
+            unit_symbol: literal.unit_symbol.clone(),
+            measurement_reference: literal.measurement_reference.clone(),
             quantity_kind: declared.and_then(|value| value.quantity_kind.clone()),
         }));
     }
@@ -2379,6 +2497,9 @@ fn feature_path_dynamic(path: &SysmlFeaturePath) -> Dynamic {
 fn ir_type_dynamic(ty: &IrType) -> Dynamic {
     let mut value = Map::new();
     value.insert("value".into(), Dynamic::from(ir_value_type_name(&ty.value)));
+    if let Some(type_ref) = ir_value_type_reference(&ty.value) {
+        value.insert("semantic_type".into(), Dynamic::from(type_ref.clone()));
+    }
     value.insert(
         "lower".into(),
         Dynamic::from_int(ty.multiplicity.lower as i64),
@@ -2400,6 +2521,24 @@ fn ir_type_dynamic(ty: &IrType) -> Dynamic {
         ty.unit.clone().map(Dynamic::from).unwrap_or(Dynamic::UNIT),
     );
     Dynamic::from_map(value)
+}
+
+fn ir_value_type_reference(value: &IrValueType) -> Option<&SysmlTypeRef> {
+    match value {
+        IrValueType::Quantity {
+            quantity_kind: Some(type_ref),
+        }
+        | IrValueType::Enumeration {
+            type_name: Some(type_ref),
+        }
+        | IrValueType::Reference {
+            type_name: Some(type_ref),
+        }
+        | IrValueType::Structured {
+            type_name: Some(type_ref),
+        } => Some(type_ref),
+        _ => None,
+    }
 }
 
 fn ir_value_type_name(value: &IrValueType) -> &'static str {
@@ -2457,8 +2596,14 @@ fn literal_dynamic(literal: &lunco_sysml_ast::SysmlLiteral) -> Dynamic {
     if let Some(string) = &literal.string_value {
         value.insert("string_value".into(), Dynamic::from(string.clone()));
     }
-    if let Some(unit) = &literal.unit {
-        value.insert("unit".into(), Dynamic::from(unit.clone()));
+    if let Some(unit_symbol) = &literal.unit_symbol {
+        value.insert("unit_symbol".into(), Dynamic::from(unit_symbol.clone()));
+    }
+    if let Some(measurement_reference) = &literal.measurement_reference {
+        value.insert(
+            "measurement_reference".into(),
+            Dynamic::from(measurement_reference.clone()),
+        );
     }
     value.insert(
         "literal_kind".into(),

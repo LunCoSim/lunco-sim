@@ -5,7 +5,6 @@
 import "modelica_editor" as modelica_editor;
 import "assembly_builder" as assembly_builder;
 import "assembly_edit" as assembly_edit;
-import "engineering_units" as engineering_units;
 import "numerical_settings" as numerical_settings;
 
 fn analyze(path) {
@@ -179,9 +178,10 @@ fn select(report, requested) {
       relationships: related, references: related_references}
 }
 
-/// Read exactly three length quantities, resolve their UCUM/SI units through
-/// the shared native quantity adapter, then lower them to the shared f64
-/// Bevy/Rhai Vec3. Unit conversion is never inferred from a bare number.
+/// Read exactly three length quantities from their resolved SysML measurement
+/// units, convert them to coherent SI, then lower them to the shared f64
+/// Bevy/Rhai Vec3. Unit conversion is never inferred from a bare number or
+/// from a source spelling.
 /// A qualified name is accepted only as a public selector; all later joins
 /// use the attribute's native feature and owner handles.
 fn position_m(report, feature_selector) {
@@ -201,11 +201,9 @@ fn position_m(report, feature_selector) {
         let qualified_name = attribute.qualified_name;
         if attribute.declared_type == ()
             || attribute.declared_type.is_quantity != true
-            || attribute.declared_type.quantity_kind == ()
-            || attribute.declared_type.quantity_kind.qualified_name != "ISQBase::LengthValue"
             || attribute.declared_type.dimensions.len() != 1
             || attribute.declared_type.dimensions[0] != 3 {
-            return #{ok: false, error: "SysML position must be a fixed three-element length quantity: " + qualified_name};
+            return #{ok: false, error: "SysML position must be a fixed three-element quantity collection: " + qualified_name};
         }
         if attribute.value == () || attribute.value.kind != "vector"
             || attribute.value.elements == () || attribute.value.elements.len() != 3 {
@@ -213,20 +211,16 @@ fn position_m(report, feature_selector) {
         }
         let values = [];
         for element in attribute.value.elements {
-            if element.number_value == () || element.unit == () {
+            if element.number_value == () || element.measurement_reference == () {
                 return #{ok: false, error: "SysML position components must be finite quantities: " + qualified_name};
             }
-            let source_unit = engineering_units::ucum_unit(element.unit);
-            let metre_unit = engineering_units::ucum_unit("m");
-            let source_quantity = if source_unit == () || metre_unit == () {
-                ()
-            } else { quantity(element.number_value, source_unit) };
-            let value = if source_quantity == () { () } else {
-                quantity_value_in(source_quantity, metre_unit)
-            };
-            if value == () {
-                return #{ok: false, error: "SysML position components use unsupported or incompatible units: " + qualified_name};
+            let source_unit = element.measurement_reference.engineering_unit;
+            if source_unit == () || source_unit.dimension != [1, 0, 0, 0, 0, 0, 0]
+                || source_unit.scale_is_exact != true {
+                return #{ok: false, error: "SysML position components require a resolved length unit with an exact SI scale: " + qualified_name};
             }
+            let source_quantity = quantity(element.number_value, source_unit);
+            let value = quantity_si_value(source_quantity);
             values.push(value);
         }
         return #{ok: true, value: vec3(values[0], values[1], values[2]),

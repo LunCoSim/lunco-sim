@@ -9,30 +9,34 @@ fn _dimension(l, m, t, i, temperature, amount, luminous) {
     [l, m, t, i, temperature, amount, luminous]
 }
 
+fn _unit(symbol, dimensions, scale, offset, exact) {
+    engineering_unit_with_exactness(symbol, dimensions, scale, offset, exact)
+}
+
 fn ucum_unit(symbol) {
-    if symbol == "1" { return engineering_unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "m" { return engineering_unit(symbol, _dimension(1, 0, 0, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "cm" { return engineering_unit(symbol, _dimension(1, 0, 0, 0, 0, 0, 0), 0.01, 0.0); }
-    if symbol == "mm" { return engineering_unit(symbol, _dimension(1, 0, 0, 0, 0, 0, 0), 0.001, 0.0); }
-    if symbol == "km" { return engineering_unit(symbol, _dimension(1, 0, 0, 0, 0, 0, 0), 1000.0, 0.0); }
-    if symbol == "s" { return engineering_unit(symbol, _dimension(0, 0, 1, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "ms" { return engineering_unit(symbol, _dimension(0, 0, 1, 0, 0, 0, 0), 0.001, 0.0); }
-    if symbol == "kg" { return engineering_unit(symbol, _dimension(0, 1, 0, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "g" { return engineering_unit(symbol, _dimension(0, 1, 0, 0, 0, 0, 0), 0.001, 0.0); }
-    if symbol == "K" { return engineering_unit(symbol, _dimension(0, 0, 0, 0, 1, 0, 0), 1.0, 0.0); }
+    if symbol == "1" { return _unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "m" { return _unit(symbol, _dimension(1, 0, 0, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "cm" { return _unit(symbol, _dimension(1, 0, 0, 0, 0, 0, 0), 0.01, 0.0, true); }
+    if symbol == "mm" { return _unit(symbol, _dimension(1, 0, 0, 0, 0, 0, 0), 0.001, 0.0, true); }
+    if symbol == "km" { return _unit(symbol, _dimension(1, 0, 0, 0, 0, 0, 0), 1000.0, 0.0, true); }
+    if symbol == "s" { return _unit(symbol, _dimension(0, 0, 1, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "ms" { return _unit(symbol, _dimension(0, 0, 1, 0, 0, 0, 0), 0.001, 0.0, true); }
+    if symbol == "kg" { return _unit(symbol, _dimension(0, 1, 0, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "g" { return _unit(symbol, _dimension(0, 1, 0, 0, 0, 0, 0), 0.001, 0.0, true); }
+    if symbol == "K" { return _unit(symbol, _dimension(0, 0, 0, 0, 1, 0, 0), 1.0, 0.0, true); }
     if symbol == "Cel" || symbol == "degC" || symbol == "°C" {
-        return engineering_unit("Cel", _dimension(0, 0, 0, 0, 1, 0, 0), 1.0, 273.15);
+        return _unit("Cel", _dimension(0, 0, 0, 0, 1, 0, 0), 1.0, 273.15, true);
     }
-    if symbol == "A" { return engineering_unit(symbol, _dimension(0, 0, 0, 1, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "mol" { return engineering_unit(symbol, _dimension(0, 0, 0, 0, 0, 1, 0), 1.0, 0.0); }
-    if symbol == "cd" { return engineering_unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 1), 1.0, 0.0); }
-    if symbol == "N" { return engineering_unit(symbol, _dimension(1, 1, -2, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "Pa" { return engineering_unit(symbol, _dimension(-1, 1, -2, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "J" { return engineering_unit(symbol, _dimension(2, 1, -2, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "W" { return engineering_unit(symbol, _dimension(2, 1, -3, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "Hz" { return engineering_unit(symbol, _dimension(0, 0, -1, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "rad" { return engineering_unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 1.0, 0.0); }
-    if symbol == "deg" { return engineering_unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 0.017453292519943295, 0.0); }
+    if symbol == "A" { return _unit(symbol, _dimension(0, 0, 0, 1, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "mol" { return _unit(symbol, _dimension(0, 0, 0, 0, 0, 1, 0), 1.0, 0.0, true); }
+    if symbol == "cd" { return _unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 1), 1.0, 0.0, true); }
+    if symbol == "N" { return _unit(symbol, _dimension(1, 1, -2, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "Pa" { return _unit(symbol, _dimension(-1, 1, -2, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "J" { return _unit(symbol, _dimension(2, 1, -2, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "W" { return _unit(symbol, _dimension(2, 1, -3, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "Hz" { return _unit(symbol, _dimension(0, 0, -1, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "rad" { return _unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 1.0, 0.0, true); }
+    if symbol == "deg" { return _unit(symbol, _dimension(0, 0, 0, 0, 0, 0, 0), 0.017453292519943295, 0.0, false); }
     ()
 }
 

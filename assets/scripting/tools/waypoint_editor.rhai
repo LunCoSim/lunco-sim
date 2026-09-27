@@ -423,6 +423,25 @@ fn context_route_point(context, route) {
     ()
 }
 
+fn delete_route_point(context, route) {
+    let point = context_route_point(context, route);
+    if point != () { return point; }
+    if context == () || context["doc_id"] == () { return (); }
+
+    // Selection-only delete commands have no pointer target to resolve. Use
+    // the selected point only when no pointer paths were supplied, so an
+    // unrelated scene selection cannot override a real click target.
+    let has_pointer_target = context["target_path"] != ()
+        || context["hit_path"] != ()
+        || (context["prim_paths"] != () && context["prim_paths"].len() > 0);
+    if has_pointer_target { return (); }
+    let selected = context["selected_path"];
+    if direct_route_point(context["doc_id"], selected, route) {
+        return selected;
+    }
+    ()
+}
+
 fn next_point_name(doc, route) {
     let children = query("QueryUsdPrim", #{
         path: route,
@@ -928,7 +947,7 @@ fn on_delete(context) {
         return failure("delete has no active document");
     }
     let route = route_edit_path(context);
-    let point = context_route_point(context, route);
+    let point = delete_route_point(context, route);
     if point == () { return failure("delete target is not a direct route point"); }
     let target = target_record(context.doc_id, point, "@runtime@");
     if !target.ok || !target.exists { return failure("delete target does not exist"); }

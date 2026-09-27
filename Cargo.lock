@@ -9584,6 +9584,7 @@ dependencies = [
 name = "lunco-sysml-ir"
 version = "0.1.0"
 dependencies = [
+ "lunco-engineering-values",
  "lunco-hash",
  "lunco-sysml-ast",
  "serde",
@@ -9613,6 +9614,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-core",
+ "lunco-engineering-values",
  "lunco-scripting-rhai-core",
  "lunco-sysml-ast",
  "lunco-sysml-ir",

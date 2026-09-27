@@ -4,6 +4,9 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   constant Real pi = 3.141592653589793 "Circle constant";
   constant Real minimum_positive = 1.0e-9 "Numerical floor for denominators";
 
+  parameter Integer engine_count(min = 1) = 1
+    "Equal nozzles represented by the aggregate propulsion outputs";
+
   // Emissive geometry in a forward renderer illuminates nothing. A descent burn
   // therefore leaves the regolith directly under the vehicle lit only by the sun,
   // which on an airless body — hard shadows, no atmospheric scatter to hide it —
@@ -21,16 +24,16 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
   // propulsion and nozzle models through USD connections.
 
   input Real throttle = 0.0
-    "Commanded engine valve 0..1 — wired from the flight-control output";
-  input Real thrust_n = 0.0 "Current engine thrust magnitude (N)";
-  input Real maximum_thrust_n = 0.0 "Engine thrust capability at nominal flow (N)";
-  input Real propellant_flow_kgs = 0.0 "Current total propellant flow (kg/s)";
+    "Command or combustion activity 0..1; delivered thrust gates the plume";
+  input Real thrust_n = 0.0 "Current total cluster thrust magnitude (N)";
+  input Real maximum_thrust_n = 0.0 "Total cluster thrust capability at nominal flow (N)";
+  input Real propellant_flow_kgs = 0.0 "Current total cluster propellant flow (kg/s)";
   input Real exhaust_velocity_mps = 0.0
     "Current effective exhaust velocity after mixture losses (m/s)";
   input Real design_exhaust_velocity_mps = 0.0
     "Nominal effective exhaust velocity before current mixture losses (m/s)";
-  input Real nozzle_exit_radius_m = 0.0 "Nozzle exit radius (m)";
-  input Real nozzle_exit_area_m2 = 0.0 "Nozzle exit area (m2)";
+  input Real nozzle_exit_radius_m = 0.0 "One nozzle's exit radius (m)";
+  input Real nozzle_exit_area_m2 = 0.0 "One nozzle's exit area (m2)";
   input Real nozzle_exit_pressure_pa = 0.0 "Nozzle design exit pressure (Pa)";
   input Real chamber_pressure_pa = 0.0 "Current chamber pressure (Pa)";
   input Real design_chamber_pressure_pa = 0.0 "Nozzle design chamber pressure (Pa)";
@@ -73,15 +76,15 @@ model PlumePhotometry "What an exhaust plume is worth as a light source."
     "Current visible length divided by the fixed shader envelope";
   output Real render_throttle
     "Delivered-thrust throttle used by the plume material (0..1)";
-  output Real area "Lateral surface of the plume cone (m2)";
-  output Real intensity "Luminous power (lm) — Bevy PointLight.intensity";
+  output Real area "Lateral surface of one plume cone (m2)";
+  output Real intensity "Luminous power per nozzle (lm) — Bevy PointLight.intensity";
   output Real visual_intensity
     "Luminous power using the shader's visible throttle response (lm)";
   output Real radius "Physical source radius (m) — Bevy PointLight.radius";
   output Real visual_radius "Source radius using the shader's visible response (m)";
-  output Real momentum_flux_n "Current propellant momentum flux (N)";
+  output Real momentum_flux_n "Current propellant momentum flux per nozzle (N)";
   output Real exit_dynamic_pressure_pa
-    "Current exhaust dynamic pressure at the nozzle exit (Pa)";
+    "Current exhaust dynamic pressure per nozzle exit (Pa)";
 
   Real t "Delivered throttle, bounded by command activity and thrust";
   Real visual_t "Shader-matched visible throttle response";
@@ -103,13 +106,14 @@ equation
   visual_t = max(0.0, t) ^ max(0.1, min(1.0, throttle_exponent));
   render_throttle = t;
 
-  // A nominal mass flow is not copied from USD: it comes from the engine's
-  // published thrust capability and its published design exhaust velocity. The
-  // resulting exit dynamic pressure is compared with the authored exit-plane
-  // pressure. In vacuum the stronger term wins; with ambient pressure the
-  // pressure margin and chamber factor reduce the visible free-jet basis.
+  // A nominal mass flow is not copied from USD: it comes from the cluster's
+  // published thrust capability and design exhaust velocity, then is divided
+  // among equal nozzles. The resulting per-nozzle exit dynamic pressure is
+  // compared with the authored exit-plane pressure. In vacuum the stronger term
+  // wins; with ambient pressure the pressure margin and chamber factor reduce
+  // the visible free-jet basis.
   design_mass_flow_kgs = max(0.0, maximum_thrust_n)
-    / max(minimum_positive, design_exhaust_velocity_mps);
+    / (max(1, engine_count) * max(minimum_positive, design_exhaust_velocity_mps));
   design_exit_dynamic_pressure_pa = 0.5 * design_mass_flow_kgs
     * max(0.0, design_exhaust_velocity_mps)
     / max(minimum_positive, nozzle_exit_area_m2);
@@ -138,7 +142,8 @@ equation
   // value is the conservative exit-load estimate when mixture efficiency is
   // still settling during spool-up.
   momentum_flux_n = min(max(0.0, thrust_n),
-    max(0.0, propellant_flow_kgs) * max(0.0, exhaust_velocity_mps));
+    max(0.0, propellant_flow_kgs) * max(0.0, exhaust_velocity_mps))
+    / max(1, engine_count);
   exit_dynamic_pressure_pa = 0.5 * momentum_flux_n
     / max(minimum_positive, nozzle_exit_area_m2);
 

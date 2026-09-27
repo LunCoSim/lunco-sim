@@ -122,6 +122,46 @@ WGSL owns the perceptual width response and flicker; Modelica owns the physical
 length and photometry; Rhai supplies stimulus and verdicts only. Zero thrust is
 therefore dark without a script-side visual mirror.
 
+### Aggregate propulsion with multiple nozzles
+
+When a propulsion model publishes cluster-total thrust and flow but the vehicle
+has one visual nozzle per engine, set
+`PlumePhotometry.engine_count` to the configured nozzle count. Keep the input
+thrust and flow aggregate; supply each nozzle's own exit radius and area. The
+photometry model divides the extensive cluster values before deriving the
+per-nozzle momentum flux, exit pressure, and light output. Connect the same
+per-nozzle results to one fixed flame pair and one light at each nozzle. Source
+the count from the Twin's typed engine-instance configuration and verify the
+authored model parameter against it. Do not send the undivided cluster light to
+every nozzle or calculate per-engine plume state in Rhai.
+
+Set the fixed envelope's nozzle end on the measured bell exit plane and point its
+narrow end down the exhaust axis. Start its throttle and light intensity at zero;
+the simulation's live outputs reveal the flame during a burn.
+Keep vehicle-specific material paths in the vehicle composition layer; a reusable
+nozzle component must not point at a particular vehicle's absolute material path.
+
+### Prove a plume is driven by the simulation
+
+An authored connection proves only that a route exists. Before reporting a visible,
+simulation-driven flame, confirm the continuous model compiles and produces samples,
+then compare an idle sample with a powered sample:
+
+- At zero delivered thrust, `render_throttle`, `visual_length_fraction`, and
+  `intensity` are zero. `radius` may remain at its authored idle value; zero light
+  intensity and the shader's zero throttle keep the plume dark.
+- During a burn, those three outputs are finite and positive, and the powered
+  values reach the cone and light through the composed USD connections.
+- Read the composed ports on the photometry model and at least one flame/light
+  sink, then inspect the rendered vehicle to confirm the cone responds and the
+  light affects nearby terrain. A solver sample proves the values; a rendered
+  inspection proves the visual result.
+
+If the model is unbalanced or has no run, report the authored wiring as present
+and the dynamic/visual result as unverified. Do not make Rhai animate the flame to
+hide a missing solver result. The Griffin status example is in its Twin's
+`contracts/implementation_gaps.md`.
+
 **A driven `Transform` is not a licence to animate.** A transform WIRED to a port is
 a consequence — some model or joint published the number and the stage shows where
 it came from. A transform COMPUTED per tick in a script is animation, and is still

@@ -527,11 +527,16 @@ reference does not lose a body-root shape merely because the referenced asset
 also contains child colliders, and all composed prim paths remain available to
 the existing joint, Modelica, and collision-filter resolution paths.
 
-`QueryUsdPrim.collision_geometry` reports the cooked Avian geometry for a
-collision Mesh or Cube: triangle topology for direct mesh collision, hull
-vertices for convex shapes, and separate hull parts for convex decomposition.
-It does not expose authored mesh vertices as though they were the realized
-collider. `collision_bounds` reports a composed AABB and a `fidelity` value;
+`QueryUsdPrim.collision_geometry` reports the effective scaled Avian collider
+for authored Mesh, Cube, Sphere, Cylinder, Cone, Capsule, and finite Plane
+shapes. Triangle meshes retain topology; convex shapes return cooked hull
+vertices; convex decomposition retains separate parts; analytic primitives
+return exact dimensions and an explicit collider-local-to-stage pose. Mesh
+vertices therefore describe the realized collider, not an authored source
+mesh passed through unchanged. The composed collider pose stays in double
+precision through the stage transform; only scale crosses Avian's `f32`
+collider API boundary. `collision_bounds` reports a composed AABB and a
+`fidelity` value;
 `exact` means its extrema match the collision geometry, while
 `conservative_geometry_envelope` identifies bounds derived from source-mesh
 envelopes for convex decomposition or local bounds for curved primitives.
@@ -656,6 +661,28 @@ def PhysicsCollisionGroup "Wheels"
 The two spellings are proven to agree: `scenes/tests/filtered_pairs.usda` and
 `scenes/tests/collision_groups.usda` are the same rig, referenced, filtered the
 two different ways, sharing one control and one scenario.
+
+### Collider geometry observations and NURBS
+
+`QueryUsdPrim { collision_geometry: true }` exposes the effective Avian shape
+derived from a composed `PhysicsCollisionAPI` prim through the shared
+`lunco-usd-avian-reader`. Primitive results carry their cooked dimensions and
+pose; mesh results carry the cooked triangle or convex-hull vertices. This is
+the geometry the adapter will project from that composed USD state. It is
+distinct from authored shape attributes, visual `geometry_bounds`, aggregate
+`collision_bounds`, and proof that a live ECS collider has completed projection.
+Requirement policies can use this query to compare source and backend geometry
+without implementing a second collider reader.
+
+`UsdGeomNurbsPatch` is not directly a `UsdPhysicsMeshCollisionAPI` collider.
+The generic `PlanNurbsCollisionProxy` query and `nurbs.rhai` authoring tool
+derive an invisible, source-linked `UsdGeomMesh` using the same geometry cook
+used by Avian projection. Its `max_refinement_delta_m` is a sampled change
+threshold between consecutive tessellation levels, not a certified surface
+error bound. Projection deterministically re-cooks and rejects stale or edited
+proxy data. The adapter advertises only modes it can realize: `none`,
+`convexHull`, and `convexDecomposition`; it rejects unsupported standard modes
+instead of substituting a different approximation.
 
 ### Standard schema support boundaries
 

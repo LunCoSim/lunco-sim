@@ -34,9 +34,10 @@
 //! `lunco_usd_bevy_scene::collision::collision_aabb` reader, so nested compound
 //! ownership, standard shape dimensions, purpose filtering, transforms, and
 //! malformed-data errors have one owner for API, Rhai, and other consumers.
-//! A request with `collision_geometry: true` adds the cooked Avian shape parts
-//! for one collision Mesh or Cube in canonical stage coordinates. Convex
-//! decomposition parts stay separate; triangle meshes retain their indices.
+//! A request with `collision_geometry: true` adds the effective Avian collider
+//! for any supported authored collision shape. Meshes and convex shapes return
+//! cooked vertices/topology; analytic primitives retain exact dimensions and a
+//! collider-local-to-stage pose. Convex decomposition parts stay separate.
 //! This is the shape-level surface for interface checks that cannot be
 //! established by overlapping AABBs alone.
 //! A request with `geometry_bounds: true` adds the selected prim's composed
@@ -87,18 +88,20 @@ use lunco_usd_authoring::author::open_doc_stage;
 use lunco_usd_avian_reader::collider::{
     AuthoredColliderGeometry, ColliderGeometryPart, authored_collider_geometry_from_usd,
 };
-use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
-use lunco_usd_bevy_scene::collision::geometry_world_matrix_d;
-use lunco_usd_bevy_scene::collision::{ObjectAabb, collision_aabb, prim_geometry_aabb};
+use lunco_usd_bevy_scene::collision::{
+    ObjectAabb, collision_aabb, geometry_world_matrix_d, prim_geometry_aabb,
+};
+use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_quat};
 use lunco_usd_bevy_stage::read::UsdRead;
 use lunco_usd_bevy_stage::view::StageView;
 use lunco_usd_bevy_stage::{
     MaterialPurpose, UsdStageAsset, canonical::CanonicalStages, effective_purpose,
-    is_descendant_or_self, resolve_bound_shader,
+    is_descendant_or_self, resolve_bound_shader, stage_convention,
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, canonical_stage_for_document, scene_document_for};
 use lunco_usd_document::document::UsdDocument;
+use openusd::schemas::physics::tokens as physics_tokens;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -249,18 +252,16 @@ fn collider_geometry_api_value(
     view: &StageView<'_>,
     prim: &SdfPath,
     geometry: &AuthoredColliderGeometry,
+    rigid_transform: DMat4,
 ) -> Result<ApiValue, String> {
-    let transform = geometry_world_matrix_d(view, prim).map_err(|error| {
-        format!("QueryUsdPrim: invalid collider transform at `{prim}`: {error}")
-    })?;
-    let mut cooked_parts = geometry
+    let cooked_parts = geometry
         .parts
         .iter()
-        .map(|part| collider_part_api_values(&transform, part))
+        .map(|part| collider_part_api_value(&rigid_transform, &rigid_transform, part))
         .collect::<Vec<_>>();
     let type_name = view.type_name(prim).unwrap_or_default();
-    let approximation = geometry.approximation.map_or("primitive", |mode| {
-        openusd::schemas::physics::CollisionApprox::as_token(mode)
+    let approximation = geometry.approximation.map_or(ApiValue::Unit, |mode| {
+        ApiValue::str(openusd::schemas::physics::CollisionApprox::as_token(mode))
     });
     if cooked_parts.is_empty() {
         return Err(format!(
@@ -268,39 +269,30 @@ fn collider_geometry_api_value(
         ));
     }
     if cooked_parts.len() > 1 {
-        let parts = cooked_parts
-            .into_iter()
-            .map(|(shape, vertices, triangles)| {
-                api_value!({
-                    "shape": shape,
-                    "vertices": vertices,
-                    "triangles": triangles,
-                })
-            })
-            .collect::<Vec<_>>();
         return Ok(api_value!({
             "type_name": type_name,
             "approximation": approximation,
             "shape": "compound",
-            "parts": ApiValue::Array(parts),
+            "parts": ApiValue::Array(cooked_parts),
             "frame": "canonical_stage",
         }));
     }
-    let (shape, vertices, triangles) = cooked_parts.remove(0);
-    Ok(api_value!({
-        "type_name": type_name,
-        "approximation": approximation,
-        "shape": shape,
-        "vertices": vertices,
-        "triangles": triangles,
-        "frame": "canonical_stage",
-    }))
+    let ApiValue::Map(mut fields) = cooked_parts.into_iter().next().unwrap() else {
+        return Err(format!(
+            "QueryUsdPrim: Avian returned an invalid geometry record at `{prim}`"
+        ));
+    };
+    fields.push(("type_name".to_owned(), ApiValue::str(type_name)));
+    fields.push(("approximation".to_owned(), approximation));
+    fields.push(("frame".to_owned(), ApiValue::str("canonical_stage")));
+    Ok(ApiValue::Map(fields))
 }
 
-fn collider_part_api_values(
-    transform: &DMat4,
+fn collider_part_api_value(
+    geometry_to_stage: &DMat4,
+    collider_transform: &DMat4,
     part: &ColliderGeometryPart,
-) -> (&'static str, ApiValue, ApiValue) {
+) -> ApiValue {
     match part {
         ColliderGeometryPart::TriangleMesh {
             vertices,
@@ -308,7 +300,7 @@ fn collider_part_api_values(
         } => {
             let vertices = vertices
                 .iter()
-                .map(|point| collider_point_api_value(transform, point))
+                .map(|point| collider_point_api_value(geometry_to_stage, point))
                 .collect::<Vec<_>>();
             let triangles = triangles
                 .iter()
@@ -320,20 +312,104 @@ fn collider_part_api_values(
                     ])
                 })
                 .collect::<Vec<_>>();
-            (
-                "triangle_mesh",
-                ApiValue::Array(vertices),
-                ApiValue::Array(triangles),
-            )
+            api_value!({
+                "shape": "triangle_mesh",
+                "vertices": ApiValue::Array(vertices),
+                "triangles": ApiValue::Array(triangles),
+            })
         }
         ColliderGeometryPart::ConvexHull { vertices } => {
             let vertices = vertices
                 .iter()
-                .map(|point| collider_point_api_value(transform, point))
+                .map(|point| collider_point_api_value(geometry_to_stage, point))
                 .collect::<Vec<_>>();
-            ("convex_hull", ApiValue::Array(vertices), ApiValue::Unit)
+            api_value!({
+                "shape": "convex_hull",
+                "vertices": ApiValue::Array(vertices),
+                "triangles": ApiValue::Unit,
+            })
         }
+        ColliderGeometryPart::Sphere { radius } => api_value!({
+            "shape": "sphere",
+            "radius_m": *radius,
+            "local_to_stage": collider_pose_api_value(collider_transform),
+            "geometry_frame": "collider_local",
+        }),
+        ColliderGeometryPart::Cylinder {
+            radius,
+            half_height,
+        } => api_value!({
+            "shape": "cylinder",
+            "radius_m": *radius,
+            "half_height_m": *half_height,
+            "local_to_stage": collider_pose_api_value(collider_transform),
+            "geometry_frame": "collider_local",
+        }),
+        ColliderGeometryPart::Cone {
+            radius,
+            half_height,
+        } => api_value!({
+            "shape": "cone",
+            "radius_m": *radius,
+            "half_height_m": *half_height,
+            "local_to_stage": collider_pose_api_value(collider_transform),
+            "geometry_frame": "collider_local",
+        }),
+        ColliderGeometryPart::Capsule {
+            radius,
+            half_segment,
+        } => api_value!({
+            "shape": "capsule",
+            "radius_m": *radius,
+            "half_segment_m": *half_segment,
+            "local_to_stage": collider_pose_api_value(collider_transform),
+            "geometry_frame": "collider_local",
+        }),
     }
+}
+
+fn collider_pose_api_value(transform: &DMat4) -> ApiValue {
+    let (_, rotation, translation) = transform.to_scale_rotation_translation();
+    api_value!({
+        "translation_m": api_value!([
+            translation.x,
+            translation.y,
+            translation.z,
+        ]),
+        "rotation_wxyz": api_value!([
+            rotation.w,
+            rotation.x,
+            rotation.y,
+            rotation.z,
+        ]),
+    })
+}
+
+fn collider_transform_in_stage(
+    view: &StageView<'_>,
+    prim: &SdfPath,
+) -> Result<(DMat4, Vec3), String> {
+    let transform = geometry_world_matrix_d(view, prim).map_err(|error| {
+        format!("QueryUsdPrim: invalid collider transform at `{prim}`: {error}")
+    })?;
+    let (scale, mut rotation, translation) = transform.to_scale_rotation_translation();
+    let type_name = view.type_name(prim).unwrap_or_default();
+    if matches!(
+        type_name.as_str(),
+        "Cylinder" | "Cone" | "Capsule" | "Plane"
+    ) {
+        let axis = read_primitive_axis(view, prim, &type_name)
+            .ok_or_else(|| format!("QueryUsdPrim: invalid UsdGeom{type_name} axis at `{prim}`"))?;
+        let convention = stage_convention(view).map_err(|error| {
+            format!("QueryUsdPrim: invalid stage convention at `{prim}`: {error}")
+        })?;
+        let axis_rotation = convention.orient_d(usd_axis_to_quat(axis).as_dquat());
+        rotation *= axis_rotation;
+    }
+    Ok((
+        DMat4::from_rotation_translation(rotation, translation),
+        scale.as_vec3(),
+    ))
 }
 
 fn collider_point_api_value(transform: &DMat4, point: &[f64; 3]) -> ApiValue {
@@ -1113,13 +1189,22 @@ fn read_prim_from_view(
     };
 
     let collision_geometry = if include_collision_geometry {
-        match authored_collider_geometry_from_usd(view, prim) {
-            Ok(Some(geometry)) => Some(collider_geometry_api_value(view, prim, &geometry)?),
-            Ok(None) => Some(ApiValue::Unit),
-            Err(error) => {
-                return Err(format!(
-                    "QueryUsdPrim: invalid collision geometry at `{path}`: {error}"
-                ));
+        if !view.has_api_schema(prim, physics_tokens::API_COLLISION) {
+            Some(ApiValue::Unit)
+        } else {
+            let (transform, scale) = collider_transform_in_stage(view, prim).map_err(|error| {
+                format!("QueryUsdPrim: invalid collision geometry at `{path}`: {error}")
+            })?;
+            match authored_collider_geometry_from_usd(view, prim, scale) {
+                Ok(Some(geometry)) => Some(collider_geometry_api_value(
+                    view, prim, &geometry, transform,
+                )?),
+                Ok(None) => Some(ApiValue::Unit),
+                Err(error) => {
+                    return Err(format!(
+                        "QueryUsdPrim: invalid collision geometry at `{path}`: {error}"
+                    ));
+                }
             }
         }
     } else {

@@ -15,7 +15,7 @@ use openusd::schemas::physics::CollisionApprox;
 /// Mesh approximation modes that the Avian adapter can cook from standard
 /// `UsdPhysicsMeshCollisionAPI` input.
 ///
-/// OpenUSD defines six tokens. Keeping the four implemented modes in this
+/// OpenUSD defines six tokens. Keeping the three implemented modes in this
 /// adapter contract lets authoring queries expose exactly what the runtime can
 /// realize, while still parsing and diagnosing the complete standard token set
 /// through [`CollisionApprox`].
@@ -26,19 +26,60 @@ pub enum AvianMeshApproximation {
     TriangleMesh,
     ConvexHull,
     ConvexDecomposition,
-    /// An oriented box fitted to the mesh vertices in the mesh's local frame.
-    /// The current principal-axis fitting algorithm is deterministic but does
-    /// not guarantee the globally minimum-volume box.
-    BoundingCube,
+}
+
+/// Geometry representation produced by one implemented USD mesh mode.
+///
+/// This describes the adapter output rather than the USD token. Keeping the
+/// distinction explicit lets authoring tools explain both what was selected
+/// and what the solver will receive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvianCookedMeshGeometry {
+    TriangleMesh,
+    ConvexHull,
+    ConvexHullCompound,
+}
+
+impl AvianCookedMeshGeometry {
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::TriangleMesh => "triangle_mesh",
+            Self::ConvexHull => "convex_hull",
+            Self::ConvexHullCompound => "convex_hull_compound",
+        }
+    }
+}
+
+/// Rigid-body classes compatible with a cooked mesh mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvianMeshBodySupport {
+    AnyRigidBody,
+    StaticOrKinematicOnly,
+}
+
+impl AvianMeshBodySupport {
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::AnyRigidBody => "any_rigid_body",
+            Self::StaticOrKinematicOnly => "static_or_kinematic_only",
+        }
+    }
+}
+
+/// Complete runtime contract for an implemented USD mesh approximation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvianMeshApproximationCapability {
+    pub approximation: AvianMeshApproximation,
+    pub geometry: AvianCookedMeshGeometry,
+    pub body_support: AvianMeshBodySupport,
 }
 
 impl AvianMeshApproximation {
     /// Implemented USD modes, in the stable order used by authoring tools.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 3] = [
         Self::TriangleMesh,
         Self::ConvexHull,
         Self::ConvexDecomposition,
-        Self::BoundingCube,
     ];
 
     pub const fn as_usd_approximation(self) -> CollisionApprox {
@@ -46,12 +87,38 @@ impl AvianMeshApproximation {
             Self::TriangleMesh => CollisionApprox::None,
             Self::ConvexHull => CollisionApprox::ConvexHull,
             Self::ConvexDecomposition => CollisionApprox::ConvexDecomposition,
-            Self::BoundingCube => CollisionApprox::BoundingCube,
         }
     }
 
     pub const fn requires_static_or_kinematic_body(self) -> bool {
-        matches!(self, Self::TriangleMesh)
+        matches!(
+            self.capability().body_support,
+            AvianMeshBodySupport::StaticOrKinematicOnly
+        )
+    }
+
+    /// Runtime geometry and body restrictions used by both projection and
+    /// authoring capability queries.
+    pub const fn capability(self) -> AvianMeshApproximationCapability {
+        let (geometry, body_support) = match self {
+            Self::TriangleMesh => (
+                AvianCookedMeshGeometry::TriangleMesh,
+                AvianMeshBodySupport::StaticOrKinematicOnly,
+            ),
+            Self::ConvexHull => (
+                AvianCookedMeshGeometry::ConvexHull,
+                AvianMeshBodySupport::AnyRigidBody,
+            ),
+            Self::ConvexDecomposition => (
+                AvianCookedMeshGeometry::ConvexHullCompound,
+                AvianMeshBodySupport::AnyRigidBody,
+            ),
+        };
+        AvianMeshApproximationCapability {
+            approximation: self,
+            geometry,
+            body_support,
+        }
     }
 }
 
@@ -63,129 +130,32 @@ impl TryFrom<CollisionApprox> for AvianMeshApproximation {
             CollisionApprox::None => Ok(Self::TriangleMesh),
             CollisionApprox::ConvexHull => Ok(Self::ConvexHull),
             CollisionApprox::ConvexDecomposition => Ok(Self::ConvexDecomposition),
-            CollisionApprox::BoundingCube => Ok(Self::BoundingCube),
             unsupported => Err(unsupported),
         }
     }
 }
 
-/// Failure to derive the oriented `UsdPhysics` bounding cube from source mesh
-/// vertices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BoundingCubeFitError {
-    FewerThanFourVertices,
-    NonFiniteVertex,
-    DegenerateExtent,
-}
-
-impl std::fmt::Display for BoundingCubeFitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::FewerThanFourVertices => f.write_str("needs at least four mesh vertices"),
-            Self::NonFiniteVertex => f.write_str("contains a non-finite mesh vertex"),
-            Self::DegenerateExtent => f.write_str("has a zero fitted extent on a box axis"),
-        }
-    }
-}
-
-impl std::error::Error for BoundingCubeFitError {}
-
-/// Fit the same local oriented box used by the Avian `boundingCube` cooker.
-///
-/// The returned corners are the authoritative cooked geometry. Consumers
-/// deriving placement bounds must use these corners too, so an oriented box
-/// cannot silently become a different axis-aligned box in another projection.
-/// The backend fit is deterministic but is not guaranteed to be globally
-/// minimum-volume.
-pub fn fit_bounding_cube(vertices: &[DVec3]) -> Result<[DVec3; 8], BoundingCubeFitError> {
-    if vertices.len() < 4 {
-        return Err(BoundingCubeFitError::FewerThanFourVertices);
-    }
-    if vertices.iter().any(|vertex| !vertex.is_finite()) {
-        return Err(BoundingCubeFitError::NonFiniteVertex);
-    }
-
-    let (pose, cuboid) = avian3d::parry::utils::obb(vertices);
-    let half = cuboid.half_extents;
-    if !half.is_finite()
-        || half.x <= f64::EPSILON
-        || half.y <= f64::EPSILON
-        || half.z <= f64::EPSILON
-    {
-        return Err(BoundingCubeFitError::DegenerateExtent);
-    }
-    Ok(std::array::from_fn(|index| {
-        let bits = index as u8;
-        pose.transform_point(DVec3::new(
-            if bits & 1 == 0 { -half.x } else { half.x },
-            if bits & 2 == 0 { -half.y } else { half.y },
-            if bits & 4 == 0 { -half.z } else { half.z },
-        ))
-    }))
-}
-
 #[cfg(test)]
-mod bounding_cube_tests {
-    use super::{BoundingCubeFitError, fit_bounding_cube};
-    use bevy::math::{DQuat, DVec3};
-
-    fn pairwise_distances(points: &[DVec3]) -> Vec<f64> {
-        let mut distances = Vec::new();
-        for left in 0..points.len() {
-            for right in (left + 1)..points.len() {
-                distances.push(points[left].distance(points[right]));
-            }
-        }
-        distances.sort_by(f64::total_cmp);
-        distances
-    }
+mod mesh_approximation_capability_tests {
+    use super::{AvianMeshApproximation, AvianMeshBodySupport};
 
     #[test]
-    fn bounding_cube_fits_rotated_source_geometry() {
-        let rotation = DQuat::from_rotation_y(0.63);
-        let source: Vec<DVec3> = (0..8)
-            .map(|bits| {
-                rotation
-                    * DVec3::new(
-                        if bits & 1 == 0 { -2.0 } else { 2.0 },
-                        if bits & 2 == 0 { -1.0 } else { 1.0 },
-                        if bits & 4 == 0 { -0.5 } else { 0.5 },
-                    )
-            })
-            .collect();
-        let fitted = fit_bounding_cube(&source).expect("non-degenerate box fits");
-        let fitted = fitted.as_slice();
-
-        assert_eq!(fitted.len(), 8);
-        for (source, fitted) in pairwise_distances(&source)
-            .iter()
-            .zip(pairwise_distances(fitted))
-        {
-            assert!((source - fitted).abs() < 1.0e-8);
+    fn supported_usd_tokens_round_trip_through_one_capability_contract() {
+        for approximation in AvianMeshApproximation::ALL {
+            let capability = approximation.capability();
+            assert_eq!(capability.approximation, approximation);
+            assert_eq!(
+                AvianMeshApproximation::try_from(approximation.as_usd_approximation()),
+                Ok(approximation)
+            );
+            assert_eq!(
+                approximation.requires_static_or_kinematic_body(),
+                matches!(
+                    capability.body_support,
+                    AvianMeshBodySupport::StaticOrKinematicOnly
+                )
+            );
         }
-        let source_aabb_volume = {
-            let min = source.iter().copied().reduce(DVec3::min).unwrap();
-            let max = source.iter().copied().reduce(DVec3::max).unwrap();
-            let size = max - min;
-            size.x * size.y * size.z
-        };
-        assert!(source_aabb_volume > 8.0);
-    }
-
-    #[test]
-    fn bounding_cube_reports_invalid_source_geometry() {
-        assert_eq!(
-            fit_bounding_cube(&[DVec3::ZERO, DVec3::X, DVec3::Y]),
-            Err(BoundingCubeFitError::FewerThanFourVertices)
-        );
-        assert_eq!(
-            fit_bounding_cube(&[DVec3::ZERO, DVec3::X, DVec3::Y, DVec3::NAN]),
-            Err(BoundingCubeFitError::NonFiniteVertex)
-        );
-        assert_eq!(
-            fit_bounding_cube(&[DVec3::ZERO, DVec3::X, DVec3::Y, DVec3::ZERO]),
-            Err(BoundingCubeFitError::DegenerateExtent)
-        );
     }
 }
 

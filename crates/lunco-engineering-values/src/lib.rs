@@ -19,6 +19,73 @@ impl Dimension {
     pub const NONE: Self = Self([0; 7]);
     /// Length.
     pub const LENGTH: Self = Self([1, 0, 0, 0, 0, 0, 0]);
+
+    /// Combine dimensions for multiplication.
+    pub fn checked_product(self, other: Self) -> Result<Self, UnitError> {
+        self.combine(other, i8::checked_add)
+    }
+
+    /// Combine dimensions for division.
+    pub fn checked_quotient(self, other: Self) -> Result<Self, UnitError> {
+        self.combine(other, i8::checked_sub)
+    }
+
+    /// Raise dimensions to an integral power.
+    pub fn checked_power(self, exponent: i32) -> Result<Self, UnitError> {
+        let mut dimensions = [0_i8; 7];
+        for (slot, value) in dimensions.iter_mut().zip(self.0) {
+            let powered = i32::from(value)
+                .checked_mul(exponent)
+                .ok_or(UnitError::DimensionOverflow)?;
+            *slot = i8::try_from(powered).map_err(|_| UnitError::DimensionOverflow)?;
+        }
+        Ok(Self(dimensions))
+    }
+
+    /// Halve dimensions for a square-root quantity.
+    pub fn checked_sqrt(self) -> Result<Self, UnitError> {
+        let mut dimensions = [0_i8; 7];
+        for (slot, value) in dimensions.iter_mut().zip(self.0) {
+            if value % 2 != 0 {
+                return Err(UnitError::FractionalDimension);
+            }
+            *slot = value / 2;
+        }
+        Ok(Self(dimensions))
+    }
+
+    fn combine(self, other: Self, operation: fn(i8, i8) -> Option<i8>) -> Result<Self, UnitError> {
+        let mut dimensions = [0_i8; 7];
+        for ((slot, left), right) in dimensions.iter_mut().zip(self.0).zip(other.0) {
+            *slot = operation(left, right).ok_or(UnitError::DimensionOverflow)?;
+        }
+        Ok(Self(dimensions))
+    }
+}
+
+/// Knowledge about the scale factor relating a unit to coherent SI.
+///
+/// This records conversion exactness only; it does not represent measurement
+/// uncertainty or instrument accuracy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitScaleExactness {
+    Exact,
+    Approximate,
+    #[default]
+    Unspecified,
+}
+
+impl UnitScaleExactness {
+    /// Combine conversion metadata for a derived value. Known approximate
+    /// factors remain approximate even if another factor is unspecified.
+    pub const fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Approximate, _) | (_, Self::Approximate) => Self::Approximate,
+            (Self::Unspecified, _) | (_, Self::Unspecified) => Self::Unspecified,
+            (Self::Exact, Self::Exact) => Self::Exact,
+        }
+    }
 }
 
 /// A resolved unit definition supplied by a standard/library adapter.
@@ -26,21 +93,81 @@ impl Dimension {
 /// `scale_to_si` and `offset_to_si` express the affine conversion
 /// `si = value * scale_to_si + offset_to_si`. The unit symbol is metadata for
 /// provenance and display; conversion never parses or interprets it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Unit {
     symbol: String,
     dimension: Dimension,
     scale_to_si: f64,
     offset_to_si: f64,
+    scale_exactness: UnitScaleExactness,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnitFields {
+    symbol: String,
+    dimension: Dimension,
+    scale_to_si: f64,
+    offset_to_si: f64,
+    #[serde(default)]
+    scale_exactness: UnitScaleExactness,
+}
+
+impl<'de> Deserialize<'de> for Unit {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let fields = UnitFields::deserialize(deserializer)?;
+        Self::new_with_exactness(
+            fields.symbol,
+            fields.dimension,
+            fields.scale_to_si,
+            fields.offset_to_si,
+            fields.scale_exactness,
+        )
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 impl Unit {
+    /// Construct the coherent SI unit for a dimension.
+    ///
+    /// The generic symbol is display metadata; the dimension vector carries
+    /// all operational meaning for a derived result.
+    pub fn coherent_si(dimension: Dimension) -> Self {
+        Self {
+            symbol: "derived SI".to_owned(),
+            dimension,
+            scale_to_si: 1.0,
+            offset_to_si: 0.0,
+            scale_exactness: UnitScaleExactness::Exact,
+        }
+    }
+
     /// Create a resolved unit definition.
     pub fn new(
         symbol: impl Into<String>,
         dimension: Dimension,
         scale_to_si: f64,
         offset_to_si: f64,
+    ) -> Result<Self, UnitError> {
+        Self::new_with_exactness(
+            symbol,
+            dimension,
+            scale_to_si,
+            offset_to_si,
+            UnitScaleExactness::Unspecified,
+        )
+    }
+
+    /// Create a resolved unit definition with explicit conversion exactness.
+    pub fn new_with_exactness(
+        symbol: impl Into<String>,
+        dimension: Dimension,
+        scale_to_si: f64,
+        offset_to_si: f64,
+        scale_exactness: UnitScaleExactness,
     ) -> Result<Self, UnitError> {
         let symbol = symbol.into();
         if symbol.trim().is_empty() {
@@ -57,6 +184,7 @@ impl Unit {
             dimension,
             scale_to_si,
             offset_to_si,
+            scale_exactness,
         })
     }
 
@@ -88,6 +216,16 @@ impl Unit {
         self.offset_to_si
     }
 
+    /// Knowledge about whether this unit's scale to SI is exact.
+    pub const fn scale_exactness(&self) -> UnitScaleExactness {
+        self.scale_exactness
+    }
+
+    /// Whether two resolved units measure the same physical dimension.
+    pub fn is_compatible_with(&self, other: &Self) -> bool {
+        self.dimension == other.dimension
+    }
+
     /// Convert one value into SI base units.
     pub fn to_si(&self, value: f64) -> Result<f64, UnitError> {
         finite(value)?;
@@ -103,17 +241,52 @@ impl Unit {
 
 /// A finite, unit-aware scalar. It remains a native Rust value until an
 /// adapter deliberately lowers it to Bevy, Modelica, USD, or a wire format.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Quantity {
     value: f64,
     unit: Unit,
+    conversion_exactness: UnitScaleExactness,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QuantityFields {
+    value: f64,
+    unit: Unit,
+    #[serde(default)]
+    conversion_exactness: UnitScaleExactness,
+}
+
+impl<'de> Deserialize<'de> for Quantity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let fields = QuantityFields::deserialize(deserializer)?;
+        Self::with_conversion_exactness(fields.value, fields.unit, fields.conversion_exactness)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl Quantity {
     /// Construct a quantity from an already resolved unit.
     pub fn with_unit(value: f64, unit: Unit) -> Result<Self, UnitError> {
+        let exactness = unit.scale_exactness;
+        Self::with_conversion_exactness(value, unit, exactness)
+    }
+
+    fn with_conversion_exactness(
+        value: f64,
+        unit: Unit,
+        conversion_exactness: UnitScaleExactness,
+    ) -> Result<Self, UnitError> {
         finite(value)?;
-        Ok(Self { value, unit })
+        let conversion_exactness = conversion_exactness.combine(unit.scale_exactness);
+        Ok(Self {
+            value,
+            unit,
+            conversion_exactness,
+        })
     }
 
     /// Authored numeric payload.
@@ -124,6 +297,11 @@ impl Quantity {
     /// Authored unit definition.
     pub fn unit(&self) -> &Unit {
         &self.unit
+    }
+
+    /// Exactness of the scale conversions used to form this quantity value.
+    pub const fn conversion_exactness(&self) -> UnitScaleExactness {
+        self.conversion_exactness
     }
 
     /// SI dimension vector.
@@ -139,7 +317,12 @@ impl Quantity {
                 to: target.symbol,
             });
         }
-        Self::with_unit(target.from_si(self.unit.to_si(self.value)?)?, target)
+        let conversion_exactness = self.conversion_exactness.combine(target.scale_exactness);
+        Self::with_conversion_exactness(
+            target.from_si(self.unit.to_si(self.value)?)?,
+            target,
+            conversion_exactness,
+        )
     }
 
     /// Return the numeric value in another compatible unit.
@@ -151,6 +334,104 @@ impl Quantity {
     pub fn si_value(&self) -> Result<f64, UnitError> {
         self.unit.to_si(self.value)
     }
+
+    /// Add compatible quantities and retain the left operand's unit.
+    pub fn add(&self, other: &Self) -> Result<Self, UnitError> {
+        self.linear_arithmetic(other)?;
+        let right = other.in_unit(self.unit.clone())?;
+        Self::with_conversion_exactness(
+            self.value + right.value,
+            self.unit.clone(),
+            self.conversion_exactness
+                .combine(right.conversion_exactness),
+        )
+    }
+
+    /// Subtract compatible quantities and retain the left operand's unit.
+    pub fn subtract(&self, other: &Self) -> Result<Self, UnitError> {
+        self.linear_arithmetic(other)?;
+        let right = other.in_unit(self.unit.clone())?;
+        Self::with_conversion_exactness(
+            self.value - right.value,
+            self.unit.clone(),
+            self.conversion_exactness
+                .combine(right.conversion_exactness),
+        )
+    }
+
+    /// Multiply quantities, returning the result in coherent SI units.
+    pub fn multiply(&self, other: &Self) -> Result<Self, UnitError> {
+        self.linear_arithmetic(other)?;
+        let dimension = self.unit.dimension.checked_product(other.unit.dimension)?;
+        Self::with_conversion_exactness(
+            self.si_value()? * other.si_value()?,
+            Unit::coherent_si(dimension),
+            self.conversion_exactness
+                .combine(other.conversion_exactness),
+        )
+    }
+
+    /// Divide quantities, returning the result in coherent SI units.
+    pub fn divide(&self, other: &Self) -> Result<Self, UnitError> {
+        self.linear_arithmetic(other)?;
+        let dimension = self.unit.dimension.checked_quotient(other.unit.dimension)?;
+        Self::with_conversion_exactness(
+            self.si_value()? / other.si_value()?,
+            Unit::coherent_si(dimension),
+            self.conversion_exactness
+                .combine(other.conversion_exactness),
+        )
+    }
+
+    /// Raise a quantity to a finite power. Dimensioned values require an
+    /// integral exponent and the result is represented in coherent SI units.
+    pub fn power(&self, exponent: f64) -> Result<Self, UnitError> {
+        finite(exponent)?;
+        if self.unit.offset_to_si != 0.0 {
+            return Err(UnitError::AffineArithmetic);
+        }
+        let dimension = if self.unit.dimension == Dimension::NONE {
+            Dimension::NONE
+        } else if exponent.fract() == 0.0
+            && exponent >= i32::MIN as f64
+            && exponent <= i32::MAX as f64
+        {
+            self.unit.dimension.checked_power(exponent as i32)?
+        } else {
+            return Err(UnitError::FractionalDimension);
+        };
+        Self::with_conversion_exactness(
+            self.si_value()?.powf(exponent),
+            Unit::coherent_si(dimension),
+            self.conversion_exactness,
+        )
+    }
+
+    /// Square root a quantity whose exponents are all even.
+    pub fn sqrt(&self) -> Result<Self, UnitError> {
+        if self.unit.offset_to_si != 0.0 {
+            return Err(UnitError::AffineArithmetic);
+        }
+        let dimension = self.unit.dimension.checked_sqrt()?;
+        Self::with_conversion_exactness(
+            self.si_value()?.sqrt(),
+            Unit::coherent_si(dimension),
+            self.conversion_exactness,
+        )
+    }
+
+    fn linear_arithmetic(&self, other: &Self) -> Result<(), UnitError> {
+        if !self.unit.is_compatible_with(&other.unit) {
+            return Err(UnitError::Incompatible {
+                from: self.unit.symbol.clone(),
+                to: other.unit.symbol.clone(),
+            });
+        }
+        if self.unit.offset_to_si != 0.0 || other.unit.offset_to_si != 0.0 {
+            return Err(UnitError::AffineArithmetic);
+        }
+        Ok(())
+    }
 }
 
 /// Errors are explicit so adapters cannot silently compare unlike physical
@@ -160,6 +441,9 @@ pub enum UnitError {
     EmptySymbol,
     InvalidScale,
     Incompatible { from: String, to: String },
+    DimensionOverflow,
+    FractionalDimension,
+    AffineArithmetic,
     NonFinite,
 }
 
@@ -171,6 +455,15 @@ impl fmt::Display for UnitError {
             Self::Incompatible { from, to } => {
                 write!(formatter, "incompatible units '{from}' and '{to}'")
             }
+            Self::DimensionOverflow => write!(formatter, "engineering dimension exponent overflow"),
+            Self::FractionalDimension => write!(
+                formatter,
+                "operation produces fractional dimension exponents"
+            ),
+            Self::AffineArithmetic => write!(
+                formatter,
+                "affine units cannot be used in this arithmetic operation"
+            ),
             Self::NonFinite => write!(formatter, "engineering value must be finite"),
         }
     }

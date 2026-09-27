@@ -38,6 +38,17 @@ IR. Rhai selects providers, queries observations, orchestrates behavior, and
 formats evidence. A verification registry selects a scene and script but does
 not duplicate requirement text or thresholds.
 
+### Preserve declared collection shape
+
+Read model values through the typed `SysmlModel.value` projection. A structured
+`Position` literal may lower to one native `DVec3`, while a declared
+`Position[n]` collection must remain an array of native `DVec3` values. The
+generic Rust projection distinguishes vector components from declared
+multiplicity. Do not recover missing model values by walking `AnalyzeSysml`
+AST records, parsing string encodings, or rebuilding arrays in Twin Rhai. If a
+declared shape is missing, fix the shared typed projection and keep the Twin
+policy declarative.
+
 For mission models with material-dependent structural, pressure, thermal, or
 electrical behavior, follow the
 [physical-material data gate](../interactive-component-authoring/references/mission-engineering-quality.md#physical-materials-and-engineering-properties).
@@ -54,6 +65,42 @@ engineering properties: a shader preset is not a source for absorptance,
 emittance, coating thickness, or Modelica thermal parameters. Record missing
 finish catalog and rendering adapters as generic tool gaps, not per-component
 string metadata.
+
+### Keep resolved type identity typed
+
+Use the resolver-selected `SysmlTypeRef.element` handle for type comparisons
+and joins. If a typed contract needs a SysML type, carry that reference rather
+than its name. Its `qualified_name` is for reports and source navigation only;
+two semantic types must not be treated as equal because their display names
+match. The handle is scoped to its SysML source revision and fingerprint, so
+reject values assembled from a different snapshot.
+
+For unit-bearing model data, author standard quantity-value and unit-reference
+features where the model needs them. Keep a unit suffix from source syntax as
+source spelling; it is not a resolved unit definition. Provider observations
+must carry a native `Quantity` constructed with a resolved `EngineeringUnit`,
+and a binding contract's optional unit must also be an `EngineeringUnit`. Do
+not add a second `unit` string to an observation or pass `{ value, unit: "m" }`:
+those forms do not establish dimension or scale and are rejected by the adapter.
+The evaluator checks SI dimensions and converts compatible units during
+arithmetic and comparison. A resolved unit-bearing source literal now carries
+its measurement-unit feature handle, SI dimension, and source-derived scale.
+The AST resolver reads standard `MeasurementUnit` quantity-power factors and
+linear conversion relationships, including prefixes, reference-unit factors,
+and arithmetic unit definitions. Rhai exposes the resolved unit as a native
+`EngineeringUnit`; source verification and geometry adapters use that value
+without consulting a symbol table. Numeric conversion expressions support
+arithmetic, including integer powers; dimensional unit composition supports
+multiplication, division, and integer powers. Keep `unit_symbol` for source
+display only. The standard conversion `isExact` flag is projected onto native
+units as `scale_is_exact` and accumulated by native quantities as
+`conversion_is_exact`. These flags describe conversion exactness only, not
+measurement uncertainty.
+The bounded Modelica position adapter requires an exact SI scale before
+lowering to an unqualified vector.
+`MeasurementScale` mappings and unresolved or unsupported unit definitions do
+not produce an engineering unit and must remain unavailable; do not infer a
+scale from the spelling.
 
 For a mission Twin, apply the generic
 [mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
@@ -277,19 +324,30 @@ package-prefix guess or a second registry. Use
 `sysml_requirements::verification_name(report, id)` when a canonical identity
 is needed before constructing additional evidence.
 
-Unit-bearing vector components are preserved as arrays of native `Quantity`
-values. A geometry policy must validate the declared quantity kind, fixed
-cardinality, and each component's unit before lowering them to the shared
-`Vec3`; never read only `number_value` and drop unit metadata. The shared
-`lunco-engineering-values` seam performs dimension-safe conversion, while the
-authored `engineering_units.rhai` catalog selects the supported UCUM-compatible
-symbols. The current SysML-to-Modelica geometry adapter accepts a bounded
-`LengthValue[3]` catalog and converts compatible entries to metres; it is not a
-full UCUM parser and must fail closed for unsupported units.
-Other physical-property quantities, including material properties, need the
-same unit-preserving treatment. Do not reuse the geometry-only length adapter,
-strip units, or assume an unimplemented material projection; capability-check
-the property kind and consumer before generating a model.
+Unit-bearing literals expose `measurement_reference`, a snapshot-scoped handle
+to the resolved SysML measurement-unit feature and its declared unit type. Its
+`unit_definition` contains the standard-derived SI dimension and conversion;
+`engineering_unit` on the Rhai reference yields the native unit value.
+`unit_symbol` is only the spelling in source. New SysML verification and
+projection code must use the resolved reference; do not use the spelling as a
+unit registry key. Linear `MeasurementUnit` definitions are resolved from
+their quantity-power factors, standard SI base units, unit-conversion edges,
+and arithmetic initializers. Nonlinear or affine `MeasurementScale` mappings,
+malformed definitions, and expressions outside the resolver's supported
+arithmetic remain unavailable. Standard `isExact` metadata is projected and
+propagated through native quantity operations; it does not replace uncertainty
+or instrument-accuracy data. `engineering_units.rhai` serves explicit unit
+input at non-SysML boundaries; it is not authoritative for SysML source values.
+
+Before lowering a unit-bearing vector to shared `Vec3` or a Modelica parameter,
+validate the declared quantity kind, fixed cardinality, each resolved unit,
+and compatible dimensions. Do not read only `number_value` and drop unit
+identity. The bounded SysML-to-Modelica `LengthValue[3]` geometry path consumes
+the resolved measurement-reference unit and converts through the native SI
+quantity operation; it does not look up `unit_symbol`. Other
+physical-property quantities, including material properties, need the same
+unit-preserving treatment; capability-check the property kind and consumer
+before generating a model.
 
 For CAD/mechanical intent, keep the requirement and tolerance in SysML, then
 call the reloadable `assets/scripting/tools/mechanical_relations.rhai` policy

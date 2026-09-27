@@ -8,9 +8,10 @@
 use crate::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlConstraintBinding, SysmlDiagnostic,
     SysmlElement, SysmlElementHandle, SysmlExpression, SysmlExpressionKind,
-    SysmlExpressionOperator, SysmlFeatureHandle, SysmlLiteral, SysmlReference, SysmlRelationship,
-    SysmlRequirementRecord, SysmlStandardConstant, SysmlStandardFunction, SysmlSubject, SysmlType,
-    SysmlTypeRef, SysmlUnsupportedExpression, SysmlVerificationRecord,
+    SysmlExpressionOperator, SysmlFeatureHandle, SysmlLiteral, SysmlMeasurementReference,
+    SysmlReference, SysmlRelationship, SysmlRequirementRecord, SysmlStandardConstant,
+    SysmlStandardFunction, SysmlSubject, SysmlType, SysmlTypeRef, SysmlUnsupportedExpression,
+    SysmlVerificationRecord,
 };
 use lunco_hooks::HookValue as H;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -892,11 +893,19 @@ fn literal(value: &SysmlLiteral) -> H {
                 .unwrap_or(H::Unit),
         ),
         (
-            "unit",
+            "unit_symbol",
             value
-                .unit
+                .unit_symbol
                 .as_ref()
-                .map(|unit| H::str(unit.clone()))
+                .map(|symbol| H::str(symbol.clone()))
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "measurement_reference",
+            value
+                .measurement_reference
+                .as_ref()
+                .map(measurement_reference_facts)
                 .unwrap_or(H::Unit),
         ),
     ];
@@ -972,14 +981,6 @@ fn type_facts(value: &SysmlType) -> H {
                 .unwrap_or(H::Unit),
         ),
         (
-            "unit",
-            value
-                .unit
-                .as_ref()
-                .map(|unit| H::str(unit.clone()))
-                .unwrap_or(H::Unit),
-        ),
-        (
             "modelica_type",
             H::str(format!("{:?}", value.modelica_type())),
         ),
@@ -989,7 +990,56 @@ fn type_facts(value: &SysmlType) -> H {
 }
 
 fn type_ref_facts(value: &SysmlTypeRef) -> H {
-    H::map([("qualified_name", H::str(value.qualified_name.clone()))])
+    H::map([
+        ("element", element_handle(value.element)),
+        ("qualified_name", H::str(value.qualified_name.clone())),
+    ])
+}
+
+fn measurement_reference_facts(value: &SysmlMeasurementReference) -> H {
+    H::map([
+        ("feature", feature_handle(value.feature)),
+        ("qualified_name", H::str(value.qualified_name.clone())),
+        (
+            "short_name",
+            value
+                .short_name
+                .as_ref()
+                .map(|name| H::str(name.clone()))
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "declared_type",
+            value
+                .declared_type
+                .as_ref()
+                .map(type_ref_facts)
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "unit_definition",
+            value
+                .unit_definition
+                .map(|definition| {
+                    H::map([
+                        (
+                            "dimension",
+                            H::Array(
+                                definition
+                                    .dimension
+                                    .into_iter()
+                                    .map(|exponent| H::Int(i64::from(exponent)))
+                                    .collect(),
+                            ),
+                        ),
+                        ("scale_to_si", H::Float(definition.scale_to_si.as_f64())),
+                        ("offset_to_si", H::Float(definition.offset_to_si.as_f64())),
+                        ("scale_is_exact", H::Bool(definition.scale_is_exact)),
+                    ])
+                })
+                .unwrap_or(H::Unit),
+        ),
+    ])
 }
 
 fn subject(value: &SysmlSubject) -> H {
