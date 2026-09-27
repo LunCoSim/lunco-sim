@@ -477,7 +477,8 @@ the level-triggered command for a target-scoped held intent. External API,
 application-Rhai, and direct typed commands targeting a fixed-simulation entity
 require a stable target id and committed scene generation, then enter the
 bounded controller queue for the next `SimTick`. Held changes and discrete
-edges share its per-tick sequence. The acknowledgement returns a correlation
+edges receive order from the shared `lunco-control-core::SimulationInputOrderAllocator`,
+which resets at scene teardown. The acknowledgement returns a correlation
 id, producer id, and admission stamp; fixed-step commit publishes `intent.hold`
 with the same producer id and stamp. API and direct typed producers supply a
 nonzero `producer_id` stable for that caller's session. Actorless application

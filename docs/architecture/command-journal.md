@@ -95,6 +95,10 @@ also enter a bounded controller queue. Admission requires a stable target id, a
 completed scene generation, and a fixed simulation clock; it assigns the next
 tick and a per-tick sequence. The fixed-step owner validates generation and
 target again, then emits the semantic edge before control propagation.
+`SimulationInputOrderAllocator` in `lunco-control-core` owns that per-tick
+sequence across producers and resets on scene teardown; each owner's pending
+queue still needs a shared commit coordinator before a total cross-type effect
+order is guaranteed.
 `CausalTrace` and `intent.edge` retain that producer id and admission stamp.
 The command acknowledgement includes the same `producer_id`, `correlation_id`,
 and optional admission fields, so a client can query this exact edge after later
@@ -372,6 +376,30 @@ contracts:
 | Spawn a rover during a session | Document-backed scene: resulting `ApplyUsdOps` in the Twin journal; raw-file scene: direct ECS spawn plus `NetSpawn`; neither path records a session input stamp | document operation uses `EntryId` and merged order; whole-session replay also needs producer, scene generation, target, `SimTick`, and stable sequence |
 | Possess during a session | semantic user intent; whole-session capture is not implemented | scene generation, controlled target, `SimTick`, stable sequence |
 | USD prim edit | USD document operation in the Twin journal | `EntryId` and merged journal order |
+
+### Raw-file runtime-spawn input
+
+The raw-file `SpawnEntity` path is a transient simulation input. It must enter
+a shared typed commit coordinator alongside external held intents, discrete
+edges, and physical frames. `lunco-control-core` owns their shared per-tick
+order allocator, but the controller's pending-action queue remains private, so
+that cross-type coordinator is not yet installed. Separate per-crate queues
+without a coordinator would not preserve action and capture order across input
+types.
+
+An admitted spawn record must retain the stable scene-root target and active
+physics-frame identities, catalog entry, original `f64` position and optional
+rotation, producer provenance, command correlation id, and the reserved
+`GlobalEntityId` for the runtime-spawn root. The owner commits the spawn and its
+session record at the same fixed tick and sequence; it inserts the reserved id
+before the identity-admission system can mint another one. `NetSpawn` and
+network replication continue to use that same root identity. Invalid producer,
+scene, frame, catalog, queue, or generation state rejects the command or holds
+the admitted operation with a structured error.
+
+The document-backed path stays outside this session-input record: it authors
+`ApplyUsdOps`, whose Twin-journal entry already owns its identity and order.
+Recording it again as a runtime spawn would duplicate the authored mutation.
 
 These rows do not all share one lifecycle. The USD prim edit belongs to the
 authored document journal. Runtime interactions require session-input or

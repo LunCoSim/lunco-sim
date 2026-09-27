@@ -108,7 +108,9 @@ The fixed-step vessel controller captures physical `ActionState<UserIntent>` int
 a by-value `PhysicalIntentFrame` semantic snapshot. Admission requires the
 local input `SessionId`, the target's stable `GlobalEntityId`, and a committed
 scene generation; the frame also carries the current `SimTick` and a sequence
-from the same per-tick allocator used by external semantic inputs. Missing
+from the `lunco-control-core::SimulationInputOrderAllocator` used by external
+semantic inputs. The resource resets on scene teardown so producers share one
+per-tick sequence across scene generations. Missing
 admission facts and duplicate target/session order keys hold the input with a
 structured runtime error; ordering never falls back to Bevy `Entity` bits.
 API/Rhai holds remain separately sourced until the binding evaluates an intent.

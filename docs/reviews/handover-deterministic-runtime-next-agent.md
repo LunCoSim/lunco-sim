@@ -3,14 +3,18 @@
 **Prepared:** 2026-09-27
 **Workspace:** `/home/rod/Documents/luncosim-workspace/lunar-soil`
 **Branch:** `codex/lunar-soil`
-**Behavioral source baseline:** `791cda5e30c16dc10046dc324a7a53be54f57e6f`
+**Integrated local-main base before this continuation:** `4d8b139f0634842bfe8b0d0188989544db815529`
 
-The in-progress optimization merge was completed as `c8740ceaf`; latest local
-`main` was integrated by merge commit `19c1c3e27`. The follow-up D9/D14 capture
-commit `791cda5e` was then fast-forwarded to the separate local `main` worktree.
-The local `main` worktree includes that commit. There is no active merge or
-unresolved path, and no push was made. The pre-merge `D9`/`D14` backup remains
-in `stash@{0}`. The API evidence below was captured from that source baseline.
+The D9 producer-identity change (`acf996add`) was merged into local `main` by
+`13137c115`. Local `main` then advanced through `54acee747` and
+`4d8b139f0`; the latter contains the possessed route-context UI acceptance
+change. This checkout and the `tutorials` worktree were fast-forwarded to
+`4d8b139f0`. The `main`, `usd`, and `optimization` worktrees were already at
+that commit. No push was made and there is no active merge. The optimization
+worktree has unrelated edits and must remain untouched. The pre-merge D9/D14
+backup remains in `stash@{0}`. Evidence below stays tied to the individual
+builds and source revisions named in each section; the full source baseline is
+now `4d8b139f0`.
 
 ## Active user objective
 
@@ -190,12 +194,23 @@ this task. No performance measurement was taken.
   gone. Port 47123 was left untouched. No visual or performance acceptance was
   run.
 
-Next D9 work is to capture other typed inputs and runtime-spawn admission plus
-stable spawned identity without duplicating document-backed `ApplyUsdOps` in
-the Twin journal, then build durable recording/playback through the normal
-controller path. See the owner and record-shape requirements in
-[`command-journal.md`](../architecture/command-journal.md). Whole-session
-capture/replay and supported-profile divergence evidence remain open.
+Next D9 work is to establish one shared typed admission/commit owner before
+adding runtime-spawn capture. The shared per-tick order allocator now lives in
+`lunco-control-core`, while `PendingSemanticInputs` and its consumer remain
+private to `lunco-controller`; there is not yet one ordered commit coordinator
+across input types. Raw-file `SpawnEntity` currently creates ECS entities in
+the command observer, and the session identity owner assigns their root ids on
+a later `PreUpdate`. A
+replayable runtime spawn needs a fixed-tick admission record with the scene-root
+and active-frame `GlobalEntityId`s, catalog entry, original `f64` pose,
+producer provenance, correlation id, and a reserved spawned-root id. Its action
+and capture record must commit in the same stable per-tick order as held
+intents, edges, and physical frames. Preserve the existing network replication
+contract by inserting that reserved id on the spawned root. Document-backed
+spawns remain `ApplyUsdOps` entries in the Twin journal and must not be
+duplicated in the session stream. See the owner and record-shape requirements
+in [`command-journal.md`](../architecture/command-journal.md). Durable
+recording/playback and supported-profile divergence evidence remain open.
 
 ### D14: owner context for camera, runtime UI, render, and USD projection policies
 
@@ -248,6 +263,32 @@ Independent UI and visualization cadences remain open. Do not introduce a
 second mutable Rhai interpreter schedule; owner cycles need isolated state or
 typed queues before that is safe.
 
+### Latest local-main integration review (2026-09-27)
+
+- Fast-forwarded this checkout and the clean `tutorials` worktree from
+  `13137c115` to local `main` at `4d8b139f0`. The `main`, `usd`, and
+  `optimization` worktrees were already there. The optimization worktree has
+  unrelated source, docs, and profiling edits; preserve them. No conflicts or
+  pushes occurred.
+- Reviewed `54acee747`'s Twin `DocumentSaved` analysis refresh and `4d8b139f0`'s
+  possessed route-context production test. `cargo test -p lunco-sysml -j 4`
+  passed all 14 tests in 3m09s. The tests cover path matching, refresh-set
+  bookkeeping, and existing analysis fences. There is still no production
+  Rhai/API gate that saves an indexed source, observes the reload, and checks
+  the new Twin analysis revision; this is recorded in
+  [`open-deterministic-simulation-contract.md`](open-deterministic-simulation-contract.md).
+- `git show --check HEAD~2..HEAD` passed for the two integrated commits.
+  The route-context test is a windowed UI acceptance and was not run in this
+  review; no visual or performance result is claimed.
+- The shared order allocator is now owned by `lunco-control-core`, with
+  scene-teardown reset there. It still has only controller consumers; runtime
+  spawn admission must use it and join one ordered commit/capture coordinator
+  before D9 can claim a total cross-input order.
+- After that extraction, `cargo test -p lunco-control-core -p lunco-controller -j 4`
+  passed all 7 control-core and 24 controller tests, including same-tick
+  sequence sharing by external semantic input and physical frames, forward-tick
+  reset, and scene-teardown reset.
+
 ## Runtime and repository constraints
 
 - Do not edit authored USD through shell or patch tools. Use the live USD
@@ -255,8 +296,8 @@ typed queues before that is safe.
 - Runtime checks must use this checkout's production binary on an explicit free
   port. Verify PID, executable, working directory, and listener before control;
   stop only the owned app through API `Exit`.
-- Preserve the current unstaged changes and the backup stash. The `main` merge
-  is complete. Do not reset, repeat Cargo cleanup, or push. The earlier
-  package-scoped Cargo cleanup removed only this checkout's selected build
-  outputs; shared Cargo caches and source were preserved.
+- Preserve unrelated edits in the optimization worktree and the backup stash.
+  Do not reset, repeat Cargo cleanup, or push. The earlier package-scoped Cargo
+  cleanup removed only this checkout's selected build outputs; shared Cargo
+  caches and source were preserved.
 - Report source, scene-test, live API, and visual evidence as distinct claims.

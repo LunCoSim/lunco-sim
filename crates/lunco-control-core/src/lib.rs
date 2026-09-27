@@ -214,6 +214,58 @@ pub struct SimulationInputOrder {
     pub sequence: u64,
 }
 
+/// Shared per-tick order source for admitted simulation inputs.
+///
+/// Producers in different crates use this resource so their records do not
+/// invent independent sequence spaces. It assigns order only; owners still
+/// validate and commit their typed payloads at the appropriate simulation
+/// boundary.
+#[derive(Resource, Debug, Default)]
+pub struct SimulationInputOrderAllocator {
+    sequence_tick: Option<u64>,
+    next_sequence: u64,
+}
+
+impl SimulationInputOrderAllocator {
+    /// Assign the next sequence for an admitted scene generation and tick.
+    pub fn assign_order(
+        &mut self,
+        scene_generation: u64,
+        effective_tick: u64,
+    ) -> Result<SimulationInputOrder, String> {
+        let sequence = match self.sequence_tick {
+            Some(tick) if effective_tick < tick => {
+                return Err(format!(
+                    "simulation input tick moved backwards from {tick} to {effective_tick}"
+                ));
+            }
+            Some(tick) if effective_tick == tick => self
+                .next_sequence
+                .checked_add(1)
+                .ok_or_else(|| "simulation input sequence exhausted".to_owned())?,
+            _ => 1,
+        };
+        self.sequence_tick = Some(effective_tick);
+        self.next_sequence = sequence;
+
+        Ok(SimulationInputOrder {
+            scene_generation,
+            effective_tick,
+            sequence,
+        })
+    }
+
+    /// Reset ordering state when the outgoing scene is torn down.
+    pub fn reset(&mut self) {
+        self.sequence_tick = None;
+        self.next_sequence = 0;
+    }
+}
+
+fn reset_simulation_input_order(mut order: ResMut<SimulationInputOrderAllocator>) {
+    order.reset();
+}
+
 /// A target-scoped semantic edge emitted by the controller contract.
 ///
 /// This event carries intent, target, correlation, and classified producer
@@ -612,6 +664,8 @@ impl Plugin for LunCoControlPlugin {
         app.add_plugins(InputManagerPlugin::<UserIntent>::default())
             .init_resource::<EguiFocus>()
             .init_resource::<CausalTrace>()
+            .init_resource::<SimulationInputOrderAllocator>()
+            .add_systems(lunco_core::SceneTeardown, reset_simulation_input_order)
             .register_type::<UserIntent>()
             .register_type::<SemanticIntentEdgeKind>()
             .register_type::<SemanticIntentEdge>()
@@ -621,7 +675,51 @@ impl Plugin for LunCoControlPlugin {
 
 #[cfg(test)]
 mod tests {
-    use super::{ControlBinding, UserIntent, parse_user_intent};
+    use super::{
+        ControlBinding, LunCoControlPlugin, SimulationInputOrderAllocator, UserIntent,
+        parse_user_intent,
+    };
+    use bevy::prelude::*;
+
+    #[test]
+    fn simulation_input_order_allocator_shares_sequences_per_tick_and_resets_forward() {
+        let mut allocator = SimulationInputOrderAllocator::default();
+        assert_eq!(allocator.assign_order(3, 10).unwrap().sequence, 1);
+        assert_eq!(allocator.assign_order(3, 10).unwrap().sequence, 2);
+        assert_eq!(allocator.assign_order(3, 11).unwrap().sequence, 1);
+        assert!(allocator.assign_order(3, 10).is_err());
+    }
+
+    #[test]
+    fn scene_teardown_resets_simulation_input_order_allocator() {
+        let mut app = App::new();
+        app.add_plugins(LunCoControlPlugin);
+        let order = app
+            .world_mut()
+            .resource_mut::<SimulationInputOrderAllocator>()
+            .assign_order(1, 24)
+            .expect("first admitted input");
+        assert_eq!(order.sequence, 1);
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<SimulationInputOrderAllocator>()
+                .assign_order(1, 24)
+                .expect("second admitted input")
+                .sequence,
+            2
+        );
+
+        app.world_mut().run_schedule(lunco_core::SceneTeardown);
+
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<SimulationInputOrderAllocator>()
+                .assign_order(2, 1)
+                .expect("the next scene starts a new order stream")
+                .sequence,
+            1
+        );
+    }
 
     /// Intent parsing accepts exactly the authored control vocabulary and rejects
     /// former aliases instead of silently changing their meaning.

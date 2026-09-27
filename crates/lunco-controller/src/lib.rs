@@ -89,40 +89,12 @@ struct PendingSemanticInput {
 #[derive(Resource, Default)]
 struct PendingSemanticInputs {
     pending: std::collections::VecDeque<PendingSemanticInput>,
-    sequence_tick: Option<u64>,
-    next_sequence: u64,
 }
 
 impl PendingSemanticInputs {
-    fn assign_order(
-        &mut self,
-        scene_generation: u64,
-        effective_tick: u64,
-    ) -> Result<lunco_control_core::SimulationInputOrder, String> {
-        let sequence = match self.sequence_tick {
-            Some(tick) if effective_tick < tick => {
-                return Err(format!(
-                    "semantic input tick moved backwards from {tick} to {effective_tick}"
-                ));
-            }
-            Some(tick) if effective_tick == tick => self
-                .next_sequence
-                .checked_add(1)
-                .ok_or_else(|| "semantic input sequence exhausted".to_owned())?,
-            _ => 1,
-        };
-        self.sequence_tick = Some(effective_tick);
-        self.next_sequence = sequence;
-
-        Ok(lunco_control_core::SimulationInputOrder {
-            scene_generation,
-            effective_tick,
-            sequence,
-        })
-    }
-
     fn admit(
         &mut self,
+        order: &mut lunco_control_core::SimulationInputOrderAllocator,
         target: Entity,
         target_gid: lunco_core::GlobalEntityId,
         action: PendingSemanticInputAction,
@@ -138,7 +110,7 @@ impl PendingSemanticInputs {
             ));
         }
 
-        let admission = self.assign_order(scene_generation, effective_tick)?;
+        let admission = order.assign_order(scene_generation, effective_tick)?;
         self.pending.push_back(PendingSemanticInput {
             target,
             target_gid,
@@ -165,8 +137,6 @@ impl PendingSemanticInputs {
 
     fn clear(&mut self) {
         self.pending.clear();
-        self.sequence_tick = None;
-        self.next_sequence = 0;
     }
 }
 
@@ -174,7 +144,7 @@ impl PendingSemanticInputs {
 struct ControllerInputAdmission<'w> {
     tick: Res<'w, lunco_core_runtime::SimTick>,
     scene: Option<Res<'w, lunco_core::SceneTransitionCoordinator>>,
-    inputs: ResMut<'w, PendingSemanticInputs>,
+    order: ResMut<'w, lunco_control_core::SimulationInputOrderAllocator>,
     recording: Option<ResMut<'w, lunco_core_session::SessionInputStream>>,
 }
 
@@ -420,9 +390,11 @@ mod physical_intent_frame_tests {
         let scene_generation = 7;
         let effective_tick = 41;
         let mut inputs = PendingSemanticInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
 
         let queued = inputs
             .admit(
+                &mut order,
                 target,
                 target_gid,
                 PendingSemanticInputAction::Edge {
@@ -436,7 +408,7 @@ mod physical_intent_frame_tests {
                 effective_tick,
             )
             .expect("external semantic input admission");
-        let physical_order = inputs
+        let physical_order = order
             .assign_order(scene_generation, effective_tick)
             .expect("physical frame admission");
 
@@ -873,6 +845,7 @@ fn on_simulate_intent_edge(
     target_ids: Query<&lunco_core::GlobalEntityId>,
     scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     tick: Option<Res<lunco_core_runtime::SimTick>>,
+    mut order: ResMut<lunco_control_core::SimulationInputOrderAllocator>,
     mut pending: ResMut<PendingSemanticInputs>,
     mut commands: Commands,
 ) -> Result<Ack, Reject> {
@@ -934,6 +907,7 @@ fn on_simulate_intent_edge(
         Some(
             pending
                 .admit(
+                    &mut order,
                     cmd.target,
                     target_gid,
                     PendingSemanticInputAction::Edge { intent, kind },
@@ -1249,6 +1223,7 @@ fn on_simulate_intent(
     local_embodiments: Query<(), With<lunco_embodiment_core::roles::LocalEmbodiment>>,
     scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     tick: Option<Res<lunco_core_runtime::SimTick>>,
+    mut order: ResMut<lunco_control_core::SimulationInputOrderAllocator>,
     mut pending: ResMut<PendingSemanticInputs>,
     mut sim: ResMut<SimulatedIntents>,
 ) -> Result<Ack, Reject> {
@@ -1306,6 +1281,7 @@ fn on_simulate_intent(
         Some(
             pending
                 .admit(
+                    &mut order,
                     cmd.target,
                     target_gid,
                     PendingSemanticInputAction::Held { intent, held },
@@ -1911,7 +1887,7 @@ fn drive_from_bindings(
         };
         let mut physical = PhysicalIntentFrame::capture(binding, intents, egui_keyboard);
         match input_admission
-            .inputs
+            .order
             .assign_order(scene_generation, input_admission.tick.0)
         {
             Ok(order) => {
@@ -2721,6 +2697,7 @@ mod tests {
             .init_resource::<lunco_control_core::CausalTrace>()
             .init_resource::<SimulatedIntents>()
             .init_resource::<PendingSemanticInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .init_resource::<lunco_core_session::CommandPolicyRegistry>()
             .add_observer(observe_semantic_edge)
             .add_observer(observe_control_telemetry);
@@ -2907,6 +2884,7 @@ mod tests {
             .init_resource::<lunco_core::ActiveCommandId>()
             .init_resource::<lunco_core_runtime::SimTick>()
             .init_resource::<PendingSemanticInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .init_resource::<SimulatedIntents>()
             .init_resource::<lunco_control_core::CausalTrace>()
             .init_resource::<SemanticEdgeObserved>()
@@ -3021,6 +2999,7 @@ mod tests {
             .init_resource::<lunco_core::ActiveCommandId>()
             .init_resource::<lunco_core_runtime::SimTick>()
             .init_resource::<PendingSemanticInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .init_resource::<SimulatedIntents>()
             .init_resource::<lunco_control_core::CausalTrace>()
             .init_resource::<SemanticEdgeObserved>()
@@ -3532,6 +3511,7 @@ mod tests {
             .init_resource::<lunco_core_runtime::SimTick>()
             .init_resource::<lunco_core_session::OwnedInputLog>()
             .init_resource::<PendingSemanticInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .init_resource::<VesselControlObserved>()
             .add_observer(observe_vessel_control)
             .add_systems(FixedUpdate, drive_from_bindings);
@@ -3576,20 +3556,22 @@ mod tests {
 
         let queued_external = app
             .world_mut()
-            .resource_mut::<PendingSemanticInputs>()
-            .admit(
-                vessel,
-                lunco_core::GlobalEntityId::from_raw(0xCAFE),
-                PendingSemanticInputAction::Edge {
-                    intent: UserIntent::Action,
-                    kind: lunco_control_core::SemanticIntentEdgeKind::Pulse,
-                },
-                101,
-                Some(lunco_core::CommandOrigin::ApiTransport),
-                SimulatedIntentSource::ApiTransport { producer_id: 501 },
-                scene_generation,
-                1,
-            )
+            .resource_scope(|world, mut pending: Mut<PendingSemanticInputs>| {
+                pending.admit(
+                    &mut world.resource_mut::<lunco_control_core::SimulationInputOrderAllocator>(),
+                    vessel,
+                    lunco_core::GlobalEntityId::from_raw(0xCAFE),
+                    PendingSemanticInputAction::Edge {
+                        intent: UserIntent::Action,
+                        kind: lunco_control_core::SemanticIntentEdgeKind::Pulse,
+                    },
+                    101,
+                    Some(lunco_core::CommandOrigin::ApiTransport),
+                    SimulatedIntentSource::ApiTransport { producer_id: 501 },
+                    scene_generation,
+                    1,
+                )
+            })
             .expect("external input admitted before the physical frame");
         app.world_mut()
             .resource_mut::<lunco_core_runtime::SimTick>()
@@ -3614,10 +3596,14 @@ mod tests {
                 .expect("avatar action state")
                 .pressed(&UserIntent::MoveForward)
         );
-        let pending = app.world().resource::<PendingSemanticInputs>();
         assert_eq!(queued_external.sequence, 1);
-        assert_eq!(pending.sequence_tick, Some(1));
-        assert_eq!(pending.next_sequence, 2);
+        let third_input_order = app
+            .world_mut()
+            .resource_mut::<lunco_control_core::SimulationInputOrderAllocator>()
+            .assign_order(scene_generation, 1)
+            .expect("the physical frame consumed the second shared sequence");
+        assert_eq!(third_input_order.sequence, 3);
+        let pending = app.world().resource::<PendingSemanticInputs>();
         assert_eq!(
             pending
                 .pending
@@ -3683,6 +3669,7 @@ mod tests {
             .init_resource::<SimTick>()
             .init_resource::<OwnedInputLog>()
             .init_resource::<PendingSemanticInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .insert_resource(completed_controller_scene())
             .init_resource::<ControlTargetOrder>()
             .add_observer(record_control_target_order)
@@ -3730,6 +3717,7 @@ mod tests {
             .init_resource::<SimTick>()
             .init_resource::<OwnedInputLog>()
             .init_resource::<PendingSemanticInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .insert_resource(scene)
             .init_resource::<SessionInputStream>()
             .add_systems(FixedUpdate, drive_from_bindings);
@@ -3784,6 +3772,7 @@ mod tests {
             .init_resource::<SimTick>()
             .init_resource::<OwnedInputLog>()
             .init_resource::<PendingSemanticInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .init_resource::<VesselControlObserved>()
             .init_resource::<ControllerRuntimeErrors>()
             .add_observer(observe_vessel_control)
@@ -3823,6 +3812,7 @@ mod tests {
             .init_resource::<SimTick>()
             .init_resource::<OwnedInputLog>()
             .init_resource::<PendingSemanticInputs>()
+            .init_resource::<lunco_control_core::SimulationInputOrderAllocator>()
             .insert_resource(completed_controller_scene())
             .init_resource::<VesselControlObserved>()
             .init_resource::<ControllerRuntimeErrors>()

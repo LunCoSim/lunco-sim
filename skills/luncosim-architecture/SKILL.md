@@ -110,8 +110,10 @@ identity. `drive_from_bindings` captures physical
 `ActionState<UserIntent>` into a by-value `PhysicalIntentFrame` semantic
 snapshot. Admission requires the local input `SessionId`, target
 `GlobalEntityId`, and committed scene generation. The fixed-step owner stamps
-the frame with those identities, the current `SimTick`, and the shared per-tick
-input sequence before controller translation. Missing facts or duplicate
+the frame with those identities, the current `SimTick`, and a sequence from
+the shared `lunco-control-core::SimulationInputOrderAllocator` before
+controller translation. The allocator resets on scene teardown so producers
+share one per-tick order space. Missing facts or duplicate
 target/session order keys hold input with a structured runtime error; ordering
 does not fall back to Bevy `Entity` bits. The frame is discarded after
 translation, while an active `SessionInputStream` capture retains sorted
