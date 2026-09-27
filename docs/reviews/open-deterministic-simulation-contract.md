@@ -41,6 +41,28 @@ contract remains open.
 | D26 | Fixed | A mounted primary USD document can receive simulation-affecting edits in application or fixed-script cycles after its last projection. A catch-up burst could then start another authoritative tick before the edit is reconciled into live ECS state. Document generations coalesce under a typed progress key: `SimulationProgressAdmissionSet` runs after entity indexing and before `TimeSpineSet`, while `FixedLast` admits fixed-cycle edits before closing remaining catch-up iterations. Typed view-layer-only suffixes avoid the hold; unavailable suffixes conservatively hold. Projection publication releases only after reaching the latest admitted generation, so stale completions retain the hold. The production `route_lifecycle` Rhai gate now exercises fixed-script and Application/Repl edits. For the Repl edit, it confirms the public entity index has not caught up immediately after the document operation, observes paused simulation while projection is pending, and requires the first later simulation tick to see the projected prim; it also checks Application/Repl context and event tick. Four runs with seed `6840157149251759617` passed at 52 simulation ticks, with 103–114 application updates. Focused tests cover generation coalescing/stale completion, PreUpdate ordering, and stopping the current fixed catch-up burst. | Fixed-step and Application/Repl projection admission acceptance passes through the production scene runner; the focused generic admission tests pass |
 | D27 | Partial | External semantic controls enter the bounded session-owned `PendingSessionInputs` resource. `lunco-core-session` owns admission storage, scene-teardown clearing, stable target and generation validation, capture, and a fixed-tick commit set that synchronously publishes typed events in shared `(effective_tick, sequence)` order while simulation time is running. Paused input remains queued until play resumes. The controller applies semantic edges and held changes before physical sampling. Runtime spawns and physical frames have not joined the shared queue, so total cross-domain effect order is still incomplete. | `cargo test -p lunco-core-session -p lunco-controller -j 4` passes (42 session tests including authz integration, 24 controller tests); whole-session cross-domain ordering and spawn replay remain open |
 
+## Latest local-main integration evidence (2026-09-27)
+
+Commit `b41f7c6e9` centralizes ordered fixed-tick commits for external semantic
+inputs. Local `main`, `codex/lunar-soil`, `tutorials`, `usd`, and `optimization`
+were fast-forwarded to the same head. The tutorials worktree's celestial LOD
+changes and optimization's unrelated source, documentation, and profiling
+changes were preserved; the disjoint doc 62 edits were combined and pass
+`git diff --check`. No push was made.
+
+`cargo test -p lunco-core-session -p lunco-controller -j 4` passed 40
+core-session unit tests, 2 authz integration tests, and 24 controller tests.
+`cargo build -p lunco-luncosim --bin luncosim -j 4` passed. A production API
+session on owned port 4192 admitted the skid rover's API `SimulateIntent` from
+producer 8181; the receipt, `intent.hold`, and captured record matched
+correlation 1 and `{scene_generation: 1, effective_tick: 17, sequence: 1}`.
+The authored observer passed `TESTS_OK 11` and
+`SIMULATE INTENT INPUT ADMISSION: PASS`. API `Exit` stopped process 1183357 and
+closed port 4192. `python3 scripts/validate_skills.py` passed all 43 skills.
+This verifies semantic admission, fixed-tick commit, and capture; runtime-spawn
+ordering, physical-frame replay, durable replay, full vehicle scene acceptance,
+and performance evidence remain open.
+
 ## Prior local-main integration evidence (2026-09-27)
 
 Integrated `main` at `277fced5d` into `codex/lunar-soil` with merge commit

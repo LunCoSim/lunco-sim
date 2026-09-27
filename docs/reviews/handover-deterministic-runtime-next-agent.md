@@ -3,16 +3,16 @@
 **Prepared:** 2026-09-27
 **Workspace:** `/home/rod/Documents/luncosim-workspace/lunar-soil`
 **Branch:** `codex/lunar-soil`
-**Latest local-main base before this continuation:** `37bc9c2ebc7d5bb4367da88a2df05c4d0c71c78d`
+**D27 code integration commit:** `b41f7c6e9bf70a6a78fa5a3b6392a085c1122877`
 
-The D9 producer-identity and pending-queue work was previously integrated in
-`4f8430a0f`. Local `main` then advanced to `37bc9c2eb` with agent-session and
-review guidance. This checkout was fast-forwarded to that latest local-main
-head before continuing. The `tutorials`, `usd`, and `optimization` heads remain
-at `4f8430a0f`; the optimization worktree has unrelated edits that must be
-preserved during its later fast-forward. No push was made, no merge is active,
-and the pre-merge D9/D14 backup remains in `stash@{0}`. Evidence below stays
-tied to the individual builds and source revisions named in each section.
+The D9 session-input commit boundary is committed as `b41f7c6e9` and was
+fast-forwarded to local `main`, `tutorials`, `usd`, and `optimization`. All five
+heads matched at that integration point. The `tutorials` worktree's celestial
+LOD edits and the `optimization` worktree's unrelated source, documentation,
+and profiling edits were preserved; the tutorial architecture edit in doc 62
+was combined with the session-input update and passes `git diff --check`. No
+push was made and no merge is active. Evidence below stays tied to the
+individual builds and source revisions named in each section.
 
 ## Active user objective
 
