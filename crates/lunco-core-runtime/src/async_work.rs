@@ -60,6 +60,8 @@ pub enum AsyncWorkKind {
     UsdPreparation,
     /// Prepare presentation-only derived work.
     VisualizationPreparation,
+    /// Encode an immutable session-input capture for durable export.
+    SessionInputArchiveExport,
 }
 
 /// Stable identity for one preparation operation.

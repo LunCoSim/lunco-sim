@@ -25,6 +25,8 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{Storage, StorageEntryKind, StorageError, StorageHandle, StorageResult};
 
@@ -44,6 +46,9 @@ impl FileStorage {
         Self::default()
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Atomic file replace (tmp + `fsync` + `rename`) — the implementation
 /// behind the `File` arm of [`FileStorage::write`] (CQ-107). Private: the
@@ -71,6 +76,61 @@ fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
+    Ok(())
+}
+
+/// Write a new file completely before linking it into place. `hard_link`
+/// commits atomically and fails instead of replacing an existing destination.
+#[cfg(not(target_arch = "wasm32"))]
+fn atomic_write_new(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("tmp");
+    let mut staged = None;
+    for _ in 0..32 {
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temporary = path.with_file_name(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            sequence
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(mut file) => {
+                let staged_result = file.write_all(bytes).and_then(|()| file.sync_all());
+                drop(file);
+                if let Err(error) = staged_result {
+                    let _ = std::fs::remove_file(&temporary);
+                    return Err(error);
+                }
+                staged = Some(temporary);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    let temporary = staged.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "unable to reserve a unique storage staging file",
+        )
+    })?;
+    let commit = std::fs::hard_link(&temporary, path);
+    let cleanup = std::fs::remove_file(&temporary);
+    commit?;
+    cleanup?;
     Ok(())
 }
 
@@ -115,6 +175,34 @@ impl Storage for FileStorage {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 map.insert(key.clone(), bytes.to_vec());
                 Ok(())
+            }
+            _ => Err(StorageError::Unsupported(
+                "FileStorage does not handle web / remote variants".into(),
+            )),
+        }
+    }
+
+    async fn write_new(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()> {
+        match handle {
+            #[cfg(not(target_arch = "wasm32"))]
+            StorageHandle::File(path) => atomic_write_new(path, bytes).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    StorageError::AlreadyExists
+                } else {
+                    StorageError::Io(error)
+                }
+            }),
+            StorageHandle::Memory(key) => {
+                let mut map = self
+                    .memory
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if map.contains_key(key) {
+                    Err(StorageError::AlreadyExists)
+                } else {
+                    map.insert(key.clone(), bytes.to_vec());
+                    Ok(())
+                }
             }
             _ => Err(StorageError::Unsupported(
                 "FileStorage does not handle web / remote variants".into(),
@@ -318,6 +406,38 @@ mod tests {
             s.write(&h, b"persisted").await.unwrap();
             assert!(s.exists(&h).await);
             assert_eq!(s.read(&h).await.unwrap(), b"persisted");
+        });
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn file_write_new_commits_without_replacing_an_existing_entry() {
+        block_on(async {
+            let root = tempdir().unwrap();
+            let handle = StorageHandle::File(root.path().join("capture.lcsin"));
+            let storage = FileStorage::new();
+
+            storage.write_new(&handle, b"first archive").await.unwrap();
+            assert!(matches!(
+                storage.write_new(&handle, b"replacement").await,
+                Err(StorageError::AlreadyExists)
+            ));
+            assert_eq!(storage.read(&handle).await.unwrap(), b"first archive");
+        });
+    }
+
+    #[test]
+    fn memory_write_new_commits_without_replacing_an_existing_entry() {
+        block_on(async {
+            let handle = StorageHandle::Memory("capture".to_owned());
+            let storage = FileStorage::new();
+
+            storage.write_new(&handle, b"first archive").await.unwrap();
+            assert!(matches!(
+                storage.write_new(&handle, b"replacement").await,
+                Err(StorageError::AlreadyExists)
+            ));
+            assert_eq!(storage.read(&handle).await.unwrap(), b"first archive");
         });
     }
 

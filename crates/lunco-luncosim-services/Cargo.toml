@@ -18,6 +18,8 @@ lunco-assets-path = { path = "../lunco-assets-path" }
 lunco-command-contracts = { path = "../lunco-command-contracts", optional = true }
 lunco-core = { path = "../lunco-core", optional = true }
 lunco-core-session = { path = "../lunco-core-session", optional = true }
+lunco-core-runtime = { path = "../lunco-core-runtime", optional = true }
+lunco-hooks = { path = "../lunco-hooks", optional = true }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false, optional = true }
 lunco-experiments = { path = "../lunco-experiments", optional = true }
 lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }
@@ -29,6 +31,7 @@ lunco-networking-sync = { path = "../lunco-networking-sync", optional = true }
 lunco-obstacle-field = { path = "../lunco-obstacle-field", optional = true }
 lunco-scene-authoring = { path = "../lunco-scene-authoring", optional = true }
 lunco-storage = { path = "../lunco-storage", optional = true }
+lunco-settings = { path = "../lunco-settings", optional = true }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
@@ -42,6 +45,15 @@ serde_json = { workspace = true }
 [features]
 default = []
 experiments = ["dep:lunco-experiments", "dep:lunco-storage", "dep:lunco-core-session"]
+session-input-archive-export = [
+    "dep:lunco-command-contracts",
+    "dep:lunco-core",
+    "dep:lunco-core-runtime",
+    "dep:lunco-core-session",
+    "dep:lunco-hooks",
+    "dep:lunco-settings",
+    "dep:lunco-storage",
+]
 api-transport = [
     "dep:lunco-api-transport",
     "dep:lunco-modelica-api",

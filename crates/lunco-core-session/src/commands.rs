@@ -1,7 +1,7 @@
 //! Typed commands owned by the session and identity subsystem.
 
 use bevy::prelude::*;
-use lunco_command_contracts::{Ack, OpId};
+use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_hooks::HookValue;
 
@@ -65,6 +65,10 @@ fn session_input_capture_ack(stream: &SessionInputStream) -> Result<Ack, String>
         OpId::new(),
         HookValue::map([
             ("state", HookValue::str(state)),
+            (
+                "capture_id",
+                stream.capture_id().map_or(HookValue::Unit, HookValue::UInt),
+            ),
             ("record_count", HookValue::UInt(record_count)),
             ("record_limit", HookValue::UInt(record_limit)),
             (
@@ -101,9 +105,16 @@ fn on_stop_session_input_capture(
 fn on_clear_session_input_capture(
     _trigger: On<ClearSessionInputCapture>,
     mut stream: ResMut<SessionInputStream>,
-) -> Result<Ack, String> {
-    stream.clear()?;
-    session_input_capture_ack(&stream)
+    archive_export: Res<crate::SessionInputArchiveExportStatus>,
+) -> Result<Ack, Reject> {
+    if archive_export.state() == crate::SessionInputArchiveExportState::Pending {
+        return Err(Reject::InvalidOp(
+            "session input capture cannot be cleared while its archive export is pending"
+                .to_owned(),
+        ));
+    }
+    stream.clear().map_err(Reject::InvalidOp)?;
+    session_input_capture_ack(&stream).map_err(Reject::InvalidOp)
 }
 
 /// Apply a generic authority claim from a local or host-authorized origin.

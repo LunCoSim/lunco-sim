@@ -878,11 +878,18 @@ stream has a record bound, validates canonical payload names, stable stamps,
 and producer/payload pairing before retention, and stops visibly on invalid
 input, overflow, or invalid order. It is observable through
 `ReadSessionInputStream`. Physical frames are admitted at their consuming
-controller boundary and cannot be deferred by the external queue. Capture
-remains memory-backed at runtime. `SessionInputCaptureArchive` encodes its
-records in a versioned binary format bounded to 65,536 records and 16 MiB; no
-durable storage writer, baseline manifest, or playback consumer is installed.
-Other typed commands and whole-session replay remain open.
+controller boundary and cannot be deferred by the external queue. A completed
+capture can be exported on native hosts with `ExportSessionInputCapture`:
+immutable records enter the shared background admission queue for versioned
+encoding, then `lunco-storage` writes and reads back the bounded archive on
+Bevy's I/O pool. Each capture has a monotonic app-local identity and can be
+durably exported only once after a successful write; failed writes may be
+retried. The typed export status reports the capture and export identities plus
+the read-back result.
+Archives are capped at 65,536 records and 16 MiB and stored under the app's
+user-config session-captures directory. The archive still has no baseline
+manifest or playback consumer, so it does not provide whole-session replay.
+Other typed commands remain outside capture.
 
 Floating-point addition is order dependent. Every reduction that contributes
 to authoritative state needs a stable input order. Parallel physics is

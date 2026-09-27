@@ -1,6 +1,6 @@
 # Command Journal — authored mutations and session replay inputs
 
-> Status: Partial in-memory input capture; durable replay remains design work · Audience: contributors adding new domain mutations
+> Status: Partial typed input capture with bounded archive export; whole-session replay remains design work · Audience: contributors adding new domain mutations
 >
 > This page covers the future command/session journal. The current authored
 > document journal is defined in [`18-unified-journal-and-history.md`](18-unified-journal-and-history.md).
@@ -15,8 +15,9 @@ actions into authored document operations: document-backed `SpawnEntity` uses
 replication.
 `AcquireControl`, `SetPorts`, terrain spawning, time control, and other
 transient runtime actions still lack complete session capture, so deterministic
-session replay is not built. Captured records can be encoded as a bounded,
-versioned binary archive, but there is no durable writer or playback consumer.
+session replay is not built. A completed capture can be exported as a bounded,
+versioned binary archive; baseline state, remaining command inputs, and a
+playback consumer are still absent.
 
 The Twin journal owns authored document mutations. A separate session replay
 input stream must own transient external inputs such as per-tick controls and
@@ -161,11 +162,22 @@ admission and network replication. The canonical `WorldGrid` has deterministic
 content provenance for stable active-frame identity. Document-backed spawning
 continues through `ApplyUsdOps` and the Twin journal, without a duplicate
 session-input record. `SessionInputCaptureArchive` checks the record contract
-and encodes a versioned archive bounded to 65,536 records and 16 MiB. Runtime
-capture remains memory-backed; no storage writer, baseline manifest, or
-playback consumer is installed. The ingress queue and `CausalTrace` remain
-separate from durable replay storage. Other command payloads and whole-session
-replay remain open.
+and encodes a versioned archive bounded to 65,536 records and 16 MiB.
+On native hosts, `ExportSessionInputCapture` accepts a completed capture,
+shares its immutable records with a `Background`-priority `AsyncWorkAdmission`
+job, encodes away from the simulation schedule, and writes through
+`lunco-storage` on Bevy's I/O pool. The app writes under
+`<user-config>/session-captures/` using a validated filename stem and unique
+operation suffix, refuses an existing output, reads the file back, decodes it,
+and compares the records before reporting `complete`. Capture IDs are
+monotonic for the app session, and a successfully exported capture cannot be
+exported twice; failed exports retain retry eligibility.
+`ReadSessionInputArchiveExport` exposes the capture and export IDs with pending,
+complete, or failed status.
+This persists the bounded input slice; it does not include a baseline manifest
+or playback consumer, so whole-session replay remains open. The ingress queue
+and `CausalTrace` remain separate from durable replay storage. Other command
+payloads also remain open.
 
 ## Replay implementation boundary
 
@@ -187,14 +199,15 @@ recorded semantic input through controller translation and the normal
 event/command path, so Rhai and Modelica behavior are re-derived once.
 Capturing a derived command as an external input would apply its effect twice.
 
-The current queue and in-memory stream have explicit bounds. A durable writer
-must run outside the fixed schedule. A full queue, record limit, or failed
-writer must end recording with a visible error; it must not drop frames
-silently or stall simulation. Runtime-spawned entities carry their reserved
+The current queue and in-memory stream have explicit bounds. Archive encoding
+uses the shared background admission queue and durable file access uses the
+I/O task pool, outside the fixed schedule. A full queue, record limit, or
+failed writer leaves visible failure status; it must not drop frames silently
+or stall simulation. Runtime-spawned entities carry their reserved
 authoritative identity in the spawn action, while content-derived entities use
 their existing stable `GlobalEntityId`.
-Recording and playback remain unimplemented until a durable writer and playback
-consumer satisfy the lifecycle, ordering, and failure requirements above.
+Playback remains unimplemented until a baseline manifest and playback consumer
+satisfy the lifecycle, ordering, and failure requirements above.
 
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and
