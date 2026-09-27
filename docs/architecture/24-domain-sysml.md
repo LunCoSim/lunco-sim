@@ -127,8 +127,8 @@ Griffin component model:
   (rather than a hard-coded quantity-name table);
 - collection cardinality kept separate from its scalar element category;
 - authored quantity-literal unit suffixes retained as lexical source data,
-  with resolved measurement-unit feature identity and declared unit type when
-  the source reference resolves;
+  with resolved measurement-unit feature identity, declared unit type, SI
+  dimension, and conversion scale when the source reference resolves;
 - enumeration and structured-value categories;
 - part, item, and port element categories from resolved definitions;
 - an explicit Modelica mapping for scalar/quantity values, primitive arrays,
@@ -143,12 +143,20 @@ does not carry a second unit field. Compatibility is based on SI dimensions,
 and compatible quantities are converted for addition, subtraction, comparison,
 minimum, and maximum. Multiplication, division, powers, and square roots return
 coherent SI units. `SysmlQuantityLiteral.measurement_reference` now carries the
-resolved SysML unit feature handle and declared unit type. The sibling
-`unit_symbol` is source spelling only. Unit dimensions and scale/offset are not
-yet projected from the standard `MeasurementUnit` and `MeasurementScale`
-definitions into `lunco-engineering-values`, so source literals with units
-still cannot enter the constraint evaluator as quantities without a
-provider-supplied `Unit`.
+resolved SysML unit feature handle, declared unit type, and an optional
+standard-derived definition. `MeasurementUnit` definitions project quantity
+power factors, coherent SI base-unit scales, linear reference-unit conversions,
+prefixes, and supported multiplicative unit initializers into SI dimensions and
+scale. Numeric conversion-factor expressions support arithmetic including
+integer powers; addition of dimensioned units is rejected. Conversion exactness
+metadata is not yet carried into native quantities, so downstream verification
+must not treat an approximate standard conversion factor as an exact measurement.
+The Rhai adapter constructs a native `EngineeringUnit` from that typed
+definition, and a source-literal quantity enters the neutral evaluator as a
+native `Quantity`. The sibling `unit_symbol` remains source spelling only.
+`MeasurementScale` mappings and malformed or unsupported unit definitions do
+not produce a runtime unit, so they remain unavailable instead of receiving a
+guessed conversion.
 
 Spatial values do not use a second vector implementation. The Rhai adapter
 lowers the standard `CartesianThreeVectorValue` to the existing f64 Bevy/glam
@@ -163,16 +171,15 @@ the declared type and multiplicity to distinguish the vector's three scalar
 components from the collection of vectors. Twin Rhai must consume this typed
 value rather than reconstructing it from `AnalyzeSysml` syntax records.
 
-Unit-bearing coordinates remain arrays of typed scalar `Quantity` values in
-the generic SysML-to-Rhai bridge. A geometry policy may lower a
-`LengthValue[3]` to `DVec3` only after it resolves and validates each
-component's unit through the authored UCUM-compatible catalog and the native
-quantity seam. The current Modelica geometry adapter performs that explicit
-conversion to canonical metres; it never infers a unit from a bare number.
-This keeps numeric vectors and dimensioned positions distinct. Rhai receives
-one native `SysmlType` value instead of duplicate hand-built type maps. Unit
-suffixes remain authored symbols and unresolved symbols fail the adapter; no
-conversion is silently guessed or dropped.
+Unit-bearing coordinates remain arrays of typed scalar `SysmlQuantityLiteral`
+values in the generic SysML-to-Rhai bridge. A geometry policy may lower a
+`LengthValue[3]` to `DVec3` only after it resolves each component's typed
+measurement reference, verifies the engineering-unit dimension, and converts
+the native quantity to coherent SI. The Modelica geometry adapter uses this
+source-derived path; it never looks up the lexical unit spelling or infers a
+unit from a bare number. This keeps numeric vectors and dimensioned positions
+distinct. Rhai receives one native `SysmlType` value instead of duplicate
+hand-built type maps.
 
 The parser and source projection retain the declared elements and resolved
 relationships from the selected files. Resolved function-call expressions now
@@ -217,8 +224,9 @@ Out-of-range and zero/negative indices produce explicit evaluation errors.
 General derived-feature evaluation, feature-chain navigation, user-defined
 function-body execution, default-argument expansion and overload resolution
 beyond recognized standard functions, feature-valued or N-dimensional
-collections and aggregates beyond the supported scalar functions, SysML
-unit-definition resolution and static dimension inference,
+collections and aggregates beyond the supported scalar functions, static unit
+inference for quantity feature types and non-linear or affine
+`MeasurementScale` mappings,
 redefinition/subsetting semantics, temporal/behavioral execution, and
 applicability/configuration semantics still require generic language support.
 KerML defines operator expressions through function invocation and overload
@@ -462,17 +470,18 @@ dimensions, scale, and optional affine offset), validates finite values, and
 performs dimension-safe conversion. It deliberately does not parse unit names
 or contain SysML, USD, Modelica, Griffin, or relationship vocabulary.
 
-The UCUM-compatible unit catalog is authored at the Rhai library edge and can
-be replaced by a Twin/SysML library. Rhai policy selects the catalog entry,
-chooses the relation and tolerance, queries USD facts, and orchestrates
-Modelica/Rumoca. Native Rust functions only perform the generic value
+The UCUM-compatible unit catalog is authored at the Rhai library edge for
+explicit unit input at non-SysML boundaries. SysML source quantities use their
+resolved standard measurement-unit definition and never consult that catalog.
+Rhai policy chooses the relation and tolerance, queries USD facts, and
+orchestrates Modelica/Rumoca. Native Rust functions perform the generic value
 operation and return residual-ready values. Provider observations must carry a
 native `Quantity` built from a resolved `EngineeringUnit`; put an optional
 typed `EngineeringUnit` in `BindingContract.unit`. Separate observation unit
 labels and `{ value, unit: "..." }` quantity maps are rejected. The current
-SysML source projection still preserves a literal suffix as source spelling;
-resolving that suffix to a standard or project unit definition is an open
-semantic-resolution gap. This keeps the source-of-truth chain explicit:
+SysML projection retains suffix spelling for display and resolves supported
+linear `MeasurementUnit` definitions from the semantic model. Unsupported
+scales stay unavailable. This keeps the source-of-truth chain explicit:
 
 ```text
 SysML intent and typed constants

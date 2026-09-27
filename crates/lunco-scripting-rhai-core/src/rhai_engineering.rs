@@ -90,6 +90,12 @@ fn quantity_value_in(quantity: Quantity, unit: Unit) -> Result<f64, Box<EvalAltR
         .map_err(|unit_error| runtime_error(unit_error.to_string()))
 }
 
+fn quantity_si_value(quantity: Quantity) -> Result<f64, Box<EvalAltResult>> {
+    quantity
+        .si_value()
+        .map_err(|unit_error| runtime_error(unit_error.to_string()))
+}
+
 /// Register the single engineering quantity surface used by source, scene,
 /// and simulation adapters.
 pub fn register(engine: &mut Engine) {
@@ -118,6 +124,7 @@ pub fn register(engine: &mut Engine) {
         .register_fn("engineering_unit_scale", unit_scale)
         .register_fn("quantity_in", quantity_in)
         .register_fn("quantity_value_in", quantity_value_in);
+    engine.register_fn("quantity_si_value", quantity_si_value);
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@
 //! and Rhai can share one stable read-side contract.
 
 pub mod lint_facts;
+mod unit_resolution;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1214,6 +1215,28 @@ pub struct SysmlMeasurementReference {
     pub short_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declared_type: Option<SysmlTypeRef>,
+    /// Resolved linear unit definition projected from the standard SysML
+    /// measurement-unit semantics. Measurement scales that need an affine or
+    /// nonlinear mapping do not populate this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_definition: Option<SysmlUnitDefinition>,
+}
+
+/// SI conversion semantics resolved from a SysML `MeasurementUnit`.
+///
+/// The source feature handle remains the unit's identity; this record carries
+/// only the generic dimension and affine conversion needed by engineering
+/// values. `offset_to_si` is zero for SysML `MeasurementUnit` definitions,
+/// whose standard conversion contract is linear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlUnitDefinition {
+    /// SI base exponents in length, mass, time, current, temperature, amount,
+    /// and luminous-intensity order.
+    pub dimension: [i8; 7],
+    /// Multiplicative conversion from the authored unit to coherent SI.
+    pub scale_to_si: SysmlNumber,
+    /// Additive conversion to coherent SI.
+    pub offset_to_si: SysmlNumber,
 }
 
 impl PartialEq for SysmlMeasurementReference {
@@ -2962,6 +2985,7 @@ fn attribute_type_reference(
 
 fn resolved_measurement_reference(
     workspace: &mut Workspace,
+    unit_resolver: &mut unit_resolution::SysmlUnitResolver,
     file_index: usize,
     source_start: usize,
     source_end: usize,
@@ -3021,6 +3045,7 @@ fn resolved_measurement_reference(
                 },
                 qualified_name: workspace.qualified_name_of(unit_type),
             }),
+            unit_definition: unit_resolver.definition(target),
         })
     });
     let reference = resolved.next()?;
@@ -3045,6 +3070,7 @@ fn project_attributes(
         workspace,
         "MeasurementReferences::ScalarMeasurementReference",
     );
+    let mut unit_resolver = unit_resolution::SysmlUnitResolver::new(workspace);
     elements
         .iter()
         .filter(|element| element.kind == "AttributeDefinition" || element.kind == "AttributeUsage")
@@ -3128,6 +3154,7 @@ fn project_attributes(
                     source_start,
                     file_index,
                     scalar_measurement_reference_root,
+                    &mut unit_resolver,
                     workspace,
                     source_revision,
                     source_fingerprint,
@@ -3241,6 +3268,7 @@ fn bind_literal_measurement_references(
     source_start: usize,
     file_index: usize,
     measurement_reference_root: Option<ElementId>,
+    unit_resolver: &mut unit_resolution::SysmlUnitResolver,
     workspace: &mut Workspace,
     source_revision: u64,
     source_fingerprint: u64,
@@ -3269,6 +3297,7 @@ fn bind_literal_measurement_references(
                 source_start + 1 + offset,
                 file_index,
                 measurement_reference_root,
+                unit_resolver,
                 workspace,
                 source_revision,
                 source_fingerprint,
@@ -3282,6 +3311,7 @@ fn bind_literal_measurement_references(
     };
     projected.measurement_reference = resolved_measurement_reference(
         workspace,
+        unit_resolver,
         file_index,
         source_start + unit_start,
         source_start + unit_end,

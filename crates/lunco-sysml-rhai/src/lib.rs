@@ -6,7 +6,7 @@
 
 use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
-use lunco_engineering_values::{Quantity, Unit};
+use lunco_engineering_values::{Dimension, Quantity, Unit};
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraintKind, SysmlDiagnostic, SysmlElement,
     SysmlElementHandle, SysmlEnumValue, SysmlExpression, SysmlExpressionKind,
@@ -826,6 +826,13 @@ fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
     if let Some(value) = value.clone().try_cast::<Quantity>() {
         return Some(IrValue::Quantity(value));
     }
+    if let Some(value) = value.clone().try_cast::<SysmlQuantityValue>() {
+        let reference = value.measurement_reference.as_ref()?;
+        let unit = engineering_unit_from_reference(reference)?;
+        return Quantity::with_unit(value.value.as_f64(), unit)
+            .ok()
+            .map(IrValue::Quantity);
+    }
     if let Ok(value) = value.as_bool() {
         return Some(IrValue::Boolean(value));
     }
@@ -860,6 +867,17 @@ fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
         return None;
     }
     Some(nested)
+}
+
+fn engineering_unit_from_reference(reference: &SysmlMeasurementReference) -> Option<Unit> {
+    let definition = reference.unit_definition?;
+    Unit::new(
+        reference.qualified_name.clone(),
+        Dimension(definition.dimension),
+        definition.scale_to_si.as_f64(),
+        definition.offset_to_si.as_f64(),
+    )
+    .ok()
 }
 
 fn dynamic_u64(value: &Dynamic) -> Option<u64> {
@@ -1522,6 +1540,14 @@ pub fn register_sysml_types(engine: &mut Engine) {
                 reference
                     .declared_type
                     .clone()
+                    .map(Dynamic::from)
+                    .unwrap_or(Dynamic::UNIT)
+            },
+        )
+        .register_get(
+            "engineering_unit",
+            |reference: &mut SysmlMeasurementReference| {
+                engineering_unit_from_reference(reference)
                     .map(Dynamic::from)
                     .unwrap_or(Dynamic::UNIT)
             },

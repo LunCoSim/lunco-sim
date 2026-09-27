@@ -1016,6 +1016,28 @@ fn measurement_reference_facts(value: &SysmlMeasurementReference) -> H {
                 .map(type_ref_facts)
                 .unwrap_or(H::Unit),
         ),
+        (
+            "unit_definition",
+            value
+                .unit_definition
+                .map(|definition| {
+                    H::map([
+                        (
+                            "dimension",
+                            H::Array(
+                                definition
+                                    .dimension
+                                    .into_iter()
+                                    .map(|exponent| H::Int(i64::from(exponent)))
+                                    .collect(),
+                            ),
+                        ),
+                        ("scale_to_si", H::Float(definition.scale_to_si.as_f64())),
+                        ("offset_to_si", H::Float(definition.offset_to_si.as_f64())),
+                    ])
+                })
+                .unwrap_or(H::Unit),
+        ),
     ])
 }
 
