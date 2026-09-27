@@ -399,6 +399,9 @@ impl Plugin for LunCoSimUiPlugin {
             },
         });
 
+        #[cfg(feature = "sysml")]
+        app.add_plugins(lunco_sysml_ui::SysmlUiPlugin);
+
         // Forced window placement (`--window-pos`). Parses the flag and (when
         // present) inserts the resource, suppresses geometry persistence, and
         // registers the placer system — all in `lunco-workbench` so any binary

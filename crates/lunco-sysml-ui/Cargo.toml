@@ -1,0 +1,24 @@
+[package]
+name = "lunco-sysml-ui"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Focused SysML requirements and source editing panels for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+bevy_egui = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-sysml = { path = "../lunco-sysml" }
+lunco-sysml-ast = { path = "../lunco-sysml-ast" }
+lunco-telemetry-core = { path = "../lunco-telemetry-core" }
+lunco-theme = { path = "../lunco-theme" }
+lunco-twin = { path = "../lunco-twin" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
+lunco-workspace = { path = "../lunco-workspace" }
+
+[lints]
+workspace = true

@@ -6,7 +6,7 @@ use std::sync::{Mutex, OnceLock};
 use bevy::prelude::{Component, Entity, Resource, World};
 use egui::{Color32, CornerRadius, Frame, Margin, Ui};
 
-use crate::trigger_or_defer;
+use crate::{PerspectiveId, trigger_or_defer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Stable identifier for a panel or instance-panel kind.
@@ -253,6 +253,13 @@ pub trait Panel: Send + Sync + 'static {
     /// Menu group.
     fn menu_group(&self) -> PanelMenuGroup {
         PanelMenuGroup::Other
+    }
+    /// Perspective that owns this panel's normal workflow, when it has one.
+    /// Explicit focus requests activate this perspective before opening the
+    /// panel, so a panel cannot report success while remaining in a hidden
+    /// perspective dock.
+    fn preferred_perspective(&self) -> Option<PerspectiveId> {
+        None
     }
     /// Whether the panel may be closed.
     fn closable(&self) -> bool {

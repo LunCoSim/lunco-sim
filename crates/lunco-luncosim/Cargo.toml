@@ -150,6 +150,7 @@ native-plugins = [
 rhai-tls = ["lunco-rhai-repl/tls"]
 sysml = [
     "lunco-luncosim-runtime/sysml",
+    "lunco-luncosim-ui?/sysml",
     "lunco-scene-runner/sysml",
     "lunco-scripting-rhai-world/sysml",
 ]

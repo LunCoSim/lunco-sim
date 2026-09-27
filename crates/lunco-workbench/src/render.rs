@@ -3343,6 +3343,10 @@ mod tests {
             PanelSlot::SideBrowser
         }
 
+        fn preferred_perspective(&self) -> Option<PerspectiveId> {
+            Some(PerspectiveId("focus_home"))
+        }
+
         fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
     }
 
@@ -3370,6 +3374,31 @@ mod tests {
                 .is_some()
         );
         assert_eq!(layout.side_browser, [PanelId("focus_fixture")]);
+    }
+
+    #[test]
+    fn focus_panel_activates_its_declared_perspective_before_opening() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register(FocusPanelFixture);
+        layout.register(DockPanel(PanelId("center")));
+        layout.register_perspective(CenterPerspective {
+            id: PerspectiveId("focus_home"),
+        });
+        layout.register_perspective(CenterPerspective {
+            id: PerspectiveId("other"),
+        });
+        layout.activate_perspective(PerspectiveId("other"));
+
+        focus_registered_panel(&mut layout, "focus_fixture");
+
+        assert_eq!(
+            layout.active_perspective(),
+            Some(PerspectiveId("focus_home"))
+        );
+        assert_eq!(
+            layout.focused_tab(),
+            Some(&TabId::Singleton(PanelId("focus_fixture")))
+        );
     }
 
     struct DockPanel(PanelId);
