@@ -255,6 +255,12 @@ impl ModelicaCompiler {
         let Some(parsed) = lunco_modelica_library::source_library::parsed_source_bundle() else {
             return false;
         };
+        let Some(bundle_revision) =
+            lunco_modelica_library::source_library::parsed_source_bundle_revision()
+        else {
+            log::error!("[ModelicaCompiler] could not compute source-bundle content revision");
+            return false;
+        };
         let docs = (**parsed).clone();
         let roots = source_roots_from_parsed_docs(&docs);
         if roots.is_empty() {
@@ -267,10 +273,8 @@ impl ModelicaCompiler {
             None,
         );
         self.installed_roots.extend(roots);
-        self.library_revisions.insert(
-            "source-bundle".to_string(),
-            source_set_revision("source-bundle", &[]),
-        );
+        self.library_revisions
+            .insert("source-bundle".to_string(), bundle_revision);
         inserted > 0
     }
 

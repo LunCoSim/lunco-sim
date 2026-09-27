@@ -39,6 +39,7 @@
 //! single reader and marks each projected entity with `UsdSceneProjected`.
 
 use bevy::asset::AssetId;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid};
@@ -1898,6 +1899,12 @@ fn any_pending_usd_meshes(q: Query<(), With<PendingUsdMesh>>) -> bool {
     !q.is_empty()
 }
 
+#[derive(SystemParam)]
+struct LiveUsdVisualChildren<'w, 's> {
+    children: Query<'w, 's, &'static Children>,
+    paths: Query<'w, 's, &'static UsdPrimPath>,
+}
+
 /// Project USD prims until the configured wall-clock budget is exhausted.
 ///
 /// The queue is the only structural projection boundary: each admitted prim is
@@ -1933,8 +1940,8 @@ fn process_queued_usd_visuals(
         )>,
     >,
     q_grid: Query<&Grid>,
+    live_children: LiveUsdVisualChildren,
     q_child_of: Query<&ChildOf>,
-    q_live_paths: Query<(Entity, &UsdPrimPath, Option<&ChildOf>)>,
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     q_entities: Query<Entity>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
@@ -1974,13 +1981,22 @@ fn process_queued_usd_visuals(
     let mut queued: Vec<_> = q.iter().collect();
     queued.sort_by(|left, right| left.1.path.cmp(&right.1.path));
 
-    // Include already projected and already queued children. The parent
-    // projection may run after an incremental descendant spawn, so a query
-    // limited to the pending queue would still admit the same child twice.
+    // Index only the existing children of parents admitted in this batch. A
+    // whole-world prim scan here made a small incremental projection pay for
+    // every live USD entity in the scene. The parent projection may run after
+    // an incremental descendant spawn, so pending-queue membership alone
+    // would still admit the same child twice.
     let mut live_child_keys = std::collections::HashSet::new();
-    for (_entity, path, child_of) in &q_live_paths {
-        let Some(child_of) = child_of else { continue };
-        live_child_keys.insert((child_of.parent(), path.stage_handle.id(), path.path.clone()));
+    for (parent, ..) in &queued {
+        let Ok(children) = live_children.children.get(*parent) else {
+            continue;
+        };
+        for child in children.iter() {
+            let Ok(path) = live_children.paths.get(child) else {
+                continue;
+            };
+            live_child_keys.insert((*parent, path.stage_handle.id(), path.path.clone()));
+        }
     }
 
     for (entity, prim_path, vis, tf, is_instance_root, member, instance_projection) in queued {

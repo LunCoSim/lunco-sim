@@ -275,10 +275,14 @@ that boundary; process-local ECS ids do not.
 Generated Modelica source synthesis uses the same active-or-committed Twin
 generation in `Twin/Lifecycle/Preparation`, with no elapsed clock. The owner
 captures this context before dispatching synthesis to the async worker, so both
-the async startup path and synchronous live projection invoke the same policy
-contract. Both shipped synthesis policies reject calls from scenario, UI, or
-REPL cycles. Async results must still match that Twin generation as well as the
-canonical USD generation or exact prepared instance plan before publication.
+the async startup path and live projection invoke the same policy contract.
+Immutable prepared plans run full graph extraction, Rhai policy, and source
+validation on workers. A live canonical OpenUSD reader stays main-thread-owned;
+its typed network snapshot is sent through the bounded worker admission path,
+which performs policy and source validation off-cycle. Completed networks
+publish in request order, at most one per Update, after matching the Twin,
+canonical USD, or exact prepared instance generation. Both shipped synthesis
+policies reject calls from scenario, UI, or REPL cycles.
 The settled USD scene-time owner uses the completed edge's `SceneTransitionId`
 for `scene.time.select` in the same `Twin/Lifecycle/Preparation` context. The
 typed selection carries that id through its deferred application; the time

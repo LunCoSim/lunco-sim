@@ -70,6 +70,9 @@ Defined in [`01-ontology.md`](01-ontology.md) section 4a:
   Binding revisions are raised by topology, endpoint, and Modelica lifecycle
   changes; an open-but-unsettled epoch is checked for readiness without
   repeatedly requesting a full connection and causal-graph reconciliation.
+  The `ResMut<BindingRevision>` boundary is touched only when the epoch opens or
+  seals, because Bevy observes a mutable dereference as a change even when an
+  idempotent transition method leaves the resource's values unchanged.
   The composed Modelica-network membership fact has one shared cache in
   `lunco-usd-bevy-core::program`, keyed by stage asset, generation, and runtime
   instance. Initial program projection and co-simulation wiring reuse the same

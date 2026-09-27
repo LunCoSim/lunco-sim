@@ -51,6 +51,27 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
                 "PhysicsPerformance: Avian total diagnostics are not installed",
             ));
         };
+        let Some(diagnostics) = world.get_resource::<bevy::diagnostic::DiagnosticsStore>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "PhysicsPerformance: Bevy diagnostics store is not installed",
+            ));
+        };
+        let Some(step_time_diagnostic) =
+            diagnostics.get(avian3d::diagnostics::PhysicsTotalDiagnostics::STEP_TIME)
+        else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "PhysicsPerformance: Avian total-step history is not registered",
+            ));
+        };
+        let step_time_samples_ms = step_time_diagnostic.values().copied().collect::<Vec<_>>();
+        if step_time_samples_ms.is_empty() {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "PhysicsPerformance: no completed Avian steps are available yet",
+            ));
+        }
 
         let mut bodies = 0usize;
         let mut dynamic = 0usize;
@@ -125,6 +146,7 @@ impl ApiQueryProvider for PhysicsPerformanceProvider {
         Ok(Some(api_value!({
             "step_number": timing.step_number,
             "step_time_ms": timing.step_time.as_secs_f64() * 1000.0,
+            "step_time_samples_ms": step_time_samples_ms,
             "entities": entities,
             "bodies": bodies,
             "dynamic_bodies": dynamic,

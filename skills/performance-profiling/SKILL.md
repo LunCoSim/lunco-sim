@@ -5,8 +5,8 @@ description: Diagnose or improve LunCoSim FPS, physics time, periodic stalls, Bu
 
 # Performance profiling: measure the owner, then remove avoidable work
 
-Read [`scripts/perf/README.md`](../../scripts/perf/README.md) and the current
-open handover in [`docs/reviews/open-400fps-performance-handover.md`](../../docs/reviews/open-400fps-performance-handover.md)
+Read the current handover in
+[`docs/reviews/open-400fps-performance-handover.md`](../../docs/reviews/open-400fps-performance-handover.md)
 before changing code. A status-bar FPS number is a symptom, not an attribution.
 
 ## Required separation
@@ -78,7 +78,9 @@ Keep readiness checks separate from reconciliation requests. An unresolved
 async participant may require a cheap readiness check on later frames, but a
 shared revision that wakes full topology or causal-graph work should advance
 only when topology or endpoint lifecycle facts actually change—not merely
-because readiness is still pending.
+because readiness is still pending. Guard `ResMut` revisions by comparing the
+owner's state before calling a mutating method: Bevy marks the resource changed
+on mutable dereference even when an idempotent method leaves its value alone.
 
 `SimComponent` input/output shape is tracked by `lunco-port-core::ScalarPortMap`.
 Its identity key changes at insert/remove/clear boundaries, while numeric sample
@@ -169,6 +171,15 @@ If the hot path is not established, stop after source inspection and capture a
 bounded profile rather than guessing.
 
 ## Evidence
+
+For whole fixed-step timing, use the `PhysicsPerformance` query's
+`step_time_samples_ms` history in every host that installs the shared USD
+physics runtime. It returns retained `PhysicsTotalDiagnostics.step_time`
+samples, one per completed physics step; compute p50/p95/p99/max from that
+array after the measurement window. The query also returns the current
+`step_time_ms` and `step_number`, and the editor publishes the same current
+sample through `engine-health.physics_step_ms`. Query once per window because
+`PhysicsPerformance` also counts live topology and is not a per-step sampler.
 
 Record the clean FPS window, physics and render timings, Tracy capture path,
 scene/settings, and whether the result is startup or settled. Rebuild the

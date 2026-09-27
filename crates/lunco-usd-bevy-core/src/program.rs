@@ -29,8 +29,9 @@ struct ModelicaNetworkMembershipKey {
     instance: Option<u64>,
 }
 
-/// Shared composed-stage membership facts used by program projection and
-/// connection wiring. Values are send-safe; no live OpenUSD reader is retained.
+/// Shared composed-stage membership facts used by program projection, cosim
+/// participant admission, and connection wiring. Values are send-safe; no live
+/// OpenUSD reader is retained.
 #[derive(Resource, Default)]
 pub struct ModelicaNetworkMembershipCache {
     entries: std::collections::HashMap<ModelicaNetworkMembershipKey, Arc<HashSet<String>>>,
@@ -432,6 +433,104 @@ pub fn is_domain_network_root(view: &dyn UsdReadObject, prim: &SdfPath) -> bool 
     view.any_attr_with_prefix(prim, "collection:components:")
 }
 
+/// Reusable root attributes and component paths for classifying a network's
+/// Modelica boundary without re-reading its USD collection for every port.
+/// Build this once per network read from the same composed reader and revision.
+pub struct ModelicaNetworkBoundaryIndex<'a> {
+    root: &'a SdfPath,
+    root_path: String,
+    root_attributes: &'a [String],
+    component_paths: HashSet<String>,
+}
+
+impl<'a> ModelicaNetworkBoundaryIndex<'a> {
+    /// Index one network root from its already-read attributes and collection.
+    pub fn new(root: &'a SdfPath, root_attributes: &'a [String], members: &[SdfPath]) -> Self {
+        Self {
+            root,
+            root_path: root.to_string(),
+            root_attributes,
+            component_paths: members
+                .iter()
+                .filter(|path| !path.is_property_path())
+                .map(ToString::to_string)
+                .collect(),
+        }
+    }
+
+    /// Whether a root output is sourced by a component and does not collide
+    /// with a same-named generated network input.
+    pub fn is_network_boundary_output(&self, view: &dyn UsdReadObject, attr: &str) -> bool {
+        let Some(name) = attr
+            .strip_prefix("outputs:")
+            .map(|name| name.strip_suffix(".connect").unwrap_or(name))
+        else {
+            return false;
+        };
+        if self.root_attributes.iter().any(|candidate| {
+            candidate
+                .strip_prefix("inputs:")
+                .map(|name| name.strip_suffix(".connect").unwrap_or(name))
+                == Some(name)
+        }) {
+            return false;
+        }
+        view.connections(self.root, attr).iter().any(|target| {
+            target
+                .rsplit_once(".outputs:")
+                .is_some_and(|(source, _)| self.component_paths.contains(source))
+        })
+    }
+
+    /// Resolve a root input forwarded through a root output to a component
+    /// output in this collection.
+    pub fn internal_network_input_source(
+        &self,
+        view: &dyn UsdReadObject,
+        input: &str,
+    ) -> Option<String> {
+        let input_name = input.strip_prefix("inputs:").unwrap_or(input);
+        let input_name = input_name.strip_suffix(".connect").unwrap_or(input_name);
+        let input_attr = self.root_attributes.iter().find(|attr| {
+            attr.strip_prefix("inputs:")
+                .map(|name| name.strip_suffix(".connect").unwrap_or(name))
+                == Some(input_name)
+        })?;
+        let input_connections = view.connections(self.root, input_attr);
+        let input_source = input_connections.first()?.as_str();
+        let (source_root, source_output) = input_source.split_once(".outputs:")?;
+        if source_root != self.root_path {
+            return None;
+        }
+        self.network_member_output_source(view, source_output)
+    }
+
+    /// Resolve a root output to a component output in this collection.
+    pub fn network_member_output_source(
+        &self,
+        view: &dyn UsdReadObject,
+        output: &str,
+    ) -> Option<String> {
+        let output_name = output.strip_prefix("outputs:").unwrap_or(output);
+        let output_name = output_name.strip_suffix(".connect").unwrap_or(output_name);
+        let output_attr = self.root_attributes.iter().find(|attr| {
+            attr.strip_prefix("outputs:")
+                .map(|name| name.strip_suffix(".connect").unwrap_or(name))
+                == Some(output_name)
+        })?;
+        let output_connections = view.connections(self.root, output_attr);
+        let member_output = output_connections.first()?.as_str();
+        self.member_output_target(member_output)
+    }
+
+    fn member_output_target(&self, member_output: &str) -> Option<String> {
+        let (member, _) = member_output.split_once(".outputs:")?;
+        self.component_paths
+            .contains(member)
+            .then(|| member_output.to_string())
+    }
+}
+
 /// Whether an authored root output is a Modelica network boundary.
 ///
 /// A vehicle root may carry ordinary output ports such as `drive_left` and
@@ -446,30 +545,26 @@ pub fn is_domain_network_root(view: &dyn UsdReadObject, prim: &SdfPath) -> bool 
 /// linter and projector from treating an actuator command surface as an
 /// unsourced or duplicate Modelica boundary.
 pub fn is_network_boundary_output(view: &dyn UsdReadObject, root: &SdfPath, attr: &str) -> bool {
+    let root_attributes = view.attr_names(root);
     let Some(name) = attr
         .strip_prefix("outputs:")
         .map(|name| name.strip_suffix(".connect").unwrap_or(name))
     else {
         return false;
     };
-    if view.attr_names(root).iter().any(|candidate| {
-        candidate.strip_suffix(".connect").unwrap_or(candidate) == format!("inputs:{name}")
+    if root_attributes.iter().any(|candidate| {
+        candidate
+            .strip_prefix("inputs:")
+            .map(|name| name.strip_suffix(".connect").unwrap_or(name))
+            == Some(name)
     }) {
         return false;
     }
     let Ok(members) = view.collection_members(root, "components") else {
         return false;
     };
-    let member_paths: HashSet<String> = members
-        .into_iter()
-        .filter(|path| !path.is_property_path())
-        .map(|path| path.to_string())
-        .collect();
-    view.connections(root, attr).iter().any(|target| {
-        target
-            .rsplit_once(".outputs:")
-            .is_some_and(|(source, _)| member_paths.contains(source))
-    })
+    ModelicaNetworkBoundaryIndex::new(root, &root_attributes, &members)
+        .is_network_boundary_output(view, attr)
 }
 
 /// Resolve a root input that is internally fed by a member output.
@@ -492,17 +587,20 @@ pub fn internal_network_input_source(
     let root_string = root.to_string();
     let input_name = input.strip_prefix("inputs:").unwrap_or(input);
     let input_name = input_name.strip_suffix(".connect").unwrap_or(input_name);
-    let input_attr = view.attr_names(root).into_iter().find(|attr| {
+    let root_attributes = view.attr_names(root);
+    let input_attr = root_attributes.iter().find(|attr| {
         attr.strip_prefix("inputs:")
             .map(|name| name.strip_suffix(".connect").unwrap_or(name))
             == Some(input_name)
     })?;
-    let input_source = view.connections(root, &input_attr).first()?.to_string();
+    let input_source = view.connections(root, input_attr).first()?.to_string();
     let (source_root, source_output) = input_source.split_once(".outputs:")?;
     if source_root != root_string {
         return None;
     }
-    network_member_output_source(view, root, source_output)
+    let members = view.collection_members(root, "components").ok()?;
+    ModelicaNetworkBoundaryIndex::new(root, &root_attributes, &members)
+        .network_member_output_source(view, source_output)
 }
 
 /// Resolve an authored root output to a generated member output.
@@ -516,19 +614,21 @@ pub fn network_member_output_source(
     root: &SdfPath,
     output: &str,
 ) -> Option<String> {
+    let root_attributes = view.attr_names(root);
     let output_name = output.strip_prefix("outputs:").unwrap_or(output);
     let output_name = output_name.strip_suffix(".connect").unwrap_or(output_name);
-    let output_attr = view.attr_names(root).into_iter().find(|attr| {
+    let output_attr = root_attributes.iter().find(|attr| {
         attr.strip_prefix("outputs:")
             .map(|name| name.strip_suffix(".connect").unwrap_or(name))
             == Some(output_name)
     })?;
-    let member_output = view.connections(root, &output_attr).first()?.to_string();
+    let member_output = view.connections(root, output_attr).first()?.to_string();
     let (member, _) = member_output.split_once(".outputs:")?;
     let members = view.collection_members(root, "components").ok()?;
-    members
-        .into_iter()
-        .any(|path| !path.is_property_path() && path.to_string() == member)
+    let index = ModelicaNetworkBoundaryIndex::new(root, &root_attributes, &members);
+    index
+        .component_paths
+        .contains(member)
         .then_some(member_output)
 }
 

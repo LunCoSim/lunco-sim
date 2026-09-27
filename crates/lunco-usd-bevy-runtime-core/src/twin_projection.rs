@@ -1353,6 +1353,7 @@ fn write_twin_overlay(
     rel: &str,
     generation: u64,
 ) -> bool {
+    let _span = bevy::log::info_span!("usd_twin_overlay_serialize_publish").entered();
     let source = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)
@@ -1394,7 +1395,10 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         Option<u64>,
         Option<u64>,
         Option<u64>,
-    )> = world.resource::<DocBackedTwinScenes>().entries().collect();
+    )> = {
+        let _span = bevy::log::info_span!("usd_twin_projection_snapshot_documents").entered();
+        world.resource::<DocBackedTwinScenes>().entries().collect()
+    };
     let preparing_docs: HashSet<_> = world
         .resource::<PendingTwinDocs>()
         .items
@@ -1411,21 +1415,26 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     // despawn and the new one's spawn. Project nothing rather than everything:
     // the incoming scene resumes on the tick its root appears.
     let mounted: Option<AssetId<UsdStageAsset>> = {
+        let _span = bevy::log::info_span!("usd_twin_projection_find_mounted_scene").entered();
         let mut q = world.query_filtered::<&UsdPrimPath, With<UsdSceneRoot>>();
         q.iter(world).next().map(|p| p.stage_handle.id())
     };
-    let active_doc: Option<DocumentId> = mounted.and_then(|id| {
-        let path = world.resource::<AssetServer>().get_path(id)?;
-        let rel = path.path().to_string_lossy().into_owned();
-        let (name, rel) = lunco_assets_core::split_twin_rel(&rel)?;
-        world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
-    });
+    let active_doc: Option<DocumentId> = {
+        let _span = bevy::log::info_span!("usd_twin_projection_resolve_active_document").entered();
+        mounted.and_then(|id| {
+            let path = world.resource::<AssetServer>().get_path(id)?;
+            let rel = path.path().to_string_lossy().into_owned();
+            let (name, rel) = lunco_assets_core::split_twin_rel(&rel)?;
+            world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
+        })
+    };
     // A preview may edit a referenced component document while another preview
     // is already showing an assembly that contains it.  Keep those two views
     // live as one graph: the component's `twin://` bytes are patched into every
     // loaded dependent recipe and its canonical stage is rebuilt in place.  The
     // viewport state (including orbit camera) is deliberately not touched.
     for (doc, name, rel, applied, view_applied, overlay_synced) in entries {
+        let _document_span = bevy::log::info_span!("usd_twin_projection_document_sync").entered();
         if preparing_docs.contains(&doc) {
             continue;
         }
@@ -1439,18 +1448,22 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // Read the generation before any whole-stage payload. The composed source
         // is serialized only when this event-driven owner observes a new
         // generation, never on the render loop.
-        let cur_gen = match world.resource::<DocumentRegistry<UsdDocument>>().host(doc) {
-            Some(h) => h.document().generation(),
-            None => {
-                if let Err(error) = world.resource::<TwinRoots>().clear_overlay(&name, &rel) {
-                    warn!("[usd-e1b] could not clear closed document overlay: {error}");
+        let (cur_gen, view_layer_is_empty) =
+            match world.resource::<DocumentRegistry<UsdDocument>>().host(doc) {
+                Some(h) => (
+                    h.document().generation(),
+                    h.document().view_data().is_empty(),
+                ),
+                None => {
+                    if let Err(error) = world.resource::<TwinRoots>().clear_overlay(&name, &rel) {
+                        warn!("[usd-e1b] could not clear closed document overlay: {error}");
+                    }
+                    world
+                        .resource_mut::<DocBackedTwinScenes>()
+                        .forget_document(doc);
+                    continue;
                 }
-                world
-                    .resource_mut::<DocBackedTwinScenes>()
-                    .forget_document(doc);
-                continue;
-            }
-        };
+            };
         if Some(cur_gen) == applied && Some(cur_gen) == view_applied {
             // The live stage is current. Durable runtime-layer persistence is
             // scheduled independently from DocumentChanged; there is no stage
@@ -1470,33 +1483,45 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .id();
 
         // The initial scene recipe contains base + runtime, but omits the
-        // disposable view layer. Keep a separate view cursor so presentation
-        // ops that predate the first live-stage mount are still replayed. A
-        // missing cursor starts at generation zero; an initial scene mount's
-        // persistent cursor already covers its base/runtime snapshot.
+        // disposable view layer. If that layer currently has opinions, retain
+        // the zero cursor so presentation ops that predate the first live-stage
+        // mount are replayed. An empty view layer needs no replay, so its cursor
+        // can start at the same snapshot generation as the persistent layers.
         let persistent_cursor = applied.unwrap_or(cur_gen);
-        let view_cursor = view_applied.unwrap_or(0);
+        let view_cursor = view_applied.unwrap_or_else(|| {
+            if view_layer_is_empty {
+                persistent_cursor
+            } else {
+                0
+            }
+        });
         let history_cursor = persistent_cursor.min(view_cursor);
         // `None` = the op ring overflowed (more edits than capacity since the
         // oldest cursor) → the composed document is the rebuild source.
-        let ops = world
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .host(doc)
-            .and_then(|h| h.document().ops_since(history_cursor));
-        let pending_ops = ops.map(|ops| {
-            ops.into_iter()
-                .enumerate()
-                .filter_map(|(index, op)| {
-                    let generation = history_cursor + index as u64 + 1;
-                    let cursor = if op.edit_target().is_view() {
-                        view_applied.unwrap_or(0)
-                    } else {
-                        persistent_cursor
-                    };
-                    (generation > cursor).then_some(op)
-                })
-                .collect::<Vec<_>>()
-        });
+        let ops = {
+            let _span = bevy::log::info_span!("usd_twin_projection_document_op_history").entered();
+            world
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .and_then(|h| h.document().ops_since(history_cursor))
+        };
+        let pending_ops = {
+            let _span = bevy::log::info_span!("usd_twin_projection_filter_pending_ops").entered();
+            ops.map(|ops| {
+                ops.into_iter()
+                    .enumerate()
+                    .filter_map(|(index, op)| {
+                        let generation = history_cursor + index as u64 + 1;
+                        let cursor = if op.edit_target().is_view() {
+                            view_applied.unwrap_or(0)
+                        } else {
+                            persistent_cursor
+                        };
+                        (generation > cursor).then_some(op)
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
         let has_work = pending_ops
             .as_ref()
             .map(|ops| !ops.is_empty())
@@ -1528,25 +1553,35 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
             .is_some_and(|stages| stages.get(scene_id).is_some());
         if has_work && !stage_ready {
-            let recipe = world
-                .resource::<Assets<UsdStageAsset>>()
-                .get(scene_id)
-                .and_then(|asset| asset.recipe.as_ref())
-                .cloned();
+            let recipe = {
+                let _span =
+                    bevy::log::info_span!("usd_twin_projection_clone_stage_recipe").entered();
+                world
+                    .resource::<Assets<UsdStageAsset>>()
+                    .get(scene_id)
+                    .and_then(|asset| asset.recipe.as_ref())
+                    .cloned()
+            };
             let Some(recipe) = recipe else {
                 // The asset loader has not published the recipe yet. Keep the
                 // document generation pending until the asset boundary makes
                 // the canonical stage available.
                 continue;
             };
-            let built = world
-                .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-                .is_some_and(|mut stages| stages.get_or_build(scene_id, &recipe).is_some());
+            let built = {
+                let _span =
+                    bevy::log::info_span!("usd_twin_projection_get_or_build_live_stage").entered();
+                world
+                    .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+                    .is_some_and(|mut stages| stages.get_or_build(scene_id, &recipe).is_some())
+            };
             if !built {
                 continue;
             }
         }
 
+        let _delta_span =
+            bevy::log::info_span!("usd_twin_projection_commit_document_delta").entered();
         match pending_ops {
             // Overflow, or a coarse op (ReplaceSource / MovePrim / keyframe
             // removal / composition arc — no incremental stage-author yet,
@@ -1555,6 +1590,8 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // next mount rebuilds its in-memory Twin overlay from the
             // document's persistent source.
             None => {
+                let _span =
+                    bevy::log::info_span!("usd_twin_projection_rebuild_history_gap").entered();
                 let cs = world
                     .resource::<DocumentRegistry<UsdDocument>>()
                     .host(doc)
@@ -1565,6 +1602,8 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 }
             }
             Some(ops) if ops.iter().any(op_needs_rebuild) => {
+                let _span =
+                    bevy::log::info_span!("usd_twin_projection_rebuild_coarse_ops").entered();
                 if !ensure_reference_layers_for_rebuild(world, scene_id, &ops) {
                     // Keep the document generation pending until every new
                     // reference closure is available to the live resolver.
@@ -1588,18 +1627,24 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // asynchronously; the in-memory Twin overlay is rebuilt on the
             // next mount rather than serializing the whole stage here.
             Some(ops) => {
+                let _span =
+                    bevy::log::info_span!("usd_twin_projection_apply_incremental_ops").entered();
                 for op in &ops {
                     apply_incremental_op_to_stage(world, scene_id, op);
                 }
             }
         }
+        drop(_delta_span);
 
-        world
-            .resource_mut::<DocBackedTwinScenes>()
-            .mark_applied(doc, scene_id, cur_gen);
-        world
-            .resource_mut::<DocBackedTwinScenes>()
-            .mark_view_applied(doc, scene_id, cur_gen);
+        {
+            let _span = bevy::log::info_span!("usd_twin_projection_commit_cursors").entered();
+            world
+                .resource_mut::<DocBackedTwinScenes>()
+                .mark_applied(doc, scene_id, cur_gen);
+            world
+                .resource_mut::<DocBackedTwinScenes>()
+                .mark_view_applied(doc, scene_id, cur_gen);
+        }
         // A standalone Editor preview has no `UsdSceneRoot`, so the live ECS
         // sink cannot publish its cursor through `live_consume`.  The preview
         // renders the canonical stage directly; mark that stage consumed here
@@ -1611,12 +1656,16 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 .resource_mut::<DocBackedTwinScenes>()
                 .mark_stage_projected(scene_id);
         } else {
+            let _span =
+                bevy::log::info_span!("usd_twin_projection_queue_live_stage_projection").entered();
             crate::live_consume::queue_stage_projection(world, doc, scene_id, cur_gen);
         }
         // The live stage now owns this generation. Do not serialize the whole
         // composed scene into the asset overlay for ordinary edits. A later
         // mount publishes the current document once; loaded dependent stages
         // receive the affected layer through the targeted refresh below.
+        let _span =
+            bevy::log::info_span!("usd_twin_projection_refresh_dependent_stage_assets").entered();
         refresh_dependent_stage_assets(world, doc, scene_id, &twin_path, active_twin_document);
     }
 }
@@ -2048,6 +2097,7 @@ fn incremental_api_schemas(schemas: &[String]) -> bool {
 /// ECS. Only incremental ops reach here; coarse ops ([`op_needs_rebuild`]) rebuild
 /// instead. Reads/authors the `!Send` stage under short borrows.
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
+    let _span = bevy::log::info_span!("usd_twin_projection_apply_incremental_op").entered();
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
 
     // A referenced AddPrim may be waiting on its asset closure. Preserve every
@@ -3112,11 +3162,12 @@ fn rebuild_scene_from_composed(
     scene_id: AssetId<UsdStageAsset>,
     composed_source: &str,
 ) -> bool {
-    use lunco_usd_bevy_stage::canonical::CanonicalStages;
+    use lunco_usd_bevy_stage::canonical::{CanonicalStage, CanonicalStages};
     use lunco_usd_compose::recipe::StageRecipe;
     // Recipe = the edited composed source as the root layer + every referenced
     // `.usda` the current stage already loaded (keyed by the same canonical ids).
     let (scene_layer, mut bytes) = {
+        let _span = bevy::log::info_span!("usd_twin_rebuild_snapshot_live_layers").entered();
         let Some(cs) = world
             .get_non_send::<CanonicalStages>()
             .and_then(|s| s.get(scene_id))
@@ -3127,23 +3178,39 @@ fn rebuild_scene_from_composed(
     };
     bytes.insert(scene_layer.clone(), composed_source.as_bytes().to_vec());
     let recipe = StageRecipe::new(scene_layer, bytes);
-    if let Err(error) = UsdStageProjectionPlan::from_recipe(&recipe) {
-        report_stage_projection_reset_failure(
-            world,
-            scene_id,
-            format!("edited composed source could not be prepared: {error}"),
-        );
+    let replacement = match {
+        let _span = bevy::log::info_span!("usd_twin_rebuild_prepare_live_stage").entered();
+        CanonicalStage::from_recipe(&recipe)
+    } {
+        Ok(stage) => stage,
+        Err(error) => {
+            report_stage_projection_reset_failure(
+                world,
+                scene_id,
+                format!("edited composed source could not rebuild the live stage: {error}"),
+            );
+            return false;
+        }
+    };
+    let reset_ready = {
+        let _span = bevy::log::info_span!("usd_twin_rebuild_prepare_world_reset").entered();
+        prepare_stage_projection_reset(world, scene_id)
+    };
+    if !reset_ready {
         return false;
     }
-    if !prepare_stage_projection_reset(world, scene_id) {
-        return false;
-    }
-    let rebuilt = world
-        .get_non_send_mut::<CanonicalStages>()
-        .map(|mut stages| stages.rebuild(scene_id, &recipe))
-        .unwrap_or(false);
+    let rebuilt = {
+        let _span = bevy::log::info_span!("usd_twin_rebuild_commit_live_stage").entered();
+        if let Some(mut stages) = world.get_non_send_mut::<CanonicalStages>() {
+            stages.replace_rebuilt(scene_id, replacement);
+            true
+        } else {
+            false
+        }
+    };
     if rebuilt {
         // Fresh stage (new, empty sink) — re-instantiate every scene root off it.
+        let _span = bevy::log::info_span!("usd_twin_rebuild_refresh_scene_visuals").entered();
         refresh_scene_visuals_prepared(world, scene_id)
     } else {
         report_stage_projection_reset_failure(

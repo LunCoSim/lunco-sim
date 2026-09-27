@@ -1354,6 +1354,12 @@ fn on_apply_usd_transient_ops(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
+        let _span = bevy::log::info_span!(
+            "usd_apply_transient_ops",
+            document_id = ?command.doc_id,
+            operation_count = command.ops.len(),
+        )
+        .entered();
         let total = command.ops.len();
         let outcome = apply_transient_ops_result(
             world,

@@ -50,6 +50,8 @@ pub enum AsyncWorkKind {
     ModelicaSourceParse,
     /// Prepare a Modelica source library.
     ModelicaLibraryPreparation,
+    /// Synthesize and validate a Modelica network from an immutable USD snapshot.
+    ModelicaNetworkSynthesis,
     /// Compile a Rhai scenario source revision.
     RhaiCompilation,
     /// Analyze a SysML source revision.

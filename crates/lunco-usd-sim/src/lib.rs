@@ -128,7 +128,6 @@ pub struct UsdSimPlugin;
 #[derive(Default)]
 struct StageJointTopology {
     canonical_generation: Option<u64>,
-    projection_revision: Option<u64>,
     joint_targets: HashMap<String, String>,
     /// Physical wheel revolute joints and their authored carrier body. The
     /// wheel projector uses this composed relationship instead of assuming a
@@ -157,11 +156,10 @@ struct StageJointTopology {
 
 /// Per-canonical-stage cache of immutable wheel/joint topology.
 ///
-/// The canonical stage generation catches live authored changes; the USD
-/// projection revision catches a replacement stage whose local generation
-/// starts at zero again after an asset reload. A stage is scanned once for that
-/// combined stamp rather than once for every frame that a prim waits for its
-/// visuals.
+/// The canonical stage generation catches live authored changes; stage-asset
+/// events retire an entry when the prepared stage is replaced. Scene-entity
+/// projection revisions do not change authored topology and must not trigger a
+/// new stage-wide scan as each prim materializes.
 #[derive(Resource, Default)]
 struct JointTopologyIndex {
     by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, StageJointTopology>,
@@ -182,13 +180,10 @@ impl JointTopologyIndex {
         &mut self,
         stage: bevy::asset::AssetId<UsdStageAsset>,
         generation: u64,
-        projection_revision: u64,
         reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     ) {
         let topology = self.by_stage.entry(stage).or_default();
-        if topology.canonical_generation == Some(generation)
-            && topology.projection_revision == Some(projection_revision)
-        {
+        if topology.canonical_generation == Some(generation) {
             return;
         }
         topology.joint_targets.clear();
@@ -201,11 +196,30 @@ impl JointTopologyIndex {
         topology.invalid_wheel_attachments.clear();
         collect_joint_scan_read(reader, topology);
         topology.canonical_generation = Some(generation);
-        topology.projection_revision = Some(projection_revision);
+    }
+
+    fn invalidate_stage(&mut self, stage: bevy::asset::AssetId<UsdStageAsset>) {
+        self.by_stage.remove(&stage);
     }
 
     fn get(&self, stage: bevy::asset::AssetId<UsdStageAsset>) -> Option<&StageJointTopology> {
         self.by_stage.get(&stage)
+    }
+}
+
+fn invalidate_joint_topology_on_stage_asset_event(
+    mut events: MessageReader<AssetEvent<UsdStageAsset>>,
+    mut topology: ResMut<JointTopologyIndex>,
+) {
+    for event in events.read() {
+        let stage = match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::Removed { id }
+            | AssetEvent::LoadedWithDependencies { id } => *id,
+            AssetEvent::Unused { .. } => continue,
+        };
+        topology.invalidate_stage(stage);
     }
 }
 
@@ -362,6 +376,7 @@ impl Plugin for UsdSimPlugin {
         .add_systems(PreUpdate, resolve_differential_coupling)
         .init_resource::<GroundColliderPending>()
         .init_resource::<JointTopologyIndex>()
+        .add_systems(PreUpdate, invalidate_joint_topology_on_stage_asset_event)
         .add_systems(
             Update,
             (process_usd_sim_prims
@@ -472,7 +487,6 @@ fn process_usd_sim_prims(
     // use the live canonical stage selected by the shared reader boundary.
     canonical: NonSend<CanonicalStages>,
     mut topology_index: ResMut<JointTopologyIndex>,
-    stage_revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     mut runtime_diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
     let started = web_time::Instant::now();
@@ -501,7 +515,7 @@ fn process_usd_sim_prims(
         }
         if let Some(stage_asset) = stages.get(&prim_path.stage_handle) {
             let (reader, generation) = canonical.reader_for(id, stage_asset);
-            topology_index.refresh_if_stale(id, generation, stage_revision.0, &reader);
+            topology_index.refresh_if_stale(id, generation, &reader);
         }
     }
 
@@ -3477,7 +3491,7 @@ def Xform "Rover" {
         let id = Handle::<UsdStageAsset>::default().id();
         let mut index = JointTopologyIndex::default();
 
-        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        index.refresh_if_stale(id, stage.generation(), &stage.view());
         let topology = index.get(id).expect("first generation is indexed");
         assert_eq!(
             topology.joint_targets.get("/Rover/Wheel"),
@@ -3502,27 +3516,27 @@ def Xform "Rover" {
             "the physical-wheel projector owns the synthesized wheel constraint"
         );
         assert_eq!(topology.canonical_generation, Some(stage.generation()));
-        assert_eq!(topology.projection_revision, Some(1));
 
-        // Same stamp is a cache hit; a new projection revision (for example an
-        // asset reload that replaces a generation-zero canonical stage) must
-        // rebuild instead of retaining stale topology.
+        // New ECS prims do not change composed topology. Keep the cached scan
+        // until the canonical generation changes or the stage asset is replaced.
         index
             .by_stage
             .get_mut(&id)
             .expect("indexed stage")
             .joint_targets
             .clear();
-        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        index.refresh_if_stale(id, stage.generation(), &stage.view());
         assert!(
             index
                 .get(id)
                 .expect("indexed stage")
                 .joint_targets
                 .is_empty(),
-            "unchanged stamps must not rescan"
+            "an unchanged canonical stage must not rescan for ECS projection changes"
         );
-        index.refresh_if_stale(id, stage.generation(), 2, &stage.view());
+
+        index.invalidate_stage(id);
+        index.refresh_if_stale(id, stage.generation(), &stage.view());
         assert_eq!(
             index
                 .get(id)
@@ -3530,7 +3544,7 @@ def Xform "Rover" {
                 .joint_targets
                 .get("/Rover/Wheel"),
             Some(&"/Rover/WheelJoint".to_string()),
-            "a projection revision must rebuild a replacement stage"
+            "stage invalidation must rebuild replacement topology even at generation zero"
         );
     }
 
@@ -3552,7 +3566,7 @@ def Xform "Wheel" (prepend apiSchemas = [
         .expect("direct attachment fixture composes");
         let id = Handle::<UsdStageAsset>::default().id();
         let mut index = JointTopologyIndex::default();
-        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        index.refresh_if_stale(id, stage.generation(), &stage.view());
         let topology = index.get(id).expect("direct attachment is indexed");
 
         assert_eq!(
@@ -3587,7 +3601,7 @@ def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"])
         .expect("ambiguous attachment fixture composes");
         let id = Handle::<UsdStageAsset>::default().id();
         let mut index = JointTopologyIndex::default();
-        index.refresh_if_stale(id, stage.generation(), 1, &stage.view());
+        index.refresh_if_stale(id, stage.generation(), &stage.view());
         let topology = index.get(id).expect("ambiguous attachment is indexed");
 
         assert!(topology.invalid_wheel_attachments.contains("/Wheel"));

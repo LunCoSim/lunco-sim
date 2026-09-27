@@ -162,12 +162,17 @@ pub async fn fetch_layer_closure_with_limits(
 ///
 /// The runtime adapter owns the live canonical stage.
 pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedLayerBytes)> {
+    let _resolver_span = bevy::log::info_span!("usd_live_resolver_snapshot").entered();
     let resolver = LuncoUsdResolver::new(recipe.bytes.clone());
+    drop(_resolver_span);
     let shared = resolver.shared();
-    let stage = Stage::builder()
-        .resolver(resolver)
-        .open(&recipe.root_id)
-        .map_err(|e| anyhow!("USD composition error: {e}"))?;
+    let stage = {
+        let _open_span = bevy::log::info_span!("usd_live_open_stage").entered();
+        Stage::builder()
+            .resolver(resolver)
+            .open(&recipe.root_id)
+            .map_err(|e| anyhow!("USD composition error: {e}"))?
+    };
     Ok((stage, shared))
 }
 

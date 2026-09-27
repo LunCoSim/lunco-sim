@@ -7,7 +7,7 @@ const BODY_PATH = "/SandboxScene/Box";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [find(BODY_PATH)], entity_writes: [],
-       query_reads: ["RuntimeDiagnostics"], required_inputs: [] }
+       query_reads: ["RuntimeDiagnostics", "PhysicsPerformance"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -53,6 +53,12 @@ fn on_tick(me, ctx) {
 
     let state = query("QueryPhysicsState", #{ id: this.body });
     let diagnostics = query("RuntimeDiagnostics", #{});
+    let performance = query("PhysicsPerformance", #{});
+    let performance_valid = performance != () && performance.ok != false
+        && to_int(performance.step_number) > 0
+        && performance.step_time_ms != () && performance.step_time_ms >= 0.0
+        && performance.step_time_samples_ms != ()
+        && performance.step_time_samples_ms.len() > 0;
     let policy_error = false;
     let wrong_context = false;
     if diagnostics.ok == true {
@@ -82,6 +88,8 @@ fn on_tick(me, ctx) {
             "the admitted body is no longer held by physics readiness"),
         t_true(state.body_mode == "dynamic",
             "the accepted authored body entered dynamic physics"),
+        t_true(performance_valid,
+            "the shared headless physics host publishes Avian whole-step timing"),
         t_true(!policy_error, "the scheduled Rhai policy admitted the body without a diagnostic"),
         t_true(!wrong_context, "physics initialization supplied the expected owner facts and cycle"),
         t_true(this.readiness_off_cycle_rejected,

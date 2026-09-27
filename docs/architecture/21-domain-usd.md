@@ -126,7 +126,9 @@ admission queue reports its missing wasm worker transport visibly.
 Core USD schema assets register incrementally through
 `lunco-usd-bevy-runtime-core`. `lunco-usd-authoring` applies matching linear-unit
 facts as declarations arrive and validates missing entries only after all
-vendored core schema sources load successfully.
+vendored core schema sources load successfully. The registration pass sleeps
+after every source reaches a terminal load state and that validation completes;
+it does not clone or rescan the manifest entries on settled frames.
 
 Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
@@ -224,9 +226,13 @@ The command owner reuses the live stage's dependency recipe by canonical-stage
 identity and resolver-closure revision. An ordinary edit does not deep-copy
 every referenced layer's bytes; a newly injected dependency or rebuilt stage
 invalidates that recipe. The live `Stage` remains thread-affine, and edits,
-journaling, and projection still commit through their ordered owner path. This
-cache removes redundant dependency snapshots; it does not make USD authoring or
-live projection asynchronous.
+journaling, and ECS projection still commit through their ordered owner path.
+Domain-network fact extraction from that live stage is bounded to one network
+per update; Rhai policy, graph synthesis, Modelica parsing, and validation run
+through `AsyncWorkAdmission`. Results commit in request order after Twin, stage,
+and instance-generation checks. Initial prepared-plan synthesis runs entirely on
+a worker. This dependency-recipe cache removes redundant snapshots while the
+domain pipeline keeps non-critical computation off the UI and physics cycles.
 
 A newly authored `SetAttribute` uses `RemoveAttribute` as its inverse, so adding
 attributes to a growing runtime layer does not serialize the entire layer into
