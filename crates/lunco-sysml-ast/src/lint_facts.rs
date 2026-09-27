@@ -1034,6 +1034,7 @@ fn measurement_reference_facts(value: &SysmlMeasurementReference) -> H {
                         ),
                         ("scale_to_si", H::Float(definition.scale_to_si.as_f64())),
                         ("offset_to_si", H::Float(definition.offset_to_si.as_f64())),
+                        ("scale_is_exact", H::Bool(definition.scale_is_exact)),
                     ])
                 })
                 .unwrap_or(H::Unit),

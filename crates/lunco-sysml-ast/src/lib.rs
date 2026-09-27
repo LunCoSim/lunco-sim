@@ -1237,6 +1237,9 @@ pub struct SysmlUnitDefinition {
     pub scale_to_si: SysmlNumber,
     /// Additive conversion to coherent SI.
     pub offset_to_si: SysmlNumber,
+    /// Whether the SysML unit-conversion scale is declared exact.
+    #[serde(default)]
+    pub scale_is_exact: bool,
 }
 
 impl PartialEq for SysmlMeasurementReference {

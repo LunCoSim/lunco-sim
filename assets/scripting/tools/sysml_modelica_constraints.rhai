@@ -215,8 +215,9 @@ fn position_m(report, feature_selector) {
                 return #{ok: false, error: "SysML position components must be finite quantities: " + qualified_name};
             }
             let source_unit = element.measurement_reference.engineering_unit;
-            if source_unit == () || source_unit.dimension != [1, 0, 0, 0, 0, 0, 0] {
-                return #{ok: false, error: "SysML position components use unsupported or incompatible units: " + qualified_name};
+            if source_unit == () || source_unit.dimension != [1, 0, 0, 0, 0, 0, 0]
+                || source_unit.scale_is_exact != true {
+                return #{ok: false, error: "SysML position components require a resolved length unit with an exact SI scale: " + qualified_name};
             }
             let source_quantity = quantity(element.number_value, source_unit);
             let value = quantity_si_value(source_quantity);

@@ -63,6 +63,31 @@ impl Dimension {
     }
 }
 
+/// Knowledge about the scale factor relating a unit to coherent SI.
+///
+/// This records conversion exactness only; it does not represent measurement
+/// uncertainty or instrument accuracy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitScaleExactness {
+    Exact,
+    Approximate,
+    #[default]
+    Unspecified,
+}
+
+impl UnitScaleExactness {
+    /// Combine conversion metadata for a derived value. Known approximate
+    /// factors remain approximate even if another factor is unspecified.
+    pub const fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Approximate, _) | (_, Self::Approximate) => Self::Approximate,
+            (Self::Unspecified, _) | (_, Self::Unspecified) => Self::Unspecified,
+            (Self::Exact, Self::Exact) => Self::Exact,
+        }
+    }
+}
+
 /// A resolved unit definition supplied by a standard/library adapter.
 ///
 /// `scale_to_si` and `offset_to_si` express the affine conversion
@@ -74,6 +99,7 @@ pub struct Unit {
     dimension: Dimension,
     scale_to_si: f64,
     offset_to_si: f64,
+    scale_exactness: UnitScaleExactness,
 }
 
 #[derive(Deserialize)]
@@ -83,6 +109,8 @@ struct UnitFields {
     dimension: Dimension,
     scale_to_si: f64,
     offset_to_si: f64,
+    #[serde(default)]
+    scale_exactness: UnitScaleExactness,
 }
 
 impl<'de> Deserialize<'de> for Unit {
@@ -91,11 +119,12 @@ impl<'de> Deserialize<'de> for Unit {
         D: serde::Deserializer<'de>,
     {
         let fields = UnitFields::deserialize(deserializer)?;
-        Self::new(
+        Self::new_with_exactness(
             fields.symbol,
             fields.dimension,
             fields.scale_to_si,
             fields.offset_to_si,
+            fields.scale_exactness,
         )
         .map_err(serde::de::Error::custom)
     }
@@ -112,6 +141,7 @@ impl Unit {
             dimension,
             scale_to_si: 1.0,
             offset_to_si: 0.0,
+            scale_exactness: UnitScaleExactness::Exact,
         }
     }
 
@@ -121,6 +151,23 @@ impl Unit {
         dimension: Dimension,
         scale_to_si: f64,
         offset_to_si: f64,
+    ) -> Result<Self, UnitError> {
+        Self::new_with_exactness(
+            symbol,
+            dimension,
+            scale_to_si,
+            offset_to_si,
+            UnitScaleExactness::Unspecified,
+        )
+    }
+
+    /// Create a resolved unit definition with explicit conversion exactness.
+    pub fn new_with_exactness(
+        symbol: impl Into<String>,
+        dimension: Dimension,
+        scale_to_si: f64,
+        offset_to_si: f64,
+        scale_exactness: UnitScaleExactness,
     ) -> Result<Self, UnitError> {
         let symbol = symbol.into();
         if symbol.trim().is_empty() {
@@ -137,6 +184,7 @@ impl Unit {
             dimension,
             scale_to_si,
             offset_to_si,
+            scale_exactness,
         })
     }
 
@@ -168,6 +216,11 @@ impl Unit {
         self.offset_to_si
     }
 
+    /// Knowledge about whether this unit's scale to SI is exact.
+    pub const fn scale_exactness(&self) -> UnitScaleExactness {
+        self.scale_exactness
+    }
+
     /// Whether two resolved units measure the same physical dimension.
     pub fn is_compatible_with(&self, other: &Self) -> bool {
         self.dimension == other.dimension
@@ -192,6 +245,7 @@ impl Unit {
 pub struct Quantity {
     value: f64,
     unit: Unit,
+    conversion_exactness: UnitScaleExactness,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +253,8 @@ pub struct Quantity {
 struct QuantityFields {
     value: f64,
     unit: Unit,
+    #[serde(default)]
+    conversion_exactness: UnitScaleExactness,
 }
 
 impl<'de> Deserialize<'de> for Quantity {
@@ -207,15 +263,30 @@ impl<'de> Deserialize<'de> for Quantity {
         D: serde::Deserializer<'de>,
     {
         let fields = QuantityFields::deserialize(deserializer)?;
-        Self::with_unit(fields.value, fields.unit).map_err(serde::de::Error::custom)
+        Self::with_conversion_exactness(fields.value, fields.unit, fields.conversion_exactness)
+            .map_err(serde::de::Error::custom)
     }
 }
 
 impl Quantity {
     /// Construct a quantity from an already resolved unit.
     pub fn with_unit(value: f64, unit: Unit) -> Result<Self, UnitError> {
+        let exactness = unit.scale_exactness;
+        Self::with_conversion_exactness(value, unit, exactness)
+    }
+
+    fn with_conversion_exactness(
+        value: f64,
+        unit: Unit,
+        conversion_exactness: UnitScaleExactness,
+    ) -> Result<Self, UnitError> {
         finite(value)?;
-        Ok(Self { value, unit })
+        let conversion_exactness = conversion_exactness.combine(unit.scale_exactness);
+        Ok(Self {
+            value,
+            unit,
+            conversion_exactness,
+        })
     }
 
     /// Authored numeric payload.
@@ -226,6 +297,11 @@ impl Quantity {
     /// Authored unit definition.
     pub fn unit(&self) -> &Unit {
         &self.unit
+    }
+
+    /// Exactness of the scale conversions used to form this quantity value.
+    pub const fn conversion_exactness(&self) -> UnitScaleExactness {
+        self.conversion_exactness
     }
 
     /// SI dimension vector.
@@ -241,7 +317,12 @@ impl Quantity {
                 to: target.symbol,
             });
         }
-        Self::with_unit(target.from_si(self.unit.to_si(self.value)?)?, target)
+        let conversion_exactness = self.conversion_exactness.combine(target.scale_exactness);
+        Self::with_conversion_exactness(
+            target.from_si(self.unit.to_si(self.value)?)?,
+            target,
+            conversion_exactness,
+        )
     }
 
     /// Return the numeric value in another compatible unit.
@@ -257,24 +338,36 @@ impl Quantity {
     /// Add compatible quantities and retain the left operand's unit.
     pub fn add(&self, other: &Self) -> Result<Self, UnitError> {
         self.linear_arithmetic(other)?;
-        let right = other.value_in(self.unit.clone())?;
-        Self::with_unit(self.value + right, self.unit.clone())
+        let right = other.in_unit(self.unit.clone())?;
+        Self::with_conversion_exactness(
+            self.value + right.value,
+            self.unit.clone(),
+            self.conversion_exactness
+                .combine(right.conversion_exactness),
+        )
     }
 
     /// Subtract compatible quantities and retain the left operand's unit.
     pub fn subtract(&self, other: &Self) -> Result<Self, UnitError> {
         self.linear_arithmetic(other)?;
-        let right = other.value_in(self.unit.clone())?;
-        Self::with_unit(self.value - right, self.unit.clone())
+        let right = other.in_unit(self.unit.clone())?;
+        Self::with_conversion_exactness(
+            self.value - right.value,
+            self.unit.clone(),
+            self.conversion_exactness
+                .combine(right.conversion_exactness),
+        )
     }
 
     /// Multiply quantities, returning the result in coherent SI units.
     pub fn multiply(&self, other: &Self) -> Result<Self, UnitError> {
         self.linear_arithmetic(other)?;
         let dimension = self.unit.dimension.checked_product(other.unit.dimension)?;
-        Self::with_unit(
+        Self::with_conversion_exactness(
             self.si_value()? * other.si_value()?,
             Unit::coherent_si(dimension),
+            self.conversion_exactness
+                .combine(other.conversion_exactness),
         )
     }
 
@@ -282,9 +375,11 @@ impl Quantity {
     pub fn divide(&self, other: &Self) -> Result<Self, UnitError> {
         self.linear_arithmetic(other)?;
         let dimension = self.unit.dimension.checked_quotient(other.unit.dimension)?;
-        Self::with_unit(
+        Self::with_conversion_exactness(
             self.si_value()? / other.si_value()?,
             Unit::coherent_si(dimension),
+            self.conversion_exactness
+                .combine(other.conversion_exactness),
         )
     }
 
@@ -305,9 +400,10 @@ impl Quantity {
         } else {
             return Err(UnitError::FractionalDimension);
         };
-        Self::with_unit(
+        Self::with_conversion_exactness(
             self.si_value()?.powf(exponent),
             Unit::coherent_si(dimension),
+            self.conversion_exactness,
         )
     }
 
@@ -317,7 +413,11 @@ impl Quantity {
             return Err(UnitError::AffineArithmetic);
         }
         let dimension = self.unit.dimension.checked_sqrt()?;
-        Self::with_unit(self.si_value()?.sqrt(), Unit::coherent_si(dimension))
+        Self::with_conversion_exactness(
+            self.si_value()?.sqrt(),
+            Unit::coherent_si(dimension),
+            self.conversion_exactness,
+        )
     }
 
     fn linear_arithmetic(&self, other: &Self) -> Result<(), UnitError> {

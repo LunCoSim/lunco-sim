@@ -4,7 +4,7 @@
 //! shipped policy). Rust only validates the resolved definition and performs
 //! dimension-safe conversion.
 
-use lunco_engineering_values::{Dimension, Quantity, Unit};
+use lunco_engineering_values::{Dimension, Quantity, Unit, UnitScaleExactness};
 use rhai::{Array, Dynamic, Engine, EvalAltResult, ImmutableString};
 
 fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
@@ -41,6 +41,36 @@ fn engineering_unit(
         offset_to_si,
     )
     .map_err(|unit_error| runtime_error(unit_error.to_string()))
+}
+
+fn engineering_unit_with_exactness(
+    symbol: ImmutableString,
+    dimensions: Array,
+    scale_to_si: f64,
+    offset_to_si: f64,
+    is_exact: bool,
+) -> Result<Unit, Box<EvalAltResult>> {
+    let exactness = if is_exact {
+        UnitScaleExactness::Exact
+    } else {
+        UnitScaleExactness::Approximate
+    };
+    Unit::new_with_exactness(
+        symbol.to_string(),
+        dimension_from_array(dimensions)?,
+        scale_to_si,
+        offset_to_si,
+        exactness,
+    )
+    .map_err(|unit_error| runtime_error(unit_error.to_string()))
+}
+
+fn exactness_value(exactness: UnitScaleExactness) -> Dynamic {
+    match exactness {
+        UnitScaleExactness::Exact => Dynamic::from_bool(true),
+        UnitScaleExactness::Approximate => Dynamic::from_bool(false),
+        UnitScaleExactness::Unspecified => Dynamic::UNIT,
+    }
 }
 
 fn quantity(value: f64, unit: Unit) -> Result<Quantity, Box<EvalAltResult>> {
@@ -111,13 +141,23 @@ pub fn register(engine: &mut Engine) {
                     .collect(),
             )
         })
+        .register_get("scale_is_exact", |unit: &mut Unit| {
+            exactness_value(unit.scale_exactness())
+        })
         .register_type_with_name::<Quantity>("Quantity")
         .register_get("value", |quantity: &mut Quantity| quantity.value())
         .register_get("unit", |quantity: &mut Quantity| {
             quantity.unit().symbol().to_owned()
         })
         .register_get("dimension", quantity_dimension)
+        .register_get("conversion_is_exact", |quantity: &mut Quantity| {
+            exactness_value(quantity.conversion_exactness())
+        })
         .register_fn("engineering_unit", engineering_unit)
+        .register_fn(
+            "engineering_unit_with_exactness",
+            engineering_unit_with_exactness,
+        )
         .register_fn("quantity", quantity)
         .register_fn("engineering_convert", convert)
         .register_fn("engineering_convert_or_none", convert_or_none)

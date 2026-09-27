@@ -6,7 +6,7 @@
 
 use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
-use lunco_engineering_values::{Dimension, Quantity, Unit};
+use lunco_engineering_values::{Dimension, Quantity, Unit, UnitScaleExactness};
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraintKind, SysmlDiagnostic, SysmlElement,
     SysmlElementHandle, SysmlEnumValue, SysmlExpression, SysmlExpressionKind,
@@ -871,11 +871,16 @@ fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
 
 fn engineering_unit_from_reference(reference: &SysmlMeasurementReference) -> Option<Unit> {
     let definition = reference.unit_definition?;
-    Unit::new(
+    Unit::new_with_exactness(
         reference.qualified_name.clone(),
         Dimension(definition.dimension),
         definition.scale_to_si.as_f64(),
         definition.offset_to_si.as_f64(),
+        if definition.scale_is_exact {
+            UnitScaleExactness::Exact
+        } else {
+            UnitScaleExactness::Approximate
+        },
     )
     .ok()
 }

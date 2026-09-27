@@ -92,8 +92,12 @@ and arithmetic unit definitions. Rhai exposes the resolved unit as a native
 without consulting a symbol table. Numeric conversion expressions support
 arithmetic, including integer powers; dimensional unit composition supports
 multiplication, division, and integer powers. Keep `unit_symbol` for source
-display only. The standard conversion `isExact` flag is not propagated into
-native quantities yet, so do not make precision claims from a projected scale.
+display only. The standard conversion `isExact` flag is projected onto native
+units as `scale_is_exact` and accumulated by native quantities as
+`conversion_is_exact`. These flags describe conversion exactness only, not
+measurement uncertainty.
+The bounded Modelica position adapter requires an exact SI scale before
+lowering to an unqualified vector.
 `MeasurementScale` mappings and unresolved or unsupported unit definitions do
 not produce an engineering unit and must remain unavailable; do not infer a
 scale from the spelling.
@@ -330,8 +334,9 @@ unit registry key. Linear `MeasurementUnit` definitions are resolved from
 their quantity-power factors, standard SI base units, unit-conversion edges,
 and arithmetic initializers. Nonlinear or affine `MeasurementScale` mappings,
 malformed definitions, and expressions outside the resolver's supported
-arithmetic remain unavailable. The standard `isExact` conversion metadata is
-not retained in the native `Quantity` value. `engineering_units.rhai` serves explicit unit
+arithmetic remain unavailable. Standard `isExact` metadata is projected and
+propagated through native quantity operations; it does not replace uncertainty
+or instrument-accuracy data. `engineering_units.rhai` serves explicit unit
 input at non-SysML boundaries; it is not authoritative for SysML source values.
 
 Before lowering a unit-bearing vector to shared `Vec3` or a Modelica parameter,

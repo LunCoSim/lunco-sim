@@ -12,6 +12,7 @@ use crate::{SysmlNumber, SysmlUnitDefinition, semantic_type_id};
 struct UnitConversion {
     reference: ElementId,
     factor: f64,
+    is_exact: bool,
 }
 
 struct UnitDeclaration {
@@ -24,6 +25,13 @@ struct UnitDeclaration {
 struct UnitExpressionValue {
     dimension: [i8; 7],
     scale_to_si: f64,
+    is_exact: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ResolvedScale {
+    value: f64,
+    is_exact: bool,
 }
 
 /// Snapshot-local source of resolved linear units.
@@ -52,6 +60,8 @@ impl SysmlUnitResolver {
             workspace,
             "MeasurementReferences::UnitConversion::conversionFactor",
         );
+        let conversion_is_exact =
+            semantic_type_id(workspace, "MeasurementReferences::UnitConversion::isExact");
         let prefix_property = semantic_type_id(
             workspace,
             "MeasurementReferences::ConversionByPrefix::prefix",
@@ -130,6 +140,7 @@ impl SysmlUnitResolver {
                     conversion_by_prefix,
                     conversion_reference,
                     conversion_factor,
+                    conversion_is_exact,
                     prefix_property,
                     prefix_factor,
                 );
@@ -173,7 +184,13 @@ impl SysmlUnitResolver {
             if let Some(unit) = semantic_type_id(workspace, qualified_name) {
                 match declarations.get(&unit) {
                     Some(declaration) if declaration.dimension == expected_dimension => {
-                        coherent_units.insert(unit, 1.0);
+                        coherent_units.insert(
+                            unit,
+                            ResolvedScale {
+                                value: 1.0,
+                                is_exact: true,
+                            },
+                        );
                     }
                     Some(_) => {
                         invalid.insert(unit);
@@ -216,8 +233,9 @@ impl SysmlUnitResolver {
                     feature,
                     SysmlUnitDefinition {
                         dimension: declaration.dimension,
-                        scale_to_si: SysmlNumber::new(scale)?,
+                        scale_to_si: SysmlNumber::new(scale.value)?,
                         offset_to_si: SysmlNumber::new(0.0)?,
+                        scale_is_exact: scale.is_exact,
                     },
                 ))
             })
@@ -232,24 +250,36 @@ impl SysmlUnitResolver {
 
 fn record_scale(
     unit: ElementId,
-    candidate: f64,
-    scales: &mut HashMap<ElementId, f64>,
+    candidate: ResolvedScale,
+    scales: &mut HashMap<ElementId, ResolvedScale>,
     conflicts: &mut HashSet<ElementId>,
 ) -> bool {
-    if !candidate.is_finite() || candidate <= 0.0 {
+    if !candidate.value.is_finite() || candidate.value <= 0.0 {
         conflicts.insert(unit);
         scales.remove(&unit);
         return true;
     }
     match scales.get(&unit).copied() {
         Some(current) => {
-            let tolerance = 1.0e-12 * current.abs().max(candidate.abs()).max(1.0);
-            if (current - candidate).abs() > tolerance {
+            let tolerance = 1.0e-12 * current.value.abs().max(candidate.value.abs()).max(1.0);
+            if (current.value - candidate.value).abs() > tolerance {
                 conflicts.insert(unit);
                 scales.remove(&unit);
                 true
             } else {
-                false
+                let is_exact = current.is_exact && candidate.is_exact;
+                if current.is_exact != is_exact {
+                    scales.insert(
+                        unit,
+                        ResolvedScale {
+                            value: current.value,
+                            is_exact,
+                        },
+                    );
+                    true
+                } else {
+                    false
+                }
             }
         }
         None => {
@@ -263,8 +293,8 @@ fn resolve_scales(
     workspace: &mut Workspace,
     declarations: &HashMap<ElementId, UnitDeclaration>,
     blocked: &HashSet<ElementId>,
-    coherent_units: &HashMap<ElementId, f64>,
-) -> (HashMap<ElementId, f64>, HashSet<ElementId>) {
+    coherent_units: &HashMap<ElementId, ResolvedScale>,
+) -> (HashMap<ElementId, ResolvedScale>, HashSet<ElementId>) {
     let dimensions = declarations
         .iter()
         .map(|(&unit, declaration)| (unit, declaration.dimension))
@@ -289,7 +319,10 @@ fn resolve_scales(
                     if let Some(reference_scale) = scales.get(&conversion.reference).copied() {
                         changed |= record_scale(
                             unit,
-                            reference_scale * conversion.factor,
+                            ResolvedScale {
+                                value: reference_scale.value * conversion.factor,
+                                is_exact: reference_scale.is_exact && conversion.is_exact,
+                            },
                             &mut scales,
                             &mut conflicts,
                         );
@@ -297,7 +330,10 @@ fn resolve_scales(
                     if let Some(unit_scale) = scales.get(&unit).copied() {
                         changed |= record_scale(
                             conversion.reference,
-                            unit_scale / conversion.factor,
+                            ResolvedScale {
+                                value: unit_scale.value / conversion.factor,
+                                is_exact: unit_scale.is_exact && conversion.is_exact,
+                            },
                             &mut scales,
                             &mut conflicts,
                         );
@@ -318,8 +354,15 @@ fn resolve_scales(
                         scales.remove(&unit);
                         changed = true;
                     } else {
-                        changed |=
-                            record_scale(unit, value.scale_to_si, &mut scales, &mut conflicts);
+                        changed |= record_scale(
+                            unit,
+                            ResolvedScale {
+                                value: value.scale_to_si,
+                                is_exact: value.is_exact,
+                            },
+                            &mut scales,
+                            &mut conflicts,
+                        );
                     }
                 }
             }
@@ -334,7 +377,7 @@ fn resolve_scales(
 fn unit_expression_value(
     workspace: &mut Workspace,
     expression: ElementId,
-    scales: &HashMap<ElementId, f64>,
+    scales: &HashMap<ElementId, ResolvedScale>,
     dimensions: &HashMap<ElementId, [i8; 7]>,
     active_features: &mut HashSet<ElementId>,
 ) -> Option<UnitExpressionValue> {
@@ -342,13 +385,16 @@ fn unit_expression_value(
         ElementKind::LiteralInteger | ElementKind::LiteralRational => Some(UnitExpressionValue {
             dimension: [0; 7],
             scale_to_si: numeric_literal(workspace.model(), expression)?,
+            is_exact: true,
         }),
         ElementKind::FeatureReferenceExpression => {
             let target = reference_target(workspace.model(), expression)?;
             if let Some(&dimension) = dimensions.get(&target) {
+                let scale = *scales.get(&target)?;
                 return Some(UnitExpressionValue {
                     dimension,
-                    scale_to_si: *scales.get(&target)?,
+                    scale_to_si: scale.value,
+                    is_exact: scale.is_exact,
                 });
             }
             if !active_features.insert(target) {
@@ -407,29 +453,35 @@ fn apply_unit_operator(
                 } else {
                     left.scale_to_si - right.scale_to_si
                 },
+                is_exact: left.is_exact && right.is_exact,
             })
         }
         ("+", [value]) => Some(*value),
         ("-", [value]) if value.dimension == [0; 7] => Some(UnitExpressionValue {
             dimension: value.dimension,
             scale_to_si: -value.scale_to_si,
+            is_exact: value.is_exact,
         }),
         ("*", [left, right]) => Some(UnitExpressionValue {
             dimension: combine_dimensions(left.dimension, right.dimension, i8::checked_add)?,
             scale_to_si: left.scale_to_si * right.scale_to_si,
+            is_exact: left.is_exact && right.is_exact,
         }),
         ("/", [left, right]) if right.scale_to_si != 0.0 => Some(UnitExpressionValue {
             dimension: combine_dimensions(left.dimension, right.dimension, i8::checked_sub)?,
             scale_to_si: left.scale_to_si / right.scale_to_si,
+            is_exact: left.is_exact && right.is_exact,
         }),
         ("^", [base, exponent]) if exponent.dimension == [0; 7] => {
             if exponent.scale_to_si.fract() != 0.0 {
                 return None;
             }
+            let is_exact = base.is_exact && exponent.is_exact;
             let exponent = i32::try_from(exponent.scale_to_si as i64).ok()?;
             Some(UnitExpressionValue {
                 dimension: power_dimension(base.dimension, exponent)?,
                 scale_to_si: base.scale_to_si.powi(exponent),
+                is_exact,
             })
         }
         _ => None,
@@ -522,6 +574,7 @@ fn unit_conversion_for(
     prefix_conversion: Option<ElementId>,
     reference_feature: Option<ElementId>,
     factor_feature: Option<ElementId>,
+    exactness_feature: Option<ElementId>,
     prefix_feature: Option<ElementId>,
     prefix_factor_feature: Option<ElementId>,
 ) -> (Option<UnitConversion>, bool) {
@@ -611,7 +664,30 @@ fn unit_conversion_for(
     let Some(factor) = factor.filter(|factor| factor.is_finite() && *factor > 0.0) else {
         return (None, true);
     };
-    (Some(UnitConversion { reference, factor }), false)
+    let Some(exactness_feature) = exactness_feature else {
+        return (None, true);
+    };
+    let is_exact = match redefined_feature(workspace.model(), conversion, exactness_feature) {
+        Some(exactness_value) => {
+            let Some(expression) = feature_value_expression(workspace.model(), exactness_value)
+            else {
+                return (None, true);
+            };
+            let Some(is_exact) = boolean_literal(workspace.model(), expression) else {
+                return (None, true);
+            };
+            is_exact
+        }
+        None => true,
+    };
+    (
+        Some(UnitConversion {
+            reference,
+            factor,
+            is_exact,
+        }),
+        false,
+    )
 }
 
 fn redefined_feature(
@@ -676,6 +752,13 @@ fn numeric_literal(model: &sysml_model::Model, expression: ElementId) -> Option<
             Value::Real(value) => value.is_finite().then_some(*value),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+fn boolean_literal(model: &sysml_model::Model, expression: ElementId) -> Option<bool> {
+    match model.maybe(expression, "value")? {
+        Value::Bool(value) => Some(*value),
         _ => None,
     }
 }
