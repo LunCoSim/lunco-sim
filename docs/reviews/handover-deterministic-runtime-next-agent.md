@@ -427,6 +427,22 @@ typed queues before that is safe.
   recipes. The remaining baseline owners and the capture/playback integration
   still need implementation.
 
+### Replay-baseline source owner audit (2026-09-27)
+
+- `SysmlAnalysis::files()` retains each analysis source's logical name and
+  exact text. Its `source_revision` and `source_fingerprint` are 64-bit FNV
+  analysis/cache values, so the baseline must derive strong content identity
+  from the retained files.
+- `RhaiScenarioRuntime` retains canonical literal-import dependencies and the
+  immutable source text observed by the last committed compile, keyed by live
+  entity. `RhaiSource` assets retain their loaded dependency handles. The
+  runtime does not yet retain one session-wide snapshot joining active roots
+  to complete source closures; baseline capture must not infer roots from the
+  global script registry.
+- The headless host has compile-time build identity constants in
+  `lunco-luncosim-core`; the UI-only `BuildIdentity` resource is not a required
+  baseline provider.
+
 ## Runtime and repository constraints
 
 - Do not edit authored USD through shell or patch tools. Use the live USD

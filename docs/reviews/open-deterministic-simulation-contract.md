@@ -52,6 +52,14 @@ build identity, Rhai/SysML closures, Modelica solver/runtime state, physics
 profile and seeds, committed entity identities, durable baseline storage, and
 playback remain open.
 
+The source owners retain reusable facts: `SysmlAnalysis::files()` preserves
+logical names and exact source text, and the Rhai runtime keeps canonical
+literal-import dependencies plus the immutable text observed by each committed
+entity compile. Rhai asset handles retain their dependency graph, but there is
+no session-level snapshot that joins active roots to their complete closures.
+SysML's 64-bit FNV revision/fingerprint and Rhai's process-local dependency
+revision are invalidation facts; the baseline still needs strong content IDs.
+
 ### UI tool callback boundary (2026-09-27)
 
 Authored pointer and menu tool hooks use a separate bounded queue drained after

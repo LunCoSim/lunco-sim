@@ -253,6 +253,17 @@ rejects missing root bytes or any unresolved dependency. This is an owner
 primitive only: no application baseline collector consumes it yet, and the
 remaining owner snapshots and playback consumer are still required.
 
+The SysML owner already retains the exact logical source names and text in
+`SysmlAnalysis::files`; its 64-bit FNV `source_revision` and
+`source_fingerprint` remain analysis/cache facts, not strong persisted content
+identities. Rhai retains each live entity's last committed literal-import
+dependencies as canonical ids with optional immutable source text, while
+`RhaiSource::dependencies` owns the loaded asset graph. Neither surface yet
+freezes a session-wide set of active Rhai roots and their complete source
+closures. The baseline collector should read those existing owner snapshots,
+identify active roots, and report owner diagnostics when a required snapshot is
+stale or incomplete.
+
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and
 cannot reproduce a live session by itself. The input stream covers transient
