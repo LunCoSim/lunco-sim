@@ -179,6 +179,12 @@ Removal invalidation should be qualified by the entity's authored USD identity
 and relevant endpoint capability, not by a generic component removal alone.
 Extract a USD program's declared interface once at admission and reuse it for
 validation, diagnostics, and publication instead of re-enumerating attributes.
+Derive a domain root's synthesizer once alongside member-role discovery and
+reuse the root-scoped selection during projection; do not traverse a large
+component collection again to repeat its role-schema queries.
+In Tracy, compare `domain_member_role_discovery` and
+`domain_synthesizer_selection_cache` against the enclosing
+`project_domain_islands` interval to attribute any remaining app-thread tail.
 
 Keep invalidation domains distinct: a wiring/topology latch may be raised by
 endpoint arrivals and must not automatically trigger domain discovery. Live

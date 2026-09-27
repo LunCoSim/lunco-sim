@@ -648,16 +648,33 @@ pub fn derive_synthesizer_name(view: &dyn UsdReadObject, root: &SdfPath) -> Resu
     let members = view
         .collection_members(root, "components")
         .map_err(|error| format!("could not read component collection: {error}"))?;
+    let roles = members
+        .iter()
+        .filter(|path| !path.is_property_path())
+        .map(|member| {
+            (
+                member.to_string(),
+                view.has_api_schema(member, "LunCoForceActuatorAPI"),
+                view.has_api_schema(member, "LunCoProgramAPI"),
+            )
+        });
+    derive_synthesizer_name_from_member_roles(roles)
+}
+
+/// Derive network ownership from role facts already read from the composed
+/// members. Runtime discovery uses this when it has read those schemas while
+/// resolving Modelica sources, avoiding a second collection traversal.
+pub fn derive_synthesizer_name_from_member_roles(
+    member_roles: impl IntoIterator<Item = (String, bool, bool)>,
+) -> Result<String, String> {
     let mut force_actuators = 0usize;
     let mut modelica_programs = 0usize;
     let mut unclassified = Vec::new();
-    for member in members.iter().filter(|path| !path.is_property_path()) {
-        let is_force = view.has_api_schema(member, "LunCoForceActuatorAPI");
-        let is_program = view.has_api_schema(member, "LunCoProgramAPI");
+    for (member, is_force, is_program) in member_roles {
         match (is_force, is_program) {
             (true, false) => force_actuators += 1,
             (false, true) => modelica_programs += 1,
-            _ => unclassified.push(member.to_string()),
+            _ => unclassified.push(member),
         }
     }
     if force_actuators > 0 && modelica_programs == 0 && unclassified.is_empty() {
@@ -681,13 +698,32 @@ pub fn derive_synthesizer_name(view: &dyn UsdReadObject, root: &SdfPath) -> Resu
 /// USD-facing selector belongs beside the role classifier so runtime
 /// projection and lint facts cannot drift apart.
 pub fn select_synthesizer_name(view: &dyn UsdReadObject, root: &SdfPath) -> Result<String, String> {
-    if view.has_api_schema(root, "LunCoDomainSynthesisAPI") {
-        return Ok(view
-            .text(root, "lunco:synthesizer")
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| DEFAULT_DOMAIN_SYNTHESIZER.to_string()));
+    if let Some(name) = authored_synthesizer_name(view, root) {
+        return Ok(name);
     }
     derive_synthesizer_name(view, root)
+}
+
+/// Select the authored synthesizer when present, otherwise derive it from
+/// member role facts captured by the owning discovery pass.
+pub fn select_synthesizer_name_from_member_roles(
+    view: &dyn UsdReadObject,
+    root: &SdfPath,
+    member_roles: impl IntoIterator<Item = (String, bool, bool)>,
+) -> Result<String, String> {
+    if let Some(name) = authored_synthesizer_name(view, root) {
+        return Ok(name);
+    }
+    derive_synthesizer_name_from_member_roles(member_roles)
+}
+
+fn authored_synthesizer_name(view: &dyn UsdReadObject, root: &SdfPath) -> Option<String> {
+    view.has_api_schema(root, "LunCoDomainSynthesisAPI")
+        .then(|| {
+            view.text(root, "lunco:synthesizer")
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| DEFAULT_DOMAIN_SYNTHESIZER.to_string())
+        })
 }
 
 /// Every Modelica program prim on the stage that belongs to SOME component

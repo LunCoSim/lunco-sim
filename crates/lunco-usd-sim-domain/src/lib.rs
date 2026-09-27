@@ -22,7 +22,7 @@ use lunco_modelica_runtime::{ModelicaSource, resolve_communication_period_secs};
 use lunco_usd_bevy_core::program::{
     ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER, ProgramGraph,
     is_modelica_identifier, modelica_identifier, modelica_path_identifier, modelica_source_ref,
-    select_synthesizer_name,
+    select_synthesizer_name_from_member_roles,
 };
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::read::UsdReadObject as ComposedReader;
@@ -587,6 +587,7 @@ pub struct DomainClassUsers {
     assets_by_root: HashMap<Entity, HashSet<String>>,
     roots_by_stage: HashMap<AssetId<UsdStageAsset>, HashSet<Entity>>,
     paths_by_root: HashMap<Entity, DomainRootPaths>,
+    synthesizer_by_root: HashMap<Entity, Result<String, String>>,
 }
 
 #[derive(Debug)]
@@ -607,6 +608,14 @@ impl DomainClassUsers {
         self.assets_by_root
             .get(&root)
             .is_none_or(|assets| assets.iter().all(|asset| classes.known.contains_key(asset)))
+    }
+
+    fn set_synthesizer(&mut self, root: Entity, selection: Result<String, String>) {
+        self.synthesizer_by_root.insert(root, selection);
+    }
+
+    fn synthesizer(&self, root: Entity) -> Option<&Result<String, String>> {
+        self.synthesizer_by_root.get(&root)
     }
 
     fn replace_root_facts(
@@ -635,6 +644,7 @@ impl DomainClassUsers {
     }
 
     fn remove_root(&mut self, root: Entity) {
+        self.synthesizer_by_root.remove(&root);
         if let Some(assets) = self.assets_by_root.remove(&root) {
             for asset in assets {
                 if let Some(roots) = self.roots_by_asset.get_mut(&asset) {
@@ -716,6 +726,7 @@ impl DomainClassUsers {
         self.assets_by_root.clear();
         self.roots_by_stage.clear();
         self.paths_by_root.clear();
+        self.synthesizer_by_root.clear();
     }
 }
 
@@ -1003,13 +1014,24 @@ fn modelica_synthesis_context(
 }
 
 fn resolve_domain_synthesizer(
-    view: &dyn ComposedReader,
-    root_path: &SdfPath,
+    class_users: &DomainClassUsers,
+    root: Entity,
     prim_path: &str,
     registry: &SynthesizerRegistry,
 ) -> Option<(String, Arc<dyn DomainSynthesizer>)> {
-    let requested = match select_synthesizer_name(view, root_path) {
-        Ok(name) => name,
+    let selection = class_users.synthesizer(root);
+    let _selection_span = bevy::log::info_span!(
+        "domain_synthesizer_selection_cache",
+        root = prim_path,
+        cache_hit = selection.is_some()
+    )
+    .entered();
+    let Some(selection) = selection else {
+        error!("[domain-projection] `{prim_path}` has no cached synthesizer selection");
+        return None;
+    };
+    let requested = match selection {
+        Ok(name) => name.clone(),
         Err(message) => {
             error!("[domain-projection] `{prim_path}` rejected: {message}");
             return None;
@@ -1370,7 +1392,7 @@ pub fn project_domain_islands(
                 continue;
             }
             let Some((requested, synthesizer)) =
-                resolve_domain_synthesizer(reader, &root_path, &prim.path, &synthesis_owner.0)
+                resolve_domain_synthesizer(&class_users, entity, &prim.path, &synthesis_owner.0)
             else {
                 continue;
             };
@@ -1423,12 +1445,9 @@ pub fn project_domain_islands(
             if !is_runtime_domain_network_root(plan.as_ref(), &root_path) {
                 continue;
             }
-            let Some((requested, synthesizer)) = resolve_domain_synthesizer(
-                plan.as_ref(),
-                &root_path,
-                &prim.path,
-                &synthesis_owner.0,
-            ) else {
+            let Some((requested, synthesizer)) =
+                resolve_domain_synthesizer(&class_users, entity, &prim.path, &synthesis_owner.0)
+            else {
                 continue;
             };
             let model_name = network_model_name(&prim.path, instance_id);
@@ -1475,7 +1494,7 @@ pub fn project_domain_islands(
         // collections have no exposed selector and are classified from their
         // `LunCoForceActuatorAPI` members.
         let Some((requested, synthesizer)) =
-            resolve_domain_synthesizer(reader, &root_path, &prim.path, &synthesis_owner.0)
+            resolve_domain_synthesizer(&class_users, entity, &prim.path, &synthesis_owner.0)
         else {
             continue;
         };
@@ -2459,10 +2478,28 @@ pub fn resolve_member_classes(
             };
             let mut source_assets = HashSet::new();
             let member_paths = members.iter().map(ToString::to_string).collect();
+            let explicit_synthesizer = view.has_api_schema(&root, "LunCoDomainSynthesisAPI");
+            let mut member_roles = Vec::with_capacity(members.len());
+            let _member_role_span = bevy::log::info_span!(
+                "domain_member_role_discovery",
+                root = prim.path,
+                member_count = members.len(),
+                explicit_synthesizer
+            )
+            .entered();
             for member in members {
-                if !view.has_api_schema(&member, "LunCoProgramAPI") {
+                let is_program = view.has_api_schema(&member, "LunCoProgramAPI");
+                let is_force_actuator = !explicit_synthesizer
+                    && !member.is_property_path()
+                    && view.has_api_schema(&member, "LunCoForceActuatorAPI");
+                if !member.is_property_path() {
+                    member_roles.push((member.to_string(), is_force_actuator, is_program));
+                }
+                if !is_program {
                     continue;
                 }
+                let _source_resolution_span =
+                    bevy::log::info_span!("domain_member_source_resolution").entered();
                 let source_ref = match modelica_source_ref(view, &member) {
                     Ok(source_ref) => source_ref,
                     Err(issue) => {
@@ -2490,6 +2527,10 @@ pub fn resolve_member_classes(
                 member_paths,
             });
             class_users.replace_root_facts(entity, source_assets, canonical_paths);
+            class_users.set_synthesizer(
+                entity,
+                select_synthesizer_name_from_member_roles(view, &root, member_roles),
+            );
             candidates.queue_projection(entity);
         }
     }

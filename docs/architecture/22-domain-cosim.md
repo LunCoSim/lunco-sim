@@ -649,6 +649,10 @@ a domain-membership signal. Scene teardown clears the reverse index,
 stage-generation cursor, and pending discovery/projection candidate sets;
 resolved member-class facts remain reusable because they belong to shared
 Modelica source assets, not a scene.
+The same discovery pass records each root's selected synthesizer from its
+already-read member role schemas. Projection reuses that root-scoped selection
+until root/member invalidation or instance-plan rediscovery, so it does not
+walk the component collection and query both role APIs a second time.
 Prim arrivals whose stage asset is not ready wait in a stage-keyed set and are
 requeued by that asset's readiness event, rather than being retried on stable
 frames.
