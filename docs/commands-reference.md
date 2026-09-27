@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**241 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**242 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (7 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (8 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (5 commands)
 
 **USD / scenes**
@@ -227,6 +227,20 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `enabled` | `bool` |   |
 | `layers` | `Vec < String >` |   |
+
+#### `SetUsdViewPreviewTransform`
+
+ Set the presentation transform of a prim authored in the disposable USD
+ view layer. The target is resolved by stable entity identity and validated
+ against its owning document before its live Bevy transform is updated.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/script_tools.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc_id` | `u64` |  USD document which owns the view-layer prim. |
+| `entity_id` | `u64` |  Stable API identity of the projected preview prim. |
+| `translation` | `[f64 ; 3]` |  Target translation in the active physics frame. |
 
 #### `UpdateDiagnosticVisual`
 
@@ -1873,7 +1887,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `StopSessionInputCapture`
 
- Stop the active session-input capture while retaining its records.
+ Stop the active session-input capture after admitted inputs have committed.
 
 - *defined in:* `crates/lunco-core-session/src/commands.rs`
 - *fields:* none — call with `StopSessionInputCapture` (no params)
@@ -1899,6 +1913,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `target` | `Entity` |  The endpoint whose complete control intent is released. |
+| `producer_id` | `Option < u64 >` |  Stable producer identity for API, actorless Rhai, and direct typed  releases admitted to the session's next fixed tick. Twin Rhai uses its  stable actor identity and omits this field. Internal lifecycle releases  omit it because their cause is owned by another boundary. |
 
 #### `ReleasePort`
 
@@ -1910,6 +1925,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `target` | `Entity` |  The entity whose hold is released. |
 | `name` | `String` |  Input-port name. |
+| `producer_id` | `Option < u64 >` |  Stable producer identity for API, actorless Rhai, and direct typed  releases admitted to the session's next fixed tick. Internal releases  omit this field because their cause is owned by another fixed-step or  lifecycle boundary. |
 
 #### `SetPorts`
 
@@ -1928,6 +1944,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `writes` | `Vec < (String, f64) >` |  `(port_name, value)` writes to apply this tick. |
 | `seq` | `u32` |  Client prediction sequence number, when the command came from a client. |
 | `tick` | `u64` |  Simulation tick associated with this command. |
+| `producer_id` | `Option < u64 >` |  Stable producer identity for API, actorless Rhai, and direct typed  inputs that are admitted to the session's next fixed tick. Twin Rhai  uses its stable actor identity and omits this field. Internal  fixed-step producers also omit it because their source inputs are  captured at their owning boundary. |
 
 ### `lunco-input-ui` <a id="lunco-input-ui"></a>
 
@@ -3741,7 +3758,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 241 commands from the runtime schema; scanned 961 .rs files for docs (0 parse failure(s) skipped).
+<!-- 242 commands from the runtime schema; scanned 961 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->
