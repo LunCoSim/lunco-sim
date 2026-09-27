@@ -103,6 +103,16 @@ def run(port: int, timeout: float, scene: str, log_path: Path) -> int:
             windowed=True,
         ) as session:
             wait_for_scene(session, scene, min(timeout, 45.0))
+            # Editor acceptance observers advance through on_tick, but a
+            # freshly opened editor scene can retain a paused live transport.
+            # Resume it in this isolated test process after the fixture is ready.
+            transport = session.post({
+                "type": "ExecuteCommand",
+                "command": "SetTimeTransport",
+                "params": {"playing": True},
+            })
+            if transport.get("error") or transport.get("data", {}).get("accepted") is not True:
+                raise RuntimeError(f"could not start the editor test simulation: {transport!r}")
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if session.process is None or session.process.poll() is not None:

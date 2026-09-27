@@ -775,6 +775,8 @@ fn publish_sysml_warning(path: &str, qualified_name: Option<&str>, issue: Option
 fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
     if value.is_unit() {
         TelemetryValue::Bool(true)
+    } else if value.is::<u64>() {
+        TelemetryValue::U64(value.clone().cast::<u64>())
     } else if let Ok(f) = value.as_float() {
         TelemetryValue::F64(f)
     } else if let Ok(i) = value.as_int() {
@@ -5829,6 +5831,8 @@ mod tests {
         let mut payload = Map::new();
         payload.insert("path".into(), Dynamic::from("/Mission/Target1"));
         payload.insert("state".into(), Dynamic::from("active"));
+        let document_id = 114_932_766_189_908_u64;
+        payload.insert("doc_id".into(), Dynamic::from(document_id));
 
         let value = super::rhai_to_telemetry(&Dynamic::from_map(payload));
         let TelemetryValue::Map(value) = value else {
@@ -5842,6 +5846,13 @@ mod tests {
             value.get("state"),
             Some(&TelemetryValue::String("active".to_string()))
         );
+        assert_eq!(value.get("doc_id"), Some(&TelemetryValue::U64(document_id)));
+        let restored = lunco_scripting_bridge_core::telemetry_value(
+            &super::RhaiBuilder,
+            value.get("doc_id").expect("document id payload"),
+        );
+        assert!(restored.is::<u64>());
+        assert_eq!(restored.clone().try_cast::<u64>(), Some(document_id));
 
         let event = TelemetryEvent {
             name: "mission.progress".to_string(),

@@ -765,7 +765,7 @@ ground-station/ROS interop):
   (`:57`) — "discrete notification of a system state change." `sim_secs` and
   `sim_tick` are stamped from the shared simulation clock; `timestamp` is the
   derived TDB epoch label.
-- `TelemetryValue` (F64/I64/Bool/String/Array/Map, serde) (`:41`) — the typed payload value; structured event parameters do not need string parsing.
+- `TelemetryValue` (F64/I64/U64/Bool/String/Array/Map, serde) (`:41`) — the typed payload value; structured event parameters do not need string parsing.
 - `Severity` (YAMCS 5-tier) (`:25`); `SampledParameter` (`:101`) — continuous data;
   `Parameter { name, unit, path }` (`:87`) — reflection-path monitor source for the
   lunco-telemetry sampling engine.

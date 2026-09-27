@@ -165,12 +165,16 @@ until that point is entered after its predecessors. Active route progression
 uses the same order. This is presentation state, not a vessel component or a
 second route fact.
 The route context gesture opens its authored menu without selecting the point;
-selection and gizmo activation require the menu's explicit select action. User
-possession is a `ControlLink`/`SessionRegistry` lifecycle, while a route program
-is guidance policy. Releasing possession hides the vessel HUD and applies the
-generic input safe state; an enabled route then republishes its active guidance
-target without claiming the user's session. Repossession restores the HUD
-without restarting the route.
+selection and gizmo activation require the menu's explicit select action. Pass
+the resolved document, route, and direct point in each menu action context so a
+later callback does not depend on viewport query scope. Resolve a route-bearing
+pointer target before a previously selected or controlled subject, especially
+when one subject has multiple route programs. User possession is a
+`ControlLink`/`SessionRegistry` lifecycle, while a route program is guidance
+policy. Releasing possession hides the vessel HUD and applies the generic input
+safe state; an enabled route then republishes its active guidance target without
+claiming the user's session. Repossession restores the HUD without restarting
+the route.
 
 Script source edits made by a user go through the `ScriptDocument` host, so
 undo, redo, and the Twin journal see the same typed `ScriptOp`. A file-backed

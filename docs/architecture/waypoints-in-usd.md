@@ -223,10 +223,17 @@ the hit prim's registered `LunCoPointerInteractionAPI` marks that button as
 `context`. The shared Rhai router gives route editing first refusal and then
 dispatches generic selection for eligible primary gestures. Only the explicit
 “Select route point” menu action selects the point and enables its transform
-gizmo; delete and move resolve the point from the original pointer context. The
-windowed `route_interaction` production gate requires the fixture root in the
-live editor, observes the secondary pointer context and its semantic intent,
-then checks that selection stays unchanged until the explicit menu action.
+gizmo. The windowed `route_interaction` production gate requires the fixture
+root in the live editor, opens the route menu through policy, then clicks its
+Delete row through the production editor input path and checks that selection
+stays unchanged. The menu carries the document, enclosing route, and canonical
+point as its action context, so its later delete callback does not depend on
+viewport query scope or rover possession. When a controlled rover remains
+selected, a route-bearing pointer target takes precedence over that stale
+selection; this lets right-click target the route point actually under the
+pointer. The production `route_lifecycle` gate covers that route selection
+precedence. Moving a point still resolves its target from the original pointer
+context.
 
 In the editor, the runtime edit panel identifies `@runtime@` as the target for
 route points, runtime spawns, and gizmo edits. Its Twin setting tells the user

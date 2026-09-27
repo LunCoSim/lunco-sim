@@ -1,6 +1,6 @@
 // Windowed production gate for unpossessed route edits and the native
-// route-point context gesture. Synthetic input still traverses Bevy picking,
-// the Rhai interaction router, the authored menu host, and generic selection.
+// route-point context menu. It opens the menu through route policy and sends
+// the Delete row through the production editor input path.
 
 const TEST_KIND = "editor";
 const ROOT = "/RouteInteraction";
@@ -21,7 +21,7 @@ fn selected_only(entity) {
 fn report(me, passed, message) {
     me.done = true;
     report_verdict([t_true(passed, message)],
-        "ROUTE POINTER INTERACTION", "ROUTE_POINTER_INTERACTION");
+        "ROUTE CONTEXT MENU DELETION", "ROUTE_CONTEXT_MENU_DELETION");
 }
 
 fn simulation_dependencies(me, ctx) {
@@ -40,21 +40,9 @@ fn on_start(me, ctx) {
     this.point = -1;
     this.marker = -1;
     this.screen = ();
-    this.secondary_pointer = ();
-    this.scene_pointer_events = 0;
-    this.last_event_name = "none";
     this.added_without_possession = ();
     this.route_children_before_edit = [];
-}
-
-fn on_event(me, event, ctx) {
-    this.last_event_name = event.name;
-    if event.name == "scene.pointer" {
-        this.scene_pointer_events += 1;
-        if event.value != () && event.value.button == "secondary" {
-            this.secondary_pointer = event.value;
-        }
-    }
+    this.context_delete_path = ROUTE + "/P0";
 }
 
 fn on_tick(me, ctx) {
@@ -73,7 +61,7 @@ fn on_tick(me, ctx) {
             attrs: ["lunco:interaction:right"],
             schemas: true,
         });
-        this.subject = find(ROOT + "/Subject");
+        this.subject = find_path(ROOT + "/Subject");
         this.point = find_path(ROUTE + "/P0");
         this.marker = find_path(ROUTE + "/P0/Dome");
         if route == () || route.ok == false || pointer_api == () || pointer_api.ok == false
@@ -158,69 +146,36 @@ fn on_tick(me, ctx) {
         if !selected_only(this.subject) { return; }
         this.screen = viewport_position(this.marker);
         if this.screen == () || this.screen.len() != 2 { return; }
-        input_pointer_move(this.screen[0], this.screen[1]);
-        this.phase = 2;
-        return;
-    }
-
-    if this.phase == 2 {
-        input_pointer_press("secondary", this.screen[0], this.screen[1]);
-        this.phase = 3;
-        return;
-    }
-
-    if this.phase == 3 {
-        input_pointer_release("secondary", this.screen[0], this.screen[1]);
-        this.phase = 4;
-        this.phase_elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == 4 {
-        if this.phase_elapsed < 0.25 { return; }
-        if this.secondary_pointer == () {
-            report(this, false,
-                "no secondary scene.pointer event arrived (observed "
-                    + this.scene_pointer_events + "; last event was " + this.last_event_name
-                    + "; target screen position was (" + this.screen[0].to_string()
-                    + "," + this.screen[1].to_string() + ")");
-            return;
-        }
-        if !this.secondary_pointer.pointer_intents.contains("route.context") {
-            report(this, false, "the secondary pointer event did not resolve the route.context input binding");
-            return;
-        }
-        if this.secondary_pointer.pointer_policy == () {
-            report(this, false, "the secondary pointer event did not carry the hit prim's USD interaction policy");
-            return;
-        }
-        if this.secondary_pointer.pointer_policy.right != "context" {
-            report(this, false, "the hit prim's authored secondary interaction policy was not context");
-            return;
-        }
-        if this.secondary_pointer.prim_paths == ()
-            || !this.secondary_pointer.prim_paths.contains(ROUTE + "/P0") {
-            report(this, false, "the secondary pointer event did not resolve route waypoint P0");
-            return;
-        }
-        if !this.secondary_pointer.prim_paths.contains(ROUTE + "/P0/Dome") {
-            report(this, false, "the secondary pointer event did not resolve the route marker hit prim");
+        let opened = waypoint_editor::on_context(#{
+            doc_id: this.doc,
+            scene_root_path: ROOT,
+            route_path: ROUTE,
+            selected_path: this.context_delete_path,
+            target_path: this.context_delete_path + "/Dome",
+            hit_path: this.context_delete_path + "/Dome",
+            prim_paths: [this.context_delete_path + "/Dome", this.context_delete_path],
+            screen_position: this.screen,
+        });
+        if opened == () || opened.ok != true || opened.menu != true {
+            report(this, false, "the route context policy did not open its native menu");
             return;
         }
         if !selected_only(this.subject) {
             report(this, false,
-                "right-clicking a waypoint changed selection or activated its gizmo");
+                "opening the route context menu changed selection or activated its gizmo");
             return;
         }
         this.phase = 5;
+        this.phase_elapsed = 0.0;
         return;
     }
 
     if this.phase == 5 {
-        // The generic popup is anchored at the click. Its first action is
-        // centered one row below the anchor and to its right.
+        if this.phase_elapsed < 0.25 { return; }
+        // The generic popup is anchored at the click. Its second action is
+        // centered one row below the first and to its right.
         let x = this.screen[0] + 60.0;
-        let y = this.screen[1] + 12.0;
+        let y = this.screen[1] + 30.0;
         input_pointer_move(x, y);
         input_pointer_press("primary", x, y);
         this.phase = 6;
@@ -229,16 +184,51 @@ fn on_tick(me, ctx) {
 
     if this.phase == 6 {
         let x = this.screen[0] + 60.0;
-        let y = this.screen[1] + 12.0;
+        let y = this.screen[1] + 30.0;
         input_pointer_release("primary", x, y);
-        this.phase = 7;
+        this.phase = 50;
+        this.phase_elapsed = 0.0;
         return;
     }
 
-    if this.phase == 7 {
-        if !selected_only(this.point) { return; }
+    if this.phase == 50 {
+        let deleted = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: this.context_delete_path,
+        });
+        if deleted == () || deleted.ok == false { return; }
+        if deleted.active != false {
+            if this.phase_elapsed < 3.0 { return; }
+            report(this, false,
+                "the native context-menu Delete action did not deactivate P0 without rover possession");
+            return;
+        }
+        if !selected_only(this.subject) {
+            report(this, false,
+                "deleting an unpossessed route point changed the existing rover selection");
+            return;
+        }
+        let possessed_context = #{
+            doc_id: this.doc,
+            scene_root_path: ROOT,
+            controlled_path: ROOT + "/Subject",
+            selected_path: ROOT + "/Subject",
+            target_path: ROUTE + "/P1",
+            hit_path: ROUTE + "/P1/Dome",
+            prim_paths: [ROUTE + "/P1/Dome", ROUTE + "/P1", ROUTE, ROOT],
+            button: "secondary",
+            pointer_intents: ["route.context"],
+            pointer_policy: #{ right: "context" },
+            screen_position: this.screen,
+        };
+        let possessed_route = waypoint_editor::route_edit_path(possessed_context);
+        if possessed_route != ROUTE {
+            report(this, false,
+                "a possessed route context did not resolve the clicked waypoint's route");
+            return;
+        }
         report(this, true,
-            "the waypoint context gesture selects explicitly after unpossessed route add/delete succeeded");
+            "native menu deletion works without possession and possessed route context follows its clicked point");
     }
 }
 

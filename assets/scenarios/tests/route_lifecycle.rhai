@@ -1083,6 +1083,28 @@ fn on_tick(me, ctx) {
         if !has_path(this.doc, ALTERNATE_ROUTE + "/P1") { return; }
         this.checks.push(t_true(point_count(this.doc) == 2,
             "editing the alternate program does not mutate the first route"));
+        let primary_program = program_editor::list(this.doc, ROUTE);
+        if primary_program == () || !primary_program.ok
+            || primary_program.programs.len() == 0 { return; }
+        let possessed_pointer = context(
+            this.doc, ALTERNATE_ROUTE + "/P1/Dome", (),
+        );
+        possessed_pointer.route_path = ();
+        possessed_pointer.selected_path = primary_program.programs[0]["path"];
+        possessed_pointer.controlled_path = SUBJECT_PATH;
+        possessed_pointer.target_path = ALTERNATE_ROUTE + "/P1";
+        possessed_pointer.hit_path = ALTERNATE_ROUTE + "/P1/Dome";
+        possessed_pointer.prim_paths = [
+            ALTERNATE_ROUTE + "/P1/Dome", ALTERNATE_ROUTE + "/P1",
+            ALTERNATE_ROUTE, ROOT,
+        ];
+        possessed_pointer.button = "secondary";
+        possessed_pointer.pointer_intents = ["route.context"];
+        possessed_pointer.pointer_policy = #{ right: "context" };
+        let possessed_action = waypoint_editor::route_pointer_action(possessed_pointer);
+        this.checks.push(t_true(possessed_action.handled == true
+            && possessed_action.path == ALTERNATE_ROUTE + "/P1",
+            "a possessed right-click follows the hit waypoint instead of the previously selected route"));
         let generation = route_revision(this.doc);
         if generation == () {
             this.checks.push(t_true(false,
