@@ -53,6 +53,78 @@ pub struct SysmlFile {
     pub text: String,
 }
 
+/// Namespace for one source in an analyzed SysML content closure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SysmlSourceNamespace {
+    /// Source embedded in the pinned SysML standard-library dependency.
+    StandardLibrary,
+    /// Source admitted by the caller's project or document source set.
+    Project,
+}
+
+/// Strong content identity for one exact SysML source file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SysmlSourceContent {
+    /// Whether the source belongs to the embedded library or project input.
+    pub namespace: SysmlSourceNamespace,
+    /// Exact logical source name used by the analysis workspace.
+    pub source_name: String,
+    /// CIDv1 raw/SHA-256 address of the source's UTF-8 bytes.
+    pub cid: lunco_hash::content::Cid,
+}
+
+/// Stable, content-addressed identity for the full source set represented by
+/// a `SysmlAnalysis`, including the embedded standard library when enabled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SysmlContentClosure {
+    /// All project and standard-library sources, sorted by namespace and name.
+    pub sources: Vec<SysmlSourceContent>,
+}
+
+/// Why a SysML analysis cannot provide an unambiguous content closure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SysmlContentClosureError {
+    /// Parser, resolution, or standard-library collision diagnostics remain.
+    AnalysisHasDiagnostics,
+    /// A represented source has no logical identity.
+    EmptySourceName {
+        /// Namespace containing the source.
+        namespace: SysmlSourceNamespace,
+    },
+    /// Two represented sources have the same identity within one namespace.
+    DuplicateSourceName {
+        /// Namespace containing the duplicate sources.
+        namespace: SysmlSourceNamespace,
+        /// Shared logical name of the duplicate sources.
+        source_name: String,
+    },
+}
+
+impl std::fmt::Display for SysmlContentClosureError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AnalysisHasDiagnostics => formatter.write_str(
+                "SysML analysis has parser, resolution, or standard-library collision diagnostics",
+            ),
+            Self::EmptySourceName { namespace } => {
+                write!(
+                    formatter,
+                    "SysML {namespace:?} source has an empty logical name"
+                )
+            }
+            Self::DuplicateSourceName {
+                namespace,
+                source_name,
+            } => write!(
+                formatter,
+                "SysML {namespace:?} sources duplicate logical name `{source_name}`"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SysmlContentClosureError {}
+
 /// A compact, typed source location that can travel with a value or record.
 ///
 /// Keeping provenance as a value object means Rhai and report consumers can
@@ -1841,6 +1913,66 @@ impl SysmlAnalysis {
     /// Files represented by this snapshot.
     pub fn files(&self) -> &[SysmlFile] {
         &self.files
+    }
+
+    /// Freeze the exact project and embedded-library sources represented by
+    /// this resolved analysis as stable per-file content identities.
+    ///
+    /// The source set is sorted by namespace and logical name. Existing
+    /// diagnostics, empty names, and duplicate names fail closed because they
+    /// cannot identify one valid, complete analysis closure.
+    pub fn content_closure(&self) -> Result<SysmlContentClosure, SysmlContentClosureError> {
+        let mut sources = Vec::with_capacity(
+            self.files.len()
+                + if self.includes_stdlib {
+                    sysml_stdlib::FILES.len()
+                } else {
+                    0
+                },
+        );
+
+        if self.includes_stdlib {
+            sources.extend(
+                sysml_stdlib::FILES
+                    .iter()
+                    .map(|(name, text)| SysmlSourceContent {
+                        namespace: SysmlSourceNamespace::StandardLibrary,
+                        source_name: (*name).to_owned(),
+                        cid: lunco_hash::content::cid(text.as_bytes()),
+                    }),
+            );
+        }
+        sources.extend(self.files.iter().map(|file| SysmlSourceContent {
+            namespace: SysmlSourceNamespace::Project,
+            source_name: file.name.clone(),
+            cid: lunco_hash::content::cid(file.text.as_bytes()),
+        }));
+        sources.sort_unstable_by(|left, right| {
+            (left.namespace, left.source_name.as_str())
+                .cmp(&(right.namespace, right.source_name.as_str()))
+        });
+
+        for source in &sources {
+            if source.source_name.is_empty() {
+                return Err(SysmlContentClosureError::EmptySourceName {
+                    namespace: source.namespace,
+                });
+            }
+        }
+        for pair in sources.windows(2) {
+            if pair[0].namespace == pair[1].namespace && pair[0].source_name == pair[1].source_name
+            {
+                return Err(SysmlContentClosureError::DuplicateSourceName {
+                    namespace: pair[0].namespace,
+                    source_name: pair[0].source_name.clone(),
+                });
+            }
+        }
+        if !self.diagnostics.is_empty() {
+            return Err(SysmlContentClosureError::AnalysisHasDiagnostics);
+        }
+
+        Ok(SysmlContentClosure { sources })
     }
 
     /// Normalized semantic diagnostics for project files.
@@ -3778,6 +3910,83 @@ mod tests {
     fn source_revision_is_preserved() {
         let analysis = SysmlAnalysis::build([("a.sysml", "part def A {}")], false, 42);
         assert_eq!(analysis.source_revision(), 42);
+    }
+
+    #[test]
+    fn content_closure_addresses_project_and_standard_library_sources_stably() {
+        let first = SysmlAnalysis::build(
+            [("z.sysml", "part def Z {}"), ("a.sysml", "part def A {}")],
+            true,
+            0,
+        );
+        let second = SysmlAnalysis::build(
+            [("a.sysml", "part def A {}"), ("z.sysml", "part def Z {}")],
+            true,
+            0,
+        );
+        let first = first.content_closure().expect("complete source closure");
+        let second = second.content_closure().expect("complete source closure");
+
+        assert_eq!(first, second);
+        assert_eq!(first.sources.len(), sysml_stdlib::FILES.len() + 2,);
+        assert!(first.sources.windows(2).all(|pair| {
+            (pair[0].namespace, pair[0].source_name.as_str())
+                < (pair[1].namespace, pair[1].source_name.as_str())
+        }));
+        assert!(
+            first
+                .sources
+                .iter()
+                .any(|source| { source.namespace == SysmlSourceNamespace::StandardLibrary })
+        );
+    }
+
+    #[test]
+    fn content_closure_rejects_diagnostics_and_unidentified_project_sources() {
+        let malformed = SysmlAnalysis::from_files_without_stdlib([("broken.sysml", "package {")]);
+        assert_eq!(
+            malformed.content_closure(),
+            Err(SysmlContentClosureError::AnalysisHasDiagnostics),
+        );
+
+        let unidentified = SysmlAnalysis::build([("", "part def A {}")], false, 0);
+        assert_eq!(
+            unidentified.content_closure(),
+            Err(SysmlContentClosureError::EmptySourceName {
+                namespace: SysmlSourceNamespace::Project,
+            }),
+        );
+    }
+
+    #[test]
+    fn content_closure_rejects_duplicate_project_source_names() {
+        let analysis = SysmlAnalysis::build(
+            [
+                ("duplicate.sysml", "part def A {}"),
+                ("duplicate.sysml", "part def B {}"),
+            ],
+            false,
+            0,
+        );
+        assert_eq!(
+            analysis.content_closure(),
+            Err(SysmlContentClosureError::DuplicateSourceName {
+                namespace: SysmlSourceNamespace::Project,
+                source_name: "duplicate.sysml".to_owned(),
+            }),
+        );
+    }
+
+    #[test]
+    fn content_closure_changes_when_exact_source_bytes_change() {
+        let first = SysmlAnalysis::build([("model.sysml", "part def A {}")], false, 0)
+            .content_closure()
+            .expect("complete source closure");
+        let second = SysmlAnalysis::build([("model.sysml", "part def B {}")], false, 0)
+            .content_closure()
+            .expect("complete source closure");
+
+        assert_ne!(first.sources[0].cid, second.sources[0].cid);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Command Journal — authored mutations and session replay inputs
 
-> Status: Partial in-memory input capture; durable replay remains design work · Audience: contributors adding new domain mutations
+> Status: Partial typed input capture with bounded archive export; whole-session replay remains design work · Audience: contributors adding new domain mutations
 >
 > This page covers the future command/session journal. The current authored
 > document journal is defined in [`18-unified-journal-and-history.md`](18-unified-journal-and-history.md).
@@ -15,8 +15,15 @@ actions into authored document operations: document-backed `SpawnEntity` uses
 replication.
 `AcquireControl`, `SetPorts`, terrain spawning, time control, and other
 transient runtime actions still lack complete session capture, so deterministic
-session replay is not built. Captured records can be encoded as a bounded,
-versioned binary archive, but there is no durable writer or playback consumer.
+session replay is not built. A completed capture can be exported as a bounded,
+versioned binary archive; baseline state, remaining command inputs, and a
+playback consumer are still absent.
+
+The networking-owned `ScenarioManifestMsg` carries a scenario Merkle revision
+and asset CIDs, but that resource is optional and exists only when networking
+is installed. Offline replay therefore needs a transport-neutral baseline
+assembled from the admitted simulation owners; capture must not depend on the
+network manifest.
 
 The Twin journal owns authored document mutations. A separate session replay
 input stream must own transient external inputs such as per-tick controls and
@@ -161,11 +168,22 @@ admission and network replication. The canonical `WorldGrid` has deterministic
 content provenance for stable active-frame identity. Document-backed spawning
 continues through `ApplyUsdOps` and the Twin journal, without a duplicate
 session-input record. `SessionInputCaptureArchive` checks the record contract
-and encodes a versioned archive bounded to 65,536 records and 16 MiB. Runtime
-capture remains memory-backed; no storage writer, baseline manifest, or
-playback consumer is installed. The ingress queue and `CausalTrace` remain
-separate from durable replay storage. Other command payloads and whole-session
-replay remain open.
+and encodes a versioned archive bounded to 65,536 records and 16 MiB.
+On native hosts, `ExportSessionInputCapture` accepts a completed capture,
+shares its immutable records with a `Background`-priority `AsyncWorkAdmission`
+job, encodes away from the simulation schedule, and writes through
+`lunco-storage` on Bevy's I/O pool. The app writes under
+`<user-config>/session-captures/` using a validated filename stem and unique
+operation suffix, refuses an existing output, reads the file back, decodes it,
+and compares the records before reporting `complete`. Capture IDs are
+monotonic for the app session, and a successfully exported capture cannot be
+exported twice; failed exports retain retry eligibility.
+`ReadSessionInputArchiveExport` exposes the capture and export IDs with pending,
+complete, or failed status.
+This persists the bounded input slice; it does not include a baseline manifest
+or playback consumer, so whole-session replay remains open. The ingress queue
+and `CausalTrace` remain separate from durable replay storage. Other command
+payloads also remain open.
 
 ## Replay implementation boundary
 
@@ -187,14 +205,72 @@ recorded semantic input through controller translation and the normal
 event/command path, so Rhai and Modelica behavior are re-derived once.
 Capturing a derived command as an external input would apply its effect twice.
 
-The current queue and in-memory stream have explicit bounds. A durable writer
-must run outside the fixed schedule. A full queue, record limit, or failed
-writer must end recording with a visible error; it must not drop frames
-silently or stall simulation. Runtime-spawned entities carry their reserved
+The current queue and in-memory stream have explicit bounds. Archive encoding
+uses the shared background admission queue and durable file access uses the
+I/O task pool, outside the fixed schedule. A full queue, record limit, or
+failed writer leaves visible failure status; it must not drop frames silently
+or stall simulation. Runtime-spawned entities carry their reserved
 authoritative identity in the spawn action, while content-derived entities use
 their existing stable `GlobalEntityId`.
-Recording and playback remain unimplemented until a durable writer and playback
-consumer satisfy the lifecycle, ordering, and failure requirements above.
+Playback remains unimplemented until a baseline manifest and playback consumer
+satisfy the lifecycle, ordering, and failure requirements above.
+
+### Replay baseline ownership
+
+The baseline must be assembled from the owners that admitted the simulation,
+not inferred from networking state. `ScenarioManifestMsg` is optional and
+networking-owned; it can supply network scenario provenance but is absent from
+offline runs. Its Merkle revision cannot stand in for the local runtime
+baseline.
+
+The baseline contract needs stable identities and snapshots for the complete
+admitted owner closure:
+
+- The host's immutable build identity and the root USD composition closure,
+  including stable content identities for every composed dependency. The
+  `UsdStageRevision` counter is an invalidation signal, not a content identity.
+- Rhai and SysML source closures, keyed by canonical source identity and
+  stable source-content identity. Process-local registry counters alone cannot
+  identify the same sources across sessions.
+- Every live Modelica participant's model revision, resolved solver id,
+  capability profile, and effective solver parameters.
+- The fixed-step clock and physics execution profile, initial authoritative
+  runtime state, and every seed that can affect authoritative state.
+- The committed scene generation and the stable entity identities needed to
+  resolve input targets and runtime-spawn results.
+
+Each owner must expose its admitted snapshot through one typed capture boundary.
+If any required owner cannot freeze its snapshot, baseline capture must fail
+with that owner's diagnostic. The capture must not substitute a network
+manifest, a volatile revision counter, a guessed seed, or a partial state.
+Playback stays open until the same baseline can initialize the consumer and the
+consumer can submit archived records through their normal typed owner paths.
+
+`lunco-usd-compose::StageRecipe::content_closure` now provides the USD owner's
+typed, content-addressed snapshot for a complete fetched closure. It sorts
+canonical layer identifiers and stores CIDv1 raw/SHA-256 identities, and it
+rejects missing root bytes or any unresolved dependency. This is an owner
+primitive only: no application baseline collector consumes it yet, and the
+remaining owner snapshots and playback consumer are still required.
+
+`lunco-core::BuildIdentity` is the typed host identity resource. The production
+`LunCoSimRuntimePlugin` supplies the build-stamped version, revision, and
+repository when a host has not supplied its own identity; GUI presentation
+reads the same resource. This establishes the software identity component of a
+baseline, while source closures, solver/runtime snapshots, initial
+authoritative state, storage, and playback remain open.
+
+`SysmlAnalysis::content_closure()` now turns the exact logical names and text
+retained by `SysmlAnalysis::files()` into sorted CIDv1 raw/SHA-256 identities,
+including every embedded standard-library source when enabled. It rejects
+parser/resolution diagnostics and empty or duplicate names; the 64-bit FNV
+`source_revision` and `source_fingerprint` remain analysis/cache facts.
+Rhai retains each live entity's last committed literal-import dependencies as
+canonical ids with optional immutable source text, while
+`RhaiSource::dependencies` owns the loaded asset graph. Rhai still has no
+session-wide snapshot joining active roots to complete source closures. The
+baseline collector should read these owner snapshots, identify active roots,
+and report owner diagnostics when a required snapshot is stale or incomplete.
 
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and

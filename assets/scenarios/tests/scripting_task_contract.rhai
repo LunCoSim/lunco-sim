@@ -3,6 +3,12 @@
 // authored programs; it does not recreate the task cursor in Rust.
 // @timing simulation
 
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [], entity_writes: [],
+       query_reads: ["ReadSessionInputStream", "ReadSessionInputArchiveExport"],
+       required_inputs: [] }
+}
+
 fn on_start(me, ctx) {
     this.start_ctx_is_empty = ctx.len() == 0;
     let execution = execution_context();
@@ -48,6 +54,58 @@ fn on_start(me, ctx) {
     let overflow = cmd("RunRhai", #{ code: "()" });
     this.repl_queue_overflow_rejected = overflow.ok == false
         && overflow.error.contains("queue is full");
+
+    let premature_export = cmd("ExportSessionInputCapture", #{ file_stem: "premature" });
+    this.archive_premature_rejected = premature_export.ok == false
+        && premature_export.status == "rejected";
+    let capture_started = cmd("StartSessionInputCapture", #{});
+    this.archive_capture_id = ();
+    if capture_started.ok {
+        this.archive_capture_id = capture_started.data["capture_id"];
+    }
+    let capture_stopped = if capture_started.ok {
+        cmd("StopSessionInputCapture", #{})
+    } else {
+        #{ ok: false, error: "session input capture did not start" }
+    };
+    this.archive_capture_completed = capture_stopped.ok
+        && capture_stopped.data["state"] == "complete"
+        && capture_started.data["capture_id"] == capture_stopped.data["capture_id"];
+    let unsafe_export = cmd("ExportSessionInputCapture", #{ file_stem: "../escape" });
+    this.archive_unsafe_stem_rejected = unsafe_export.ok == false
+        && unsafe_export.status == "rejected";
+    this.archive_duplicate_rejected = false;
+    this.archive_export_pending = false;
+    this.archive_export_done = false;
+    this.archive_export_error = "";
+    this.archive_export_id = ();
+    this.archive_export_capture_id = ();
+    this.archive_status_capture_id = ();
+    this.archive_export_file_name = ();
+    this.archive_clear_rejected_while_pending = false;
+    this.archive_state = "idle";
+    this.archive_status_id = ();
+    this.archive_status_file_name = ();
+    this.archive_export_records = ();
+    this.archive_export_bytes = ();
+    this.archive_export_failure = "missing";
+    this.archive_clear_after_completion = false;
+    if this.archive_capture_completed {
+        let export_result = cmd("ExportSessionInputCapture", #{ file_stem: "task-contract" });
+        if export_result.ok && export_result.data["state"] == "pending" {
+            this.archive_export_pending = true;
+            this.archive_export_id = export_result.data["export_id"];
+            this.archive_export_capture_id = export_result.data["capture_id"];
+            this.archive_export_file_name = export_result.data["file_name"];
+            let cleared_while_pending = cmd("ClearSessionInputCapture", #{});
+            this.archive_clear_rejected_while_pending = cleared_while_pending.ok == false
+                && cleared_while_pending.status == "rejected";
+        } else {
+            this.archive_export_error = "archive export was not admitted: " + export_result;
+        }
+    } else {
+        this.archive_export_error = "session input capture did not complete";
+    }
     subscribe("TASK_CTX_EMPTY");
     subscribe("MISSION_CTX_EMPTY");
     subscribe("TASK_SEQ_A");
@@ -155,6 +213,32 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
 
+    if this.archive_export_pending && !this.archive_export_done {
+        let status = query("ReadSessionInputArchiveExport", #{});
+        if status == () {
+            this.archive_export_error = "archive export status query was unavailable";
+        } else if status["state"] == "complete" {
+            this.archive_state = status["state"];
+            this.archive_status_capture_id = status["capture_id"];
+            this.archive_status_id = status["export_id"];
+            this.archive_status_file_name = status["file_name"];
+            this.archive_export_records = status["record_count"];
+            this.archive_export_bytes = status["byte_count"];
+            this.archive_export_failure = status["failure"];
+            let duplicate = cmd("ExportSessionInputCapture", #{ file_stem: "duplicate" });
+            this.archive_duplicate_rejected = duplicate.ok == false
+                && duplicate.status == "rejected";
+            let cleared = cmd("ClearSessionInputCapture", #{});
+            this.archive_clear_after_completion = cleared.ok
+                && query("ReadSessionInputStream", #{})["state"] == "idle";
+            this.archive_export_done = true;
+        } else if status["state"] == "failed" {
+            this.archive_state = status["state"];
+            this.archive_export_error = status["failure"].to_string();
+            this.archive_export_done = true;
+        }
+    }
+
     let limited = command_result(this.repl_operation_command);
     if limited != () && limited.ok == false && limited.error.contains("operation") {
         this.repl_operation_limit_rejected = true;
@@ -170,7 +254,8 @@ fn on_tick(me, ctx) {
     }
 
     if this.mission_complete && this.forever >= 3 && this.repl_values.len() == 2
-        && this.repl_operation_limit_rejected && this.interrupt_recovered == 1 {
+        && this.repl_operation_limit_rejected && this.interrupt_recovered == 1
+        && this.archive_export_done {
         this.done = true;
         report_verdict([
             t_true(this.start_ctx_is_empty, "on_start receives the empty default context"),
@@ -202,13 +287,30 @@ fn on_tick(me, ctx) {
             t_true(this.repl_values == [1, 2], "one-shot REPL requests preserve FIFO execution order"),
             t_true(this.repl_operation_limit_rejected, "a world-bound one-shot cannot exceed its operation budget"),
             t_true(this.repl_queue_overflow_rejected, "the full one-shot queue rejects new commands explicitly"),
+            t_true(this.archive_premature_rejected, "archive export rejects a capture that has not completed"),
+            t_true(this.archive_capture_completed, "archive export accepts only the completed capture"),
+            t_true(this.archive_unsafe_stem_rejected, "archive export rejects filename traversal"),
+            t_true(this.archive_export_pending, "archive export reports its accepted pending operation"),
+            t_true(this.archive_clear_rejected_while_pending, "capture clearing is rejected while an immutable export snapshot is pending"),
+            t_true(this.archive_state == "complete", "archive export completed after durable write and read-back"),
+            t_true(this.archive_export_id.to_string() == this.archive_status_id.to_string(), "archive export status retained the exact request id"),
+            t_true(this.archive_export_capture_id.to_string() == this.archive_status_capture_id.to_string(), "archive status retained the capture identity bound to the export"),
+            t_true(this.archive_export_capture_id.to_string() == this.archive_capture_id.to_string(), "archive export references the capture returned by the control command"),
+            t_true(this.archive_export_file_name == this.archive_status_file_name, "archive export status retained the output filename"),
+            t_true(this.archive_export_records.to_string() == "0"
+                && this.archive_export_bytes != ()
+                && this.archive_export_bytes.to_string() != "0",
+                "archive export reports the empty capture record count and encoded byte length"),
+            t_true(this.archive_export_failure == (), "archive export completed without a failure"),
+            t_true(this.archive_duplicate_rejected, "one completed capture cannot create multiple durable archives"),
+            t_true(this.archive_clear_after_completion, "capture can be cleared after durable export completes"),
         ], "SCRIPTING TASK CONTRACT", "SCRIPTING_TASK_CONTRACT");
         return;
     }
 
     if this.elapsed > 15.0 {
         this.done = true;
-        report_verdict(["task/mission or bounded REPL contract did not reach its public observations"],
+        report_verdict(["task, bounded REPL, or durable input archive contract did not reach its public observations: " + this.archive_export_error],
             "SCRIPTING TASK CONTRACT", "SCRIPTING_TASK_CONTRACT");
     }
 }

@@ -12,6 +12,8 @@
 extern crate self as lunco_core;
 
 pub mod assembly;
+/// Stamped product and source identity supplied by an application host.
+pub mod build_identity;
 /// Runtime command markers, reflection, and result storage.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
@@ -45,6 +47,7 @@ pub use assembly::{
     AssemblyComponent, AssemblyError, AssemblyLink, AssemblyPlan, AssemblyPort, ComponentId,
     ComponentKind, PortId, PortKind,
 };
+pub use build_identity::BuildIdentity;
 pub use commands::{
     ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOrigin, CommandOutcome,
     CommandResults, EditIntent, MarkClientLocalExt, SpawnEntity,

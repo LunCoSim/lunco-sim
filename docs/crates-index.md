@@ -9,7 +9,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Stable ECS engine facts: identity/provenance, typed scene requests, runtime diagnostics/fault contracts, Bevy `RuntimeCycleSet` ordering labels, state markers, and small ECS utilities. Owner-neutral context values live in `lunco-runtime-context`. |
+| **`lunco-core`** | Stable ECS engine facts: identity/provenance, typed scene requests, runtime diagnostics/fault contracts, Bevy `RuntimeCycleSet` ordering labels, stamped `BuildIdentity`, state markers, and small ECS utilities. Owner-neutral context values live in `lunco-runtime-context`. |
 | **`lunco-runtime-context`** | Owner-neutral scope, cycle, route, clock, phase, producer-stamp, and execution-context values shared by the ECS cycle labels and scripting hook ABI without depending on Bevy ECS. |
 | **`lunco-geometry-core`** | Precision-preserving, renderer-independent geometry kernels: finite f64 AABB/OBB relations and convex profile extrusion. Shared by authored geometry tools without depending on ECS or USD mesh evaluators. |
 | **`lunco-core-runtime`** | Bevy runtime owner for core contracts: fixed simulation ticks, rollback/netcode schedule anchors, pacing/barriers, bounded priority admission for immutable async preparation, gate instrumentation, subsystem toggles, recoverable synchronization helpers, and the runtime plugin that installs those mechanisms. |
@@ -238,7 +238,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-modelica-icon-ui`** | Reusable egui renderer for authored Modelica `Icon`/`Diagram` graphics, including orientation, text substitution, themed colors, polygon tessellation, and bitmap loading through the source-library asset boundary. It has no workbench panel or document lifecycle ownership. |
 | **`lunco-modelica-docs-ui`** | Reusable egui Modelica documentation renderer: cached HTML-to-Markdown conversion, CommonMark presentation, and workbench URI-link dispatch. It does not resolve documents or own panel selection. |
 | **`lunco-modelica-ast`** | Pure Modelica source boundary: BOM normalization, strict/recovering Rumoca parse wrappers, AST interface/component extraction, typed Icon/Diagram/Placement annotation values and extractors, icon transforms, source-derived memo primitives, shared expression/description display projections, and Modelica lint facts. It has no Bevy, UI, worker, storage, or solver ownership; authored lint policy remains in `assets/scripting/policy/lint_modelica.rhai`. |
-| **`lunco-sysml-ast`** | Pure SysML v2 parser/resolver projection: source files, snapshot-scoped element/feature handles, typed literals and source-spanned constraint expression trees, requirements, verification links, diagnostics, and policy-neutral fact tables/selectors. It has no Bevy, filesystem, Twin, or scripting ownership. |
+| **`lunco-sysml-ast`** | Pure SysML v2 parser/resolver projection: source files and their sorted CID-addressed project/standard-library closure, snapshot-scoped element/feature handles, typed literals and source-spanned constraint expression trees, requirements, verification links, diagnostics, and policy-neutral fact tables/selectors. It has no Bevy, filesystem, Twin, or scripting ownership. |
 | **`lunco-sysml-ir`** | Generic typed neutral IR for the bounded resolved SysML/KerML constraint subset: source-linked expressions, parameters, multiplicity/type checking, diagnostics, fingerprints, and provider-neutral evaluation contracts. It contains no Griffin or Modelica policy. |
 | **`lunco-sysml-modelica`** | Generic lowering of valid `lunco-sysml-ir` constraints into standalone Modelica admitted through the Rumoca parser boundary. It does not resolve SysML or choose engineering/Griffin bindings. |
 | **`lunco-sysml-report`** | Optional serialized report adapter for an explicit external boundary. It owns no parsing, filesystem, Twin, Bevy, or verdict policy; the in-process `AnalyzeSysml` Rhai path uses typed `HookValue` facts instead. |
@@ -275,10 +275,10 @@ Primary entry points and simulation assembly targets.
 | **`lunco-luncosim-presentation`** | — | Application-edge visual bridges: status/environment projection, terrain horizon, USD camera/light composition, capture integration, and scene presentation wiring. |
 | **`lunco-updater`** | — | Native desktop update capability and rendered update surface. It owns Velopack admission and update UI behind the application’s opt-in `updates` feature. |
 | **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, readiness barriers, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
-| **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, build identity, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
+| **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, stamped build constants and startup logging, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
 | **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, shared render-quality policy, scene commands, and headless execution. |
-| **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, and persisted experiment artifacts. It is composed by the runtime boundary rather than embedded in the generic core. |
-| **`lunco-luncosim-runtime`** | — | Production application composition: services plus Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
+| **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, persisted experiment artifacts, and bounded durable export of completed session-input captures. It is composed by the runtime boundary rather than embedded in the generic core. |
+| **`lunco-luncosim-runtime`** | — | Production application composition: stamped build identity for headless hosts, services plus Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends on `lunco-luncosim-runtime` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-rhai-repl`** | — | Terminal adapter for the reflected `RunRhai` command. It reads stdin/files and presents results while delegating evaluation to the running simulator and HTTP to `lunco-api-client`. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
@@ -645,6 +645,9 @@ state, typed operations, layer identity, and edit history. Reusable authored
 data lives in `lunco-usd-data`, authoring and schema helpers in
 `lunco-usd-authoring`, and `StageRecipe` in `lunco-usd-compose`. It has no
 runtime projection, command observers, physics, rendering, or UI dependency.
+`StageRecipe::content_closure` freezes a complete fetched closure as sorted
+canonical layer identifiers with CIDv1 raw/SHA-256 content identities; missing
+root bytes and unresolved dependencies fail the snapshot.
 
 **`lunco-usd-data`**
 Reusable render-free authored USD data contracts: stage metadata, unit and
@@ -1056,7 +1059,7 @@ do not make the shell the owner of diagnostics state.
 **`lunco-workbench-help-ui`**
 Rendered Help/About presentation for the Workbench. It owns the help registry's
 egui menu item and version/source view and consumes `BuildIdentity` from
-`lunco-workbench-core`; the core contract remains usable by headless hosts.
+`lunco-core`; LunCoSim host composition stamps it for headless and GUI sessions.
 
 **`lunco-workbench-layout`**
 Renderer-independent workbench layout owner. It materializes perspective
@@ -1342,11 +1345,12 @@ Production headless runner for authored USD + Rhai scene and Twin verification c
 **`lunco-luncosim-core`**
 Dependency-light host substrate shared by GUI, server, and scene-test hosts. It
 owns the headless Bevy plugin group, raw input/state schedules, asset
-source/type registration, task-pool policy, build identity, and log
-deduplication. It opts into only the Bevy state and keyboard/mouse event
-features it uses; window-backed input focus belongs to the UI composition. It
-does not install physics, USD, terrain, Modelica, celestial, avatar, or
-scene-command plugins.
+source/type registration, task-pool policy, stamped build constants and
+startup logging, and log deduplication. The shared `lunco-core::BuildIdentity`
+resource is installed by host composition. It opts into only the Bevy state
+and keyboard/mouse event features it uses; window-backed input focus belongs
+to the UI composition. It does not install physics, USD, terrain, Modelica,
+celestial, avatar, or scene-command plugins.
 
 **`lunco-luncosim-simulation`**
 Renderer-independent domain composition above the host substrate. It owns the

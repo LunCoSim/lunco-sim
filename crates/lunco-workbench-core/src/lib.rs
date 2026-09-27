@@ -5,7 +5,6 @@
 //! does not depend on `bevy_egui`, `egui_dock`, a renderer, a window, storage,
 //! or application services.
 
-mod build_identity;
 mod menu;
 mod panel;
 mod perspective;
@@ -22,7 +21,6 @@ pub mod viewport;
 pub mod commands;
 pub mod presentation;
 
-pub use build_identity::BuildIdentity;
 pub use menu::{
     CustomMenu, DeferredWorldTriggers, MenuCallback, MenuCtx, MenuIntents, ScriptedMenu,
     SettingsSubmenu, UndoProbe, UndoProbeCtx, WorkbenchMenuRegistry, trigger_or_defer,

@@ -152,7 +152,7 @@ whose dependency closure can express the contract:
 
 | Package | Owns | Must not own |
 | --- | --- | --- |
-| `lunco-luncosim-core` | headless Bevy substrate, raw input/state schedules, asset source/type registration, task-pool policy, build identity, and log deduplication | input-focus/window plugins, domain plugins, GPU resources, egui, or render policy |
+| `lunco-luncosim-core` | headless Bevy substrate, raw input/state schedules, asset source/type registration, task-pool policy, stamped build constants and startup logging, and log deduplication | input-focus/window plugins, domain plugins, GPU resources, egui, or render policy |
 | `lunco-luncosim-simulation` | renderer-independent simulation composition, physics, USD load/projection, terrain, Modelica/cosim, and headless execution | windows, GPU resources, egui, or render policy |
 | `lunco-luncosim` | process/CLI dispatch | simulation rules or renderer/window composition |
 | `lunco-luncosim-ui` | window/render composition, input-focus plugins, and interactive shell assembly | headless simulation rules, application presentation bridges, or a second runtime loop |

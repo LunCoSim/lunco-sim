@@ -4,7 +4,9 @@ Dependency-light Bevy substrate shared by the windowed `luncosim` shell,
 `luncosim-server`, and the authored scene-test runner.
 
 It owns only the host-neutral headless plugin group, asset source/type
-registration, task-pool policy, build identity, and log deduplication. Physics,
+registration, task-pool policy, stamped build constants and startup logging,
+and log deduplication. Hosts expose the shared `lunco-core::BuildIdentity`
+resource to runtime and UI consumers. Physics,
 USD, terrain, Modelica/cosimulation, celestial, avatar, and scene-command
 composition live in `lunco-luncosim-simulation`.
 

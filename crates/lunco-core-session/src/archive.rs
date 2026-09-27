@@ -1,7 +1,9 @@
 //! Versioned binary framing for bounded semantic session-input captures.
 
 use crate::SessionInputRecord;
+use bevy::prelude::Resource;
 use lunco_command_contracts::SessionId;
+use std::sync::Arc;
 
 /// Maximum input records accepted by an in-memory capture and its archive.
 pub const MAX_SESSION_INPUT_RECORDS: usize = 65_536;
@@ -221,19 +223,28 @@ impl From<ArchiveRecord> for SessionInputRecord {
 /// is not a whole-session replay.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionInputCaptureArchive {
-    records: Vec<SessionInputRecord>,
+    records: Arc<Vec<SessionInputRecord>>,
 }
 
 impl SessionInputCaptureArchive {
     /// Create an archive after validating each record and the total order.
     pub fn new(records: Vec<SessionInputRecord>) -> Result<Self, String> {
         validate_records(&records)?;
+        Ok(Self {
+            records: Arc::new(records),
+        })
+    }
+
+    /// Create an archive from completed, shared capture records without
+    /// copying their payloads on the caller's thread.
+    pub fn from_shared(records: Arc<Vec<SessionInputRecord>>) -> Result<Self, String> {
+        validate_records(&records)?;
         Ok(Self { records })
     }
 
     /// Validated records in their authoritative capture order.
     pub fn records(&self) -> &[SessionInputRecord] {
-        &self.records
+        self.records.as_slice()
     }
 
     /// Encode the current versioned archive framing and bounded bincode body.
@@ -343,8 +354,17 @@ fn validate_records(records: &[SessionInputRecord]) -> Result<(), String> {
     }
 
     let mut previous = None;
+    let mut estimated_payload_bytes = 10usize;
     for record in records {
         record.validate()?;
+        estimated_payload_bytes =
+            estimated_payload_bytes.saturating_add(estimated_encoded_record_bytes(record));
+        if estimated_payload_bytes > MAX_ARCHIVE_PAYLOAD_BYTES {
+            return Err(format!(
+                "session input archive exceeds its {} byte limit",
+                MAX_SESSION_INPUT_ARCHIVE_BYTES
+            ));
+        }
         let order = (
             record.scene_generation,
             record.effective_tick,
@@ -361,6 +381,168 @@ fn validate_records(records: &[SessionInputRecord]) -> Result<(), String> {
     Ok(())
 }
 
+/// Conservative encoded-size bound checked before materializing wire records.
+/// The fixed allowance covers enum tags, identities, stamps, and numeric
+/// values; variable text and sequence contents are added at their full size
+/// plus the maximum bincode varint prefix.
+fn estimated_encoded_record_bytes(record: &SessionInputRecord) -> usize {
+    const FIXED_RECORD_BOUND: usize = 192;
+    const VARINT_BOUND: usize = 10;
+
+    let add_text = |total: usize, value: &str| {
+        total
+            .saturating_add(VARINT_BOUND)
+            .saturating_add(value.len())
+    };
+
+    match &record.payload {
+        crate::SessionInputPayload::PhysicalIntentFrame { intent_ids } => intent_ids
+            .iter()
+            .fold(FIXED_RECORD_BOUND + VARINT_BOUND, |total, intent| {
+                add_text(total, intent)
+            }),
+        crate::SessionInputPayload::SimulatedIntentChange { intent, .. } => {
+            add_text(FIXED_RECORD_BOUND, intent)
+        }
+        crate::SessionInputPayload::SemanticIntentEdge { intent, edge, .. } => {
+            add_text(add_text(FIXED_RECORD_BOUND, intent), edge)
+        }
+        crate::SessionInputPayload::RuntimeSpawn { entry_id, .. } => {
+            add_text(FIXED_RECORD_BOUND, entry_id)
+        }
+    }
+}
+
+/// Lifecycle of the latest durable session-input archive export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionInputArchiveExportState {
+    /// No archive export has been requested in this app session.
+    #[default]
+    Idle,
+    /// A bounded archive export is being encoded or written.
+    Pending,
+    /// The archive was written and read back successfully.
+    Complete,
+    /// The archive could not be encoded, written, or verified.
+    Failed,
+}
+
+/// Typed status and stale-completion guard for one session-input archive
+/// export at a time.
+#[derive(Resource, Debug, Default)]
+pub struct SessionInputArchiveExportStatus {
+    next_id: u64,
+    state: SessionInputArchiveExportState,
+    export_id: Option<u64>,
+    capture_id: Option<u64>,
+    last_exported_capture_id: Option<u64>,
+    file_name: Option<String>,
+    record_count: Option<u64>,
+    byte_count: Option<u64>,
+    failure: Option<String>,
+}
+
+impl SessionInputArchiveExportStatus {
+    /// Start one export and return its monotonic app-local identity.
+    pub fn begin(
+        &mut self,
+        capture_id: u64,
+        file_name: String,
+        record_count: usize,
+    ) -> Result<u64, String> {
+        if self.state == SessionInputArchiveExportState::Pending {
+            return Err("a session input archive export is already pending".to_owned());
+        }
+        if capture_id == 0 {
+            return Err("session input capture identity must be nonzero".to_owned());
+        }
+        if self
+            .last_exported_capture_id
+            .is_some_and(|last_exported| capture_id <= last_exported)
+        {
+            return Err("session input capture already has a durable archive".to_owned());
+        }
+        let export_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or_else(|| "session input archive export identity exhausted".to_owned())?;
+        let record_count = u64::try_from(record_count)
+            .map_err(|_| "session input record count exceeds the API integer range".to_owned())?;
+
+        self.next_id = export_id;
+        self.state = SessionInputArchiveExportState::Pending;
+        self.export_id = Some(export_id);
+        self.capture_id = Some(capture_id);
+        self.file_name = Some(file_name);
+        self.record_count = Some(record_count);
+        self.byte_count = None;
+        self.failure = None;
+        Ok(export_id)
+    }
+
+    /// Finish only the currently pending export with the matching identity.
+    pub fn complete(&mut self, export_id: u64, byte_count: u64) -> bool {
+        if self.state != SessionInputArchiveExportState::Pending
+            || self.export_id != Some(export_id)
+        {
+            return false;
+        }
+        self.state = SessionInputArchiveExportState::Complete;
+        self.last_exported_capture_id = self.capture_id;
+        self.byte_count = Some(byte_count);
+        self.failure = None;
+        true
+    }
+
+    /// Fail only the currently pending export with the matching identity.
+    pub fn fail(&mut self, export_id: u64, failure: String) -> bool {
+        if self.state != SessionInputArchiveExportState::Pending
+            || self.export_id != Some(export_id)
+        {
+            return false;
+        }
+        self.state = SessionInputArchiveExportState::Failed;
+        self.byte_count = None;
+        self.failure = Some(failure);
+        true
+    }
+
+    /// State of the latest export request.
+    pub fn state(&self) -> SessionInputArchiveExportState {
+        self.state
+    }
+
+    /// App-local identity of the latest export request, when present.
+    pub fn export_id(&self) -> Option<u64> {
+        self.export_id
+    }
+
+    /// Capture identity represented by the latest export request.
+    pub fn capture_id(&self) -> Option<u64> {
+        self.capture_id
+    }
+
+    /// Relative archive filename under the session-captures directory.
+    pub fn file_name(&self) -> Option<&str> {
+        self.file_name.as_deref()
+    }
+
+    /// Number of captured records included in the latest request.
+    pub fn record_count(&self) -> Option<u64> {
+        self.record_count
+    }
+
+    /// Encoded archive size after a successful write and read-back check.
+    pub fn byte_count(&self) -> Option<u64> {
+        self.byte_count
+    }
+
+    /// Terminal export failure, when present.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -368,8 +550,9 @@ mod tests {
         HEADER_BYTES, MAX_ARCHIVE_PAYLOAD_BYTES,
     };
     use crate::{
-        MAX_SESSION_INPUT_ARCHIVE_BYTES, MAX_SESSION_INPUT_RECORDS, SessionInputCaptureArchive,
-        SessionInputPayload, SessionInputProducer, SessionInputRecord,
+        MAX_SESSION_INPUT_ARCHIVE_BYTES, MAX_SESSION_INPUT_RECORDS,
+        SessionInputArchiveExportStatus, SessionInputCaptureArchive, SessionInputPayload,
+        SessionInputProducer, SessionInputRecord,
     };
     use lunco_command_contracts::SessionId;
 
@@ -618,6 +801,88 @@ mod tests {
         assert!(
             SessionInputCaptureArchive::from_bytes(&oversized)
                 .expect_err("oversized archive is rejected before decode")
+                .contains("byte limit")
+        );
+    }
+
+    #[test]
+    fn session_input_archive_export_status_rejects_stale_completions() {
+        let mut status = SessionInputArchiveExportStatus::default();
+        assert_eq!(status.state(), super::SessionInputArchiveExportState::Idle);
+        assert!(
+            status
+                .begin(0, "zero-capture.lcsin".to_owned(), 0)
+                .expect_err("capture identities are nonzero")
+                .contains("must be nonzero")
+        );
+        assert_eq!(
+            status
+                .begin(71, "capture-71.lcsin".to_owned(), 4)
+                .expect("first export starts"),
+            1
+        );
+        assert!(!status.complete(0, 512));
+        assert!(!status.fail(0, "stale failure".to_owned()));
+        assert_eq!(
+            status.state(),
+            super::SessionInputArchiveExportState::Pending
+        );
+        assert!(status.complete(1, 512));
+        assert_eq!(status.byte_count(), Some(512));
+        assert_eq!(status.record_count(), Some(4));
+        assert_eq!(status.capture_id(), Some(71));
+        assert!(!status.complete(1, 513));
+
+        assert!(
+            status
+                .begin(71, "duplicate.lcsin".to_owned(), 4)
+                .expect_err("successful capture cannot be exported twice")
+                .contains("already has a durable archive")
+        );
+        assert!(
+            status
+                .begin(70, "older-capture.lcsin".to_owned(), 4)
+                .expect_err("capture identities cannot move behind the last export")
+                .contains("already has a durable archive")
+        );
+
+        assert_eq!(
+            status
+                .begin(72, "capture-72.lcsin".to_owned(), 0)
+                .expect("next export starts after completion"),
+            2
+        );
+        assert!(status.fail(2, "write failed".to_owned()));
+        assert_eq!(
+            status.state(),
+            super::SessionInputArchiveExportState::Failed
+        );
+        assert_eq!(status.failure(), Some("write failed"));
+        assert_eq!(status.byte_count(), None);
+
+        assert_eq!(
+            status
+                .begin(72, "capture-72-retry.lcsin".to_owned(), 0)
+                .expect("failed capture export can be retried"),
+            3
+        );
+    }
+
+    #[test]
+    fn session_input_capture_archive_bounds_variable_payloads_before_encoding() {
+        let mut record = physical_record(10, 1);
+        record.producer = SessionInputProducer::DirectCommand { producer_id: 7 };
+        record.payload = SessionInputPayload::RuntimeSpawn {
+            entry_id: "x".repeat(MAX_SESSION_INPUT_ARCHIVE_BYTES),
+            active_frame: lunco_core::GlobalEntityId::from_raw(91),
+            requested_position: [0.0; 3],
+            requested_rotation: None,
+            correlation_id: 77,
+            spawned_root: lunco_core::GlobalEntityId::from_raw(92),
+        };
+        assert!(
+            SessionInputCaptureArchive::new(vec![record])
+                .expect_err("oversized payload is rejected before wire-record copies")
                 .contains("byte limit")
         );
     }

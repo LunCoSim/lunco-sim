@@ -37,6 +37,13 @@ structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
 
+For startup asset graphs, separate asynchronous source reads from discovery,
+composition, and UI/physics admission. Bound independent sibling reads and
+merge their results in stable dependency order; preserve the source-change
+reload graph when using child load contexts. The USD layer-closure owner and
+its reload receipts are documented in
+[`21-domain-usd`](../../docs/architecture/21-domain-usd.md#composition-closure-and-partial-scene-loading).
+
 One-shot `RunRhai` and tool callbacks share the prepared `ScenarioDriver`
 engine. When profiling a callback stall, separate one-time startup/prelude or
 tool-generation refresh from request execution; do not rebuild the engine for
@@ -214,3 +221,10 @@ Twin-open and readiness milestones: one startup outlier can stall UI even when
 the same system is nearly free on settled frames. If the outer system is hot,
 attribute time to its internal owner operations before choosing an async
 boundary or cache.
+
+For `project_usd_policies`, distinguish the initial prepared-plan lookup and
+live-stage traversal from generation-batch cache promotion. A promoted cache
+means every intervening `UsdSceneChangeBatch` was observed and the changed
+paths did not affect policy prims; a missing batch or changed policy subtree
+must remain a visible full extraction. Compare both startup and settled edit
+captures after changing this path.

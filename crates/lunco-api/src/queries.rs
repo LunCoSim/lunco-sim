@@ -385,6 +385,12 @@ impl ApiQueryProvider for ReadSessionInputStreamProvider {
 
         Ok(Some(ApiValue::map([
             ("state", ApiValue::str(state)),
+            (
+                "capture_id",
+                stream
+                    .capture_id()
+                    .map_or(ApiValue::Unit, api_value_from_u64),
+            ),
             ("record_count", api_value_from_u64(record_count)),
             ("record_limit", api_value_from_u64(record_limit)),
             (
@@ -392,6 +398,68 @@ impl ApiQueryProvider for ReadSessionInputStreamProvider {
                 stream.failure().map_or(ApiValue::Unit, ApiValue::str),
             ),
             ("records", ApiValue::Array(records)),
+        ])))
+    }
+}
+
+/// `ReadSessionInputArchiveExport` exposes the latest durable capture-export
+/// status to API clients and authored Rhai acceptance tests.
+pub struct ReadSessionInputArchiveExportProvider;
+
+impl ApiQueryProvider for ReadSessionInputArchiveExportProvider {
+    fn name(&self) -> &'static str {
+        "ReadSessionInputArchiveExport"
+    }
+
+    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
+        let Some(status) =
+            world.get_resource::<lunco_core_session::SessionInputArchiveExportStatus>()
+        else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "ReadSessionInputArchiveExport: export status resource is not present",
+            ));
+        };
+        let state = match status.state() {
+            lunco_core_session::SessionInputArchiveExportState::Idle => "idle",
+            lunco_core_session::SessionInputArchiveExportState::Pending => "pending",
+            lunco_core_session::SessionInputArchiveExportState::Complete => "complete",
+            lunco_core_session::SessionInputArchiveExportState::Failed => "failed",
+        };
+        Ok(Some(ApiValue::map([
+            ("state", ApiValue::str(state)),
+            (
+                "capture_id",
+                status
+                    .capture_id()
+                    .map_or(ApiValue::Unit, api_value_from_u64),
+            ),
+            (
+                "export_id",
+                status
+                    .export_id()
+                    .map_or(ApiValue::Unit, api_value_from_u64),
+            ),
+            (
+                "file_name",
+                status.file_name().map_or(ApiValue::Unit, ApiValue::str),
+            ),
+            (
+                "record_count",
+                status
+                    .record_count()
+                    .map_or(ApiValue::Unit, api_value_from_u64),
+            ),
+            (
+                "byte_count",
+                status
+                    .byte_count()
+                    .map_or(ApiValue::Unit, api_value_from_u64),
+            ),
+            (
+                "failure",
+                status.failure().map_or(ApiValue::Unit, ApiValue::str),
+            ),
         ])))
     }
 }
@@ -486,6 +554,7 @@ pub fn register_builtin_queries(registry: &mut ApiQueryRegistry) {
     // `readiness_tracked: false` when the readiness substrate isn't installed.
     registry.register(ReadinessProvider);
     registry.register(ReadSessionInputStreamProvider);
+    registry.register(ReadSessionInputArchiveExportProvider);
     registry.register(ReadExposuresProvider);
 }
 
@@ -632,6 +701,7 @@ mod tests {
         register_builtin_queries(&mut registry);
         assert!(registry.get("ReadExposures").is_some());
         assert!(registry.get("ReadSessionInputStream").is_some());
+        assert!(registry.get("ReadSessionInputArchiveExport").is_some());
     }
 
     #[test]
@@ -662,6 +732,7 @@ mod tests {
             .expect("session input query returns data");
 
         assert_eq!(data.get("state"), Some(&ApiValue::str("complete")));
+        assert_eq!(data.get("capture_id"), Some(&api_value_from_u64(1)));
         assert_eq!(data.get("record_count"), Some(&api_value_from_u64(1)));
         let Some(ApiValue::Array(records)) = data.get("records") else {
             panic!("session input query returns a records array");
@@ -691,6 +762,36 @@ mod tests {
             panic!("physical-frame payload retains its canonical intent array");
         };
         assert_eq!(intent_ids.len(), 1);
+    }
+
+    #[test]
+    fn session_input_archive_query_exposes_typed_completion_status() {
+        let mut status = lunco_core_session::SessionInputArchiveExportStatus::default();
+        assert_eq!(
+            status
+                .begin(71, "capture-71.lcsin".to_owned(), 4)
+                .expect("export status begins"),
+            1
+        );
+        assert!(status.complete(1, 512));
+
+        let mut world = World::new();
+        world.insert_resource(status);
+        let data = ReadSessionInputArchiveExportProvider
+            .execute(&world, &ApiValue::Unit)
+            .expect("archive export query succeeds")
+            .expect("archive export query returns data");
+
+        assert_eq!(data.get("state"), Some(&ApiValue::str("complete")));
+        assert_eq!(data.get("capture_id"), Some(&api_value_from_u64(71)));
+        assert_eq!(data.get("export_id"), Some(&api_value_from_u64(1)));
+        assert_eq!(
+            data.get("file_name"),
+            Some(&ApiValue::str("capture-71.lcsin"))
+        );
+        assert_eq!(data.get("record_count"), Some(&api_value_from_u64(4)));
+        assert_eq!(data.get("byte_count"), Some(&api_value_from_u64(512)));
+        assert_eq!(data.get("failure"), Some(&ApiValue::Unit));
     }
 
     #[test]

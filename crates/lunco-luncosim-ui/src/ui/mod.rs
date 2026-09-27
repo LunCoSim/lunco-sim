@@ -144,11 +144,17 @@ impl Plugin for LunCoSimUiPlugin {
         if !app.is_plugin_added::<lunco_embodiment_core::roles::EmbodimentCorePlugin>() {
             app.add_plugins(lunco_embodiment_core::roles::EmbodimentCorePlugin);
         }
-        app.insert_resource(lunco_workbench_core::BuildIdentity::new(
-            self.config.product_version,
-            self.config.git_sha,
-            self.config.repository_url,
-        ));
+        if app
+            .world()
+            .get_resource::<lunco_core::BuildIdentity>()
+            .is_none()
+        {
+            app.insert_resource(lunco_core::BuildIdentity::new(
+                self.config.product_version,
+                self.config.git_sha,
+                self.config.repository_url,
+            ));
+        }
         #[cfg(all(feature = "package-icons", not(target_arch = "wasm32")))]
         app.add_systems(Update, install_window_icon);
         app.insert_resource(InitialScenePath(self.config.initial_scene.clone()));

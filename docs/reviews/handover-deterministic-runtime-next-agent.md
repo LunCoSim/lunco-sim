@@ -416,6 +416,41 @@ typed queues before that is safe.
   memory-backed; no storage writer, baseline manifest, or playback consumer is
   installed, so whole-session replay remains open.
 
+### D9 replay-baseline USD owner snapshot (2026-09-27)
+
+- `StageRecipe::content_closure` in `lunco-usd-compose` now freezes every
+  successfully fetched root/dependency layer as a sorted `(logical layer id,
+  CIDv1 raw/SHA-256)` row. It rejects absent root bytes, unresolved dependency
+  diagnostics, and empty layer identifiers. This does not use the volatile
+  `UsdStageRevision` counter and does not yet assemble an application baseline.
+- Focused tests cover stable ordering/content IDs and fail-closed partial
+  recipes. The remaining baseline owners and the capture/playback integration
+  still need implementation.
+
+### Replay-baseline source owner audit (2026-09-27)
+
+- `SysmlAnalysis::content_closure()` supplies sorted CIDv1 raw/SHA-256
+  identities for the exact project source files and embedded standard library
+  represented by an analysis. It rejects parser/resolution diagnostics and
+  empty or duplicate logical names. `source_revision` and
+  `source_fingerprint` remain 64-bit FNV analysis/cache values.
+- `cargo test -p lunco-sysml-ast content_closure -j 4` passed all four focused
+  closure cases. Build identity now lives in `lunco-core::BuildIdentity`; the
+  headless runtime stamps it when the host does not provide one, and the
+  focused runtime test verifies host identity preservation. Application-level
+  baseline assembly still does not consume either owner snapshot.
+- `RhaiScenarioRuntime` retains canonical literal-import dependencies and the
+  immutable source text observed by the last committed compile, keyed by live
+  entity. `RhaiSource` assets retain their loaded dependency handles. The
+  runtime does not yet retain one session-wide snapshot joining active roots
+  to complete source closures; baseline capture must not infer roots from the
+  global script registry.
+- `lunco-core::BuildIdentity` is shared across hosts. `LunCoSimRuntimePlugin`
+  installs the stamped build constants when the host has not supplied an
+  identity, so headless and GUI baselines can name the software revision.
+  Source closures, solver/runtime snapshots, and the composite collector remain
+  unimplemented.
+
 ## Runtime and repository constraints
 
 - Do not edit authored USD through shell or patch tools. Use the live USD

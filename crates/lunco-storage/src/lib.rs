@@ -74,6 +74,10 @@ pub enum StorageError {
     #[error("not found")]
     NotFound,
 
+    /// A create-only write would replace an existing entry.
+    #[error("entry already exists")]
+    AlreadyExists,
+
     /// Handle is read-only (source library libraries, remote snapshots, etc.).
     #[error("handle is read-only")]
     ReadOnly,
@@ -457,6 +461,19 @@ pub trait Storage: Send + Sync {
     /// [`write_file_sync`].
     async fn write(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()>;
 
+    /// Create an entry only when it does not already exist.
+    ///
+    /// Backends should implement this atomically when their storage contract
+    /// supports it. The default checks the entry then writes; native
+    /// [`FileStorage`] uses an atomic no-replace commit for file handles.
+    async fn write_new(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()> {
+        match self.entry_kind(handle).await {
+            Ok(_) => Err(StorageError::AlreadyExists),
+            Err(StorageError::NotFound) => self.write(handle, bytes).await,
+            Err(error) => Err(error),
+        }
+    }
+
     /// Synchronous convenience wrapper around [`Storage::write`].
     ///
     /// Blocks the calling thread on the write future. Safe for backends
@@ -471,6 +488,11 @@ pub trait Storage: Send + Sync {
     /// abstraction without standing up an async task pipeline.
     fn write_sync(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()> {
         futures_lite::future::block_on(self.write(handle, bytes))
+    }
+
+    /// Synchronous convenience wrapper around [`Storage::write_new`].
+    fn write_new_sync(&self, handle: &StorageHandle, bytes: &[u8]) -> StorageResult<()> {
+        futures_lite::future::block_on(self.write_new(handle, bytes))
     }
 
     /// Synchronous convenience wrapper around [`Storage::read`]. Same
