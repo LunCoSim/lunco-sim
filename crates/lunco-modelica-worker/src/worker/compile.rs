@@ -339,6 +339,7 @@ fn dispatch_one(world: &mut World, request: CompileRequested) {
         compiled_generation: existing
             .as_ref()
             .map_or(0, |(_, _, _, _, _, generation, _, _)| *generation),
+        live_solver_snapshot: None,
         pending_generation: generation,
         resume_after_compile,
     };
@@ -406,6 +407,7 @@ fn fail_request(
             model.is_compiling = false;
             model.is_stepping = false;
             model.is_compiled = false;
+            model.live_solver_snapshot = None;
             model.resume_after_compile = false;
             model.last_error = Some(message.clone());
         }

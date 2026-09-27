@@ -21,8 +21,9 @@ use lunco_modelica_ast::ast_extract::{InputDefaultIssue, strip_input_defaults_wi
 use lunco_modelica_compiler::{ModelicaCompiler, PreparedSourceRoot};
 use lunco_modelica_runtime::{
     CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, MAX_MACRO_STEP_DT,
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaResult, NoticeLevel,
-    SimSampleBatch, SimSampleStream,
+    ModelicaChannels, ModelicaCommand, ModelicaLiveSolverSnapshot, ModelicaModel, ModelicaNotice,
+    ModelicaResult, ModelicaRuntimeProfile, ModelicaSolverCapabilities, ModelicaSolverParameters,
+    NoticeLevel, SimSampleBatch, SimSampleStream,
 };
 use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
@@ -90,7 +91,14 @@ fn diagnostics_from_sim_error(
 /// is both fixed-step and deterministic.
 fn live_stepper_options(
     profile: solver::RuntimeProfile,
-) -> Result<(solver::SolverSpec, rumoca_sim::SimOptions), solver::SolverError> {
+) -> Result<
+    (
+        solver::SolverSpec,
+        solver::SolverParams,
+        rumoca_sim::SimOptions,
+    ),
+    solver::SolverError,
+> {
     lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
 
     let spec = solver::resolve(&solver::SolverRequest {
@@ -101,22 +109,20 @@ fn live_stepper_options(
         authored: None,
     })?;
 
-    let options = lunco_modelica_solver::solver_backends::rumoca_options(
-        &spec,
-        &solver::SolverParams {
-            atol: LIVE_TOL,
-            rtol: LIVE_TOL,
-            // `h0` is the initial/maximum internal step: pinned to the micro-step
-            // so the integrator's first internal step matches what it is asked for.
-            h0: Some(LIVE_MICRO_DT),
-            // The live stepper is driven by `step(dt)` calls, never by `t_end`;
-            // the window only feeds defaults, so it is wide enough that no
-            // realistic session reaches it.
-            t_start: 0.0,
-            t_end: f64::from(u32::MAX),
-        },
-    )?;
-    Ok((spec, options))
+    let parameters = solver::SolverParams {
+        atol: LIVE_TOL,
+        rtol: LIVE_TOL,
+        // `h0` is the initial/maximum internal step: pinned to the micro-step
+        // so the integrator's first internal step matches what it is asked for.
+        h0: Some(LIVE_MICRO_DT),
+        // The live stepper is driven by `step(dt)` calls, never by `t_end`;
+        // the window only feeds defaults, so it is wide enough that no
+        // realistic session reaches it.
+        t_start: 0.0,
+        t_end: f64::from(u32::MAX),
+    };
+    let options = lunco_modelica_solver::solver_backends::rumoca_options(&spec, &parameters)?;
+    Ok((spec, parameters, options))
 }
 
 /// Build a `SimulationSession` for the LIVE path from a freshly-compiled model.
@@ -162,6 +168,7 @@ fn canonical_parameter_overrides(values: &[(String, f64)]) -> Vec<(String, f64)>
 
 struct LiveBuildPlan {
     spec: solver::SolverSpec,
+    snapshot: ModelicaLiveSolverSnapshot,
     options: rumoca_sim::SimOptions,
     key: PreparedSolveKey,
     #[cfg(not(target_arch = "wasm32"))]
@@ -179,13 +186,33 @@ fn live_build_plan(
     library_revision: Option<u64>,
 ) -> Result<LiveBuildPlan, rumoca_sim::SimulationDiagnosticError> {
     let parameter_overrides = canonical_parameter_overrides(parameter_overrides);
-    let (spec, mut options) = live_stepper_options(profile).map_err(|e| {
+    let (spec, parameters, mut options) = live_stepper_options(profile).map_err(|e| {
         rumoca_sim::SimulationDiagnosticError::Solver(format!("solver selection failed: {e}"))
     })?;
     // Parameter overrides must enter Rumoca's lowering boundary. That is where
     // parameter dependents and initial-equation states are recomputed. Mutating
     // the DAE after compilation leaves the initialization vector stale.
     options.param_overrides = parameter_overrides.clone();
+    let snapshot = ModelicaLiveSolverSnapshot {
+        solver_id: spec.id.to_string(),
+        capabilities: ModelicaSolverCapabilities {
+            usable_live: spec.caps.usable_live,
+            fixed_step: spec.caps.fixed_step,
+            deterministic: spec.caps.deterministic,
+        },
+        profile: ModelicaRuntimeProfile {
+            live: profile.live,
+            predicted: profile.predicted,
+        },
+        parameters: ModelicaSolverParameters {
+            atol: parameters.atol,
+            rtol: parameters.rtol,
+            h0: parameters.h0,
+            t_start: parameters.t_start,
+            t_end: parameters.t_end,
+        },
+        parameter_overrides: parameter_overrides.clone(),
+    };
     #[cfg(not(target_arch = "wasm32"))]
     let override_key = parameter_overrides
         .iter()
@@ -200,6 +227,7 @@ fn live_build_plan(
     );
     Ok(LiveBuildPlan {
         spec,
+        snapshot,
         options,
         key,
         #[cfg(not(target_arch = "wasm32"))]
@@ -218,7 +246,7 @@ fn build_stepper(
     source_key: u64,
     library_revision: Option<u64>,
     prepared: &mut PreparedSolveCache,
-) -> Result<LiveStepper, rumoca_sim::SimulationDiagnosticError> {
+) -> Result<(LiveStepper, ModelicaLiveSolverSnapshot), rumoca_sim::SimulationDiagnosticError> {
     let plan = live_build_plan(profile, parameter_overrides, source_key, library_revision)?;
     if !prepared.models.contains_key(&plan.key) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -251,11 +279,12 @@ fn build_stepper(
         .models
         .get(&plan.key)
         .expect("prepared solver model inserted or found above");
-    lunco_modelica_solver::simulation_session::live_from_solve_model(
+    let stepper = lunco_modelica_solver::simulation_session::live_from_solve_model(
         model,
         &plan.spec,
         plan.options,
-    )
+    )?;
+    Ok((stepper, plan.snapshot))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -710,7 +739,7 @@ fn finish_compile_work(
         prepared_solve_cache,
     );
     match stepper_result {
-        Ok(mut stepper) => {
+        Ok((mut stepper, live_solver_snapshot)) => {
             let CompileWork {
                 entity,
                 session_id,
@@ -748,6 +777,7 @@ fn finish_compile_work(
                     compiled: comp_res.clone(),
                     unit_hash,
                     library_gen,
+                    live_solver_snapshot: live_solver_snapshot.clone(),
                 },
             );
             steppers.insert(entity, (session_id, model_name.clone(), stepper));
@@ -769,6 +799,7 @@ fn finish_compile_work(
                             compiled_model_name: Some(model_name),
                             loaded_source_root_id: None,
                             compile_diagnostics: unit.default_diagnostics,
+                            live_solver_snapshot: Some(live_solver_snapshot.clone()),
                             ..Default::default()
                         },
                         &comp_res,
@@ -778,6 +809,7 @@ fn finish_compile_work(
                     let mut result =
                         reset_ok(entity, session_id, symbols, input_names, "Reset complete.");
                     result.compile_diagnostics = unit.default_diagnostics;
+                    result.live_solver_snapshot = Some(live_solver_snapshot.clone());
                     let _ = tx.send(result);
                 }
                 CompileIntent::UpdateParameters => {
@@ -794,6 +826,7 @@ fn finish_compile_work(
                         is_reset: false,
                         detected_input_names: input_names,
                         compile_diagnostics: unit.default_diagnostics,
+                        live_solver_snapshot: Some(live_solver_snapshot),
                         ..Default::default()
                     });
                 }
@@ -1155,6 +1188,8 @@ struct CachedModel {
     unit_hash: u64,
     /// Worker library generation at the time `compiled` was built.
     library_gen: u64,
+    /// The resolved solver plan used by the installed or rebuildable stepper.
+    live_solver_snapshot: ModelicaLiveSolverSnapshot,
 }
 
 /// Key identifying WHAT a cached artifact was compiled from: the assembled
@@ -3018,6 +3053,10 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                             }
                         }
 
+                        let live_solver_snapshot = cached_models
+                            .get(&entity)
+                            .map(|cached| cached.live_solver_snapshot.clone());
+
                         if let Some((s_id, _, stepper)) = steppers.get_mut(&entity) {
                             if *s_id == session_id {
                                 let step_started = web_time::Instant::now();
@@ -3085,6 +3124,7 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                         detected_input_names: Vec::new(),
                                         worker_step_duration_ns: Some(worker_step_duration_ns),
                                         worker_backlog_count,
+                                        live_solver_snapshot,
                                         ..Default::default()
                                     });
                                 }
@@ -3340,7 +3380,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                     };
                     if let Some(rb) = rebuild {
                         if let Ok(comp_res) = rb.outcome {
-                            if let Ok(mut s) = build_stepper(
+                            if let Ok((mut s, live_solver_snapshot)) = build_stepper(
                                 &comp_res,
                                 profile_for(entity, &w.realtime_models),
                                 &rb.parameter_overrides,
@@ -3355,6 +3395,9 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 );
                                 for (name, val) in &inputs {
                                     let _ = s.set_input(name, *val);
+                                }
+                                if let Some(cached) = w.cached_models.get_mut(&entity) {
+                                    cached.live_solver_snapshot = live_solver_snapshot;
                                 }
                                 w.steppers
                                     .insert(entity, (session_id, model_name.clone(), s));
@@ -3374,6 +3417,11 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                     return;
                 }
             }
+
+            let live_solver_snapshot = w
+                .cached_models
+                .get(&entity)
+                .map(|cached| cached.live_solver_snapshot.clone());
 
             if let Some((s_id, _, stepper)) = w.steppers.get_mut(&entity) {
                 if *s_id == session_id {
@@ -3426,6 +3474,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             is_parameter_update: false,
                             is_reset: false,
                             detected_input_names: Vec::new(),
+                            live_solver_snapshot,
                             worker_step_duration_ns: Some(worker_step_duration_ns),
                             ..Default::default()
                         });
@@ -3508,7 +3557,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &mut w.prepared_solve_cache,
                     );
                     match stepper_result {
-                        Ok(mut stepper) => {
+                        Ok((mut stepper, live_solver_snapshot)) => {
                             apply_input_defaults_validated(
                                 &mut stepper,
                                 &unit.input_defaults,
@@ -3528,6 +3577,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     compiled: comp_res.clone(),
                                     unit_hash,
                                     library_gen: w.library_gen,
+                                    live_solver_snapshot: live_solver_snapshot.clone(),
                                 },
                             );
 
@@ -3552,6 +3602,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     // surface even on a green compile — that is exactly
                                     // when they'd otherwise run at 0.0 in silence.
                                     compile_diagnostics: unit.default_diagnostics,
+                                    live_solver_snapshot: Some(live_solver_snapshot),
                                     ..Default::default()
                                 },
                                 &comp_res,
@@ -3613,7 +3664,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if let Some(rb) = rebuild {
                 match rb.outcome {
                     Ok(comp_res) => {
-                        if let Ok(mut stepper) = build_stepper(
+                        if let Ok((mut stepper, live_solver_snapshot)) = build_stepper(
                             &comp_res,
                             profile_for(entity, &w.realtime_models),
                             &rb.parameter_overrides,
@@ -3633,13 +3684,18 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                             if let Some(stream) = w.sim_streams.get(&entity) {
                                 stream.store(Arc::new(SimSnapshot::empty_at_zero()));
                             }
-                            send(reset_ok(
+                            if let Some(cached) = w.cached_models.get_mut(&entity) {
+                                cached.live_solver_snapshot = live_solver_snapshot.clone();
+                            }
+                            let mut result = reset_ok(
                                 entity,
                                 session_id,
                                 symbols,
                                 input_names,
                                 "Reset complete.",
-                            ));
+                            );
+                            result.live_solver_snapshot = Some(live_solver_snapshot);
+                            send(result);
                         } else {
                             send(ModelicaResult {
                                 entity,
@@ -3726,7 +3782,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     ) {
-                        Ok(mut stepper) => {
+                        Ok((mut stepper, live_solver_snapshot)) => {
                             apply_input_defaults_validated(
                                 &mut stepper,
                                 &unit.input_defaults,
@@ -3748,6 +3804,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     compiled: comp_res.clone(),
                                     unit_hash,
                                     library_gen: w.library_gen,
+                                    live_solver_snapshot: live_solver_snapshot.clone(),
                                 },
                             );
 
@@ -3766,6 +3823,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                 is_reset: false,
                                 detected_input_names: input_names,
                                 compile_diagnostics: unit.default_diagnostics,
+                                live_solver_snapshot: Some(live_solver_snapshot),
                                 ..Default::default()
                             });
                         }
@@ -4320,6 +4378,54 @@ mod artifact_cache_tests {
         assert_eq!(first, second);
         assert_eq!(first[0].0, "alpha");
         assert_eq!(first[1].0, "zeta");
+    }
+}
+
+#[cfg(test)]
+mod live_solver_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_matches_the_resolved_live_plan_and_ordered_overrides() {
+        let profile = solver::RuntimeProfile {
+            live: true,
+            predicted: true,
+        };
+        let plan = live_build_plan(
+            profile,
+            &[("zeta".to_owned(), 2.0), ("alpha".to_owned(), 1.0)],
+            17,
+            Some(9),
+        )
+        .expect("built-in solvers include a deterministic fixed-step live backend");
+
+        assert_eq!(plan.snapshot.solver_id, plan.spec.id.to_string());
+        assert_eq!(
+            plan.snapshot.capabilities,
+            ModelicaSolverCapabilities {
+                usable_live: plan.spec.caps.usable_live,
+                fixed_step: plan.spec.caps.fixed_step,
+                deterministic: plan.spec.caps.deterministic,
+            }
+        );
+        assert_eq!(plan.snapshot.profile.live, profile.live);
+        assert_eq!(plan.snapshot.profile.predicted, profile.predicted);
+        assert!(plan.snapshot.capabilities.usable_live);
+        assert!(plan.snapshot.capabilities.fixed_step);
+        assert!(plan.snapshot.capabilities.deterministic);
+        assert_eq!(plan.snapshot.parameters.atol, LIVE_TOL);
+        assert_eq!(plan.snapshot.parameters.rtol, LIVE_TOL);
+        assert_eq!(plan.snapshot.parameters.h0, Some(LIVE_MICRO_DT));
+        assert_eq!(plan.snapshot.parameters.t_start, 0.0);
+        assert_eq!(plan.snapshot.parameters.t_end, f64::from(u32::MAX));
+        assert_eq!(
+            plan.snapshot.parameter_overrides,
+            vec![("alpha".to_owned(), 1.0), ("zeta".to_owned(), 2.0)]
+        );
+        assert_eq!(
+            plan.options.param_overrides,
+            plan.snapshot.parameter_overrides
+        );
     }
 }
 

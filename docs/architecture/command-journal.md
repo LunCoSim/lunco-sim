@@ -252,15 +252,14 @@ canonical layer identifiers and stores CIDv1 raw/SHA-256 identities, and it
 rejects missing root bytes or any unresolved dependency. This is an owner
 primitive only: no application baseline collector consumes it yet. Source
 owner primitives now exist for SysML, Rhai, and per-root Modelica, while the
-complete Modelica compile closure, runtime snapshots, and playback consumer
-remain open.
+complete Modelica compile closure and playback consumer remain open.
 
 `lunco-core::BuildIdentity` is the typed host identity resource. The production
 `LunCoSimRuntimePlugin` supplies the build-stamped version, revision, and
 repository when a host has not supplied its own identity; GUI presentation
 reads the same resource. This establishes the software identity component of a
-baseline, while session-wide source closure assembly, solver/runtime snapshots,
-initial authoritative state, storage, and playback remain open.
+baseline, while session-wide source closure assembly, initial authoritative
+state, durable storage, and playback remain open.
 
 `SysmlAnalysis::content_closure()` now turns the exact logical names and text
 retained by `SysmlAnalysis::files()` into sorted CIDv1 raw/SHA-256 identities,
@@ -285,6 +284,17 @@ preparation. `ModelicaCompiler::source_root_content_closure(id)` exposes the
 current admitted content state, including explicit errors after failed latest
 admissions and for the parsed-only standard bundle. Per-root capture still
 does not join the active model document and every compile dependency.
+
+Each accepted live Modelica result also carries a typed
+`ModelicaLiveSolverSnapshot` from the exact resolved worker plan used to build
+its stepper. It records solver identity, declared capability and runtime
+profile, effective numerical settings, and sorted instance parameter
+overrides. The response bridge applies it after worker-session fencing; new
+compile results also pass the document-generation check, and failures clear
+the snapshot. `ModelicaModel.compiled_generation` remains a separate source
+revision fact for a collector to compare against the current document. These
+owner facts do not yet provide a full compile closure or the model's initial
+authoritative state, and no session-wide collector consumes them yet.
 
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and
