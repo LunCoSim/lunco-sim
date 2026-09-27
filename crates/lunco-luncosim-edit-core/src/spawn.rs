@@ -3,6 +3,7 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use lunco_command_contracts::OpId;
 use lunco_core::{Command, on_command, register_commands};
 use lunco_render::SceneCamera;
 use lunco_spatial::coords::GridPos;
@@ -16,6 +17,16 @@ use crate::surface_pick::{
     EDITOR_PLACEMENT_RAY_MAX_DISTANCE, SurfacePickPolicy, cursor_surface_hit,
 };
 use lunco_scene_catalog::catalog::{SpawnCatalog, SpawnSource};
+
+/// Stable producer identity for the local spawn palette during this session.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct SpawnProducerIdentity(u64);
+
+impl FromWorld for SpawnProducerIdentity {
+    fn from_world(_: &mut World) -> Self {
+        Self(OpId::new().0)
+    }
+}
 
 /// Ghost entity shown at the spawn placement point.
 #[derive(Component)]
@@ -571,6 +582,7 @@ pub fn on_scene_click_spawn(
     footprint_cache: Res<FootprintCache>,
     keys: Res<ButtonInput<KeyCode>>,
     diagnostics: Res<SpawnDiagnostics>,
+    producer: Res<SpawnProducerIdentity>,
     q_ghost: Query<Entity, With<SpawnGhost>>,
     camera_frame: SpawnCameraFrame,
     egui_focus: Res<lunco_control_core::EguiFocus>,
@@ -715,6 +727,7 @@ pub fn on_scene_click_spawn(
         entry_id: entry_id.clone(),
         position: spawn_world.0.to_array(),
         rotation: Some(spawn_rotation.as_dquat().to_array()),
+        producer_id: Some(producer.0),
     });
     info!(
         entry_id,

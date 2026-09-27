@@ -10,10 +10,13 @@ fn __missing_document(kind) {
     #{ ok: false, error: "missing explicit " + kind + " document id" }
 }
 
-/// Spawn a catalog entry. Catalog spawning is the authoritative replicated
-/// path; callers do not fabricate ECS entities or USD runtime identities.
+/// Spawn a catalog entry from an authored Twin actor. Its stable actor identity
+/// is the input producer; actorless callers provide producer_id on cmd directly.
 fn spawn_robot(entry_id, position) {
-    cmd("SpawnEntity", #{ entry_id: entry_id, position: position })
+    cmd("SpawnEntity", #{
+        entry_id: entry_id,
+        position: position,
+    })
 }
 
 // ── Modelica graph authoring ───────────────────────────────────────────────

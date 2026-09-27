@@ -605,7 +605,7 @@ pub struct OwnedInputLog(pub HashMap<u64, VesselInputLog>);
 /// [`OwnedInputLog`], which exists only for per-vessel prediction rollback.
 /// Session records retain stable identities and semantic names rather than ECS
 /// entity bits or controller-local masks.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionInputRecord {
     /// Typed producer identity available at the admission boundary.
     pub producer: SessionInputProducer,
@@ -642,6 +642,63 @@ pub enum SessionInputProducer {
 }
 
 impl SessionInputProducer {
+    /// Classify a command producer using the shared whole-session input
+    /// identity contract. `input_name` is used in validation messages.
+    pub fn from_command_origin(
+        origin: Option<lunco_core::CommandOrigin>,
+        requested_producer_id: Option<u64>,
+        input_name: &str,
+    ) -> Result<Self, String> {
+        let verb = if input_name == "semantic input" {
+            "SimulateIntent"
+        } else {
+            input_name
+        };
+        if requested_producer_id == Some(0) {
+            return Err(format!("{input_name} producer_id must be nonzero"));
+        }
+        match origin {
+            Some(lunco_core::CommandOrigin::ApiTransport) => {
+                let producer_id = requested_producer_id.ok_or_else(|| {
+                    format!("API {input_name} requires a stable nonzero producer_id")
+                })?;
+                Ok(Self::ApiTransport { producer_id })
+            }
+            Some(lunco_core::CommandOrigin::Rhai { context, actor }) => {
+                let route = context.route.ok_or_else(|| {
+                    format!("{verb} from Rhai requires a classified runtime route")
+                })?;
+                if route.scope == lunco_core::RuntimeScope::Twin && actor.is_none() {
+                    return Err(format!(
+                        "{verb} from a Twin script requires a stable actor identity"
+                    ));
+                }
+                let producer_id = match actor {
+                    Some(_) if requested_producer_id.is_some() => {
+                        return Err(format!(
+                            "Twin Rhai {input_name} uses its stable actor identity; omit producer_id"
+                        ));
+                    }
+                    Some(_) => None,
+                    None => Some(requested_producer_id.ok_or_else(|| {
+                        format!("actorless Rhai {input_name} requires a stable nonzero producer_id")
+                    })?),
+                };
+                Ok(Self::Rhai {
+                    route: Some(route),
+                    actor,
+                    producer_id,
+                })
+            }
+            None => {
+                let producer_id = requested_producer_id.ok_or_else(|| {
+                    format!("direct typed {input_name} requires a stable nonzero producer_id")
+                })?;
+                Ok(Self::DirectCommand { producer_id })
+            }
+        }
+    }
+
     /// Serialized producer class used by API and telemetry projections.
     pub const fn kind(self) -> &'static str {
         match self {
@@ -666,7 +723,7 @@ impl SessionInputProducer {
 }
 
 /// Stable payloads accepted by the session-input stream.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SessionInputPayload {
     /// Complete held-intent state sampled from a physical controller at one
@@ -691,6 +748,21 @@ pub enum SessionInputPayload {
         edge: String,
         /// Correlation id from the admitted typed command.
         correlation_id: u64,
+    },
+    /// Runtime catalog spawn admitted at a fixed simulation boundary.
+    RuntimeSpawn {
+        /// Catalog identity resolved by the scene-command owner.
+        entry_id: String,
+        /// Stable identity of the active physics frame used by the request.
+        active_frame: lunco_core::GlobalEntityId,
+        /// Original command pose in the active physics frame, retained as f64.
+        requested_position: [f64; 3],
+        /// Original optional command quaternion in `(x, y, z, w)` order.
+        requested_rotation: Option<[f64; 4]>,
+        /// Correlation id returned by command admission and retained for replay.
+        correlation_id: u64,
+        /// Identity reserved by the session owner for the spawned runtime root.
+        spawned_root: lunco_core::GlobalEntityId,
     },
 }
 
@@ -728,6 +800,29 @@ pub struct PendingSessionInputs {
 }
 
 impl PendingSessionInputs {
+    /// Reserve one authoritative runtime-spawn identity, rejecting collisions
+    /// with live entities or identities already waiting in this queue.
+    pub fn reserve_runtime_spawn_root_id(
+        &self,
+        existing_ids: impl IntoIterator<Item = lunco_core::GlobalEntityId>,
+    ) -> Result<lunco_core::GlobalEntityId, String> {
+        let candidate = lunco_core::GlobalEntityId::allocate_authoritative();
+        let conflicts_with_live = existing_ids.into_iter().any(|gid| gid == candidate);
+        let conflicts_with_pending = self.pending.iter().any(|input| {
+            matches!(
+                &input.record.payload,
+                SessionInputPayload::RuntimeSpawn { spawned_root, .. }
+                    if *spawned_root == candidate
+            )
+        });
+        if candidate.get() == 0 || conflicts_with_live || conflicts_with_pending {
+            return Err(format!(
+                "runtime spawn identity reservation collided with an existing GlobalEntityId ({candidate})"
+            ));
+        }
+        Ok(candidate)
+    }
+
     /// Admit one input with a stable target, generation, producer, and future
     /// fixed tick. Queue capacity is checked before consuming a sequence.
     #[allow(clippy::too_many_arguments)]
@@ -764,6 +859,42 @@ impl PendingSessionInputs {
                 }
                 if lunco_control_core::SemanticIntentEdgeKind::parse(edge).is_none() {
                     return Err(format!("unknown semantic edge '{edge}'"));
+                }
+            }
+            SessionInputPayload::RuntimeSpawn {
+                entry_id,
+                active_frame,
+                requested_position,
+                requested_rotation,
+                correlation_id,
+                spawned_root,
+            } => {
+                if entry_id.trim().is_empty() {
+                    return Err("runtime spawn requires a catalog entry id".to_owned());
+                }
+                if active_frame.get() == 0 {
+                    return Err("runtime spawn requires a stable active-frame identity".to_owned());
+                }
+                if requested_position.iter().any(|value| !value.is_finite()) {
+                    return Err("runtime spawn position must be finite".to_owned());
+                }
+                if let Some(rotation) = requested_rotation {
+                    let norm_squared = DQuat::from_array(*rotation).length_squared();
+                    if rotation.iter().any(|value| !value.is_finite())
+                        || !norm_squared.is_finite()
+                        || norm_squared == 0.0
+                    {
+                        return Err(
+                            "runtime spawn rotation must have a finite, nonzero magnitude"
+                                .to_owned(),
+                        );
+                    }
+                }
+                if *correlation_id == 0 {
+                    return Err("runtime spawn requires a nonzero correlation id".to_owned());
+                }
+                if spawned_root.get() == 0 {
+                    return Err("runtime spawn requires a reserved root identity".to_owned());
                 }
             }
             _ => {}
@@ -984,6 +1115,29 @@ pub fn commit_due_session_inputs(world: &mut World) {
             );
             continue;
         };
+
+        if let SessionInputPayload::RuntimeSpawn { active_frame, .. } = &record.payload {
+            let Some(frame) = entities_by_gid.get(active_frame) else {
+                report_session_input_error(
+                    world,
+                    format!(
+                        "runtime spawn active frame {} no longer resolves to its admitted GlobalEntityId",
+                        active_frame
+                    ),
+                );
+                continue;
+            };
+            if frame.is_none() {
+                report_session_input_error(
+                    world,
+                    format!(
+                        "runtime spawn active frame {} resolves to multiple entities",
+                        active_frame
+                    ),
+                );
+                continue;
+            }
+        }
 
         let recording_error =
             if let Some(mut stream) = world.get_resource_mut::<SessionInputStream>() {
@@ -2821,6 +2975,130 @@ mod session_input_stream_tests {
             .assign_order(3, 10)
             .expect("rejected payload must not consume a sequence");
         assert_eq!(next.sequence, 1);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn runtime_spawn_admission_retains_f64_pose_and_reserved_root_identity() {
+        let mut pending = PendingSessionInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
+        let target = lunco_core::GlobalEntityId::from_raw(42);
+        let active_frame = lunco_core::GlobalEntityId::from_raw(43);
+        let spawned_root = pending
+            .reserve_runtime_spawn_root_id(std::iter::empty())
+            .expect("session owner reserves one root identity");
+        let position = [1.234_567_890_123, 20.000_000_000_007, -4.5];
+        let rotation = Some([0.0, 0.0, 0.125, 0.992_156_741_649_221_5]);
+
+        let admission = pending
+            .admit(
+                &mut order,
+                SessionInputProducer::DirectCommand { producer_id: 7 },
+                target,
+                3,
+                10,
+                SessionInputPayload::RuntimeSpawn {
+                    entry_id: "catalog-entry".to_owned(),
+                    active_frame,
+                    requested_position: position,
+                    requested_rotation: rotation,
+                    correlation_id: 19,
+                    spawned_root,
+                },
+                None,
+            )
+            .expect("valid runtime spawn is admitted");
+
+        assert_eq!(admission.sequence, 1);
+        let due = pending.take_due(10);
+        let record = due[0].record();
+        assert_eq!(record.target, target);
+        assert_eq!(
+            record.producer,
+            SessionInputProducer::DirectCommand { producer_id: 7 }
+        );
+        assert_eq!(
+            record.payload,
+            SessionInputPayload::RuntimeSpawn {
+                entry_id: "catalog-entry".to_owned(),
+                active_frame,
+                requested_position: position,
+                requested_rotation: rotation,
+                correlation_id: 19,
+                spawned_root,
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_spawn_rejects_nonfinite_pose_without_consuming_order() {
+        let mut pending = PendingSessionInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
+        let result = pending.admit(
+            &mut order,
+            SessionInputProducer::DirectCommand { producer_id: 7 },
+            lunco_core::GlobalEntityId::from_raw(42),
+            3,
+            10,
+            SessionInputPayload::RuntimeSpawn {
+                entry_id: "catalog-entry".to_owned(),
+                active_frame: lunco_core::GlobalEntityId::from_raw(43),
+                requested_position: [f64::NAN, 0.0, 0.0],
+                requested_rotation: None,
+                correlation_id: 19,
+                spawned_root: lunco_core::GlobalEntityId::from_raw(44),
+            },
+            None,
+        );
+
+        assert!(
+            result
+                .expect_err("non-finite pose is rejected")
+                .contains("must be finite")
+        );
+        assert_eq!(
+            order
+                .assign_order(3, 10)
+                .expect("rejected spawn must not consume a sequence")
+                .sequence,
+            1
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn runtime_spawn_rejects_rotation_with_unrepresentable_norm_without_consuming_order() {
+        let mut pending = PendingSessionInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
+        let result = pending.admit(
+            &mut order,
+            SessionInputProducer::DirectCommand { producer_id: 7 },
+            lunco_core::GlobalEntityId::from_raw(42),
+            3,
+            10,
+            SessionInputPayload::RuntimeSpawn {
+                entry_id: "catalog-entry".to_owned(),
+                active_frame: lunco_core::GlobalEntityId::from_raw(43),
+                requested_position: [0.0; 3],
+                requested_rotation: Some([f64::MAX; 4]),
+                correlation_id: 19,
+                spawned_root: lunco_core::GlobalEntityId::from_raw(44),
+            },
+            None,
+        );
+
+        assert!(
+            result
+                .expect_err("overflowing quaternion norm is rejected")
+                .contains("finite, nonzero magnitude")
+        );
+        assert_eq!(
+            order
+                .assign_order(3, 10)
+                .expect("rejected spawn must not consume a sequence")
+                .sequence,
+            1
+        );
         assert!(pending.is_empty());
     }
 

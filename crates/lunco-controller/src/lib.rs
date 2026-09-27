@@ -984,6 +984,7 @@ fn commit_controller_session_input(
                     .to_owned(),
             });
         }
+        lunco_core_session::SessionInputPayload::RuntimeSpawn { .. } => {}
     }
 }
 
@@ -1181,50 +1182,7 @@ fn simulated_intent_source(
     origin: Option<CommandOrigin>,
     requested_producer_id: Option<u64>,
 ) -> Result<SimulatedIntentSource, String> {
-    if requested_producer_id == Some(0) {
-        return Err("semantic input producer_id must be nonzero".to_owned());
-    }
-    match origin {
-        Some(CommandOrigin::ApiTransport) => {
-            let producer_id = requested_producer_id.ok_or_else(|| {
-                "API semantic input requires a stable nonzero producer_id".to_owned()
-            })?;
-            Ok(SimulatedIntentSource::ApiTransport { producer_id })
-        }
-        Some(CommandOrigin::Rhai { context, actor }) => {
-            let route = context.route.ok_or_else(|| {
-                "SimulateIntent from Rhai requires a classified runtime route".to_owned()
-            })?;
-            if route.scope == lunco_core::RuntimeScope::Twin && actor.is_none() {
-                return Err(
-                    "SimulateIntent from a Twin script requires a stable actor identity".to_owned(),
-                );
-            }
-            let producer_id = match actor {
-                Some(_) if requested_producer_id.is_some() => {
-                    return Err(
-                        "Twin Rhai semantic input uses its stable actor identity; omit producer_id"
-                            .to_owned(),
-                    );
-                }
-                Some(_) => None,
-                None => Some(requested_producer_id.ok_or_else(|| {
-                    "actorless Rhai semantic input requires a stable nonzero producer_id".to_owned()
-                })?),
-            };
-            Ok(SimulatedIntentSource::Rhai {
-                route: Some(route),
-                actor,
-                producer_id,
-            })
-        }
-        None => {
-            let producer_id = requested_producer_id.ok_or_else(|| {
-                "direct typed semantic input requires a stable nonzero producer_id".to_owned()
-            })?;
-            Ok(SimulatedIntentSource::DirectCommand { producer_id })
-        }
-    }
+    SimulatedIntentSource::from_command_origin(origin, requested_producer_id, "semantic input")
 }
 
 #[cfg(test)]

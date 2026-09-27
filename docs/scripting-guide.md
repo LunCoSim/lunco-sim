@@ -484,7 +484,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `list_entities()` | `[#{id,name,type,catalog_id,input_surface,control_bound,celestial_body,pos}]` | every registered entity; `name` is the human-readable presentation label, `type` is the projected USD kind, not a control-component heuristic; `input_surface` is the authoritative `InputPorts` readiness bit |
 | `add(id, "Comp", #{fields})` | bool | **structural** — insert/replace a reflected component (built from default + fields); needs `#[reflect(Default)]` |
 | `remove(id, "Comp")` | bool | **structural** — strip a reflected component |
-| `despawn(id)` | bool | **structural** — despawn an entity (+children); replicates on a host. *Spawn:* use `cmd("SpawnEntity", #{entry_id, position})` (no generic spawn — clients reconstruct from the catalog) |
+| `despawn(id)` | bool | **structural** — despawn an entity (+children); replicates on a host. *Spawn:* use `cmd("SpawnEntity", #{entry_id, position})` (no generic spawn — clients reconstruct from the catalog); actorless Rhai callers of raw-file scenes also pass a stable nonzero `producer_id` |
 | `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` on the next scenario pass) |
 | `intent_edge(target, intent, edge)` / `intent_pulse(target, intent)` | command result | emit one target-scoped semantic edge; the runtime publishes it as `intent.edge` with a correlation id usable by `CausalTrace` |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | fixed simulation clock; Rhai error outside the simulation cycle |

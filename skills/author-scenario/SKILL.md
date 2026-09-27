@@ -308,7 +308,7 @@ fn on_stop(me, ctx)        { brake(me); }                       // hot-reload / 
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | available only in simulation-cycle calls; each returns a Rhai error in paused lifecycle and one-shot REPL/tool calls |
 | `execution_context()` | read-only owner scope, cycle, phase, clock sample, logical sequence, and event producer stamp |
 | `rand()` / `rand_range(lo,hi)` | **deterministic** RNG (seeded by entity, event producer or cycle sequence, and hook; discrete lifecycle hooks use a sequence-free seed) |
-| `despawn(id)` / `add`/`remove`(id,"Comp",…) | structural. **Spawn:** `cmd("SpawnEntity", #{entry_id, position})` — no generic spawn |
+| `despawn(id)` / `add`/`remove`(id,"Comp",…) | structural. **Spawn:** `cmd("SpawnEntity", #{entry_id, position, producer_id?})` — no generic spawn. Twin Rhai uses its actor identity; actorless Rhai supplies a stable producer id. |
 | `notify(msg)` / `notify_kind(msg,kind)` | HUD notification |
 
 JSON appears **only** at the `cmd`/`query` params seam. `get`/`set` are native
@@ -688,7 +688,7 @@ libraries → `<twin>/tools/*.rhai`.
 - ❌ `goto(...)` — reserved word; use `nav_to`.
 - ❌ Expecting an `emit` to be seen in the same scenario pass — it arrives on the next pass.
 - ❌ Assuming a scenario runs on clients — it's host-authoritative; clients get replicated state, not the script.
-- ❌ A generic `spawn(...)` — use `cmd("SpawnEntity", #{entry_id, position})` so clients reconstruct from the catalog.
+- ❌ A generic `spawn(...)` — use `cmd("SpawnEntity", #{entry_id, position})` so clients reconstruct from the catalog. Actorless Rhai/API callers of raw-file scenes also supply a stable nonzero `producer_id`.
 - ❌ Reading raw `Transform` for position — use `world_pos` (float-origin correct).
 - ✅ Passing `Fn("named_action")` to `once`/`step`/`wait_until` when the
   callback is declared `fn named_action(me)`; the native driver binds the

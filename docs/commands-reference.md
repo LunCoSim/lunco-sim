@@ -1586,6 +1586,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entry_id` | `String` |  The independent catalog entry ID (e.g. "ball_dynamic", "skid_rover"). |
 | `position` | `[f64 ; 3]` |  Position in the active physics frame, in metres. Kept as f64 through  command transport and frame conversion; narrowing occurs only at the  final scene-root-local Bevy `Transform` boundary. |
 | `rotation` | `Option < [f64 ; 4] >` |  Rotation in the active physics frame as an `(x, y, z, w)` unit  quaternion (optional; omitted → identity). Kept as f64 across the  command boundary for the same reason as `position`; Bevy's f32  [`bevy::prelude::Quat`] is a render/local-transform representation, not a  simulation-frame interchange type. |
+| `producer_id` | `Option < u64 >` |  Stable producer identity required for raw-file runtime admission from  API, direct typed, and actorless Rhai callers. Twin Rhai uses its actor  identity and omits this field. |
 
 ## Other (source location unknown)
 

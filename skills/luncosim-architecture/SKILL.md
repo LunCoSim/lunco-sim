@@ -118,21 +118,22 @@ share one per-tick order space. Admitted external semantic payloads wait in
 scene teardown. Its fixed-step coordinator validates and captures due records,
 then publishes typed commit events in shared sequence order while simulation
 time is running; a pause leaves inputs queued for the next running tick. The
-controller applies semantic payloads before physical input sampling. Runtime
-spawns and physical-frame admission have not joined that boundary. Missing facts or duplicate
-target/session order keys hold input with a structured runtime error; ordering
-does not fall back to Bevy `Entity` bits. The frame is discarded after
-translation, while an active `SessionInputStream` capture retains sorted
-canonical intent ids and the admission stamp in bounded memory. The typed
-start/stop/clear commands and `ReadSessionInputStream` query expose physical
-frames plus admitted `SimulateIntent` and `SimulateIntentEdge` payloads while
-capture is active. Records retain producer class and stable producer id (or
-Rhai route and actor), target, admission stamp, and semantic payload. Other
-typed commands, durable writing, and playback remain open.
-Runtime spawn handling is owner-dependent: document-backed `SpawnEntity`
-authors `ApplyUsdOps` into the Twin journal, while raw-file scenes use direct
-ECS spawning plus `NetSpawn`. Neither path currently records the spawn's
-producer and effective tick in `SessionInputStream`.
+controller applies semantic payloads before physical input sampling.
+Raw-file runtime spawns also enter this commit boundary; the scene-command
+owner checks the current frame and catalog and inserts the reserved root
+identity before identity admission. Physical frames remain sampled at their
+consuming fixed tick through the same per-tick allocator. Missing facts or
+duplicate target/session order keys hold input with a structured runtime
+error; ordering does not fall back to Bevy `Entity` bits. An active
+`SessionInputStream` captures sorted canonical intent ids, admitted controls,
+and raw-file spawn records. Spawn records retain producer, correlation, stable
+scene-root and active-frame identities, original f64 pose, admission stamp, and
+reserved root id; acknowledgements expose that stamp. Document-backed
+`SpawnEntity` still authors only `ApplyUsdOps` into the Twin journal. Capture
+remains bounded and in-memory; durable writing, playback, and other typed
+commands remain open.
+The persistent canonical `WorldGrid` has deterministic content provenance, so
+the default active physics frame also has a stable `GlobalEntityId`.
 
 Scenario actor compile submission, completion commit, and hook execution use the
 source-owned `GlobalEntityId` component directly; the Update-synchronized API
