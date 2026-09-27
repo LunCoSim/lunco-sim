@@ -262,6 +262,12 @@ the same system is nearly free on settled frames. If the outer system is hot,
 attribute time to its internal owner operations before choosing an async
 boundary or cache.
 
+For `process_queued_usd_visuals`, include queue preparation in the frame-budget
+review. Reuse its system-local child-key scratch set across updates, and keep
+duplicate-child identity checks scoped to the parent being admitted after the
+budget check; preparing keys for every queued parent can turn a small projection
+slice into a full-queue UI stall.
+
 Dependent USD-stage refresh is owner work behind `sync_twin_overlays`. Snapshot
 the base/runtime revisions, serialize each persistent source snapshot once on
 bounded workers, share its bytes across dependent stages, and coalesce changed

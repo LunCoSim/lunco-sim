@@ -1901,9 +1901,10 @@ fn any_pending_usd_meshes(q: Query<(), With<PendingUsdMesh>>) -> bool {
 }
 
 #[derive(SystemParam)]
-struct LiveUsdVisualChildren<'w, 's> {
+struct UsdVisualProjectionState<'w, 's> {
     children: Query<'w, 's, &'static Children>,
     paths: Query<'w, 's, &'static UsdPrimPath>,
+    child_keys: Local<'s, std::collections::HashSet<(Entity, AssetId<UsdStageAsset>, String)>>,
 }
 
 /// Project USD prims until the configured wall-clock budget is exhausted.
@@ -1941,7 +1942,7 @@ fn process_queued_usd_visuals(
         )>,
     >,
     q_grid: Query<&Grid>,
-    live_children: LiveUsdVisualChildren,
+    mut visual_state: UsdVisualProjectionState,
     q_child_of: Query<&ChildOf>,
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     q_entities: Query<Entity>,
@@ -1982,24 +1983,6 @@ fn process_queued_usd_visuals(
     let mut queued: Vec<_> = q.iter().collect();
     queued.sort_by(|left, right| left.1.path.cmp(&right.1.path));
 
-    // Index only the existing children of parents admitted in this batch. A
-    // whole-world prim scan here made a small incremental projection pay for
-    // every live USD entity in the scene. The parent projection may run after
-    // an incremental descendant spawn, so pending-queue membership alone
-    // would still admit the same child twice.
-    let mut live_child_keys = std::collections::HashSet::new();
-    for (parent, ..) in &queued {
-        let Ok(children) = live_children.children.get(*parent) else {
-            continue;
-        };
-        for child in children.iter() {
-            let Ok(path) = live_children.paths.get(child) else {
-                continue;
-            };
-            live_child_keys.insert((*parent, path.stage_handle.id(), path.path.clone()));
-        }
-    }
-
     for (entity, prim_path, vis, tf, is_instance_root, member, instance_projection) in queued {
         if projected != 0 && started.elapsed() >= settings.frame_budget {
             break;
@@ -2039,6 +2022,25 @@ fn process_queued_usd_visuals(
             .get(entity)
             .ok()
             .and_then(|c| q_grid.get(c.parent()).ok());
+        // Keep the scratch allocation across updates, but seed it only for the
+        // parent admitted below. Preparing keys for every queued parent before
+        // checking the frame budget made a small slice pay for the whole queue.
+        visual_state.child_keys.clear();
+        {
+            let _span = bevy::log::info_span!("usd_visual_existing_child_keys").entered();
+            if let Ok(children) = visual_state.children.get(entity) {
+                for child in children.iter() {
+                    let Ok(path) = visual_state.paths.get(child) else {
+                        continue;
+                    };
+                    visual_state.child_keys.insert((
+                        entity,
+                        path.stage_handle.id(),
+                        path.path.clone(),
+                    ));
+                }
+            }
+        }
         instantiate_usd_prim(
             entity,
             prim_path,
@@ -2057,7 +2059,7 @@ fn process_queued_usd_visuals(
             &asset_server,
             &mut meshes,
             requested_profile,
-            &mut live_child_keys,
+            &mut visual_state.child_keys,
         );
         projected += 1;
     }
