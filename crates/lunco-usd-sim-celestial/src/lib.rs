@@ -250,10 +250,9 @@ fn select_scene_time_on_transition_completed(
 type ComposedReader<'a> = dyn lunco_usd_bevy_stage::read::UsdReadObject + 'a;
 
 fn composed_stage_has_celestial_source(reader: &ComposedReader<'_>) -> bool {
-    reader
-        .prim_paths()
-        .iter()
-        .any(|path| reader.has_api_schema(path, "LunCoCelestialBodyAPI"))
+    !reader
+        .prim_paths_matching(&[], &["LunCoCelestialBodyAPI"])
+        .is_empty()
 }
 
 /// NAIF id of the default anchor body (the Moon).
