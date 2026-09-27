@@ -99,10 +99,12 @@ the presence of that primary window, so headless/offscreen scene-test hosts
 skip it without creating window-message resources.
 
 `SetPorts` latches each named command value at the shared port receiver, so a
-one-shot API/Rhai write remains deterministic across fixed ticks. Use
-`ReleasePort` for one input or `ReleaseControl` to engage the complete safe
-vehicle state; the keyboard path continues to emit its resolved binding batch
-and therefore replaces or neutralizes its own values as intents change.
+one-shot API/Rhai write remains deterministic across fixed ticks. External
+commands with stable producer identity return their next-tick admission stamp.
+Use `ReleasePort` for one input or `ReleaseControl` to engage the complete safe
+vehicle state; external release commands use the same admission contract. The
+keyboard path continues to emit its resolved binding batch and therefore
+replaces or neutralizes its own values as intents change.
 
 The fixed-step vessel controller captures physical `ActionState<UserIntent>` into
 a by-value `PhysicalIntentFrame` semantic snapshot. Admission requires the
@@ -128,7 +130,8 @@ typed payload, correlation id, producer class and stable producer id, and
 admission stamp.
 `StartSessionInputCapture`,
 `StopSessionInputCapture`, and `ClearSessionInputCapture` control the bounded
-capture; `ReadSessionInputStream` exposes its typed state and records. A
+capture; stop is rejected while admitted inputs await their fixed-tick commit.
+`ReadSessionInputStream` exposes its typed state and records. A
 completed capture can be persisted on native hosts with
 `ExportSessionInputCapture`; its background status, including capture identity,
 is available through `ReadSessionInputArchiveExport`. One successful archive

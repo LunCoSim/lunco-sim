@@ -65,6 +65,7 @@ Content-Type: application/json
   "command": "SetPorts",
   "params": {
     "target": 42,
+    "producer_id": 4812,
     "writes": [["throttle", 0.8], ["steer", 0.0], ["brake", 0.0]],
     "seq": 0,
     "tick": 0

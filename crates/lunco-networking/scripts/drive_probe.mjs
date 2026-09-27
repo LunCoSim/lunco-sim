@@ -8,6 +8,8 @@
 //   NET_DIAG=1 cargo run -j2 --bin luncosim --features networking -- --connect 127.0.0.1:5888 --api 4102
 //
 // Then:  node crates/lunco-networking/scripts/drive_probe.mjs [clientPort] [roverGid] [seconds]
+// Set LUNCO_PRODUCER_ID to give this external input source a different stable
+// identity when multiple probes share one simulation session.
 //
 // What it does on the CLIENT:
 //   1. ListEntities → find the rover chassis (/SandboxScene/<drive>_<kind>_N).
@@ -26,6 +28,10 @@
 const CLIENT = Number(process.argv[2] ?? 4102);
 const ROVER = process.argv[3] ?? null; // override gid, else first chassis found
 const SECONDS = Number(process.argv[4] ?? 4);
+const PRODUCER_ID = Number(process.env.LUNCO_PRODUCER_ID ?? 4102001);
+if (!Number.isSafeInteger(PRODUCER_ID) || PRODUCER_ID <= 0) {
+  throw new Error('LUNCO_PRODUCER_ID must be a nonzero safe integer');
+}
 
 const post = async (port, body) => {
   const r = await fetch(`http://127.0.0.1:${port}/api/commands`, {
@@ -61,7 +67,13 @@ const t0 = Date.now();
 while (Date.now() - t0 < SECONDS * 1000) {
   const s = await post(CLIENT, {
     command: 'SetPorts',
-    params: { target: gid, writes: [['throttle', 1.0], ['steer', 0.0]], seq, tick: 0 },
+    params: {
+      target: gid,
+      writes: [['throttle', 1.0], ['steer', 0.0]],
+      seq,
+      tick: 0,
+      producer_id: PRODUCER_ID,
+    },
   });
   s.status === 200 ? ok++ : fail++;
   seq++;

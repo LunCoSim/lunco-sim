@@ -53,7 +53,7 @@ use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, is_preview_only, is_prev
 pub struct LunCoAvatarPlugin;
 
 fn trigger_vessel_hard_stop(commands: &mut Commands, vessel_entity: Entity) {
-    commands.trigger(lunco_cosim_core::commands::ReleaseControl {
+    commands.trigger(lunco_cosim_core::commands::ControlSafeStop {
         target: vessel_entity,
     });
 }

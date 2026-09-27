@@ -38,6 +38,13 @@ remain derived behavior. API and direct typed commands supply a nonzero stable
 application Rhai supplies its own. Keep `SetPorts` for direct continuous
 values.
 
+External API and one-shot Rhai `SetPorts`, `ReleasePort`, and `ReleaseControl`
+commands to live targets require a stable nonzero `producer_id`; their
+acknowledgement carries the target and next-fixed-tick admission stamp. Direct
+typed producers that supply an id are captured the same way. Twin scenarios use
+their stable actor identity automatically. Simulation-clock Rhai commands remain
+in the authored scenario pass.
+
 For UI automation, use the native input helpers from `prelude/input.rhai`.
 They compose typed Bevy window events rather than calling an editor or scene
 tool directly:
@@ -428,6 +435,8 @@ You'll use these constantly (the complete table is in
 > writes are host-authoritative and unavailable to client-targeted scripts. Use `cmd`
 > for an *operation* with side effects
 > beyond a field write (spawning, swapping a material, anything an observer reacts to).
+> Twin scenario examples use the scenario actor identity; external one-shot
+> callers include their stable `producer_id` and wait for the next fixed tick.
 
 ## 5. Making it move: navigation & sensing
 
@@ -518,7 +527,8 @@ in a prelude/tool. Native `Vec3`/`Quat` operations are registered by
 > This is a raw write, not a persistent hold; use
 > `cmd("SetPorts", #{target: id, writes: [[name, value]]})` for a persistent
 > command intent, and `cmd("ReleaseControl", #{target: id})` to apply the safe
-> state immediately. Direct
+> state. External one-shot callers include their stable `producer_id` and wait
+> for the next fixed tick; Simulation-clock Rhai keeps its authored pass. Direct
 > writes are host-authoritative and unavailable to client-targeted scripts. Use `cmd` for
 > an *operation* with side effects beyond a field write (spawning, swapping a
 > material, anything an observer must react to). Settings are only reachable if

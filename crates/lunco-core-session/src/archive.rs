@@ -13,7 +13,7 @@ pub const MAX_SESSION_INPUT_RECORDS: usize = 65_536;
 pub const MAX_SESSION_INPUT_ARCHIVE_BYTES: usize = 16 * 1024 * 1024;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"LCSINP\0\0";
-const ARCHIVE_VERSION: u16 = 2;
+const ARCHIVE_VERSION: u16 = 3;
 const FIRST_ARCHIVE_VERSION: u16 = 1;
 const HEADER_BYTES: usize = 8 + 2 + 4 + 4;
 const MAX_ARCHIVE_PAYLOAD_BYTES: usize = MAX_SESSION_INPUT_ARCHIVE_BYTES - HEADER_BYTES;
@@ -65,6 +65,17 @@ enum ArchivePayload {
     ModelicaInputChange {
         name: String,
         value: f64,
+        correlation_id: u64,
+    },
+    PortInputWrites {
+        writes: Vec<(String, f64)>,
+        correlation_id: u64,
+    },
+    PortInputRelease {
+        name: String,
+        correlation_id: u64,
+    },
+    ControlInputRelease {
         correlation_id: u64,
     },
 }
@@ -152,6 +163,25 @@ impl From<&SessionInputRecord> for ArchiveRecord {
                 value: *value,
                 correlation_id: *correlation_id,
             },
+            crate::SessionInputPayload::PortInputWrites {
+                writes,
+                correlation_id,
+            } => ArchivePayload::PortInputWrites {
+                writes: writes.clone(),
+                correlation_id: *correlation_id,
+            },
+            crate::SessionInputPayload::PortInputRelease {
+                name,
+                correlation_id,
+            } => ArchivePayload::PortInputRelease {
+                name: name.clone(),
+                correlation_id: *correlation_id,
+            },
+            crate::SessionInputPayload::ControlInputRelease { correlation_id } => {
+                ArchivePayload::ControlInputRelease {
+                    correlation_id: *correlation_id,
+                }
+            }
         };
 
         Self {
@@ -236,6 +266,23 @@ impl From<ArchiveRecord> for SessionInputRecord {
                 value,
                 correlation_id,
             },
+            ArchivePayload::PortInputWrites {
+                writes,
+                correlation_id,
+            } => crate::SessionInputPayload::PortInputWrites {
+                writes,
+                correlation_id,
+            },
+            ArchivePayload::PortInputRelease {
+                name,
+                correlation_id,
+            } => crate::SessionInputPayload::PortInputRelease {
+                name,
+                correlation_id,
+            },
+            ArchivePayload::ControlInputRelease { correlation_id } => {
+                crate::SessionInputPayload::ControlInputRelease { correlation_id }
+            }
         };
 
         Self {
@@ -374,6 +421,20 @@ impl SessionInputCaptureArchive {
                     .to_owned(),
             );
         }
+        if version < 3
+            && wire_records.iter().any(|record| {
+                matches!(
+                    &record.payload,
+                    ArchivePayload::PortInputWrites { .. }
+                        | ArchivePayload::PortInputRelease { .. }
+                        | ArchivePayload::ControlInputRelease { .. }
+                )
+            })
+        {
+            return Err(format!(
+                "session input archive version {version} contains a version three record variant"
+            ));
+        }
         if wire_records.len() != record_count {
             return Err(format!(
                 "session input archive record count {} does not match decoded count {}",
@@ -457,6 +518,15 @@ fn estimated_encoded_record_bytes(record: &SessionInputRecord) -> usize {
         crate::SessionInputPayload::ModelicaInputChange { name, .. } => {
             add_text(FIXED_RECORD_BOUND, name)
         }
+        crate::SessionInputPayload::PortInputWrites { writes, .. } => writes
+            .iter()
+            .fold(FIXED_RECORD_BOUND + VARINT_BOUND, |total, (name, _)| {
+                add_text(total, name)
+            }),
+        crate::SessionInputPayload::PortInputRelease { name, .. } => {
+            add_text(FIXED_RECORD_BOUND, name)
+        }
+        crate::SessionInputPayload::ControlInputRelease { .. } => FIXED_RECORD_BOUND,
     }
 }
 
@@ -699,6 +769,41 @@ mod tests {
                     correlation_id: 304,
                 },
             },
+            SessionInputRecord {
+                producer: SessionInputProducer::ApiTransport { producer_id: 8182 },
+                target: lunco_core::GlobalEntityId::from_raw(42),
+                scene_generation: 3,
+                effective_tick: 15,
+                sequence: 1,
+                payload: SessionInputPayload::PortInputWrites {
+                    writes: vec![
+                        ("throttle".to_owned(), 0.123_456_789_012_345_67),
+                        ("steer".to_owned(), -0.000_000_000_000_000_222_04),
+                    ],
+                    correlation_id: 305,
+                },
+            },
+            SessionInputRecord {
+                producer: SessionInputProducer::ApiTransport { producer_id: 8383 },
+                target: lunco_core::GlobalEntityId::from_raw(42),
+                scene_generation: 3,
+                effective_tick: 16,
+                sequence: 1,
+                payload: SessionInputPayload::PortInputRelease {
+                    name: "throttle".to_owned(),
+                    correlation_id: 306,
+                },
+            },
+            SessionInputRecord {
+                producer: SessionInputProducer::ApiTransport { producer_id: 8484 },
+                target: lunco_core::GlobalEntityId::from_raw(42),
+                scene_generation: 3,
+                effective_tick: 17,
+                sequence: 1,
+                payload: SessionInputPayload::ControlInputRelease {
+                    correlation_id: 307,
+                },
+            },
         ]
     }
 
@@ -757,6 +862,18 @@ mod tests {
     }
 
     #[test]
+    fn session_input_capture_archive_decodes_existing_version_two_records() {
+        let legacy_records: Vec<_> = valid_records().into_iter().take(6).collect();
+        let wire_records: Vec<_> = legacy_records.iter().map(ArchiveRecord::from).collect();
+        let mut bytes = encode_wire_records(&wire_records);
+        bytes[8..10].copy_from_slice(&2_u16.to_le_bytes());
+
+        let decoded = SessionInputCaptureArchive::from_bytes(&bytes)
+            .expect("version two records remain readable after appending variants");
+        assert_eq!(decoded.records(), legacy_records.as_slice());
+    }
+
+    #[test]
     fn session_input_capture_archive_rejects_version_two_variants_in_version_one() {
         let record = ArchiveRecord {
             producer: ArchiveProducer::LocalUser {
@@ -783,8 +900,39 @@ mod tests {
     }
 
     #[test]
+    fn session_input_capture_archive_rejects_version_three_port_inputs_in_version_two() {
+        let record = ArchiveRecord {
+            producer: ArchiveProducer::ApiTransport { producer_id: 8182 },
+            target: lunco_core::GlobalEntityId::from_raw(42),
+            scene_generation: 3,
+            effective_tick: 15,
+            sequence: 1,
+            payload: ArchivePayload::PortInputWrites {
+                writes: vec![("throttle".to_owned(), 0.625)],
+                correlation_id: 305,
+            },
+        };
+        let mut bytes = encode_wire_records(&[record]);
+        bytes[8..10].copy_from_slice(&2_u16.to_le_bytes());
+
+        assert!(
+            SessionInputCaptureArchive::from_bytes(&bytes)
+                .expect_err("version two cannot claim version three port input records")
+                .contains("version three record variant")
+        );
+    }
+
+    #[test]
     fn modelica_input_capture_rejects_invalid_values() {
-        let mut record = valid_records().pop().expect("Modelica input record");
+        let mut record = valid_records()
+            .into_iter()
+            .find(|record| {
+                matches!(
+                    &record.payload,
+                    SessionInputPayload::ModelicaInputChange { .. }
+                )
+            })
+            .expect("Modelica input record");
         record.payload = SessionInputPayload::ModelicaInputChange {
             name: "drive_torque".to_owned(),
             value: f64::NAN,
@@ -795,6 +943,94 @@ mod tests {
             SessionInputCaptureArchive::new(vec![record])
                 .expect_err("non-finite inputs are not replayable")
                 .contains("must be finite")
+        );
+    }
+
+    #[test]
+    fn port_input_capture_rejects_empty_non_finite_and_uncorrelated_batches() {
+        let mut record = valid_records()
+            .into_iter()
+            .find(|record| matches!(&record.payload, SessionInputPayload::PortInputWrites { .. }))
+            .expect("port input record");
+        record.payload = SessionInputPayload::PortInputWrites {
+            writes: Vec::new(),
+            correlation_id: 305,
+        };
+        assert!(
+            SessionInputCaptureArchive::new(vec![record.clone()])
+                .expect_err("empty write batches are not session inputs")
+                .contains("must not be empty")
+        );
+
+        record.payload = SessionInputPayload::PortInputWrites {
+            writes: vec![("throttle".to_owned(), f64::INFINITY)],
+            correlation_id: 305,
+        };
+        assert!(
+            SessionInputCaptureArchive::new(vec![record.clone()])
+                .expect_err("non-finite setpoints are not replayable")
+                .contains("must be finite")
+        );
+
+        record.payload = SessionInputPayload::PortInputWrites {
+            writes: vec![("throttle".to_owned(), 0.625)],
+            correlation_id: 0,
+        };
+        assert!(
+            SessionInputCaptureArchive::new(vec![record])
+                .expect_err("setpoints require a correlation identity")
+                .contains("correlation id")
+        );
+    }
+
+    #[test]
+    fn port_input_release_capture_rejects_empty_names_and_correlations() {
+        let mut record = valid_records()
+            .into_iter()
+            .find(|record| {
+                matches!(
+                    &record.payload,
+                    SessionInputPayload::PortInputRelease { .. }
+                )
+            })
+            .expect("port input release record");
+        record.payload = SessionInputPayload::PortInputRelease {
+            name: "  ".to_owned(),
+            correlation_id: 306,
+        };
+        assert!(
+            SessionInputCaptureArchive::new(vec![record.clone()])
+                .expect_err("port releases require a named input")
+                .contains("non-empty port name")
+        );
+
+        record.payload = SessionInputPayload::PortInputRelease {
+            name: "throttle".to_owned(),
+            correlation_id: 0,
+        };
+        assert!(
+            SessionInputCaptureArchive::new(vec![record])
+                .expect_err("port releases require a correlation identity")
+                .contains("correlation id")
+        );
+    }
+
+    #[test]
+    fn control_input_release_capture_requires_a_correlation_identity() {
+        let mut record = valid_records()
+            .into_iter()
+            .find(|record| {
+                matches!(
+                    &record.payload,
+                    SessionInputPayload::ControlInputRelease { .. }
+                )
+            })
+            .expect("control input release record");
+        record.payload = SessionInputPayload::ControlInputRelease { correlation_id: 0 };
+        assert!(
+            SessionInputCaptureArchive::new(vec![record])
+                .expect_err("control releases require a correlation identity")
+                .contains("correlation id")
         );
     }
 

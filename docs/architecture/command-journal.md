@@ -87,14 +87,14 @@ are:
 
 | Producer | Current path | Replay implication |
 |---|---|---|
-| HTTP / MCP transport | `ApiCommandEvent` → `api_command_dispatcher` → typed command event | Live `SetModelInput` retains its stable caller producer id, correlation, target, and fixed-tick admission in its typed session record. Other commands still need their owning capture path. |
-| Direct typed command | Typed command event via Bevy `Commands` | Live `SetModelInput` requires a stable caller producer id and captures the target, correlation, and fixed-tick admission. Other commands still need their owning capture path. |
-| Rhai command outside the Simulation clock | `ApiCommandEvent` → `api_command_dispatcher` → typed command event | Live `SetModelInput` retains its producer id or Twin actor identity, correlation, target, and fixed-tick admission. Simulation-clock Rhai writes remain derived behavior. Other commands still need their owning capture path. |
-| UI and Rust subsystem systems | Direct typed command events via Bevy `Commands` | Modelica UI input changes enter the same fixed-tick queue with the local peer `SessionId`; general command capture remains owner-specific. |
-| Keyboard/gamepad vessel control | Bevy input state → admitted `PhysicalIntentFrame` semantic snapshot in `drive_from_bindings` at `FixedUpdate` → `SetPorts` before `ControlDacSet` | Admission requires the local input `SessionId`, target `GlobalEntityId`, and committed scene generation; the frame also carries the current `SimTick` and shared per-tick sequence. Missing admission facts and duplicate target/session order keys hold the input with a structured runtime error; ordering never falls back to Bevy `Entity` bits. While explicitly active, `SessionInputStream` retains the sorted canonical intent ids and admission identity in a bounded in-memory record. Do not record resolved port writes as external input. |
+| HTTP / MCP transport | `ApiCommandEvent` → `api_command_dispatcher` → typed command event | Live `SetModelInput`, `SetPorts`, `ReleasePort`, and `ReleaseControl` retain a stable caller producer id, correlation, target, and fixed-tick admission in typed session records. Other commands still need their owning capture path. |
+| Direct typed command | Typed command event via Bevy `Commands` | Live `SetModelInput`, `SetPorts`, `ReleasePort`, and `ReleaseControl` with a stable caller producer id capture the target, correlation, and fixed-tick admission. Internal fixed-step producers omit it because their source input is captured at its owning boundary. Unclassified direct `SetPorts`, `ReleasePort`, and `ReleaseControl` events without an id still take the immediate path and are not captured. Other commands still need their owning capture path. |
+| Rhai command outside the Simulation clock | `ApiCommandEvent` → `api_command_dispatcher` → typed command event | Live `SetModelInput`, `SetPorts`, `ReleasePort`, and `ReleaseControl` retain a producer id or Twin actor identity, correlation, target, and fixed-tick admission. Simulation-clock Rhai writes and releases remain derived behavior. Other commands still need their owning capture path. |
+| UI and Rust subsystem systems | Direct typed command events via Bevy `Commands` | Modelica UI input changes enter the same fixed-tick queue with the local peer `SessionId`. The live port inspector still emits unclassified direct `SetPorts` and `ReleasePort` commands; capturing those local UI producers remains open. Lifecycle-derived `ControlSafeStop` events stay immediate and are not captured yet. |
+| Keyboard/gamepad vessel control | Bevy input state → admitted `PhysicalIntentFrame` semantic snapshot in `drive_from_bindings` at `FixedUpdate` → `SetPorts` before `ControlDacSet` | Admission requires the local input `SessionId`, target `GlobalEntityId`, and committed scene generation; the frame also carries the current `SimTick` and shared per-tick sequence. Missing admission facts and duplicate target/session order keys hold the input with a structured runtime error; ordering never falls back to Bevy `Entity` bits. While explicitly active, `SessionInputStream` retains the sorted canonical intent ids and admission identity in a bounded in-memory record. The controller-derived `SetPorts` writes are not captured a second time. |
 | Networked vessel control | Wire input → `SetPorts`; remote frames are consumed by `GlobalEntityId` and per-vessel sequence order at the fixed simulation step | `InputFrame` and `OwnedInputLog` serve one-vessel prediction rollback and acknowledgement. They are not a whole-session log. |
 | Scheduled Rhai and hook behavior | Evaluated serially in the owning scenario/hook cycle against live simulation state | These outputs are derived behavior. Re-run them from the same state and inputs during replay; do not record them as independent external inputs. Direct scenario bridge writes (`set`, `port_set`) are part of that ordered evaluation and must stay behind the same replay boundary. |
-| One-shot Rhai / workbench tool evaluation | Bounded `Repl` or tool queue → live-world evaluation outside the fixed simulation transaction | Reflected live `SetModelInput` commands are fenced to the next fixed tick and captured with typed arguments. Other commands and direct bridge mutations from one-shot evaluation still need source/tool revision capture and an effective simulation boundary. |
+| One-shot Rhai / workbench tool evaluation | Bounded `Repl` or tool queue → live-world evaluation outside the fixed simulation transaction | Reflected live `SetModelInput`, `SetPorts`, `ReleasePort`, and `ReleaseControl` commands with stable producer identity are admitted for the next fixed tick and captured with typed arguments. Other commands and direct bridge mutations from one-shot evaluation still need source/tool revision capture and an effective simulation boundary. |
 | Async preparation and owner results | Prepared off-thread, then validated and committed by the owning lifecycle or simulation boundary | Worker completion is not an input. Replay the admitted source revision and deterministic commit order, not completion timing. |
 
 `ApiCommandEvent` carries its transport origin. The reflected command
@@ -102,8 +102,8 @@ dispatcher scopes that origin with the active command id, and the generated
 `CommandOccurred` fact carries it to downstream observers. `CommandOccurred`
 does not retain typed parameters, target identity, scene generation, effective
 tick, or per-tick input order. The bounded session-input owner records those
-facts for admitted semantic controls, live Modelica input changes, and raw-file
-spawns. Rhai scenario origins also
+facts for admitted semantic controls, live Modelica input changes, identified
+live `SetPorts` writes and release commands, and raw-file spawns. Rhai scenario origins also
 carry the executing actor's stable `GlobalEntityId` and source execution
 sequence; application-level Rhai calls may have no actor. Direct typed triggers
 remain outside the API dispatcher.
@@ -142,7 +142,8 @@ appends a `SessionInputRecord` containing sorted canonical intent ids and that
 admission stamp to `SessionInputStream`; the controller-local frame object is
 discarded after translation. `StartSessionInputCapture`,
 `StopSessionInputCapture`, and `ClearSessionInputCapture` control the bounded
-in-memory stream;
+in-memory stream. Stop refuses while admitted inputs await their fixed-tick
+commit, so an acknowledged input cannot be omitted by closing the capture early;
 `ReadSessionInputStream` returns its state and typed records. Before retention,
 the session owner validates canonical payload names, stable stamps,
 producer/payload pairing, and runtime-spawn pose invariants. Malformed records,

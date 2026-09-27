@@ -984,8 +984,13 @@ fn commit_controller_session_input(
                     .to_owned(),
             });
         }
+        // Domain owners observe the same ordered commit event and apply their
+        // own typed payloads at this boundary.
         lunco_core_session::SessionInputPayload::RuntimeSpawn { .. }
-        | lunco_core_session::SessionInputPayload::ModelicaInputChange { .. } => {}
+        | lunco_core_session::SessionInputPayload::ModelicaInputChange { .. }
+        | lunco_core_session::SessionInputPayload::PortInputWrites { .. }
+        | lunco_core_session::SessionInputPayload::PortInputRelease { .. }
+        | lunco_core_session::SessionInputPayload::ControlInputRelease { .. } => {}
     }
 }
 
@@ -1866,6 +1871,7 @@ fn drive_from_bindings(
             writes,
             seq,
             tick: input_admission.tick.0,
+            producer_id: None,
         });
     }
 }
@@ -2005,6 +2011,7 @@ fn drive_self_drivers(
             writes,
             seq: 0,
             tick: 0,
+            producer_id: None,
         });
     }
 }
@@ -2191,6 +2198,7 @@ mod input_ack_tests {
                 writes: vec![("steer".to_string(), steer)],
                 seq,
                 tick: seq as u64,
+                producer_id: None,
             });
         app.update();
     }
@@ -2291,6 +2299,7 @@ mod input_ack_tests {
                 ],
                 seq: 1,
                 tick: 7,
+                producer_id: None,
             });
         app.update();
 
@@ -2300,6 +2309,7 @@ mod input_ack_tests {
                 writes: vec![("steer".into(), -0.25)],
                 seq: 2,
                 tick: 8,
+                producer_id: None,
             });
         app.update();
 

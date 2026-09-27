@@ -1085,9 +1085,14 @@ The whole-simulation guarantee remains open because:
    input log and replay verdict. Networking rollback's bounded per-vessel input
    frames retain ordered, latched `SetPorts` setpoints for owned-body replay;
    the fixed-step host consumes vessel frames in stable `GlobalEntityId` order.
-   These frames do not capture scene lifecycle, authored external commands, or
-   all Rhai and Modelica state. Adaptive Modelica is not a cross-machine
-   bitwise deterministic solver.
+   The session stream captures API and classified non-Simulation Rhai
+   `SetPorts`, `ReleasePort`, and `ReleaseControl` commands, explicitly
+   identified direct typed port inputs, and live `SetModelInput` changes at
+   their fixed-tick boundaries. Unclassified direct `SetPorts`, `ReleasePort`, and `ReleaseControl`
+   events, port-inspector UI commands, lifecycle-derived safe-stops, scene lifecycle,
+   other authored commands, and all Rhai/Modelica runtime state still need
+   capture or a replay owner. Adaptive Modelica is not a cross-machine bitwise
+   deterministic solver.
 7. `RuntimeCycleSet` is ordering vocabulary rather than an independent cadence
    driver. Typed context reaches scenario preparation/start/event/behavior/stop
    calls and one-shot Rhai evaluation. Generic registered hooks now receive a

@@ -212,7 +212,12 @@ is a projection defect, not an acceptable fallback.
 When an authored Modelica endpoint also carries `InputPorts`, that component is
 the single public command boundary. `SetPorts` and Rhai writes land there, and
 the generic Modelica bridge mirrors only names accepted by the compiled model
-into its solver input buffer. Do not add a vehicle-specific setter. Battery
+into its solver input buffer. External live `SetPorts` commands with a stable
+producer id enter the shared next-fixed-tick queue and are captured as ordered
+named writes; Simulation-clock Rhai writes remain derived behavior. Do not add a
+vehicle-specific setter. External API/direct and non-Simulation Rhai
+`ReleasePort`/`ReleaseControl` commands use the same producer identity and
+ordered session boundary. Battery
 empty events use the authored 0.1% usable-storage reserve in `Battery.mo`, not
 a solver-epsilon comparison.
 

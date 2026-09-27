@@ -7,8 +7,8 @@ use lunco_hooks::HookValue;
 
 use crate::authority::{claim_control, release_control_target};
 use crate::{
-    LocalSession, NetworkRole, SessionInputStream, SessionInputStreamSettings, SessionRbac,
-    SessionRegistry, SyncApplyGuard,
+    LocalSession, NetworkRole, PendingSessionInputs, SessionInputStream,
+    SessionInputStreamSettings, SessionRbac, SessionRegistry, SyncApplyGuard,
 };
 
 /// Claim a stable control endpoint for the originating session.
@@ -42,7 +42,7 @@ pub struct UpdateProfile {
 #[Command(default)]
 pub struct StartSessionInputCapture {}
 
-/// Stop the active session-input capture while retaining its records.
+/// Stop the active session-input capture after admitted inputs have committed.
 #[Command(default)]
 pub struct StopSessionInputCapture {}
 
@@ -93,12 +93,21 @@ fn on_start_session_input_capture(
 fn on_stop_session_input_capture(
     _trigger: On<StopSessionInputCapture>,
     mut stream: ResMut<SessionInputStream>,
-) -> Result<Ack, String> {
+    pending: Res<PendingSessionInputs>,
+) -> Result<Ack, Reject> {
     if !stream.is_recording() {
-        return Err("session input capture is not recording".to_owned());
+        return Err(Reject::InvalidOp(
+            "session input capture is not recording".to_owned(),
+        ));
+    }
+    if !pending.is_empty() {
+        return Err(Reject::InvalidOp(
+            "session input capture cannot stop while admitted inputs are pending; retry after their fixed ticks commit"
+                .to_owned(),
+        ));
     }
     stream.finish();
-    session_input_capture_ack(&stream)
+    session_input_capture_ack(&stream).map_err(Reject::InvalidOp)
 }
 
 #[on_command(ClearSessionInputCapture)]

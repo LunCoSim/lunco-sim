@@ -312,11 +312,12 @@ Commands are typed — each domain crate defines its own command structs. The AP
 
 | Domain | Command | Description |
 |---|---|---|
-| **Control** | `SetPorts` | Write a vessel's named input ports (`throttle`/`steer`/`brake` for a rover; any FSW/Modelica/hardware port for other vessels) — the one generic control command. |
+| **Control** | `SetPorts` | Write a vessel's named input ports (`throttle`/`steer`/`brake` for a rover; any FSW/Modelica/hardware port for other vessels). External API callers supply a stable nonzero `producer_id`; live writes are admitted for the next fixed tick and the acknowledgement returns the target, producer, correlation, and admission stamp. |
+| **Control** | `ReleasePort` / `ReleaseControl` | Release one named hold or apply the endpoint safe state. External live API callers supply a stable nonzero `producer_id`; acknowledgements include the fixed-tick admission stamp. |
 | **Control** | `ClaimControl` / `ReleaseControlClaim` | Claim or release a stable endpoint for the originating session without binding an avatar camera. |
 | **Control** | `SimulateIntentEdge` | Emit one target-scoped semantic `pressed`, `released`, or `pulse` edge for a shared intent; the consuming Rhai/Modelica policy decides its meaning. |
 | **Control** | `AcquireControl` | Acquire a target control surface, optionally binding the local presentation rig. |
-| **Session** | `StartSessionInputCapture` / `StopSessionInputCapture` | Begin or finish bounded in-memory capture of physical frames and admitted semantic inputs. |
+| **Session** | `StartSessionInputCapture` / `StopSessionInputCapture` | Begin or finish bounded in-memory capture of physical frames and admitted semantic inputs. Stop is rejected while admitted inputs await their fixed-tick commit. |
 | **Session** | `ClearSessionInputCapture` | Explicitly discard a stopped or failed in-memory session-input capture. |
 | **Camera** | `FollowTarget` | Chase-camera a target through a selected or local camera rig. |
 | | `FocusTarget` | Orbit-camera a target through a selected or local camera rig. |
@@ -352,8 +353,11 @@ Commands are typed — each domain crate defines its own command structs. The AP
 Control is a single generic command — `SetPorts` writes the vessel's named input
 ports. A wheeled rover exposes `throttle`/`steer`/`brake`; each accepted value
 persists at the receiver until replacement or an explicit `ReleasePort`/
-`ReleaseControl`. The composed Modelica/Rhai controller reads those inputs and
-publishes final motor and wheel-heading outputs through the authored port graph.
+`ReleaseControl`. External API calls to `SetPorts`, `ReleasePort`, and
+`ReleaseControl` include a stable nonzero `producer_id` and are acknowledged
+when admitted to the next fixed tick; the response carries the exact admission
+stamp. The composed Modelica/Rhai controller reads those inputs and publishes
+final motor and wheel-heading outputs through the authored port graph.
 
 ```bash
 curl -X POST http://127.0.0.1:4101/api/commands \
@@ -362,7 +366,8 @@ curl -X POST http://127.0.0.1:4101/api/commands \
     "type": "ExecuteCommand",
     "command": "SetPorts",
     "params": {
-      "target": "01ARZ7NDEKTSV4M9",
+      "target": 1234,
+      "producer_id": 4821,
       "writes": [["throttle", 0.8], ["steer", 0.0]]
     }
   }'
@@ -377,7 +382,8 @@ curl -X POST http://127.0.0.1:4101/api/commands \
     "type": "ExecuteCommand",
     "command": "SetPorts",
     "params": {
-      "target": "01ARZ7NDEKTSV4M9",
+      "target": 1234,
+      "producer_id": 4821,
       "writes": [["brake", 1.0]]
     }
   }'
@@ -777,6 +783,8 @@ without rebuilding unchanged views.
 
 `StartSessionInputCapture`, `StopSessionInputCapture`, and
 `ClearSessionInputCapture` control the bounded session-input buffer.
+`StopSessionInputCapture` is rejected while an admitted input is still pending;
+retry after the fixed-tick owner commits those records.
 `ReadSessionInputStream` returns the active/latest capture identity and
 physical-frame and semantic-input records with producer class, target identity,
 committed scene generation, tick, and input

@@ -612,6 +612,7 @@ impl PortPanel {
                         writes: vec![(info.name.clone(), *value)],
                         seq: 0,
                         tick: 0,
+                        producer_id: None,
                     });
                 }
             }
@@ -624,6 +625,7 @@ impl PortPanel {
                 ctx.trigger(lunco_cosim_core::commands::ReleasePort {
                     target: row.entity,
                     name: info.name.clone(),
+                    producer_id: None,
                 });
             }
         });

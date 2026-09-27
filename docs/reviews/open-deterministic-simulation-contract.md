@@ -39,9 +39,9 @@ contract remains open.
 | D24 | P1 | Every new `SetAttribute` previously serialized the entire target layer as its inverse even though `RemoveAttribute` is the exact inverse for a newly-authored opinion. It now returns the typed removal op; existing values retain typed restoration, with source snapshots only for prior opinions lacking a representable typed restore. This removes growing-layer serialization from each waypoint-marker add while preserving the same journaled forward intent. The `route_authoring_history` production Rhai gate authors a new attribute, removes it, and verifies `UndoDocument` restores it while `RedoDocument` removes it; the focused `new_attribute_uses_remove_attribute_as_its_inverse` Rust mechanism test also passes. | Partial; operation selection and public undo/redo behavior are verified; Summer Space School add/delete latency and full runtime history profiling remain open |
 | D25 | Fixed | `drive_from_bindings` reuses a per-controller scratch vector ordered by target `GlobalEntityId` and local input `SessionId`. Missing target/session identity or committed scene generation holds physical input with a structured runtime error. Duplicate target/session keys are held together; ordering does not use Bevy `Entity` bits as a tie-breaker. The focused controller test passes with targets ordered `[100, 200]` despite descending creation order. | Fixed-step ordering and fail-closed admission tests pass; whole-session input replay remains open under D9 |
 | D26 | Fixed | A mounted primary USD document can receive simulation-affecting edits in application or fixed-script cycles after its last projection. A catch-up burst could then start another authoritative tick before the edit is reconciled into live ECS state. Document generations coalesce under a typed progress key: `SimulationProgressAdmissionSet` runs after entity indexing and before `TimeSpineSet`, while `FixedLast` admits fixed-cycle edits before closing remaining catch-up iterations. Typed view-layer-only suffixes avoid the hold; unavailable suffixes conservatively hold. Projection publication releases only after reaching the latest admitted generation, so stale completions retain the hold. The production `route_lifecycle` Rhai gate now exercises fixed-script and Application/Repl edits. For the Repl edit, it confirms the public entity index has not caught up immediately after the document operation, observes paused simulation while projection is pending, and requires the first later simulation tick to see the projected prim; it also checks Application/Repl context and event tick. Four runs with seed `6840157149251759617` passed at 52 simulation ticks, with 103–114 application updates. Focused tests cover generation coalescing/stale completion, PreUpdate ordering, and stopping the current fixed catch-up burst. | Fixed-step and Application/Repl projection admission acceptance passes through the production scene runner; the focused generic admission tests pass |
-| D27 | Partial | External semantic controls, live Modelica `SetModelInput` changes, and raw-file runtime spawns enter the bounded session-owned `PendingSessionInputs` resource. `lunco-core-session` owns admission storage, scene-teardown clearing, stable target and generation validation, capture, and a fixed-tick commit set that synchronously publishes typed commits in shared `(effective_tick, sequence)` order while simulation time is running. Paused input remains queued until play resumes. The controller applies semantic edges and held changes before physical sampling. Physical frames use the same per-tick allocator at their consuming controller boundary, but cannot be deferred through the external queue. Document-backed spawns remain `ApplyUsdOps` in the Twin journal. A bounded, versioned archive codec validates and encodes captured records. On native hosts, completed captures can be exported through bounded background admission and the I/O pool to the user-config session-captures directory; export status is typed and reports the capture/export identities after read-back verification. Capture identity is monotonic per app session, and successful captures cannot be exported twice; failed exports can retry. The authored production scripting_task_contract Rhai gate has assertions for invalid/premature requests, pending-clear rejection, durable empty-archive write/read-back, identity matching, duplicate-export rejection, and clear-after-completion. Baseline manifests, playback, remaining typed command payloads, and full cross-domain replay remain open. | `cargo test -p lunco-core-session -j 4` passed (54 unit, 2 authz integration); `cargo test -p lunco-storage write_new_commits_without_replacing_an_existing_entry -j 4` passed (2); `cargo test -p lunco-api session_input_archive_query_exposes_typed_completion_status -j 4` passed (1); `cargo check -p lunco-luncosim-services --features session-input-archive-export -j 4` passed. The production `scripting_task_contract` gate passed `TESTS_OK 41` in 15 fixed ticks and 38 updates after its local variable was renamed from Rhai’s reserved `export` keyword and its assertion was corrected to read the populated `archive_state`. It verifies durable empty-archive write/read-back, identity matching, duplicate-export rejection, and clear-after-completion. The command reference was regenerated from a live windowed production schema with 240 commands across 54 crates. Baseline manifests, playback, other typed command payloads, and broader cross-domain acceptance remain open |
+| D27 | Partial | External semantic controls, live Modelica `SetModelInput` changes, identified generic `SetPorts` writes, explicit `ReleasePort`/`ReleaseControl` commands, and raw-file runtime spawns enter the bounded session-owned `PendingSessionInputs` resource. The API and classified non-Simulation Rhai paths require a stable producer id; explicitly identified direct typed inputs are captured too. Unclassified direct `SetPorts`, `ReleasePort`, and `ReleaseControl` events without a producer id still use the immediate owner path and are not captured. `lunco-core-session` owns admission storage, scene-teardown clearing, stable target and generation validation, capture, and a fixed-tick commit set that synchronously publishes typed commits in shared `(effective_tick, sequence)` order while simulation time is running. Paused input remains queued until play resumes. Capture stop is rejected while any admitted input remains pending, so an acknowledged input cannot disappear when recording ends. The controller applies semantic edges and held changes before physical sampling. Physical frames use the same per-tick allocator at their consuming controller boundary, but cannot be deferred through the external queue. Document-backed spawns remain `ApplyUsdOps` in the Twin journal. A bounded, versioned archive codec validates and encodes captured records. On native hosts, completed captures can be exported through bounded background admission and the I/O pool to the user-config session-captures directory; export status is typed and reports the capture/export identities after read-back verification. Capture identity is monotonic per app session, and successful captures cannot be exported twice; failed exports can retry. The authored production scripting_task_contract Rhai gate has assertions for invalid/premature requests, pending-clear rejection, durable empty-archive write/read-back, identity matching, duplicate-export rejection, and clear-after-completion. Unclassified direct port writes, port-inspector inputs, lifecycle-derived safe-stops, baseline manifests, playback, remaining typed command payloads, and full cross-domain replay remain open. | Current continuation: `cargo test -p lunco-core-session -j 4` passed (60 unit, 2 authz integration); the `lunco-cosim` safe-stop regression passed; production `luncosim` build passed; API admission gates passed `TESTS_OK 13` and `TESTS_OK 7` on port 4732. Earlier archive-export and scripting-task-contract evidence above remains applicable. Baseline manifests, playback, remaining typed command payloads, and broader cross-domain acceptance remain open |
 
-### Live Modelica input capture (2026-09-27)
+### Live Modelica and port input capture (2026-09-28)
 
 `SetModelInput` selects a live co-simulation participant by stable
 `target_gid`; editor models continue to use `doc_id`. Live API and direct
@@ -52,27 +52,38 @@ the next fixed tick and captured as a typed Modelica input payload containing
 the declared name, exact `f64` value, and command correlation id. The Modelica
 owner applies the record through the existing port-first input helper at the
 ordered session commit boundary. Acknowledgements return the target,
-correlation, producer kind, any stable producer id, and admission stamp. The
-version-two archive encodes these records; the version-one decoder continues
-to accept its prior record variants and rejects variants introduced only in
-version two under a version-one header.
+correlation, producer kind, any stable producer id, and admission stamp.
+Archive version three contains Modelica input, generic port write, and
+explicit port/control release records. The decoder continues to accept
+version-one and version-two variants and rejects newer variants under older
+headers.
 
-`cargo build -p lunco-luncosim --bin luncosim -j 4` passed. The production
-API gate `LUNCOSIM_BIN=target/debug/luncosim python3
-scripts/api/test_modelica_input_admission.py` passed on owned port 4731
-(process 3854686): target `1106042478292393`, input `throttle = 0.375`,
-admission `{scene_generation: 1, effective_tick: 5, sequence: 1}`, and
-`TESTS_OK 9`. The gate rejected a missing producer, zero and unresolved target
-identities, and conflicting selectors,
-then verified the captured record, completed stream, and live port value after
-the admitted tick. API `Exit` stopped the owned session. The same targeted
-Cargo run passed 24 controller tests, 54 session unit tests plus 2 authz
-integration tests, and 66 Modelica core tests. The MCP package passed both
-Node tests. The schema-backed command catalog contains 240 live commands
-across 54 crates.
+The expanded production API gate covers live Modelica input admission and
+application, generic port writes, `ReleasePort`/`ReleaseControl`, producer
+validation, capture order, and fixed-tick application. It first observes the
+Modelica value at its admitted tick, then submits a later `SetPorts` write to
+the same port and verifies that write at its own tick. It also confirms that
+capture cannot stop while either acknowledged input is still pending. On
+2026-09-28 the gate passed `TESTS_OK 13` for Modelica/port admission and
+`TESTS_OK 7` for releases. The capture retained the matching target, producer,
+correlation, and stamps; the Modelica input applied at tick 21, `SetPorts` at
+tick 23, and the port/control releases at ticks 37 and 38. The API-owned
+production process (PID 246784) exited through `Exit`; port 4732 is closed.
 
-This verifies one API-driven live Modelica input through capture and fixed-tick
-application. It does not establish playback, baseline manifests, all command
+The first production pass exposed that `ReleaseControl` only enumerated active
+holds and `InputPorts`, leaving a Modelica `SimComponent` input unchanged when
+`ReleasePort` had already removed its hold. The co-simulation safe-stop now
+enumerates declared input owners through `PortRegistry`, then latches each safe
+value. `cargo test -p lunco-cosim
+release_control_neutralizes_declared_modelica_inputs_after_port_release -j 4`
+passed the owner regression. `cargo test -p lunco-core-session -j 4` passed 60
+unit tests and 2 authz integration tests, and
+`cargo build -p lunco-luncosim --bin luncosim -j 4` passed after the production
+controller commit observer was updated to leave domain payloads to their
+registered owners.
+
+This acceptance does not establish playback, baseline manifests, capture of
+unclassified direct port writes or lifecycle-derived safe-stops, all command
 payloads, or whole-simulation cross-domain replay.
 
 ### Replay baseline owner snapshot (2026-09-27)

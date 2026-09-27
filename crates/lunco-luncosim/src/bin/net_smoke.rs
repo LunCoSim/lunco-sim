@@ -444,6 +444,7 @@ fn client_act(
         writes: vec![("throttle".into(), 1.0), ("steer".into(), 0.0)],
         seq: 0,
         tick: 0,
+        producer_id: None,
     });
 }
 
@@ -474,6 +475,7 @@ fn client_drive_cadence(
         writes: vec![("throttle".into(), throttle)],
         seq: *seq,
         tick: *seq as u64,
+        producer_id: None,
     });
     ideal.0 += (throttle as f32) * FWD_SPEED * time.delta_secs();
 }
