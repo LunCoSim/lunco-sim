@@ -5,7 +5,8 @@
 **Branch:** `codex/lunar-soil`
 **D3/D9 physical-input acceptance commit:** `b1747728e`
 **D9 direct-command owner test commit:** `211d7d495`
-**Latest local main merge commit:** `7c65820584b846df914cc88f4204bf6340e085bc`
+**D9 session-record validation commit:** `d4937baff`
+**Latest local main merge commit:** `41f1270e733e9900d54a96d5e1fb928f1c13f1db`
 
 The D9 session-input boundary at `4acf09915` had previously been integrated
 across the local worktrees. The 2026-09-27 D3/D9 acceptance commit
@@ -16,13 +17,16 @@ edits preserved. The tutorial celestial LOD changes stayed in place; the USD
 status-bar edit and optimization source, documentation, and profiling edits
 were reapplied successfully after fast-forwarding. New task-scoped stashes hold
 recovery copies, and the previous stashes remain intact. The five local heads
-share the tip containing this handover update. The D9 direct-command owner
-test commit `211d7d495` was merged into local `main` as
-`7c65820584b846df914cc88f4204bf6340e085bc`; all five heads were fast-forwarded
-to the handover follow-up. The merge's first parent was `a0dde5fcb`, the then-
-current `origin/main`, which is retained in local `main`. No push was made. The
-evidence below stays tied to the individual builds and source revisions named
-in each section.
+share the tip containing this handover update. The D9 direct-command owner test
+commit `211d7d495` was merged into local `main` as
+`7c65820584b846df914cc88f4204bf6340e085bc`; its first parent was `a0dde5fcb`,
+the then-current `origin/main`. The D9 session-record validation commit
+`d4937baff` was merged as `41f1270e733e9900d54a96d5e1fb928f1c13f1db`, and
+`main`, `codex/lunar-soil`, `tutorials`, `usd`, and `optimization` now share
+that tip. Tutorial and optimization edits were stashed to advance their
+branches and reapplied; both worktrees pass `git diff --check`, and the backup
+stashes remain. No push was made. The evidence below stays tied to the
+individual builds and source revisions named in each section.
 
 ## Active user objective
 
