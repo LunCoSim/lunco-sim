@@ -6,6 +6,8 @@
 //! async path. The main thread then binds the owned facts to Bevy entities;
 //! it does not parse USD, walk the hierarchy, resolve materials, or decode
 //! transforms during initial scene materialisation.
+//! Native composition and snapshot extraction run on Bevy's async-compute pool
+//! after source-layer reads complete.
 
 use std::collections::{HashMap, HashSet};
 

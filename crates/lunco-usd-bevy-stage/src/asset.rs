@@ -1,18 +1,20 @@
 //! Bevy asset boundary for resolver-backed composed USD stages.
 //!
-//! `UsdStageAsset` carries only the send-safe layer recipe and projection plan.
-//! The live OpenUSD stage is intentionally owned by [`crate::canonical`], so
-//! this asset can cross Bevy's asynchronous loading boundary without retaining
-//! `Rc`-backed OpenUSD handles.
+//! `UsdStageAsset` carries the send-safe layer recipe, source-read receipts,
+//! and projection plan. The live OpenUSD stage is intentionally owned by
+//! [`crate::canonical`], so this asset can cross Bevy's asynchronous loading
+//! boundary without retaining `Rc`-backed OpenUSD handles.
 
 use std::sync::Arc;
 
 use anyhow::Result;
 use bevy::asset::{AssetLoader, AssetServer, Handle, LoadContext, io::Reader};
 use bevy::prelude::{Asset, TypePath};
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::tasks::AsyncComputeTaskPool;
 
 use crate::UsdStageProjectionPlan;
-use crate::compose::fetch_layer_closure;
+use crate::compose::{FetchedStageClosure, fetch_layer_closure};
 use lunco_assets_core::asset_path::anchor_of;
 
 /// A Bevy asset representing a loaded, composed USD stage.
@@ -38,14 +40,15 @@ impl UsdStageAsset {
     /// Build an asset with the same prepared projection contract as the async
     /// loader.
     pub fn from_recipe(recipe: lunco_usd_compose::recipe::StageRecipe) -> Result<Self> {
-        Self::from_fetched_recipe(recipe, Vec::new())
+        let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
+        Self::from_prepared_recipe(recipe, Vec::new(), projection_plan)
     }
 
-    pub(crate) fn from_fetched_recipe(
+    pub(crate) fn from_prepared_recipe(
         recipe: lunco_usd_compose::recipe::StageRecipe,
         source_dependencies: Vec<Handle<UsdLayerReadReceipt>>,
+        projection_plan: UsdStageProjectionPlan,
     ) -> Result<Self> {
-        let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
         projection_plan.validate()?;
         Ok(Self {
             recipe: Some(recipe),
@@ -118,7 +121,25 @@ impl AssetLoader for UsdLoader {
         let root_asset_path = anchor_of(load_context.path());
 
         let fetched = fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
-        UsdStageAsset::from_fetched_recipe(fetched.recipe, fetched.source_dependencies)
+        let FetchedStageClosure {
+            recipe,
+            source_dependencies,
+        } = fetched;
+        #[cfg(not(target_arch = "wasm32"))]
+        let (recipe, projection_plan) = {
+            AsyncComputeTaskPool::get()
+                .spawn(async move {
+                    let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
+                    Ok::<_, anyhow::Error>((recipe, projection_plan))
+                })
+                .await?
+        };
+        #[cfg(target_arch = "wasm32")]
+        let (recipe, projection_plan) = {
+            let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
+            (recipe, projection_plan)
+        };
+        UsdStageAsset::from_prepared_recipe(recipe, source_dependencies, projection_plan)
     }
 
     fn extensions(&self) -> &[&str] {

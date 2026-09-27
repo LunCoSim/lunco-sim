@@ -455,8 +455,11 @@ resolver with shared limits for layer count, dependency width, depth, retained
 bytes, and concurrent reads. Sibling layers are read in bounded parallel
 batches; results and diagnostics are applied in authored dependency order.
 Labeled read receipts preserve source-change reloads through Bevy's asset
-dependency graph. A missing sublayer, reference, or payload does not discard
-already available siblings. The loader publishes the available stage, leaves
+dependency graph. On native, USD composition and prepared-plan extraction run
+on Bevy's async-compute pool so they do not occupy an asset I/O worker. The
+browser path still composes on the browser main thread until a Web Worker
+transport is available. A missing sublayer, reference, or payload does not
+discard already available siblings. The loader publishes the available stage, leaves
 the missing authored arc unresolved as required by OpenUSD, and records a
 scene-scoped `RuntimeDiagnostics` warning with both logical layer identifiers.
 
