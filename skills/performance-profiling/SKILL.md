@@ -171,9 +171,11 @@ Keep invalidation domains distinct: a wiring/topology latch may be raised by
 endpoint arrivals and must not automatically trigger domain discovery. Live
 canonical edits publish `UsdSceneChangeBatch` with stage generation and
 resynced/info paths; route those paths through the owning stage/root/member
-index. Stage-asset changes and missed generation batches requeue only roots on
-the affected stage. Reserve the all-prim discovery for initial admission, and
-keep entity arrivals on their queued-entity path.
+index. Transform-only info paths advance the generation without re-reading a
+Modelica network; structural and other member/root changes still invalidate
+affected roots. Stage-asset changes and missed generation batches requeue only
+roots on the affected stage. Reserve the all-prim discovery for initial
+admission, and keep entity arrivals on their queued-entity path.
 Generated-source document sync should share the `PendingEntityWork` contract,
 and its metadata publisher should consume the owner-published dirty flag rather
 than adding a parallel change query.

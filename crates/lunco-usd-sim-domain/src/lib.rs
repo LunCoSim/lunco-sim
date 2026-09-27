@@ -2329,6 +2329,9 @@ pub fn resolve_member_classes(
             );
         }
         for path in &change.info_prim_paths {
+            if change.transform_only_prim_paths.contains(path) {
+                continue;
+            }
             class_users.extend_roots_affected_by_info(
                 change.stage_id,
                 path,

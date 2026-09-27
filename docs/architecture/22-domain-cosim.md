@@ -635,8 +635,10 @@ initial admission. Each canonical sink drain publishes one
 `UsdSceneChangeBatch` with its projected generation, resynced paths, and
 info-changed owning prim paths. The domain index maps canonical stage/root/member
 paths back to their network roots: structural paths invalidate overlapping
-network/member scopes, while info paths invalidate the exact network root or a
-member subtree. Runtime-instance plans are excluded because they are immutable
+network/member scopes, while non-transform info paths invalidate the exact
+network root or a member subtree. Transform-only info paths advance the stage
+generation without re-reading a network because synthesis does not consume
+transforms. Runtime-instance plans are excluded because they are immutable
 projections, not readers of the canonical stage. A changed USD asset requeues
 indexed roots on that stage; a missed generation batch does the same as a safety
 pass. Neither path scans every USD prim. Endpoint lifecycle continues to requeue
