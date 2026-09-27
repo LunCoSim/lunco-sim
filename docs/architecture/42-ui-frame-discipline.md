@@ -247,6 +247,10 @@ The same ownership rule applies to the measured presentation paths:
   prior markers and channels once even when more prims arrive during admission.
   Steady frames do not rebuild maps or clone authored path keys, and a wrapper
   becoming available cannot be mistaken for a missing telemetry port.
+- **Authored runtime projection** shares one canonical owner reader and one
+  child-path snapshot between control-surface and generic-program resolution.
+  It prepares owned typed facts before mutating the owner, avoiding a second
+  stage-reader acquisition and duplicate child traversal for the same prim.
 - **Generated Modelica source metadata** is invalidated by the generated USD
   source component and by explicit document-link/removal dirtiness. The
   publisher does not treat `ModelicaModel` output/time updates as source
