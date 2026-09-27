@@ -149,9 +149,12 @@ disjoint sibling paths rather than live inside that folder.
 
 New source classes get their own `Asset` + `AssetLoader` in the owning
 domain crate. Loaders are normally dumb (parse to bytes / utf-8 / domain AST);
-`RhaiSourceLoader` additionally declares the literal `import` paths it finds as
-Bevy dependencies. The owning scenario handle is not published to the runtime
-until Bevy reports its recursive dependency graph ready, so a referenced
+`RhaiSourceLoader` additionally declares literal `import` paths as Bevy
+dependencies before awaiting native AST compilation on the async-compute pool.
+This lets independent imports enter Bevy's asset graph while AST compilation
+stays off the I/O worker. The wasm asset loader keeps its platform-supported
+synchronous compile path. The owning scenario handle is not published to the
+runtime until Bevy reports its recursive dependency graph ready, so a referenced
 scenario loads only itself and its imports. Scenario workers compile that
 revisioned source closure before lifecycle activation, and the live resolver
 evaluates only owner-committed ASTs. Application-owned Rhai

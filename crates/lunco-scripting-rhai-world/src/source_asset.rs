@@ -11,6 +11,8 @@ use bevy::asset::AssetPath;
 use bevy::asset::{Asset, AssetId, AssetLoader, LoadContext, io::Reader};
 #[cfg(feature = "rhai")]
 use bevy::prelude::*;
+#[cfg(all(feature = "rhai", not(target_arch = "wasm32")))]
+use bevy::tasks::AsyncComputeTaskPool;
 #[cfg(feature = "rhai")]
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -78,10 +80,12 @@ impl AssetLoader for RhaiSourceLoader {
         let text = String::from_utf8(bytes)?;
         let importer = canonical_asset_id(load_context.path());
         let dependencies = load_import_dependencies(&text, &importer, load_context)?;
-        let mut engine = rhai::Engine::new();
-        lunco_hooks_rhai::rhai_limits::apply(&mut engine);
-        let mut ast = lunco_scripting_rhai_core::compile_with_script_consts(&engine, &text)?;
-        ast.set_source(&importer);
+        #[cfg(not(target_arch = "wasm32"))]
+        let (text, ast) = AsyncComputeTaskPool::get()
+            .spawn(async move { compile_rhai_source(text, importer) })
+            .await?;
+        #[cfg(target_arch = "wasm32")]
+        let (text, ast) = compile_rhai_source(text, importer)?;
         Ok(RhaiSource {
             text,
             ast,
@@ -92,6 +96,18 @@ impl AssetLoader for RhaiSourceLoader {
     fn extensions(&self) -> &[&str] {
         &["rhai"]
     }
+}
+
+#[cfg(feature = "rhai")]
+fn compile_rhai_source(
+    text: String,
+    importer: String,
+) -> Result<(String, rhai::AST), anyhow::Error> {
+    let mut engine = rhai::Engine::new();
+    lunco_hooks_rhai::rhai_limits::apply(&mut engine);
+    let mut ast = lunco_scripting_rhai_core::compile_with_script_consts(&engine, &text)?;
+    ast.set_source(&importer);
+    Ok((text, ast))
 }
 
 #[cfg(feature = "rhai")]

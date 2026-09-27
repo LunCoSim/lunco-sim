@@ -44,6 +44,8 @@ authored order; this avoids serializing independent branches behind one parent
 at a time. Preserve the source-change reload graph when using child load
 contexts. The USD layer-closure owner and its reload receipts are documented in
 [`21-domain-usd`](../../docs/architecture/21-domain-usd.md#composition-closure-and-partial-scene-loading).
+Keep CPU-heavy source compilation off asset I/O workers too: register literal
+dependencies first, then prepare source ASTs on the existing async-compute pool.
 
 One-shot `RunRhai` and tool callbacks share the prepared `ScenarioDriver`
 engine. When profiling a callback stall, separate one-time startup/prelude or
