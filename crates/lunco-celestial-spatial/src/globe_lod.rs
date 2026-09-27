@@ -64,17 +64,17 @@ pub struct GlobeLod {
 /// The DEM owns exactly its authored square. Outside that square it has no
 /// measured samples, so extending the nearest edge sample through the whole
 /// globe collar would turn an edge crater/rim into a many-kilometre artificial
-/// apron. The only valid continuation is the measured border datum on the same
-/// body sphere, reached over one raster posting while preserving the measured
-/// edge slope. This makes the source C1 without inventing an outer terrain or
-/// removing the physical body curvature at the edge.
+/// apron. The continuation returns edge relief to the curved border datum over
+/// one site half-extent, while preserving the measured one-sided edge slope.
+/// The wider shoulder prevents large edge-to-datum differences from becoming
+/// an apparent wall at the square boundary.
 #[derive(Clone)]
 struct BoundarySiteSource {
     oracle: Arc<SurfaceOracle>,
     region: Square,
     datum_m: f64,
     radius_m: f64,
-    boundary_m: f64,
+    relief_blend_m: f64,
 }
 
 impl HeightSource for BoundarySiteSource {
@@ -100,18 +100,24 @@ impl HeightSource for BoundarySiteSource {
             self.region.center[1] - self.region.half,
             self.region.center[1] + self.region.half,
         );
-        if self.boundary_m <= 0.0 {
+        if self.relief_blend_m <= 0.0 {
             return self.curved_datum_height(x, z);
         }
         let distance_x = x - edge_x;
         let distance_z = z - edge_z;
         let distance = distance_x.hypot(distance_z);
-        if distance >= self.boundary_m {
+        if distance >= self.relief_blend_m {
             return self.curved_datum_height(x, z);
         }
         let edge_height = self.height_at(edge_x, edge_z);
-        let t = (distance / self.boundary_m).clamp(0.0, 1.0);
-        let gradient = normal_at_bounded(self, edge_x, edge_z, self.boundary_m, self.region.half);
+        let t = (distance / self.relief_blend_m).clamp(0.0, 1.0);
+        let gradient = normal_at_bounded(
+            self,
+            edge_x,
+            edge_z,
+            self.oracle.spacing() as f64,
+            self.region.half,
+        );
         let outward_slope = if distance > 0.0 {
             let outward_x = distance_x / distance;
             let outward_z = distance_z / distance;
@@ -122,12 +128,9 @@ impl HeightSource for BoundarySiteSource {
         let datum_height = self.curved_datum_height(x, z);
         let datum_slope = self.curved_datum_slope(x, z, distance_x, distance_z, distance);
 
-        // Cubic Hermite interpolation matches the measured one-sided edge
-        // derivative at d=0 and arrives on the curved datum with its physical
-        // derivative at d=boundary_m. A value-only smoothstep left a normal
-        // discontinuity exactly where the local terrain met the globe, while
-        // fading to the raw datum removed the body's curvature in the same
-        // posting and rendered that edge as a dark wall.
+        // Cubic Hermite interpolation preserves the measured outward slope at
+        // the DEM edge and the physical derivative of the curved border datum
+        // at the end of the relief shoulder.
         let t2 = t * t;
         let t3 = t2 * t;
         let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
@@ -135,9 +138,9 @@ impl HeightSource for BoundarySiteSource {
         let h01 = -2.0 * t3 + 3.0 * t2;
         let h11 = t3 - t2;
         h00 * edge_height
-            + h10 * self.boundary_m * outward_slope
+            + h10 * self.relief_blend_m * outward_slope
             + h01 * datum_height
-            + h11 * self.boundary_m * datum_slope
+            + h11 * self.relief_blend_m * datum_slope
     }
 }
 
@@ -271,14 +274,16 @@ impl GlobeHandoff {
         oracle: Arc<SurfaceOracle>,
         half_extent: f64,
     ) -> Self {
-        // The DEM is in the body's absolute vertical datum. The body-scale
-        // sagitta determines the source-to-sphere collar below; the finite DEM
-        // source itself must only carry its measured edge relief through one
-        // raster posting. Extending the edge sample across the whole collar
-        // turns a real edge feature into an invented apron.
+        // The DEM is in the body's absolute vertical datum. Return local edge
+        // relief to the curved perimeter datum over one finite-footprint
+        // half-extent;
+        // the body-scale sagitta then determines the longer source-to-sphere
+        // collar. This keeps the handoff smooth without carrying edge features
+        // through the full globe collar.
         let border_datum = oracle.grid().border_datum();
         let sagitta_distance = (2.0 * radius_m * border_datum.abs()).sqrt();
         let blend_m = half_extent.max(sagitta_distance).max(0.0);
+        let relief_blend_m = half_extent.max(0.0);
         let region = Square {
             center: [0.0, 0.0],
             half: half_extent,
@@ -289,7 +294,7 @@ impl GlobeHandoff {
                 region,
                 datum_m: border_datum,
                 radius_m,
-                boundary_m: oracle.spacing() as f64,
+                relief_blend_m,
             }),
             MeanSphereSource { radius_m },
             region,
@@ -642,7 +647,13 @@ fn handoff_lod_refinement_regions(
 ) -> Vec<LodRefinementRegion> {
     let posting_m = square_boundary_posting_spacing(half_extent_m, boundary_grid_resolution);
     let collar_posting_m = posting_m.unwrap_or(0.0);
-    let outer_extent_m = half_extent_m + collar_posting_m;
+    let relief_blend_m = if boundary_grid_resolution > 0 {
+        half_extent_m.max(0.0)
+    } else {
+        0.0
+    };
+    let refinement_width_m = relief_blend_m + collar_posting_m;
+    let outer_extent_m = half_extent_m + refinement_width_m;
     let outer_corner_radius_m = std::f64::consts::SQRT_2 * outer_extent_m;
     let local_radius_m = radius_m * (outer_corner_radius_m / site_radius_m).atan();
     let local_tile_size_m = posting_m
@@ -657,7 +668,7 @@ fn handoff_lod_refinement_regions(
         north,
         site_radius_m,
         half_extent_m,
-        width_m: collar_posting_m,
+        width_m: refinement_width_m,
         max_tile_size_m: local_tile_size_m,
         max_lod: local_max_lod,
     }]
@@ -1700,7 +1711,7 @@ mod tests {
             region,
             datum_m: 100.0,
             radius_m: 1.0e9,
-            boundary_m: 10.0,
+            relief_blend_m: 10.0,
         };
 
         assert_eq!(source.height_at(10.0, 10.0), 200.0);
@@ -1727,7 +1738,7 @@ mod tests {
             },
             datum_m: 0.0,
             radius_m: 1.0e9,
-            boundary_m: 5.0,
+            relief_blend_m: 5.0,
         };
         let epsilon = 1.0e-5;
         let edge_slope =
@@ -1763,7 +1774,7 @@ mod tests {
             },
             datum_m,
             radius_m,
-            boundary_m: 5.0,
+            relief_blend_m: 5.0,
         };
         let expected = datum_m
             + MeanSphereSource {

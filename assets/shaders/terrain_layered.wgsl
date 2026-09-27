@@ -47,27 +47,27 @@
 //!@ui      micro_scale       8 80        "Regolith micro scale (/m)"
 //!@default micro_scale       35
 //!@ui      micro_bump        0 0.05      "Regolith micro-relief amplitude (m)"
-//!@default micro_bump        0.015
+//!@default micro_bump        0.0005
 //!@ui      micro_albedo      0 0.2       "Regolith micro-albedo strength"
-//!@default micro_albedo      0.045
+//!@default micro_albedo      0.002
 //!@ui      roughness         0 1         "Base regolith roughness"
 //!@default roughness         0.88
 //!@ui      macro_clump_scale 1 20        "Macro clump scale (/m)"
 //!@default macro_clump_scale 8
 //!@ui      macro_bump        0 0.3       "Macro bump strength"
-//!@default macro_bump        0.06
+//!@default macro_bump        0.002
 //!@ui      mid_scale         0.02 1      "Mid hummock scale (/m)"
 //!@default mid_scale         0.15
 //!@ui      mid_bump          0 1.5       "Mid hummock strength"
-//!@default mid_bump          0.6
+//!@default mid_bump          0.01
 //!@ui      fine_scale        50 400      "Fine grain scale (/m)"
 //!@default fine_scale        180
 //!@ui      fine_bump         0 0.1       "Fine grain strength"
-//!@default fine_bump         0.025
+//!@default fine_bump         0.0005
 //!@ui      rough_mix         0 1         "Roughness mix"
 //!@default rough_mix         0.35
 //!@ui      mottle            0 0.6       "Albedo mottle"
-//!@default mottle            0.22
+//!@default mottle            0.02
 // --- layer blend weights (0 = layer off → pure procedural) -----------------
 //!@ui      weight_albedo     0 1         "Albedo map weight"
 //!@default weight_albedo     0
@@ -229,7 +229,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var fine_h = 0.5;
     var micro_h = 0.5;
     if (micro_fade > 0.0) {
-        detail_n = bump_layer(detail_n, detail_p, micro_scale, 3, 0.5, 0.45, 0.57, micro_bump * micro_fade, &micro_h);
+        detail_n = bump_layer(detail_n, detail_p, micro_scale, 1, 0.5, 0.45, 0.57, micro_bump * micro_fade, &micro_h);
     }
     // A measured DEM already carries its macro/mid/fine relief in geometry.
     // Repeating those bands in the fragment normal creates a second, view- and
@@ -257,8 +257,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     if (procedural_albedo_weight > 0.0) {
         let dust_fade = aa_fade(0.008, pw);
         if (dust_fade > 0.0) {
-            let dust = surface_fbm(detail_p * 0.008, 3, 0.5);
-            albedo *= 1.0 + (dust - 0.5) * 0.18 * dust_fade * procedural_albedo_weight;
+            let dust = surface_fbm(detail_p * 0.008, 2, 0.5);
+            albedo *= 1.0 + (dust - 0.5) * 0.04 * dust_fade * procedural_albedo_weight;
         }
         albedo *= 1.0
             + (mix(0.5, mid_h, mid_fade) - 0.5)
@@ -275,6 +275,19 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var map_n = textureSample(normal_tex, normal_smp, uv);
     var map_s = textureSample(surface_tex, surface_smp, uv);
     let map_footprint = pw / mat.map_texel_size_m;
+    // Fade authored surface maps into the base regolith at the finite DEM
+    // boundary. The globe renderer owns the adjoining surface, so a hard map
+    // edge reads as a vertical slab even when the two geometries meet.
+    let edge_uv = min(
+        min(in.uv.x, 1.0 - in.uv.x),
+        min(in.uv.y, 1.0 - in.uv.y),
+    );
+    let edge_distance_m = max(edge_uv, 0.0) * 2.0 * mat.terrain_half_extent;
+    let edge_fade_width_m = max(
+        mat.terrain_half_extent * 0.08,
+        mat.map_texel_size_m * 16.0,
+    );
+    let map_edge_fade = smoothstep(0.0, edge_fade_width_m, edge_distance_m);
     let map_weights = terrain_map_weights(
         map_footprint,
         mat.derived_surface_on,
@@ -286,17 +299,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         mat.weight_ao,
         mat.weight_normal,
     );
-    let map_weight_normal = map_weights.x;
-    let map_weight_rough = map_weights.y;
-    let map_weight_ao = map_weights.z;
-    let map_weight_tone = map_weights.w;
+    let map_weight_normal = map_weights.x * map_edge_fade;
+    let map_weight_rough = map_weights.y * map_edge_fade;
+    let map_weight_ao = map_weights.z * map_edge_fade;
+    let map_weight_tone = map_weights.w * map_edge_fade;
     var map_ao = 1.0;
     // Albedo is already a linear material colour. The asset pipeline separates
     // source-image illumination from local surface detail before writing this
     // sRGB-authored texture; this shader must not relight the source image.
     if (authored_albedo_weight > 0.0) {
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
-        albedo = mix(albedo, a, authored_albedo_weight);
+        albedo = mix(albedo, a, authored_albedo_weight * map_edge_fade);
     }
     // (Mineral/classification is NOT applied here: it is an OVERLAY — data
     // visualization, not material — and composites after lighting below, so a
