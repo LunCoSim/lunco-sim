@@ -1189,7 +1189,7 @@ fn process_usd_avian_prims(
             path = %prim_path.path,
         )
         .entered();
-        group_tables.get_or_read(id, &reader).clone()
+        group_tables.get_or_read(id, &reader)
     };
     let _span = bevy::log::info_span!(
         "usd_avian_extract_prim",
@@ -1200,7 +1200,7 @@ fn process_usd_avian_prims(
         &reader,
         entity,
         &sdf_path,
-        &groups,
+        groups,
         &mut commands,
         faults.as_deref_mut(),
         holds.as_deref_mut(),

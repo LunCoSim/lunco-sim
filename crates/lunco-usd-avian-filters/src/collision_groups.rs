@@ -113,9 +113,8 @@ impl CollisionGroupTable {
         let mut order: Vec<String> = Vec::new();
 
         let mut paths: Vec<String> = reader
-            .prim_paths()
+            .prim_paths_matching(&[ptok::T_PHYSICS_COLLISION_GROUP], &[])
             .into_iter()
-            .filter(|p| reader.type_name(p).as_deref() == Some(ptok::T_PHYSICS_COLLISION_GROUP))
             .map(|p| p.to_string())
             .collect();
         // Deterministic bit assignment: the same stage must produce the same
@@ -303,15 +302,20 @@ impl Group {
     /// exclude takes a subtree back out, and the DEEPEST opinion wins — so a
     /// group can include a vehicle and exclude one part of it.
     fn contains(&self, path: &str) -> bool {
-        let depth = |prefix: &String| -> Option<usize> {
-            if path == prefix || path.starts_with(&format!("{prefix}/")) {
-                Some(prefix.len())
-            } else {
-                None
-            }
+        let depth = |prefix: &str| -> Option<usize> {
+            let suffix = path.strip_prefix(prefix)?;
+            (suffix.is_empty() || suffix.starts_with('/')).then_some(prefix.len())
         };
-        let inc = self.includes.iter().filter_map(depth).max();
-        let exc = self.excludes.iter().filter_map(depth).max();
+        let inc = self
+            .includes
+            .iter()
+            .filter_map(|prefix| depth(prefix))
+            .max();
+        let exc = self
+            .excludes
+            .iter()
+            .filter_map(|prefix| depth(prefix))
+            .max();
         match (inc, exc) {
             (Some(i), Some(e)) => i > e,
             (Some(_), None) => true,
