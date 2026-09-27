@@ -34,7 +34,10 @@
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use lunco_command_contracts::{Reject, SessionId};
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 /// Default WebTransport port for the listen-server / host and for any client
 /// address that omits an explicit port. Single source of truth for the `5888`
@@ -1285,8 +1288,10 @@ pub enum SessionInputStreamState {
 #[derive(Resource, Debug, Default)]
 pub struct SessionInputStream {
     state: SessionInputStreamState,
+    next_capture_id: u64,
+    capture_id: Option<u64>,
     record_limit: usize,
-    records: Vec<SessionInputRecord>,
+    records: Arc<Vec<SessionInputRecord>>,
     last_order: Option<(u64, u64, u64)>,
     failure: Option<String>,
 }
@@ -1325,6 +1330,12 @@ impl SessionInputStream {
                 crate::MAX_SESSION_INPUT_RECORDS
             ));
         }
+        let capture_id = self
+            .next_capture_id
+            .checked_add(1)
+            .ok_or_else(|| "session input capture identity exhausted".to_owned())?;
+        self.next_capture_id = capture_id;
+        self.capture_id = Some(capture_id);
         self.record_limit = record_limit;
         self.last_order = None;
         self.failure = None;
@@ -1342,9 +1353,22 @@ impl SessionInputStream {
         self.state
     }
 
+    /// Monotonic app-local identity of the active or latest capture.
+    pub fn capture_id(&self) -> Option<u64> {
+        self.capture_id
+    }
+
     /// Retained records in their authoritative admission order.
     pub fn records(&self) -> &[SessionInputRecord] {
-        &self.records
+        self.records.as_slice()
+    }
+
+    /// Share completed capture records with bounded background work.
+    ///
+    /// The returned `Arc` lets a worker encode or persist the capture without
+    /// copying the records on the simulation thread.
+    pub fn shared_records(&self) -> Arc<Vec<SessionInputRecord>> {
+        Arc::clone(&self.records)
     }
 
     /// The terminal recording error, when capture failed.
@@ -1398,7 +1422,7 @@ impl SessionInputStream {
         }
 
         self.last_order = Some(order);
-        self.records.push(record);
+        Arc::make_mut(&mut self.records).push(record);
         Ok(())
     }
 
@@ -1415,8 +1439,9 @@ impl SessionInputStream {
             return Err("active session input capture must be stopped before clearing".to_owned());
         }
         self.state = SessionInputStreamState::Idle;
+        self.capture_id = None;
         self.record_limit = 0;
-        self.records.clear();
+        self.records = Arc::new(Vec::new());
         self.last_order = None;
         self.failure = None;
         Ok(())
@@ -3317,6 +3342,8 @@ mod session_input_stream_tests {
     fn a_new_capture_requires_explicit_disposal_of_previous_records() {
         let mut stream = SessionInputStream::default();
         stream.begin(2).expect("capture starts");
+        let first_capture_id = stream.capture_id();
+        assert_eq!(first_capture_id, Some(1));
         stream
             .append(physical_record(10, 1))
             .expect("record retained");
@@ -3324,8 +3351,10 @@ mod session_input_stream_tests {
 
         assert!(stream.begin(2).is_err());
         stream.clear().expect("completed capture can be cleared");
+        assert_eq!(stream.capture_id(), None);
         stream.begin(2).expect("new capture starts after clear");
         assert_eq!(stream.state(), SessionInputStreamState::Recording);
+        assert_eq!(stream.capture_id(), Some(2));
     }
 
     #[test]

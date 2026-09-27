@@ -106,6 +106,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |
 | `CausalTrace` | `{"target": u64, "correlation_id": u64?}` | Explain one semantic edge through its authored binding, selected port owner, USD connection/admission state, current measured channels, classified producer origin, and optional fixed-tick admission stamp. |
 | `ReadSessionInputStream` | `{}` | Read the bounded in-memory capture of physical frames and admitted held/edge semantic inputs, including producer, admission, and typed payload records. |
+| `ReadSessionInputArchiveExport` | `{}` | Read the latest durable session-input archive export state, capture/export identities, filename, record and byte counts, and terminal failure. |
 
 `ListOpenDocuments`, `ListRecentFiles`, and `ListTwin` are owned by
 `lunco-workspace`, so they are available in windowed, headless, and offscreen
@@ -776,13 +777,17 @@ without rebuilding unchanged views.
 
 `StartSessionInputCapture`, `StopSessionInputCapture`, and
 `ClearSessionInputCapture` control the bounded session-input buffer.
-`ReadSessionInputStream` returns physical-frame and semantic-input records with
-producer class, target identity, committed scene generation, tick, and input
+`ReadSessionInputStream` returns the active/latest capture identity and
+physical-frame and semantic-input records with producer class, target identity,
+committed scene generation, tick, and input
 sequence. Semantic records also include the admitted command correlation id
 and stable caller `producer_id`; Rhai records retain their route and actor when
 available. API and direct typed callers use nonzero IDs that remain stable for
-their session. This capture is in memory only and does not provide durable
-replay.
+their session. Native application hosts can persist a completed capture through
+`ExportSessionInputCapture`. `ReadSessionInputArchiveExport` reports the latest
+capture and export IDs, bounded archive filename, record and byte counts, and
+write/read-back result. This archive has no baseline manifest or playback
+consumer, so it does not provide whole-session replay.
 
 **Adding a new typed command** (side-effect): follow the existing
 pattern in `skills/test-via-api/SKILL.md`.

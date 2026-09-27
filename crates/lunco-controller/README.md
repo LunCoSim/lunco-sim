@@ -127,11 +127,15 @@ target, scene generation, tick, and shared sequence. Admitted external
 typed payload, correlation id, producer class and stable producer id, and
 admission stamp.
 `StartSessionInputCapture`,
-`StopSessionInputCapture`, and `ClearSessionInputCapture` control the in-memory
-capture; `ReadSessionInputStream` exposes its typed state and records. The frame
-itself is still discarded after translation. API, direct typed, and actorless
+`StopSessionInputCapture`, and `ClearSessionInputCapture` control the bounded
+capture; `ReadSessionInputStream` exposes its typed state and records. A
+completed capture can be persisted on native hosts with
+`ExportSessionInputCapture`; its background status, including capture identity,
+is available through `ReadSessionInputArchiveExport`. One successful archive
+is allowed per capture; a failed export can be retried. The frame itself is
+still discarded after translation. API, direct typed, and actorless
 Rhai callers provide a stable nonzero `producer_id`; Twin Rhai uses its actor
-identity. The stream is not durably written or played back.
+identity. The archive has no baseline manifest or playback consumer.
 
 `SimulateIntent` remains the level-triggered held-control command. External
 commands targeting fixed-simulation state enter the bounded input queue for the

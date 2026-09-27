@@ -35,8 +35,10 @@
   clear capture, and `ReadSessionInputStream` returns the records through the typed API.
   Deterministic simulation-Rhai actions remain derived behavior, and local-embodiment input remains
   on the interaction cadence. Other typed command payloads remain outside capture. Runtime capture
-  is memory-backed and has a bounded, versioned binary record-archive codec, but no durable writer,
-  baseline manifest, or playback consumer. The per-vessel `InputFrame` log
+  is memory-backed and has a bounded, versioned binary record-archive codec. Native hosts can export
+  one verified archive per completed capture through bounded background admission and the storage
+  I/O pool; failed exports can be retried. There is no baseline manifest or playback consumer. The
+  per-vessel `InputFrame` log
   retains latched `SetPorts` setpoints for opt-in owned-body prediction rollback; it is not a
   persistent whole-session log. Runtime actions such as `AcquireControl`, `DriveRover`, external
   `SetPorts`, terrain operations, and time control therefore cannot be reconstructed as a session

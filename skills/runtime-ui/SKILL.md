@@ -274,13 +274,18 @@ Manifest reconciliation prunes unknown surface ids, and `TwinClosed` clears the
 in-memory layout scope.
 
 `interactive: true` enables input ownership for visible HUI controls that carry
-an authored `on_press` action. The runtime feeds each control's computed Bevy UI
-rectangle into the existing `ScenePickGate`; it never registers the surface root
-or a full-window `viewport` rectangle. This keeps HUDs transparent to camera
-dragging and scene clicks outside their explicit controls. Do not add a parallel
-pointer/interception system. Do not add per-frame position correction; placement
-is applied after HUI/Flair style work with change detection, and the startup
-resolver ignores a zero-sized target in favor of the live primary window
+an authored `on_press` action. The runtime adds `Pickable` to those visible
+controls and feeds each computed Bevy UI rectangle into the existing
+`ScenePickGate`; it never registers the surface root or a full-window
+`viewport` rectangle. The active presentation camera is enabled for UI picking
+with Bevy's marker filter, so decorative retained nodes without `Pickable` pass
+scene hits through. Visible HUI nodes in a `draggable` window surface,
+including its root, receive pick markers so pointer drags can bubble to that
+surface's owner. This keeps HUDs transparent to camera dragging and scene clicks
+outside their explicit controls. Do not add a parallel pointer/interception
+system. Do not add per-frame position correction; placement is applied after
+HUI/Flair style work with change detection, and the startup resolver ignores a
+zero-sized target in favor of the live primary window
 dimensions.
 
 ### 4. Map actions through the existing command path
