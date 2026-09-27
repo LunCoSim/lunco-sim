@@ -582,6 +582,15 @@ empty ready analysis without initializing the embedded standard library;
 non-empty Twin source sets resolve against that library on the async analysis
 worker.
 
+Saving an open document that belongs to a mounted Twin's indexed SysML source
+set invalidates that Twin's analysis snapshot immediately. The runtime matches
+the document's canonical file identity to the prepared source set, reloads the
+same `twin://` asset, and waits for that asset's change event before capturing
+source text for the next async analysis. `AnalyzeSysml` therefore reports its
+preparation state instead of serving the pre-save snapshot during this refresh.
+Asset load or analysis failures remain explicit terminal states. Unsaved edits
+do not alter the Twin snapshot; this lifecycle is tied to a successful save.
+
 ### Verification ownership
 
 - State requirement intent, units, limits, and traceability in standard SysML.

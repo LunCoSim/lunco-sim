@@ -5,14 +5,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use bevy::asset::{AssetEvent, AssetLoadFailedEvent, AssetServer, Assets, Handle};
+use bevy::asset::{AssetEvent, AssetId, AssetLoadFailedEvent, AssetServer, Assets, Handle};
 use bevy::prelude::*;
 use lunco_assets_core::{TwinRoots, twin_uri};
 use lunco_core_runtime::{AsyncWorkAdmission, AsyncWorkKey, AsyncWorkKind, AsyncWorkPriority};
+use lunco_doc_bevy::{DocumentRegistry, DocumentSaved};
 use lunco_sysml_ast::SysmlAnalysis;
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 
-use crate::SysmlSource;
+use crate::{SysmlDocument, SysmlSource};
 
 /// Owner namespace used by scenarios that require a mounted Twin's SysML
 /// analysis before their first initialization/start hook.
@@ -63,6 +64,10 @@ struct PendingAnalysis {
     name: String,
     operation: u64,
     sources: Vec<SourceHandle>,
+    /// Assets which must emit a reload event before this snapshot may read
+    /// their cached contents. This prevents a saved file from being analyzed
+    /// against its pre-save `Assets<SysmlSource>` value.
+    awaiting_asset_refresh: HashSet<AssetId<SysmlSource>>,
     submitted: bool,
     capacity_revision: Option<u64>,
 }
@@ -199,7 +204,8 @@ pub(crate) fn register(app: &mut App) {
     app.init_resource::<TwinSysmlAnalyses>()
         .init_resource::<lunco_core_runtime::SimulationDependencyStates>()
         .add_systems(Update, prepare_ready_sysml_analyses)
-        .add_observer(clear_closed_twin_analysis);
+        .add_observer(clear_closed_twin_analysis)
+        .add_observer(refresh_saved_twin_sysml_source);
     app.world_mut()
         .resource_mut::<lunco_core_runtime::SimulationDependencyStates>()
         .register_owner(TWIN_ANALYSIS_DEPENDENCY_OWNER)
@@ -342,6 +348,7 @@ fn prepare_twin_sysml_analysis(
             name: request.name.clone(),
             operation,
             sources,
+            awaiting_asset_refresh: HashSet::new(),
             submitted: false,
             capacity_revision: None,
         },
@@ -364,6 +371,162 @@ fn prepare_twin_sysml_analysis(
 }
 
 lunco_core::register_commands!(prepare_twin_sysml_analysis);
+
+fn queue_twin_sysml_analysis(
+    raw_id: u64,
+    awaiting_asset_refresh: HashSet<AssetId<SysmlSource>>,
+    analyses: &mut TwinSysmlAnalyses,
+    dependency_states: &mut lunco_core_runtime::SimulationDependencyStates,
+    admission: &mut AsyncWorkAdmission,
+) {
+    let Some((twin_id, root, name, sources)) = analyses.source_sets.get(&raw_id).cloned() else {
+        return;
+    };
+    let operation = analyses.next_operation;
+    let Some(next_operation) = operation.checked_add(1) else {
+        if let Some(previous) = analyses.pending.remove(&raw_id) {
+            retire_pending_analysis(previous, admission);
+        }
+        let state =
+            TwinSysmlAnalysisState::Failed(vec!["SysML analysis operation id exhausted".into()]);
+        analyses.states.insert(name.clone(), state.clone());
+        if let Ok(key) = twin_analysis_dependency_key(&name)
+            && let Err(error) =
+                dependency_states.publish(key, analysis_dependency_status(&state, operation))
+        {
+            bevy::log::error!("[sysml-analysis] {error}");
+        }
+        return;
+    };
+    analyses.next_operation = next_operation;
+    if let Some(previous) = analyses.pending.remove(&raw_id) {
+        retire_pending_analysis(previous, admission);
+    }
+    analyses.pending.insert(
+        raw_id,
+        PendingAnalysis {
+            twin_id,
+            root,
+            name: name.clone(),
+            operation,
+            sources,
+            awaiting_asset_refresh,
+            submitted: false,
+            capacity_revision: None,
+        },
+    );
+    analyses
+        .states
+        .insert(name.clone(), TwinSysmlAnalysisState::Pending);
+    if let Ok(key) = twin_analysis_dependency_key(&name)
+        && let Err(error) = dependency_states.publish(
+            key,
+            lunco_core_runtime::SimulationDependencyStatus::Pending {
+                operation_id: operation,
+            },
+        )
+    {
+        bevy::log::error!("[sysml-analysis] {error}");
+    }
+}
+
+fn fail_pending_twin_sysml_analysis(
+    raw_id: u64,
+    detail: String,
+    analyses: &mut TwinSysmlAnalyses,
+    dependency_states: &mut lunco_core_runtime::SimulationDependencyStates,
+    admission: &mut AsyncWorkAdmission,
+) {
+    let Some(pending) = analyses.pending.remove(&raw_id) else {
+        return;
+    };
+    let name = pending.name.clone();
+    let operation = pending.operation;
+    retire_pending_analysis(pending, admission);
+    let state = TwinSysmlAnalysisState::Failed(vec![detail]);
+    if let Ok(key) = twin_analysis_dependency_key(&name)
+        && let Err(error) =
+            dependency_states.publish(key, analysis_dependency_status(&state, operation))
+    {
+        bevy::log::error!("[sysml-analysis] {error}");
+    }
+    analyses.states.insert(name, state);
+}
+
+fn saved_path_matches_twin_source(root: &Path, relative_path: &str, saved_path: &Path) -> bool {
+    lunco_doc::same_file(&root.join(relative_path), saved_path)
+}
+
+fn refresh_saved_twin_sysml_source(
+    trigger: On<DocumentSaved>,
+    registry: Res<DocumentRegistry<SysmlDocument>>,
+    asset_server: Option<Res<AssetServer>>,
+    mut analyses: ResMut<TwinSysmlAnalyses>,
+    mut dependency_states: ResMut<lunco_core_runtime::SimulationDependencyStates>,
+    mut admission: ResMut<AsyncWorkAdmission>,
+) {
+    let Some(saved_path) = registry
+        .host(trigger.event().doc)
+        .and_then(|host| host.document().origin().canonical_path())
+    else {
+        return;
+    };
+
+    let refreshes: Vec<_> = analyses
+        .source_sets
+        .iter()
+        .filter_map(|(raw_id, (_, root, name, sources))| {
+            sources
+                .iter()
+                .find(|source| {
+                    saved_path_matches_twin_source(root, &source.relative_path, saved_path)
+                })
+                .map(|source| {
+                    (
+                        *raw_id,
+                        name.clone(),
+                        source.relative_path.clone(),
+                        source.handle.id(),
+                    )
+                })
+        })
+        .collect();
+
+    for (raw_id, name, relative_path, asset_id) in refreshes {
+        queue_twin_sysml_analysis(
+            raw_id,
+            HashSet::from([asset_id]),
+            &mut analyses,
+            &mut dependency_states,
+            &mut admission,
+        );
+        if let Some(asset_server) = asset_server.as_deref() {
+            asset_server.reload(twin_uri(&name, &relative_path));
+        } else {
+            let message = format!(
+                "Twin `{name}` saved SysML source `{relative_path}` but the asset server is unavailable for refresh"
+            );
+            bevy::log::error!("[sysml-analysis] {message}");
+            fail_pending_twin_sysml_analysis(
+                raw_id,
+                message,
+                &mut analyses,
+                &mut dependency_states,
+                &mut admission,
+            );
+        }
+    }
+}
+
+fn remaining_asset_refreshes(
+    previous: Option<&HashSet<AssetId<SysmlSource>>>,
+    changed_assets: &HashSet<AssetId<SysmlSource>>,
+    removed_assets: &HashSet<AssetId<SysmlSource>>,
+) -> HashSet<AssetId<SysmlSource>> {
+    let mut awaiting = previous.cloned().unwrap_or_default();
+    awaiting.retain(|asset| !changed_assets.contains(asset) && !removed_assets.contains(asset));
+    awaiting
+}
 
 fn prepare_ready_sysml_analyses(
     assets: Option<Res<Assets<SysmlSource>>>,
@@ -406,57 +569,21 @@ fn prepare_ready_sysml_analyses(
         .collect();
     changed_twins.sort_unstable();
     for raw_id in changed_twins {
-        let Some((twin_id, root, name, sources)) = analyses.source_sets.get(&raw_id).cloned()
-        else {
-            continue;
-        };
-        let operation = analyses.next_operation;
-        let Some(next_operation) = operation.checked_add(1) else {
-            if let Some(previous) = analyses.pending.remove(&raw_id) {
-                retire_pending_analysis(previous, &mut admission);
-            }
-            let state = TwinSysmlAnalysisState::Failed(vec![
-                "SysML analysis operation id exhausted".into(),
-            ]);
-            analyses.states.insert(name.clone(), state.clone());
-            if let Ok(key) = twin_analysis_dependency_key(&name) {
-                if let Err(error) =
-                    dependency_states.publish(key, analysis_dependency_status(&state, operation))
-                {
-                    bevy::log::error!("[sysml-analysis] {error}");
-                }
-            }
-            continue;
-        };
-        analyses.next_operation = next_operation;
-        if let Some(previous) = analyses.pending.remove(&raw_id) {
-            retire_pending_analysis(previous, &mut admission);
-        }
-        analyses.pending.insert(
-            raw_id,
-            PendingAnalysis {
-                twin_id,
-                root,
-                name: name.clone(),
-                operation,
-                sources,
-                submitted: false,
-                capacity_revision: None,
-            },
+        let awaiting_asset_refresh = remaining_asset_refreshes(
+            analyses
+                .pending
+                .get(&raw_id)
+                .map(|pending| &pending.awaiting_asset_refresh),
+            &changed_assets,
+            &removed_assets,
         );
-        analyses
-            .states
-            .insert(name.clone(), TwinSysmlAnalysisState::Pending);
-        if let Ok(key) = twin_analysis_dependency_key(&name) {
-            if let Err(error) = dependency_states.publish(
-                key,
-                lunco_core_runtime::SimulationDependencyStatus::Pending {
-                    operation_id: operation,
-                },
-            ) {
-                bevy::log::error!("[sysml-analysis] {error}");
-            }
-        }
+        queue_twin_sysml_analysis(
+            raw_id,
+            awaiting_asset_refresh,
+            &mut analyses,
+            &mut dependency_states,
+            &mut admission,
+        );
     }
 
     let completion_sender = Arc::clone(&analyses.completions);
@@ -486,6 +613,9 @@ fn prepare_ready_sysml_analyses(
                 TwinSysmlAnalysisState::Failed(vec![message]),
             ));
             terminal_pending_ids.push(raw_id);
+            continue;
+        }
+        if !pending.awaiting_asset_refresh.is_empty() {
             continue;
         }
         if pending
@@ -730,6 +860,45 @@ mod tests {
     }
 
     #[test]
+    fn saved_source_match_is_scoped_to_the_prepared_twin_source_set() {
+        let root = Path::new("/fixture/twin");
+
+        assert!(saved_path_matches_twin_source(
+            root,
+            "requirements/lander.sysml",
+            Path::new("/fixture/twin/requirements/lander.sysml"),
+        ));
+        assert!(!saved_path_matches_twin_source(
+            root,
+            "requirements/lander.sysml",
+            Path::new("/fixture/other/requirements/lander.sysml"),
+        ));
+    }
+
+    #[test]
+    fn a_pending_twin_analysis_waits_for_each_saved_source_asset_reload() {
+        let first = AssetId::<SysmlSource>::Uuid {
+            uuid: bevy::asset::uuid::Uuid::from_u128(1),
+        };
+        let second = AssetId::<SysmlSource>::Uuid {
+            uuid: bevy::asset::uuid::Uuid::from_u128(2),
+        };
+        let awaiting = HashSet::from([first, second]);
+        let none_changed = HashSet::new();
+        let first_reloaded = HashSet::from([first]);
+
+        assert_eq!(
+            remaining_asset_refreshes(Some(&awaiting), &none_changed, &none_changed),
+            awaiting,
+        );
+        assert_eq!(
+            remaining_asset_refreshes(Some(&awaiting), &first_reloaded, &none_changed),
+            HashSet::from([second]),
+        );
+        assert!(remaining_asset_refreshes(Some(&awaiting), &none_changed, &awaiting,).is_empty());
+    }
+
+    #[test]
     fn worker_result_is_accepted_only_for_its_exact_twin_operation() {
         let twin_id = lunco_workspace::TwinId::new(7);
         let root = std::path::PathBuf::from("/fixture/twin");
@@ -739,6 +908,7 @@ mod tests {
             name: "analysis-fixture".into(),
             operation: 12,
             sources: Vec::new(),
+            awaiting_asset_refresh: HashSet::new(),
             submitted: true,
             capacity_revision: None,
         };
@@ -807,6 +977,7 @@ mod tests {
             name: "analysis-fixture".into(),
             operation: 12,
             sources: Vec::new(),
+            awaiting_asset_refresh: HashSet::new(),
             submitted: false,
             capacity_revision: None,
         };

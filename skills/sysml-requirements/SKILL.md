@@ -493,6 +493,11 @@ by the authored Twin lifecycle policy. Non-empty source sets resolve against
 the embedded standard library on the async analysis worker; an empty optional
 source set commits an empty ready snapshot without initializing that library.
 Until the snapshot is ready, the query returns an explicit preparation result.
+Saving an indexed SysML document invalidates the mounted Twin snapshot and
+reloads that exact `twin://` source before analysis runs again. After a save,
+retry the query until its preparation result becomes ready, then use the
+returned source revision for any paged join. Unsaved editor changes are not
+part of the Twin-wide snapshot.
 Use `AnalyzeSysml` for preflight, authoring, or explicit verification work; do
 not call it from a high-rate `on_tick` hook. Revision-stamped async analysis
 and admission are part of the cross-domain runtime contract in
