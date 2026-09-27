@@ -6,27 +6,19 @@
 **D3/D9 physical-input acceptance commit:** `b1747728e`
 **D9 direct-command owner test commit:** `211d7d495`
 **D9 session-record validation commit:** `d4937baff`
-**Latest local main merge commit:** `41f1270e733e9900d54a96d5e1fb928f1c13f1db`
+**Latest local main integration before this continuation:** `18a826e2183ead16083ce6d0f7794c82f7980759`
 
-The D9 session-input boundary at `4acf09915` had previously been integrated
-across the local worktrees. The 2026-09-27 D3/D9 acceptance commit
-`b1747728e` was then merged into local `main` as `da7b244d`; that merge also
-retains the newer `main` commits through `c7807d1ca`. The `tutorials`, `usd`,
-and `optimization` worktrees have now been fast-forwarded with their unrelated
-edits preserved. The tutorial celestial LOD changes stayed in place; the USD
-status-bar edit and optimization source, documentation, and profiling edits
-were reapplied successfully after fast-forwarding. New task-scoped stashes hold
-recovery copies, and the previous stashes remain intact. The five local heads
-share the tip containing this handover update. The D9 direct-command owner test
-commit `211d7d495` was merged into local `main` as
-`7c65820584b846df914cc88f4204bf6340e085bc`; its first parent was `a0dde5fcb`,
-the then-current `origin/main`. The D9 session-record validation commit
-`d4937baff` was merged as `41f1270e733e9900d54a96d5e1fb928f1c13f1db`, and
-`main`, `codex/lunar-soil`, `tutorials`, `usd`, and `optimization` now share
-that tip. Tutorial and optimization edits were stashed to advance their
-branches and reapplied; both worktrees pass `git diff --check`, and the backup
-stashes remain. No push was made. The evidence below stays tied to the
-individual builds and source revisions named in each section.
+The D9 session-input boundary at `4acf09915` and its 2026-09-27 acceptance,
+direct-command, and record-validation commits are integrated on local `main`.
+The D9 record-validation commit `d4937baff` was merged as
+`41f1270e733e9900d54a96d5e1fb928f1c13f1db`; a documentation-only fast-forward
+then advanced `main`, `codex/lunar-soil`, `tutorials`, `usd`, and
+`optimization` to `18a826e2183ead16083ce6d0f7794c82f7980759`. The unrelated
+tutorial celestial LOD changes and optimization source, documentation, and
+profiling edits remain in their worktrees; task-scoped recovery stashes remain
+intact. The USD worktree was clean at that shared tip. No push was made. The
+evidence below stays tied to the individual builds and source revisions named
+in each section.
 
 ## Active user objective
 
@@ -397,6 +389,24 @@ typed queues before that is safe.
   and the command-journal contract now describe the current in-memory typed
   payloads and validation boundary; durable input persistence and playback
   remain unimplemented.
+
+### D9 bounded session-input archive codec (2026-09-27)
+
+- Added `SessionInputCaptureArchive` to `lunco-core-session`. Its versioned
+  binary framing accepts at most 65,536 validated, strictly ordered records
+  and 16 MiB; decoding checks the header, exact payload consumption, record
+  count, semantic payloads, and producer pairing. The wire projection uses
+  ordinary typed enum variants so the existing internally tagged Serde enums
+  do not leak JSON or fail the binary codec. It preserves exact `f64` spawn
+  poses and all current producer and payload variants.
+- `cargo test -p lunco-core-session -j 4` passed 49 unit tests and 2 authz
+  integration tests. Archive tests cover variant round-trip, invalid decoded
+  records, bad magic/version/count/length, trailing payload bytes, and the byte
+  limit. `SessionInputStream::begin` rejects configured limits above the
+  archive's record cap.
+- The archive is an encode/decode capability only. Runtime capture remains
+  memory-backed; no storage writer, baseline manifest, or playback consumer is
+  installed, so whole-session replay remains open.
 
 ## Runtime and repository constraints
 

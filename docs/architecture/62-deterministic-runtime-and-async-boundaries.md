@@ -875,8 +875,10 @@ and producer/payload pairing before retention, and stops visibly on invalid
 input, overflow, or invalid order. It is observable through
 `ReadSessionInputStream`. Physical frames are admitted at their consuming
 controller boundary and cannot be deferred by the external queue. Capture
-remains in memory only; other typed commands, durable writing, and playback
-remain open.
+remains memory-backed at runtime. `SessionInputCaptureArchive` encodes its
+records in a versioned binary format bounded to 65,536 records and 16 MiB; no
+durable storage writer, baseline manifest, or playback consumer is installed.
+Other typed commands and whole-session replay remain open.
 
 Floating-point addition is order dependent. Every reduction that contributes
 to authoritative state needs a stable input order. Parallel physics is

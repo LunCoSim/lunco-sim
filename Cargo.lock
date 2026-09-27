@@ -7580,6 +7580,7 @@ name = "lunco-core-session"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "bincode 2.0.1",
  "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",

@@ -1301,7 +1301,7 @@ pub struct SessionInputStreamSettings {
 impl Default for SessionInputStreamSettings {
     fn default() -> Self {
         Self {
-            max_records_per_capture: 65_536,
+            max_records_per_capture: crate::MAX_SESSION_INPUT_RECORDS,
         }
     }
 }
@@ -1318,6 +1318,12 @@ impl SessionInputStream {
         }
         if record_limit == 0 {
             return Err("session input capture record limit must be positive".to_owned());
+        }
+        if record_limit > crate::MAX_SESSION_INPUT_RECORDS {
+            return Err(format!(
+                "session input capture record limit exceeds its {} record maximum",
+                crate::MAX_SESSION_INPUT_RECORDS
+            ));
         }
         self.record_limit = record_limit;
         self.last_order = None;
@@ -2931,6 +2937,8 @@ mod session_input_stream_tests {
     };
     use lunco_command_contracts::SessionId;
 
+    use crate::MAX_SESSION_INPUT_RECORDS;
+
     fn physical_record(tick: u64, sequence: u64) -> SessionInputRecord {
         SessionInputRecord {
             producer: super::SessionInputProducer::PhysicalController {
@@ -2944,6 +2952,18 @@ mod session_input_stream_tests {
                 intent_ids: vec!["forward".to_owned()],
             },
         }
+    }
+
+    #[test]
+    fn capture_rejects_a_record_limit_above_the_archive_bound() {
+        let mut stream = SessionInputStream::default();
+        let error = stream
+            .begin(MAX_SESSION_INPUT_RECORDS + 1)
+            .expect_err("capture limit must fit the versioned archive contract");
+
+        assert!(error.contains("record maximum"));
+        assert_eq!(stream.state(), SessionInputStreamState::Idle);
+        assert!(stream.records().is_empty());
     }
 
     #[test]

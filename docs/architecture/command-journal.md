@@ -15,7 +15,8 @@ actions into authored document operations: document-backed `SpawnEntity` uses
 replication.
 `AcquireControl`, `SetPorts`, terrain spawning, time control, and other
 transient runtime actions still lack complete session capture, so deterministic
-session replay is not built.
+session replay is not built. Captured records can be encoded as a bounded,
+versioned binary archive, but there is no durable writer or playback consumer.
 
 The Twin journal owns authored document mutations. A separate session replay
 input stream must own transient external inputs such as per-tick controls and
@@ -159,9 +160,12 @@ the producer, scene-root and active-frame identities, catalog entry, exact
 admission and network replication. The canonical `WorldGrid` has deterministic
 content provenance for stable active-frame identity. Document-backed spawning
 continues through `ApplyUsdOps` and the Twin journal, without a duplicate
-session-input record. The ingress queue and `CausalTrace` are still separate
-from durable replay storage. Other command payloads, durable writing, and
-playback remain open.
+session-input record. `SessionInputCaptureArchive` checks the record contract
+and encodes a versioned archive bounded to 65,536 records and 16 MiB. Runtime
+capture remains memory-backed; no storage writer, baseline manifest, or
+playback consumer is installed. The ingress queue and `CausalTrace` remain
+separate from durable replay storage. Other command payloads and whole-session
+replay remain open.
 
 ## Replay implementation boundary
 
