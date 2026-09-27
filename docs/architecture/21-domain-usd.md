@@ -564,7 +564,11 @@ non-transform info changes to indexed topology paths. Transform-only info
 changes advance the cached generation without rebuilding joint topology;
 structural resyncs and mixed edits still refresh it. Live USD invalidation
 requeues the affected prim, while `SceneTeardown` retires the scene-owned work
-and cache.
+and cache. A completed prepared-plan task is discarded when the live topology
+index already proves the same canonical generation current; a late worker
+result cannot cause a second whole-stage refresh. Tracy's
+`usd_sim_prepared_topology_cache` span records whether this owner-level check
+found that current-generation proof.
 
 Authored controls and generic executable programs are resolved by the separate
 `UsdAuthoredRuntimePlugin` after visual projection. It observes

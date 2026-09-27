@@ -410,6 +410,25 @@ fn poll_prepared_joint_topology(
         }
 
         let (reader, generation) = canonical.reader_for(stage, stage_asset);
+        let cache_is_current = topology_index.get(stage).is_some_and(|current| {
+            !current.dirty
+                && current.simulation_candidates_ready
+                && current.canonical_generation == Some(generation)
+        });
+        let cache_span = bevy::log::info_span!(
+            "usd_sim_prepared_topology_cache",
+            generation,
+            cache_current = cache_is_current
+        )
+        .entered();
+        if cache_is_current {
+            // A live read or change observer may have already advanced the
+            // authoritative cache while this prepared-plan task was running.
+            // Its completion must not trigger a duplicate whole-stage scan.
+            changes.0.remove(&stage);
+            continue;
+        }
+        drop(cache_span);
         let change_history = changes.0.remove(&stage);
         let relevant_resyncs = change_history.as_ref().map_or(0, |history| {
             history

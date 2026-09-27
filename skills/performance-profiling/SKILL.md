@@ -150,7 +150,12 @@ carry a relevant schema, and info changes on indexed source prims, require
 refresh; unrelated paths only advance the cached generation. Transform-only
 info changes on topology source paths also advance the generation without a
 topology rebuild; structural resyncs or mixed edits still refresh. Check
-intervening changes before accepting prepared worker output.
+intervening changes before accepting prepared worker output. If another live
+read or the change observer has already made the cache current at that exact
+generation, discard the late prepared result instead of scanning the stage
+again. `usd_sim_prepared_topology_cache` records whether this check found a
+current-generation cache; pair it with `usd_sim_joint_topology_scan` to confirm
+that a repeated reconciliation did not scan the stage.
 
 For whole-index projectors such as USD telemetry, use one initial bootstrap,
 then coalesce relevant insert/remove observers into an invalidation flag. Keep
