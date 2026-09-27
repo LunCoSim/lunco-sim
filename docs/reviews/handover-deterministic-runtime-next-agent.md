@@ -6,19 +6,26 @@
 **D3/D9 physical-input acceptance commit:** `b1747728e`
 **D9 direct-command owner test commit:** `211d7d495`
 **D9 session-record validation commit:** `d4937baff`
-**Latest local main integration before this continuation:** `18a826e2183ead16083ce6d0f7794c82f7980759`
+**D9 archive feature commit:** `935a527322bc9ab8c753920aa1e31ee7cf1059ca`
+**D9 archive merge commit:** `61737e56e645ab58f3b033c5e2968c0bc119dc75`
+**Latest local `main` and `origin/main`:** `6b8258edf`
 
 The D9 session-input boundary at `4acf09915` and its 2026-09-27 acceptance,
-direct-command, and record-validation commits are integrated on local `main`.
-The D9 record-validation commit `d4937baff` was merged as
-`41f1270e733e9900d54a96d5e1fb928f1c13f1db`; a documentation-only fast-forward
-then advanced `main`, `codex/lunar-soil`, `tutorials`, `usd`, and
-`optimization` to `18a826e2183ead16083ce6d0f7794c82f7980759`. The unrelated
-tutorial celestial LOD changes and optimization source, documentation, and
-profiling edits remain in their worktrees; task-scoped recovery stashes remain
-intact. The USD worktree was clean at that shared tip. No push was made. The
-evidence below stays tied to the individual builds and source revisions named
-in each section.
+direct-command, record-validation, and archive-codec commits are integrated on
+local `main`. Archive feature commit `935a52732` was merged with first-parent
+history preserved as `61737e56e` (base `18a826e21`). Local `main` later gained
+the optimization and terrain-streaming integrations (`14b88558f`,
+`2828983f1`, `e00664d88`, `eaa9baded`, and `9768cc1d1`), then advanced to
+`6b8258edf` for the generated `.tracy` ignore rule. `main`,
+`codex/lunar-soil`, `tutorials`, `usd`, and `optimization` now share
+`6b8258edf`. The tutorial celestial LOD edits and optimization source and
+documentation edits remain in their worktrees; the tutorials backup stash
+`d22f8f25d` and earlier recovery stashes remain intact. The USD worktree is
+clean. A Tracy build was active in optimization at the last check and was not
+interrupted. `origin/main` matches local `main`; its reflog shows an
+`update by push` during this continuation, but this agent did not run a push.
+The evidence below stays tied to the individual builds and source revisions
+named in each section.
 
 ## Active user objective
 
