@@ -6,9 +6,13 @@ use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use lunco_core_runtime::{AsyncWorkAdmission, AsyncWorkKey, AsyncWorkKind, AsyncWorkPriority};
-use lunco_doc::{Document, DocumentId, DocumentOrigin};
+use lunco_doc::{
+    Diagnostic, DiagnosticSourceReport, DiagnosticSourceState, Document, DocumentId,
+    DocumentOrigin, offset_to_line_col,
+};
 use lunco_doc_bevy::{
-    DocumentChanged, DocumentClosed, DocumentOpened, DocumentRegistry, DocumentSaved,
+    DocumentChanged, DocumentClosed, DocumentDiagnostics, DocumentOpened, DocumentRegistry,
+    DocumentSaved,
 };
 
 use crate::{SysmlDocument, document::build_analysis};
@@ -209,13 +213,11 @@ fn on_sysml_document_opened(
     registry: Res<DocumentRegistry<SysmlDocument>>,
     mut analyses: ResMut<SysmlDocumentAnalyses>,
     mut admission: ResMut<AsyncWorkAdmission>,
+    mut diagnostics: ResMut<DocumentDiagnostics>,
 ) {
-    request_document_analysis(
-        trigger.event().doc,
-        &registry,
-        &mut analyses,
-        &mut admission,
-    );
+    let doc_id = trigger.event().doc;
+    request_document_analysis(doc_id, &registry, &mut analyses, &mut admission);
+    publish_current_analysis(doc_id, &registry, &analyses, &mut diagnostics);
 }
 
 fn on_sysml_document_changed(
@@ -223,13 +225,11 @@ fn on_sysml_document_changed(
     registry: Res<DocumentRegistry<SysmlDocument>>,
     mut analyses: ResMut<SysmlDocumentAnalyses>,
     mut admission: ResMut<AsyncWorkAdmission>,
+    mut diagnostics: ResMut<DocumentDiagnostics>,
 ) {
-    request_document_analysis(
-        trigger.event().doc,
-        &registry,
-        &mut analyses,
-        &mut admission,
-    );
+    let doc_id = trigger.event().doc;
+    request_document_analysis(doc_id, &registry, &mut analyses, &mut admission);
+    publish_current_analysis(doc_id, &registry, &analyses, &mut diagnostics);
 }
 
 fn on_sysml_document_saved(
@@ -237,31 +237,110 @@ fn on_sysml_document_saved(
     registry: Res<DocumentRegistry<SysmlDocument>>,
     mut analyses: ResMut<SysmlDocumentAnalyses>,
     mut admission: ResMut<AsyncWorkAdmission>,
+    mut diagnostics: ResMut<DocumentDiagnostics>,
 ) {
-    request_document_analysis(
-        trigger.event().doc,
-        &registry,
-        &mut analyses,
-        &mut admission,
-    );
+    let doc_id = trigger.event().doc;
+    request_document_analysis(doc_id, &registry, &mut analyses, &mut admission);
+    publish_current_analysis(doc_id, &registry, &analyses, &mut diagnostics);
 }
 
 fn on_sysml_document_closed(
     trigger: On<DocumentClosed>,
     mut analyses: ResMut<SysmlDocumentAnalyses>,
     mut admission: ResMut<AsyncWorkAdmission>,
+    mut diagnostics: ResMut<DocumentDiagnostics>,
 ) {
     let doc_id = trigger.event().doc;
     analyses.states.remove(&doc_id);
+    diagnostics.clear_source(doc_id, "sysml.analysis");
     if let Some(pending) = analyses.pending.remove(&doc_id) {
         retire_pending(pending, &mut admission);
     }
+}
+
+fn publish_current_analysis(
+    doc_id: DocumentId,
+    registry: &DocumentRegistry<SysmlDocument>,
+    analyses: &SysmlDocumentAnalyses,
+    diagnostics: &mut DocumentDiagnostics,
+) {
+    let Some(host) = registry.host(doc_id) else {
+        return;
+    };
+    let document = host.document();
+    let generation = document.generation();
+    let origin_uri = document.origin().session_uri();
+    let state = analyses.state_for(doc_id, generation, &origin_uri);
+    let (source_state, revision, findings) = match state {
+        SysmlDocumentAnalysisState::Pending { generation, .. } => {
+            (DiagnosticSourceState::Pending, Some(generation), Vec::new())
+        }
+        SysmlDocumentAnalysisState::Ready {
+            generation,
+            analysis,
+            ..
+        } => {
+            let findings = analysis
+                .diagnostics()
+                .iter()
+                .map(|finding| {
+                    let source = analysis
+                        .files()
+                        .iter()
+                        .find(|file| file.name == finding.file);
+                    let (line, column) = source.map_or((None, None), |file| {
+                        let (line, column) = offset_to_line_col(&file.text, finding.start as usize);
+                        (Some(line), Some(column))
+                    });
+                    let (end_line, end_column) = source.map_or((None, None), |file| {
+                        let (line, column) = offset_to_line_col(&file.text, finding.end as usize);
+                        (Some(line), Some(column))
+                    });
+                    let mut diagnostic = Diagnostic::error(finding.message.clone(), line, column)
+                        .with_domain("sysml")
+                        .with_source("sysml-analysis")
+                        .with_code(match finding.kind {
+                            lunco_sysml_ast::SysmlDiagnosticKind::Syntax => "syntax",
+                            lunco_sysml_ast::SysmlDiagnosticKind::Name => "unresolved-name",
+                            lunco_sysml_ast::SysmlDiagnosticKind::Collision => "name-collision",
+                        })
+                        .with_uri(finding.file.clone())
+                        .with_offsets(u64::from(finding.start), u64::from(finding.end));
+                    if let (Some(end_line), Some(end_column)) = (end_line, end_column) {
+                        diagnostic = diagnostic.with_end(end_line, end_column);
+                    }
+                    diagnostic
+                })
+                .collect();
+            (DiagnosticSourceState::Ready, Some(generation), findings)
+        }
+        SysmlDocumentAnalysisState::Failed {
+            generation, error, ..
+        } => (
+            DiagnosticSourceState::Failed(error),
+            Some(generation),
+            Vec::new(),
+        ),
+    };
+    diagnostics.set_source_report(
+        doc_id,
+        DiagnosticSourceReport {
+            id: "sysml.analysis".to_owned(),
+            domain: "sysml".to_owned(),
+            generation,
+            revision,
+            state: source_state,
+            message: None,
+            diagnostics: findings,
+        },
+    );
 }
 
 fn prepare_document_analyses(
     registry: Res<DocumentRegistry<SysmlDocument>>,
     mut analyses: ResMut<SysmlDocumentAnalyses>,
     mut admission: ResMut<AsyncWorkAdmission>,
+    mut diagnostics: ResMut<DocumentDiagnostics>,
 ) {
     let capacity_revision = admission.capacity_revision();
     let doc_ids: Vec<_> = analyses.pending.keys().copied().collect();
@@ -337,6 +416,7 @@ fn prepare_document_analyses(
                 error,
             },
         );
+        publish_current_analysis(doc_id, &registry, &analyses, &mut diagnostics);
     }
     terminal.sort_unstable();
     terminal.dedup();
@@ -384,6 +464,7 @@ fn prepare_document_analyses(
             },
         };
         analyses.states.insert(completion.doc_id, state);
+        publish_current_analysis(completion.doc_id, &registry, &analyses, &mut diagnostics);
         if let Some(pending) = analyses.pending.remove(&completion.doc_id) {
             retire_pending(pending, &mut admission);
         }
@@ -396,6 +477,7 @@ pub(crate) fn register(app: &mut App) {
         app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
     }
     app.init_resource::<SysmlDocumentAnalyses>()
+        .init_resource::<DocumentDiagnostics>()
         .add_systems(Update, prepare_document_analyses)
         .add_observer(on_sysml_document_opened)
         .add_observer(on_sysml_document_changed)

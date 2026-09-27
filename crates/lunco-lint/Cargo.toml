@@ -12,6 +12,7 @@ description = "Universal lint substrate: domain crates supply FACTS, authored rh
 # comes from the domain crate that owns the subject.
 bevy = { workspace = true }
 lunco-hooks = { path = "../lunco-hooks" }
+lunco-doc = { path = "../lunco-doc" }
 
 [lints]
 workspace = true

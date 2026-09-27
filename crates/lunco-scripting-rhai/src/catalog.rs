@@ -799,14 +799,21 @@ impl ApiQueryProvider for ScriptCompleteProvider {
             );
         }
         for query in lunco_api::discover_queries(world.get_resource::<ApiQueryRegistry>()) {
+            let name = query.name.clone();
+            let detail = query
+                .description
+                .clone()
+                .unwrap_or_else(|| "read-only structured provider".to_owned());
+            let schema = api_value_from_serializable(&query)?;
             push_completion(
                 &mut candidates,
                 &prefix,
-                query.clone(),
+                name.clone(),
                 api_value!({
-                    "label": query,
+                    "label": name,
                     "kind": "query",
-                    "detail": "read-only structured provider",
+                    "detail": detail,
+                    "schema": schema,
                 }),
             );
         }
@@ -898,9 +905,9 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
 
         // Registered read-only providers (query targets), from the same
         // registry the runtime executes.
-        let queries = api_value!(lunco_api::discover_queries(Some(
+        let queries = api_value_from_serializable(&lunco_api::discover_queries(Some(
             world.resource::<ApiQueryRegistry>(),
-        )));
+        )))?;
         let reflection = reflected_surface(world);
         let policy_status = lunco_scripting_rhai_world::world_bridge::policy_status_value(world);
 

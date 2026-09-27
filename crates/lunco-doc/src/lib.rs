@@ -69,10 +69,14 @@ pub mod diagnostics;
 pub mod domain_engine;
 pub mod refindex;
 
-pub use diagnostics::{DiagnosticStatus, DocDiagnostics, DocStatus, document_status};
+pub use diagnostics::{
+    DiagnosticSourceReport, DiagnosticSourceState, DiagnosticStatus, DocDiagnostics, DocStatus,
+    document_status,
+};
 pub use domain_engine::{
-    CompileState, Diagnostic, DiagnosticSeverity, DomainEngine, DomainEngineError, NodeId,
-    ResolvedRef, SymbolRef, TextRange, line_col_to_offset, offset_to_line_col,
+    CompileState, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, DomainEngine,
+    DomainEngineError, NodeId, ResolvedRef, SymbolRef, TextRange, line_col_to_offset,
+    offset_to_line_col,
 };
 pub use refindex::RefIndex;
 

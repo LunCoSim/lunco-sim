@@ -2469,8 +2469,11 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Lint what is loaded now.
 
- Findings land in [`lunco_lint::LintReport`] (readable via the `LintReport`
- query) and are logged — errors at `error!`, warnings at `warn!`.
+ Findings land in [`lunco_lint::LintReport`] and are logged — errors at
+ `error!`, warnings at `warn!`. Read them through the shared
+ [`GetDiagnostics` query](./architecture/12-api.md#getdiagnostics): use
+ `scope: "loaded_stages"` or `scope: "twin"` for scene/Twin lint, or `doc_id`
+ for the complete diagnostics of one open document.
 
 - *defined in:* `crates/lunco-scene-validation/src/lint_command.rs`
 

@@ -1278,6 +1278,179 @@ mod tests {
     }
 
     #[test]
+    fn execute_command_reads_generation_scoped_document_diagnostics() {
+        use std::sync::{Arc, Mutex};
+
+        let mut app = App::new();
+        app.add_plugins((ApiExecutorPlugin, crate::queries::ApiQueryRegistryPlugin))
+            .init_resource::<ApiEntityRegistry>()
+            .init_resource::<ApiVisibility>();
+        let doc_id = lunco_doc::DocumentId::new(42);
+        app.world_mut()
+            .resource_mut::<lunco_doc_bevy::DocumentDiagnostics>()
+            .set_error(
+                doc_id,
+                vec![
+                    lunco_doc::Diagnostic::error(
+                        "Why simulation did not start: `network.pressure` is unmatched",
+                        Some(2),
+                        Some(5),
+                    )
+                    .with_domain("modelica")
+                    .with_source("rumoca-compiler")
+                    .with_code("underdetermined")
+                    .with_uri("untitled://probe.mo")
+                    .with_suggestion("Add an independent equation"),
+                ],
+            );
+        app.world_mut()
+            .resource_mut::<lunco_doc_bevy::DocumentDiagnostics>()
+            .set_source_report(
+                doc_id,
+                lunco_doc::DiagnosticSourceReport {
+                    id: "modelica.rumoca-lint".to_owned(),
+                    domain: "modelica".to_owned(),
+                    generation: 7,
+                    revision: Some(3),
+                    state: lunco_doc::DiagnosticSourceState::Ready,
+                    message: None,
+                    diagnostics: vec![
+                        lunco_doc::Diagnostic::warning(
+                            "Add an independent equation",
+                            Some(4),
+                            Some(3),
+                        )
+                        .with_domain("modelica")
+                        .with_source("rumoca-linter")
+                        .with_code("naming-convention")
+                        .with_uri("untitled://probe.mo")
+                        .with_suggestion("Add a constraint for the unmatched unknown"),
+                    ],
+                },
+            );
+
+        let responses = Arc::new(Mutex::new(Vec::<ApiResponse>::new()));
+        let sink = Arc::clone(&responses);
+        app.add_observer(move |trigger: On<ApiResponseEvent>| {
+            sink.lock().unwrap().push(trigger.event().response.clone());
+        });
+        app.world_mut().trigger(ApiRequestEvent {
+            request: ApiRequest::ExecuteCommand {
+                command: "GetDiagnostics".to_owned(),
+                params: api_value!({ "doc_id": 42 }),
+            },
+            correlation_id: 84,
+        });
+        app.world_mut().flush();
+
+        let responses = responses.lock().unwrap();
+        let [ApiResponse::Ok { data: Some(report) }] = responses.as_slice() else {
+            panic!("GetDiagnostics did not return one successful query response: {responses:?}");
+        };
+        assert_eq!(report.get("generation").and_then(ApiValue::as_u64), Some(7));
+        assert_eq!(report.get("complete"), Some(&ApiValue::Bool(true)));
+        assert_eq!(
+            report.get("state").and_then(ApiValue::as_str),
+            Some("error")
+        );
+        assert_eq!(report.get("errors").and_then(ApiValue::as_u64), Some(1));
+        assert_eq!(report.get("warnings").and_then(ApiValue::as_u64), Some(1));
+        let Some(ApiValue::Array(diagnostics)) = report.get("diagnostics") else {
+            panic!("diagnostics field is not an array");
+        };
+        assert_eq!(diagnostics.len(), 2);
+        let compile = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.get("code").and_then(ApiValue::as_str) == Some("underdetermined")
+            })
+            .expect("compile explanation is retained as a structured diagnostic");
+        assert_eq!(
+            compile.get("domain").and_then(ApiValue::as_str),
+            Some("modelica")
+        );
+        assert_eq!(
+            compile.get("source").and_then(ApiValue::as_str),
+            Some("rumoca-compiler")
+        );
+        assert_eq!(
+            compile.get("message").and_then(ApiValue::as_str),
+            Some("Why simulation did not start: `network.pressure` is unmatched")
+        );
+        assert_eq!(compile.get("line").and_then(ApiValue::as_u64), Some(2));
+        assert_eq!(
+            compile.get("suggestion").and_then(ApiValue::as_str),
+            Some("Add an independent equation")
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.get("source").and_then(ApiValue::as_str) == Some("rumoca-linter")
+                && diagnostic.get("code").and_then(ApiValue::as_str) == Some("naming-convention")
+                && diagnostic.get("suggestion").and_then(ApiValue::as_str)
+                    == Some("Add a constraint for the unmatched unknown")
+        }));
+    }
+
+    #[test]
+    fn discover_schema_publishes_the_get_diagnostics_contract() {
+        use std::sync::{Arc, Mutex};
+
+        let mut app = App::new();
+        app.add_plugins((ApiExecutorPlugin, crate::queries::ApiQueryRegistryPlugin))
+            .init_resource::<ApiEntityRegistry>()
+            .init_resource::<ApiVisibility>();
+
+        let responses = Arc::new(Mutex::new(Vec::<ApiResponse>::new()));
+        let sink = Arc::clone(&responses);
+        app.add_observer(move |trigger: On<ApiResponseEvent>| {
+            sink.lock().unwrap().push(trigger.event().response.clone());
+        });
+        app.world_mut().trigger(ApiRequestEvent {
+            request: ApiRequest::DiscoverSchema,
+            correlation_id: 85,
+        });
+        app.world_mut().flush();
+
+        let responses = responses.lock().unwrap();
+        let [ApiResponse::Ok { data: Some(schema) }] = responses.as_slice() else {
+            panic!("DiscoverSchema did not return one successful response: {responses:?}");
+        };
+        let Some(ApiValue::Array(queries)) = schema.get("queries") else {
+            panic!("DiscoverSchema omitted query contracts");
+        };
+        let query = queries
+            .iter()
+            .find(|query| query.get("name").and_then(ApiValue::as_str) == Some("GetDiagnostics"))
+            .expect("GetDiagnostics is a discoverable query");
+        let Some(ApiValue::Array(parameters)) = query.get("parameters") else {
+            panic!("GetDiagnostics omitted its parameter schema");
+        };
+        assert_eq!(parameters.len(), 2);
+        assert_eq!(
+            parameters[0].get("name").and_then(ApiValue::as_str),
+            Some("doc_id")
+        );
+        assert_eq!(
+            parameters[1].get("name").and_then(ApiValue::as_str),
+            Some("scope")
+        );
+        let Some(ApiValue::Array(alternatives)) = query.get("exactly_one_of") else {
+            panic!("GetDiagnostics omitted its exactly-one-of parameter rule");
+        };
+        assert_eq!(alternatives.len(), 1);
+        assert_eq!(
+            alternatives[0],
+            ApiValue::Array(vec![ApiValue::str("doc_id"), ApiValue::str("scope")])
+        );
+        assert!(
+            query
+                .get("response")
+                .and_then(ApiValue::as_str)
+                .is_some_and(|contract| contract.contains("diagnostics[]")
+                    && contract.contains("suggestion"))
+        );
+    }
+
+    #[test]
     fn deferred_command_result_records_and_emits_once() {
         use std::sync::{Arc, Mutex};
 

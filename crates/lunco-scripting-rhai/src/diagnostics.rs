@@ -234,7 +234,10 @@ fn document_status_api_value(entry: Option<&DocDiagnostics>) -> ApiValue {
 
 /// Register the scripting diagnostics + introspection query providers.
 pub fn register_queries(app: &mut App) {
-    app.init_resource::<ApiQueryRegistry>();
+    lunco_api::add_plugin_once::<lunco_api::ApiQueryRegistryPlugin>(
+        app,
+        lunco_api::ApiQueryRegistryPlugin,
+    );
     let mut reg = app.world_mut().resource_mut::<ApiQueryRegistry>();
     reg.register(ScriptStatusProvider);
     reg.register(ScriptInspectProvider);

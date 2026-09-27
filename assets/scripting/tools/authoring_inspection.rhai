@@ -158,7 +158,7 @@ fn candidate_diff(before_doc, after_doc, paths) {
         policy: "warn",
         doc_id: after_doc,
     });
-    let lint = query("LintReport", #{ doc_id: after_doc });
+    let lint = query("GetDiagnostics", #{ doc_id: after_doc });
     #{
         ok: errors.len() == 0 && query_ok(lint_command),
         kind: "candidate_diff",
@@ -167,24 +167,24 @@ fn candidate_diff(before_doc, after_doc, paths) {
         paths: entries,
         errors: errors,
         lint: lint,
-        lint_pending: lint == () || lint.pending == true || lint.stale == true,
+        lint_pending: lint == () || lint.complete != true,
         command: lint_command,
     }
 }
 
 fn owner_for_finding(finding) {
     let domain = if finding.domain != () { finding.domain } else { "" };
-    let rule = if finding.rule != () { finding.rule } else { "" };
-    if domain == "usd" && (rule.contains("composition") || rule.contains("source")) {
+    let code = if finding.code != () { finding.code } else { "" };
+    if domain == "usd" && (code.contains("composition") || code.contains("source")) {
         return "Composition";
     }
-    if domain == "usd" && (rule.contains("joint") || rule.contains("collider")
-        || rule.contains("body") || rule.contains("physics")) {
+    if domain == "usd" && (code.contains("joint") || code.contains("collider")
+        || code.contains("body") || code.contains("physics")) {
         return "USD/Physics";
     }
     if domain == "modelica" { return "Modelica"; }
     if domain == "rhai" { return "Rhai"; }
-    if domain == "presentation" || rule.contains("material") || rule.contains("camera") {
+    if domain == "presentation" || code.contains("material") || code.contains("camera") {
         return "Presentation";
     }
     if domain == "" { "Unclassified" } else { domain }

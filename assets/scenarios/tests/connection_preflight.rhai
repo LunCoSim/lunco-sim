@@ -2,10 +2,10 @@
 // that standard USD connections are inspected before simulation and that each
 // broken source remains visible by exact rule and consuming-property subject.
 
-fn by_rule(findings, rule) {
+fn by_code(findings, code) {
     let out = [];
     for finding in findings {
-        if finding.rule == rule { out.push(finding); }
+        if finding.code == code { out.push(finding); }
     }
     out
 }
@@ -34,7 +34,7 @@ fn find_document() {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["LintReport", "ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["GetDiagnostics", "ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -103,19 +103,20 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    this.done = true;
-    let report = query("LintReport");
-    if report == () {
-        fail_fast("LintReport query returned (), so connection preflight was not exercised",
+    let report = query("GetDiagnostics", #{ scope: "loaded_stages" });
+    if report == () || report.available != true || report.complete != true {
+        if this.elapsed < 10.0 { return; }
+        fail_fast("GetDiagnostics did not produce a completed loaded-stage report",
             "CONNECTION PREFLIGHT", "CONNECTION_PREFLIGHT");
         return;
     }
+    this.done = true;
 
-    let findings = report.findings;
+    let findings = report.diagnostics;
     let failures = [];
-    let missing_property = by_rule(findings, "connection-source-property-missing");
-    let missing_prim = by_rule(findings, "connection-source-prim-missing");
-    let mismatch = by_rule(findings, "connection-source-type-mismatch");
+    let missing_property = by_code(findings, "connection-source-property-missing");
+    let missing_prim = by_code(findings, "connection-source-prim-missing");
+    let mismatch = by_code(findings, "connection-source-type-mismatch");
 
     if missing_property.len() != 1 {
         failures.push("connection-source-property-missing count=" + missing_property.len() + ", expected 1");
@@ -132,13 +133,13 @@ fn on_tick(me, ctx) {
     } else if !has_subject(mismatch, "/ConnectionPreflight/Sink.inputs:type_mismatch") {
         failures.push("type-mismatch finding did not name the consuming property");
     }
-    let runtime_missing = by_rule(findings, "connection-source-runtime-port-missing");
+    let runtime_missing = by_code(findings, "connection-source-runtime-port-missing");
     if runtime_missing.len() != 1 {
         failures.push("connection-source-runtime-port-missing count=" + runtime_missing.len() + ", expected 1");
     } else if !has_subject(runtime_missing, "/ConnectionPreflight/Sink.inputs:runtime_missing") {
         failures.push("runtime-port finding did not name the consuming property");
     }
-    let runtime_invalid = by_rule(findings, "connection-source-runtime-direction-invalid");
+    let runtime_invalid = by_code(findings, "connection-source-runtime-direction-invalid");
     if runtime_invalid.len() != 1 {
         failures.push("connection-source-runtime-direction-invalid count=" + runtime_invalid.len() + ", expected 1");
     } else if !has_subject(runtime_invalid, "/ConnectionPreflight/Sink.inputs:runtime_invalid") {
