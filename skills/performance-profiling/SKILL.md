@@ -125,6 +125,9 @@ steps such as wrapping a Modelica model into its shared port surface. Keep a
 single bootstrap discovery for entities predating plugin installation, and
 retry only work whose authoritative stage/readiness input is still pending.
 The idle run condition should inspect the owner set, not scan the population.
+When initial candidate processing spans many owners, queue the bootstrap IDs
+once and drain a fixed-size batch in stable entity order per app update; keep
+the remainder queued so a large scene cannot monopolize one UI frame.
 When a worker prepares facts for a composed plan, result commit must use the
 same prepared-plan identity for any derived cache. Generation-zero ordinary
 and runtime-instance plans stay on that cached read surface; only later live

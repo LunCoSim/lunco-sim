@@ -641,11 +641,14 @@ generation without re-reading a network because synthesis does not consume
 transforms. Runtime-instance plans are excluded because they are immutable
 projections, not readers of the canonical stage. A changed USD asset requeues
 indexed roots on that stage; a missed generation batch does the same as a safety
-pass. Neither path scans every USD prim. Endpoint lifecycle continues to requeue
-only its entity; the broader `UsdWiringDirty` latch is not a domain-membership
-signal. Scene teardown clears the reverse index, stage-generation cursor, and
-pending discovery/projection candidate sets; resolved member-class facts remain
-reusable because they belong to shared Modelica source assets, not a scene.
+pass. Neither path scans every USD prim. Initial discovery snapshots the USD
+prim entity IDs once, then processes at most 64 sorted candidates per app
+update; any remaining work stays queued for the next update. Endpoint lifecycle
+continues to requeue only its entity; the broader `UsdWiringDirty` latch is not
+a domain-membership signal. Scene teardown clears the reverse index,
+stage-generation cursor, and pending discovery/projection candidate sets;
+resolved member-class facts remain reusable because they belong to shared
+Modelica source assets, not a scene.
 Prim arrivals whose stage asset is not ready wait in a stage-keyed set and are
 requeued by that asset's readiness event, rather than being retried on stable
 frames.

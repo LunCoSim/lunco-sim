@@ -436,6 +436,16 @@ impl Default for PendingDomainProjectionCandidates {
 }
 
 impl PendingDomainProjectionCandidates {
+    fn take_discovery_batch(&mut self, limit: usize) -> Vec<Entity> {
+        let mut batch: Vec<_> = self.discovery.iter().copied().collect();
+        batch.sort_unstable();
+        batch.truncate(limit);
+        for entity in &batch {
+            self.discovery.remove(entity);
+        }
+        batch
+    }
+
     fn has_eligible_projection_work(&self, capacity_revision: u64) -> bool {
         self.projection.iter().any(|entity| {
             self.capacity_blocked
@@ -2293,6 +2303,8 @@ pub fn resolve_member_classes(
     mut source_events: MessageReader<AssetEvent<ModelicaSource>>,
     mut source_failures: MessageReader<bevy::asset::AssetLoadFailedEvent<ModelicaSource>>,
 ) {
+    const MAX_DOMAIN_CLASS_DISCOVERY_PER_UPDATE: usize = 64;
+
     let mut loaded = HashSet::new();
     let mut modified = HashSet::new();
     for event in source_events.read() {
@@ -2382,8 +2394,21 @@ pub fn resolve_member_classes(
         }
     }
 
-    let initial_discovery = candidates.initial_discovery;
-    let discover = initial_discovery || !candidates.discovery.is_empty();
+    if candidates.initial_discovery {
+        class_users.clear();
+        candidates.discovery.clear();
+        candidates.initial_discovery = false;
+        candidates.observed_stage_generations.clear();
+        candidates.observed_stage_generations.extend(
+            canonical
+                .iter()
+                .map(|(asset, stage)| (asset, stage.generation())),
+        );
+        candidates
+            .discovery
+            .extend(prims.iter().map(|(entity, _, _)| entity));
+    }
+    let discover = !candidates.discovery.is_empty();
     if !discover && loaded.is_empty() && modified.is_empty() && failed.is_empty() {
         return;
     }
@@ -2404,25 +2429,10 @@ pub fn resolve_member_classes(
         classes.pending.insert(asset, handle);
     }
     if discover {
-        let discovery_entities: Vec<_> = if initial_discovery {
-            class_users.clear();
-            candidates.discovery.clear();
-            candidates.initial_discovery = false;
-            candidates.observed_stage_generations.clear();
-            candidates.observed_stage_generations.extend(
-                canonical
-                    .iter()
-                    .map(|(asset, stage)| (asset, stage.generation())),
-            );
-            prims.iter().collect()
-        } else {
-            let mut entities: Vec<_> = candidates.discovery.drain().collect();
-            entities.sort_unstable();
-            entities
-                .into_iter()
-                .filter_map(|entity| prims.get(entity).ok())
-                .collect()
-        };
+        let discovery_entities = candidates
+            .take_discovery_batch(MAX_DOMAIN_CLASS_DISCOVERY_PER_UPDATE)
+            .into_iter()
+            .filter_map(|entity| prims.get(entity).ok());
         for (entity, prim, instance_projection) in discovery_entities {
             if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
                 class_users.remove_root(entity);
