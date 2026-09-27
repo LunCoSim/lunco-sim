@@ -31,6 +31,8 @@ impl Plugin for LunCoCoreSessionPlugin {
             .init_resource::<CommandPolicyRegistry>()
             .init_resource::<PendingReplicatedSpawns>()
             .init_resource::<OwnedInputLog>()
+            .init_resource::<SessionInputStream>()
+            .init_resource::<SessionInputStreamSettings>()
             .init_resource::<BufferedClientInputs>()
             .init_resource::<LocalDriveInput>()
             .init_resource::<AppliedInputSeq>()

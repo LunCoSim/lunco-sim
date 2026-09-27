@@ -82,7 +82,8 @@ impl Plugin for UsdCameraPlugin {
                 (
                     camera_mount::resolve_camera_mounts,
                     camera_path::resolve_camera_paths,
-                    camera_switch::ensure_standalone_presentation,
+                    camera_switch::ensure_standalone_presentation
+                        .in_set(lunco_core::RuntimeCycleSet::Presentation),
                     camera_track::bind_camera_tracks_to_preview,
                     camera_track::clear_camera_track_plans_on_stage_reload.run_if(
                         bevy::ecs::schedule::common_conditions::on_message::<
@@ -90,12 +91,12 @@ impl Plugin for UsdCameraPlugin {
                         >,
                     ),
                     camera_track::plan_camera_tracks,
-                    camera_switch::validate_authored_camera_contract.run_if(
-                        lunco_core_runtime::gate::tracked(
+                    camera_switch::validate_authored_camera_contract
+                        .in_set(lunco_core::RuntimeCycleSet::Presentation)
+                        .run_if(lunco_core_runtime::gate::tracked(
                             "usd::camera_contract",
                             camera_switch::camera_contract_inputs_changed,
-                        ),
-                    ),
+                        )),
                     camera_track::sample_camera_tracks.after(lunco_time::DomainResolveSet),
                 )
                     .chain()

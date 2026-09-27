@@ -169,10 +169,13 @@ one `SimulateIntentEdge` command; do not model a pulse as two API requests:
 }
 ```
 
-The accepted response includes the canonical `intent`, `edge`, and command
-`id`. Confirm delivery through the `intent.edge` telemetry event (`source`,
-`value.target_gid`, and `value.correlation_id` identify the same target/action).
-Then inspect the downstream path without log scraping:
+The response includes the canonical `intent`, `edge`, `correlation_id`, and
+command `id`. API submissions also include `admission` with the committed
+scene generation, effective simulation tick, and per-tick sequence. Confirm
+delivery through the `intent.edge` telemetry event (`source`,
+`value.target_gid`, and `value.correlation_id` identify the same target/action);
+its admission fields carry the same stamp. Use the returned `correlation_id`
+for the exact edge's trace, even when the scene emits later edges:
 
 ```json
 {
@@ -183,10 +186,17 @@ Then inspect the downstream path without log scraping:
 ```
 
 The response composes the authored binding, selected `PortRegistry` owner,
-USD connection/native-joint admission, and current retained measurements. An
-empty/pending stage is a real incomplete path. A target-scoped command still
-passes the normal ownership/authority gate; an acknowledgement alone does not
-prove that a consuming Twin policy acted on the edge.
+USD connection/native-joint admission, current retained measurements, and the
+producer's admission stamp. An empty/pending stage is a real incomplete path.
+A target-scoped command still passes the normal ownership/authority gate; an
+acknowledgement alone does not prove that a consuming Twin policy acted on the
+edge.
+
+For a held control, send one `SimulateIntent` command with `held: true` or
+`false`. An external command targeting fixed-simulation state returns a
+correlation id and next-tick admission stamp; verify the matching `intent.hold`
+event has the same target, held value, and stamp. The held state changes at
+that fixed tick. Local-embodiment commands remain on the interaction cadence.
 
 ## Live runtime HTML/CSS iteration
 

@@ -200,18 +200,21 @@ pub struct GuidedSkip {}
 fn on_guided_next(_trigger: On<GuidedNext>, mut world: DeferredWorld) {
     world.trigger(lunco_core::CommandOccurred {
         name: stringify!(GuidedNext).to_string(),
+        origin: None,
     });
 }
 
 fn on_guided_back(_trigger: On<GuidedBack>, mut world: DeferredWorld) {
     world.trigger(lunco_core::CommandOccurred {
         name: stringify!(GuidedBack).to_string(),
+        origin: None,
     });
 }
 
 fn on_guided_skip(_trigger: On<GuidedSkip>, mut world: DeferredWorld) {
     world.trigger(lunco_core::CommandOccurred {
         name: stringify!(GuidedSkip).to_string(),
+        origin: None,
     });
 }
 

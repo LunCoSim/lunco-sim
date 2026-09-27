@@ -122,6 +122,27 @@ impl std::fmt::Display for UserIntent {
 }
 
 impl UserIntent {
+    /// Every semantic intent in stable enum vocabulary order.
+    pub const ALL: [Self; 17] = [
+        Self::MoveForward,
+        Self::MoveBackward,
+        Self::MoveLeft,
+        Self::MoveRight,
+        Self::MoveUp,
+        Self::MoveDown,
+        Self::SpeedBoost,
+        Self::Look,
+        Self::Zoom,
+        Self::Action,
+        Self::Thrust,
+        Self::Brake,
+        Self::Release,
+        Self::SwitchMode,
+        Self::Pause,
+        Self::Cancel,
+        Self::DeleteSelection,
+    ];
+
     /// Canonical lower-case name used by authored bindings and event payloads.
     pub const fn canonical_name(self) -> &'static str {
         match self {
@@ -182,12 +203,24 @@ impl std::fmt::Display for SemanticIntentEdgeKind {
     }
 }
 
+/// Admission stamp for an external semantic input consumed at a fixed tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub struct SimulationInputOrder {
+    /// Successfully admitted scene generation that owns the target.
+    pub scene_generation: u64,
+    /// Fixed simulation tick at which the input becomes visible.
+    pub effective_tick: u64,
+    /// Stable order among inputs assigned to the same tick.
+    pub sequence: u64,
+}
+
 /// A target-scoped semantic edge emitted by the controller contract.
 ///
-/// This event carries intent identity and target identity only. It does not
-/// choose a vehicle port or mutate a domain; authored policy consumes it and
-/// may issue the existing `SetPorts` command if that is the intended effect.
-#[derive(Event, Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+/// This event carries intent, target, correlation, and classified producer
+/// provenance. It does not choose a vehicle port or mutate a domain; authored
+/// policy consumes it and may issue the existing `SetPorts` command if that is
+/// the intended effect.
+#[derive(Event, Clone, Copy, Debug, PartialEq, Reflect)]
 pub struct SemanticIntentEdge {
     /// The entity whose authored semantic control surface receives the edge.
     pub target: Entity,
@@ -199,6 +232,13 @@ pub struct SemanticIntentEdge {
     /// inspection. Physical input edges mint an id locally; API/Rhai dispatch
     /// reuses the active command id.
     pub correlation_id: u64,
+    /// Classified API/Rhai producer for commands routed through the typed
+    /// dispatcher. Direct controller and Bevy producers leave this absent.
+    #[reflect(ignore)]
+    pub origin: Option<lunco_core::CommandOrigin>,
+    /// Fixed-tick admission for externally submitted edges. Deterministic
+    /// simulation hooks emit derived edges without an admission stamp.
+    pub admission: Option<SimulationInputOrder>,
 }
 
 /// One bounded semantic edge retained for causal inspection.
@@ -207,7 +247,7 @@ pub struct SemanticIntentEdge {
 /// observations (port owner, connection, admission, and measurements) belong
 /// to their existing owners and are composed by the `CausalTrace` API query;
 /// keeping them out of this ledger avoids a second routing or telemetry store.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CausalTraceRecord {
     /// The command/operation id that identifies this action.
     pub correlation_id: u64,
@@ -219,6 +259,10 @@ pub struct CausalTraceRecord {
     pub intent: UserIntent,
     /// The delivered edge kind.
     pub kind: SemanticIntentEdgeKind,
+    /// Producer classification retained from the typed semantic edge.
+    pub origin: Option<lunco_core::CommandOrigin>,
+    /// Fixed-tick admission stamp when the edge came through external ingress.
+    pub admission: Option<SimulationInputOrder>,
 }
 
 /// Bounded, scene-scoped semantic edge ledger used by the causal trace query.
@@ -245,6 +289,8 @@ impl CausalTrace {
             target_gid,
             intent: edge.intent,
             kind: edge.kind,
+            origin: edge.origin,
+            admission: edge.admission,
         });
         while self.records.len() > Self::MAX_RECORDS {
             self.records.pop_front();

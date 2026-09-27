@@ -55,6 +55,10 @@ pub struct ApiCommandEvent {
     /// deferred response through its own completion path.
     #[reflect(ignore)]
     pub correlation_id: Option<u64>,
+    /// Trusted in-process producer classification. It is assigned by the
+    /// transport adapter or scripting bridge and is not part of command params.
+    #[reflect(ignore)]
+    pub origin: Option<lunco_core::CommandOrigin>,
 }
 
 /// System counter for generating unique IDs.
@@ -420,6 +424,7 @@ pub fn api_command_dispatcher(
             let cmd_name = event.command.clone();
             let cmd_id = event.id;
             let correlation_id = event.correlation_id;
+            let origin = event.origin;
 
             commands.queue(move |world: &mut World| {
                 let registry = world.resource::<AppTypeRegistry>().clone();
@@ -475,11 +480,13 @@ pub fn api_command_dispatcher(
                         record_rejected_command(world, cmd_id, msg, correlation_id);
                         return;
                     }
-                    // Scope the active request id around the trigger so a
-                    // result-reporting `#[on_command]` wrapper records its
-                    // outcome under this id. Observers run synchronously
-                    // inside `trigger`, so set-before / clear-after is sound.
-                    world.resource_mut::<lunco_core::ActiveCommandId>().set(Some(cmd_id));
+                    // Scope the command id and producer origin around the
+                    // reflected trigger so result and occurrence observers can
+                    // retain those facts. Observers run synchronously inside
+                    // `trigger`, so set-before / clear-after is sound.
+                    world
+                        .resource_mut::<lunco_core::ActiveCommandId>()
+                        .set_with_origin(cmd_id, origin);
                     reflect_event.trigger(world, reflected.as_ref(), &type_reg);
                     world.resource_mut::<lunco_core::ActiveCommandId>().set(None);
                     // The pending correlation is a per-dispatch handoff to a
@@ -975,6 +982,7 @@ fn execute_request(
                     params: typed_params.clone(),
                     id: id_counter.next_id(),
                     correlation_id: None,
+                    origin: Some(lunco_core::CommandOrigin::ApiTransport),
                 });
                 return None; // the handler answers on `correlation_id`
             }
@@ -989,6 +997,7 @@ fn execute_request(
                 params: typed_params,
                 id: command_id,
                 correlation_id: Some(correlation_id),
+                origin: Some(lunco_core::CommandOrigin::ApiTransport),
             });
 
             None
@@ -1183,7 +1192,9 @@ impl Plugin for ApiExecutorPlugin {
 mod tests {
     use super::*;
     use lunco_command_contracts::{Ack, OpId};
-    use lunco_core::{ActiveCommandId, Command, CommandOutcome, CommandResults, on_command};
+    use lunco_core::{
+        ActiveCommandId, Command, CommandOrigin, CommandOutcome, CommandResults, on_command,
+    };
 
     #[test]
     fn internal_command_id_generation() {
@@ -1238,6 +1249,11 @@ mod tests {
         app.add_observer(move |trigger: On<ApiResponseEvent>| {
             sink.lock().unwrap().push(trigger.event().response.clone());
         });
+        let origins = Arc::new(Mutex::new(Vec::<Option<CommandOrigin>>::new()));
+        let origin_sink = Arc::clone(&origins);
+        app.add_observer(move |trigger: On<lunco_core::CommandOccurred>| {
+            origin_sink.lock().unwrap().push(trigger.event().origin);
+        });
 
         app.world_mut().trigger(ApiRequestEvent {
             request: ApiRequest::ExecuteCommand {
@@ -1255,6 +1271,10 @@ mod tests {
                 data: Some(data)
             }] if data.get("answer").and_then(ApiValue::as_i64) == Some(42)
         ));
+        assert_eq!(
+            origins.lock().unwrap().as_slice(),
+            &[Some(CommandOrigin::ApiTransport)]
+        );
     }
 
     #[test]

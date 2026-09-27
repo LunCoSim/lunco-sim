@@ -7,6 +7,7 @@ description = "Transport-agnostic command, query, discovery, and response contra
 
 [dependencies]
 lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-core-session = { path = "../lunco-core-session" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-telemetry-core = { path = "../lunco-telemetry-core" }
 lunco-core = { path = "../lunco-core" }

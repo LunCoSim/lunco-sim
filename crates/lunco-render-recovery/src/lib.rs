@@ -555,7 +555,10 @@ pub fn install_wgpu_error_handler(app: &mut App) {
     // Shadow allocation happens during render extraction. The preflight must
     // observe the fully materialised scene in PostUpdate, after scene-load
     // commands apply but before the render sub-app extracts lights.
-    app.add_systems(PostUpdate, apply_shadow_caster_policy);
+    app.add_systems(
+        PostUpdate,
+        apply_shadow_caster_policy.in_set(lunco_core::RuntimeCycleSet::Presentation),
+    );
 
     let render_app = app.get_sub_app_mut(RenderApp).expect("checked above");
     render_app.insert_resource(RenderHealthHandle(health));
@@ -1101,6 +1104,7 @@ fn shadow_quality_policy_warning(
     spot_casters: usize,
     required_bytes: u64,
     budget_bytes: u64,
+    runtime_context: lunco_core::RuntimeExecutionContext,
 ) -> Option<String> {
     let facts = lunco_hooks::HookValue::map([
         (
@@ -1124,7 +1128,7 @@ fn shadow_quality_policy_warning(
         ("estimated_bytes", shadow_hook_int(required_bytes)),
         ("budget_bytes", shadow_hook_int(budget_bytes)),
     ]);
-    match lunco_hooks::invoke_unclassified(RENDER_SHADOW_QUALITY_HOOK, &[facts]) {
+    match lunco_hooks::invoke_with_context(RENDER_SHADOW_QUALITY_HOOK, &[facts], runtime_context) {
         None | Some(Ok(lunco_hooks::HookValue::Unit)) => None,
         Some(Ok(lunco_hooks::HookValue::Str(message))) if !message.is_empty() => Some(message),
         Some(Ok(lunco_hooks::HookValue::Str(_))) => None,
@@ -1149,6 +1153,7 @@ fn shadow_quality_policy_warning(
 /// The estimate does not account for unrelated GPU allocations or driver
 /// overhead; adapter limits are validated separately before settings apply.
 fn apply_shadow_caster_policy(
+    time: Res<Time<Real>>,
     mut state: ResMut<ShadowAdmissionState>,
     mut commands: Commands,
     settings: Res<RenderingQualitySettings>,
@@ -1263,6 +1268,17 @@ fn apply_shadow_caster_policy(
         enabled_spot_casters,
         required_bytes,
         admission_budget,
+        lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::application(
+                lunco_core::RuntimeCycle::Presentation,
+            )),
+            phase: lunco_core::RuntimePhase::Preparation,
+            clock: lunco_core::RuntimeClock::Presentation,
+            time_seconds: Some(time.elapsed_secs_f64()),
+            delta_seconds: Some(time.delta_secs_f64()),
+            sequence: None,
+            producer: None,
+        },
     );
     if let Some(mut status_bus) = status_bus {
         if let Some(message) = policy_warning {
@@ -1527,8 +1543,26 @@ mod tests {
     impl lunco_hooks::ScriptHook for TestShadowQualityPolicy {
         fn invoke(
             &self,
-            _invocation: &lunco_hooks::HookInvocation<'_>,
+            invocation: &lunco_hooks::HookInvocation<'_>,
         ) -> Result<lunco_hooks::HookValue, lunco_hooks::HookError> {
+            let context = invocation.context;
+            if context.route
+                != Some(lunco_core::RuntimeRoute::application(
+                    lunco_core::RuntimeCycle::Presentation,
+                ))
+                || context.phase != lunco_core::RuntimePhase::Preparation
+                || context.clock != lunco_core::RuntimeClock::Presentation
+                || context.time_seconds.is_none()
+                || context.delta_seconds.is_none()
+                || context.sequence.is_some()
+                || context.producer.is_some()
+                || context.validate().is_err()
+            {
+                return Err(lunco_hooks::HookError(
+                    "shadow-quality policy requires Application/Presentation/Preparation context"
+                        .into(),
+                ));
+            }
             Ok(lunco_hooks::HookValue::str("policy warning"))
         }
     }
@@ -2024,6 +2058,7 @@ mod tests {
         settings.max_spot_shadow_casters = 0;
         settings.shadow_budget_bytes = 16 * 1024 * 1024;
         app.insert_resource(settings);
+        app.init_resource::<Time<Real>>();
         app.insert_resource(lunco_status_core::status_bus::StatusBus::default());
         app.insert_resource(lunco_exposure_core::EngineExposures::default());
         app.init_resource::<ShadowAdmissionState>();
@@ -2031,7 +2066,10 @@ mod tests {
         app.insert_resource(RenderHealthHandle(health.clone()));
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_caster_policy);
+        app.add_systems(
+            PostUpdate,
+            apply_shadow_caster_policy.in_set(lunco_core::RuntimeCycleSet::Presentation),
+        );
         for _ in 0..5 {
             app.world_mut().spawn((bevy::light::PointLight {
                 intensity: 321.0,
@@ -2125,12 +2163,16 @@ mod tests {
         settings.max_spot_shadow_casters = 0;
         settings.shadow_budget_bytes = 1;
         app.insert_resource(settings);
+        app.init_resource::<Time<Real>>();
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
         app.insert_resource(RenderHealthHandle(health.clone()));
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
-        app.add_systems(PostUpdate, apply_shadow_caster_policy);
+        app.add_systems(
+            PostUpdate,
+            apply_shadow_caster_policy.in_set(lunco_core::RuntimeCycleSet::Presentation),
+        );
         app.world_mut().spawn(bevy::light::PointLight {
             shadow_maps_enabled: true,
             ..default()
@@ -2150,13 +2192,17 @@ mod tests {
     fn effective_cascade_overflow_does_not_shed_or_lower_quality() {
         let mut app = App::new();
         app.insert_resource(test_settings());
+        app.init_resource::<Time<Real>>();
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
         app.insert_resource(RenderHealthHandle(health.clone()));
         app.insert_resource(lunco_exposure_core::EngineExposures::default());
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
-        app.add_systems(PostUpdate, apply_shadow_caster_policy);
+        app.add_systems(
+            PostUpdate,
+            apply_shadow_caster_policy.in_set(lunco_core::RuntimeCycleSet::Presentation),
+        );
 
         let light = app
             .world_mut()

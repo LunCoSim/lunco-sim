@@ -14,7 +14,7 @@ const APPLICATION_ADMISSION_EVENT = "ROUTE_LIFECYCLE_APPLICATION_EDIT";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [find_path(SUBJECT_PATH)], entity_reads: [], entity_writes: [],
-       query_reads: ["QueryUsdPrim", "ResolveUsdTarget", "InspectSelection", "ScriptInspect", "ScriptStatus"],
+       query_reads: ["QueryUsdPrim", "ResolveUsdTarget", "InspectSelection", "ScriptInspect", "ScriptStatus", "ReadExposures"],
        required_inputs: [] }
 }
 
@@ -476,6 +476,18 @@ fn on_tick(me, ctx) {
             "HUD activation is authored through the typed USD document"));
         this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "authoring runtime HUD metadata preserves the live subject projection"));
+        let exposed = query("ReadExposures", #{ surface: "program-browser" });
+        if exposed == () || exposed.ok == false || exposed.surfaces == () { return; }
+        let surface = exposed.surfaces["program-browser"];
+        if surface == () || surface.visible != true || surface.properties == ()
+            || surface.properties.programs == () || surface.properties.programs.len() != 1 {
+            return;
+        }
+        this.checks.push(t_true(surface.visible == true,
+            "the Application/Ui owner consumes the authored always-visible policy"));
+        this.checks.push(t_true(surface.properties.program_count == "1 PROGRAMS"
+                && surface.properties.programs[0].path == this.program_path,
+            "the Application/Ui owner publishes the typed program collection properties"));
         for check in invalid_edit_checks(this.doc) { this.checks.push(check); }
         this.phase = 1;
         return;

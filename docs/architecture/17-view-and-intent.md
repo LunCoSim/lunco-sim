@@ -364,8 +364,12 @@ correlation id and publishes the same id in `intent.edge.value.correlation_id`.
 Pass that id with the target to the read-only `CausalTrace` query. The query
 joins the semantic edge to the authored control binding, selected
 `PortRegistry` owner, USD connection/native-joint admission, and current
-`SignalRegistry` measurements; it is diagnostic composition, not another
-control or telemetry path.
+`SignalRegistry` measurements. Its classified Rhai origin includes the owner
+route, phase, generation, logical sequence, and scenario actor id. External
+discrete edges also include the committed scene generation, effective tick,
+and per-tick sequence. Deterministic Rhai simulation edges carry no external
+admission stamp. The query is diagnostic composition, not another control or
+telemetry path.
 
 Control authority has two independent layers. The generic session layer's
 `SessionRegistry` answers *which session controls which stable target id*; the
@@ -469,8 +473,16 @@ Text fields retain keyboard ownership until that explicit scene press.
 ### 6.8 Atomic semantic intent edges
 
 Held controls and discrete actions use separate contracts. `SimulateIntent` is
-the level-triggered API/Rhai command for a target-scoped held intent. For a
-single transition, use `SimulateIntentEdge` with `edge` set to `pressed`,
+the level-triggered command for a target-scoped held intent. External API,
+application-Rhai, and direct typed commands targeting a fixed-simulation entity
+require a stable target id and committed scene generation, then enter the
+bounded controller queue for the next `SimTick`. Held changes and discrete
+edges share its per-tick sequence. The acknowledgement returns a correlation
+id and admission stamp; fixed-step commit publishes `intent.hold` with that
+stamp. Deterministic Simulation Rhai changes remain in their owning pass, and
+local-embodiment interaction input remains on the interaction cadence.
+
+For a single transition, use `SimulateIntentEdge` with `edge` set to `pressed`,
 `released`, or `pulse`:
 
 ```rhai
@@ -483,9 +495,10 @@ The controller validates the shared `UserIntent` vocabulary and emits one
 mutate the Twin. Authored Rhai/Modelica policy consumes the edge and decides
 whether it means a latch, release, toggle, or other action. Rhai `on_event`
 hooks receive the same edge on the existing telemetry bus as `intent.edge`,
-with `value.intent`, `value.edge`, and `value.target_gid`; the event source is
-also the target gid. The target remains subject to the normal command authority
-policy, so two spawned vehicles cannot receive one another's edge.
+with typed `value.correlation_id`, `value.intent`, `value.edge`, and
+`value.target_gid`; the event source is also the target gid. The target remains
+subject to the normal command authority policy, so two spawned vehicles cannot
+receive one another's edge.
 
 ### 6.9 Editor keyboard input
 

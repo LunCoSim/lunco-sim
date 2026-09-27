@@ -88,6 +88,43 @@ recorded snapshots on the same build. This is fixture-specific evidence. Do not
 claim whole-simulation replay determinism while the remaining reviewed gaps
 are open.
 
+Reflected commands sent through `ApiCommandEvent` retain whether they came from
+an API transport or a Rhai evaluation; generated `CommandOccurred` facts carry
+that origin. Direct typed Bevy triggers remain unclassified, and the occurrence
+fact still lacks command parameters, target, scene generation, effective tick,
+and per-tick input order. Rhai scenario origins carry their stable actor id and
+source execution sequence.
+`SimulateIntentEdge` preserves the complete origin through its typed semantic
+edge into the bounded `CausalTrace` query; Rhai records include owner route,
+phase, generation, sequence, and actor id. API, application-Rhai, and direct
+typed discrete edges receive a committed scene generation, next `SimTick`, and
+per-tick sequence, then reach the event bus from the fixed-step owner.
+Simulation-clock Rhai edges remain derived behavior and do not receive this
+external-input stamp. The queue is bounded to 4,096 pending records and clears
+on scene teardown; the trace is not durable replay storage. External held
+`SimulateIntent` changes share the bounded queue and per-tick order with edges;
+their source buckets retain API transport, Rhai runtime route plus actor id, and
+direct typed-command producer class. `drive_from_bindings` captures physical
+`ActionState<UserIntent>` into a by-value `PhysicalIntentFrame` semantic
+snapshot. Admission requires the local input `SessionId`, target
+`GlobalEntityId`, and committed scene generation. The fixed-step owner stamps
+the frame with those identities, the current `SimTick`, and the shared per-tick
+input sequence before controller translation. Missing facts or duplicate
+target/session order keys hold input with a structured runtime error; ordering
+does not fall back to Bevy `Entity` bits. The frame is discarded after
+translation, while an active `SessionInputStream` capture retains sorted
+canonical intent ids and the admission stamp in bounded memory. The typed
+start/stop/clear commands and `ReadSessionInputStream` query expose physical
+frames plus admitted `SimulateIntent` and `SimulateIntentEdge` payloads while
+capture is active. Records retain producer class, Rhai actor when available,
+target, admission stamp, and semantic payload. API identities remain
+transport-wide; direct typed commands have no stable producer id. Other typed
+commands, durable writing, and playback remain open.
+Runtime spawn handling is owner-dependent: document-backed `SpawnEntity`
+authors `ApplyUsdOps` into the Twin journal, while raw-file scenes use direct
+ECS spawning plus `NetSpawn`. Neither path currently records the spawn's
+producer and effective tick in `SessionInputStream`.
+
 Scenario actor compile submission, completion commit, and hook execution use the
 source-owned `GlobalEntityId` component directly; the Update-synchronized API
 lookup index is not an ordering source. A local-only host without that component
@@ -397,8 +434,8 @@ compositions keep terrain physics/query support but omit camera-driven LOD,
 visual-map baking, and overlays entirely. A system hidden behind a server-mode
 `run_if` still exists in that schedule and is not equivalent to omitting it.
 Application builders install the selected capabilities automatically; authors
-should not assemble Bevy schedules by hand. Rhai currently declares process-role
-selection through `@run-on host|client|both`, with simulation as its supported
+should not assemble Bevy schedules by hand. Rhai currently declares peer-role
+selection through `@peer host|client|both`, with simulation as its supported
 timing. An unknown execution target, unsupported timing, or unknown metadata
 directive disables only that scenario and publishes one document error for its
 source generation instead of breaking the host, defaulting to host, or guessing
@@ -406,6 +443,35 @@ a clock. Cycle and clock selection come
 from the Rust owner, not a script directive. A callback error remains visible
 and local to its owner; required authoritative hooks hold/fault their owner.
 Never panic or silently report success for a failed hook.
+
+The initial camera policy receives `Application/Presentation/Preparation` with
+the `Time<Real>` presentation clock. Its `RuntimeCycleSet::Presentation` labels
+are ordering metadata inside `Update`; they do not give UI or visual LOD an
+independent cadence. The runtime UI recording selector receives
+`Application/Ui/Preparation` with the Application clock in its `PostUpdate`
+owner chain; it runs only when its revisions change, not as a separate cadence.
+The authored runtime-surface visibility/property policies receive typed
+`Application/Ui/Preparation` context from exposure publication; camera-status
+properties receive `Application/Presentation/Initialization` or
+`Application/Presentation/Event` from the camera-status publisher. Add a
+policy guard and verify both the scheduled owner context and an off-cycle call
+when assigning context to another hook. The `route_lifecycle` production gate
+checks `ReadExposures` for an authored program-browser surface after metadata
+admission.
+
+The rendering-quality catalog receives
+`Application/Presentation/Initialization` on startup and
+`Application/Presentation/Preparation` for stale-policy refreshes, both using
+`Time<Real>`. The render shadow-warning policy receives Presentation
+Preparation context from its `PostUpdate` owner when its configuration changes.
+The Presentation cycle set remains ordering metadata and does not add a
+separate cadence.
+
+The event-driven `usd.component_refresh` owner supplies
+`Twin/Lifecycle/Preparation` with the active or committed generation for a
+mounted-Twin document, and `Application/Lifecycle/Preparation` for a preview-
+only document. The owner requires a generation for a mounted Twin; a missing
+generation rejects that policy-controlled refresh visibly.
 
 Cycle labels identify ordering and ownership; they do not imply that every owner
 already publishes timing and queue metrics. Expose bounded aggregates at task

@@ -14,6 +14,7 @@ leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-control-core = { path = "../lunco-control-core" }
+lunco-embodiment-core = { path = "../lunco-embodiment-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-input-core = { path = "../lunco-input-core" }
 # The generic vessel-control command contracts live in the backend-neutral

@@ -597,6 +597,226 @@ pub struct VesselInputLog {
 #[derive(Resource, Default)]
 pub struct OwnedInputLog(pub HashMap<u64, VesselInputLog>);
 
+/// Semantic input admitted at a fixed-step boundary for whole-session capture.
+///
+/// This stream has a different lifetime and record shape from
+/// [`OwnedInputLog`], which exists only for per-vessel prediction rollback.
+/// Session records retain stable identities and semantic names rather than ECS
+/// entity bits or controller-local masks.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SessionInputRecord {
+    /// Typed producer identity available at the admission boundary.
+    pub producer: SessionInputProducer,
+    /// Stable target identity for this input.
+    pub target: lunco_core::GlobalEntityId,
+    /// Committed scene generation that admitted the target.
+    pub scene_generation: u64,
+    /// Fixed simulation tick at which the input was consumed.
+    pub effective_tick: u64,
+    /// Shared per-tick sequence assigned at the controller admission boundary.
+    pub sequence: u64,
+    /// Typed semantic input payload.
+    pub payload: SessionInputPayload,
+}
+
+/// Producer class and identity retained with an admitted session input.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SessionInputProducer {
+    /// Physical controller attached to the local input session.
+    PhysicalController { session_id: SessionId },
+    /// Command accepted through the external API transport. The transport does
+    /// not yet expose a stable per-client identity.
+    ApiTransport,
+    /// Rhai command; Twin actor identity is retained when the caller has one.
+    Rhai {
+        actor: Option<lunco_core::GlobalEntityId>,
+    },
+    /// In-process typed command without a classified producer identity.
+    DirectCommand,
+}
+
+/// Stable payloads accepted by the session-input stream.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SessionInputPayload {
+    /// Complete held-intent state sampled from a physical controller at one
+    /// fixed tick. Names use the canonical `UserIntent` spelling.
+    PhysicalIntentFrame { intent_ids: Vec<String> },
+    /// Admitted level-triggered intent change supplied by an API, Rhai, or
+    /// direct typed command.
+    SimulatedIntentChange {
+        /// Canonical shared intent name.
+        intent: String,
+        /// Whether the producer held or released the intent.
+        held: bool,
+        /// Correlation id from the admitted typed command.
+        correlation_id: u64,
+    },
+    /// Admitted discrete semantic edge supplied by an API, Rhai, or direct
+    /// typed command.
+    SemanticIntentEdge {
+        /// Canonical shared intent name.
+        intent: String,
+        /// `pressed`, `released`, or `pulse`.
+        edge: String,
+        /// Correlation id from the admitted typed command.
+        correlation_id: u64,
+    },
+}
+
+/// Lifecycle of the bounded in-memory session-input capture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionInputStreamState {
+    /// Capture has not started or was cleared.
+    #[default]
+    Idle,
+    /// Inputs are being appended in admitted fixed-step order.
+    Recording,
+    /// Capture stopped without losing any admitted records.
+    Complete,
+    /// Capture stopped because its record contract could no longer be met.
+    Failed,
+}
+
+/// Bounded append-only capture of admitted whole-session input records.
+///
+/// This is separate from [`OwnedInputLog`]: the latter is a rolling network
+/// rollback buffer of resolved vessel port writes, while this stream retains
+/// semantic inputs for recording and replay.
+#[derive(Resource, Debug, Default)]
+pub struct SessionInputStream {
+    state: SessionInputStreamState,
+    record_limit: usize,
+    records: Vec<SessionInputRecord>,
+    last_order: Option<(u64, u64, u64)>,
+    failure: Option<String>,
+}
+
+/// Runtime bound applied to one session-input capture.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct SessionInputStreamSettings {
+    /// Maximum semantic records retained by one capture.
+    pub max_records_per_capture: usize,
+}
+
+impl Default for SessionInputStreamSettings {
+    fn default() -> Self {
+        Self {
+            max_records_per_capture: 65_536,
+        }
+    }
+}
+
+impl SessionInputStream {
+    /// Begin a capture with an explicit record bound. A completed or failed
+    /// capture must be cleared before another can begin.
+    pub fn begin(&mut self, record_limit: usize) -> Result<(), String> {
+        if self.state == SessionInputStreamState::Recording {
+            return Err("session input capture is already recording".to_owned());
+        }
+        if self.state != SessionInputStreamState::Idle {
+            return Err("session input capture must be cleared before recording again".to_owned());
+        }
+        if record_limit == 0 {
+            return Err("session input capture record limit must be positive".to_owned());
+        }
+        self.record_limit = record_limit;
+        self.last_order = None;
+        self.failure = None;
+        self.state = SessionInputStreamState::Recording;
+        Ok(())
+    }
+
+    /// Whether this stream currently accepts admitted inputs.
+    pub fn is_recording(&self) -> bool {
+        self.state == SessionInputStreamState::Recording
+    }
+
+    /// Current capture lifecycle state.
+    pub fn state(&self) -> SessionInputStreamState {
+        self.state
+    }
+
+    /// Retained records in their authoritative admission order.
+    pub fn records(&self) -> &[SessionInputRecord] {
+        &self.records
+    }
+
+    /// The terminal recording error, when capture failed.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
+    /// Maximum number of records accepted by the current capture.
+    pub fn record_limit(&self) -> usize {
+        self.record_limit
+    }
+
+    /// Append one record or stop capture visibly if the bounded stream can no
+    /// longer retain the authoritative input sequence.
+    pub fn append(&mut self, record: SessionInputRecord) -> Result<(), String> {
+        if !self.is_recording() {
+            return Err("session input capture is not recording".to_owned());
+        }
+
+        let order = (
+            record.scene_generation,
+            record.effective_tick,
+            record.sequence,
+        );
+        let failure = if record.target.get() == 0 {
+            Some("session input record has no stable target identity".to_owned())
+        } else if record.scene_generation == 0 {
+            Some("session input record has no committed scene generation".to_owned())
+        } else if record.sequence == 0 {
+            Some("session input record has no admitted per-tick sequence".to_owned())
+        } else if self.records.len() >= self.record_limit {
+            Some(format!(
+                "session input capture reached its {} record limit",
+                self.record_limit
+            ))
+        } else if self.last_order.is_some_and(|previous| order <= previous) {
+            Some(format!(
+                "session input order must increase; received generation {}, tick {}, sequence {} after {:?}",
+                order.0, order.1, order.2, self.last_order
+            ))
+        } else {
+            None
+        };
+
+        if let Some(message) = failure {
+            self.failure = Some(message.clone());
+            self.state = SessionInputStreamState::Failed;
+            return Err(message);
+        }
+
+        self.last_order = Some(order);
+        self.records.push(record);
+        Ok(())
+    }
+
+    /// Finish a recording without discarding its records.
+    pub fn finish(&mut self) {
+        if self.is_recording() {
+            self.state = SessionInputStreamState::Complete;
+        }
+    }
+
+    /// Discard all retained records and return to the idle state.
+    pub fn clear(&mut self) -> Result<(), String> {
+        if self.is_recording() {
+            return Err("active session input capture must be stopped before clearing".to_owned());
+        }
+        self.state = SessionInputStreamState::Idle;
+        self.record_limit = 0;
+        self.records.clear();
+        self.last_order = None;
+        self.failure = None;
+        Ok(())
+    }
+}
+
 /// CLIENT-side latest local drive input per owned gid `(throttle, steer)`, captured
 /// from the outbound `SetPorts` in `record_control_input`. The render-lead
 /// (`lead_owned_rover_render`) reads it to visually anticipate the rover's motion —
@@ -2101,4 +2321,112 @@ mod tests {
     // `tests/authz_hook.rs` (its own test binary), because it registers under the
     // process-global `AUTHORIZE_HOOK` id — doing so in this binary would race the
     // other `authorize()` unit tests running on parallel threads.
+}
+
+#[cfg(test)]
+mod session_input_stream_tests {
+    use super::{
+        SessionInputPayload, SessionInputRecord, SessionInputStream, SessionInputStreamState,
+    };
+    use lunco_command_contracts::SessionId;
+
+    fn physical_record(tick: u64, sequence: u64) -> SessionInputRecord {
+        SessionInputRecord {
+            producer: super::SessionInputProducer::PhysicalController {
+                session_id: SessionId(7),
+            },
+            target: lunco_core::GlobalEntityId::from_raw(42),
+            scene_generation: 3,
+            effective_tick: tick,
+            sequence,
+            payload: SessionInputPayload::PhysicalIntentFrame {
+                intent_ids: vec!["forward".to_owned()],
+            },
+        }
+    }
+
+    #[test]
+    fn capture_fails_visibly_instead_of_reordering_or_dropping_records() {
+        let mut stream = SessionInputStream::default();
+        stream.begin(3).expect("capture starts");
+        stream
+            .append(physical_record(10, 1))
+            .expect("first record retained");
+        stream
+            .append(physical_record(10, 2))
+            .expect("next ordered record retained");
+
+        let error = stream
+            .append(physical_record(10, 2))
+            .expect_err("duplicate admission order must fail capture");
+        assert!(error.contains("order must increase"));
+        assert_eq!(stream.state(), SessionInputStreamState::Failed);
+        assert_eq!(stream.records().len(), 2);
+        assert_eq!(stream.failure(), Some(error.as_str()));
+    }
+
+    #[test]
+    fn bounded_capture_stops_without_silently_evicting_admitted_inputs() {
+        let mut stream = SessionInputStream::default();
+        stream.begin(1).expect("capture starts");
+        stream
+            .append(physical_record(10, 1))
+            .expect("first record retained");
+
+        let error = stream
+            .append(physical_record(11, 1))
+            .expect_err("capacity overflow must be visible");
+        assert!(error.contains("record limit"));
+        assert_eq!(stream.state(), SessionInputStreamState::Failed);
+        assert_eq!(stream.records(), &[physical_record(10, 1)]);
+    }
+
+    #[test]
+    fn a_new_capture_requires_explicit_disposal_of_previous_records() {
+        let mut stream = SessionInputStream::default();
+        stream.begin(2).expect("capture starts");
+        stream
+            .append(physical_record(10, 1))
+            .expect("record retained");
+        stream.finish();
+
+        assert!(stream.begin(2).is_err());
+        stream.clear().expect("completed capture can be cleared");
+        stream.begin(2).expect("new capture starts after clear");
+        assert_eq!(stream.state(), SessionInputStreamState::Recording);
+    }
+
+    #[test]
+    fn empty_completed_or_failed_capture_requires_explicit_clear_before_restart() {
+        let mut stream = SessionInputStream::default();
+        stream.begin(2).expect("capture starts");
+        stream.finish();
+        assert!(stream.records().is_empty());
+        assert!(
+            stream
+                .begin(2)
+                .expect_err("empty completed capture still requires clear")
+                .contains("must be cleared")
+        );
+
+        stream.clear().expect("completed capture can be cleared");
+        stream.begin(2).expect("capture starts after clear");
+        let mut invalid = physical_record(10, 1);
+        invalid.target = lunco_core::GlobalEntityId::from_raw(0);
+        stream
+            .append(invalid)
+            .expect_err("invalid identity fails the empty capture");
+        assert_eq!(stream.state(), SessionInputStreamState::Failed);
+        assert!(stream.records().is_empty());
+        assert!(
+            stream
+                .begin(2)
+                .expect_err("empty failed capture still requires clear")
+                .contains("must be cleared")
+        );
+
+        stream.clear().expect("failed capture can be cleared");
+        stream.begin(2).expect("capture restarts after clear");
+        assert!(stream.is_recording());
+    }
 }

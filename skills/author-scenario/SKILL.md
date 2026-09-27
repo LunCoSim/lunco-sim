@@ -15,8 +15,8 @@ are task/event-driven policy. They must not define `on_tick`; that hook is
 reserved for authored tests under `assets/scenarios/tests/` to sample live
 telemetry and publish a bounded verdict. Continuous rover dynamics remain in
 fixed-step physics/Modelica. Runtime plugins install their own cycles from
-the selected application composition. A scenario may declare its process-role
-execution target with `// @run-on host|client|both` and its cadence with
+the selected application composition. A scenario may declare its peer-role
+execution target with `// @peer host|client|both` and its cadence with
 `// @timing simulation`; `host` includes standalone authoritative mode. These
 directives do not choose its Core/Application/Twin owner or install schedules.
 Rust assigns the owner route and retains schedule ownership.
@@ -604,16 +604,27 @@ severity; threshold and hysteresis equations remain in Modelica.
 Discrete vessel actions have a dedicated atomic edge surface:
 `intent_edge(target, intent, "pressed"|"released"|"pulse")` or the shorter
 `intent_pulse(target, intent)` helper. It emits `intent.edge` with
-`value.target_gid`, `value.correlation_id`, `value.intent`, and `value.edge`; the consuming Twin decides
-what the edge means and whether to write a port. Use `SimulateIntent`/`SetPorts`
+`value.target_gid`, `value.correlation_id`, `value.intent`, and `value.edge`;
+`value.correlation_id` is the same unsigned command id returned by the helper.
+The consuming Twin decides what the edge means and whether to write a port.
+Use `SimulateIntent`/`SetPorts`
 for held or continuous values, and never build a pulse from two ordered writes.
+Held `SimulateIntent` state is keyed by target, intent, and producer identity:
+API transport, Rhai runtime route plus scenario actor id, or direct typed
+command. A release clears only that source's hold. External commands targeting
+fixed simulation state are admitted for the next tick and publish `intent.hold`
+with their correlation id and input-order stamp; Simulation-clock Rhai behavior
+stays in its current pass, and local-embodiment input uses the interaction
+cadence. The live held state is not a durable session replay record.
 
 The helper result's `id` correlates the edge with the read-only
 `query("CausalTrace", #{target: target, correlation_id: edge.id})` snapshot.
 That snapshot exposes the authored mapping, selected port owner, connection
-and native-joint admission, and current measured channels. Missing or pending
-stages remain visible as incomplete; they are not inferred as successful
-actuation.
+and native-joint admission, current measured channels, and classified producer
+origin. An externally admitted edge also exposes its committed scene
+generation, effective simulation tick, and per-tick sequence; a deterministic
+simulation-hook edge has no external admission stamp. Missing or pending stages
+remain visible as incomplete; they are not inferred as successful actuation.
 
 ## 6. Running & debugging
 

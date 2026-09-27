@@ -339,10 +339,12 @@ pub fn on_command(attr: TokenStream, item: TokenStream) -> TokenStream {
         /// Project this typed command onto the shared script/telemetry event bus.
         #fn_vis fn #project_fn_name(
             _trigger: bevy::prelude::On<#cmd_type>,
+            active_command: Option<bevy::prelude::Res<::lunco_core::ActiveCommandId>>,
             mut commands: bevy::prelude::Commands,
         ) {
             commands.trigger(::lunco_core::CommandOccurred {
                 name: stringify!(#cmd_type).to_string(),
+                origin: active_command.and_then(|active| active.origin()),
             });
         }
 

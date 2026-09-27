@@ -359,6 +359,9 @@ Use `SimulateIntent` for a held semantic control and
 publishes one target-scoped `intent.edge` event; Rhai owns the action policy and
 Modelica owns continuous state, so the edge must not be translated into a
 vehicle-specific Rust write or emulated with two ordered held commands.
+Held intents keep API transport, Rhai runtime route plus scenario actor id, and
+direct typed-command sources separate; releasing one source does not release
+another. This is live control state, not tick-assigned session replay input.
 
 For an operator-facing causal check, keep the edge result `id` and call
 `query("CausalTrace", #{target: target, correlation_id: edge.id})`. The
@@ -366,6 +369,9 @@ read-only response composes the existing `ControlBinding`, `PortRegistry`, USD
 connection/native-joint admission, and `SignalRegistry` facts. It reports
 missing/pending stages explicitly and never becomes a second control or
 telemetry route.
+Externally admitted discrete edges also report the committed scene generation,
+effective tick, and per-tick sequence; deterministic Rhai simulation edges
+carry no external admission stamp.
 
 Battery empty events use the authored 0.1% usable-storage reserve in
 `Battery.mo`; do not replace that physical boundary with Rust actuator policy or

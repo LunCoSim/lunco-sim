@@ -339,12 +339,14 @@ mod tests {
 
         app.world_mut().trigger(lunco_core::CommandOccurred {
             name: "First".to_owned(),
+            origin: None,
         });
         app.world_mut()
             .resource_mut::<Time<Real>>()
             .advance_by(std::time::Duration::from_millis(250));
         app.world_mut().trigger(lunco_core::CommandOccurred {
             name: "Second".to_owned(),
+            origin: None,
         });
 
         let cadence = app.world().resource::<ApplicationCadence>();

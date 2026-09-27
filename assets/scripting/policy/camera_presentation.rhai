@@ -6,6 +6,12 @@
 // empty and lets the owning contract report that no initial presentation was
 // selected.
 fn default_presentation(ctx) {
+    if runtime_context.scope != "application"
+        || runtime_context.cycle != "presentation"
+        || runtime_context.phase != "preparation"
+        || runtime_context.clock != "presentation" {
+        throw "camera.default_presentation requires Application/Presentation/Preparation context";
+    }
     if ctx.local_avatar_camera_count == 1 {
         return "avatar";
     }

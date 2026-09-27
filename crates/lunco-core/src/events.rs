@@ -1,8 +1,9 @@
 //! Generic runtime facts emitted by the core and projected by optional consumers.
 
+use crate::CommandOrigin;
 use bevy::prelude::*;
 
-/// A typed command was accepted by the runtime.
+/// A typed command event was dispatched by the runtime.
 ///
 /// This is a core fact rather than a telemetry event. Telemetry, scripting, and
 /// other observers may project it into their own channels without making the
@@ -11,6 +12,9 @@ use bevy::prelude::*;
 pub struct CommandOccurred {
     /// The stable command type name.
     pub name: String,
+    /// Classified origin for reflected API and Rhai commands. `None` marks a
+    /// direct Bevy trigger whose producer has not supplied replay provenance.
+    pub origin: Option<CommandOrigin>,
 }
 
 /// A recoverable runtime operation reported an error.

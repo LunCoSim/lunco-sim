@@ -254,6 +254,7 @@ fn default_presentation_action(
     authored_camera_count: usize,
     camera_track_count: usize,
     local_avatar_camera_count: usize,
+    runtime_context: lunco_core::RuntimeExecutionContext,
 ) -> Result<DefaultPresentationAction, String> {
     let context = HookValue::map([
         (
@@ -273,12 +274,16 @@ fn default_presentation_action(
             HookValue::Int(local_avatar_camera_count as i64),
         ),
     ]);
-    let result = lunco_hooks::invoke_unclassified(DEFAULT_PRESENTATION_HOOK, &[context])
-        .ok_or_else(|| {
-            format!(
-                "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' is not registered"
-            )
-        })?;
+    let result = lunco_hooks::invoke_with_context(
+        DEFAULT_PRESENTATION_HOOK,
+        &[context],
+        runtime_context,
+    )
+    .ok_or_else(|| {
+        format!(
+            "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' is not registered"
+        )
+    })?;
     let value = result.map_err(|error| {
         format!("camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' faulted: {error}")
     })?;
@@ -292,6 +297,20 @@ fn default_presentation_action(
         None => Err(format!(
             "camera default-presentation policy '{DEFAULT_PRESENTATION_HOOK}' must return 'none', 'avatar', or 'generated'"
         )),
+    }
+}
+
+fn presentation_runtime_context(time: &Time<Real>) -> lunco_core::RuntimeExecutionContext {
+    lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::application(
+            lunco_core::RuntimeCycle::Presentation,
+        )),
+        phase: lunco_core::RuntimePhase::Preparation,
+        clock: lunco_core::RuntimeClock::Presentation,
+        time_seconds: Some(time.elapsed_secs_f64()),
+        delta_seconds: Some(time.delta_secs_f64()),
+        sequence: None,
+        producer: None,
     }
 }
 
@@ -1044,6 +1063,7 @@ pub(crate) struct StandalonePresentationQueries<'w, 's> {
 }
 
 pub(crate) fn ensure_standalone_presentation(
+    time: Res<Time<Real>>,
     mount: Res<lunco_core::SceneMountState>,
     settings: Res<StandalonePresentationSettings>,
     mut presentation: ResMut<StandalonePresentationState>,
@@ -1243,6 +1263,7 @@ pub(crate) fn ensure_standalone_presentation(
         authored_camera_count,
         camera_track_count,
         local_avatar_camera_count,
+        presentation_runtime_context(&time),
     ) {
         Ok(action) => action,
         Err(error) => {
@@ -1728,6 +1749,7 @@ pub(crate) struct AuthoredAvatarSelection<'w, 's> {
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct AuthoredPresentationQueries<'w, 's> {
+    time: Res<'w, Time<Real>>,
     generated_cameras: Query<'w, 's, Entity, With<StandalonePresentationCamera>>,
     directional_lights: Query<
         'w,
@@ -1925,6 +1947,7 @@ pub(crate) fn validate_authored_camera_contract(
                 &avatar_selection.local_avatar,
                 &avatar_selection.retiring,
                 &mut commands,
+                presentation_runtime_context(&presentation_queries.time),
             ) {
                 Ok(DefaultPresentationAction::Embodiment) => {}
                 Ok(DefaultPresentationAction::None) => errors.push(
@@ -2009,6 +2032,7 @@ fn request_authored_local_avatar_view(
     local_avatar: &TheLocalEmbodiment,
     retiring: &Query<(), With<lunco_render::CameraRetiring>>,
     commands: &mut Commands,
+    runtime_context: lunco_core::RuntimeExecutionContext,
 ) -> Result<DefaultPresentationAction, String> {
     if !tracks.is_empty() || selection.requested.is_some() {
         return Ok(DefaultPresentationAction::None);
@@ -2026,8 +2050,13 @@ fn request_authored_local_avatar_view(
                 .to_string(),
         );
     }
-    let action =
-        default_presentation_action(false, cameras.iter().count(), tracks.iter().count(), 1)?;
+    let action = default_presentation_action(
+        false,
+        cameras.iter().count(),
+        tracks.iter().count(),
+        1,
+        runtime_context,
+    )?;
     if action == DefaultPresentationAction::Embodiment {
         commands.trigger(ActivateCamera::policy(target));
     }
@@ -2127,6 +2156,24 @@ mod tests {
 
     impl lunco_hooks::ScriptHook for TestPresentationPolicy {
         fn invoke(&self, invocation: &lunco_hooks::HookInvocation<'_>) -> lunco_hooks::HookResult {
+            let context = invocation.context;
+            if context.route
+                != Some(lunco_core::RuntimeRoute::application(
+                    lunco_core::RuntimeCycle::Presentation,
+                ))
+                || context.phase != lunco_core::RuntimePhase::Preparation
+                || context.clock != lunco_core::RuntimeClock::Presentation
+                || context.time_seconds.is_none()
+                || context.delta_seconds.is_none()
+                || context.sequence.is_some()
+                || context.producer.is_some()
+                || context.validate().is_err()
+            {
+                return Err(lunco_hooks::HookError(
+                    "camera policy requires Application/Presentation/Preparation context with its presentation clock"
+                        .into(),
+                ));
+            }
             let context = invocation
                 .args
                 .first()
@@ -2167,7 +2214,10 @@ mod tests {
             .init_resource::<StandalonePresentationState>()
             .init_resource::<StandalonePresentationSettings>()
             .add_observer(on_activate_camera)
-            .add_systems(Update, ensure_standalone_presentation)
+            .add_systems(
+                Update,
+                ensure_standalone_presentation.in_set(lunco_core::RuntimeCycleSet::Presentation),
+            )
             .add_systems(lunco_core::SceneTeardown, reset_camera_selection);
         app.world_mut()
             .resource_mut::<StandalonePresentationState>()

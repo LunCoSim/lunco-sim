@@ -34,6 +34,7 @@
 //! can drive a vessel by naming intents — the same consistent vocabulary. All writes
 //! land through the same [`lunco_port_core::ports::PortRegistry`].
 
+use bevy::ecs::system::SystemParam;
 use bevy::input::{
     ButtonState,
     keyboard::{Key, KeyCode, KeyboardInput, NativeKey},
@@ -48,30 +49,450 @@ use lunco_control_core::ControlLink;
 use lunco_control_core::{
     ControlBinding, InteractionControlSet, UserIntent, ensure_control_plugin,
 };
-use lunco_core::{Command, on_command, register_commands};
+use lunco_core::{Command, CommandOrigin, RuntimeRoute, on_command, register_commands};
 use lunco_hooks::HookValue;
 use lunco_input_core::InputBindingsSettings;
 use serde::{Deserialize, Serialize};
 
-/// Intents forced held by [`SimulateIntent`], **keyed by the entity they drive** —
-/// a headless stand-in for the keyboard.
+/// Origin for a held intent supplied through [`SimulateIntent`]. Physical
+/// [`ActionState<UserIntent>`] is sampled through [`PhysicalIntentFrame`] at its
+/// consuming cadence and remains a separate producer. Rhai scenario sources
+/// retain both their runtime route and stable actor identity; fixed-tick admission
+/// belongs to the session-input boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SimulatedIntentSource {
+    ApiTransport,
+    Rhai {
+        route: RuntimeRoute,
+        actor: Option<lunco_core::GlobalEntityId>,
+    },
+    DirectCommand,
+}
+
+const MAX_PENDING_SEMANTIC_INPUTS: usize = 4096;
+
+#[derive(Clone, Copy, Debug)]
+enum PendingSemanticInputAction {
+    Edge {
+        intent: UserIntent,
+        kind: lunco_control_core::SemanticIntentEdgeKind,
+    },
+    Held {
+        intent: UserIntent,
+        source: SimulatedIntentSource,
+        held: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingSemanticInput {
+    target: Entity,
+    target_gid: lunco_core::GlobalEntityId,
+    action: PendingSemanticInputAction,
+    correlation_id: u64,
+    origin: Option<CommandOrigin>,
+    admission: lunco_control_core::SimulationInputOrder,
+}
+
+/// Bounded ingress for external semantic inputs. Deterministic Rhai simulation
+/// hooks bypass this queue because their actions are derived behavior.
+#[derive(Resource, Default)]
+struct PendingSemanticInputs {
+    pending: std::collections::VecDeque<PendingSemanticInput>,
+    sequence_tick: Option<u64>,
+    next_sequence: u64,
+}
+
+impl PendingSemanticInputs {
+    fn assign_order(
+        &mut self,
+        scene_generation: u64,
+        effective_tick: u64,
+    ) -> Result<lunco_control_core::SimulationInputOrder, String> {
+        let sequence = match self.sequence_tick {
+            Some(tick) if effective_tick < tick => {
+                return Err(format!(
+                    "semantic input tick moved backwards from {tick} to {effective_tick}"
+                ));
+            }
+            Some(tick) if effective_tick == tick => self
+                .next_sequence
+                .checked_add(1)
+                .ok_or_else(|| "semantic input sequence exhausted".to_owned())?,
+            _ => 1,
+        };
+        self.sequence_tick = Some(effective_tick);
+        self.next_sequence = sequence;
+
+        Ok(lunco_control_core::SimulationInputOrder {
+            scene_generation,
+            effective_tick,
+            sequence,
+        })
+    }
+
+    fn admit(
+        &mut self,
+        target: Entity,
+        target_gid: lunco_core::GlobalEntityId,
+        action: PendingSemanticInputAction,
+        correlation_id: u64,
+        origin: Option<CommandOrigin>,
+        scene_generation: u64,
+        effective_tick: u64,
+    ) -> Result<lunco_control_core::SimulationInputOrder, String> {
+        if self.pending.len() >= MAX_PENDING_SEMANTIC_INPUTS {
+            return Err(format!(
+                "semantic input admission queue is full ({MAX_PENDING_SEMANTIC_INPUTS} records)"
+            ));
+        }
+
+        let admission = self.assign_order(scene_generation, effective_tick)?;
+        self.pending.push_back(PendingSemanticInput {
+            target,
+            target_gid,
+            action,
+            correlation_id,
+            origin,
+            admission,
+        });
+        Ok(admission)
+    }
+
+    fn take_due(&mut self, tick: u64) -> Vec<PendingSemanticInput> {
+        self.pending
+            .make_contiguous()
+            .sort_by_key(|input| (input.admission.effective_tick, input.admission.sequence));
+        let ready_count = self
+            .pending
+            .iter()
+            .take_while(|input| input.admission.effective_tick <= tick)
+            .count();
+        self.pending.drain(..ready_count).collect()
+    }
+
+    fn clear(&mut self) {
+        self.pending.clear();
+        self.sequence_tick = None;
+        self.next_sequence = 0;
+    }
+}
+
+#[derive(SystemParam)]
+struct ControllerInputAdmission<'w> {
+    tick: Res<'w, lunco_core_runtime::SimTick>,
+    scene: Option<Res<'w, lunco_core::SceneTransitionCoordinator>>,
+    inputs: ResMut<'w, PendingSemanticInputs>,
+    recording: Option<ResMut<'w, lunco_core_session::SessionInputStream>>,
+}
+
+/// Intents forced held by [`SimulateIntent`], keyed by target, intent, and
+/// producer class. Releasing one producer's hold leaves another producer's hold
+/// intact.
 ///
-/// `drive_from_bindings` treats a member exactly as a held key: it OR's into the
-/// `held` test, so a simulated intent flows through the SAME two-stage binding path a
-/// real keypress does (intent → `ControlBinding` → `SetPorts`). This is how a test, a
-/// script, or the API drives a possessed vessel with no physical keyboard.
-///
-/// **Per-entity, not global.** A held intent is addressed to the ONE vessel it
-/// controls. This used to be a bare `HashSet<UserIntent>` consulted for every vessel
-/// `drive_from_bindings` iterated, so a single simulated press drove EVERY controlled
-/// vessel at once: two spawns of the same asset (two landers — byte-identical prim
-/// paths, distinct entities) could not be flown independently, and "control" meant
-/// "whatever happens to be possessed". Keying by the vessel entity makes the signal
-/// name its subject, exactly as the wire endpoints do via `GlobalEntityId`.
+/// This is live controller state, not a replay log. External commands enter the
+/// bounded session-input queue and update this resource at their admitted tick.
 #[derive(Resource, Default)]
 pub struct SimulatedIntents(
-    pub std::collections::HashMap<Entity, std::collections::HashSet<UserIntent>>,
+    std::collections::HashMap<
+        Entity,
+        std::collections::HashMap<UserIntent, std::collections::HashSet<SimulatedIntentSource>>,
+    >,
 );
+
+impl SimulatedIntents {
+    fn set(
+        &mut self,
+        target: Entity,
+        intent: UserIntent,
+        source: SimulatedIntentSource,
+        held: bool,
+    ) {
+        if held {
+            self.0
+                .entry(target)
+                .or_default()
+                .entry(intent)
+                .or_default()
+                .insert(source);
+            return;
+        }
+
+        let Some(intents) = self.0.get_mut(&target) else {
+            return;
+        };
+        if let Some(sources) = intents.get_mut(&intent) {
+            sources.remove(&source);
+            if sources.is_empty() {
+                intents.remove(&intent);
+            }
+        }
+        if intents.is_empty() {
+            self.0.remove(&target);
+        }
+    }
+
+    fn is_held(&self, target: Entity, intent: UserIntent) -> bool {
+        self.0
+            .get(&target)
+            .and_then(|intents| intents.get(&intent))
+            .is_some_and(|sources| !sources.is_empty())
+    }
+}
+
+/// Value snapshot of the physical semantic inputs read at one controller
+/// cadence. At the fixed-step owner it also carries the local input session,
+/// stable target id, and shared tick-order stamp. Script/API holds stay in
+/// [`SimulatedIntents`] and are combined only when the controller asks whether
+/// an intent is active. The bit layout is process-local; a session record must
+/// store semantic intent ids.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PhysicalIntentFrame {
+    held: u128,
+    producer_session: Option<lunco_command_contracts::SessionId>,
+    target_gid: Option<lunco_core::GlobalEntityId>,
+    admission: Option<lunco_control_core::SimulationInputOrder>,
+}
+
+impl PhysicalIntentFrame {
+    fn capture(
+        binding: &ControlBinding,
+        action_state: &ActionState<UserIntent>,
+        keyboard_captured: bool,
+    ) -> Self {
+        if keyboard_captured {
+            return Self::default();
+        }
+
+        let mut frame = Self::default();
+        for (intent, _, _) in &binding.binds {
+            if action_state.pressed(intent) {
+                frame.held |= physical_intent_mask(*intent);
+            }
+        }
+        if action_state.pressed(&UserIntent::Action) {
+            frame.held |= physical_intent_mask(UserIntent::Action);
+        }
+        frame
+    }
+
+    fn is_held(self, intent: UserIntent) -> bool {
+        self.held & physical_intent_mask(intent) != 0
+    }
+
+    fn session_input_record(self) -> Result<lunco_core_session::SessionInputRecord, String> {
+        let producer_session = self
+            .producer_session
+            .ok_or_else(|| "physical semantic frame has no producer session".to_owned())?;
+        let target = self
+            .target_gid
+            .ok_or_else(|| "physical semantic frame has no stable target identity".to_owned())?;
+        let admission = self
+            .admission
+            .ok_or_else(|| "physical semantic frame has no fixed-tick admission".to_owned())?;
+        let mut intent_ids = UserIntent::ALL
+            .into_iter()
+            .filter(|intent| self.is_held(*intent))
+            .map(|intent| intent.canonical_name().to_owned())
+            .collect::<Vec<_>>();
+        intent_ids.sort_unstable();
+
+        Ok(lunco_core_session::SessionInputRecord {
+            producer: lunco_core_session::SessionInputProducer::PhysicalController {
+                session_id: producer_session,
+            },
+            target,
+            scene_generation: admission.scene_generation,
+            effective_tick: admission.effective_tick,
+            sequence: admission.sequence,
+            payload: lunco_core_session::SessionInputPayload::PhysicalIntentFrame { intent_ids },
+        })
+    }
+
+    fn admit(
+        mut self,
+        producer_session: lunco_command_contracts::SessionId,
+        target_gid: lunco_core::GlobalEntityId,
+        admission: lunco_control_core::SimulationInputOrder,
+    ) -> Self {
+        self.producer_session = Some(producer_session);
+        self.target_gid = Some(target_gid);
+        self.admission = Some(admission);
+        self
+    }
+
+    fn validate_admission(
+        self,
+        producer_session: Option<lunco_command_contracts::SessionId>,
+        target_gid: Option<lunco_core::GlobalEntityId>,
+        scene_generation: Option<u64>,
+        effective_tick: u64,
+    ) -> Result<(), String> {
+        match (self.producer_session, self.target_gid, self.admission) {
+            (None, None, None) => Ok(()),
+            (Some(admitted_producer), Some(admitted_target), Some(admission))
+                if producer_session == Some(admitted_producer)
+                    && target_gid == Some(admitted_target)
+                    && scene_generation == Some(admission.scene_generation)
+                    && admission.effective_tick == effective_tick =>
+            {
+                Ok(())
+            }
+            _ => Err("physical semantic frame admission does not match its input session, target, and fixed tick".to_owned()),
+        }
+    }
+}
+
+fn physical_intent_mask(intent: UserIntent) -> u128 {
+    let index = match intent {
+        UserIntent::MoveForward => 0,
+        UserIntent::MoveBackward => 1,
+        UserIntent::MoveLeft => 2,
+        UserIntent::MoveRight => 3,
+        UserIntent::MoveUp => 4,
+        UserIntent::MoveDown => 5,
+        UserIntent::SpeedBoost => 6,
+        UserIntent::Look => 7,
+        UserIntent::Zoom => 8,
+        UserIntent::Action => 9,
+        UserIntent::Thrust => 10,
+        UserIntent::Brake => 11,
+        UserIntent::Release => 12,
+        UserIntent::SwitchMode => 13,
+        UserIntent::Pause => 14,
+        UserIntent::Cancel => 15,
+        UserIntent::DeleteSelection => 16,
+    };
+    1_u128 << index
+}
+
+#[cfg(test)]
+mod physical_intent_frame_tests {
+    use super::*;
+
+    #[test]
+    fn physical_frame_respects_keyboard_capture_without_masking_simulated_holds() {
+        let target = Entity::PLACEHOLDER;
+        let mut action_state = ActionState::<UserIntent>::default();
+        action_state.press(&UserIntent::MoveForward);
+        let simulated = SimulatedIntents::default();
+
+        let binding =
+            ControlBinding::from_intent_entries(&[("forward".into(), "throttle".into(), 1.0)])
+                .expect("valid physical-frame binding");
+        let physical = PhysicalIntentFrame::capture(&binding, &action_state, false);
+        assert!(intent_held(
+            target,
+            UserIntent::MoveForward,
+            &physical,
+            Some(&simulated)
+        ));
+        assert!(!intent_held(
+            target,
+            UserIntent::MoveBackward,
+            &physical,
+            Some(&simulated)
+        ));
+
+        action_state.release(&UserIntent::MoveForward);
+        assert!(physical.is_held(UserIntent::MoveForward));
+
+        let keyboard_captured = PhysicalIntentFrame::capture(&binding, &action_state, true);
+        assert!(!intent_held(
+            target,
+            UserIntent::MoveForward,
+            &keyboard_captured,
+            Some(&simulated)
+        ));
+
+        let mut simulated = simulated;
+        simulated.set(
+            target,
+            UserIntent::MoveForward,
+            SimulatedIntentSource::ApiTransport,
+            true,
+        );
+        assert!(intent_held(
+            target,
+            UserIntent::MoveForward,
+            &keyboard_captured,
+            Some(&simulated)
+        ));
+    }
+
+    #[test]
+    fn physical_frame_uses_the_shared_tick_sequence_and_stable_identities() {
+        let target = Entity::PLACEHOLDER;
+        let target_gid = lunco_core::GlobalEntityId::from_raw(0x22);
+        let producer_session = lunco_command_contracts::SessionId(11);
+        let scene_generation = 7;
+        let effective_tick = 41;
+        let mut inputs = PendingSemanticInputs::default();
+
+        let queued = inputs
+            .admit(
+                target,
+                target_gid,
+                PendingSemanticInputAction::Edge {
+                    intent: UserIntent::Action,
+                    kind: lunco_control_core::SemanticIntentEdgeKind::Pulse,
+                },
+                9,
+                None,
+                scene_generation,
+                effective_tick,
+            )
+            .expect("external semantic input admission");
+        let physical_order = inputs
+            .assign_order(scene_generation, effective_tick)
+            .expect("physical frame admission");
+
+        assert_eq!(queued.sequence, 1);
+        assert_eq!(physical_order.sequence, 2);
+        let frame =
+            PhysicalIntentFrame::default().admit(producer_session, target_gid, physical_order);
+        assert!(
+            frame
+                .validate_admission(
+                    Some(producer_session),
+                    Some(target_gid),
+                    Some(scene_generation),
+                    effective_tick
+                )
+                .is_ok()
+        );
+        assert!(
+            frame
+                .validate_admission(
+                    Some(lunco_command_contracts::SessionId(12)),
+                    Some(target_gid),
+                    Some(scene_generation),
+                    effective_tick
+                )
+                .is_err()
+        );
+        assert!(
+            frame
+                .validate_admission(
+                    Some(producer_session),
+                    Some(target_gid),
+                    Some(scene_generation),
+                    effective_tick + 1
+                )
+                .is_err()
+        );
+        assert!(
+            frame
+                .validate_admission(
+                    Some(producer_session),
+                    Some(target_gid),
+                    Some(scene_generation + 1),
+                    effective_tick
+                )
+                .is_err()
+        );
+    }
+}
 
 /// A physical keyboard or pointer event delivered through Bevy's native input
 /// message fan-out. The command is intentionally device-level: Rhai composes
@@ -446,6 +867,10 @@ fn parse_intent_edge(name: &str) -> Option<lunco_control_core::SemanticIntentEdg
 fn on_simulate_intent_edge(
     _trigger: On<SimulateIntentEdge>,
     active_command: Res<lunco_core::ActiveCommandId>,
+    target_ids: Query<&lunco_core::GlobalEntityId>,
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    tick: Option<Res<lunco_core_runtime::SimTick>>,
+    mut pending: ResMut<PendingSemanticInputs>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let Some(intent) = lunco_control_core::parse_user_intent(&cmd.intent) else {
@@ -460,11 +885,57 @@ fn on_simulate_intent_edge(
             cmd.edge
         ));
     };
-    commands.trigger(lunco_control_core::SemanticIntentEdge {
-        target: cmd.target,
-        intent,
-        kind,
-        correlation_id: active_command.get().unwrap_or_else(|| OpId::new().0),
+    let origin = active_command.origin();
+    let correlation_id = active_command.get().unwrap_or_else(|| OpId::new().0);
+    let admission = if deterministic_simulation_origin(origin) {
+        commands.trigger(lunco_control_core::SemanticIntentEdge {
+            target: cmd.target,
+            intent,
+            kind,
+            correlation_id,
+            origin,
+            admission: None,
+        });
+        None
+    } else {
+        let target_gid = target_ids
+            .get(cmd.target)
+            .copied()
+            .map_err(|_| "semantic input target has no stable GlobalEntityId".to_owned())?;
+        let scene_generation = scene
+            .as_deref()
+            .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
+            .ok_or_else(|| {
+                "semantic input admission requires a committed scene generation".to_owned()
+            })?;
+        let effective_tick = tick
+            .as_deref()
+            .map(|tick| tick.0)
+            .ok_or_else(|| {
+                "semantic input admission requires the fixed simulation tick".to_owned()
+            })?
+            .checked_add(1)
+            .ok_or_else(|| "semantic input effective tick exhausted".to_owned())?;
+        Some(pending.admit(
+            cmd.target,
+            target_gid,
+            PendingSemanticInputAction::Edge { intent, kind },
+            correlation_id,
+            origin,
+            scene_generation,
+            effective_tick,
+        )?)
+    };
+
+    let admission_value = admission.map_or(HookValue::Unit, |admission| {
+        HookValue::map([
+            (
+                "scene_generation",
+                HookValue::UInt(admission.scene_generation),
+            ),
+            ("effective_tick", HookValue::UInt(admission.effective_tick)),
+            ("sequence", HookValue::UInt(admission.sequence)),
+        ])
     });
     Ok(Ack::with_data(
         OpId::new(),
@@ -472,8 +943,198 @@ fn on_simulate_intent_edge(
             ("target", HookValue::str(format!("{:?}", cmd.target))),
             ("intent", HookValue::str(cmd.intent.clone())),
             ("edge", HookValue::str(kind.as_str())),
+            ("correlation_id", HookValue::UInt(correlation_id)),
+            ("admission", admission_value),
         ]),
     ))
+}
+
+fn deterministic_simulation_origin(origin: Option<CommandOrigin>) -> bool {
+    matches!(
+        origin,
+        Some(CommandOrigin::Rhai {
+            context: lunco_core::RuntimeExecutionContext {
+                clock: lunco_core::RuntimeClock::Simulation,
+                ..
+            },
+            ..
+        })
+    )
+}
+
+/// Deliver admitted external semantic inputs at their assigned fixed tick.
+/// A scene replacement clears pending work, and the identity/generation checks
+/// here make stale records fail visibly if teardown did not own that transition.
+fn dispatch_pending_semantic_inputs(
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    tick: Option<Res<lunco_core_runtime::SimTick>>,
+    target_ids: Query<&lunco_core::GlobalEntityId>,
+    mut pending: ResMut<PendingSemanticInputs>,
+    mut simulated: ResMut<SimulatedIntents>,
+    mut recording: Option<ResMut<lunco_core_session::SessionInputStream>>,
+    mut commands: Commands,
+) {
+    if pending.pending.is_empty() {
+        return;
+    }
+    let Some(tick) = tick.as_deref().map(|tick| tick.0) else {
+        pending.clear();
+        commands.trigger(lunco_core::RuntimeError {
+            name: "session-input-admission".to_owned(),
+            message: "pending semantic input cannot be committed without SimTick".to_owned(),
+        });
+        return;
+    };
+    let Some(scene_generation) = scene
+        .as_deref()
+        .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
+    else {
+        pending.clear();
+        commands.trigger(lunco_core::RuntimeError {
+            name: "session-input-admission".to_owned(),
+            message: "pending semantic input cannot be committed without a scene generation"
+                .to_owned(),
+        });
+        return;
+    };
+
+    for input in pending.take_due(tick) {
+        if input.admission.effective_tick != tick {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-admission".to_owned(),
+                message: format!(
+                    "semantic input assigned to tick {} missed its commit boundary at tick {tick}",
+                    input.admission.effective_tick
+                ),
+            });
+            continue;
+        }
+        if input.admission.scene_generation != scene_generation {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-admission".to_owned(),
+                message: format!(
+                    "semantic input belongs to scene generation {}, current generation is {scene_generation}",
+                    input.admission.scene_generation
+                ),
+            });
+            continue;
+        }
+        if !target_ids
+            .get(input.target)
+            .is_ok_and(|target_gid| *target_gid == input.target_gid)
+        {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-admission".to_owned(),
+                message: format!(
+                    "semantic input target {} no longer resolves to its admitted GlobalEntityId",
+                    input.target_gid
+                ),
+            });
+            continue;
+        }
+        if let Some(stream) = recording.as_deref_mut()
+            && stream.is_recording()
+            && let Err(message) = stream.append(session_input_record(input))
+        {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-recording".to_owned(),
+                message,
+            });
+        }
+        match input.action {
+            PendingSemanticInputAction::Edge { intent, kind } => {
+                commands.trigger(lunco_control_core::SemanticIntentEdge {
+                    target: input.target,
+                    intent,
+                    kind,
+                    correlation_id: input.correlation_id,
+                    origin: input.origin,
+                    admission: Some(input.admission),
+                });
+            }
+            PendingSemanticInputAction::Held {
+                intent,
+                source,
+                held,
+            } => {
+                simulated.set(input.target, intent, source, held);
+                let mut data = std::collections::BTreeMap::new();
+                data.insert(
+                    "intent".to_owned(),
+                    lunco_telemetry_core::TelemetryValue::String(
+                        intent.canonical_name().to_owned(),
+                    ),
+                );
+                data.insert(
+                    "held".to_owned(),
+                    lunco_telemetry_core::TelemetryValue::Bool(held),
+                );
+                data.insert(
+                    "target_gid".to_owned(),
+                    lunco_telemetry_core::TelemetryValue::U64(input.target_gid.get()),
+                );
+                data.insert(
+                    "correlation_id".to_owned(),
+                    lunco_telemetry_core::TelemetryValue::U64(input.correlation_id),
+                );
+                data.insert(
+                    "scene_generation".to_owned(),
+                    lunco_telemetry_core::TelemetryValue::U64(input.admission.scene_generation),
+                );
+                data.insert(
+                    "effective_tick".to_owned(),
+                    lunco_telemetry_core::TelemetryValue::U64(input.admission.effective_tick),
+                );
+                data.insert(
+                    "input_sequence".to_owned(),
+                    lunco_telemetry_core::TelemetryValue::U64(input.admission.sequence),
+                );
+                commands.trigger(lunco_telemetry_core::TelemetryEvent {
+                    name: "intent.hold".to_owned(),
+                    source: input.target_gid.get(),
+                    severity: lunco_telemetry_core::Severity::Info,
+                    data: lunco_telemetry_core::TelemetryValue::Map(data),
+                    timestamp: 0.0,
+                    sim_secs: 0.0,
+                    sim_tick: input.admission.effective_tick,
+                });
+            }
+        }
+    }
+}
+
+fn session_input_record(input: PendingSemanticInput) -> lunco_core_session::SessionInputRecord {
+    use lunco_core_session::{SessionInputPayload, SessionInputProducer};
+
+    let producer = match input.origin {
+        Some(CommandOrigin::ApiTransport) => SessionInputProducer::ApiTransport,
+        Some(CommandOrigin::Rhai { actor, .. }) => SessionInputProducer::Rhai { actor },
+        None => SessionInputProducer::DirectCommand,
+    };
+    let payload = match input.action {
+        PendingSemanticInputAction::Edge { intent, kind } => {
+            SessionInputPayload::SemanticIntentEdge {
+                intent: intent.canonical_name().to_owned(),
+                edge: kind.as_str().to_owned(),
+                correlation_id: input.correlation_id,
+            }
+        }
+        PendingSemanticInputAction::Held { intent, held, .. } => {
+            SessionInputPayload::SimulatedIntentChange {
+                intent: intent.canonical_name().to_owned(),
+                held,
+                correlation_id: input.correlation_id,
+            }
+        }
+    };
+    lunco_core_session::SessionInputRecord {
+        producer,
+        target: input.target_gid,
+        scene_generation: input.admission.scene_generation,
+        effective_tick: input.admission.effective_tick,
+        sequence: input.admission.sequence,
+        payload,
+    }
 }
 
 /// Project the typed edge onto the existing script/telemetry event bus. Rhai
@@ -501,13 +1162,29 @@ fn project_intent_edge(
         TelemetryValue::String(edge.kind.as_str().to_string()),
     );
     data.insert(
-        "target_gid".to_string(),
-        TelemetryValue::I64(target_gid.map_or(0, |gid| gid.get() as i64)),
-    );
-    data.insert(
         "correlation_id".to_string(),
-        TelemetryValue::I64(edge.correlation_id as i64),
+        TelemetryValue::U64(edge.correlation_id),
     );
+    if let Some(target_gid) = target_gid {
+        data.insert(
+            "target_gid".to_string(),
+            TelemetryValue::U64(target_gid.get()),
+        );
+    }
+    if let Some(admission) = edge.admission {
+        data.insert(
+            "scene_generation".to_string(),
+            TelemetryValue::U64(admission.scene_generation),
+        );
+        data.insert(
+            "effective_tick".to_string(),
+            TelemetryValue::U64(admission.effective_tick),
+        );
+        data.insert(
+            "input_sequence".to_string(),
+            TelemetryValue::U64(admission.sequence),
+        );
+    }
     commands.trigger(lunco_telemetry_core::TelemetryEvent {
         name: "intent.edge".to_string(),
         source: target_gid.map_or(0, |gid| gid.get()),
@@ -515,42 +1192,203 @@ fn project_intent_edge(
         data: TelemetryValue::Map(data),
         timestamp: 0.0,
         sim_secs: 0.0,
-        sim_tick: 0,
+        sim_tick: edge
+            .admission
+            .map_or(0, |admission| admission.effective_tick),
     });
 }
 
 #[on_command(SimulateIntent)]
-fn on_simulate_intent(trigger: On<SimulateIntent>, mut sim: ResMut<SimulatedIntents>) {
+fn on_simulate_intent(
+    trigger: On<SimulateIntent>,
+    active_command: Res<lunco_core::ActiveCommandId>,
+    target_ids: Query<&lunco_core::GlobalEntityId>,
+    local_embodiments: Query<(), With<lunco_embodiment_core::roles::LocalEmbodiment>>,
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
+    tick: Option<Res<lunco_core_runtime::SimTick>>,
+    mut pending: ResMut<PendingSemanticInputs>,
+    mut sim: ResMut<SimulatedIntents>,
+) -> Result<Ack, String> {
     let cmd = trigger.event();
     let Some(intent) = lunco_control_core::parse_user_intent(&cmd.intent) else {
-        warn!("[simulate-intent] unknown intent '{}'", cmd.intent);
-        return;
+        return Err(format!("unknown intent '{}'", cmd.intent));
     };
     // No target = no subject. Refuse rather than fall back to "every vessel": a
     // silent broadcast is what made two landers fly as one.
     if cmd.target == Entity::PLACEHOLDER {
-        warn!(
-            "[simulate-intent] '{}' names no `target` vessel — an intent must name the \
-             entity it drives (pass the vessel's api_id); ignoring",
+        return Err(format!(
+            "'{}' names no target entity; an intent must name the vessel it drives",
             cmd.intent
-        );
-        return;
+        ));
     }
-    if cmd.held {
-        sim.0.entry(cmd.target).or_default().insert(intent);
-    } else if let Some(set) = sim.0.get_mut(&cmd.target) {
-        set.remove(&intent);
-        // Don't leak an empty set per vessel ever simulated.
-        if set.is_empty() {
-            sim.0.remove(&cmd.target);
-        }
-    }
+    let origin = active_command.origin();
+    let source = simulated_intent_source(origin)?;
+    let correlation_id = active_command.get().unwrap_or_else(|| OpId::new().0);
+    let admission =
+        if deterministic_simulation_origin(origin) || local_embodiments.get(cmd.target).is_ok() {
+            sim.set(cmd.target, intent, source, cmd.held);
+            None
+        } else {
+            let target_gid = target_ids.get(cmd.target).copied().map_err(|_| {
+                "held semantic input target has no stable GlobalEntityId".to_owned()
+            })?;
+            let scene_generation = scene
+                .as_deref()
+                .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
+                .ok_or_else(|| {
+                    "held semantic input admission requires a committed scene generation".to_owned()
+                })?;
+            let effective_tick = tick
+                .as_deref()
+                .map(|tick| tick.0)
+                .ok_or_else(|| {
+                    "held semantic input admission requires the fixed simulation tick".to_owned()
+                })?
+                .checked_add(1)
+                .ok_or_else(|| "held semantic input effective tick exhausted".to_owned())?;
+            Some(pending.admit(
+                cmd.target,
+                target_gid,
+                PendingSemanticInputAction::Held {
+                    intent,
+                    source,
+                    held: cmd.held,
+                },
+                correlation_id,
+                origin,
+                scene_generation,
+                effective_tick,
+            )?)
+        };
+    let admission_value = admission.map_or(HookValue::Unit, |admission| {
+        HookValue::map([
+            (
+                "scene_generation",
+                HookValue::UInt(admission.scene_generation),
+            ),
+            ("effective_tick", HookValue::UInt(admission.effective_tick)),
+            ("sequence", HookValue::UInt(admission.sequence)),
+        ])
+    });
     info!(
         "[simulate-intent] {} → {} on {:?}",
         cmd.intent,
         if cmd.held { "HELD" } else { "released" },
         cmd.target
     );
+    Ok(Ack::with_data(
+        OpId::new(),
+        HookValue::map([
+            ("intent", HookValue::str(intent.canonical_name())),
+            ("held", HookValue::Bool(cmd.held)),
+            ("target", HookValue::str(format!("{:?}", cmd.target))),
+            ("source", HookValue::str(format!("{source:?}"))),
+            ("correlation_id", HookValue::UInt(correlation_id)),
+            ("admission", admission_value),
+        ]),
+    ))
+}
+
+fn simulated_intent_source(origin: Option<CommandOrigin>) -> Result<SimulatedIntentSource, String> {
+    match origin {
+        Some(CommandOrigin::ApiTransport) => Ok(SimulatedIntentSource::ApiTransport),
+        Some(CommandOrigin::Rhai { context, actor }) => {
+            let route = context.route.ok_or_else(|| {
+                "SimulateIntent from Rhai requires a classified runtime route".to_owned()
+            })?;
+            if route.scope == lunco_core::RuntimeScope::Twin && actor.is_none() {
+                return Err(
+                    "SimulateIntent from a Twin script requires a stable actor identity".to_owned(),
+                );
+            }
+            Ok(SimulatedIntentSource::Rhai { route, actor })
+        }
+        None => Ok(SimulatedIntentSource::DirectCommand),
+    }
+}
+
+#[cfg(test)]
+mod simulated_intent_source_tests {
+    use super::*;
+
+    #[test]
+    fn releasing_one_simulated_source_preserves_other_holds() {
+        let target = Entity::PLACEHOLDER;
+        let intent = UserIntent::MoveForward;
+        let scenario_route = RuntimeRoute::twin(lunco_core::RuntimeCycle::Simulation, 17);
+        let api = SimulatedIntentSource::ApiTransport;
+        let actor_a = SimulatedIntentSource::Rhai {
+            route: scenario_route,
+            actor: Some(lunco_core::GlobalEntityId::from_raw(0x11)),
+        };
+        let actor_b = SimulatedIntentSource::Rhai {
+            route: scenario_route,
+            actor: Some(lunco_core::GlobalEntityId::from_raw(0x22)),
+        };
+        let mut simulated = SimulatedIntents::default();
+
+        simulated.set(target, intent, api, true);
+        simulated.set(target, intent, actor_a, true);
+        simulated.set(target, intent, actor_b, true);
+        assert!(simulated.is_held(target, intent));
+
+        simulated.set(target, intent, api, false);
+        assert!(simulated.is_held(target, intent));
+
+        simulated.set(target, intent, actor_a, false);
+        assert!(simulated.is_held(target, intent));
+
+        simulated.set(target, intent, actor_b, false);
+        assert!(!simulated.is_held(target, intent));
+        assert!(simulated.0.is_empty());
+    }
+
+    #[test]
+    fn simulated_source_retains_transport_or_rhai_route() {
+        let route = RuntimeRoute::twin(lunco_core::RuntimeCycle::Simulation, 23);
+        let actor = lunco_core::GlobalEntityId::from_raw(0x11);
+        let context = lunco_core::RuntimeExecutionContext {
+            route: Some(route),
+            phase: lunco_core::RuntimePhase::Behavior,
+            clock: lunco_core::RuntimeClock::Simulation,
+            time_seconds: Some(1.0),
+            delta_seconds: None,
+            sequence: Some(60),
+            producer: None,
+        };
+        assert_eq!(
+            simulated_intent_source(Some(CommandOrigin::ApiTransport)),
+            Ok(SimulatedIntentSource::ApiTransport)
+        );
+        assert_eq!(
+            simulated_intent_source(Some(CommandOrigin::Rhai {
+                context,
+                actor: Some(actor),
+            })),
+            Ok(SimulatedIntentSource::Rhai {
+                route,
+                actor: Some(actor),
+            })
+        );
+        assert_eq!(
+            simulated_intent_source(None),
+            Ok(SimulatedIntentSource::DirectCommand)
+        );
+        assert!(
+            simulated_intent_source(Some(CommandOrigin::Rhai {
+                context: lunco_core::RuntimeExecutionContext::unclassified(),
+                actor: Some(actor),
+            }))
+            .is_err()
+        );
+        assert!(
+            simulated_intent_source(Some(CommandOrigin::Rhai {
+                context,
+                actor: None,
+            }))
+            .is_err()
+        );
+    }
 }
 
 /// Declare that commands can (or cannot) currently reach `target`.
@@ -630,9 +1468,11 @@ pub struct LunCoControllerPlugin;
 /// the same entity slot or global id.
 fn reset_scene_control_state(
     mut intents: ResMut<SimulatedIntents>,
+    mut pending_inputs: ResMut<PendingSemanticInputs>,
     mut paths: ResMut<lunco_core_session::ControlPathRegistry>,
 ) {
     intents.0.clear();
+    pending_inputs.clear();
     paths.clear();
 }
 
@@ -654,6 +1494,7 @@ impl Plugin for LunCoControllerPlugin {
             app.add_plugins(lunco_input_core::InputBindingsPlugin);
         }
         app.init_resource::<SimulatedIntents>()
+            .init_resource::<PendingSemanticInputs>()
             .init_resource::<InjectedCursorRestore>();
         app.add_message::<PendingWindowInput>();
         lunco_core::MarkClientLocalExt::mark_client_local::<InjectWindowInput>(app);
@@ -672,14 +1513,21 @@ impl Plugin for LunCoControllerPlugin {
         register_all_commands(app);
         app.add_systems(
             FixedUpdate,
-            // Ahead of wire propagation, so the `Port` writes this tick emits
-            // reach their wired targets in the same tick. Unordered, propagation
-            // may read the port before or after this system depending on the
-            // schedule's parallel layout, and prediction diverges from the host
-            // on that coin flip.
-            drive_from_bindings
-                .run_if(lunco_core_runtime::not_rolling_back)
-                .run_if(lunco_time::simulation_is_running)
+            (
+                dispatch_pending_semantic_inputs
+                    .run_if(lunco_core_runtime::not_rolling_back)
+                    .run_if(lunco_time::simulation_is_running),
+                // Ahead of wire propagation, so the `Port` writes this tick emits
+                // reach their wired targets in the same tick. Unordered, propagation
+                // may read the port before or after this system depending on the
+                // schedule's parallel layout, and prediction diverges from the host
+                // on that coin flip.
+                drive_from_bindings
+                    .run_if(lunco_core_runtime::not_rolling_back)
+                    .run_if(lunco_time::simulation_is_running),
+            )
+                .chain()
+                .after(lunco_core_runtime::SimTickSet)
                 .before(lunco_core_runtime::ControlDacSet),
         );
         // The SELF-DRIVER half runs on the INTERACTION cadence, not the sim tick.
@@ -748,41 +1596,38 @@ const INPUT_EPS: f64 = 1e-3;
 struct VesselInputState {
     ports_active: std::collections::HashMap<Entity, bool>,
     takeover_requested: std::collections::HashSet<(Entity, Entity)>,
+    ambiguous_order_sources: std::collections::HashSet<Entity>,
     order: Vec<ControllerOrder>,
 }
 
 /// One controller's deterministic key in the reusable fixed-step sort buffer.
 #[derive(Clone, Copy)]
 struct ControllerOrder {
-    key: ((bool, u64), (bool, u64), u64),
+    key: (u64, u64),
     source: Entity,
-}
-
-/// Put admitted global identities before keys scoped to this World.
-fn controller_entity_order(entity: Entity, global_id: Option<u64>) -> (bool, u64) {
-    global_id.map_or((true, entity.to_bits()), |id| (false, id))
 }
 
 /// Fixed-tick input emission for prediction. Emits a [`lunco_cosim_core::commands::SetPorts`]
 /// while a controller is active and once on the active→idle edge, from its
-/// [`ControlBinding`] and held keys, stamped with a per-vessel `seq` + `SimTick`.
+/// [`ControlBinding`], sampled [`PhysicalIntentFrame`], and separately held
+/// simulated intents, stamped with a per-vessel `seq` + `SimTick`.
 /// For a vessel this client owns + predicts ([`lunco_core_session::OwnedLocally`]) the
 /// frame is buffered for replay by [`record_control_input`]; on host/standalone
 /// the command uses `seq = 0`. Silent idle ticks leave the domain writer alone.
 fn drive_from_bindings(
     role: Res<lunco_core_session::NetworkRole>,
-    tick: Res<lunco_core_runtime::SimTick>,
+    mut input_admission: ControllerInputAdmission,
     mut log: ResMut<lunco_core_session::OwnedInputLog>,
     // Control authority is generic session ownership. If another session owns a
     // target, an active operator intent requests the normal claim transition below;
-    // the authored authority policy decides whether the handoff is allowed. Both
-    // resources are optional so a controller-only app without the session
-    // substrate retains its local input path.
+    // the authored authority policy decides whether the handoff is allowed. The
+    // registry remains optional for controller-only hosts, but an admitted fixed
+    // physical frame requires `LocalSession` as its stable producer identity.
     registry: Option<Res<lunco_core_session::SessionRegistry>>,
     local_session: Option<Res<lunco_core_session::LocalSession>>,
     // The authored authorization POLICY applies to the local keyboard too — see the
-    // gate below. All `Option` so a controller-only test app without the session
-    // substrate still runs ungated.
+    // gate below. These policy resources stay optional so hosts without that policy
+    // substrate can still run an admitted controller input.
     rbac: Option<Res<lunco_core_session::SessionRbac>>,
     control_paths: Option<Res<lunco_core_session::ControlPathRegistry>>,
     q_ctrl: Query<(Entity, &ControlLink, &ActionState<UserIntent>)>,
@@ -793,7 +1638,7 @@ fn drive_from_bindings(
     )>,
     // egui keyboard capture (published by `lunco-workbench`). While a text field
     // is focused we treat every intent as released so a keypress typed into the UI
-    // doesn't also drive the vessel — see the `held` closure below. `Option` so a
+    // doesn't also drive the vessel — see `PhysicalIntentFrame` below. `Option` so a
     // controller-only test app without the workbench still runs (no gate).
     egui_focus: Option<Res<lunco_control_core::EguiFocus>>,
     // Intents forced by `SimulateIntent` — the headless/API/rhai stand-in for keys.
@@ -828,31 +1673,73 @@ fn drive_from_bindings(
     // command (as it would if we simply skipped the system).
     let egui_keyboard = egui_focus.is_some_and(|f| f.wants_keyboard);
     let sim_intents = sim_intents.as_deref();
-    let held = |vessel: Entity, intent, intents: &ActionState<UserIntent>| {
-        intent_held(vessel, intent, intents, sim_intents, egui_keyboard)
-    };
-
     // Query iteration follows ECS storage layout, which can change when
     // unrelated components move entities between archetypes. Reuse this local
-    // buffer and order control effects by stable target identity before any
-    // intent edge or SetPorts command is emitted.
+    // buffer and order control effects by stable target identity and input
+    // session before any intent edge or SetPorts command is emitted.
     input_state.order.clear();
     for (source, link, _) in q_ctrl.iter() {
-        let target_id = q_vessel.get(link.target).ok().map(|(id, _)| id.get());
-        let source_id = q_vessel.get(source).ok().map(|(id, _)| id.get());
+        if !q_binding.contains(link.target) {
+            continue;
+        }
+        let Ok((target_id, _)) = q_vessel.get(link.target) else {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-admission".to_owned(),
+                message: format!(
+                    "physical controller {source:?} cannot drive target {:?} without a stable GlobalEntityId",
+                    link.target
+                ),
+            });
+            continue;
+        };
+        let Some(session_id) = local_session.as_ref().map(|session| session.0.0) else {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-admission".to_owned(),
+                message: format!(
+                    "physical controller {source:?} has no stable local session identity"
+                ),
+            });
+            continue;
+        };
         input_state.order.push(ControllerOrder {
-            key: (
-                controller_entity_order(link.target, target_id),
-                controller_entity_order(source, source_id),
-                source.to_bits(),
-            ),
+            key: (target_id.get(), session_id),
             source,
         });
     }
     input_state.order.sort_unstable_by_key(|entry| entry.key);
 
+    // Two live physical producers with the same stable target/session key have
+    // no deterministic tie-breaker. Hold both until their owner supplies a
+    // distinct source identity instead of ordering them by process-local Entity.
+    input_state.ambiguous_order_sources.clear();
+    let mut group_start = 0;
+    while group_start < input_state.order.len() {
+        let key = input_state.order[group_start].key;
+        let mut group_end = group_start + 1;
+        while group_end < input_state.order.len() && input_state.order[group_end].key == key {
+            group_end += 1;
+        }
+        if group_end - group_start > 1 {
+            for index in group_start..group_end {
+                let source = input_state.order[index].source;
+                input_state.ambiguous_order_sources.insert(source);
+            }
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-order".to_owned(),
+                message: format!(
+                    "multiple physical controllers share target/session order key ({}, {}); input is held until producer identities are distinct",
+                    key.0, key.1
+                ),
+            });
+        }
+        group_start = group_end;
+    }
+
     for index in 0..input_state.order.len() {
         let source = input_state.order[index].source;
+        if input_state.ambiguous_order_sources.contains(&source) {
+            continue;
+        }
         let Ok((_, link, intents)) = q_ctrl.get(source) else {
             continue;
         };
@@ -864,8 +1751,62 @@ fn drive_from_bindings(
             continue;
         };
 
+        let vessel_id = q_vessel.get(link.target).ok();
+        let Some((target_gid, _)) = vessel_id else {
+            continue;
+        };
+        let target_gid = *target_gid;
+        let Some(producer_session) = local_session.as_ref().map(|session| session.0) else {
+            continue;
+        };
+        let Some(scene_generation) = input_admission
+            .scene
+            .as_deref()
+            .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
+        else {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-admission".to_owned(),
+                message: format!(
+                    "physical semantic frame for input session {} and target {} has no committed scene generation",
+                    producer_session.0, target_gid
+                ),
+            });
+            continue;
+        };
+        let mut physical = PhysicalIntentFrame::capture(binding, intents, egui_keyboard);
+        match input_admission
+            .inputs
+            .assign_order(scene_generation, input_admission.tick.0)
+        {
+            Ok(order) => {
+                physical = physical.admit(producer_session, target_gid, order);
+            }
+            Err(message) => {
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "session-input-admission".to_owned(),
+                    message: format!(
+                        "physical semantic frame admission failed for input session {} and target {}: {message}",
+                        producer_session.0, target_gid
+                    ),
+                });
+                continue;
+            }
+        }
+        if let Err(message) = physical.validate_admission(
+            Some(producer_session),
+            Some(target_gid),
+            Some(scene_generation),
+            input_admission.tick.0,
+        ) {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-admission".to_owned(),
+                message,
+            });
+            continue;
+        }
+
         let operator_intent_active =
-            has_active_control_intent(link.target, binding, intents, sim_intents, egui_keyboard);
+            has_active_control_intent(link.target, binding, &physical, sim_intents);
         if !operator_intent_active {
             input_state
                 .takeover_requested
@@ -874,7 +1815,6 @@ fn drive_from_bindings(
 
         // The vessel's id (gid + is-it-locally-owned) — used both by the ownership
         // handoff below and the client seq bookkeeping.
-        let vessel_id = q_vessel.get(link.target).ok();
         let owns = registry
             .as_ref()
             .zip(local_session.as_ref())
@@ -943,17 +1883,31 @@ fn drive_from_bindings(
             .takeover_requested
             .remove(&(source, link.target));
 
+        if let Some(stream) = input_admission.recording.as_deref_mut()
+            && stream.is_recording()
+        {
+            let result = physical
+                .session_input_record()
+                .and_then(|record| stream.append(record));
+            if let Err(message) = result {
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "session-input-recording".to_owned(),
+                    message,
+                });
+            }
+        }
+
         emit_intent_edges(
             link.target,
             binding,
-            intents,
+            &physical,
             sim_intents,
-            egui_keyboard,
             &mut edge_state,
             &mut commands,
         );
 
-        let writes = binding.resolve(|intent| held(link.target, intent, intents));
+        let writes =
+            binding.resolve(|intent| intent_held(link.target, intent, &physical, sim_intents));
 
         // Owned + predicted on a client → assign a real seq (buffered for replay
         // by `record_control_input`). seq MUST be stamped HERE (the origin)
@@ -1000,7 +1954,7 @@ fn drive_from_bindings(
             target: link.target,
             writes,
             seq,
-            tick: tick.0,
+            tick: input_admission.tick.0,
         });
     }
 }
@@ -1012,18 +1966,16 @@ fn drive_from_bindings(
 /// physical key that a focused text field could be swallowing).
 ///
 /// Scoped to `vessel`: a simulated intent drives ONLY the vessel it was addressed
-/// to. The keyboard half is per-vessel too, via that vessel's own `ActionState`.
+/// to. The physical half is per-vessel too, via that controller's sampled frame.
 /// (The sim half used to be a global set consulted inside the drive loop, so one
 /// `SimulateIntent` pressed the key on EVERY controlled vessel.)
 fn intent_held(
     vessel: Entity,
     intent: UserIntent,
-    intents: &ActionState<UserIntent>,
+    physical: &PhysicalIntentFrame,
     sim_intents: Option<&SimulatedIntents>,
-    egui_keyboard: bool,
 ) -> bool {
-    sim_intents.is_some_and(|s| s.0.get(&vessel).is_some_and(|set| set.contains(&intent)))
-        || (!egui_keyboard && intents.pressed(&intent))
+    sim_intents.is_some_and(|s| s.is_held(vessel, intent)) || physical.is_held(intent)
 }
 
 /// Whether the user has an active semantic control intent for this target.
@@ -1032,20 +1984,14 @@ fn intent_held(
 fn has_active_control_intent(
     vessel: Entity,
     binding: &ControlBinding,
-    intents: &ActionState<UserIntent>,
+    physical: &PhysicalIntentFrame,
     sim_intents: Option<&SimulatedIntents>,
-    egui_keyboard: bool,
 ) -> bool {
-    intent_held(
-        vessel,
-        UserIntent::Action,
-        intents,
-        sim_intents,
-        egui_keyboard,
-    ) || binding
-        .binds
-        .iter()
-        .any(|(intent, _, _)| intent_held(vessel, *intent, intents, sim_intents, egui_keyboard))
+    intent_held(vessel, UserIntent::Action, physical, sim_intents)
+        || binding
+            .binds
+            .iter()
+            .any(|(intent, _, _)| intent_held(vessel, *intent, physical, sim_intents))
 }
 
 /// Publish each authored semantic intent transition exactly once for a target.
@@ -1055,9 +2001,8 @@ fn has_active_control_intent(
 fn emit_intent_edges(
     target: Entity,
     binding: &ControlBinding,
-    intents: &ActionState<UserIntent>,
+    physical: &PhysicalIntentFrame,
     sim_intents: Option<&SimulatedIntents>,
-    egui_keyboard: bool,
     previous: &mut std::collections::HashMap<(Entity, UserIntent), bool>,
     commands: &mut Commands,
 ) {
@@ -1065,13 +2010,7 @@ fn emit_intent_edges(
     // observed even when a control surface has no authored port named
     // `action`; scene programs consume the edge and decide what it means.
     let mut seen = vec![UserIntent::Action];
-    let active = intent_held(
-        target,
-        UserIntent::Action,
-        intents,
-        sim_intents,
-        egui_keyboard,
-    );
+    let active = intent_held(target, UserIntent::Action, physical, sim_intents);
     let prior = previous
         .insert((target, UserIntent::Action), active)
         .unwrap_or(false);
@@ -1085,6 +2024,8 @@ fn emit_intent_edges(
                 lunco_control_core::SemanticIntentEdgeKind::Released
             },
             correlation_id: OpId::new().0,
+            origin: None,
+            admission: None,
         });
     }
     for (intent, _, _) in &binding.binds {
@@ -1092,7 +2033,7 @@ fn emit_intent_edges(
             continue;
         }
         seen.push(*intent);
-        let active = intent_held(target, *intent, intents, sim_intents, egui_keyboard);
+        let active = intent_held(target, *intent, physical, sim_intents);
         let prior = previous.insert((target, *intent), active).unwrap_or(false);
         if active != prior {
             commands.trigger(lunco_control_core::SemanticIntentEdge {
@@ -1104,6 +2045,8 @@ fn emit_intent_edges(
                     lunco_control_core::SemanticIntentEdgeKind::Released
                 },
                 correlation_id: OpId::new().0,
+                origin: None,
+                admission: None,
             });
         }
     }
@@ -1133,18 +2076,17 @@ fn drive_self_drivers(
     let egui_keyboard = egui_focus.is_some_and(|f| f.wants_keyboard);
     let sim_intents = sim_intents.as_deref();
     for (entity, intents, binding) in q_self.iter() {
+        let physical = PhysicalIntentFrame::capture(binding, intents, egui_keyboard);
         // A self-driver IS its own vessel, so it is its own intent subject.
         emit_intent_edges(
             entity,
             binding,
-            intents,
+            &physical,
             sim_intents,
-            egui_keyboard,
             &mut edge_state,
             &mut commands,
         );
-        let writes = binding
-            .resolve(|intent| intent_held(entity, intent, intents, sim_intents, egui_keyboard));
+        let writes = binding.resolve(|intent| intent_held(entity, intent, &physical, sim_intents));
         commands.trigger(lunco_cosim_core::commands::SetPorts {
             target: entity,
             writes,
@@ -1624,11 +2566,11 @@ mod tests {
         observed.typed.push(*trigger.event());
     }
 
-    fn observe_edge_telemetry(
+    fn observe_control_telemetry(
         trigger: On<lunco_telemetry_core::TelemetryEvent>,
         mut observed: ResMut<SemanticEdgeObserved>,
     ) {
-        if trigger.event().name == "intent.edge" {
+        if matches!(trigger.event().name.as_str(), "intent.edge" | "intent.hold") {
             observed.telemetry.push(trigger.event().clone());
         }
     }
@@ -1640,9 +2582,10 @@ mod tests {
             .init_resource::<lunco_core::ActiveCommandId>()
             .init_resource::<lunco_control_core::CausalTrace>()
             .init_resource::<SimulatedIntents>()
+            .init_resource::<PendingSemanticInputs>()
             .init_resource::<lunco_core_session::CommandPolicyRegistry>()
             .add_observer(observe_semantic_edge)
-            .add_observer(observe_edge_telemetry);
+            .add_observer(observe_control_telemetry);
         app.world_mut()
             .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
             .register(
@@ -1669,12 +2612,53 @@ mod tests {
             lunco_core_session::CommandPolicy::OWNED_CONTROL
         );
 
+        let origin_context = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin(
+                lunco_core::RuntimeCycle::Simulation,
+                3,
+            )),
+            phase: lunco_core::RuntimePhase::Start,
+            clock: lunco_core::RuntimeClock::Simulation,
+            time_seconds: Some(1.0),
+            delta_seconds: Some(1.0 / 60.0),
+            sequence: Some(60),
+            producer: None,
+        };
+        let origin_actor = lunco_core::GlobalEntityId::from_raw(0x11);
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set_with_origin(
+                77,
+                Some(lunco_core::CommandOrigin::Rhai {
+                    context: origin_context,
+                    actor: Some(origin_actor),
+                }),
+            );
         app.world_mut().trigger(SimulateIntentEdge {
             target,
             intent: "release".into(),
             edge: "pulse".into(),
         });
         app.update();
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(None);
+
+        let Some(lunco_core::CommandOutcome::Succeeded(ack)) =
+            app.world().resource::<lunco_core::CommandResults>().get(77)
+        else {
+            panic!("semantic intent edge command must retain its acknowledgement");
+        };
+        let Some(HookValue::Map(ack_data)) = ack.data.as_ref() else {
+            panic!("semantic intent edge acknowledgement must carry typed data");
+        };
+        assert_eq!(
+            ack_data
+                .iter()
+                .find(|(key, _)| key == "correlation_id")
+                .map(|(_, value)| value),
+            Some(&HookValue::UInt(77))
+        );
 
         let observed = app.world().resource::<SemanticEdgeObserved>();
         assert_eq!(observed.typed.len(), 1);
@@ -1685,6 +2669,15 @@ mod tests {
             lunco_control_core::SemanticIntentEdgeKind::Pulse
         );
         assert_ne!(observed.typed[0].correlation_id, 0);
+        assert_eq!(observed.typed[0].correlation_id, 77);
+        assert_eq!(
+            observed.typed[0].origin,
+            Some(lunco_core::CommandOrigin::Rhai {
+                context: origin_context,
+                actor: Some(origin_actor),
+            })
+        );
+        assert_eq!(observed.typed[0].admission, None);
         assert_eq!(observed.typed[0].target, target);
         assert_ne!(observed.typed[0].target, other);
         assert_eq!(observed.telemetry.len(), 1);
@@ -1702,11 +2695,11 @@ mod tests {
         );
         assert_eq!(
             data["target_gid"],
-            lunco_telemetry_core::TelemetryValue::I64(0x11)
+            lunco_telemetry_core::TelemetryValue::U64(0x11)
         );
         assert_eq!(
             data["correlation_id"],
-            lunco_telemetry_core::TelemetryValue::I64(observed.typed[0].correlation_id as i64)
+            lunco_telemetry_core::TelemetryValue::U64(observed.typed[0].correlation_id)
         );
         let trace = app.world().resource::<lunco_control_core::CausalTrace>();
         assert_eq!(trace.len(), 1);
@@ -1717,6 +2710,27 @@ mod tests {
                     observed.typed[0].correlation_id
                 )
                 .is_some()
+        );
+        assert_eq!(
+            trace
+                .find(
+                    lunco_core::GlobalEntityId::from_raw(0x11),
+                    observed.typed[0].correlation_id
+                )
+                .and_then(|record| record.origin),
+            Some(lunco_core::CommandOrigin::Rhai {
+                context: origin_context,
+                actor: Some(origin_actor),
+            })
+        );
+        assert_eq!(
+            trace
+                .find(
+                    lunco_core::GlobalEntityId::from_raw(0x11),
+                    observed.typed[0].correlation_id
+                )
+                .and_then(|record| record.admission),
+            None
         );
 
         app.world_mut().trigger(SimulateIntentEdge {
@@ -1729,6 +2743,346 @@ mod tests {
             app.world().resource::<SemanticEdgeObserved>().typed.len(),
             1,
             "an invalid edge must not emit a typed event"
+        );
+    }
+
+    #[test]
+    fn external_semantic_edges_commit_in_stable_order_at_the_admitted_tick() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_core_runtime::SimTick>()
+            .init_resource::<PendingSemanticInputs>()
+            .init_resource::<SimulatedIntents>()
+            .init_resource::<lunco_control_core::CausalTrace>()
+            .init_resource::<SemanticEdgeObserved>()
+            .add_observer(observe_semantic_edge)
+            .add_observer(observe_control_telemetry)
+            .add_observer(project_intent_edge)
+            .add_systems(FixedUpdate, dispatch_pending_semantic_inputs);
+
+        let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
+        let path = "admission-test.usda".to_owned();
+        let root_prim = "/World".to_owned();
+        assert_eq!(
+            coordinator.admit(lunco_core::SceneTransitionRequest::load(
+                path.clone(),
+                root_prim.clone(),
+            )),
+            lunco_core::SceneTransitionAdmission::Admitted
+        );
+        coordinator.take_admitted().expect("admitted scene request");
+        let generation = coordinator.start(lunco_core::SceneTransition::Load { path, root_prim });
+        assert!(coordinator.complete(generation));
+        let generation = generation.get();
+        app.insert_resource(coordinator);
+
+        let target_gid = lunco_core::GlobalEntityId::from_raw(0x1234);
+        let target = app.world_mut().spawn(target_gid).id();
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimTick>()
+            .0 = 20;
+        register_all_commands(&mut app);
+
+        for command_id in [101, 102] {
+            app.world_mut()
+                .resource_mut::<lunco_core::ActiveCommandId>()
+                .set_with_origin(command_id, Some(lunco_core::CommandOrigin::ApiTransport));
+            app.world_mut().trigger(SimulateIntentEdge {
+                target,
+                intent: "action".into(),
+                edge: "pulse".into(),
+            });
+        }
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(None);
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world()
+                .resource::<PendingSemanticInputs>()
+                .pending
+                .len(),
+            2
+        );
+        assert!(
+            app.world()
+                .resource::<SemanticEdgeObserved>()
+                .typed
+                .is_empty()
+        );
+
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(
+            app.world()
+                .resource::<SemanticEdgeObserved>()
+                .typed
+                .is_empty()
+        );
+
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimTick>()
+            .0 = 21;
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let observed = app.world().resource::<SemanticEdgeObserved>();
+        assert_eq!(observed.typed.len(), 2);
+        assert_eq!(observed.typed[0].correlation_id, 101);
+        assert_eq!(observed.typed[1].correlation_id, 102);
+        assert_eq!(
+            observed.typed[0].admission,
+            Some(lunco_control_core::SimulationInputOrder {
+                scene_generation: generation,
+                effective_tick: 21,
+                sequence: 1,
+            })
+        );
+        assert_eq!(
+            observed.typed[1].admission,
+            Some(lunco_control_core::SimulationInputOrder {
+                scene_generation: generation,
+                effective_tick: 21,
+                sequence: 2,
+            })
+        );
+        let trace = app.world().resource::<lunco_control_core::CausalTrace>();
+        assert_eq!(
+            trace
+                .find(target_gid, 101)
+                .and_then(|record| record.admission),
+            observed.typed[0].admission
+        );
+        assert_eq!(
+            observed.telemetry[0].sim_tick, 21,
+            "script-visible event carries its admitted simulation tick"
+        );
+    }
+
+    #[test]
+    fn external_held_intent_commits_at_its_admitted_tick_and_publishes_its_stamp() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_core_runtime::SimTick>()
+            .init_resource::<PendingSemanticInputs>()
+            .init_resource::<SimulatedIntents>()
+            .init_resource::<lunco_control_core::CausalTrace>()
+            .init_resource::<SemanticEdgeObserved>()
+            .add_observer(observe_semantic_edge)
+            .add_observer(observe_control_telemetry)
+            .add_observer(project_intent_edge)
+            .add_systems(FixedUpdate, dispatch_pending_semantic_inputs);
+        app.insert_resource(lunco_core_session::SessionInputStream::default());
+        app.world_mut()
+            .resource_mut::<lunco_core_session::SessionInputStream>()
+            .begin(4)
+            .expect("session input capture starts");
+
+        let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
+        let path = "held-input-admission-test.usda".to_owned();
+        let root_prim = "/World".to_owned();
+        assert_eq!(
+            coordinator.admit(lunco_core::SceneTransitionRequest::load(
+                path.clone(),
+                root_prim.clone(),
+            )),
+            lunco_core::SceneTransitionAdmission::Admitted
+        );
+        coordinator.take_admitted().expect("admitted scene request");
+        let generation = coordinator.start(lunco_core::SceneTransition::Load { path, root_prim });
+        assert!(coordinator.complete(generation));
+        let generation = generation.get();
+        app.insert_resource(coordinator);
+
+        let target_gid = lunco_core::GlobalEntityId::from_raw(0x5678);
+        let target = app.world_mut().spawn(target_gid).id();
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimTick>()
+            .0 = 20;
+        register_all_commands(&mut app);
+
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set_with_origin(300, Some(lunco_core::CommandOrigin::ApiTransport));
+        app.world_mut().trigger(SimulateIntentEdge {
+            target,
+            intent: "action".to_owned(),
+            edge: "pulse".to_owned(),
+        });
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set_with_origin(301, Some(lunco_core::CommandOrigin::ApiTransport));
+        app.world_mut().trigger(SimulateIntent {
+            target,
+            intent: "forward".to_owned(),
+            held: true,
+        });
+        app.update();
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(None);
+
+        assert!(
+            !app.world()
+                .resource::<SimulatedIntents>()
+                .is_held(target, UserIntent::MoveForward),
+            "external held state stays unchanged until its admitted fixed tick"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<PendingSemanticInputs>()
+                .pending
+                .len(),
+            2
+        );
+        let Some(lunco_core::CommandOutcome::Succeeded(ack)) = app
+            .world()
+            .resource::<lunco_core::CommandResults>()
+            .get(301)
+        else {
+            panic!("SimulateIntent must acknowledge the admitted input");
+        };
+        let Some(HookValue::Map(ack_data)) = ack.data.as_ref() else {
+            panic!("SimulateIntent acknowledgement must carry typed admission data");
+        };
+        assert_eq!(
+            ack_data
+                .iter()
+                .find(|(key, _)| key == "correlation_id")
+                .map(|(_, value)| value),
+            Some(&HookValue::UInt(301))
+        );
+        let Some(HookValue::Map(admission_data)) = ack_data
+            .iter()
+            .find(|(key, _)| key == "admission")
+            .map(|(_, value)| value)
+        else {
+            panic!("external SimulateIntent acknowledgement must include an admission stamp");
+        };
+        assert!(admission_data.iter().any(|(key, value)| {
+            key == "scene_generation" && value == &HookValue::UInt(generation)
+        }));
+        assert!(
+            admission_data
+                .iter()
+                .any(|(key, value)| { key == "effective_tick" && value == &HookValue::UInt(21) })
+        );
+        assert!(
+            admission_data
+                .iter()
+                .any(|(key, value)| { key == "sequence" && value == &HookValue::UInt(2) })
+        );
+
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(
+            !app.world()
+                .resource::<SimulatedIntents>()
+                .is_held(target, UserIntent::MoveForward),
+            "tick 20 must not commit an input assigned to tick 21"
+        );
+        assert!(
+            app.world()
+                .resource::<SemanticEdgeObserved>()
+                .typed
+                .is_empty(),
+            "the preceding discrete edge also waits for its admitted tick"
+        );
+
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimTick>()
+            .0 = 21;
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(
+            app.world()
+                .resource::<SimulatedIntents>()
+                .is_held(target, UserIntent::MoveForward)
+        );
+
+        let observed = app.world().resource::<SemanticEdgeObserved>();
+        assert_eq!(observed.typed.len(), 1);
+        assert_eq!(observed.typed[0].correlation_id, 300);
+        assert_eq!(
+            observed.typed[0].admission,
+            Some(lunco_control_core::SimulationInputOrder {
+                scene_generation: generation,
+                effective_tick: 21,
+                sequence: 1,
+            })
+        );
+        let edge_trace = app
+            .world()
+            .resource::<lunco_control_core::CausalTrace>()
+            .find(target_gid, 300)
+            .expect("the admitted edge keeps its receipt-to-trace correlation");
+        assert_eq!(edge_trace.admission, observed.typed[0].admission);
+
+        let hold_event = observed
+            .telemetry
+            .iter()
+            .find(|event| event.name == "intent.hold")
+            .expect("the held command publishes its fixed-tick commit event");
+        assert_eq!(hold_event.source, target_gid.get());
+        assert_eq!(hold_event.sim_tick, 21);
+        let lunco_telemetry_core::TelemetryValue::Map(data) = &hold_event.data else {
+            panic!("held-input event must expose its typed admission data");
+        };
+        assert_eq!(
+            data["intent"],
+            lunco_telemetry_core::TelemetryValue::String("forward".to_owned())
+        );
+        assert_eq!(
+            data["held"],
+            lunco_telemetry_core::TelemetryValue::Bool(true)
+        );
+        assert_eq!(
+            data["correlation_id"],
+            lunco_telemetry_core::TelemetryValue::U64(301)
+        );
+        assert_eq!(
+            data["target_gid"],
+            lunco_telemetry_core::TelemetryValue::U64(target_gid.get())
+        );
+        assert_eq!(
+            data["scene_generation"],
+            lunco_telemetry_core::TelemetryValue::U64(generation)
+        );
+        assert_eq!(
+            data["effective_tick"],
+            lunco_telemetry_core::TelemetryValue::U64(21)
+        );
+        assert_eq!(
+            data["input_sequence"],
+            lunco_telemetry_core::TelemetryValue::U64(2)
+        );
+
+        let stream = app
+            .world()
+            .resource::<lunco_core_session::SessionInputStream>();
+        assert_eq!(stream.records().len(), 2);
+        assert_eq!(
+            stream.records()[0].producer,
+            lunco_core_session::SessionInputProducer::ApiTransport
+        );
+        assert_eq!(
+            stream.records()[0].payload,
+            lunco_core_session::SessionInputPayload::SemanticIntentEdge {
+                intent: "action".to_owned(),
+                edge: "pulse".to_owned(),
+                correlation_id: 300,
+            }
+        );
+        assert_eq!(
+            stream.records()[1].producer,
+            lunco_core_session::SessionInputProducer::ApiTransport
+        );
+        assert_eq!(
+            stream.records()[1].payload,
+            lunco_core_session::SessionInputPayload::SimulatedIntentChange {
+                intent: "forward".to_owned(),
+                held: true,
+                correlation_id: 301,
+            }
         );
     }
 
@@ -1983,11 +3337,31 @@ mod tests {
             InputManagerPlugin::<UserIntent>::default(),
         ));
         app.insert_resource(lunco_core_session::NetworkRole::Host)
+            .insert_resource(lunco_core_session::LocalSession(
+                lunco_command_contracts::SessionId(77),
+            ))
             .init_resource::<lunco_core_runtime::SimTick>()
             .init_resource::<lunco_core_session::OwnedInputLog>()
+            .init_resource::<PendingSemanticInputs>()
             .init_resource::<VesselControlObserved>()
             .add_observer(observe_vessel_control)
             .add_systems(FixedUpdate, drive_from_bindings);
+
+        let mut scene = lunco_core::SceneTransitionCoordinator::default();
+        let path = "physical-frame-admission.usda".to_owned();
+        let root_prim = "/World".to_owned();
+        assert_eq!(
+            scene.admit(lunco_core::SceneTransitionRequest::load(
+                path.clone(),
+                root_prim.clone(),
+            )),
+            lunco_core::SceneTransitionAdmission::Admitted
+        );
+        scene.take_admitted().expect("admitted test scene request");
+        let generation = scene.start(lunco_core::SceneTransition::Load { path, root_prim });
+        assert!(scene.complete(generation));
+        let scene_generation = generation.get();
+        app.insert_resource(scene);
 
         let vessel = app
             .world_mut()
@@ -2004,11 +3378,32 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
+                lunco_core::GlobalEntityId::from_raw(0xBEEF),
                 ControlLink { target: vessel },
                 ActionState::<UserIntent>::default(),
                 test_bindings().input_map().unwrap(),
             ))
             .id();
+
+        let queued_external = app
+            .world_mut()
+            .resource_mut::<PendingSemanticInputs>()
+            .admit(
+                vessel,
+                lunco_core::GlobalEntityId::from_raw(0xCAFE),
+                PendingSemanticInputAction::Edge {
+                    intent: UserIntent::Action,
+                    kind: lunco_control_core::SemanticIntentEdgeKind::Pulse,
+                },
+                101,
+                Some(lunco_core::CommandOrigin::ApiTransport),
+                scene_generation,
+                1,
+            )
+            .expect("external input admitted before the physical frame");
+        app.world_mut()
+            .resource_mut::<lunco_core_runtime::SimTick>()
+            .0 = 1;
 
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -2029,6 +3424,18 @@ mod tests {
                 .expect("avatar action state")
                 .pressed(&UserIntent::MoveForward)
         );
+        let pending = app.world().resource::<PendingSemanticInputs>();
+        assert_eq!(queued_external.sequence, 1);
+        assert_eq!(pending.sequence_tick, Some(1));
+        assert_eq!(pending.next_sequence, 2);
+        assert_eq!(
+            pending
+                .pending
+                .front()
+                .map(|input| input.admission.sequence),
+            Some(queued_external.sequence),
+            "the physical frame must share the per-tick order without replacing queued inputs"
+        );
     }
 
     #[derive(Resource, Default)]
@@ -2044,6 +3451,35 @@ mod tests {
         }
     }
 
+    #[derive(Resource, Default)]
+    struct ControllerRuntimeErrors(Vec<String>);
+
+    fn record_controller_runtime_error(
+        trigger: On<lunco_core::RuntimeError>,
+        mut errors: ResMut<ControllerRuntimeErrors>,
+    ) {
+        errors.0.push(trigger.event().name.clone());
+    }
+
+    fn completed_controller_scene() -> lunco_core::SceneTransitionCoordinator {
+        let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
+        let path = "controller-order-test.usda".to_owned();
+        let root_prim = "/World".to_owned();
+        assert_eq!(
+            coordinator.admit(lunco_core::SceneTransitionRequest::load(
+                path.clone(),
+                root_prim.clone(),
+            )),
+            lunco_core::SceneTransitionAdmission::Admitted
+        );
+        coordinator
+            .take_admitted()
+            .expect("controller test scene request");
+        let generation = coordinator.start(lunco_core::SceneTransition::Load { path, root_prim });
+        assert!(coordinator.complete(generation));
+        coordinator
+    }
+
     #[test]
     fn fixed_step_control_commands_follow_target_global_identity_order() {
         use lunco_core_runtime::SimTick;
@@ -2051,8 +3487,13 @@ mod tests {
 
         let mut app = App::new();
         app.insert_resource(NetworkRole::Host)
+            .insert_resource(lunco_core_session::LocalSession(
+                lunco_command_contracts::SessionId::LOCAL,
+            ))
             .init_resource::<SimTick>()
             .init_resource::<OwnedInputLog>()
+            .init_resource::<PendingSemanticInputs>()
+            .insert_resource(completed_controller_scene())
             .init_resource::<ControlTargetOrder>()
             .add_observer(record_control_target_order)
             .add_systems(FixedUpdate, drive_from_bindings);
@@ -2080,6 +3521,146 @@ mod tests {
             app.world().resource::<ControlTargetOrder>().0,
             vec![100, 200],
             "control effects entering the fixed-step command path must have stable target order"
+        );
+    }
+
+    #[test]
+    fn admitted_physical_frames_are_retained_as_canonical_semantic_records() {
+        use lunco_core_runtime::SimTick;
+        use lunco_core_session::{
+            LocalSession, NetworkRole, OwnedInputLog, SessionInputPayload, SessionInputProducer,
+            SessionInputStream,
+        };
+
+        let scene = completed_controller_scene();
+        let generation = scene.completed_generation().expect("committed test scene");
+        let mut app = App::new();
+        app.insert_resource(NetworkRole::Host)
+            .insert_resource(LocalSession(lunco_command_contracts::SessionId(9)))
+            .init_resource::<SimTick>()
+            .init_resource::<OwnedInputLog>()
+            .init_resource::<PendingSemanticInputs>()
+            .insert_resource(scene)
+            .init_resource::<SessionInputStream>()
+            .add_systems(FixedUpdate, drive_from_bindings);
+        app.world_mut()
+            .resource_mut::<SessionInputStream>()
+            .begin(4)
+            .expect("bounded session input capture starts");
+
+        let target = app
+            .world_mut()
+            .spawn((
+                GlobalEntityId::from_raw(310),
+                ControlBinding {
+                    binds: vec![(UserIntent::MoveForward, "throttle".into(), 1.0)],
+                },
+            ))
+            .id();
+        let mut intents = ActionState::<UserIntent>::default();
+        intents.press(&UserIntent::MoveForward);
+        intents.press(&UserIntent::Action);
+        app.world_mut().spawn((ControlLink { target }, intents));
+
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let stream = app.world().resource::<SessionInputStream>();
+        assert_eq!(stream.records().len(), 1);
+        assert_eq!(
+            stream.records()[0].producer,
+            SessionInputProducer::PhysicalController {
+                session_id: lunco_command_contracts::SessionId(9),
+            }
+        );
+        assert_eq!(stream.records()[0].target, GlobalEntityId::from_raw(310));
+        assert_eq!(stream.records()[0].scene_generation, generation);
+        assert_eq!(stream.records()[0].sequence, 1);
+        assert_eq!(
+            stream.records()[0].payload,
+            SessionInputPayload::PhysicalIntentFrame {
+                intent_ids: vec!["action".to_owned(), "forward".to_owned()]
+            }
+        );
+    }
+
+    #[test]
+    fn physical_controller_holds_input_without_a_committed_scene_generation() {
+        use lunco_core_runtime::SimTick;
+        use lunco_core_session::{LocalSession, NetworkRole, OwnedInputLog};
+
+        let mut app = App::new();
+        app.insert_resource(NetworkRole::Host)
+            .insert_resource(LocalSession(lunco_command_contracts::SessionId(9)))
+            .init_resource::<SimTick>()
+            .init_resource::<OwnedInputLog>()
+            .init_resource::<PendingSemanticInputs>()
+            .init_resource::<VesselControlObserved>()
+            .init_resource::<ControllerRuntimeErrors>()
+            .add_observer(observe_vessel_control)
+            .add_observer(record_controller_runtime_error)
+            .add_systems(FixedUpdate, drive_from_bindings);
+
+        let target = app
+            .world_mut()
+            .spawn((
+                GlobalEntityId::from_raw(300),
+                ControlBinding {
+                    binds: vec![(UserIntent::MoveForward, "throttle".into(), 1.0)],
+                },
+            ))
+            .id();
+        let mut intents = ActionState::<UserIntent>::default();
+        intents.press(&UserIntent::MoveForward);
+        app.world_mut().spawn((ControlLink { target }, intents));
+
+        app.world_mut().run_schedule(FixedUpdate);
+
+        assert!(app.world().resource::<VesselControlObserved>().0.is_empty());
+        assert_eq!(
+            app.world().resource::<ControllerRuntimeErrors>().0,
+            vec!["session-input-admission"]
+        );
+    }
+
+    #[test]
+    fn duplicate_physical_producer_order_keys_hold_both_inputs() {
+        use lunco_core_runtime::SimTick;
+        use lunco_core_session::{LocalSession, NetworkRole, OwnedInputLog};
+
+        let mut app = App::new();
+        app.insert_resource(NetworkRole::Host)
+            .insert_resource(LocalSession(lunco_command_contracts::SessionId(9)))
+            .init_resource::<SimTick>()
+            .init_resource::<OwnedInputLog>()
+            .init_resource::<PendingSemanticInputs>()
+            .insert_resource(completed_controller_scene())
+            .init_resource::<VesselControlObserved>()
+            .init_resource::<ControllerRuntimeErrors>()
+            .add_observer(observe_vessel_control)
+            .add_observer(record_controller_runtime_error)
+            .add_systems(FixedUpdate, drive_from_bindings);
+
+        let target = app
+            .world_mut()
+            .spawn((
+                GlobalEntityId::from_raw(301),
+                ControlBinding {
+                    binds: vec![(UserIntent::MoveForward, "throttle".into(), 1.0)],
+                },
+            ))
+            .id();
+        for _ in 0..2 {
+            let mut intents = ActionState::<UserIntent>::default();
+            intents.press(&UserIntent::MoveForward);
+            app.world_mut().spawn((ControlLink { target }, intents));
+        }
+
+        app.world_mut().run_schedule(FixedUpdate);
+
+        assert!(app.world().resource::<VesselControlObserved>().0.is_empty());
+        assert_eq!(
+            app.world().resource::<ControllerRuntimeErrors>().0,
+            vec!["session-input-order"]
         );
     }
 
@@ -2167,6 +3748,7 @@ mod tests {
             lunco_time::TimePlugin,
             lunco_cosim::CoSimPlugin,
         ));
+        app.init_resource::<lunco_core::ActiveCommandId>();
         app.configure_sets(InteractionSchedule, InteractionControlSet);
         app.add_systems(
             InteractionSchedule,
@@ -2233,6 +3815,7 @@ mod tests {
             lunco_time::TimePlugin,
             lunco_cosim::CoSimPlugin,
         ));
+        app.init_resource::<lunco_core::ActiveCommandId>();
         app.configure_sets(InteractionSchedule, InteractionControlSet);
         app.add_systems(
             InteractionSchedule,

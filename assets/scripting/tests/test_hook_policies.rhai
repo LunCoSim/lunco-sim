@@ -195,8 +195,42 @@ let camera_call = invoke_hook("camera.default_presentation", [#{
     camera_track_count: 0,
     host_requests_generated: false,
 }]);
-checks.push(t_true(camera_call.ok == true && camera_call.value == "avatar",
-    "the authored policy is installed and returns its declared type"));
+checks.push(t_true(camera_call.ok == false && camera_call.status == "fault"
+        && camera_call.error.contains("Application/Presentation/Preparation"),
+    "the camera presentation policy rejects calls outside its owner cycle"));
+
+let recording_call = invoke_hook("runtime.ui.recording", [#{
+    all_surface_ids: [],
+    visible_surface_ids: [],
+    recording_active: true,
+}]);
+checks.push(t_true(recording_call.ok == false && recording_call.status == "fault"
+        && recording_call.error.contains("Application/Ui/Preparation"),
+    "the runtime UI recording policy rejects calls outside its owner cycle"));
+
+let visibility_call = invoke_hook("runtime.ui.visibility", [#{
+    available: true,
+    visibility_mode: "always",
+    control_owner: "local",
+    status: "ready",
+    simulation_progress: (),
+}]);
+checks.push(t_true(visibility_call.ok == false && visibility_call.status == "fault"
+        && visibility_call.error.contains("Application/Ui/Preparation"),
+    "the runtime UI visibility policy rejects calls outside its owner cycle"));
+
+let properties_call = invoke_hook("runtime.ui.properties", [#{
+    surface_id: "camera-status",
+    cameras: [],
+    active_name: "",
+    active_label: "",
+    avatar_available: false,
+    director_available: false,
+    error: (),
+}]);
+checks.push(t_true(properties_call.ok == false && properties_call.status == "fault"
+        && properties_call.error.contains("Application/Ui/Preparation"),
+    "the runtime UI properties policy rejects calls outside a presentation owner cycle"));
 
 let quality_profile_hook = ();
 let default_quality_hook = ();
@@ -287,6 +321,30 @@ checks.push(t_true(rejected.ok == false && rejected.status == "rejected",
 let removed = unbind_policy("camera.default_presentation");
 checks.push(t_true(removed.ok == true && removed.status == "removed",
     "Rhai can remove exactly the implementation it installed"));
+
+let component_refresh_bound = bind_policy(
+    "usd.component_refresh",
+    "decide_refresh",
+    "fn decide_refresh(facts) { if runtime_context.cycle != \"lifecycle\" || runtime_context.phase != \"preparation\" || runtime_context.clock != \"none\" { throw \"usd.component_refresh requires an owner lifecycle preparation context\"; } #{ action: \"propagate\" } }",
+);
+checks.push(t_true(component_refresh_bound.ok == true
+        && component_refresh_bound.status == "installed",
+    "the local component refresh policy can be installed through its owner contract"));
+let component_refresh_call = invoke_hook("usd.component_refresh", [#{
+    changed_document: 1,
+    changed_layer: "twin://example/components/part.usda",
+    dependent_stage: "StageAssetId(1)",
+    default_action: "propagate",
+    camera_policy: "preserve",
+}]);
+checks.push(t_true(component_refresh_call.ok == false
+        && component_refresh_call.status == "fault"
+        && component_refresh_call.error.contains("owner lifecycle preparation context"),
+    "component refresh policy rejects calls outside its scheduled lifecycle owner"));
+let component_refresh_removed = unbind_policy("usd.component_refresh");
+checks.push(t_true(component_refresh_removed.ok == true
+        && component_refresh_removed.status == "removed",
+    "Rhai can remove the local component refresh policy"));
 
 let status = policy_status();
 checks.push(t_true(status.scope != () && status.installed != ()

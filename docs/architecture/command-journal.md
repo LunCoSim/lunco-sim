@@ -5,9 +5,17 @@
 > This page covers the future command/session journal. The current authored
 > document journal is defined in [`18-unified-journal-and-history.md`](18-unified-journal-and-history.md).
 
-`#[Command]` execution is not currently journaled. Runtime actions such as
-`SpawnEntity`, `AcquireControl`, `SetPorts`, terrain spawning, and time control
-remain transient; deterministic session replay is therefore not built.
+`#[Command]` dispatch is not journaled as a general session input. A bounded
+in-memory `SessionInputStream` now captures physical intent frames and admitted
+external `SimulateIntent`/`SimulateIntentEdge` payloads, but it is not a complete
+session log. Some command owners translate actions into authored document
+operations: document-backed `SpawnEntity` uses `ApplyUsdOps` and the Twin
+journal, while a raw-file scene uses direct ECS spawning plus `NetSpawn`. The
+document journal can reconstruct authored state, but neither spawn path records
+the command's producer and effective simulation tick as a session input.
+`AcquireControl`, `SetPorts`, terrain spawning, time control, and other
+transient runtime actions still lack complete session capture, so deterministic
+session replay is not built.
 
 The Twin journal owns authored document mutations. A separate session replay
 input stream must own transient external inputs such as per-tick controls and
@@ -61,39 +69,116 @@ are:
 
 | Producer | Current path | Replay implication |
 |---|---|---|
-| HTTP, MCP, and Rhai command calls | `ApiCommandEvent` → `api_command_dispatcher` → typed command event | The API dispatcher sees these calls, but not direct typed triggers. |
+| HTTP, MCP, and Rhai command calls | `ApiCommandEvent` → `api_command_dispatcher` → typed command event | The event retains `ApiTransport` or the Rhai execution context through `ActiveCommandId` and `CommandOccurred`; direct typed triggers remain outside this path. |
 | UI and Rust subsystem systems | Direct typed command events via Bevy `Commands` | Capture cannot be attached only to the API dispatcher. |
-| Keyboard/gamepad vessel control | Bevy input state → `drive_from_bindings` in `FixedUpdate` → `SetPorts` before `ControlDacSet` | The effective port writes and `SimTick` are known at the fixed-step producer. Record the consumed semantic frame, not device events. |
+| Keyboard/gamepad vessel control | Bevy input state → admitted `PhysicalIntentFrame` semantic snapshot in `drive_from_bindings` at `FixedUpdate` → `SetPorts` before `ControlDacSet` | Admission requires the local input `SessionId`, target `GlobalEntityId`, and committed scene generation; the frame also carries the current `SimTick` and shared per-tick sequence. Missing admission facts and duplicate target/session order keys hold the input with a structured runtime error; ordering never falls back to Bevy `Entity` bits. While explicitly active, `SessionInputStream` retains the sorted canonical intent ids and admission identity in a bounded in-memory record. Do not record resolved port writes as external input. |
 | Networked vessel control | Wire input → `SetPorts`; remote frames are consumed by `GlobalEntityId` and per-vessel sequence order at the fixed simulation step | `InputFrame` and `OwnedInputLog` serve one-vessel prediction rollback and acknowledgement. They are not a whole-session log. |
 | Scheduled Rhai and hook behavior | Evaluated serially in the owning scenario/hook cycle against live simulation state | These outputs are derived behavior. Re-run them from the same state and inputs during replay; do not record them as independent external inputs. Direct scenario bridge writes (`set`, `port_set`) are part of that ordered evaluation and must stay behind the same replay boundary. |
 | One-shot Rhai / workbench tool evaluation | Bounded `Repl` or tool queue → live-world evaluation outside the fixed simulation transaction | This is an external action when it changes authoritative state. The replay contract must retain the source/tool revision and typed arguments, assign an effective simulation boundary, and reproduce the result there; an application-cycle evaluation cannot mutate authoritative state at an arrival-dependent time. This path is not yet captured or fenced to a simulation tick. |
 | Async preparation and owner results | Prepared off-thread, then validated and committed by the owning lifecycle or simulation boundary | Worker completion is not an input. Replay the admitted source revision and deterministic commit order, not completion timing. |
 
-`CommandOccurred` projects only the command type name; it does not retain
-parameters, target, origin, scene generation, tick, or sequence. A generic
-event observer therefore does not by itself provide replay data, even though it
-sees typed command events from direct and API paths.
+`ApiCommandEvent` now carries its producer origin. The reflected command
+dispatcher scopes that origin with the active command id, and the generated
+`CommandOccurred` fact carries it to downstream observers. The fact still does
+not retain typed command parameters, stable target identity, scene generation,
+effective tick, or per-tick input order. Rhai scenario origins also carry the
+executing actor's stable `GlobalEntityId` and source execution sequence;
+application-level Rhai calls may have no actor. Direct typed triggers publish
+no classified origin unless their producer routes them through an explicit
+boundary. This metadata alone is not a replay record.
 
-The session stream must capture external authoritative inputs at the boundary
-where they become eligible for simulation, before domain projection, with a
-scene generation, stable target identity, effective `SimTick`, and stable
-per-tick sequence. This is later than UI/API request arrival when a request is
-assigned to a simulation tick. High-rate controls should be semantic per-tick
-frames; discrete actions should retain their typed action and target. Capture
-must distinguish external inputs from commands derived by deterministic
-Rhai/hooks, since replaying both an input and its derived command would apply
-the same effect twice.
+`SimulateIntentEdge` copies the reflected command origin onto its
+`SemanticIntentEdge`. The bounded `CausalTrace` query now exposes API transport
+origin or Rhai scope, cycle, phase, generation, sequence, and scenario actor id
+for that discrete edge. API, application-Rhai, and direct typed submissions
+also enter a bounded controller queue. Admission requires a stable target id, a
+completed scene generation, and a fixed simulation clock; it assigns the next
+tick and a per-tick sequence. The fixed-step owner validates generation and
+target again, then emits the semantic edge before control propagation.
+`CausalTrace` and `intent.edge` retain that admission stamp. The command
+acknowledgement includes the same `correlation_id` and optional admission
+fields, so a client can query this exact edge after later edges arrive.
+Simulation-clock Rhai edges stay in their deterministic hook pass and carry no
+external-input stamp.
+
+The controller producer is not yet a complete input boundary.
+`drive_from_bindings` captures physical `ActionState<UserIntent>` into a
+by-value `PhysicalIntentFrame` semantic snapshot and reads the `SimulatedIntents`
+resource separately, then combines them with OR only while evaluating an
+intent. Admission requires the local input `SessionId`, target `GlobalEntityId`,
+and committed scene generation; the snapshot carries those identities, the
+current `SimTick`, and an order from the same per-tick sequence allocator used
+by external semantic inputs. Missing facts and duplicate target/session order
+keys hold physical input with a structured runtime error; there is no
+world-local `Entity` ordering fallback. When capture is active, the controller
+appends a `SessionInputRecord` containing sorted canonical intent ids and that
+admission stamp to `SessionInputStream`; the controller-local frame object is
+discarded after translation. `StartSessionInputCapture`,
+`StopSessionInputCapture`, and `ClearSessionInputCapture` control the bounded
+in-memory stream;
+`ReadSessionInputStream` returns its state and typed records. A capacity or
+ordering violation stops capture visibly and preserves admitted records. The
+held resource keeps API transport, Rhai
+runtime route plus scenario actor id,
+and direct typed-command sources in separate buckets; a
+release removes only that source's hold. API calls still share one
+transport-wide source class, app-level Rhai calls may lack an actor, and direct
+typed commands share one source class. External `SimulateIntent` changes and
+`SimulateIntentEdge` submissions share the bounded 4,096-record queue, require
+a stable target id and committed scene generation, and receive the next fixed
+tick plus a per-tick sequence. The fixed-step owner rechecks target and
+generation before applying either action; held-state commits publish
+`intent.hold`, while discrete edges retain their correlation id and admission
+stamp in both `CausalTrace` and the `intent.edge` event. Scene teardown clears
+pending records. Physical
+`ActionState` frames receive the local input `SessionId`, target `GlobalEntityId`,
+and fixed-tick order at their controller boundary. Missing identity or committed
+scene state holds the input visibly, and duplicate target/session order keys do
+not use process-local entity bits to break ties. While active,
+`SessionInputStream` captures physical frames and admitted `SimulateIntent` /
+`SimulateIntentEdge` payloads in bounded memory. Semantic records retain the
+producer class, Rhai actor when available, target, committed generation, tick,
+sequence, and command correlation id. Physical records retain the local input
+session and canonical intent ids. Capacity/order failures stop capture without
+evicting admitted records. API producer identity remains transport-wide, and
+direct typed commands have no stable producer id. The external ingress queue
+and `CausalTrace` are still separate from durable replay storage. Other command
+payloads, runtime-spawn identity, durable writing, and playback remain open.
+
+## Replay implementation boundary
+
+The current session-input slice covers external `SimulateIntentEdge`
+submissions, held/released `SimulateIntent` changes, and physical semantic
+frames while explicit capture is active. A complete session-input
+implementation must extend the same typed ingress to all supported external
+authoritative inputs, retain stable source and target identities, and persist
+records outside the fixed schedule. High-rate controls need semantic per-tick
+frames; discrete actions need their typed action and target. The fixed-step
+owner must consume all records in their admitted order.
+
+Physical frames and admitted API/Rhai/direct semantic inputs retain distinct
+producer classes in the capture. Deterministic simulation-Rhai actions remain
+derived behavior and are not recorded as external inputs. Playback feeds
+recorded semantic input through controller translation and the normal
+event/command path, so Rhai and Modelica behavior are re-derived once.
+Capturing a derived command as an external input would apply its effect twice.
+
+The current queue and in-memory stream have explicit bounds. A durable writer
+must run outside the fixed schedule. A full queue, record limit, or failed
+writer must end recording with a visible error; it must not drop frames
+silently or stall simulation. Runtime-spawned
+entities need their recorded authoritative identity in the spawn action, while
+content-derived entities can use their existing stable `GlobalEntityId`.
+Recording and playback remain unimplemented until these lifecycle, identity,
+origin, and persistence requirements have a real producer and consumer.
 
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and
-cannot reproduce a live session by itself. A session replay input stream must
-cover those transient inputs without recording authored document edits a
-second time. This capture and replay path is not implemented yet. The ingress
-inventory rules out treating `api_command_dispatcher`, `CommandOccurred`, or
-the network rollback buffer as the whole-session boundary. The implementation
-needs an explicit typed simulation-input contract that all supported external
-simulation producers can submit to and the fixed-step owner can order and
-consume.
+cannot reproduce a live session by itself. The input stream covers transient
+runtime state without recording authored document edits a second time. The
+audited ingress paths rule out treating `api_command_dispatcher`,
+`CommandOccurred`, or the network rollback buffer as the whole-session
+boundary.
 
 ## The authored-document model — one write path (record → project)
 
@@ -106,7 +191,7 @@ Local and remote authored document ops take the same path:
 ```
    authored document edit ─► document ingress ─► authored journal ─► domain projection ─► ECS
    remote authored op ─────► merge plane ──────► authored journal ─► domain projection ─► ECS
-   UserIntent/InputFrame ───► session input log at (scene generation, SimTick, sequence)
+   external UserIntent ─────► future session input stream at (generation, SimTick, sequence)
    deterministic Rhai/hooks ───────────────────────────────────────────────► re-derived
 ```
 
@@ -281,7 +366,7 @@ contracts:
 |---|---|---|
 | Dig / raise authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
 | Flatten pad authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
-| Spawn a rover during a session | Runtime command; session input capture is not implemented | scene generation, target, `SimTick`, stable sequence |
+| Spawn a rover during a session | Document-backed scene: resulting `ApplyUsdOps` in the Twin journal; raw-file scene: direct ECS spawn plus `NetSpawn`; neither path records a session input stamp | document operation uses `EntryId` and merged order; whole-session replay also needs producer, scene generation, target, `SimTick`, and stable sequence |
 | Possess during a session | semantic user intent; whole-session capture is not implemented | scene generation, controlled target, `SimTick`, stable sequence |
 | USD prim edit | USD document operation in the Twin journal | `EntryId` and merged journal order |
 

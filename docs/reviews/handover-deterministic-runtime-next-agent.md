@@ -1,0 +1,223 @@
+# Handover: deterministic runtime work
+
+**Prepared:** 2026-09-27
+**Workspace:** `/home/rod/Documents/luncosim-workspace/lunar-soil`
+**Branch:** `codex/lunar-soil`
+**HEAD:** `19c1c3e27ae2fc469b0a236ea0581368103d671a`
+**Integrated main:** `277fced5da73cda8448492ab9f25b5a7c827eb6a`
+
+The in-progress optimization merge was completed as `c8740ceaf`; latest local
+`main` was then integrated by merge commit `19c1c3e27`. There is no active
+merge and no unresolved path. The task work remains uncommitted: 54 modified
+tracked files and three untracked files, with nothing staged. No push was made.
+The pre-merge `D9`/`D14` backup remains in `stash@{0}`; the work was restored
+and reviewed after the merge.
+
+## Active user objective
+
+Implement a robust cross-domain deterministic simulation architecture in
+`lunar-soil`: explicit progress admission and deterministic async result commits,
+complete causal dependencies and stable ordering across USD, Modelica, SysML,
+Rhai, physics, and replay, with production tests and performance evidence;
+preserve clean local `main` integration.
+
+Read [`open-deterministic-simulation-contract.md`](open-deterministic-simulation-contract.md)
+and [`62-deterministic-runtime-and-async-boundaries.md`](../architecture/62-deterministic-runtime-and-async-boundaries.md)
+before selecting the next gap. D25 controller ordering and D26 projection
+admission are complete. Whole-session replay, full causal closure, remaining
+cadence work, and performance evidence remain open.
+
+## Current progress
+
+### D9: command origin, causal edge trace, and producer identity
+
+Reflected API commands retain `ApiTransport` or Rhai execution context through
+`ActiveCommandId` and `CommandOccurred`. Rhai scenario commands also carry the
+executing actor's stable `GlobalEntityId`; application-level Rhai calls may
+have no actor. `SimulateIntentEdge` preserves origin through
+`SemanticIntentEdge` and bounded `CausalTrace`, including actor id, route, phase,
+generation, and sequence.
+
+External API, application-Rhai, and direct typed `SimulateIntentEdge` calls
+now enter a bounded controller queue. Admission requires a stable target id, a
+committed scene generation, and the fixed simulation tick; it assigns the next
+tick and per-tick sequence. The fixed-step owner checks that the stamp is due
+and that generation and target still match before emitting the edge ahead of
+control propagation. `CausalTrace`, `intent.edge`, and the API acknowledgement
+carry the correlation id and admission stamp. The acknowledgement correlation
+id lets clients query the exact edge while later edges are being emitted.
+Simulation-clock Rhai edges stay in their deterministic hook pass and carry no
+external-input stamp.
+
+`SimulatedIntents` keys held state by target, intent, and producer class. API
+transport, Rhai route plus actor identity, and direct typed-command holds remain
+separate; releasing one scenario actor leaves another actor on the same route
+held. External API, application-Rhai, and direct typed `SimulateIntent` changes
+for fixed-simulation targets now share the bounded input queue with
+`SimulateIntentEdge`. Both action types require a stable target id and committed
+scene generation, receive the next fixed tick and shared per-tick sequence, and
+are revalidated at the fixed-step owner before control propagation. Held commits
+publish `intent.hold`; the command acknowledgement and event retain the same
+correlation id and admission stamp. Deterministic Simulation Rhai behavior stays
+in its current pass, while local-embodiment commands keep their interaction
+cadence. API identity remains transport-wide, application Rhai may have no
+actor, and direct typed commands remain one source class. The fixed-step vessel
+controller captures physical `ActionState<UserIntent>` into a by-value
+`PhysicalIntentFrame` semantic snapshot, separate from simulated holds until
+intent translation. Frame admission requires the local input `SessionId`,
+target `GlobalEntityId`, and a committed scene generation. It carries those
+identities plus the current `SimTick` and a sequence from the shared per-tick
+allocator. Missing admission facts or duplicate target/session order keys hold
+the input with a structured runtime error; ordering does not fall back to Bevy
+`Entity` bits. The frame is discarded after the pass. An active bounded
+`SessionInputStream` retains physical frames and admitted external
+`SimulateIntent`/`SimulateIntentEdge` payloads in memory, with producer class,
+available Rhai actor identity, stable target, generation, tick, sequence, and
+correlation where applicable. Other commands, distinct API/direct producer
+identity, runtime spawns, durable writing, and playback are still outside this
+capture.
+
+Verification for this increment:
+
+- `cargo test -p lunco-controller semantic_edge_is_atomic_target_scoped_and_script_visible -j 4` —
+  1 passed, including the typed acknowledgement correlation id.
+- The prior full `cargo test -p lunco-controller -j 4` passed all 18 tests,
+  including stable admitted tick/order and source-scoped held input coverage.
+- `cargo test -p lunco-controller external_held_intent_commits_at_its_admitted_tick_and_publishes_its_stamp -j 4` — passed after the capture extension; it interleaves an edge and held API input, checks no early state change, and verifies shared sequence, stamps, producer, and typed retained payloads.
+- `cargo test -p lunco-controller physical_frame_respects_keyboard_capture_without_masking_simulated_holds -j 4` — passed again after making the frame a by-value snapshot; the test releases `ActionState` after capture and confirms the captured semantic state remains stable, while keyboard capture suppresses only physical input and leaves API holds active.
+- Current continuation: `cargo test -p lunco-controller -j 4` passed all 23
+  tests. The possessed-avatar keyboard test supplies a local `SessionId`, target
+  `GlobalEntityId`, and committed scene, then verifies its physical frame
+  advances the shared per-tick sequence after an already admitted API edge.
+  New negative tests verify that a missing scene generation and duplicate
+  target/session order keys hold input and emit structured runtime errors.
+- `cargo build -p lunco-luncosim -j 4` — passed after the API acknowledgement
+  changes, including this held-input admission increment.
+- `rustfmt --edition 2024 --config skip_children=true` on the three changed
+  Rust owners — passed after implementation and runtime validation.
+- This continuation formatted `crates/lunco-controller/src/lib.rs` and
+  `crates/lunco-control-core/src/lib.rs` once after the controller suite passed.
+- `python3 scripts/validate_skills.py` — 43 skills valid.
+- `git diff --check` and `git diff --cached --check` — passed with the existing
+  mixed staged/unstaged work preserved.
+- Windowed production `free_flight_speed_boost` attached through the live API
+  — `TESTS_OK 10`; current attached run measured 23.1006 m/s base,
+  23.0992 m/s diagonal, 163.3417 m descent, and 166.064 m ascent.
+- A live API edge to Avatar returned correlation id `1` and admission
+  `{scene_generation: 1, effective_tick: 1736, sequence: 1}`. `CausalTrace`
+  queried by that exact id and the `intent.edge` telemetry event both reported
+  the same stamp; telemetry placed delivery at tick 1736.
+- The rebuilt production headless session on port 4103 accepted API
+  `SimulateIntent` for the skid rover with correlation id `3` and admission
+  `{scene_generation: 1, effective_tick: 1997, sequence: 1}`. Its `intent.hold`
+  event reported the identical id and stamp with `U64` correlation and target
+  ids; attached `simulate_intent_input_admission.rhai` passed `TESTS_OK 4`.
+  This verifies the command/event boundary only; the enclosing
+  `physical_rover_controls` fixture still has its independent existing
+  undeclared-dependency diagnostics.
+- The earlier production headless fixture run passed causal assertions but
+  failed three motion assertions at 0 m/s. It is not counted as a passing
+  headless gate; the windowed cadence run is separate evidence.
+
+Fresh evidence after the `main` merge:
+
+- `cargo build -p lunco-luncosim --bin luncosim -j 4` — passed on the merged
+  tree (`19c1c3e2-dirty`) after adding typed held/edge input records to capture.
+- A fresh production API run of `free_flight_speed_boost` passed
+  `TESTS_OK 11`; measured base/diagonal speeds were 23.1/23.1001 m/s and
+  descent/ascent distances were 163.3417 m.
+- The rebuilt production binary passed the updated
+  `simulate_intent_input_admission.rhai` gate on port 4122 with `TESTS_OK 8`.
+  The API `SimulateIntent` receipt and `intent.hold` event matched correlation
+  id 1 and `{scene_generation: 1, effective_tick: 432, sequence: 1}`; the
+  completed `ReadSessionInputStream` record retained the same stamp, target,
+  `api_transport` producer, and `{intent: "action", held: true}` payload.
+  The fixture still emitted its independent undeclared-dependency diagnostics.
+  This verifies one admitted API held input and capture lifecycle; the run did
+  not exercise physical-key capture or durable replay.
+- An earlier port 4120 attempt of that gate reported `FAIL`; the fixture's
+  repeated steering dependency diagnostic obscured its assertion output. The
+  prompt port 4121 rerun passed. Keep the fixture diagnostics separate from
+  the D9 result.
+- The command reference was regenerated from the merged build's live runtime
+  schema: 235 runtime-visible commands across 53 crates.
+- The owned sessions on ports 4119, 4120, 4121, and 4122 were stopped through
+  API `Exit`; their processes and listeners are gone. The 4121 process was PID
+  142057; the new capture run on 4122 used PID 226406. No visual or performance
+  acceptance was run.
+
+Older sessions on port 4103 were also stopped through API `Exit`; they are not
+evidence for this merged-main run. No runtime session is currently owned by
+this task. No performance measurement was taken.
+
+Next D9 work is to capture other typed inputs and runtime-spawn admission plus
+stable spawned identity without duplicating document-backed `ApplyUsdOps` in
+the Twin journal. Give API clients and direct typed producers stable
+identities, then build durable recording/playback through the normal controller
+path. See the owner and record-shape requirements in
+[`command-journal.md`](../architecture/command-journal.md). Whole-session
+capture/replay and supported-profile divergence evidence remain open.
+
+### D14: owner context for camera, runtime UI, render, and USD projection policies
+
+Camera presentation policy calls now receive
+`Application/Presentation/Preparation`. Runtime UI recording, visibility, and
+properties calls receive their typed UI or camera-status presentation context.
+The Rhai policies reject off-cycle calls. `publish_exposure` runs in the UI
+cycle set, which remains ordering metadata rather than an independent cadence.
+The rendering-quality catalog invokes its hooks as
+`Application/Presentation/Initialization` at startup and
+`Application/Presentation/Preparation` after a committed policy revision. The
+shadow-warning policy receives `Application/Presentation/Preparation` from its
+`PostUpdate` owner when shadow configuration changes. Those owners remain in
+their host schedules; the cycle set does not create a separate cadence.
+
+Verification recorded for these changes:
+
+- `cargo check -p lunco-luncosim-exposures -j 4` — passed.
+- `cargo test -p lunco-luncosim-exposures camera_ -j 4` — passed 3 tests.
+- `cargo test -p lunco-render profile_contexts_use_the_application_presentation_clock -j 4` — passed, 1 test.
+- `cargo test -p lunco-render-recovery configured_shadow_caster_limits_preserve_authored_lights_and_deduplicate_warning -j 4` — passed, 1 test.
+- `cargo build -p lunco-luncosim -j 4` — passed.
+- `cargo test -p lunco-usd-bevy-runtime-core component_refresh_context_tracks_the_projection_owner -j 4` — passed, 1 test.
+- Production API `test_hook_policies.rhai` on the rebuilt empty app — `TESTS_OK 40`.
+- Production headless `route_lifecycle` — `PASS 84 assertions`.
+- Windowed production `test_camera_presentation_owner.rhai` on `sensor.usda` —
+  `TESTS_OK 1`; the active camera was selected through the scheduled owner.
+- `python3 scripts/validate_skills.py` — 43 skills valid after the skill edit.
+- `rustfmt --edition 2024 --config skip_children=true` on the two render owners
+  and USD projection owner — passed.
+- `git diff --check` and `git diff --cached --check` — passed after the latest
+  documentation and formatting updates.
+
+The `usd.component_refresh` owner now stamps mounted-Twin edits as
+`Twin/Lifecycle/Preparation` with the active or committed transition generation
+and preview-only edits as `Application/Lifecycle/Preparation`. The focused
+runtime-core test validates both route shapes and rejects a missing mounted-Twin
+generation; the production `test_hook_policies.rhai` run passed 40 assertions,
+including rejection of a policy call outside Lifecycle Preparation. A separate
+exploratory run with `sensor.usda` mounted observed the Application camera hook
+as unavailable from the Twin-scoped REPL. That sensor session remained not-ready
+with pending Altimeter/IMUSensor work and logged a GPU allocation failure, so it
+is not a readiness or performance result. The windowed camera-owner test passed
+in a separate sensor session.
+
+The most recent empty-app API session on port 4103 was stopped with API `Exit`;
+its PID and listener are gone.
+
+Independent UI and visualization cadences remain open. Do not introduce a
+second mutable Rhai interpreter schedule; owner cycles need isolated state or
+typed queues before that is safe.
+
+## Runtime and repository constraints
+
+- Do not edit authored USD through shell or patch tools. Use the live USD
+  document operations for authored changes.
+- Runtime checks must use this checkout's production binary on an explicit free
+  port. Verify PID, executable, working directory, and listener before control;
+  stop only the owned app through API `Exit`.
+- Preserve the current unstaged changes and the backup stash. The `main` merge
+  is complete. Do not reset, repeat Cargo cleanup, or push. The earlier
+  package-scoped Cargo cleanup removed only this checkout's selected build
+  outputs; shared Cargo caches and source were preserved.
+- Report source, scene-test, live API, and visual evidence as distinct claims.

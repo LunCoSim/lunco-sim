@@ -104,7 +104,8 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `GetShareLink` | `{"doc_id": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{"include_values": bool?, "include_entities": bool?}` | List USD-driven cosim entities with live telemetry. Both options default to `true`; `include_values: false` omits input/output maps and verbose model/error details, while `include_entities: false` returns only counts, synchronization state, and an aggregate Modelica step profile. |
 | `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |
-| `CausalTrace` | `{"target": u64, "correlation_id": u64?}` | Explain one semantic edge through its authored binding, selected port owner, USD connection/admission state, and current measured channels. |
+| `CausalTrace` | `{"target": u64, "correlation_id": u64?}` | Explain one semantic edge through its authored binding, selected port owner, USD connection/admission state, current measured channels, classified producer origin, and optional fixed-tick admission stamp. |
+| `ReadSessionInputStream` | `{}` | Read the bounded in-memory capture of physical frames and admitted held/edge semantic inputs, including producer, admission, and typed payload records. |
 
 `ListOpenDocuments`, `ListRecentFiles`, and `ListTwin` are owned by
 `lunco-workspace`, so they are available in windowed, headless, and offscreen
@@ -133,6 +134,21 @@ edge for that target. The response composes the existing owners:
 - `joint_admission` reports target-related native joint admission, while
   `measured_channels` reports the latest retained `SignalRegistry` samples and
   provenance metadata.
+- `origin` reports API transport or Rhai route, phase, generation, sequence,
+  and the stable actor id for scenario-owned Rhai calls.
+- `admission` is empty for deterministic Rhai simulation behavior. For an
+  external discrete edge it reports the committed scene generation, effective
+  `SimTick`, and per-tick sequence assigned before fixed-step delivery.
+
+The `SimulateIntentEdge` command acknowledgement returns the edge's
+`correlation_id` and, for external submissions, the same admission stamp. Use
+that returned id to query this exact edge while the scene continues emitting
+later events.
+
+External `SimulateIntent` acknowledgements also return `correlation_id` and an
+admission stamp. The fixed-step commit publishes `intent.hold` with the same
+correlation id, target id, held value, and stamp. Local-embodiment interaction
+commands remain on the interaction cadence and have no fixed-tick admission.
 
 An absent edge returns an API error. An edge with an incomplete downstream path
 returns an empty or explicitly pending/failed stage, so a trace never turns a
@@ -279,6 +295,8 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | **Control** | `ClaimControl` / `ReleaseControlClaim` | Claim or release a stable endpoint for the originating session without binding an avatar camera. |
 | **Control** | `SimulateIntentEdge` | Emit one target-scoped semantic `pressed`, `released`, or `pulse` edge for a shared intent; the consuming Rhai/Modelica policy decides its meaning. |
 | **Control** | `AcquireControl` | Acquire a target control surface, optionally binding the local presentation rig. |
+| **Session** | `StartSessionInputCapture` / `StopSessionInputCapture` | Begin or finish bounded in-memory capture of physical frames and admitted semantic inputs. |
+| **Session** | `ClearSessionInputCapture` | Explicitly discard a stopped or failed in-memory session-input capture. |
 | **Camera** | `FollowTarget` | Chase-camera a target through a selected or local camera rig. |
 | | `FocusTarget` | Orbit-camera a target through a selected or local camera rig. |
 | | `CaptureScreenshot` | Trigger an in-sim screenshot. |
@@ -734,6 +752,15 @@ The built-in `ReadExposures` query reads the domain-neutral
 `EngineExposures` registry used by runtime HTML/CSS surfaces and other
 clients. Its `revision` is the change-detection boundary; callers can poll
 without rebuilding unchanged views.
+
+`StartSessionInputCapture`, `StopSessionInputCapture`, and
+`ClearSessionInputCapture` control the bounded session-input buffer.
+`ReadSessionInputStream` returns physical-frame and semantic-input records with
+producer class, target identity, committed scene generation, tick, and input
+sequence. Semantic records also include the admitted command correlation id;
+Rhai records retain an actor id when available. API identity remains
+transport-wide. This capture is in memory only and does not provide durable
+replay.
 
 **Adding a new typed command** (side-effect): follow the existing
 pattern in `skills/test-via-api/SKILL.md`.

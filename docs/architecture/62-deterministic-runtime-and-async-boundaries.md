@@ -189,7 +189,7 @@ remain statically composed by owner crates, so an absent capability is absent
 from the host schedule and an installed cycle has a visible owner.
 
 Rhai scheduling metadata is admission data, not a request to mutate the Rust
-scheduler. A script with an unsupported `@run-on` target or timing is skipped
+scheduler. A script with an unsupported `@peer` target or timing is skipped
 and receives a document diagnostic for that source revision; the host and its
 other scripts continue. The owner must not guess a scope or move the script to
 another clock. Runtime callback errors also remain visible and local to their
@@ -297,8 +297,8 @@ callback runs in a later cycle; discrete lifecycle hooks use a stable
 sequence-free seed.
 Nested Rhai functions inherit the current phase. Runtime owner scope
 (`Core`, `Application`, or `Twin`) is assigned by the Rust owner and remains
-independent of cycle and clock. The authored `@run-on host|client|both` directive
-selects the process role for a scenario; it does not select the runtime owner
+independent of cycle and clock. The authored `@peer host|client|both` directive
+selects the network peer for a scenario; it does not select the runtime owner
 scope. Continuous scenario behavior may state its required
 cadence with `@timing simulation`; Rust still installs and invokes the scenario
 from its owning schedules. Lifecycle hooks receive the lifecycle or simulation
@@ -400,6 +400,14 @@ The causal transaction follows explicit owner phases:
 The exact existing phase anchors and FMI-style exchange are documented in
 [`22-domain-cosim.md`](22-domain-cosim.md). This document adds the rule that
 asynchronous completion never selects the visible simulation tick.
+
+External `SimulateIntentEdge` and `SimulateIntent` commands targeting fixed
+simulation state enter one bounded controller queue. The owner assigns the next
+fixed tick and a shared per-tick sequence, then validates scene generation and
+stable target identity again before applying the action ahead of control
+propagation. The held-state commit publishes `intent.hold`; edge delivery also
+records its `CausalTrace`. Simulation-clock Rhai actions stay in their derived
+behavior pass, and local-embodiment input stays on the interaction cadence.
 
 ## 4. Async preparation, priority, and result commit
 
@@ -807,9 +815,10 @@ ordering includes:
   instead of through the Update-synchronized API lookup index; hosts without a
   global identity use their Bevy entity key only within that running World and
   are outside cross-session replay ordering;
-- fixed-step controller inputs: target `GlobalEntityId`, then source identity;
-  endpoints without a global identity use their Bevy entity key only within the
-  current World and are outside cross-session replay ordering;
+- fixed-step controller inputs: target `GlobalEntityId`, then local input
+  `SessionId`; missing target/session identity or committed scene generation
+  holds the input with a structured runtime error, and duplicate target/session
+  keys are rejected instead of ordered by Bevy `Entity` bits;
 - telemetry delivery: simulation tick, source, name, severity, time, and a
   recursive order over the typed payload;
 - USD-connected events: instance namespace, authored event prim path, source,
@@ -827,6 +836,23 @@ The world-local entity key makes execution independent of ECS query layout in
 one running world. It does not provide cross-session replay identity. Any actor
 or model included in a cross-peer/replay guarantee needs its stable
 `GlobalEntityId` or another source-owned, replicated identity.
+
+External held-input changes and discrete edges share one assigned per-tick
+sequence. While capture is active, `SessionInputStream` retains their typed
+payloads, correlation ids, producer class, target, committed generation, tick,
+and sequence. API producer identity remains transport-wide, and direct typed
+commands have no stable source id. The fixed-step controller captures physical
+`ActionState<UserIntent>` into a
+by-value `PhysicalIntentFrame` semantic snapshot. When the controller and
+target have stable `GlobalEntityId`s and a committed scene generation, the
+fixed-step owner stamps the frame with those identities, the current `SimTick`,
+and the shared per-tick input sequence before combining physical and simulated
+holds for control translation. Capture also retains that frame as sorted
+canonical intent ids with its producer session and admission stamp. The shared
+stream has a record bound, stops visibly on overflow or invalid order, and is
+observable through `ReadSessionInputStream`. It remains in memory only; other
+typed commands, durable writing, playback, and stable per-client API identities
+remain open.
 
 Floating-point addition is order dependent. Every reduction that contributes
 to authoritative state needs a stable input order. Parallel physics is
@@ -848,6 +874,41 @@ The gate exposes its owner and operation key plus a user-facing wait reason;
 matching failure and completion edges release only their own operation.
 `TimeTransport` mode and rate remain the user's intent while this gate pauses
 `Time<Virtual>`.
+
+The application-owned `camera.default_presentation` hook now receives an
+`Application/Presentation/Preparation` context with elapsed and delta samples
+from `Time<Real>`. Both standalone-camera selection and authored-camera
+validation use this owner context, and the Rhai policy rejects other cycles.
+Their `RuntimeCycleSet::Presentation` membership labels ordering; these systems
+still run in `Update` and do not have a separate presentation cadence. UI and
+terrain LOD remain shared-cycle work, so independent presentation/visualization
+cadences are still open.
+
+The rendering-quality catalog owner invokes its deterministic profile hooks
+from `Application/Presentation/Initialization` at startup and
+`Application/Presentation/Preparation` on stale policy revisions, sampling
+elapsed and delta time from `Time<Real>`. The refresh is labeled with
+`RuntimeCycleSet::Presentation` but remains in `Update`. The render recovery
+owner invokes the non-authoritative `render.shadow_quality` warning policy as
+`Application/Presentation/Preparation` in `PostUpdate`, only when the shadow
+configuration changes; a focused owner test validates the supplied context.
+
+The runtime UI recording-contract selector now invokes
+`runtime.ui.recording` as `Application/Ui/Preparation`, with the Application
+clock sampled from `Time<Real>`. It runs in the UI owner's `PostUpdate` chain
+only when the exposure, policy, or recording revision changes; it does not
+create a second UI cadence. Its Rhai policy rejects off-cycle calls.
+
+The authored runtime-surface visibility and property policies receive
+`Application/Ui/Preparation` from the `publish_exposure` owner, which is
+explicitly placed in `RuntimeCycleSet::Ui`. Camera-status properties are
+published at startup and on camera-status events with
+`Application/Presentation/Initialization` and
+`Application/Presentation/Event` respectively. Their Rhai policy accepts only
+those owner contexts; the visibility policy accepts only the UI refresh owner.
+The production `route_lifecycle` gate queries `ReadExposures` after authoring
+its `program-browser` surface and checks the scheduled visibility and program
+collection output.
 
 The whole-simulation guarantee remains open because:
 
@@ -986,10 +1047,23 @@ The whole-simulation guarantee remains open because:
    USD scene-time owner invokes its policy with the exact transition generation
    in `Twin/Lifecycle/Preparation`; `SceneTimeSelection` preserves that id
    through apply, and the time owner ignores stale completion/apply edges. Its
-   authored policy is also inspectable in `Application/Repl/Evaluation`. Other
-   scheduled Rust hook owners remain open until their cycle owners classify them.
-   GUI UI and LOD still share the main `Update` schedule, although server hosts
-   now omit the visual plugin entirely.
+   authored policy is also inspectable in `Application/Repl/Evaluation`. The
+   readiness selector receives `Core/Simulation/Behavior` from `SimTick` and
+   `Time<Fixed>`. The camera presentation owner receives
+   `Application/Presentation/Preparation` with `Time<Real>`. Render quality
+   profile loading receives Presentation Initialization or Preparation
+   context, and the shadow warning policy receives Presentation Preparation
+   context from its PostUpdate owner. The runtime UI recording selector
+   receives `Application/Ui/Preparation` with the Application clock.
+   Runtime-surface visibility and property policies receive their typed UI or
+   camera-status presentation owner context. The `usd.component_refresh`
+   policy receives `Twin/Lifecycle/Preparation` with the active or committed
+   generation for a mounted-Twin document, and
+   `Application/Lifecycle/Preparation` for a preview-only document; an
+   installed Twin policy requires its generation. Generic `invoke_hook`
+   forwards the active execution context. UI and LOD still run on host-frame
+   `Update`/`PostUpdate` schedules without independent cadence drivers, although
+   server hosts now omit the visual plugin entirely.
 8. Async task admission and priority are local to individual owners. The shared
    Bevy pool can be saturated by background work, and completion commits are
    not yet governed by one cross-owner budget/order contract.
@@ -1039,9 +1113,13 @@ These findings and their owner-specific file evidence are maintained in
    step request; add production Rhai verdicts for observable
    event ordering. Keep source-owned identities and fail visibly when a
    required identity is invalid.
-2. **Cycle and clock context.** Extend the typed invocation context from
-   scenario and REPL owners to every callback owner, then expose it read-only to
-   Rhai. Give UI and visualization independent cadences while keeping both
+2. **Cycle and clock context.** Current scheduled hook owners supply typed
+   owner context, and generic `invoke_hook` forwards the active execution
+   context. The initial-camera, runtime UI recording, runtime-surface
+   visibility/properties, and component-refresh policies reject off-cycle calls.
+   Keep `RuntimeCycleSet` labels distinct from cadence ownership. The
+   remaining D14 work is to establish independent UI and
+   visualization cadences where owner behavior needs them, while keeping both
    presentation-only.
 3. **Async work admission.** Use shared bounded priority admission over the
    existing worker pools. Modelica document parsing, Rhai inline roots and

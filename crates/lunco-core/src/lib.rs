@@ -46,8 +46,8 @@ pub use assembly::{
     ComponentKind, PortId, PortKind,
 };
 pub use commands::{
-    ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOutcome, CommandResults,
-    EditIntent, MarkClientLocalExt, SpawnEntity,
+    ActiveCommandId, ApiCommandMarker, ClientCommandPolicy, CommandOrigin, CommandOutcome,
+    CommandResults, EditIntent, MarkClientLocalExt, SpawnEntity,
 };
 pub use cycles::{
     RuntimeClock, RuntimeCycle, RuntimeCycleSet, RuntimeExecutionContext,

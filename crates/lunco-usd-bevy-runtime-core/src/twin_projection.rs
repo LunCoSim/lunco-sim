@@ -1435,6 +1435,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         if active_doc != Some(doc) && !preview_owned {
             continue;
         }
+        let active_twin_document = active_doc == Some(doc);
         // Read the generation before any whole-stage payload. The composed source
         // is serialized only when this event-driven owner observes a new
         // generation, never on the render loop.
@@ -1616,7 +1617,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // composed scene into the asset overlay for ordinary edits. A later
         // mount publishes the current document once; loaded dependent stages
         // receive the affected layer through the targeted refresh below.
-        refresh_dependent_stage_assets(world, doc, scene_id, &twin_path);
+        refresh_dependent_stage_assets(world, doc, scene_id, &twin_path, active_twin_document);
     }
 }
 
@@ -1634,6 +1635,7 @@ fn refresh_dependent_stage_assets(
     changed_doc: DocumentId,
     changed_scene: AssetId<UsdStageAsset>,
     layer_id: &str,
+    active_twin_document: bool,
 ) {
     let candidates: Vec<(
         AssetId<UsdStageAsset>,
@@ -1663,6 +1665,22 @@ fn refresh_dependent_stage_assets(
     if candidates.is_empty() {
         return;
     }
+    let policy_context = if lunco_hooks::get(COMPONENT_REFRESH_POLICY_HOOK).is_some() {
+        let generation = world
+            .get_resource::<lunco_core::SceneTransitionCoordinator>()
+            .and_then(lunco_core::SceneTransitionCoordinator::lifecycle_generation);
+        match component_refresh_runtime_context(active_twin_document, generation) {
+            Ok(context) => Some(context),
+            Err(error) => {
+                warn!(
+                    "[usd-live] hook {COMPONENT_REFRESH_POLICY_HOOK} has no valid owner context; dependent stages will not refresh: {error}"
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
     let Some(source) = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(changed_doc)
@@ -1680,7 +1698,7 @@ fn refresh_dependent_stage_assets(
     let source_bytes = source.into_bytes();
 
     for (stage_id, mut recipe) in candidates {
-        match component_refresh_decision(changed_doc, layer_id, stage_id) {
+        match component_refresh_decision(changed_doc, layer_id, stage_id, policy_context) {
             ComponentRefreshDecision::Propagate => {}
             ComponentRefreshDecision::Defer => {
                 info!(
@@ -1777,6 +1795,7 @@ fn component_refresh_decision(
     changed_doc: DocumentId,
     layer_id: &str,
     dependent_stage: AssetId<UsdStageAsset>,
+    runtime_context: Option<lunco_core::RuntimeExecutionContext>,
 ) -> ComponentRefreshDecision {
     let args = [HookValue::map([
         ("changed_document", HookValue::Int(changed_doc.0 as i64)),
@@ -1789,7 +1808,11 @@ fn component_refresh_decision(
         ("camera_policy", HookValue::str("preserve")),
     ])];
 
-    let Some(result) = lunco_hooks::invoke_unclassified(COMPONENT_REFRESH_POLICY_HOOK, &args)
+    let Some(runtime_context) = runtime_context else {
+        return ComponentRefreshDecision::Propagate;
+    };
+    let Some(result) =
+        lunco_hooks::invoke_with_context(COMPONENT_REFRESH_POLICY_HOOK, &args, runtime_context)
     else {
         return ComponentRefreshDecision::Propagate;
     };
@@ -1812,6 +1835,28 @@ fn component_refresh_decision(
             ComponentRefreshDecision::Reject
         }
     }
+}
+
+fn component_refresh_runtime_context(
+    active_twin_document: bool,
+    twin_generation: Option<u64>,
+) -> Result<lunco_core::RuntimeExecutionContext, &'static str> {
+    let route = if active_twin_document {
+        let generation = twin_generation
+            .ok_or("the mounted Twin document has no active or committed lifecycle generation")?;
+        lunco_core::RuntimeRoute::twin(lunco_core::RuntimeCycle::Lifecycle, generation)
+    } else {
+        lunco_core::RuntimeRoute::application(lunco_core::RuntimeCycle::Lifecycle)
+    };
+    Ok(lunco_core::RuntimeExecutionContext {
+        route: Some(route),
+        phase: lunco_core::RuntimePhase::Preparation,
+        clock: lunco_core::RuntimeClock::None,
+        time_seconds: None,
+        delta_seconds: None,
+        sequence: None,
+        producer: None,
+    })
 }
 
 fn parse_component_refresh_decision(
@@ -3491,6 +3536,36 @@ mod tests {
             )]))
             .is_err()
         );
+    }
+
+    #[test]
+    fn component_refresh_context_tracks_the_projection_owner() {
+        let application = component_refresh_runtime_context(false, None)
+            .expect("an editor preview uses the Application lifecycle route");
+        assert_eq!(
+            application.route,
+            Some(lunco_core::RuntimeRoute::application(
+                lunco_core::RuntimeCycle::Lifecycle,
+            ))
+        );
+        assert_eq!(application.phase, lunco_core::RuntimePhase::Preparation);
+        assert_eq!(application.clock, lunco_core::RuntimeClock::None);
+        assert!(application.validate().is_ok());
+
+        let twin = component_refresh_runtime_context(true, Some(17))
+            .expect("a mounted Twin uses its lifecycle generation");
+        assert_eq!(
+            twin.route,
+            Some(lunco_core::RuntimeRoute::twin(
+                lunco_core::RuntimeCycle::Lifecycle,
+                17,
+            ))
+        );
+        assert_eq!(twin.phase, lunco_core::RuntimePhase::Preparation);
+        assert_eq!(twin.clock, lunco_core::RuntimeClock::None);
+        assert!(twin.validate().is_ok());
+
+        assert!(component_refresh_runtime_context(true, None).is_err());
     }
 
     #[test]

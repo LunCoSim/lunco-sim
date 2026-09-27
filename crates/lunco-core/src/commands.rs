@@ -129,20 +129,53 @@ impl CommandResults {
     }
 }
 
-/// The request id of the command currently being dispatched, set by the
-/// transport dispatcher immediately around the observer trigger so the
-/// `#[on_command]` wrapper can record its outcome under the right id.
-/// `None` for in-process triggers (UI `commands.trigger`) — those aren't
-/// polled, so their result handlers simply don't record.
+/// Origin of a reflected command entering the typed command dispatcher.
+/// Direct Bevy event triggers have no origin unless their producer routes them
+/// through an explicitly classified command boundary.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CommandOrigin {
+    /// HTTP, MCP, or another external API transport submitted this command.
+    ApiTransport,
+    /// A Rhai evaluation emitted this command. Scenario calls retain their
+    /// stable actor identity; application-level evaluations have no actor.
+    Rhai {
+        /// Typed owner context for the Rhai invocation.
+        context: crate::RuntimeExecutionContext,
+        /// Stable source actor when the call came from a Twin program.
+        actor: Option<crate::GlobalEntityId>,
+    },
+}
+
+/// The request id and origin of the command currently being dispatched. The
+/// API dispatcher scopes these facts around the reflected command trigger so
+/// command observers can record outcomes and input provenance.
 #[derive(Resource, Default)]
-pub struct ActiveCommandId(Option<u64>);
+pub struct ActiveCommandId {
+    id: Option<u64>,
+    origin: Option<CommandOrigin>,
+}
 
 impl ActiveCommandId {
     pub fn get(&self) -> Option<u64> {
-        self.0
+        self.id
     }
+
+    /// Origin of the currently dispatched reflected command, if classified.
+    pub fn origin(&self) -> Option<CommandOrigin> {
+        self.origin
+    }
+
+    /// Set the command result id without an origin. Used by direct in-process
+    /// result tests and command producers that do not use `ApiCommandEvent`.
     pub fn set(&mut self, id: Option<u64>) {
-        self.0 = id;
+        self.id = id;
+        self.origin = None;
+    }
+
+    /// Scope a reflected command id and its classified producer origin.
+    pub fn set_with_origin(&mut self, id: u64, origin: Option<CommandOrigin>) {
+        self.id = Some(id);
+        self.origin = origin;
     }
 }
 
