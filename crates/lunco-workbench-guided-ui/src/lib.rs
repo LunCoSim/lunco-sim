@@ -49,6 +49,12 @@ pub struct GuidedOverlay {
     /// Pre-formatted objectives checklist block (one objective per line, with a
     /// leading glyph). Empty = the objectives card is hidden.
     pub objectives: String,
+    /// Registered Rhai tool selected by the current action set.
+    pub action_tool: String,
+    /// One-argument Rhai hook selected by the current action set.
+    pub action_hook: String,
+    /// Optional semantic action buttons displayed below the hint/objectives.
+    pub actions: Vec<GuidedHudAction>,
     /// Active spotlight: `(anchor_key, caption)`. `anchor_key` resolves against
     /// [`HelpAnchors`](lunco_workbench_core::presentation::HelpAnchors); a named key must resolve to a
     /// visible widget. `None` = no spotlight.
@@ -120,6 +126,43 @@ pub struct SetHint {
 pub struct SetObjectives {
     /// Pre-formatted checklist block; empty hides the objectives card.
     pub text: String,
+}
+
+/// One optional semantic button on the persistent guided HUD.
+#[derive(Reflect, Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GuidedHudAction {
+    /// Stable action identifier passed to the authored Rhai hook.
+    pub id: String,
+    /// Button label shown in the HUD.
+    pub label: String,
+    /// Disabled buttons remain visible so the operator can see the next step.
+    pub enabled: bool,
+}
+
+/// Replace the HUD's authored action buttons. All buttons dispatch their id to
+/// one registered one-argument Rhai tool hook; an empty `actions` list clears
+/// the buttons.
+#[Command(default)]
+pub struct SetGuidedHudActions {
+    /// Registered Rhai tool namespace, e.g. `griffin_surface_ops`.
+    pub tool: String,
+    /// One-argument function in that namespace, without `/1`.
+    pub hook: String,
+    /// Current button set in display order.
+    #[serde(default)]
+    pub actions: Vec<GuidedHudAction>,
+}
+
+/// A guided HUD button was pressed. The application adapter dispatches it
+/// through the normal typed Rhai tool-hook command path.
+#[derive(Event, Clone, Debug, PartialEq, Eq)]
+pub struct GuidedHudActionRequested {
+    /// Registered Rhai tool namespace.
+    pub tool: String,
+    /// One-argument Rhai hook name.
+    pub hook: String,
+    /// Authored action identifier passed as a string argument.
+    pub action: String,
 }
 
 /// Spotlight a workbench widget by its [`HelpAnchors`](lunco_workbench_core::presentation::HelpAnchors) key,
@@ -228,6 +271,14 @@ fn on_set_objectives(trigger: On<SetObjectives>, mut hud: ResMut<GuidedOverlay>)
     hud.objectives = cmd.text.clone();
 }
 
+#[on_command(SetGuidedHudActions)]
+fn on_set_guided_hud_actions(trigger: On<SetGuidedHudActions>, mut hud: ResMut<GuidedOverlay>) {
+    let cmd = trigger.event();
+    hud.action_tool = cmd.tool.clone();
+    hud.action_hook = cmd.hook.clone();
+    hud.actions = cmd.actions.clone();
+}
+
 #[on_command(Spotlight)]
 fn on_spotlight(trigger: On<Spotlight>, mut hud: ResMut<GuidedOverlay>) {
     hud.spotlight = Some((cmd.anchor.clone(), cmd.text.clone()));
@@ -265,6 +316,7 @@ fn on_clear_tour(trigger: On<ClearTour>, mut hud: ResMut<GuidedOverlay>) {
 register_commands!(
     on_set_hint,
     on_set_objectives,
+    on_set_guided_hud_actions,
     on_spotlight,
     on_clear_spotlight,
     on_set_tour_step,
@@ -282,16 +334,17 @@ fn register_guided_navigation(app: &mut App) {
 
 // ── Rendering ─────────────────────────────────────────────────────────────
 
-/// Draw the persistent objectives/hint card, top-left, below the menu bar.
-/// Non-interactive and in the guided overlay layer so it stays visible across
-/// perspectives without eating clicks. Workbench menus and window controls are
-/// rendered in the higher egui `Foreground` order.
+/// Draw the persistent objectives/hint card and any authored action buttons,
+/// top-left below the menu bar. It only owns pointer input while buttons are
+/// present. Workbench menus and window controls are rendered in the higher
+/// egui `Foreground` order.
 fn draw_guided_hud(
     mut egui_ctx: EguiContexts,
     hud: Res<GuidedOverlay>,
     theme: Option<Res<lunco_theme::Theme>>,
+    mut commands: Commands,
 ) {
-    if hud.hint.is_empty() && hud.objectives.is_empty() {
+    if hud.hint.is_empty() && hud.objectives.is_empty() && hud.actions.is_empty() {
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
@@ -306,7 +359,7 @@ fn draw_guided_hud(
 
     egui::Area::new(egui::Id::new("lunco_guided_hud"))
         .order(GUIDED_OVERLAY_ORDER)
-        .interactable(false)
+        .interactable(!hud.actions.is_empty())
         .fixed_pos(egui::pos2(screen.left() + 16.0, screen.top() + 44.0))
         .show(ctx, |ui| {
             ui.set_max_width(320.0);
@@ -346,6 +399,27 @@ fn draw_guided_hud(
                                 .color(theme.tokens.text)
                                 .size(15.0),
                         );
+                    }
+                    if !hud.actions.is_empty() {
+                        if !hud.hint.is_empty() || !hud.objectives.is_empty() {
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.add_space(6.0);
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            for action in &hud.actions {
+                                if ui
+                                    .add_enabled(action.enabled, egui::Button::new(&action.label))
+                                    .clicked()
+                                {
+                                    commands.trigger(GuidedHudActionRequested {
+                                        tool: hud.action_tool.clone(),
+                                        hook: hud.action_hook.clone(),
+                                        action: action.id.clone(),
+                                    });
+                                }
+                            }
+                        });
                     }
                 });
         });
@@ -1191,6 +1265,7 @@ impl Plugin for GuidedOverlayPlugin {
         use lunco_core::MarkClientLocalExt;
         app.mark_client_local::<SetHint>()
             .mark_client_local::<SetObjectives>()
+            .mark_client_local::<SetGuidedHudActions>()
             .mark_client_local::<Spotlight>()
             .mark_client_local::<ClearSpotlight>()
             .mark_client_local::<SetTourStep>()

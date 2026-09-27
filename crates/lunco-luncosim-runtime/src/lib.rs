@@ -70,6 +70,7 @@ impl Plugin for LunCoSimRuntimePlugin {
             app.insert_resource(lunco_scripting_bridge_core::IgnoredScenarioCommands::new([
                 "SetHint",
                 "SetObjectives",
+                "SetGuidedHudActions",
                 "Spotlight",
                 "ClearSpotlight",
                 "FocusPanel",
