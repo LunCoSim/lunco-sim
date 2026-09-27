@@ -25,16 +25,24 @@
 //! by `drain_world_scripts` with the prelude and every tool in scope, so an
 //! authored interaction policy can do anything a scenario can.
 
+use bevy::math::DVec3;
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
+use big_space::prelude::{CellCoord, Grid};
+use lunco_command_contracts::{Ack, OpId};
 use lunco_control_core::ControlLink;
+use lunco_core::{Command, on_command, register_commands};
+use lunco_doc::DocumentId;
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_embodiment_core::roles::TheLocalEmbodiment;
 use lunco_input_core::InputBindingsSettings;
 use lunco_scene_selection::SelectedEntities;
 use lunco_spatial::coords::{
     ACTIVE_FRAME_NAME, ActiveFrameCoordinates, RENDER_FRAME_NAME, RenderPos,
 };
+use lunco_spatial::world::ActivePhysicsFrame;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
+use lunco_usd_document::document::{LayerId, UsdDocument};
 use std::collections::HashSet;
 
 /// Build the language-neutral map passed to a script tool. The map is an
@@ -50,6 +58,7 @@ pub(crate) fn tool_map(entries: Vec<(String, TelemetryValue)>) -> TelemetryValue
 pub struct ScenePointerDispatch {
     seen: HashSet<ScenePointerKey>,
     seen_moves: HashSet<ScenePointerMoveKey>,
+    pending_moves: Vec<(PointerId, TelemetryValue)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -69,6 +78,115 @@ struct ScenePointerMoveKey {
 pub fn clear_scene_pointer_dispatch(mut dispatch: ResMut<ScenePointerDispatch>) {
     dispatch.seen.clear();
     dispatch.seen_moves.clear();
+    dispatch.pending_moves.clear();
+}
+
+/// Set the presentation transform of a prim authored in the disposable USD
+/// view layer. The target is resolved by stable entity identity and validated
+/// against its owning document before its live Bevy transform is updated.
+#[Command(default)]
+pub struct SetUsdViewPreviewTransform {
+    /// USD document which owns the view-layer prim.
+    pub doc_id: u64,
+    /// Stable API identity of the projected preview prim.
+    pub entity_id: u64,
+    /// Target translation in the active physics frame.
+    pub translation: [f64; 3],
+}
+
+#[on_command(SetUsdViewPreviewTransform)]
+fn on_set_usd_view_preview_transform(
+    trigger: On<SetUsdViewPreviewTransform>,
+    documents: Res<DocumentRegistry<UsdDocument>>,
+    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    asset_server: Res<AssetServer>,
+    entities: Res<lunco_api::registry::ApiEntityRegistry>,
+    active_frame: Option<Res<ActivePhysicsFrame>>,
+    q_prim: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    mut spatial: ParamSet<(
+        Query<(Option<&CellCoord>, &Transform)>,
+        Query<&mut Transform>,
+    )>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
+    let command = trigger.event();
+    let doc = DocumentId::new(command.doc_id);
+    if doc.is_unassigned() {
+        return Err("preview transform requires an assigned USD document".to_string());
+    }
+    let entity_id = lunco_core::GlobalEntityId::from_raw(command.entity_id);
+    let entity = entities
+        .resolve(&entity_id)
+        .ok_or_else(|| "preview transform target is not live".to_string())?;
+    let prim = q_prim
+        .get(entity)
+        .map_err(|_| "preview transform target is not a USD prim".to_string())?;
+    let target_doc =
+        lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, prim.stage_handle.id())
+            .ok_or_else(|| "preview transform target has no document-backed scene".to_string())?;
+    if target_doc != doc {
+        return Err("preview transform target belongs to another USD document".to_string());
+    }
+    let host = documents
+        .host(doc)
+        .ok_or_else(|| format!("USD document {doc} is not open"))?;
+    if !host
+        .document()
+        .authored_prim_exists(&LayerId::view(), &prim.path)
+        .map_err(|error| format!("cannot validate USD view prim {}: {error}", prim.path))?
+    {
+        return Err(format!(
+            "preview transform target {} is not authored in the USD view layer",
+            prim.path
+        ));
+    }
+    let frame = active_frame
+        .as_deref()
+        .map(|frame| frame.0)
+        .ok_or_else(|| "preview transform has no active physics frame".to_string())?;
+    let position = DVec3::from_array(command.translation);
+    if !position.is_finite() {
+        return Err("preview transform position must be finite".to_string());
+    }
+
+    // Preview geometry is a render-only entity. Convert from the stable active
+    // frame through its real parent hierarchy, using BigSpace's canonical cell
+    // split before narrowing into Bevy's local render transform.
+    let (old_cell, new_cell, local_translation) = {
+        let spatial = spatial.p0();
+        let (old_cell, _) = spatial
+            .get(entity)
+            .map_err(|_| "preview transform target has no live transform".to_string())?;
+        let (new_cell, local_translation) =
+            lunco_spatial::coords::position_in_grid_to_parent_local(
+                entity, position, frame, &q_parents, &q_grids, &spatial,
+            )
+            .ok_or_else(|| {
+                "preview transform target is disconnected from the active frame".to_string()
+            })?;
+        (old_cell.copied(), new_cell, local_translation)
+    };
+    {
+        let mut transforms = spatial.p1();
+        let mut transform = transforms
+            .get_mut(entity)
+            .map_err(|_| "preview transform target has no mutable transform".to_string())?;
+        if transform.translation != local_translation {
+            transform.translation = local_translation;
+        }
+    }
+    match (new_cell, old_cell) {
+        (Some(cell), previous) if previous != Some(cell) => {
+            commands.entity(entity).try_insert(cell);
+        }
+        (None, Some(_)) => {
+            commands.entity(entity).try_remove::<CellCoord>();
+        }
+        _ => {}
+    }
+    Ok(Ack::new(OpId::new()))
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -723,7 +841,6 @@ pub(crate) fn on_scene_pointer_move_event(
     egui_focus: Res<lunco_control_core::EguiFocus>,
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,
-    mut commands: Commands,
 ) {
     if armed.armed()
         || !matches!(
@@ -834,9 +951,32 @@ pub(crate) fn on_scene_pointer_move_event(
             TelemetryValue::String(scene_root.path.clone()),
         ));
     }
-    commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
-        tool: "scene_interaction".to_string(),
-        hook: "on_pointer_move".to_string(),
-        args: tool_map(entries),
-    });
+    let args = tool_map(entries);
+    if let Some((_, pending)) = dispatch
+        .pending_moves
+        .iter_mut()
+        .find(|(pointer, _)| *pointer == pointer_move.pointer_id)
+    {
+        *pending = args;
+    } else {
+        dispatch.pending_moves.push((pointer_move.pointer_id, args));
+    }
 }
+
+/// Dispatch only the latest pointer sample collected during this picking
+/// pass. The UI-hook queue is intentionally bounded, so enqueuing every mouse
+/// sample would make a visual preview replay an ever older cursor trail.
+pub(crate) fn flush_scene_pointer_moves(
+    mut dispatch: ResMut<ScenePointerDispatch>,
+    mut commands: Commands,
+) {
+    for (_, args) in dispatch.pending_moves.drain(..) {
+        commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
+            tool: "scene_interaction".to_string(),
+            hook: "on_pointer_move".to_string(),
+            args,
+        });
+    }
+}
+
+register_commands!(on_set_usd_view_preview_transform);

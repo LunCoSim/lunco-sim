@@ -1319,12 +1319,22 @@ fn on_pointer_move(context) {
     }
     let pointer = pointer_point(context);
     if pointer.ok != true { return #{ ok: true, changed: false }; }
-    let plan = move_preview_ops(context.doc_id, route, context.selected_path,
-        point_values(pointer.point));
-    if plan.ok != true { return plan; }
-    let result = apply_view_ops(context.doc_id, "Preview route-point move", plan.ops);
-    if result.retryable == true { return result; }
-    result
+    let preview = find_path(preview_path(route));
+    if preview < 0 {
+        return #{ ok: false, retryable: true,
+            error: "route-point move preview is not projected yet" };
+    }
+    let result = cmd("SetUsdViewPreviewTransform", #{
+        doc_id: context.doc_id,
+        entity_id: preview,
+        translation: point_values(pointer.point),
+    });
+    if result == () || result.ok != true {
+        return #{ ok: false, retryable: true,
+            error: if result == () { "route-point preview transform returned no result" }
+                else { result.error } };
+    }
+    #{ ok: true, changed: true }
 }
 
 fn on_add_here(context) {

@@ -220,13 +220,19 @@ The `Move route point` context-menu action selects the point and arms placement
 for the next ordinary primary scene hit. The selected point path remains its
 identity; the editor writes a `SetTranslate` opinion to `@runtime@` and leaves
 the route program and live subject intact. Pointer movement is coalesced per
-screen position and sent through the typed UI hook. Rhai creates a translucent
-`Xform` and Dome in the disposable `@view@` layer, with a view-layer target child
-that identifies the armed point. The Dome copies the selected marker's authored
-radius and local offset; each hover update changes only the preview root
-transform. Selecting a point alone does not arm movement. The terrain-sampled
-ribbon is rebuilt after commit, not on each hover event, so preview work does
-not batch-sample terrain or resample curve geometry.
+pointer and picking frame, retaining only its newest position before the typed
+UI hook enters the bounded script queue. Rhai creates a translucent `Xform` and
+Dome in the disposable `@view@` layer, with a view-layer target child that
+identifies the armed point. The Dome copies the selected marker's authored
+radius and local offset. Hover sends a typed `SetUsdViewPreviewTransform`
+command that validates the projected target against its document and view-layer
+authorship, converts the active-frame position through the target's real parent
+hierarchy, and updates only its live render transform. It does not edit the USD
+document or trigger projection. Preview creation and cleanup each use one
+transient view-layer edit; only the placement click authors the waypoint's
+canonical `@runtime@` position. Selecting a point alone does not arm movement.
+The terrain-sampled ribbon is rebuilt after commit, not on each hover event, so
+preview work does not batch-sample terrain or resample curve geometry.
 
 The point context menu adds `Add point before` and `Add point after` when the
 route has at least two active points. Each inserts a new ordinary marker and
@@ -272,7 +278,9 @@ placement, insertion order, and ribbon context policy.
 Pointer and menu tool hooks use the bounded UI queue, which runs after Bevy
 picking in `PreUpdate` and before fixed simulation. General `RunRhai` requests
 stay in the separate `Repl` queue, so unrelated script work cannot delay route
-input policy.
+input policy. The `route_interaction` gate sends a burst of cursor samples and
+requires the live ghost to follow within half a second without advancing the
+USD document generation during hover.
 
 In the editor, the runtime edit panel identifies `@runtime@` as the target for
 route points, runtime spawns, and gizmo edits. Its Twin setting tells the user

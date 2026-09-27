@@ -59,6 +59,9 @@ fn on_start(me, ctx) {
     this.scene_pointer_seen = false;
     this.scene_pointer_context = ();
     this.primary_pointer_context = ();
+    this.move_preview_entity = -1;
+    this.move_preview_generation = -1;
+    this.ghost_observed_move = false;
 }
 
 fn on_event(me, evt, ctx) {
@@ -463,12 +466,18 @@ fn on_tick(me, ctx) {
             return;
         }
         this.point_position_before_move = point.world_position;
-        if ghost.world_position == () {
+        this.move_preview_entity = find_path(ROUTE + "/MovePreview");
+        let ghost_position = if this.move_preview_entity >= 0 {
+            world_pos(this.move_preview_entity)
+        } else { () };
+        if ghost_position == () {
+            if this.phase_elapsed < 3.0 { return; }
             this.done = true;
-            report(this, false, "the route move ghost has no composed world position");
+            report(this, false, "the projected move ghost has no live world position");
             return;
         }
-        this.first_ghost_position = ghost.world_position;
+        this.first_ghost_position = ghost_position;
+        this.move_preview_generation = usd_document_generation(this.doc);
         if !is_controlled(this.subject) {
             this.done = true;
             report(this, false, "starting a route move released rover possession");
@@ -476,26 +485,42 @@ fn on_tick(me, ctx) {
         }
         this.move_x = this.screen[0] + 460.0;
         this.move_y = this.screen[1];
-        input_pointer_move(this.move_x, this.move_y);
+        // Several cursor samples can arrive before the UI hook drain runs.
+        // The preview should follow the newest position, not replay a FIFO trail.
+        for offset in [20.0, 60.0, 100.0, 140.0, 180.0, 220.0,
+            260.0, 300.0, 340.0, 380.0, 420.0, 460.0] {
+            input_pointer_move(this.screen[0] + offset, this.move_y);
+        }
         this.phase = 27;
         this.phase_elapsed = 0.0;
         return;
     }
 
     if this.phase == 27 {
-        let ghost = query("QueryUsdPrim", #{
-            doc_id: this.doc,
-            path: ROUTE + "/MovePreview",
-            attrs: ["xformOp:translate"],
-        });
-        if ghost == () || ghost.ok == false || ghost.attrs == ()
-            || ghost.attrs["xformOp:translate"] == () || ghost.world_position == ()
-            || !positions_differ(ghost.world_position, this.first_ghost_position) {
-            if this.phase_elapsed < 3.0 { return; }
+        let generation = usd_document_generation(this.doc);
+        if generation != this.move_preview_generation {
             this.done = true;
-            report(this, false, "the move ghost did not follow pointer movement across the scene");
+            report(this, false,
+                "hover movement changed the USD document instead of the live preview transform");
             return;
         }
+        let ghost_position = world_pos(this.move_preview_entity);
+        if ghost_position == () {
+            if this.phase_elapsed < 0.5 { return; }
+            this.done = true;
+            report(this, false, "the live move ghost disappeared during pointer movement");
+            return;
+        }
+        if positions_differ(ghost_position, this.first_ghost_position) {
+            this.ghost_observed_move = true;
+        }
+        if this.phase_elapsed > 0.5 && !this.ghost_observed_move {
+            this.done = true;
+            report(this, false,
+                "the live move ghost did not follow the cursor within half a second");
+            return;
+        }
+        if !this.ghost_observed_move { return; }
         this.phase = 28;
         this.phase_elapsed = 0.0;
         return;

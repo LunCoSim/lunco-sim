@@ -91,11 +91,16 @@ would still occupy the application thread, so keep the hook bounded and move
 preparation or I/O to its owning asynchronous boundary.
 
 Scene `Pointer<Move>` observers used for an armed route-point preview must
-coalesce the Bevy bubble to one typed hook per pointer position in a frame.
-Keep the hook presentation-only: update one disposable transform and do not
-rebuild route geometry or sample a full terrain path during hover. The next
-primary click commits the armed route point through the canonical `@runtime@`
-USD edit path.
+coalesce to the newest position per pointer and picking frame before adding one
+typed hook to the bounded UI queue. Keep the hook presentation-only: update the
+live transform of the projected `@view@` preview through the generic typed
+preview-transform command. It validates document and view-layer ownership and
+uses the canonical active-frame/parent-local conversion; hover must not edit the
+USD document, trigger projection, rebuild route geometry, or sample a full
+terrain path. The next primary click commits the armed route point through the
+canonical `@runtime@` USD edit path. The `route_interaction` production gate
+checks that the live ghost responds within half a second while document
+generation stays unchanged during hover.
 The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
 run by `scripts/run_editor_scene_tests.sh`; it sends typed native-window input
 through picking and verifies the mounted fixture, waypoint hit, semantic

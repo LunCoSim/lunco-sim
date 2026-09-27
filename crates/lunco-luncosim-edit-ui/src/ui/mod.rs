@@ -442,6 +442,12 @@ impl Plugin for SceneEditUiPlugin {
             PostUpdate,
             crate::script_tools::clear_scene_pointer_dispatch,
         );
+        app.add_systems(
+            PreUpdate,
+            crate::script_tools::flush_scene_pointer_moves
+                .after(bevy::picking::PickingSystems::Last)
+                .before(lunco_core::RuntimeCycleSet::Ui),
+        );
         app.add_observer(spawn_palette::on_spawn_state_requested);
         app.add_observer(terrain_tools::on_terrain_ui_action);
         app.add_observer(crate::selection::on_select_entity_target);
@@ -452,6 +458,7 @@ impl Plugin for SceneEditUiPlugin {
         app.add_observer(crate::selection::on_usd_viewport_click);
         app.add_observer(crate::script_tools::on_scene_click_script_tool);
         crate::diagnostic_visuals::register_all_commands(app);
+        crate::script_tools::register_all_commands(app);
         crate::selection::register_all_commands(app);
         app.add_systems(Update, crate::selection::draw_selection_bounds);
 

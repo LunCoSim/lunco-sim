@@ -15,6 +15,7 @@ Inspector and authored USD panels live in
 - **Entity Selection** — Left-click replaces, Shift+Left-click extends, and Ctrl+Left-click removes from the selection; each uses the transform gizmo selection owner
 - **USD Preview Picking** — clicks in the isolated Editor image map through its focused offscreen camera and select the nearest authored prim-backed part
 - **Script-authored click tools** — Rhai tool libraries exposing `on_click(context)` appear in the Tools palette and receive the canonical scene click context
+- **Scene pointer previews** — high-frequency pointer samples keep only the newest position per pointer and picking frame; authored tools move view-only previews through a generic typed active-frame transform command without editing USD during hover
 - **Prims Navigation** — provided by `lunco-usd-prim-tree-ui`; a newly selected prim opens its ancestors and scrolls into view while unchanged selections leave manual tree scrolling alone
 - **Authoring inspection** — the Rhai `authoring_inspection` library composes path-based candidate diffs, structured diagnostic groups, exact selection/reveal/frame navigation, and visual/collision/joint/frame/material/provenance evidence
 - **Transform Gizmo** — provided by [`lunco-luncosim-edit-gizmo-ui`](../lunco-luncosim-edit-gizmo-ui), using `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
