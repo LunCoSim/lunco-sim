@@ -1063,7 +1063,9 @@ For example, `none` produces a triangle mesh and supports only static or
 kinematic bodies; convex modes support dynamic bodies. Authoring tools should
 use these records instead of maintaining a second token list or duplicating
 the runtime body-kind rules. `PlanNurbsCollisionProxy` returns the same mode
-records with its geometry proposal.
+records with its geometry proposal. Its required `max_refinement_delta_m`
+parameter is a positive canonical-metre threshold for sampled change between
+successive tessellations, not a certified bound on exact NURBS surface error.
 
 For numeric authoring evidence, use the built-in `authoring_measurements`
 Rhai library. It evaluates explicit requirements over the same composed USD

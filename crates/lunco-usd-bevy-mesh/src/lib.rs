@@ -93,44 +93,45 @@ pub struct NurbsCollisionMesh {
     pub geometry_fingerprint: u64,
 }
 
-/// A tolerance-driven collision cook and its reproducible selected resolution.
+/// A refinement-limited collision cook and its reproducible selected resolution.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NurbsCollisionCook {
     /// Cooked mesh geometry and its stable fingerprint.
     pub mesh: NurbsCollisionMesh,
     /// Resolution selected by the deterministic refinement process.
     pub tessellation: NurbsCollisionTessellation,
-    /// Target tolerance in canonical metres.
-    pub deviation_tolerance_m: f64,
-    /// Symmetric sampled vertex-to-surface distance between the last two
-    /// refinement levels, in canonical metres. This is a convergence estimate,
-    /// not a certified upper bound on the exact NURBS deviation.
-    pub refinement_deviation_m: f64,
+    /// Maximum accepted symmetric sampled change between consecutive refinement
+    /// levels, in canonical metres. This is a convergence threshold, not a
+    /// certified bound on surface-to-mesh error.
+    pub max_refinement_delta_m: f64,
+    /// Symmetric sampled vertex-to-triangle distance between the last two
+    /// refinement levels, in canonical metres.
+    pub refinement_delta_m: f64,
 }
 
-/// Failure to produce a tolerance-driven NURBS collision cook.
+/// Failure to produce a refinement-limited NURBS collision cook.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NurbsCollisionCookError {
-    /// The requested target was not finite and positive.
-    InvalidTolerance,
+    /// The requested refinement threshold was not finite and positive.
+    InvalidRefinementLimit,
     /// The source surface or trim data was malformed or unsupported.
     InvalidSurface,
     /// A valid NURBS surface could not produce a collision mesh.
     TessellationFailed,
     /// The cooked meshes could not be compared with the geometry backend.
-    DeviationMeasurementFailed,
-    /// The maximum physical tessellation resolution did not meet the target.
+    RefinementMeasurementFailed,
+    /// The maximum tessellation resolution did not meet the refinement threshold.
     RefinementBudgetExceeded {
-        deviation_tolerance_m: f64,
-        last_refinement_deviation_m: f64,
+        max_refinement_delta_m: f64,
+        last_refinement_delta_m: f64,
     },
 }
 
 impl std::fmt::Display for NurbsCollisionCookError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidTolerance => {
-                f.write_str("NURBS collision deviation tolerance must be finite and positive")
+            Self::InvalidRefinementLimit => {
+                f.write_str("NURBS collision refinement limit must be finite and positive")
             }
             Self::InvalidSurface => {
                 f.write_str("NURBS collision source is malformed or unsupported")
@@ -138,15 +139,15 @@ impl std::fmt::Display for NurbsCollisionCookError {
             Self::TessellationFailed => {
                 f.write_str("NURBS collision source could not be tessellated")
             }
-            Self::DeviationMeasurementFailed => {
-                f.write_str("NURBS collision refinement deviation could not be measured")
+            Self::RefinementMeasurementFailed => {
+                f.write_str("NURBS collision refinement delta could not be measured")
             }
             Self::RefinementBudgetExceeded {
-                deviation_tolerance_m,
-                last_refinement_deviation_m,
+                max_refinement_delta_m,
+                last_refinement_delta_m,
             } => write!(
                 f,
-                "NURBS collision refinement budget exhausted at {last_refinement_deviation_m} m; requested estimate is at most {deviation_tolerance_m} m"
+                "NURBS collision refinement budget exhausted at {last_refinement_delta_m} m; requested inter-level change is at most {max_refinement_delta_m} m"
             ),
         }
     }
@@ -960,21 +961,21 @@ pub fn build_usd_nurbs_patch_mesh(
     build_usd_nurbs_patch_mesh_with_tessellation(reader, path, surface, lathe_params, tessellation)
 }
 
-/// Derive collision geometry from a NURBS patch until the sampled refinement
-/// deviation is within `deviation_tolerance_m`.
+/// Derive collision geometry from a NURBS patch until the sampled change
+/// between consecutive refinement levels is within `max_refinement_delta_m`.
 ///
-/// The tolerance is expressed in canonical metres. Each refinement level is
+/// The convergence threshold is expressed in canonical metres. Each level is
 /// compared symmetrically by projecting both meshes' vertices onto the other
 /// mesh's triangles, using Parry's triangle-mesh BVH. This deterministic
-/// estimator drives resolution selection but is not a certified upper bound on
-/// the exact rational surface deviation.
-pub fn build_nurbs_collision_mesh_to_tolerance(
+/// sampled change metric drives resolution selection; it is not a certified
+/// upper bound on the exact rational surface-to-mesh error.
+pub fn build_nurbs_collision_mesh_with_refinement_limit(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
-    deviation_tolerance_m: f64,
+    max_refinement_delta_m: f64,
 ) -> Result<NurbsCollisionCook, NurbsCollisionCookError> {
-    if !deviation_tolerance_m.is_finite() || deviation_tolerance_m <= 0.0 {
-        return Err(NurbsCollisionCookError::InvalidTolerance);
+    if !max_refinement_delta_m.is_finite() || max_refinement_delta_m <= 0.0 {
+        return Err(NurbsCollisionCookError::InvalidRefinementLimit);
     }
     let (surface, lathe_params) =
         read_nurbs_patch_surface(reader, path).ok_or(NurbsCollisionCookError::InvalidSurface)?;
@@ -983,13 +984,13 @@ pub fn build_nurbs_collision_mesh_to_tolerance(
     let mut previous =
         build_nurbs_collision_mesh_at(reader, path, &surface, lathe_params.as_ref(), tessellation)
             .ok_or(NurbsCollisionCookError::TessellationFailed)?;
-    let mut last_deviation_m = None;
+    let mut last_delta_m = None;
 
     loop {
         let Some(next_tessellation) = tessellation.refine(trimmed) else {
             return Err(NurbsCollisionCookError::RefinementBudgetExceeded {
-                deviation_tolerance_m,
-                last_refinement_deviation_m: last_deviation_m.unwrap_or(f64::INFINITY),
+                max_refinement_delta_m,
+                last_refinement_delta_m: last_delta_m.unwrap_or(f64::INFINITY),
             });
         };
         let next = build_nurbs_collision_mesh_at(
@@ -1000,19 +1001,19 @@ pub fn build_nurbs_collision_mesh_to_tolerance(
             next_tessellation,
         )
         .ok_or(NurbsCollisionCookError::TessellationFailed)?;
-        let refinement_deviation_m = symmetric_mesh_vertex_deviation(&previous, &next)
-            .ok_or(NurbsCollisionCookError::DeviationMeasurementFailed)?;
-        if refinement_deviation_m <= deviation_tolerance_m {
+        let refinement_delta_m = symmetric_mesh_vertex_change(&previous, &next)
+            .ok_or(NurbsCollisionCookError::RefinementMeasurementFailed)?;
+        if refinement_delta_m <= max_refinement_delta_m {
             return Ok(NurbsCollisionCook {
                 mesh: next,
                 tessellation: next_tessellation,
-                deviation_tolerance_m,
-                refinement_deviation_m,
+                max_refinement_delta_m,
+                refinement_delta_m,
             });
         }
         tessellation = next_tessellation;
         previous = next;
-        last_deviation_m = Some(refinement_deviation_m);
+        last_delta_m = Some(refinement_delta_m);
     }
 }
 
@@ -1069,17 +1070,17 @@ fn nurbs_collision_mesh_from_bevy_mesh(mesh: &Mesh) -> Option<NurbsCollisionMesh
     })
 }
 
-fn symmetric_mesh_vertex_deviation(
+fn symmetric_mesh_vertex_change(
     first: &NurbsCollisionMesh,
     second: &NurbsCollisionMesh,
 ) -> Option<f64> {
     Some(
-        directed_mesh_vertex_deviation(&first.points, second)?
-            .max(directed_mesh_vertex_deviation(&second.points, first)?),
+        directed_mesh_vertex_change(&first.points, second)?
+            .max(directed_mesh_vertex_change(&second.points, first)?),
     )
 }
 
-fn directed_mesh_vertex_deviation(
+fn directed_mesh_vertex_change(
     source_points: &[[f32; 3]],
     target: &NurbsCollisionMesh,
 ) -> Option<f64> {

@@ -6,7 +6,7 @@
 //! re-composed by the normal USD projection.
 
 fn ui_label() { "NURBS points" }
-fn ui_hint() { "Edit NURBS points with set_point; create a reviewed collision proxy with propose_collision_proxy(doc, source, name, approximation, deviation_tolerance_m, layer, scope)" }
+fn ui_hint() { "Edit NURBS points with set_point; create a reviewed collision proxy with propose_collision_proxy(doc, source, name, approximation, max_refinement_delta_m, layer, scope)" }
 
 fn on_click(context) {
     if context == () || context.button != "primary" || context.target_entity_id == () {
@@ -84,21 +84,21 @@ fn collision_attribute_op(edit_target, path, name, type_name, value) {
 }
 
 /// Read a composed NURBS patch and adaptively refine its collision mesh until
-/// the measured between-level deviation meets an explicit canonical-metre target.
-fn plan_collision_proxy(doc, source_path, proxy_name, approximation, deviation_tolerance_m) {
+/// the measured between-level change meets an explicit canonical-metre threshold.
+fn plan_collision_proxy(doc, source_path, proxy_name, approximation, max_refinement_delta_m) {
     query("PlanNurbsCollisionProxy", #{
         doc_id: doc,
         path: source_path,
         proxy_name: proxy_name,
         approximation: approximation,
-        deviation_tolerance_m: deviation_tolerance_m,
+        max_refinement_delta_m: max_refinement_delta_m,
     })
 }
 
 /// Turn a cooked NURBS proxy plan into ordinary typed USD edits. The proxy is
 /// invisible to rendering, has standard USD Physics collision schemas, and
-/// records the source relationship, target tolerance, measured refinement
-/// deviation, and resolution selected by the deterministic cook.
+/// records the source relationship, refinement threshold, measured between-level
+/// change, and resolution selected by the deterministic cook.
 fn collision_proxy_ops(plan, edit_target) {
     if plan == () { return []; }
     let path = plan.proxy_path;
@@ -129,10 +129,10 @@ fn collision_proxy_ops(plan, edit_target) {
         "\"" + plan.approximation + "\""));
     ops.push(collision_attribute_op(edit_target, path, "lunco:derived:geometryFingerprint", "uint64",
         plan.geometry_fingerprint.to_string()));
-    ops.push(collision_attribute_op(edit_target, path, "lunco:derived:deviationToleranceM", "double",
-        plan.deviation_tolerance_m.to_string()));
-    ops.push(collision_attribute_op(edit_target, path, "lunco:derived:refinementDeviationM", "double",
-        plan.refinement_deviation_m.to_string()));
+    ops.push(collision_attribute_op(edit_target, path, "lunco:derived:maxRefinementDeltaM", "double",
+        plan.max_refinement_delta_m.to_string()));
+    ops.push(collision_attribute_op(edit_target, path, "lunco:derived:refinementDeltaM", "double",
+        plan.refinement_delta_m.to_string()));
     ops.push(collision_attribute_op(edit_target, path, "lunco:derived:nurbsUSubdivisions", "int",
         plan.u_subdivisions.to_string()));
     ops.push(collision_attribute_op(edit_target, path, "lunco:derived:nurbsVSubdivisions", "int",
@@ -158,9 +158,9 @@ fn collision_proxy_ops(plan, edit_target) {
 /// Create a normal Editor proposal to author or refresh a derived collision
 /// proxy. Review and commit the returned proposal through assembly_edit.
 fn propose_collision_proxy(doc, source_path, proxy_name, approximation,
-    deviation_tolerance_m, edit_target, scope) {
+    max_refinement_delta_m, edit_target, scope) {
     let plan = plan_collision_proxy(doc, source_path, proxy_name,
-        approximation, deviation_tolerance_m);
+        approximation, max_refinement_delta_m);
     if plan == () { return plan; }
     return _propose_collision_plan(doc, plan, edit_target, scope);
 }

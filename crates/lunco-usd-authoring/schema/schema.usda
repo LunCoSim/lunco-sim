@@ -1448,7 +1448,7 @@ class "LunCoLatheAPI" (
 
 # A collision proxy generated from a standard UsdGeomNurbsPatch is an ordinary
 # UsdGeomMesh with the USD Physics schemas. This API records its source and the
-# requested deviation tolerance and selected resolution so the runtime can
+# requested refinement threshold and selected resolution so the runtime can
 # reject stale geometry instead of simulating an out-of-date approximation.
 class "LunCoDerivedGeometryAPI" (
     inherits = </APISchemaBase>
@@ -1459,7 +1459,7 @@ class "LunCoDerivedGeometryAPI" (
     from a USD NURBS surface. The source relationship is authoritative; the mesh
     is a regenerated physics proxy. The geometry fingerprint covers the cooked
     canonical vertices and topology and is checked against both source and proxy
-    at collider admission. The refinement deviation is a deterministic sampled
+    at collider admission. The refinement delta is a deterministic sampled
     convergence estimate, not a certified error bound."""
 )
 {
@@ -1469,20 +1469,20 @@ class "LunCoDerivedGeometryAPI" (
     uniform uint64 lunco:derived:geometryFingerprint = 0 (
         doc = "Stable fingerprint of the canonical cooked point and triangle arrays. A mismatch rejects the proxy as stale or modified."
     )
-    uniform double lunco:derived:deviationToleranceM = 0 (
-        doc = "Positive target for the sampled between-refinement mesh deviation, in canonical metres."
+    uniform double lunco:derived:maxRefinementDeltaM = 0 (
+        doc = "Positive maximum accepted sampled mesh change between consecutive refinement levels, in canonical metres; this is not a certified surface-error bound."
     )
-    uniform double lunco:derived:refinementDeviationM = 0 (
-        doc = "Measured symmetric vertex-to-triangle distance between the last two refinement levels, in canonical metres. This is an estimate and not a certified surface-error bound."
+    uniform double lunco:derived:refinementDeltaM = 0 (
+        doc = "Measured symmetric vertex-to-triangle distance between the last two refinement levels, in canonical metres."
     )
     uniform int lunco:derived:nurbsUSubdivisions = 0 (
-        doc = "U parameter subdivisions selected by the tolerance-driven untrimmed surface cook."
+        doc = "U parameter subdivisions selected by the refinement-limited untrimmed surface cook."
     )
     uniform int lunco:derived:nurbsVSubdivisions = 0 (
-        doc = "V parameter subdivisions selected by the tolerance-driven untrimmed surface cook."
+        doc = "V parameter subdivisions selected by the refinement-limited untrimmed surface cook."
     )
     uniform int lunco:derived:trimCurveSamples = 0 (
-        doc = "Samples per authored NURBS trim curve selected by the tolerance-driven trimmed surface cook."
+        doc = "Samples per authored NURBS trim curve selected by the refinement-limited trimmed surface cook."
     )
     uniform int lunco:derived:trimGridSubdivisions = 0 (
         doc = "Parameter-grid subdivisions selected to triangulate the authored NURBS trim domain."

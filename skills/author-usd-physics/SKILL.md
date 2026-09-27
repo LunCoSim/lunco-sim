@@ -149,6 +149,33 @@ not in the core asset library, and keep their output to explicit generic USD
 operations. The core should provide only reusable component facts, topology,
 placement, and typed-op validation.
 
+## Collision geometry and derived NURBS proxies
+
+`QueryUsdPrim { collision_geometry: true }` reads the composed collider through
+the same USD-to-Avian geometry reader used by projection. Use it when a
+requirement must compare the backend shape to its visual or design geometry;
+authored `radius`/`height`, `geometry_bounds`, and `collision_bounds` answer
+different questions. This query predicts the geometry Avian will receive from
+the current composed USD. It does not prove that a live ECS entity has completed
+projection or is currently contacting the world.
+
+For `UsdGeomNurbsPatch`, use the read-only `PlanNurbsCollisionProxy` query and
+the shared `nurbs.rhai` proposal. Pass `max_refinement_delta_m` in canonical
+metres. This bounds the sampled change between two successive tessellation
+levels; it is a deterministic convergence criterion, not a certified maximum
+distance from the exact rational surface. Review the proposal that creates an
+invisible, source-linked `UsdGeomMesh` carrying standard mesh-collision APIs.
+Projection re-cooks the source and rejects stale or edited derived geometry.
+Do not author a separate collider approximation by hand or treat this threshold
+as a CAD accuracy guarantee.
+
+The Avian mesh adapter advertises its implemented USD approximation modes via
+`AvianMeshCollisionApproximations`: `none`, `convexHull`, and
+`convexDecomposition`. `none` is valid only for static or kinematic bodies.
+Other standard USD tokens remain valid authored values, but this adapter
+rejects them until it can realize their stated semantics; it does not silently
+substitute another shape.
+
 The local avatar is a runtime kinematic camera embodiment, not an authored
 rigid body. Its `MoveAndSlide` capsule reuses the standard `UsdPhysics`
 colliders projected by the Avian bridge in the active BigSpace frame. Do not
