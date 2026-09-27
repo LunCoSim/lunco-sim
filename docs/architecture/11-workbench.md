@@ -480,6 +480,9 @@ panel from the View menu is an explicit user request and uses the same shell
 insertion path. The menu keeps Reset Layout and Toggle Activity Bar directly
 available, then groups panel checkboxes into Builder, Editor, and Lunica
 submenus according to `PanelMenuGroup`; unclassified integrations use Other.
+The SysML Requirements panel is grouped under Editor and opens in Center from
+the View menu. It remains available inside the existing workbench and does not
+add another editor session or perspective.
 
 ### 5a. Side-browser architecture — Twin panel + Files panel
 

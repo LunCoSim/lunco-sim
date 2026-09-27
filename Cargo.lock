@@ -8301,6 +8301,7 @@ dependencies = [
  "lunco-settings",
  "lunco-status-core",
  "lunco-storage",
+ "lunco-sysml-ui",
  "lunco-telemetry-core",
  "lunco-terrain-surface",
  "lunco-theme",
@@ -9636,6 +9637,25 @@ dependencies = [
  "lunco-sysml-ir",
  "lunco-sysml-modelica",
  "rhai",
+]
+
+[[package]]
+name = "lunco-sysml-ui"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-assets-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-sysml",
+ "lunco-sysml-ast",
+ "lunco-telemetry-core",
+ "lunco-theme",
+ "lunco-twin",
+ "lunco-workbench-core",
+ "lunco-workbench-widgets",
+ "lunco-workspace",
 ]
 
 [[package]]

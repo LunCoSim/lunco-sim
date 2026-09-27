@@ -18,7 +18,7 @@ pub use analysis::{
     PrepareTwinSysmlAnalysis, TWIN_ANALYSIS_DEPENDENCY_OWNER, TwinSysmlAnalyses,
     TwinSysmlAnalysisState,
 };
-pub use api::{ApplySysmlOps, SysmlApiOp, SysmlApiPlugin};
+pub use api::{ApplySysmlOps, SaveSysmlDocument, SysmlApiOp, SysmlApiPlugin};
 pub use document::{SysmlDocument, SysmlOp};
 pub use document_analysis::{SysmlDocumentAnalyses, SysmlDocumentAnalysisState};
 pub use source_asset::{SysmlSource, SysmlSourceAssetPlugin, SysmlSourceLoader};
