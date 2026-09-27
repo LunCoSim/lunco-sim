@@ -1816,71 +1816,82 @@ pub(crate) fn publish_exposure(
     runtime.refresh.first_update = false;
 
     if update_control {
+        let _control_span = bevy::log::info_span!("exposure_publish_control").entered();
         let revision = stage_revision.as_deref().map(|revision| revision.0);
-        runtime_surface_roots.refresh(
-            revision,
-            &runtime.scene_mount,
-            &queries.usd_paths,
-            &queries.parents,
-            &queries.scene_roots,
-            &queries.entities,
-            &runtime.stages,
-            &runtime.canonical,
-        );
+        {
+            let _span = bevy::log::info_span!("exposure_refresh_runtime_surface_roots").entered();
+            runtime_surface_roots.refresh(
+                revision,
+                &runtime.scene_mount,
+                &queries.usd_paths,
+                &queries.parents,
+                &queries.scene_roots,
+                &queries.entities,
+                &runtime.stages,
+                &runtime.canonical,
+            );
+        }
         let RuntimeSurfaceRootCache {
             roots,
             public_output_names,
             retired_surface_ids,
             ..
         } = &mut *runtime_surface_roots;
-        publish_runtime_surface_exposures(
-            &mut runtime.exposures,
-            &queries.name,
-            &queries.callsign,
-            &queries.catalog_id,
-            &queries.gid,
-            &queries.sim,
-            &runtime.signals,
-            &queries.channels,
-            &queries.parents,
-            &queries.grids,
-            &queries.velocity,
-            &runtime.angular_velocity,
-            &runtime.rotation,
-            &queries.spatial,
-            &queries.usd_paths,
-            &runtime.stages,
-            &runtime.canonical,
-            roots,
-            public_output_names,
-            retired_surface_ids,
-            &runtime.sessions,
-            runtime.local_session.0,
-            &queries.inputs,
-            overlays.simulation_progress.as_deref(),
-            runtime_context,
-        );
+        {
+            let _span = bevy::log::info_span!("exposure_publish_runtime_surfaces").entered();
+            publish_runtime_surface_exposures(
+                &mut runtime.exposures,
+                &queries.name,
+                &queries.callsign,
+                &queries.catalog_id,
+                &queries.gid,
+                &queries.sim,
+                &runtime.signals,
+                &queries.channels,
+                &queries.parents,
+                &queries.grids,
+                &queries.velocity,
+                &runtime.angular_velocity,
+                &runtime.rotation,
+                &queries.spatial,
+                &queries.usd_paths,
+                &runtime.stages,
+                &runtime.canonical,
+                roots,
+                public_output_names,
+                retired_surface_ids,
+                &runtime.sessions,
+                runtime.local_session.0,
+                &queries.inputs,
+                overlays.simulation_progress.as_deref(),
+                runtime_context,
+            );
+        }
         retired_surface_ids.clear();
     }
 
     if update_driven {
-        let vessel = resolve_driven(
-            &runtime.local_avatar,
-            &queries.avatar,
-            &queries.name,
-            &queries.callsign,
-            &queries.catalog_id,
-            &queries.gid,
-            &queries.velocity,
-            &queries.parents,
-            &queries.grids,
-            &queries.spatial,
-            &queries.links,
-            &queries.ids,
-            &queries.wheels,
-            &queries.com,
-            &geo.surface_pose,
-        );
+        let _driven_span = bevy::log::info_span!("exposure_publish_driven").entered();
+        let vessel = {
+            let _span = bevy::log::info_span!("exposure_resolve_driven_vessel").entered();
+            resolve_driven(
+                &runtime.local_avatar,
+                &queries.avatar,
+                &queries.name,
+                &queries.callsign,
+                &queries.catalog_id,
+                &queries.gid,
+                &queries.velocity,
+                &queries.parents,
+                &queries.grids,
+                &queries.spatial,
+                &queries.links,
+                &queries.ids,
+                &queries.wheels,
+                &queries.com,
+                &geo.surface_pose,
+            )
+        };
 
         if let Some(vessel) = vessel {
             if seminar.current_vessel != Some(vessel.entity) {
@@ -1961,44 +1972,56 @@ pub(crate) fn publish_exposure(
                         }
                     })
                     .unwrap_or("none");
-                let facts = runtime_ui_facts(
-                    &surface.surface_id,
-                    Some(vessel.entity),
-                    subject,
-                    control_owner,
-                    control_claimed,
-                    &surface.visibility_mode,
-                    &surface.programs,
-                    public_output_names,
-                    &queries.name,
-                    &queries.callsign,
-                    &queries.catalog_id,
-                    &queries.gid,
-                    &queries.sim,
-                    &queries.inputs,
-                    &queries.parents,
-                    &queries.velocity,
-                    &runtime.angular_velocity,
-                    &runtime.rotation,
-                    &queries.grids,
-                    &queries.spatial,
-                    &queries.usd_paths,
-                    &runtime.stages,
-                    &runtime.canonical,
-                    &[],
-                    overlays.simulation_progress.as_deref(),
-                );
-                ui.visible(runtime_ui_visibility(
-                    &facts,
-                    &surface.surface_id,
-                    runtime_context,
-                ));
-                let telemetry = resolve_authored_telemetry(
-                    vessel.entity,
-                    &runtime.signals,
-                    &queries.parents,
-                    &queries.channels,
-                );
+                let facts = {
+                    let _span = bevy::log::info_span!("exposure_build_runtime_ui_facts").entered();
+                    runtime_ui_facts(
+                        &surface.surface_id,
+                        Some(vessel.entity),
+                        subject,
+                        control_owner,
+                        control_claimed,
+                        &surface.visibility_mode,
+                        &surface.programs,
+                        public_output_names,
+                        &queries.name,
+                        &queries.callsign,
+                        &queries.catalog_id,
+                        &queries.gid,
+                        &queries.sim,
+                        &queries.inputs,
+                        &queries.parents,
+                        &queries.velocity,
+                        &runtime.angular_velocity,
+                        &runtime.rotation,
+                        &queries.grids,
+                        &queries.spatial,
+                        &queries.usd_paths,
+                        &runtime.stages,
+                        &runtime.canonical,
+                        &[],
+                        overlays.simulation_progress.as_deref(),
+                    )
+                };
+                {
+                    let _span =
+                        bevy::log::info_span!("exposure_evaluate_runtime_ui_visibility").entered();
+                    ui.visible(runtime_ui_visibility(
+                        &facts,
+                        &surface.surface_id,
+                        runtime_context,
+                    ));
+                }
+                let telemetry = {
+                    let _span =
+                        bevy::log::info_span!("exposure_resolve_authored_telemetry").entered();
+                    resolve_authored_telemetry(
+                        vessel.entity,
+                        &runtime.signals,
+                        &queries.parents,
+                        &queries.channels,
+                    )
+                };
+                let _span = bevy::log::info_span!("exposure_publish_vessel_values").entered();
                 publish_vessel_values(&mut ui, &vessel, &telemetry);
             }
         } else {
@@ -2010,6 +2033,7 @@ pub(crate) fn publish_exposure(
     }
 
     if update_schema {
+        let _span = bevy::log::info_span!("exposure_publish_schema").entered();
         publish_lunica_schema_exposure(
             &mut runtime.exposures,
             &runtime.selected,
@@ -2019,6 +2043,7 @@ pub(crate) fn publish_exposure(
         );
     }
     if update_celestial {
+        let _span = bevy::log::info_span!("exposure_publish_celestial").entered();
         publish_celestial_capability(
             &mut runtime.exposures,
             &runtime.bodies,
@@ -2030,6 +2055,7 @@ pub(crate) fn publish_exposure(
         );
     }
     if update_overlay {
+        let _span = bevy::log::info_span!("exposure_publish_overlay").entered();
         publish_runtime_overlay_exposures(&mut runtime.exposures, &overlays);
     }
 }
@@ -2467,7 +2493,10 @@ fn publish_runtime_surface_exposures(
                 }
             })
             .unwrap_or("none");
-        let telemetry = resolve_authored_telemetry(root.entity, signals, q_parents, q_channels);
+        let telemetry = {
+            let _span = bevy::log::info_span!("exposure_runtime_surface_telemetry").entered();
+            resolve_authored_telemetry(root.entity, signals, q_parents, q_channels)
+        };
         publish_selected_control_exposure(
             exposures,
             &root.surface_id,
@@ -2529,41 +2558,53 @@ fn publish_selected_control_exposure(
     progress: Option<&lunco_core_runtime::SimulationProgress>,
     runtime_context: lunco_core::RuntimeExecutionContext,
 ) {
-    let facts = runtime_ui_facts(
-        namespace,
-        root,
-        subject,
-        control_owner,
-        control_claimed,
-        visibility_mode,
-        authored_programs,
-        public_output_names,
-        q_name,
-        q_callsign,
-        q_catalog_id,
-        q_gid,
-        q_sim,
-        q_inputs,
-        q_parents,
-        q_vel,
-        q_angvel,
-        q_rotation,
-        q_grids,
-        q_spatial,
-        q_paths,
-        stages,
-        canonical,
-        telemetry,
-        progress,
-    );
-    let visible = runtime_ui_visibility(&facts, namespace, runtime_context);
-    let properties = runtime_ui_properties(&facts, namespace, runtime_context);
+    let facts = {
+        let _span = bevy::log::info_span!("exposure_runtime_surface_facts").entered();
+        runtime_ui_facts(
+            namespace,
+            root,
+            subject,
+            control_owner,
+            control_claimed,
+            visibility_mode,
+            authored_programs,
+            public_output_names,
+            q_name,
+            q_callsign,
+            q_catalog_id,
+            q_gid,
+            q_sim,
+            q_inputs,
+            q_parents,
+            q_vel,
+            q_angvel,
+            q_rotation,
+            q_grids,
+            q_spatial,
+            q_paths,
+            stages,
+            canonical,
+            telemetry,
+            progress,
+        )
+    };
+    let visible = {
+        let _span = bevy::log::info_span!("exposure_runtime_surface_visibility").entered();
+        runtime_ui_visibility(&facts, namespace, runtime_context)
+    };
+    let properties = {
+        let _span = bevy::log::info_span!("exposure_runtime_surface_properties").entered();
+        runtime_ui_properties(&facts, namespace, runtime_context)
+    };
     let mut ui = exposures.writer(namespace);
-    ui.subject(subject);
-    ui.visible(visible);
-    ui.clear_properties();
-    for (name, value) in properties {
-        ui.property(name, value);
+    {
+        let _span = bevy::log::info_span!("exposure_runtime_surface_write").entered();
+        ui.subject(subject);
+        ui.visible(visible);
+        ui.clear_properties();
+        for (name, value) in properties {
+            ui.property(name, value);
+        }
     }
 }
 

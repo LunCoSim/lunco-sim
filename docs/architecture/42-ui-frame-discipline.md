@@ -227,6 +227,12 @@ package — none of these belong on the UI thread every frame. Patterns:
   returns a `Task<T>`; `future::poll_once(&mut task)` in an Update
   system yields the result when ready without blocking. Reference:
   the Package Browser's `handle_package_loading_tasks`.
+- **Derived entity tree**: the UI thread snapshots the typed ECS facts needed
+  for names, hierarchy, visibility, and camera labels once per invalidation;
+  hierarchy construction and sorting run on one bounded worker task. Repeated
+  topology changes coalesce behind a revision fence, stale results are dropped,
+  and Twin close clears the published view. Panels continue reading the last
+  completed view while a current build is pending.
 - **Generation-gated recompute**: the canvas diagram only
   reprojects when the document generation moves; the panel advances
   its `last_seen_gen` to skip echo rebuilds of its own ops.
@@ -245,6 +251,17 @@ The same ownership rule applies to the measured presentation paths:
   publisher does not treat `ModelicaModel` output/time updates as source
   metadata changes; solver state remains in the Modelica owner while the
   generated source registry stays stable between projection events.
+- **Generated network synthesis** uses the bounded async-work admission owner.
+  Immutable prepared USD plans run graph extraction, Rhai, and source
+  validation on workers. A live OpenUSD reader produces only the typed facts
+  that must be captured on its owning thread; synthesis and validation still
+  run off-cycle. Results publish in stable request order with one network
+  commit per Update and generation fences; live-reader fact extraction is
+  bounded to one network per Update. Admission pressure retries only after
+  queue capacity changes. Prepared-plan telemetry ownership indexes are
+  built once on the worker instead of scanning the full stage during the first
+  result commit, and each request snapshots only class metadata used by its
+  own network.
 - **Graphs** retain the history-to-plot point buffer in the visualization
   owner, keyed by the history fingerprint. A plot host may clone points at the
   `egui_plot` owned-data boundary, but it must not recopy the SignalRegistry
@@ -303,6 +320,13 @@ until that asset-upload budget admits them, so off-thread generation cannot turn
 into an unbounded main-thread upload burst. These are owner-local cursors, not
 compatibility stores or alternate sources of truth.
 
+USD visual projection sorts only the queued prims and checks duplicate-child
+identity through the direct children of queued parents. It does not scan every
+live USD prim when an incremental visual batch is small.
+Celestial tile transitions keep reusable current and previous body maps, so
+steady frames do not allocate a replacement map and dirty writes do not clone
+the transition map.
+
 The engine exposure producer has one shared 20 Hz cadence gate for its change
 detector and publisher. The first publication is immediate; subsequent stable
 frames do not even enter the publisher's large query set. `ExposureRefresh`
@@ -335,13 +359,9 @@ When FPS drops, **do not optimise from code reading.** A frame loop runs the
 3D scene + Avian + an embedded egui IDE together, and the dominant cost is
 rarely the obvious one. Use the profiling subsystem:
 
-```sh
-scripts/perf/profile.sh --release            # build → samply → symbolicated hot functions
-scripts/perf/profile.sh --release --diag-only # frame time + GPU adapter only (no sudo)
-```
-
-Workflow: **profile → A/B-disable to confirm → fix → re-measure**, in that order.
-See `scripts/perf/profile.sh --help` for the full toolkit (setup, reading results, gotchas).
+Follow the [`performance-profiling` skill](../../skills/performance-profiling/SKILL.md)
+for the current Tracy workflow and evidence requirements. Use the workflow:
+**profile → confirm the owner → fix → re-measure**.
 
 Three regressions/assumptions keep recurring; prefer the by-design fix:
 
@@ -354,6 +374,14 @@ Three regressions/assumptions keep recurring; prefer the by-design fix:
   frame if any code path forgets to insert the marker. If you must poll, mark
   **every** examined entity, including on `else { continue }` exits.
 - **Do not blame diagnostics plugins for physics solver spikes.** Spikes during physics steps are not caused by logging or profiling plugins like `PhysicsTotalDiagnosticsPlugin`, whose overhead is microscopic (measured in microseconds). The cost is driven by the authoritative physics solver configuration (`lunco_physics::DEFAULT_SUBSTEP_COUNT` × solver iterations). Gating or removing the diagnostics plugin merely hides the measurement without resolving the actual cost.
+
+`UsdAvianPlugin` installs `PhysicsDiagnosticsPlugin` and
+`PhysicsTotalDiagnosticsPlugin` for every USD physics host, including
+headless/API hosts. The editor UI bridge only copies the latest total-step
+sample into `PhysicsHealthSnapshot`; it does not own or gate measurement.
+The shared `PhysicsPerformance` query includes the retained per-step timing
+history for percentile reporting; query it at the end of a measurement window
+instead of scanning the world once per fixed tick.
 
 A `run_if`-gated system that still appears in a steady-state profile means its
 gate isn't closing — that's the bug, not the cost.

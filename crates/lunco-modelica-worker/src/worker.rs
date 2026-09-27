@@ -28,7 +28,7 @@ use lunco_modelica_solver::simulation_session::LiveStepper;
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
-const PREPARED_SOLVE_CACHE_VERSION: u32 = 4;
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 5;
 
 mod cache;
 use cache::{PreparedSolveCache, PreparedSolveKey};
@@ -177,7 +177,6 @@ fn live_build_plan(
     parameter_overrides: &[(String, f64)],
     source_key: u64,
     library_revision: Option<u64>,
-    _prepared: &PreparedSolveCache,
 ) -> Result<LiveBuildPlan, rumoca_sim::SimulationDiagnosticError> {
     let parameter_overrides = canonical_parameter_overrides(parameter_overrides);
     let (spec, mut options) = live_stepper_options(profile).map_err(|e| {
@@ -206,7 +205,7 @@ fn live_build_plan(
         #[cfg(not(target_arch = "wasm32"))]
         source_key,
         #[cfg(not(target_arch = "wasm32"))]
-        persistent_library_revision: _prepared.persistent_library_revision(library_revision),
+        persistent_library_revision: library_revision,
         #[cfg(not(target_arch = "wasm32"))]
         override_key,
     })
@@ -220,13 +219,7 @@ fn build_stepper(
     library_revision: Option<u64>,
     prepared: &mut PreparedSolveCache,
 ) -> Result<LiveStepper, rumoca_sim::SimulationDiagnosticError> {
-    let plan = live_build_plan(
-        profile,
-        parameter_overrides,
-        source_key,
-        library_revision,
-        prepared,
-    )?;
+    let plan = live_build_plan(profile, parameter_overrides, source_key, library_revision)?;
     if !prepared.models.contains_key(&plan.key) {
         #[cfg(not(target_arch = "wasm32"))]
         return Err(rumoca_sim::SimulationDiagnosticError::Solver(
@@ -381,34 +374,56 @@ impl SolvePreparationPool {
             (
                 work.plan.source_key,
                 revision,
+                work.plan.spec.id.to_string(),
                 work.plan.override_key.clone(),
             )
         });
         let tx = self.tx.clone();
+        let queued_at = web_time::Instant::now();
         self.pool.spawn(move || {
-            let cached = disk_cache.as_ref().and_then(
-                |(source_key, revision, overrides)| {
-                    PreparedSolveCache::load_disk(*source_key, *revision, overrides)
-                },
-            );
+            let _job_span = bevy::log::info_span!(
+                "modelica_solve_preparation_job",
+                preparation_id = id,
+                model = %model_name,
+                queue_wait_us = queued_at.elapsed().as_micros() as u64,
+            )
+            .entered();
+            let cached = {
+                let _cache_span =
+                    bevy::log::info_span!("modelica_solve_preparation_disk_cache_lookup").entered();
+                disk_cache.as_ref().and_then(
+                    |(source_key, revision, solver_id, overrides)| {
+                        PreparedSolveCache::load_disk(
+                            *source_key,
+                            *revision,
+                            solver_id,
+                            overrides,
+                        )
+                    },
+                )
+            };
             let disk_hit = cached.is_some();
             let result = if let Some(model) = cached {
                 Ok(model)
             } else {
                 let lower_started = web_time::Instant::now();
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    lunco_modelica_solver::simulation_session::lower_for_live(&dae, &options)
-                }))
-                .unwrap_or_else(|payload| {
-                    let message = payload
-                        .downcast_ref::<&str>()
-                        .copied()
-                        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-                        .unwrap_or("unknown payload");
-                    Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
-                        "parallel solve lowering panicked: {message}"
-                    )))
-                });
+                let result = {
+                    let _lower_span =
+                        bevy::log::info_span!("modelica_solve_preparation_lower_for_live").entered();
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        lunco_modelica_solver::simulation_session::lower_for_live(&dae, &options)
+                    }))
+                    .unwrap_or_else(|payload| {
+                        let message = payload
+                            .downcast_ref::<&str>()
+                            .copied()
+                            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                            .unwrap_or("unknown payload");
+                        Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                            "parallel solve lowering panicked: {message}"
+                        )))
+                    })
+                };
                 if result.is_ok() {
                     log::debug!(
                         "[modelica-runtime] parallel solve lowering finished for `{model_name}` in {:?}",
@@ -418,16 +433,26 @@ impl SolvePreparationPool {
                 result
             };
             if !disk_hit {
-                if let (Ok(model), Some((source_key, revision, overrides))) =
+                if let (Ok(model), Some((source_key, revision, solver_id, overrides))) =
                     (&result, disk_cache.as_ref())
                 {
-                    PreparedSolveCache::save_disk(*source_key, *revision, overrides, model);
+                    let _cache_span =
+                        bevy::log::info_span!("modelica_solve_preparation_disk_cache_save").entered();
+                    PreparedSolveCache::save_disk(
+                        *source_key,
+                        *revision,
+                        solver_id,
+                        overrides,
+                        model,
+                    );
                 }
             } else {
                 log::debug!(
                     "[modelica-runtime] loaded prepared solver IR for `{model_name}`: cache=disk-hit"
                 );
             }
+            let _send_span =
+                bevy::log::info_span!("modelica_solve_preparation_publish_result").entered();
             if tx
                 .send(WorkerPreparationResult::Solve(SolvePreparationResult {
                     id,
@@ -670,6 +695,12 @@ fn finish_compile_work(
     step_lane: &mut VecDeque<ModelicaCommand>,
     tx: &Sender<ModelicaResult>,
 ) {
+    let _span = bevy::log::info_span!(
+        "modelica_finish_compile_work",
+        model = %work.model_name,
+        entity = ?work.entity,
+    )
+    .entered();
     let stepper_result = build_stepper(
         &work.comp_res,
         profile_for(work.entity, realtime_models),
@@ -795,6 +826,12 @@ fn complete_preparation(
         );
         return;
     };
+    let _span = bevy::log::info_span!(
+        "modelica_commit_solve_preparation",
+        preparation_id,
+        model = %work.model_name,
+    )
+    .entered();
     if work.cancelled {
         bevy::log::debug!(
             "[modelica-runtime] discarded cancelled solve preparation {preparation_id} for `{}`",
@@ -980,7 +1017,7 @@ fn commit_ready_compiler_completions(
                     commit.inserted_file_count > 0 || commit.library_revision != *library_revision;
                 if library_changed {
                     *library_gen = library_gen.wrapping_add(1);
-                    prepared_solve_cache.disable_persistent();
+                    prepared_solve_cache.clear();
                 }
                 *library_defaults = commit.library_defaults;
                 *library_revision = commit.library_revision;
@@ -1023,18 +1060,13 @@ fn commit_ready_compiler_completions(
                         continue;
                     }
                 };
-                let unit_key = prepared_unit_hash(
-                    &pending.model_name,
-                    &pending.doc_uri,
-                    &artifact.unit,
-                    pending.library_gen,
-                );
+                let unit_key =
+                    prepared_unit_hash(&pending.model_name, &pending.doc_uri, &artifact.unit);
                 let plan = match live_build_plan(
                     profile_for(pending.entity, realtime_models),
                     &pending.parameter_overrides,
                     unit_key,
                     Some(artifact.library_revision),
-                    prepared_solve_cache,
                 ) {
                     Ok(plan) => plan,
                     Err(error) => {
@@ -1143,20 +1175,13 @@ fn compile_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64
     h.finish()
 }
 
-/// Stable cross-process identity for the solve-IR cache. It uses the same
-/// structural source identity as the in-process artifact cache and includes
-/// the worker library generation; unlike a Bevy entity or a Rumoca source id
-/// it is identical in a fresh recorder process.
-fn prepared_unit_hash(
-    model_name: &str,
-    doc_uri: &str,
-    unit: &CompileUnit,
-    library_gen: u64,
-) -> u64 {
+/// Stable cross-process identity for the solve-IR source. The admitted library
+/// revision is a separate [`PreparedSolveKey`] field; a worker-local generation
+/// counter must not affect persistent reuse across launches.
+fn prepared_unit_hash(model_name: &str, doc_uri: &str, unit: &CompileUnit) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     shared_source_hash(model_name, unit, doc_uri).hash(&mut h);
-    library_gen.hash(&mut h);
     h.finish()
 }
 
@@ -1202,8 +1227,8 @@ fn generated_structural_source(model_name: &str, source: &str) -> String {
 /// Hash the source identity used by the cross-entity artifact and prepared
 /// solve-IR caches. Document URIs are attribution keys, not equation identity;
 /// generated instance names and their numeric network-title suffix are
-/// similarly excluded while all authored source text and sibling URIs remain
-/// part of the key.
+/// similarly excluded. Sibling documents form a source set: their runtime
+/// document IDs and iteration order do not affect the equations they define.
 fn shared_source_hash(model_name: &str, unit: &CompileUnit, doc_uri: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -1213,8 +1238,9 @@ fn shared_source_hash(model_name: &str, unit: &CompileUnit, doc_uri: &str) -> u6
         model_name.hash(&mut h);
         unit.source.hash(&mut h);
     }
-    for (uri, text) in &unit.extras {
-        uri.hash(&mut h);
+    let mut extra_sources: Vec<_> = unit.extras.iter().map(|(_, text)| text).collect();
+    extra_sources.sort_unstable();
+    for text in extra_sources {
         text.hash(&mut h);
     }
     h.finish()
@@ -1419,7 +1445,7 @@ fn rebuild_from_cache(
     };
     let mut unit = assemble_compile_unit(&source, extras);
     let hash = compile_unit_hash(&model_name, &doc_uri, &unit);
-    let unit_key = prepared_unit_hash(&model_name, &doc_uri, &unit, library_gen);
+    let unit_key = prepared_unit_hash(&model_name, &doc_uri, &unit);
     // Library defaults are folded in AFTER hashing on purpose: the hash keys the
     // source set, and `library_gen` already invalidates the artifact when the
     // seated libraries change. Both the reuse and the recompile path below need
@@ -1518,14 +1544,12 @@ impl NativeCachedRebuild {
         library_gen: u64,
         profile: solver::RuntimeProfile,
         intent: CompileIntent,
-        prepared: &PreparedSolveCache,
     ) -> Result<CompileWork, rumoca_sim::SimulationDiagnosticError> {
         let plan = live_build_plan(
             profile,
             &self.parameter_overrides,
             self.unit_key,
             Some(self.library_revision),
-            prepared,
         )?;
         Ok(CompileWork {
             entity,
@@ -1551,13 +1575,12 @@ impl NativeCachedRebuild {
 fn native_cached_rebuild(
     cached_models: &HashMap<Entity, CachedModel>,
     entity: Entity,
-    library_gen: u64,
     library_defaults: &HashMap<String, f64>,
     library_revision: u64,
 ) -> Option<NativeCachedRebuild> {
     let cached = cached_models.get(&entity)?;
     let mut unit = assemble_compile_unit(&cached.source, cached.extra_sources.clone());
-    let unit_key = prepared_unit_hash(&cached.model_name, &cached.doc_uri, &unit, library_gen);
+    let unit_key = prepared_unit_hash(&cached.model_name, &cached.doc_uri, &unit);
     unit.merge_library_defaults(library_defaults);
     Some(NativeCachedRebuild {
         model_name: cached.model_name.clone(),
@@ -1584,13 +1607,9 @@ fn cached_solve_is_prepared(
     profile: solver::RuntimeProfile,
     prepared_solve_cache: &PreparedSolveCache,
 ) -> bool {
-    let Some(cached) = native_cached_rebuild(
-        cached_models,
-        entity,
-        library_gen,
-        library_defaults,
-        library_revision,
-    ) else {
+    let Some(cached) =
+        native_cached_rebuild(cached_models, entity, library_defaults, library_revision)
+    else {
         return false;
     };
     if !cached.artifact_is_valid(library_gen) {
@@ -1601,7 +1620,6 @@ fn cached_solve_is_prepared(
         &cached.parameter_overrides,
         cached.unit_key,
         Some(cached.library_revision),
-        prepared_solve_cache,
     )
     .map(|plan| prepared_solve_cache.models.contains_key(&plan.key))
     // A selection error is reported when the queued Step reaches its owner
@@ -1654,14 +1672,7 @@ fn submit_cached_solve_preparation(
 ) {
     let source = Arc::clone(&cached.source);
     let failure_intent = intent.clone();
-    let work = match cached.into_compile_work(
-        entity,
-        session_id,
-        library_gen,
-        profile,
-        intent,
-        prepared_solve_cache,
-    ) {
+    let work = match cached.into_compile_work(entity, session_id, library_gen, profile, intent) {
         Ok(work) => work,
         Err(error) => {
             send_compile_stepper_error(tx, entity, session_id, &source, &error, &failure_intent);
@@ -2727,7 +2738,6 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                         if let Some(cached) = native_cached_rebuild(
                             &cached_models,
                             entity,
-                            library_gen,
                             &library_defaults,
                             library_revision,
                         ) {
@@ -2918,7 +2928,6 @@ pub fn modelica_worker(rx: Receiver<ModelicaCommand>, tx: Sender<ModelicaResult>
                                 if let Some(cached) = native_cached_rebuild(
                                     &cached_models,
                                     entity,
-                                    library_gen,
                                     &library_defaults,
                                     library_revision,
                                 ) {
@@ -3494,7 +3503,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
                         &parameter_overrides,
-                        prepared_unit_hash(&model_name, &doc_uri, &unit, w.library_gen),
+                        prepared_unit_hash(&model_name, &doc_uri, &unit),
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     );
@@ -3713,7 +3722,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                         &comp_res,
                         profile_for(entity, &w.realtime_models),
                         &[],
-                        prepared_unit_hash(&model_name, &doc_uri, &unit, w.library_gen),
+                        prepared_unit_hash(&model_name, &doc_uri, &unit),
                         Some(compiler.library_revision()),
                         &mut w.prepared_solve_cache,
                     ) {
@@ -3813,7 +3822,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
             if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
                 w.library_gen += 1;
                 w.compiled_artifacts.clear();
-                w.prepared_solve_cache.disable_persistent();
+                w.prepared_solve_cache.clear();
             }
             log::info!(
                 "[modelica-worker] LoadSourceRoot `{}`: {} parsed / {} \
@@ -4196,7 +4205,7 @@ mod artifact_cache_tests {
 
     fn prepared_hash_of(model: &str, source: &str, uri: &str) -> u64 {
         let unit = assemble_compile_unit(source, Vec::new());
-        prepared_unit_hash(model, uri, &unit, 4)
+        prepared_unit_hash(model, uri, &unit)
     }
 
     /// The hash keys the whole assembled CompileUnit: primary source, extras,

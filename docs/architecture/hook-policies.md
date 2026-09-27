@@ -327,11 +327,16 @@ after authored UI metadata is admitted.
 The `synth.acausal-network` and `synth.actuator-wrench` source generators run
 as `Twin/Lifecycle/Preparation` with the active-or-committed scene generation
 and no clock sample. The domain owner captures that context before async
-dispatch and supplies the same value to synchronous live projection. Their
-policies reject calls from other cycles; production tests exercise an off-cycle
-call and verify source publication through the generated-source query. Async
-results also carry the same Twin generation and are discarded when it changes,
-even if their USD stage revision still matches.
+dispatch. Immutable prepared plans run fully on workers; live canonical readers
+are reduced to typed fact snapshots on their owning thread, then both policies
+run on workers. The typed class facts are limited to the admitted network's
+members; asset handles and unresolved-source state stay with the main-thread
+owner. Each `DomainSynthesizer` must implement this preparation boundary, so
+adding an owner cannot silently reintroduce synchronous policy execution.
+Their policies reject calls from other cycles; production tests
+exercise an off-cycle call and verify source publication through the
+generated-source query. Async results also carry the same Twin generation and
+are discarded when it changes, even if their USD stage revision still matches.
 
 The domain synthesizer registry owns the typed adapter selected for a composed
 network. Installing or reloading a `synth.<name>` hook updates the policy behind

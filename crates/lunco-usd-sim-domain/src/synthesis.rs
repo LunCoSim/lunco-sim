@@ -4,7 +4,6 @@
 //! module. This module owns policy selection and validation of the generated
 //! Modelica plan; runtime ECS projection remains in the parent module.
 
-use super::network::read_network;
 use super::*;
 
 lunco_hooks::declare_hook! {
@@ -155,6 +154,37 @@ pub trait DomainSynthesizer: Send + Sync + 'static {
         model_name: &str,
         ctx: &SynthContext<'_>,
     ) -> Result<SynthOutcome, Vec<DomainProjectionError>>;
+
+    /// Snapshot required facts from a live reader and return pure synthesis
+    /// work for the bounded worker pool. Every owner must implement this
+    /// boundary so a newly registered policy cannot run expensive work inline.
+    fn prepare_synthesis(
+        self: std::sync::Arc<Self>,
+        view: &dyn ComposedReader,
+        root: &SdfPath,
+        model_name: &str,
+        ctx: &SynthContext<'_>,
+    ) -> SynthesisWork;
+}
+
+/// Synthesis split between live USD fact extraction and immutable computation.
+pub enum SynthesisWork {
+    /// The owner completed the request while preparing its input.
+    Immediate(Result<SynthOutcome, Vec<DomainProjectionError>>),
+    /// The closure owns all inputs and is safe to run on a worker.
+    Background(
+        Box<dyn FnOnce() -> Result<SynthOutcome, Vec<DomainProjectionError>> + Send + 'static>,
+    ),
+}
+
+impl SynthesisWork {
+    /// Run the prepared request. Call this inside the owning worker task.
+    pub fn run(self) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+        match self {
+            Self::Immediate(result) => result,
+            Self::Background(work) => work(),
+        }
+    }
 }
 
 /// What a synthesizer concluded about a network root.
@@ -173,6 +203,10 @@ pub enum SynthOutcome {
 pub struct SynthContext<'a> {
     /// Class-per-source-asset, as declared BY THE FILE. See [`MemberClasses`].
     pub classes: &'a MemberClasses,
+    /// Ordered component membership captured by the domain discovery index.
+    /// Live readers reuse this snapshot instead of expanding the same USD
+    /// collection again during projection.
+    pub member_paths: Option<&'a [String]>,
     /// Twin lifecycle route that owns this generated-source revision.
     pub runtime_context: lunco_core::RuntimeExecutionContext,
 }
@@ -240,34 +274,45 @@ pub struct HookSynthesizer {
     hook_id: String,
 }
 
-impl DomainSynthesizer for HookSynthesizer {
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn synthesize(
+enum HookSynthesisInput {
+    Immediate(SynthOutcome),
+    Ready(DomainNetwork),
+}
+
+impl HookSynthesizer {
+    fn read_network(
         &self,
         view: &dyn ComposedReader,
         root: &SdfPath,
-        model_name: &str,
         ctx: &SynthContext<'_>,
-    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+    ) -> Result<HookSynthesisInput, Vec<DomainProjectionError>> {
         // The READER is not the policy's business — a rhai body that had to
         // re-walk USD would be a second, divergent definition of what a network
         // is, which is the exact failure the one-reader rule exists to prevent.
         let network_result = {
             let _span = bevy::log::info_span!("domain_network_read").entered();
-            read_network(view, root, ctx.classes)
+            super::network::read_network_with_members(view, root, ctx.classes, ctx.member_paths)
         };
         let Some(network) = network_result? else {
-            return Ok(SynthOutcome::NotMine);
+            return Ok(HookSynthesisInput::Immediate(SynthOutcome::NotMine));
         };
         if network.pending_sources {
-            return Ok(SynthOutcome::Pending);
+            return Ok(HookSynthesisInput::Immediate(SynthOutcome::Pending));
         }
+        Ok(HookSynthesisInput::Ready(network))
+    }
+
+    fn finish_network(
+        &self,
+        network: DomainNetwork,
+        model_name: &str,
+        classes: &MemberClasses,
+        runtime_context: lunco_core::RuntimeExecutionContext,
+    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
         let network_root = network.root.clone();
         let facts_result = {
             let _span = bevy::log::info_span!("domain_policy_facts").entered();
-            network_facts(&network, model_name, Some(ctx.classes))
+            network_facts(&network, model_name, Some(classes))
         };
         let facts = facts_result.map_err(|message| {
             vec![DomainProjectionError {
@@ -280,7 +325,7 @@ impl DomainSynthesizer for HookSynthesizer {
         })?;
         let result = {
             let _span = bevy::log::info_span!("domain_rhai_synthesis").entered();
-            lunco_hooks::invoke_with_context(&self.hook_id, &[facts], ctx.runtime_context)
+            lunco_hooks::invoke_with_context(&self.hook_id, &[facts], runtime_context)
         }
         .ok_or_else(|| {
             vec![DomainProjectionError {
@@ -357,7 +402,7 @@ impl DomainSynthesizer for HookSynthesizer {
         let member_output_aliases = parse_policy_member_output_aliases(
             hook_map_value(map, "member_output_aliases"),
             &network,
-            Some(ctx.classes),
+            Some(classes),
             &network_root,
             &self.name,
         )
@@ -381,10 +426,6 @@ impl DomainSynthesizer for HookSynthesizer {
         Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
             interface,
-            // The BOUNDARY remains Rust's composed-USD answer. The policy owns
-            // the emitted source, merge partition, and visual placement, but
-            // cannot invent a runtime port surface or a member outside the
-            // composed network.
             inputs: network.inputs.clone(),
             outputs: network.outputs.keys().cloned().collect(),
             component_paths: network
@@ -409,6 +450,50 @@ impl DomainSynthesizer for HookSynthesizer {
             layout,
             communication_period_secs: network.communication_period_secs,
         })))
+    }
+}
+
+impl DomainSynthesizer for HookSynthesizer {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn synthesize(
+        &self,
+        view: &dyn ComposedReader,
+        root: &SdfPath,
+        model_name: &str,
+        ctx: &SynthContext<'_>,
+    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+        match self.read_network(view, root, ctx)? {
+            HookSynthesisInput::Immediate(outcome) => Ok(outcome),
+            HookSynthesisInput::Ready(network) => {
+                self.finish_network(network, model_name, ctx.classes, ctx.runtime_context)
+            }
+        }
+    }
+
+    fn prepare_synthesis(
+        self: std::sync::Arc<Self>,
+        view: &dyn ComposedReader,
+        root: &SdfPath,
+        model_name: &str,
+        ctx: &SynthContext<'_>,
+    ) -> SynthesisWork {
+        let input = match self.read_network(view, root, ctx) {
+            Ok(input) => input,
+            Err(errors) => return SynthesisWork::Immediate(Err(errors)),
+        };
+        match input {
+            HookSynthesisInput::Immediate(outcome) => SynthesisWork::Immediate(Ok(outcome)),
+            HookSynthesisInput::Ready(network) => {
+                let model_name = model_name.to_owned();
+                let classes = ctx.classes.synthesis_snapshot_for_network(&network);
+                let runtime_context = ctx.runtime_context;
+                SynthesisWork::Background(Box::new(move || {
+                    self.finish_network(network, &model_name, &classes, runtime_context)
+                }))
+            }
+        }
     }
 }
 
@@ -1498,31 +1583,50 @@ fn network_boundary_for_target(network: &DomainNetwork, target: &str) -> Option<
 /// different allocation policy.
 pub struct ActuatorWrenchSynthesizer;
 
-impl DomainSynthesizer for ActuatorWrenchSynthesizer {
-    fn name(&self) -> &str {
-        ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER
-    }
+struct ActuatorWrenchNetwork {
+    root: String,
+    model_name: String,
+    inputs: BTreeSet<String>,
+    outputs: BTreeSet<String>,
+    actuators: BTreeMap<String, (String, lunco_cosim_core::ForceActuator)>,
+}
 
-    fn synthesize(
+impl ActuatorWrenchSynthesizer {
+    fn read_network(
         &self,
         view: &dyn ComposedReader,
         root: &SdfPath,
         model_name: &str,
         ctx: &SynthContext<'_>,
-    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+    ) -> Result<Option<ActuatorWrenchNetwork>, Vec<DomainProjectionError>> {
         if !is_runtime_domain_network_root(view, root) {
-            return Ok(SynthOutcome::NotMine);
+            return Ok(None);
         }
 
         let root_string = root.to_string();
-        let members = view
-            .collection_members(root, "components")
-            .map_err(|error| {
-                vec![DomainProjectionError {
-                    path: root_string.clone(),
-                    message: format!("could not read actuator collection: {error}"),
-                }]
-            })?;
+        let members = if let Some(cached_members) = ctx.member_paths {
+            cached_members
+                .iter()
+                .map(|path| {
+                    SdfPath::new(path).map_err(|error| {
+                        vec![DomainProjectionError {
+                            path: root_string.clone(),
+                            message: format!(
+                                "cached actuator collection contains invalid path {path}: {error}"
+                            ),
+                        }]
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            view.collection_members(root, "components")
+                .map_err(|error| {
+                    vec![DomainProjectionError {
+                        path: root_string.clone(),
+                        message: format!("could not read actuator collection: {error}"),
+                    }]
+                })?
+        };
 
         let mut actuators = BTreeMap::new();
         for path in members {
@@ -1574,7 +1678,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 }]);
             };
             if actuators
-                .insert(command.clone(), (path.clone(), actuator))
+                .insert(command.clone(), (path.to_string(), actuator))
                 .is_some()
             {
                 return Err(vec![DomainProjectionError {
@@ -1585,10 +1689,11 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         }
         if actuators.is_empty() {
             return Err(vec![DomainProjectionError {
-                path: root.to_string(),
-                message: "actuator-wrench collection contains no force actuators".into(),
+                path: root_string.clone(),
+                message: "actuator collection contains no force actuators".into(),
             }]);
         }
+
         let mut inputs = BTreeSet::new();
         let mut outputs = BTreeSet::new();
         for attr in view.attr_names(root) {
@@ -1607,7 +1712,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         for name in inputs.iter().chain(outputs.iter()) {
             if !is_modelica_identifier(name) {
                 return Err(vec![DomainProjectionError {
-                    path: root.to_string(),
+                    path: root_string.clone(),
                     message: format!("public port `{name}` is not a valid Modelica identifier"),
                 }]);
             }
@@ -1615,7 +1720,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         let actuator_outputs: BTreeSet<_> = actuators.keys().cloned().collect();
         if actuator_outputs != outputs {
             return Err(vec![DomainProjectionError {
-                path: root.to_string(),
+                path: root_string,
                 message: format!(
                     "actuator command outputs {:?} do not match the authored network outputs {:?}",
                     actuator_outputs, outputs
@@ -1623,7 +1728,31 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             }]);
         }
 
-        let columns: Vec<_> = actuators.values().map(|(_, actuator)| *actuator).collect();
+        Ok(Some(ActuatorWrenchNetwork {
+            root: root.to_string(),
+            model_name: model_name.to_string(),
+            inputs,
+            outputs,
+            actuators,
+        }))
+    }
+
+    fn finish_network(
+        &self,
+        network: ActuatorWrenchNetwork,
+        runtime_context: lunco_core::RuntimeExecutionContext,
+    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+        let ActuatorWrenchNetwork {
+            root: root_string,
+            model_name,
+            inputs,
+            outputs,
+            actuators,
+        } = network;
+        let columns = actuators
+            .values()
+            .map(|(_, actuator)| *actuator)
+            .collect::<Vec<_>>();
         let (wrench_matrix, allocation_step) =
             actuator_wrench_matrix(&columns).map_err(|message| {
                 vec![DomainProjectionError {
@@ -1633,12 +1762,12 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             })?;
         let component_paths = actuators
             .values()
-            .map(|(path, _)| path.to_string())
+            .map(|(path, _)| path.clone())
             .collect::<Vec<_>>();
         let facts = lunco_hooks::HookValue::Map(vec![
             (
                 "model_name".to_string(),
-                lunco_hooks::HookValue::str(model_name),
+                lunco_hooks::HookValue::str(&model_name),
             ),
             (
                 "root".to_string(),
@@ -1698,25 +1827,22 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 lunco_hooks::HookValue::Int(wrench_matrix.len() as i64),
             ),
         ]);
-        let value = lunco_hooks::invoke_with_context(
-            "synth.actuator-wrench",
-            &[facts],
-            ctx.runtime_context,
-        )
-        .ok_or_else(|| {
-            vec![DomainProjectionError {
+        let value =
+            lunco_hooks::invoke_with_context("synth.actuator-wrench", &[facts], runtime_context)
+                .ok_or_else(|| {
+                    vec![DomainProjectionError {
                 path: root_string.clone(),
                 message:
                     "actuator-wrench is selected but its Rhai synthesis policy is not registered"
                         .into(),
             }]
-        })?
-        .map_err(|error| {
-            vec![DomainProjectionError {
-                path: root_string.clone(),
-                message: format!("actuator-wrench synthesis policy failed: {}", error.0),
-            }]
-        })?;
+                })?
+                .map_err(|error| {
+                    vec![DomainProjectionError {
+                        path: root_string.clone(),
+                        message: format!("actuator-wrench synthesis policy failed: {}", error.0),
+                    }]
+                })?;
         let lunco_hooks::HookValue::Map(map) = value else {
             return Err(vec![DomainProjectionError {
                 path: root_string,
@@ -1733,7 +1859,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 message: "actuator-wrench synthesis policy returned no string `source` key".into(),
             }]);
         };
-        let interface = parse_validated_root_interface(source, model_name, &inputs, &outputs, &[])
+        let interface = parse_validated_root_interface(source, &model_name, &inputs, &outputs, &[])
             .map_err(|message| {
                 vec![DomainProjectionError {
                     path: root_string.clone(),
@@ -1773,6 +1899,42 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
     }
 }
 
+impl DomainSynthesizer for ActuatorWrenchSynthesizer {
+    fn name(&self) -> &str {
+        ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER
+    }
+
+    fn synthesize(
+        &self,
+        view: &dyn ComposedReader,
+        root: &SdfPath,
+        model_name: &str,
+        ctx: &SynthContext<'_>,
+    ) -> Result<SynthOutcome, Vec<DomainProjectionError>> {
+        let Some(network) = self.read_network(view, root, model_name, ctx)? else {
+            return Ok(SynthOutcome::NotMine);
+        };
+        self.finish_network(network, ctx.runtime_context)
+    }
+
+    fn prepare_synthesis(
+        self: std::sync::Arc<Self>,
+        view: &dyn ComposedReader,
+        root: &SdfPath,
+        model_name: &str,
+        ctx: &SynthContext<'_>,
+    ) -> SynthesisWork {
+        let network = match self.read_network(view, root, model_name, ctx) {
+            Ok(Some(network)) => network,
+            Ok(None) => return SynthesisWork::Immediate(Ok(SynthOutcome::NotMine)),
+            Err(errors) => return SynthesisWork::Immediate(Err(errors)),
+        };
+        let runtime_context = ctx.runtime_context;
+        SynthesisWork::Background(Box::new(move || {
+            self.finish_network(network, runtime_context)
+        }))
+    }
+}
 fn strip_connection_suffix(name: &str) -> String {
     name.strip_suffix(".connect").unwrap_or(name).to_string()
 }

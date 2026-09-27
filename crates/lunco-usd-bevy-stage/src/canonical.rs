@@ -1168,9 +1168,8 @@ impl CanonicalStages {
         recipe: &lunco_usd_compose::recipe::StageRecipe,
     ) -> bool {
         match CanonicalStage::from_recipe(recipe) {
-            Ok(mut cs) => {
-                cs.generation = self.get(asset).map_or(1, |stage| stage.generation + 1);
-                self.by_asset.insert(asset, cs);
+            Ok(stage) => {
+                self.replace_rebuilt(asset, stage);
                 true
             }
             Err(e) => {
@@ -1178,6 +1177,18 @@ impl CanonicalStages {
                 false
             }
         }
+    }
+
+    /// Commit a canonical stage that was built and validated before any
+    /// stage-owned ECS state was retired. This keeps the replacement boundary
+    /// infallible after owners prepare for the reset.
+    pub fn replace_rebuilt(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+        mut replacement: CanonicalStage,
+    ) {
+        replacement.generation = self.get(asset).map_or(1, |stage| stage.generation + 1);
+        self.by_asset.insert(asset, replacement);
     }
 
     /// Ensure the live canonical stage for `asset` exists and return it. This is

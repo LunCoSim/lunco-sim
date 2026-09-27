@@ -4,16 +4,13 @@
 //! an `Option<f32>` field for any crate that knows about avian to
 //! populate.
 
-use avian3d::diagnostics::{
-    PhysicsDiagnosticsPlugin, PhysicsTotalDiagnostics, PhysicsTotalDiagnosticsPlugin,
-};
+use avian3d::diagnostics::PhysicsTotalDiagnostics;
 use bevy::prelude::*;
 use lunco_core_runtime::PhysicsHealthSnapshot;
 
-/// Adds avian's diagnostics plugins (the framework one + the
-/// total-step one that actually inserts `PhysicsTotalDiagnostics`)
-/// and a physics-cycle publisher that writes the shared
-/// [`PhysicsHealthSnapshot`]. HUD and telemetry consume that same snapshot.
+/// Publishes the shared physics-step sample into [`PhysicsHealthSnapshot`].
+/// The shared `UsdAvianPlugin` owns installation of Avian's diagnostics in all
+/// hosts; the HUD and telemetry consume this UI-facing snapshot.
 ///
 /// Cost note (don't be fooled by profiles): `PhysicsTotalDiagnosticsPlugin`
 /// *appears* as a ~30 ms per-step spike, but it does not cause it. Its systems
@@ -32,12 +29,6 @@ pub struct PerfBridgePlugin;
 
 impl Plugin for PerfBridgePlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<PhysicsDiagnosticsPlugin>() {
-            app.add_plugins(PhysicsDiagnosticsPlugin);
-        }
-        if !app.is_plugin_added::<PhysicsTotalDiagnosticsPlugin>() {
-            app.add_plugins(PhysicsTotalDiagnosticsPlugin);
-        }
         app.add_systems(
             FixedPostUpdate,
             publish_physics_step

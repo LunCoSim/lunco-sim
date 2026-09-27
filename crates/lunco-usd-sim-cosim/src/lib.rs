@@ -52,7 +52,7 @@ use lunco_usd_bevy_stage::{
     canonical::CanonicalStages,
 };
 use openusd::sdf::{Path as SdfPath, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use lunco_usd_sim_core::{PendingDifferential, PendingEntityWork, UsdSimProcessed, UsdSimSet};
 use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule};
@@ -474,6 +474,7 @@ pub(crate) fn process_usd_cosim_prims(
     mut pending: ResMut<PendingUsdCosimPrimWork>,
     parents: Query<&ChildOf>,
     preview_roots: Query<(), With<UsdPreviewOnly>>,
+    mut membership: ModelicaNetworkMembershipInputs,
     stages: Res<Assets<UsdStageAsset>>,
     // Initial reads use the worker-produced plan; later authored generations
     // use the live canonical stage selected by the shared reader boundary.
@@ -482,10 +483,6 @@ pub(crate) fn process_usd_cosim_prims(
     mut wiring_dirty: ResMut<UsdWiringDirty>,
     mut python_unavailable: ResMut<PythonUnavailablePrograms>,
 ) {
-    // Which prims a component collection already owns, per stage. Computed once
-    // per batch rather than per prim.
-    let mut members_by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, BTreeSet<String>> =
-        HashMap::new();
     let mut entities = pending.0.take_queued();
     if pending.0.take_initial_discovery() {
         // This single bootstrap pass covers entities that predate plugin
@@ -516,7 +513,7 @@ pub(crate) fn process_usd_cosim_prims(
             pending.0.queue(entity);
             continue;
         };
-        let (reader, _generation) =
+        let (reader, generation) =
             canonical.reader_for_entity(id, stage_asset, instance_projection);
         // `try_insert` (not `.insert`): a `LoadScene` cleanup may despawn this
         // prim between this system's iterate and ApplyDeferred — the canonical
@@ -552,23 +549,45 @@ pub(crate) fn process_usd_cosim_prims(
             wiring_dirty.0 = true;
             continue;
         }
-        let members = members_by_stage.entry(id).or_insert_with(|| {
-            lunco_usd_bevy_core::program::modelica_network_member_paths(&reader)
-                .into_iter()
-                .collect()
-        });
+        let instance = lunco_usd_bevy_scene::instance_key_from_projection(
+            entity,
+            &membership.provenance,
+            &membership.global_ids,
+            &membership.instance_roots,
+            instance_projection,
+        );
+        let members = if let Some(members) = membership.cache.get(id, generation, instance) {
+            members
+        } else {
+            let _span = bevy::log::info_span!("usd_cosim_membership_index_build").entered();
+            membership.cache.insert(
+                id,
+                generation,
+                instance,
+                lunco_usd_bevy_core::program::modelica_network_member_paths(&reader),
+            )
+        };
+        let _span = bevy::log::info_span!("usd_cosim_process_prim_read").entered();
         process_usd_cosim_prim_read(
             &reader,
             entity,
             prim_path,
             &sdf_path,
-            members,
+            &members,
             &mut commands,
             &asset_server,
             &mut wiring_dirty,
             &mut python_unavailable,
         );
     }
+}
+
+#[derive(SystemParam)]
+struct ModelicaNetworkMembershipInputs<'w, 's> {
+    provenance: Query<'w, 's, &'static lunco_core::Provenance>,
+    global_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
+    instance_roots: Query<'w, 's, (), With<UsdInstanceRoot>>,
+    cache: ResMut<'w, lunco_usd_bevy_core::program::ModelicaNetworkMembershipCache>,
 }
 
 /// Report Python availability once the scene's USD prims have finished
@@ -1009,7 +1028,7 @@ fn process_usd_cosim_prim_read(
     prim_path: &UsdPrimPath,
     sdf_path: &SdfPath,
     // Every prim some `CollectionAPI:components` scope on this stage owns.
-    network_members: &BTreeSet<String>,
+    network_members: &HashSet<String>,
     commands: &mut Commands,
     asset_server: &AssetServer,
     wiring_dirty: &mut UsdWiringDirty,
@@ -2188,6 +2207,9 @@ fn tag_cosim_opaque(
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
 impl Plugin for UsdSimCosimPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
+            app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+        }
         lunco_usd_bevy_core::program::install_modelica_network_membership_cache(app);
         use lunco_cosim_core::schedule::{
             CosimApplySet as ApplyForcesCosimSet, CosimSet as PropagateCosimSet,
@@ -2229,6 +2251,7 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_usd_sim_domain::DomainClassUsers>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
             .init_resource::<lunco_usd_sim_domain::PendingDomainProjectionCandidates>()
+            .init_resource::<lunco_usd_sim_domain::AuthoredTelemetryIndexes>()
             .init_resource::<lunco_usd_sim_domain::PendingGeneratedSourceDocuments>()
             .init_resource::<PendingUsdCosimPrimWork>()
             .init_resource::<PendingModelicaWrapWork>()

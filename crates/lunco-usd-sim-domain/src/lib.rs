@@ -4,12 +4,11 @@
 //! authority for equations and member types; USD supplies instances, constant
 //! input opinions, and ordinary property connections between public members.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use bevy::asset::AssetId;
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_modelica_ast::ast_extract::{
     ModelInterface, ModelicaVariableMetadata, parse_model_interface_from_ast,
@@ -133,12 +132,15 @@ enum AuthoredTelemetryScope {
         asset: AssetId<UsdStageAsset>,
         generation: u64,
     },
-    PreparedPlan(usize),
+    PreparedPlan {
+        asset: AssetId<UsdStageAsset>,
+        identity: usize,
+    },
 }
 
 /// Output ownership facts authored through `LunCoTelemetryAPI`, indexed once
 /// per composed read surface and projection batch.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct AuthoredTelemetryIndex {
     outputs_by_owner: HashMap<String, HashSet<String>>,
 }
@@ -175,6 +177,91 @@ impl AuthoredTelemetryIndex {
         self.outputs_by_owner
             .get(member)
             .is_some_and(|outputs| outputs.contains(output))
+    }
+}
+
+/// Reuse telemetry ownership facts across asynchronous domain-result commits.
+/// Canonical entries are keyed by stage generation and replaced as that stage
+/// advances; immutable prepared plans stay cached until scene teardown.
+#[derive(Resource, Default)]
+pub struct AuthoredTelemetryIndexes {
+    by_scope: HashMap<AuthoredTelemetryScope, AuthoredTelemetryIndexEntry>,
+}
+
+#[derive(Default)]
+struct AuthoredTelemetryIndexEntry {
+    index: Option<Arc<AuthoredTelemetryIndex>>,
+    worker_index: Arc<OnceLock<Arc<AuthoredTelemetryIndex>>>,
+    prepared_plan_users: HashSet<Entity>,
+}
+
+impl AuthoredTelemetryIndexes {
+    fn get_or_build(
+        &mut self,
+        scope: AuthoredTelemetryScope,
+        view: &dyn ComposedReader,
+        owner: Entity,
+    ) -> &AuthoredTelemetryIndex {
+        if let AuthoredTelemetryScope::Canonical { asset, generation } = scope {
+            self.by_scope.retain(|cached_scope, _| {
+                !matches!(
+                    cached_scope,
+                    AuthoredTelemetryScope::Canonical {
+                        asset: cached_asset,
+                        generation: cached_generation,
+                    } if *cached_asset == asset && *cached_generation != generation
+                )
+            });
+        }
+        let entry = self.by_scope.entry(scope).or_default();
+        if matches!(scope, AuthoredTelemetryScope::PreparedPlan { .. }) {
+            entry.prepared_plan_users.insert(owner);
+        }
+        if entry.index.is_none() {
+            entry.index = Some(
+                entry
+                    .worker_index
+                    .get()
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(AuthoredTelemetryIndex::from_view(view))),
+            );
+        }
+        entry
+            .index
+            .as_deref()
+            .expect("telemetry index was created before access")
+    }
+
+    fn prepared_worker_slot(
+        &mut self,
+        scope: AuthoredTelemetryScope,
+        owner: Entity,
+    ) -> Arc<OnceLock<Arc<AuthoredTelemetryIndex>>> {
+        let entry = self.by_scope.entry(scope).or_default();
+        entry.prepared_plan_users.insert(owner);
+        Arc::clone(&entry.worker_index)
+    }
+
+    fn forget_entity(&mut self, entity: Entity) {
+        self.by_scope.retain(|scope, entry| {
+            if matches!(scope, AuthoredTelemetryScope::PreparedPlan { .. }) {
+                entry.prepared_plan_users.remove(&entity);
+                !entry.prepared_plan_users.is_empty()
+            } else {
+                true
+            }
+        });
+    }
+
+    fn retire_asset(&mut self, asset: AssetId<UsdStageAsset>) {
+        self.by_scope.retain(|scope, _| match scope {
+            AuthoredTelemetryScope::Canonical { asset: cached, .. }
+            | AuthoredTelemetryScope::PreparedPlan { asset: cached, .. } => *cached != asset,
+        });
+    }
+
+    fn clear(&mut self) {
+        self.by_scope.clear();
     }
 }
 
@@ -298,7 +385,9 @@ struct PendingDomainProjection {
     model_name: String,
     requested: String,
     plan: Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
-    task: Task<Result<SynthOutcome, Vec<DomainProjectionError>>>,
+    work_key: Option<lunco_core_runtime::AsyncWorkKey>,
+    completion: Arc<Mutex<Option<Result<SynthOutcome, Vec<DomainProjectionError>>>>>,
+    completed: Option<Result<SynthOutcome, Vec<DomainProjectionError>>>,
 }
 
 /// In-flight domain synthesis owned by the scene projection lifecycle.
@@ -308,7 +397,16 @@ struct PendingDomainProjection {
 /// or the exact immutable prepared instance plan before it can publish a result.
 #[derive(Resource, Default)]
 pub struct PendingDomainProjections {
-    tasks: Vec<PendingDomainProjection>,
+    tasks: VecDeque<PendingDomainProjection>,
+    next_operation: u64,
+}
+
+impl PendingDomainProjections {
+    fn allocate_operation(&mut self) -> Option<u64> {
+        let operation = self.next_operation;
+        self.next_operation = operation.checked_add(1)?;
+        Some(operation)
+    }
 }
 
 /// Domain-root candidates discovered from USD entity and source lifecycles.
@@ -321,6 +419,7 @@ pub struct PendingDomainProjectionCandidates {
     waiting_for_stage: HashMap<AssetId<UsdStageAsset>, HashSet<Entity>>,
     initial_discovery: bool,
     observed_stage_generations: HashMap<AssetId<UsdStageAsset>, u64>,
+    capacity_blocked: HashMap<Entity, u64>,
 }
 
 impl Default for PendingDomainProjectionCandidates {
@@ -331,13 +430,53 @@ impl Default for PendingDomainProjectionCandidates {
             waiting_for_stage: HashMap::new(),
             initial_discovery: true,
             observed_stage_generations: HashMap::new(),
+            capacity_blocked: HashMap::new(),
         }
     }
 }
 
 impl PendingDomainProjectionCandidates {
-    pub fn has_projection_work(&self) -> bool {
-        !self.projection.is_empty()
+    fn has_eligible_projection_work(&self, capacity_revision: u64) -> bool {
+        self.projection.iter().any(|entity| {
+            self.capacity_blocked
+                .get(entity)
+                .is_none_or(|blocked_revision| *blocked_revision != capacity_revision)
+        })
+    }
+
+    fn take_eligible_projection(&mut self, capacity_revision: u64) -> Vec<Entity> {
+        let mut ready = self
+            .projection
+            .iter()
+            .copied()
+            .filter(|entity| {
+                self.capacity_blocked
+                    .get(entity)
+                    .is_none_or(|blocked_revision| *blocked_revision != capacity_revision)
+            })
+            .collect::<Vec<_>>();
+        ready.sort_unstable();
+        for entity in &ready {
+            self.projection.remove(entity);
+            self.capacity_blocked.remove(entity);
+        }
+        ready
+    }
+
+    fn queue_projection(&mut self, entity: Entity) {
+        self.capacity_blocked.remove(&entity);
+        self.projection.insert(entity);
+    }
+
+    fn extend_projection(&mut self, entities: impl IntoIterator<Item = Entity>) {
+        for entity in entities {
+            self.queue_projection(entity);
+        }
+    }
+
+    fn defer_projection_for_capacity(&mut self, entity: Entity, capacity_revision: u64) {
+        self.projection.insert(entity);
+        self.capacity_blocked.insert(entity, capacity_revision);
     }
 
     fn observe_stage_generation(
@@ -363,6 +502,7 @@ impl PendingDomainProjectionCandidates {
     fn forget_entity(&mut self, entity: Entity) {
         self.discovery.remove(&entity);
         self.projection.remove(&entity);
+        self.capacity_blocked.remove(&entity);
         self.waiting_for_stage.retain(|_, waiting| {
             waiting.remove(&entity);
             !waiting.is_empty()
@@ -421,8 +561,11 @@ pub fn mark_generated_sources_dirty_on_insert(
     generated.dirty = true;
 }
 
-pub fn domain_projection_due(candidates: Res<PendingDomainProjectionCandidates>) -> bool {
-    candidates.has_projection_work()
+pub fn domain_projection_due(
+    candidates: Res<PendingDomainProjectionCandidates>,
+    admission: Res<lunco_core_runtime::AsyncWorkAdmission>,
+) -> bool {
+    candidates.has_eligible_projection_work(admission.capacity_revision())
 }
 
 /// Reverse index from a Modelica source asset to the domain roots that depend
@@ -440,7 +583,13 @@ pub struct DomainClassUsers {
 struct DomainRootPaths {
     stage_id: AssetId<UsdStageAsset>,
     root_path: String,
-    member_paths: HashSet<String>,
+    /// Generation used for this root's authored membership facts. Generation
+    /// zero is the worker-produced immutable plan; unrelated later edits do not
+    /// invalidate that network snapshot.
+    stage_generation: u64,
+    /// Preserve USD collection order for synthesis while using this same list
+    /// as the root's path invalidation index.
+    member_paths: Vec<String>,
 }
 
 impl DomainClassUsers {
@@ -578,12 +727,25 @@ pub fn reset_scene_projection_work(
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
     mut generated_documents: ResMut<PendingGeneratedSourceDocuments>,
     pending_synthesis: Option<ResMut<PendingDomainProjections>>,
+    admission: Option<ResMut<lunco_core_runtime::AsyncWorkAdmission>>,
+    telemetry_indexes: Option<ResMut<AuthoredTelemetryIndexes>>,
 ) {
     users.clear();
     candidates.reset_for_scene();
     generated_documents.0 = PendingEntityWork::with_initial_discovery();
     if let Some(mut pending_synthesis) = pending_synthesis {
+        if let Some(mut admission) = admission {
+            for task in &pending_synthesis.tasks {
+                if let Some(work_key) = task.work_key {
+                    admission.cancel_queued(work_key);
+                }
+            }
+        }
         pending_synthesis.tasks.clear();
+        pending_synthesis.next_operation = 0;
+    }
+    if let Some(mut telemetry_indexes) = telemetry_indexes {
+        telemetry_indexes.clear();
     }
 }
 
@@ -638,12 +800,121 @@ pub fn forget_domain_projection_entity(
     trigger: On<Remove, UsdPrimPath>,
     mut users: ResMut<DomainClassUsers>,
     mut pending: ResMut<PendingDomainProjectionCandidates>,
+    telemetry_indexes: Option<ResMut<AuthoredTelemetryIndexes>>,
 ) {
     users.remove_root(trigger.entity);
     pending.forget_entity(trigger.entity);
+    if let Some(mut telemetry_indexes) = telemetry_indexes {
+        telemetry_indexes.forget_entity(trigger.entity);
+    }
+}
+
+fn queue_domain_projection_work(
+    admission: &mut lunco_core_runtime::AsyncWorkAdmission,
+    pending: &mut PendingDomainProjections,
+    entity: Entity,
+    stage_id: AssetId<UsdStageAsset>,
+    stage_generation: u64,
+    scene_generation: u64,
+    root_path: &SdfPath,
+    model_name: String,
+    requested: String,
+    plan: Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
+    instance_plan: bool,
+    work: impl FnOnce() -> Result<SynthOutcome, Vec<DomainProjectionError>> + Send + 'static,
+) -> Result<(), lunco_core_runtime::AsyncWorkRejection> {
+    let operation = pending.allocate_operation();
+    let root_path = root_path.to_string();
+    let completion = Arc::new(Mutex::new(None));
+    let Some(operation) = operation else {
+        pending.tasks.push_back(PendingDomainProjection {
+            entity,
+            stage_id,
+            stage_generation,
+            scene_generation,
+            instance_plan,
+            root_path: root_path.clone(),
+            model_name,
+            requested,
+            plan,
+            work_key: None,
+            completion,
+            completed: Some(Err(vec![DomainProjectionError {
+                path: root_path,
+                message: "domain synthesis operation id exhausted".into(),
+            }])),
+        });
+        return Ok(());
+    };
+    let work_key = lunco_core_runtime::AsyncWorkKey::new(
+        lunco_core_runtime::AsyncWorkKind::ModelicaNetworkSynthesis,
+        scene_generation,
+        u128::from(lunco_hash::fnv1a64(model_name.as_bytes())),
+        stage_generation,
+        operation,
+    );
+    let worker_completion = Arc::clone(&completion);
+    let worker_path = root_path.clone();
+    let job = move || {
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|_| {
+                Err(vec![DomainProjectionError {
+                    path: worker_path,
+                    message: "domain network synthesis worker panicked".into(),
+                }])
+            });
+        *worker_completion
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(result);
+    };
+    match admission.submit_ordered(
+        lunco_core_runtime::AsyncWorkPriority::SimulationRequired,
+        work_key,
+        lunco_hash::fnv1a64(model_name.as_bytes()),
+        job,
+    ) {
+        Ok(()) => {
+            pending.tasks.push_back(PendingDomainProjection {
+                entity,
+                stage_id,
+                stage_generation,
+                scene_generation,
+                instance_plan,
+                root_path,
+                model_name,
+                requested,
+                plan,
+                work_key: Some(work_key),
+                completion,
+                completed: None,
+            });
+        }
+        Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable) => {
+            pending.tasks.push_back(PendingDomainProjection {
+                entity,
+                stage_id,
+                stage_generation,
+                scene_generation,
+                instance_plan,
+                root_path: root_path.clone(),
+                model_name,
+                requested,
+                plan,
+                work_key: None,
+                completion,
+                completed: Some(Err(vec![DomainProjectionError {
+                    path: root_path,
+                    message: "domain synthesis requires a worker transport on this host".into(),
+                }])),
+            });
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(())
 }
 
 fn queue_domain_projection(
+    admission: &mut lunco_core_runtime::AsyncWorkAdmission,
     pending: &mut PendingDomainProjections,
     entity: Entity,
     stage_id: AssetId<UsdStageAsset>,
@@ -655,33 +926,45 @@ fn queue_domain_projection(
     synthesizer: Arc<dyn DomainSynthesizer>,
     plan: Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
     instance_plan: bool,
-    classes: MemberClasses,
+    classes: &MemberClasses,
+    class_assets: Option<&HashSet<String>>,
+    telemetry_index: Option<Arc<OnceLock<Arc<AuthoredTelemetryIndex>>>>,
+    member_paths: Option<Vec<String>>,
     runtime_context: lunco_core::RuntimeExecutionContext,
-) {
-    let root_path_string = root_path.to_string();
+) -> Result<(), lunco_core_runtime::AsyncWorkRejection> {
+    let classes = class_assets
+        .map(|assets| classes.synthesis_snapshot(Some(assets)))
+        .unwrap_or_else(|| classes.clone());
     let task_root = root_path.clone();
     let task_model_name = model_name.clone();
     let task_plan = plan.clone();
-    let task = AsyncComputeTaskPool::get().spawn(async move {
+    let work = move || {
         let view: &dyn ComposedReader = task_plan.as_ref();
+        if let Some(telemetry_index) = telemetry_index {
+            let _ =
+                telemetry_index.get_or_init(|| Arc::new(AuthoredTelemetryIndex::from_view(view)));
+        }
         let context = SynthContext {
             classes: &classes,
+            member_paths: member_paths.as_deref(),
             runtime_context,
         };
         synthesizer.synthesize(view, &task_root, &task_model_name, &context)
-    });
-    pending.tasks.push(PendingDomainProjection {
+    };
+    queue_domain_projection_work(
+        admission,
+        pending,
         entity,
         stage_id,
         stage_generation,
         scene_generation,
-        instance_plan,
-        root_path: root_path_string,
+        root_path,
         model_name,
         requested,
         plan,
-        task,
-    });
+        instance_plan,
+        work,
+    )
 }
 
 fn modelica_synthesis_context(
@@ -752,7 +1035,7 @@ fn commit_domain_projection(
     requested: &str,
     model_name: &str,
     synthesized: Result<SynthOutcome, Vec<DomainProjectionError>>,
-    telemetry_indexes: &mut HashMap<AuthoredTelemetryScope, AuthoredTelemetryIndex>,
+    telemetry_indexes: &mut AuthoredTelemetryIndexes,
     telemetry_scope: AuthoredTelemetryScope,
     notices: &mut MessageWriter<ModelicaNotice>,
 ) -> bool {
@@ -870,9 +1153,7 @@ fn commit_domain_projection(
         .filter(|(_, _, alias)| interface.outputs.contains(alias))
         .cloned()
         .collect::<Vec<_>>();
-    let telemetry = telemetry_indexes
-        .entry(telemetry_scope)
-        .or_insert_with(|| AuthoredTelemetryIndex::from_view(view));
+    let telemetry = telemetry_indexes.get_or_build(telemetry_scope, view, entity);
     let signal_layout = match generated_signal_layout(
         view,
         root_path,
@@ -938,18 +1219,11 @@ fn commit_domain_projection(
 /// Reactively compile every prim containing a standard component collection of
 /// Modelica program facets. The generated source is runtime projection only.
 pub fn project_domain_islands(
-    mut commands: Commands,
     preview: (
         Query<&ChildOf>,
         Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     ),
-    prims: Query<(
-        Entity,
-        &UsdPrimPath,
-        Option<&DomainProjectionState>,
-        Option<&ModelicaModel>,
-        Option<&UsdInstanceProjection>,
-    )>,
+    prims: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>)>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<lunco_usd_bevy_stage::UsdInstanceRoot>>,
@@ -962,6 +1236,8 @@ pub fn project_domain_islands(
     canonical: NonSend<CanonicalStages>,
     mut pending: ResMut<PendingDomainProjections>,
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
+    mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
+    mut telemetry_indexes: ResMut<AuthoredTelemetryIndexes>,
     class_users: Res<DomainClassUsers>,
     classes: Res<MemberClasses>,
     synthesis_owner: (
@@ -969,12 +1245,12 @@ pub fn project_domain_islands(
         Option<Res<lunco_core::SceneTransitionCoordinator>>,
     ),
     modelica_channels: Option<Res<ModelicaChannels>>,
-    mut notices: MessageWriter<ModelicaNotice>,
 ) {
     if modelica_channels.is_none() {
         return;
     }
-    if candidates.projection.is_empty() {
+    let capacity_revision = admission.capacity_revision();
+    if !candidates.has_eligible_projection_work(capacity_revision) {
         return;
     }
     let (runtime_context, scene_generation) =
@@ -989,18 +1265,27 @@ pub fn project_domain_islands(
         };
     let started = web_time::Instant::now();
     let mut projected = 0usize;
-    let mut candidate_entities: Vec<_> = candidates.projection.drain().collect();
-    candidate_entities.sort_unstable();
+    let mut live_snapshots = 0usize;
+    const MAX_LIVE_DOMAIN_FACT_SNAPSHOTS_PER_UPDATE: usize = 1;
+    let candidate_entities = candidates.take_eligible_projection(capacity_revision);
     let candidate_set: HashSet<_> = candidate_entities.iter().copied().collect();
-    let mut telemetry_indexes = HashMap::new();
     // Invalidate only in-flight synthesis for roots whose source view changed.
     // Unrelated network tasks remain valid and continue without restarting.
-    pending
-        .tasks
-        .retain(|task| !candidate_set.contains(&task.entity));
+    let mut cancelled_work = Vec::new();
+    pending.tasks.retain(|task| {
+        let keep = !candidate_set.contains(&task.entity);
+        if !keep {
+            if let Some(work_key) = task.work_key {
+                cancelled_work.push(work_key);
+            }
+        }
+        keep
+    });
+    for work_key in cancelled_work {
+        admission.cancel_queued(work_key);
+    }
     for entity in candidate_entities {
-        let Ok((entity, prim, previous, installed_model, instance_projection)) = prims.get(entity)
-        else {
+        let Ok((entity, prim, instance_projection)) = prims.get(entity) else {
             continue;
         };
         if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
@@ -1037,8 +1322,18 @@ pub fn project_domain_islands(
         let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        let (reader, stage_generation) =
+        let (canonical_reader, stage_generation) =
             canonical.reader_for_entity(id, stage_asset, instance_projection);
+        let prepared_network = instance_projection.is_none()
+            && class_users
+                .paths_by_root
+                .get(&entity)
+                .is_some_and(|paths| paths.stage_generation == 0);
+        let reader: &dyn ComposedReader = if prepared_network {
+            stage_asset.projection_plan.as_ref()
+        } else {
+            &canonical_reader
+        };
         let Ok(root_path) = SdfPath::new(&prim.path) else {
             continue;
         };
@@ -1061,17 +1356,24 @@ pub fn project_domain_islands(
                         .projection_plan
                         .clone()
                 });
-            let plan_view: &dyn ComposedReader = &reader;
-            if !is_runtime_domain_network_root(plan_view, &root_path) {
+            if !is_runtime_domain_network_root(reader, &root_path) {
                 continue;
             }
             let Some((requested, synthesizer)) =
-                resolve_domain_synthesizer(plan_view, &root_path, &prim.path, &synthesis_owner.0)
+                resolve_domain_synthesizer(reader, &root_path, &prim.path, &synthesis_owner.0)
             else {
                 continue;
             };
             let model_name = network_model_name(&prim.path, instance_id);
-            queue_domain_projection(
+            let telemetry_slot = telemetry_indexes.prepared_worker_slot(
+                AuthoredTelemetryScope::PreparedPlan {
+                    asset: id,
+                    identity: Arc::as_ptr(&plan) as usize,
+                },
+                entity,
+            );
+            if let Err(error) = queue_domain_projection(
+                &mut admission,
                 &mut pending,
                 entity,
                 id,
@@ -1083,16 +1385,78 @@ pub fn project_domain_islands(
                 synthesizer,
                 plan,
                 instance_projection.is_some(),
-                classes.clone(),
+                &classes,
+                class_users.assets_by_root.get(&entity),
+                Some(telemetry_slot),
+                class_users
+                    .paths_by_root
+                    .get(&entity)
+                    .map(|paths| paths.member_paths.clone()),
                 runtime_context,
-            );
+            ) {
+                bevy::log::warn!(
+                    "[domain-projection] background admission deferred `{}`: {error:?}",
+                    prim.path
+                );
+                candidates.defer_projection_for_capacity(entity, capacity_revision);
+            }
+            continue;
+        }
+        if prepared_network {
+            // The root and membership facts still match the immutable plan
+            // produced by the USD loader. Unrelated live-stage edits do not
+            // force this network's graph extraction back onto the UI thread.
+            if pending.tasks.iter().any(|task| task.entity == entity) {
+                continue;
+            }
+            let plan = stage_asset.projection_plan.clone();
+            if !is_runtime_domain_network_root(plan.as_ref(), &root_path) {
+                continue;
+            }
+            let Some((requested, synthesizer)) = resolve_domain_synthesizer(
+                plan.as_ref(),
+                &root_path,
+                &prim.path,
+                &synthesis_owner.0,
+            ) else {
+                continue;
+            };
+            let model_name = network_model_name(&prim.path, instance_id);
+            if let Err(error) = queue_domain_projection(
+                &mut admission,
+                &mut pending,
+                entity,
+                id,
+                stage_generation,
+                scene_generation,
+                &root_path,
+                model_name,
+                requested,
+                synthesizer,
+                plan,
+                false,
+                &classes,
+                class_users.assets_by_root.get(&entity),
+                None,
+                class_users
+                    .paths_by_root
+                    .get(&entity)
+                    .map(|paths| paths.member_paths.clone()),
+                runtime_context,
+            ) {
+                bevy::log::warn!(
+                    "[domain-projection] background admission deferred `{}`: {error:?}",
+                    prim.path
+                );
+                candidates.defer_projection_for_capacity(entity, capacity_revision);
+            }
             continue;
         }
         // Domain projection owns only prims with the standard component
         // collection.  Keep this structural gate ahead of synthesizer
         // selection: deriving ownership for an ordinary prim would walk its
         // collection metadata even though it cannot be a network root.
-        if !is_runtime_domain_network_root(&reader, &root_path) {
+        if !is_runtime_domain_network_root(reader, &root_path) {
             continue;
         }
         // Domain ownership is derived from the typed member role schemas. A
@@ -1101,46 +1465,56 @@ pub fn project_domain_islands(
         // collections have no exposed selector and are classified from their
         // `LunCoForceActuatorAPI` members.
         let Some((requested, synthesizer)) =
-            resolve_domain_synthesizer(&reader, &root_path, &prim.path, &synthesis_owner.0)
+            resolve_domain_synthesizer(reader, &root_path, &prim.path, &synthesis_owner.0)
         else {
             continue;
         };
+        if live_snapshots >= MAX_LIVE_DOMAIN_FACT_SNAPSHOTS_PER_UPDATE {
+            // A live canonical reader is !Send. Keep its required typed-fact
+            // extraction to one network per frame so a bulk edit cannot make
+            // independent reads accumulate into one UI-thread stall.
+            candidates.queue_projection(entity);
+            continue;
+        }
         let model_name = network_model_name(&prim.path, instance_id);
-        let synthesized = {
-            let _span = bevy::log::info_span!("domain_synthesizer_live").entered();
-            synthesizer.synthesize(
-                &reader,
+        let work = {
+            let _span = bevy::log::info_span!("domain_synthesis_input_snapshot").entered();
+            Arc::clone(&synthesizer).prepare_synthesis(
+                reader,
                 &root_path,
                 &model_name,
                 &SynthContext {
                     classes: &classes,
+                    member_paths: class_users
+                        .paths_by_root
+                        .get(&entity)
+                        .map(|paths| paths.member_paths.as_slice()),
                     runtime_context,
                 },
             )
         };
-        let committed = {
-            let _span = bevy::log::info_span!("domain_projection_commit").entered();
-            commit_domain_projection(
-                &mut commands,
-                entity,
-                prim,
-                previous,
-                installed_model,
-                &root_path,
-                &reader,
-                &classes,
-                &requested,
-                &model_name,
-                synthesized,
-                &mut telemetry_indexes,
-                AuthoredTelemetryScope::Canonical {
-                    asset: id,
-                    generation: stage_generation,
-                },
-                &mut notices,
-            )
-        };
-        if committed {
+        live_snapshots += 1;
+        let task_plan = stage_asset.projection_plan.clone();
+        if let Err(error) = queue_domain_projection_work(
+            &mut admission,
+            &mut pending,
+            entity,
+            id,
+            stage_generation,
+            scene_generation,
+            &root_path,
+            model_name,
+            requested,
+            task_plan,
+            false,
+            move || work.run(),
+        ) {
+            bevy::log::warn!(
+                "[domain-projection] background admission deferred `{}`: {error:?}",
+                prim.path
+            );
+            candidates.defer_projection_for_capacity(entity, capacity_revision);
+        } else {
             projected += 1;
         }
         continue;
@@ -1153,8 +1527,8 @@ pub fn project_domain_islands(
     }
 }
 
-/// Publish completed startup synthesis tasks without making the UI schedule
-/// wait for Rhai, network extraction, or generated-source validation.
+/// Publish completed domain synthesis in request order and bound live-world
+/// result application to one network per Update.
 pub fn poll_domain_projection_tasks(
     mut commands: Commands,
     preview: (
@@ -1170,6 +1544,10 @@ pub fn poll_domain_projection_tasks(
     )>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
+    class_users: Res<DomainClassUsers>,
+    mut candidates: ResMut<PendingDomainProjectionCandidates>,
+    mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
+    mut telemetry_indexes: ResMut<AuthoredTelemetryIndexes>,
     classes: Res<MemberClasses>,
     scene_transitions: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     modelica_channels: Option<Res<ModelicaChannels>>,
@@ -1182,31 +1560,53 @@ pub fn poll_domain_projection_tasks(
         .as_deref()
         .and_then(lunco_core::SceneTransitionCoordinator::lifecycle_generation);
     let Some(current_scene_generation) = current_scene_generation else {
+        for task in &pending.tasks {
+            if let Some(work_key) = task.work_key {
+                admission.cancel_queued(work_key);
+            }
+        }
         pending.tasks.clear();
         return;
     };
-    pending
-        .tasks
-        .retain(|task| task.scene_generation == current_scene_generation);
-    let mut telemetry_indexes = HashMap::new();
-    let mut index = 0;
-    while index < pending.tasks.len() {
-        // A task may finish after its entity enters a presentation-only lease.
-        // Cancel before polling so it cannot publish a runtime participant.
-        if lunco_usd_bevy_scene::is_preview_only(
-            pending.tasks[index].entity,
-            &preview.0,
-            &preview.1,
-        ) {
-            pending.tasks.swap_remove(index);
-            continue;
+    let mut cancelled_work = Vec::new();
+    pending.tasks.retain(|task| {
+        let keep = task.scene_generation == current_scene_generation
+            && !lunco_usd_bevy_scene::is_preview_only(task.entity, &preview.0, &preview.1);
+        if !keep {
+            if let Some(work_key) = task.work_key {
+                cancelled_work.push(work_key);
+            }
         }
-        let ready = block_on(future::poll_once(&mut pending.tasks[index].task));
-        let Some(synthesized) = ready else {
-            index += 1;
-            continue;
-        };
-        let task = pending.tasks.swap_remove(index);
+        keep
+    });
+    for work_key in cancelled_work {
+        admission.cancel_queued(work_key);
+    }
+
+    // Worker completion is independent of publication order. Collect every
+    // finished slot, then commit only the oldest request so completion timing
+    // cannot select the order of authoritative Modelica participants.
+    for task in &mut pending.tasks {
+        if task.completed.is_none() {
+            task.completed = task
+                .completion
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+        }
+    }
+    const MAX_DOMAIN_PROJECTION_COMMITS_PER_UPDATE: usize = 1;
+    let mut commits = 0;
+    while commits < MAX_DOMAIN_PROJECTION_COMMITS_PER_UPDATE {
+        if pending
+            .tasks
+            .front()
+            .is_none_or(|task| task.completed.is_none())
+        {
+            break;
+        }
+        let mut task = pending.tasks.pop_front().expect("front task was checked");
+        let synthesized = task.completed.take().expect("front result was checked");
         let Ok((prim, previous, installed_model, instance_projection)) = prims.get(task.entity)
         else {
             continue;
@@ -1214,7 +1614,7 @@ pub fn poll_domain_projection_tasks(
         if prim.stage_handle.id() != task.stage_id {
             continue;
         }
-        let Some(_stage_asset) = stages.get(&prim.stage_handle) else {
+        let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
         if task.instance_plan {
@@ -1225,12 +1625,27 @@ pub fn poll_domain_projection_tasks(
                 continue;
             }
         } else if canonical.generation_for(task.stage_id) != task.stage_generation {
-            continue;
+            let still_matches_prepared_scene =
+                Arc::ptr_eq(&task.plan, &stage_asset.projection_plan)
+                    && class_users
+                        .paths_by_root
+                        .get(&task.entity)
+                        .is_some_and(|paths| paths.stage_generation == 0);
+            if !still_matches_prepared_scene {
+                candidates.queue_projection(task.entity);
+                continue;
+            }
         }
         let Ok(root_path) = SdfPath::new(&task.root_path) else {
             continue;
         };
-        let view: &dyn ComposedReader = task.plan.as_ref();
+        let (canonical_reader, commit_generation) =
+            canonical.reader_for_entity(task.stage_id, stage_asset, instance_projection);
+        let view: &dyn ComposedReader = if task.instance_plan {
+            task.plan.as_ref()
+        } else {
+            &canonical_reader
+        };
         commit_domain_projection(
             &mut commands,
             task.entity,
@@ -1245,15 +1660,19 @@ pub fn poll_domain_projection_tasks(
             synthesized,
             &mut telemetry_indexes,
             if task.instance_plan {
-                AuthoredTelemetryScope::PreparedPlan(Arc::as_ptr(&task.plan) as usize)
+                AuthoredTelemetryScope::PreparedPlan {
+                    asset: task.stage_id,
+                    identity: Arc::as_ptr(&task.plan) as usize,
+                }
             } else {
                 AuthoredTelemetryScope::Canonical {
                     asset: task.stage_id,
-                    generation: task.stage_generation,
+                    generation: commit_generation,
                 }
             },
             &mut notices,
         );
+        commits += 1;
     }
 }
 
@@ -1794,6 +2213,42 @@ impl MemberClasses {
         self.metadata.get(asset)
     }
 
+    /// Copy only the immutable class facts a generated network reads on its
+    /// worker. `MemberClasses` also owns asset handles and pending state, which
+    /// must stay on the main thread and are irrelevant after admission.
+    fn synthesis_snapshot(&self, assets: Option<&HashSet<String>>) -> Self {
+        let mut snapshot = Self::default();
+        let Some(assets) = assets else {
+            return snapshot;
+        };
+        for asset in assets {
+            self.copy_synthesis_asset(&mut snapshot, asset);
+        }
+        snapshot
+    }
+
+    fn synthesis_snapshot_for_network(&self, network: &DomainNetwork) -> Self {
+        let mut snapshot = Self::default();
+        for component in &network.components {
+            self.copy_synthesis_asset(&mut snapshot, &component.source_asset);
+        }
+        snapshot
+    }
+
+    fn copy_synthesis_asset(&self, snapshot: &mut Self, asset: &str) {
+        if let Some(class) = self.known.get(asset) {
+            snapshot.known.insert(asset.to_string(), class.clone());
+        }
+        if let Some(outputs) = self.outputs.get(asset) {
+            snapshot.outputs.insert(asset.to_string(), outputs.clone());
+        }
+        if let Some(metadata) = self.metadata.get(asset) {
+            snapshot
+                .metadata
+                .insert(asset.to_string(), metadata.clone());
+        }
+    }
+
     /// Resolve the class to instantiate for `asset`. `Ok(None)` means the source
     /// is still loading; `Err` is a terminal source error.
     pub fn resolve(&self, asset: &str) -> Result<Option<String>, String> {
@@ -1827,6 +2282,7 @@ pub fn resolve_member_classes(
     mut classes: ResMut<MemberClasses>,
     mut class_users: ResMut<DomainClassUsers>,
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
+    mut telemetry_indexes: Option<ResMut<AuthoredTelemetryIndexes>>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     mut scene_changes: MessageReader<lunco_usd_bevy_scene::UsdSceneChangeBatch>,
@@ -1895,6 +2351,16 @@ pub fn resolve_member_classes(
     // A replaced/loaded USD asset invalidates only the indexed roots on its
     // stage. New roots are independently queued by their UsdPrimPath observer.
     for event in stage_asset_events.read() {
+        let stage_id = match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::Removed { id }
+            | AssetEvent::Unused { id }
+            | AssetEvent::LoadedWithDependencies { id } => *id,
+        };
+        if let Some(indexes) = telemetry_indexes.as_deref_mut() {
+            indexes.retire_asset(stage_id);
+        }
         match event {
             AssetEvent::Added { id }
             | AssetEvent::Modified { id }
@@ -1963,7 +2429,7 @@ pub fn resolve_member_classes(
                 candidates.wait_for_stage(id, entity);
                 continue;
             };
-            let (reader, _generation) =
+            let (reader, stage_generation) =
                 canonical.reader_for_entity(id, stage_asset, instance_projection);
             let view: &dyn ComposedReader = &reader;
             let Ok(root) = SdfPath::new(&prim.path) else {
@@ -1978,9 +2444,8 @@ pub fn resolve_member_classes(
                 continue;
             };
             let mut source_assets = HashSet::new();
-            let mut member_paths = HashSet::new();
+            let member_paths = members.iter().map(ToString::to_string).collect();
             for member in members {
-                member_paths.insert(member.to_string());
                 if !view.has_api_schema(&member, "LunCoProgramAPI") {
                     continue;
                 }
@@ -2007,10 +2472,11 @@ pub fn resolve_member_classes(
             let canonical_paths = instance_projection.is_none().then(|| DomainRootPaths {
                 stage_id: id,
                 root_path: prim.path.clone(),
+                stage_generation,
                 member_paths,
             });
             class_users.replace_root_facts(entity, source_assets, canonical_paths);
-            candidates.projection.insert(entity);
+            candidates.queue_projection(entity);
         }
     }
 
@@ -2086,7 +2552,7 @@ pub fn resolve_member_classes(
             }
         }
         if let Some(roots) = class_users.roots_by_asset.get(&asset) {
-            candidates.projection.extend(roots.iter().copied());
+            candidates.extend_projection(roots.iter().copied());
         }
     }
     // A network's declared member classes are a single synthesis input. Keep
@@ -2159,7 +2625,8 @@ mod tests {
             Some(DomainRootPaths {
                 stage_id: stage,
                 root_path: "/World/NetworkA".into(),
-                member_paths: HashSet::from(["/Library/Motor".into()]),
+                stage_generation: 0,
+                member_paths: vec!["/Library/Motor".into()],
             }),
         );
         users.replace_root_facts(
@@ -2168,7 +2635,8 @@ mod tests {
             Some(DomainRootPaths {
                 stage_id: stage,
                 root_path: "/World/NetworkB".into(),
-                member_paths: HashSet::from(["/Library/Battery".into()]),
+                stage_generation: 0,
+                member_paths: vec!["/Library/Battery".into()],
             }),
         );
         users.replace_root_facts(
@@ -2177,7 +2645,8 @@ mod tests {
             Some(DomainRootPaths {
                 stage_id: other_stage,
                 root_path: "/World/NetworkA".into(),
-                member_paths: HashSet::from(["/Library/Motor".into()]),
+                stage_generation: 0,
+                member_paths: vec!["/Library/Motor".into()],
             }),
         );
 
@@ -2223,7 +2692,8 @@ mod tests {
             Some(DomainRootPaths {
                 stage_id: stage,
                 root_path: "/World/Network".into(),
-                member_paths: HashSet::new(),
+                stage_generation: 0,
+                member_paths: Vec::new(),
             }),
         );
 
@@ -2302,7 +2772,8 @@ mod tests {
             Some(DomainRootPaths {
                 stage_id: AssetId::default(),
                 root_path: "/World/Network".into(),
-                member_paths: HashSet::from(["/World/Network/Motor".into()]),
+                stage_generation: 0,
+                member_paths: vec!["/World/Network/Motor".into()],
             }),
         );
         let mut candidates = PendingDomainProjectionCandidates::default();
@@ -2351,6 +2822,7 @@ mod tests {
             waiting_for_stage: HashMap::new(),
             initial_discovery: false,
             observed_stage_generations: HashMap::new(),
+            capacity_blocked: HashMap::new(),
         })
         .add_observer(queue_added_domain_prim)
         .add_observer(queue_added_domain_identity)
@@ -2678,6 +3150,7 @@ mod tests {
                 "Rig_System",
                 &SynthContext {
                     classes: &classes,
+                    member_paths: None,
                     runtime_context: synthesis_test_context(),
                 },
             )

@@ -678,10 +678,15 @@ impl Plugin for SceneEditUiPlugin {
         >(app);
         app.add_systems(Startup, asset_visibility::register_settings_submenu);
         app.init_resource::<entity_list::EntityTreeView>();
+        app.init_resource::<entity_list::EntityTreeBuildState>();
         app.add_observer(entity_list::on_twin_closed);
+        app.add_systems(
+            Update,
+            entity_list::poll_entity_tree_view_build.run_if(entity_list::entity_tree_task_pending),
+        );
         app.add_view_model(
             entity_list::populate_entity_tree_view,
-            entity_list::scene_topology_changed,
+            entity_list::scene_topology_changed.or_else(entity_list::entity_tree_build_due),
         );
 
         // The universal port table is a live diagnostic/control surface. Its

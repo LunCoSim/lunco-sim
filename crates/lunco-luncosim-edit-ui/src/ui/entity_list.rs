@@ -17,6 +17,7 @@
 //! before. Nothing is scanned, walked, or sorted while painting.
 
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 use bevy_egui::egui;
 use lunco_camera_core::camera_display_labels;
 use lunco_render::SceneCamera;
@@ -279,6 +280,38 @@ struct GridScopeState {
     current_grid: Option<Entity>,
 }
 
+struct NamedTreeCandidate {
+    entity: Entity,
+    label: String,
+    stable_key: String,
+    camera_identity: Option<String>,
+}
+
+struct EntityTreeBuildInput {
+    show_system: bool,
+    scope_state: GridScopeState,
+    scope_error: Option<String>,
+    child_of: HashMap<Entity, Entity>,
+    grids: HashSet<Entity>,
+    named_candidates: Vec<NamedTreeCandidate>,
+    selectable: HashSet<Entity>,
+    has_mesh: HashSet<Entity>,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct EntityTreeBuildState {
+    revision: u64,
+    dirty: bool,
+    task: Option<Task<(u64, EntityTreeView)>>,
+}
+
+impl EntityTreeBuildState {
+    fn invalidate(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+        self.dirty = true;
+    }
+}
+
 fn grid_scope_state(
     workspace: Option<&WorkspaceResource>,
     current_grid: Option<Entity>,
@@ -421,7 +454,7 @@ fn compute_shown(
 /// actually changes. This is the entire cost the old per-frame `render` paid; it
 /// now runs ~once per topology change instead of every frame.
 pub(crate) fn populate_entity_tree_view(
-    mut view: ResMut<EntityTreeView>,
+    mut build: ResMut<EntityTreeBuildState>,
     settings: Res<EntityListSettings>,
     workspace: Option<Res<WorkspaceResource>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
@@ -439,67 +472,129 @@ pub(crate) fn populate_entity_tree_view(
     selectable_q: Query<Entity, With<lunco_core::SelectableRoot>>,
     mesh_q: Query<Entity, With<Mesh3d>>,
 ) {
-    // ── Harvest (read-only).
-    // System-owned churn (streamed LOD tiles, globe tiles, scatter) is dropped
-    // right here unless the user opted in, so nothing downstream — parenting,
-    // visibility, sort — even sees it. Their children (none today) would simply
-    // re-parent to the nearest surviving named ancestor.
-    let system: HashSet<Entity> = if settings.show_system {
-        HashSet::new()
-    } else {
-        system_q.iter().collect()
+    if build.task.is_some() {
+        build.invalidate();
+        return;
+    }
+    build.invalidate();
+
+    let input = {
+        let _span = bevy::log::info_span!("entity_tree_view_snapshot").entered();
+        // System-owned churn is excluded before the immutable snapshot leaves the
+        // ECS thread. The hierarchy derivation below uses only owned values.
+        let system: HashSet<Entity> = if settings.show_system {
+            HashSet::new()
+        } else {
+            system_q.iter().collect()
+        };
+        let grids: HashSet<Entity> = grid_q.iter().collect();
+        let (scope_state, scope_error) = grid_scope_state(
+            workspace.as_deref(),
+            active_frame
+                .as_ref()
+                .map(|frame| frame.0)
+                .filter(|grid| grids.contains(grid)),
+            active_frame.is_some(),
+        );
+        let child_of: HashMap<Entity, Entity> = child_q
+            .iter()
+            .map(|(entity, child)| (entity, child.parent()))
+            .collect();
+        let named_candidates: Vec<_> = named_q
+            .iter()
+            .filter_map(|(entity, name, callsign, catalog_id, path, is_camera)| {
+                if system.contains(&entity) {
+                    return None;
+                }
+                Some(NamedTreeCandidate {
+                    entity,
+                    label: lunco_core::entity_display_name(Some(name), callsign, catalog_id),
+                    stable_key: stable_key(name, path),
+                    camera_identity: is_camera.then(|| {
+                        path.map(|path| path.path.clone())
+                            .unwrap_or_else(|| name.as_str().to_string())
+                    }),
+                })
+            })
+            .collect();
+        EntityTreeBuildInput {
+            show_system: settings.show_system,
+            scope_state,
+            scope_error,
+            child_of,
+            grids,
+            named_candidates,
+            selectable: selectable_q.iter().collect(),
+            has_mesh: mesh_q.iter().collect(),
+        }
     };
-    // The active physics frame is the authoritative meaning of "current grid".
-    // The tree never infers it from render transforms or from whichever Grid
-    // happens to be first in query order.
-    let grids: HashSet<Entity> = grid_q.iter().collect();
-    let (scope_state, scope_error) = grid_scope_state(
-        workspace.as_deref(),
-        active_frame
-            .as_ref()
-            .map(|frame| frame.0)
-            .filter(|grid| grids.contains(grid)),
-        active_frame.is_some(),
-    );
-    let child_of: HashMap<Entity, Entity> = child_q.iter().map(|(e, c)| (e, c.parent())).collect();
+
+    let revision = build.revision;
+    build.dirty = false;
+    let span = bevy::log::info_span!("entity_tree_view_derive_worker");
+    build.task = Some(AsyncComputeTaskPool::get().spawn(async move {
+        let _span = span.enter();
+        (revision, derive_entity_tree_view(input))
+    }));
+}
+
+pub(crate) fn entity_tree_task_pending(build: Res<EntityTreeBuildState>) -> bool {
+    build.task.is_some()
+}
+
+pub(crate) fn poll_entity_tree_view_build(
+    mut build: ResMut<EntityTreeBuildState>,
+    mut view: ResMut<EntityTreeView>,
+) {
+    let completed = build
+        .task
+        .as_mut()
+        .and_then(|task| future::block_on(future::poll_once(task)));
+    let Some((revision, result)) = completed else {
+        return;
+    };
+    build.task = None;
+    if revision == build.revision {
+        *view = result;
+        build.dirty = false;
+    } else {
+        build.dirty = true;
+    }
+}
+
+fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
+    let EntityTreeBuildInput {
+        show_system,
+        scope_state,
+        scope_error,
+        child_of,
+        grids,
+        named_candidates,
+        selectable,
+        has_mesh,
+    } = input;
     let mut scope_entities = HashSet::new();
     let mut scope_ancestors = HashSet::new();
-    let named: Vec<(Entity, String, String)> = named_q
-        .iter()
-        .filter_map(|(e, name, callsign, catalog_id, path, _)| {
-            if system.contains(&e) {
-                return None;
-            }
-            scope_entities.insert(e);
-            collect_scope_ancestors(e, &child_of, &mut scope_ancestors);
-            if scope_error.is_some() || !in_scope(e, scope_state, &child_of, &grids) {
-                return None;
-            }
-            Some((
-                e,
-                lunco_core::entity_display_name(Some(name), callsign, catalog_id),
-                stable_key(name, path),
-            ))
-        })
-        .collect();
-    let named_set: HashSet<Entity> = named.iter().map(|(e, _, _)| *e).collect();
-
-    let camera_identities: Vec<(Entity, String)> = named_q
-        .iter()
-        .filter(|(entity, _, _, _, _path, is_camera)| {
-            *is_camera
-                && !system.contains(entity)
-                && scope_error.is_none()
-                && in_scope(*entity, scope_state, &child_of, &grids)
-        })
-        .map(|(entity, name, _, _, path, _)| {
-            (
-                entity,
-                path.map(|path| path.path.clone())
-                    .unwrap_or_else(|| name.as_str().to_string()),
-            )
-        })
-        .collect();
+    let mut named: Vec<(Entity, String, String)> = Vec::with_capacity(named_candidates.len());
+    let mut camera_identities = Vec::new();
+    for candidate in named_candidates {
+        let NamedTreeCandidate {
+            entity,
+            label,
+            stable_key,
+            camera_identity,
+        } = candidate;
+        scope_entities.insert(entity);
+        collect_scope_ancestors(entity, &child_of, &mut scope_ancestors);
+        if scope_error.is_some() || !in_scope(entity, scope_state, &child_of, &grids) {
+            continue;
+        }
+        if let Some(identity) = camera_identity {
+            camera_identities.push((entity, identity));
+        }
+        named.push((entity, label, stable_key));
+    }
+    let named_set: HashSet<Entity> = named.iter().map(|(entity, _, _)| *entity).collect();
     let camera_names: Vec<String> = camera_identities
         .iter()
         .map(|(_, identity)| identity.clone())
@@ -513,49 +608,34 @@ pub(crate) fn populate_entity_tree_view(
         .collect();
     let camera_entities: HashSet<Entity> = camera_labels.keys().copied().collect();
 
-    // "Interesting" = something a user would edit: a selectable object or any
-    // mesh-bearing part. Everything else (cosim wires, ports, empty transform
-    // wrappers) is plumbing — hidden unless it's an ancestor of an interesting
-    // entity. (Cosim model blocks ARE selectable, so they stay.)
-    let selectable: HashSet<Entity> = selectable_q.iter().collect();
-    let has_mesh: HashSet<Entity> = mesh_q.iter().collect();
-
-    // NOTE: there is deliberately no separate "shader materials" group any more.
-    // Every `ShaderLook` entity is already a mesh in the tree below, so the pinned
-    // group was the same objects listed twice — and since every streamed terrain
-    // tile carries a `ShaderLook`, it was mostly LOD churn. Select the object in
-    // the tree; its shader params are in the Inspector as before.
-    //
-    // Build the display tree: each named entity's parent is its nearest named
-    // ancestor (unnamed wrappers collapse away), giving rover→wheel nesting
-    // instead of a flat alphabetical dump.
-    let display_parent = |e: Entity| -> Option<Entity> {
-        let mut cur = e;
+    let display_parent = |entity: Entity| -> Option<Entity> {
+        let mut current = entity;
         for _ in 0..64 {
-            let p = *child_of.get(&cur)?;
-            if named_set.contains(&p) {
-                return Some(p);
+            let parent = *child_of.get(&current)?;
+            if named_set.contains(&parent) {
+                return Some(parent);
             }
-            cur = p;
+            current = parent;
         }
         None
     };
     let mut kids: HashMap<Entity, Vec<Entity>> = HashMap::new();
-    let mut roots: Vec<Entity> = Vec::new();
-    for (e, _, _) in &named {
-        match display_parent(*e) {
-            Some(p) => kids.entry(p).or_default().push(*e),
-            None => roots.push(*e),
+    let mut roots = Vec::new();
+    for (entity, _, _) in &named {
+        match display_parent(*entity) {
+            Some(parent) => kids.entry(parent).or_default().push(*entity),
+            None => roots.push(*entity),
         }
     }
 
-    // Visibility: an entity shows if it or any descendant is interesting.
-    let interesting = |e: Entity| {
-        selectable.contains(&e) || has_mesh.contains(&e) || camera_entities.contains(&e)
+    let interesting = |entity| {
+        selectable.contains(&entity)
+            || has_mesh.contains(&entity)
+            || camera_entities.contains(&entity)
     };
-    let mut shown: HashMap<Entity, bool> = HashMap::new();
-    for (e, _, _) in &named {
-        compute_shown(*e, &kids, &interesting, &mut shown);
+    let mut shown = HashMap::new();
+    for (entity, _, _) in &named {
+        compute_shown(*entity, &kids, &interesting, &mut shown);
     }
 
     let base_labels: HashMap<Entity, String> = named
@@ -569,35 +649,30 @@ pub(crate) fn populate_entity_tree_view(
             labels.insert(*entity, label.clone());
         }
     }
-
-    // Prune children to shown-only + stable alphabetical order by leaf label, at
-    // every level; drop empty entries so the panel treats them as leaves.
-    let by_leaf = |a: &Entity, b: &Entity| {
-        let la = labels.get(a).map(String::as_str).unwrap_or("");
-        let lb = labels.get(b).map(String::as_str).unwrap_or("");
-        la.cmp(lb)
+    let by_leaf = |left: &Entity, right: &Entity| {
+        let left_label = labels.get(left).map(String::as_str).unwrap_or("");
+        let right_label = labels.get(right).map(String::as_str).unwrap_or("");
+        left_label.cmp(right_label)
     };
     let mut pruned: HashMap<Entity, Vec<Entity>> = HashMap::new();
-    for (parent, cs) in &kids {
-        let mut v: Vec<Entity> = cs
+    for (parent, children) in &kids {
+        let mut visible_children: Vec<Entity> = children
             .iter()
             .copied()
-            .filter(|c| *shown.get(c).unwrap_or(&false))
+            .filter(|child| *shown.get(child).unwrap_or(&false))
             .collect();
-        if v.is_empty() {
+        if visible_children.is_empty() {
             continue;
         }
-        v.sort_by(by_leaf);
-        pruned.insert(*parent, v);
+        visible_children.sort_by(by_leaf);
+        pruned.insert(*parent, visible_children);
     }
-    roots.retain(|e| *shown.get(e).unwrap_or(&false));
+    roots.retain(|entity| *shown.get(entity).unwrap_or(&false));
     roots.sort_by(by_leaf);
 
+    let mut view = EntityTreeView::default();
     view.roots = roots;
     view.kids = pruned;
-    // The gate below uses this as the exact visible-node set.  Keeping labels
-    // only for nodes paint can reach prevents unnamed/internal or visibility-
-    // pruned runtime churn from invalidating the tree.
     view.labels = labels
         .into_iter()
         .filter(|(entity, _)| shown.get(entity).copied().unwrap_or(false))
@@ -626,7 +701,7 @@ pub(crate) fn populate_entity_tree_view(
                 .map(|parent| (*entity, parent))
         })
         .collect();
-    view.show_system = settings.show_system;
+    view.show_system = show_system;
     view.grid_scope = scope_state.scope;
     view.active_twin = scope_state.active_twin;
     view.current_grid = scope_state.current_grid;
@@ -634,6 +709,7 @@ pub(crate) fn populate_entity_tree_view(
     view.scope_entities = scope_entities;
     view.scope_ancestors = scope_ancestors;
     view.built = true;
+    view
 }
 
 /// Run condition for [`populate_entity_tree_view`]: rebuild only when the scene
@@ -648,6 +724,10 @@ pub(crate) fn populate_entity_tree_view(
 /// terrain streaming and render extraction create both continuously, and neither
 /// can change the visible tree by itself.
 /// Tracked automatically by `add_view_model` — see [`lunco_core_runtime::gate::tracked`].
+pub(crate) fn entity_tree_build_due(build: Res<EntityTreeBuildState>) -> bool {
+    build.dirty && build.task.is_none()
+}
+
 pub(crate) fn scene_topology_changed(
     mut first: Local<bool>,
     settings: Res<EntityListSettings>,
@@ -771,22 +851,27 @@ pub(crate) fn scene_topology_changed(
     let unnamed_parent_changed = changed_unnamed_parents
         .iter()
         .any(|entity| view.scope_ancestors.contains(&entity));
-    let run = !*first
+    let invalidated = !*first
         || view.show_system != settings.show_system
         || scope_changed
         || named_changed
         || unnamed_parent_changed
         || removed;
     *first = true;
-    run
+    invalidated
 }
 
 /// Retire the derived tree as soon as its active Twin closes. The next Twin's
 /// scene repopulates it from its own manifest and grid frame; no old scope or
 /// rows remain visible during the transition.
-pub(crate) fn on_twin_closed(trigger: On<TwinClosed>, mut view: ResMut<EntityTreeView>) {
+pub(crate) fn on_twin_closed(
+    trigger: On<TwinClosed>,
+    mut view: ResMut<EntityTreeView>,
+    mut build: ResMut<EntityTreeBuildState>,
+) {
     if trigger.event().was_active {
         *view = EntityTreeView::default();
+        build.invalidate();
     }
 }
 

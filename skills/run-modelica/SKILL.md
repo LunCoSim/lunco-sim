@@ -141,8 +141,10 @@ synchronous discovery. Synchronous compiler helpers remain for CLI and batch
 callers.
 The policy list does not replace composed USD facts for member-class
 discovery. The worker's prepared-solve cache keys library state from the
-revisions that `ModelicaCompiler` records while admitting source roots; it does
-not scan the complete Modelica tree during the first live stepper build.
+revisions that `ModelicaCompiler` records while admitting source roots. Its
+source key is based on primary and sibling source text, not per-session sibling
+document IDs or worker-local library-generation counters. It does not scan the
+complete Modelica tree during the first live stepper build.
 
 On native runs, one dedicated Rumoca actor owns the mutable session and shared
 DAE cache. Source-root installation, `Compile`, `Reset`, parameter updates, and
@@ -159,7 +161,11 @@ On native desktop startup, cache-miss solve-IR lowering runs in the worker's
 bounded preparation pool because the DAE input and solve options are immutable.
 The worker alone commits the resulting solve model and constructs the live
 stepper; `Step`, `Reset`, parameter updates, and source-root changes remain
-ordered behind that commit. Readiness is still the completion barrier, so
+ordered behind that commit. Persistent solve-IR entries are keyed by structural
+source identity, the content-sensitive admitted-library revision, solver, and
+parameter overrides. A source-root change clears worker-local prepared models
+while retaining disk entries for future matching revisions. Readiness is still
+the completion barrier, so
 physics must not be started before `/api/ready` reports `ready=true`,
 `world_hold=false`, and `pending_count=0`.
 
