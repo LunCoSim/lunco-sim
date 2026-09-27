@@ -439,9 +439,11 @@ typed queues before that is safe.
   runtime does not yet retain one session-wide snapshot joining active roots
   to complete source closures; baseline capture must not infer roots from the
   global script registry.
-- The headless host has compile-time build identity constants in
-  `lunco-luncosim-core`; the UI-only `BuildIdentity` resource is not a required
-  baseline provider.
+- `lunco-core::BuildIdentity` is shared across hosts. `LunCoSimRuntimePlugin`
+  installs the stamped build constants when the host has not supplied an
+  identity, so headless and GUI baselines can name the software revision.
+  Source closures, solver/runtime snapshots, and the composite collector remain
+  unimplemented.
 
 ## Runtime and repository constraints
 

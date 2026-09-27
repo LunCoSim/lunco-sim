@@ -138,11 +138,17 @@ fn main() {
     // bundle the sandbox embeds as its Design tab.
     #[cfg(feature = "ui")]
     if !headless {
-        app.insert_resource(lunco_workbench_core::BuildIdentity::new(
-            lunco_modelica_core::PRODUCT_VERSION,
-            lunco_modelica_core::GIT_SHA,
-            lunco_modelica_core::REPOSITORY_URL,
-        ));
+        if app
+            .world()
+            .get_resource::<lunco_core::BuildIdentity>()
+            .is_none()
+        {
+            app.insert_resource(lunco_core::BuildIdentity::new(
+                lunco_modelica_core::PRODUCT_VERSION,
+                lunco_modelica_core::GIT_SHA,
+                lunco_modelica_core::REPOSITORY_URL,
+            ));
+        }
         app.add_plugins(ModelicaWorkbenchPlugin::default());
         // Frame pacing: Continuous focused (vsync paces Update); low-power
         // unfocused. (The 5 Hz "UI vanishes on zoom" spike-train fix.) Native

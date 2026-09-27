@@ -9,7 +9,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Stable ECS engine facts: identity/provenance, typed scene requests, runtime diagnostics/fault contracts, Bevy `RuntimeCycleSet` ordering labels, state markers, and small ECS utilities. Owner-neutral context values live in `lunco-runtime-context`. |
+| **`lunco-core`** | Stable ECS engine facts: identity/provenance, typed scene requests, runtime diagnostics/fault contracts, Bevy `RuntimeCycleSet` ordering labels, stamped `BuildIdentity`, state markers, and small ECS utilities. Owner-neutral context values live in `lunco-runtime-context`. |
 | **`lunco-runtime-context`** | Owner-neutral scope, cycle, route, clock, phase, producer-stamp, and execution-context values shared by the ECS cycle labels and scripting hook ABI without depending on Bevy ECS. |
 | **`lunco-geometry-core`** | Precision-preserving, renderer-independent geometry kernels: finite f64 AABB/OBB relations and convex profile extrusion. Shared by authored geometry tools without depending on ECS or USD mesh evaluators. |
 | **`lunco-core-runtime`** | Bevy runtime owner for core contracts: fixed simulation ticks, rollback/netcode schedule anchors, pacing/barriers, bounded priority admission for immutable async preparation, gate instrumentation, subsystem toggles, recoverable synchronization helpers, and the runtime plugin that installs those mechanisms. |
@@ -275,10 +275,10 @@ Primary entry points and simulation assembly targets.
 | **`lunco-luncosim-presentation`** | — | Application-edge visual bridges: status/environment projection, terrain horizon, USD camera/light composition, capture integration, and scene presentation wiring. |
 | **`lunco-updater`** | — | Native desktop update capability and rendered update surface. It owns Velopack admission and update UI behind the application’s opt-in `updates` feature. |
 | **`lunco-scene-runner`** | — | Production headless runner for authored USD + Rhai scene and Twin verification checks. It owns deterministic stepping, readiness barriers, telemetry verdicts, and exit codes, keeping the GUI composition crate focused on startup and presentation. |
-| **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, build identity, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
+| **`lunco-luncosim-core`** | — | Dependency-light Bevy substrate shared by GUI, server, and scene-test hosts: raw input/state schedules, asset source/type registration, task-pool policy, stamped build constants and startup logging, and log deduplication. Bevy state/input features are explicit here; window-backed input focus belongs to the UI composition. It does not install domain plugins. |
 | **`lunco-luncosim-simulation`** | — | Renderer-independent domain composition: world shell, physics, USD, terrain, celestial, Modelica/cosimulation, mobility, avatar, controller, hardware, telemetry, shared render-quality policy, scene commands, and headless execution. |
 | **`lunco-luncosim-services`** | — | Production application services: startup Twin resolution, API/query registration, networking, journal projection, persisted experiment artifacts, and bounded durable export of completed session-input captures. It is composed by the runtime boundary rather than embedded in the generic core. |
-| **`lunco-luncosim-runtime`** | — | Production application composition: services plus Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
+| **`lunco-luncosim-runtime`** | — | Production application composition: stamped build identity for headless hosts, services plus Rhai plugin/policy projection, `SetRhaiPolicy`, scripting journal consumers, headless builders, and the headless launcher. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends on `lunco-luncosim-runtime` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-rhai-repl`** | — | Terminal adapter for the reflected `RunRhai` command. It reads stdin/files and presents results while delegating evaluation to the running simulator and HTTP to `lunco-api-client`. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
@@ -1059,7 +1059,7 @@ do not make the shell the owner of diagnostics state.
 **`lunco-workbench-help-ui`**
 Rendered Help/About presentation for the Workbench. It owns the help registry's
 egui menu item and version/source view and consumes `BuildIdentity` from
-`lunco-workbench-core`; the core contract remains usable by headless hosts.
+`lunco-core`; LunCoSim host composition stamps it for headless and GUI sessions.
 
 **`lunco-workbench-layout`**
 Renderer-independent workbench layout owner. It materializes perspective
@@ -1345,11 +1345,12 @@ Production headless runner for authored USD + Rhai scene and Twin verification c
 **`lunco-luncosim-core`**
 Dependency-light host substrate shared by GUI, server, and scene-test hosts. It
 owns the headless Bevy plugin group, raw input/state schedules, asset
-source/type registration, task-pool policy, build identity, and log
-deduplication. It opts into only the Bevy state and keyboard/mouse event
-features it uses; window-backed input focus belongs to the UI composition. It
-does not install physics, USD, terrain, Modelica, celestial, avatar, or
-scene-command plugins.
+source/type registration, task-pool policy, stamped build constants and
+startup logging, and log deduplication. The shared `lunco-core::BuildIdentity`
+resource is installed by host composition. It opts into only the Bevy state
+and keyboard/mouse event features it uses; window-backed input focus belongs
+to the UI composition. It does not install physics, USD, terrain, Modelica,
+celestial, avatar, or scene-command plugins.
 
 **`lunco-luncosim-simulation`**
 Renderer-independent domain composition above the host substrate. It owns the

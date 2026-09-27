@@ -831,7 +831,7 @@ pub(crate) fn render_help_menu(
     world: &mut World,
     menus: &WorkbenchMenuRegistry,
 ) {
-    if let Some(identity) = world.get_resource::<lunco_workbench_core::BuildIdentity>() {
+    if let Some(identity) = world.get_resource::<lunco_core::BuildIdentity>() {
         ui.label(format!(
             "{} · {}",
             running_app_name(),
@@ -2957,7 +2957,7 @@ mod tests {
 
     #[test]
     fn build_identity_formats_the_shared_version_label() {
-        let identity = lunco_workbench_core::BuildIdentity::new(
+        let identity = lunco_core::BuildIdentity::new(
             "0.6.0-nightly.37.1",
             "abc12345-dirty",
             "https://github.com/LunCoSim/lunco-sim",

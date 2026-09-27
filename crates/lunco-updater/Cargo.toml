@@ -9,6 +9,7 @@ description = "Native Velopack update surface for the LunCoSim application"
 bevy = { workspace = true }
 bevy_egui = { workspace = true, features = ["render"] }
 lunco-assets-transport = { path = "../lunco-assets-transport" }
+lunco-core = { path = "../lunco-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-theme = { path = "../lunco-theme" }

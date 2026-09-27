@@ -9843,6 +9843,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "lunco-assets-transport",
+ "lunco-core",
  "lunco-settings",
  "lunco-status-core",
  "lunco-theme",

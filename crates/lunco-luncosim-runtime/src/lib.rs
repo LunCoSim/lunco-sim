@@ -37,6 +37,7 @@ impl Default for LunCoSimRuntimePlugin {
 
 impl Plugin for LunCoSimRuntimePlugin {
     fn build(&self, app: &mut App) {
+        install_build_identity(app);
         app.add_plugins(lunco_luncosim_services::LunCoSimServicesPlugin {
             headless: self.headless,
             startup_scene: self.startup_scene.clone(),
@@ -110,6 +111,20 @@ impl Plugin for LunCoSimRuntimePlugin {
                 replay_scenario_journal_timeline,
             ),
         );
+    }
+}
+
+fn install_build_identity(app: &mut App) {
+    if app
+        .world()
+        .get_resource::<lunco_core::BuildIdentity>()
+        .is_none()
+    {
+        app.insert_resource(lunco_core::BuildIdentity::new(
+            lunco_luncosim_core::PRODUCT_VERSION,
+            lunco_luncosim_core::GIT_SHA,
+            lunco_luncosim_core::REPOSITORY_URL,
+        ));
     }
 }
 
@@ -1071,6 +1086,29 @@ mod tests {
 
     fn count_policy_projection(mut runs: ResMut<PolicyProjectionRuns>) {
         runs.0 += 1;
+    }
+
+    #[test]
+    fn runtime_build_identity_stamps_missing_hosts_and_preserves_supplied_identity() {
+        let mut app = App::new();
+        install_build_identity(&mut app);
+        assert_eq!(
+            app.world().resource::<lunco_core::BuildIdentity>(),
+            &lunco_core::BuildIdentity::new(
+                lunco_luncosim_core::PRODUCT_VERSION,
+                lunco_luncosim_core::GIT_SHA,
+                lunco_luncosim_core::REPOSITORY_URL,
+            ),
+        );
+
+        let host_identity =
+            lunco_core::BuildIdentity::new("host-version", "host-revision", "host-repo");
+        app.insert_resource(host_identity.clone());
+        install_build_identity(&mut app);
+        assert_eq!(
+            app.world().resource::<lunco_core::BuildIdentity>(),
+            &host_identity,
+        );
     }
 
     #[test]

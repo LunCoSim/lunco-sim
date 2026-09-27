@@ -253,6 +253,13 @@ rejects missing root bytes or any unresolved dependency. This is an owner
 primitive only: no application baseline collector consumes it yet, and the
 remaining owner snapshots and playback consumer are still required.
 
+`lunco-core::BuildIdentity` is the typed host identity resource. The production
+`LunCoSimRuntimePlugin` supplies the build-stamped version, revision, and
+repository when a host has not supplied its own identity; GUI presentation
+reads the same resource. This establishes the software identity component of a
+baseline, while source closures, solver/runtime snapshots, initial
+authoritative state, storage, and playback remain open.
+
 The SysML owner already retains the exact logical source names and text in
 `SysmlAnalysis::files`; its 64-bit FNV `source_revision` and
 `source_fingerprint` remain analysis/cache facts, not strong persisted content

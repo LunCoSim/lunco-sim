@@ -48,7 +48,7 @@ owner snapshot: canonical logical layer identifiers sorted for stable
 comparison, each paired with its CIDv1 raw/SHA-256 content identity. It fails
 when the root bytes are absent, any dependency is unresolved, or a layer has no
 identifier. The baseline collector is not wired to this owner primitive yet;
-build identity, Rhai/SysML closures, Modelica solver/runtime state, physics
+Rhai/SysML closures, Modelica solver/runtime state, physics
 profile and seeds, committed entity identities, durable baseline storage, and
 playback remain open.
 
@@ -59,6 +59,11 @@ entity compile. Rhai asset handles retain their dependency graph, but there is
 no session-level snapshot that joins active roots to their complete closures.
 SysML's 64-bit FNV revision/fingerprint and Rhai's process-local dependency
 revision are invalidation facts; the baseline still needs strong content IDs.
+
+`lunco-core::BuildIdentity` is the shared typed product/source stamp, and
+`LunCoSimRuntimePlugin` now installs the compile-time stamp when the host has
+not supplied an identity. This provides the software identity field to headless
+and GUI hosts; the composite baseline collector is still unimplemented.
 
 ### UI tool callback boundary (2026-09-27)
 

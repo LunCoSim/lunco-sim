@@ -522,7 +522,7 @@ fn register_update_settings_menu(world: &mut World) {
     };
     menus.register_settings_submenu("Updates", |ui, ctx| {
         ui.label(egui::RichText::new("Velopack updates").weak().small());
-        let identity = ctx.resource::<lunco_workbench_core::BuildIdentity>();
+        let identity = ctx.resource::<lunco_core::BuildIdentity>();
         egui::Grid::new("updates_build_identity")
             .num_columns(2)
             .spacing([8.0, 4.0])
