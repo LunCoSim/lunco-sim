@@ -404,11 +404,13 @@ asynchronous completion never selects the visible simulation tick.
 External `SimulateIntentEdge` and `SimulateIntent` commands targeting fixed
 simulation state enter the bounded `lunco-core-session::PendingSessionInputs`
 queue. The session owner assigns the next fixed tick and a shared per-tick
-sequence; the controller validates scene generation and resolves the stable
-target identity again before applying semantic actions ahead of control
-propagation. The held-state commit publishes `intent.hold`; edge delivery also
-records its `CausalTrace`. A shared admission queue does not yet centralize
-commits across semantic input, physical frames, and runtime spawns.
+sequence, then validates scene generation and stable target identity, captures
+the record, and publishes its typed commit event before fixed-step producers
+run while simulation time is running. A pause leaves admitted inputs queued for
+the next running fixed tick. The controller applies semantic actions at that
+boundary. The held-state commit publishes `intent.hold`; edge delivery also
+records its `CausalTrace`.
+Physical-frame admission and runtime spawns have not joined this commit path.
 Simulation-clock Rhai actions stay in their derived behavior pass, and
 local-embodiment input stays on the interaction cadence.
 

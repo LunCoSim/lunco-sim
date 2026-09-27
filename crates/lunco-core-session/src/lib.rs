@@ -42,6 +42,15 @@ impl Plugin for LunCoCoreSessionPlugin {
                 PreUpdate,
                 assign_global_entity_ids.in_set(lunco_core::RuntimeCycleSet::IdentityAdmission),
             )
+            .add_systems(
+                FixedUpdate,
+                commit_due_session_inputs
+                    .in_set(SessionInputCommitSet)
+                    .after(lunco_core_runtime::SimTickSet)
+                    .before(lunco_core_runtime::ControlDacSet)
+                    .run_if(lunco_time::simulation_is_running)
+                    .run_if(lunco_core_runtime::not_rolling_back),
+            )
             .add_systems(FixedFirst, sync_applied_seq_owners);
         commands::register_all_commands(app);
     }

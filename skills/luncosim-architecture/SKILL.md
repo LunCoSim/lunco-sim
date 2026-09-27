@@ -115,9 +115,11 @@ the shared `lunco-control-core::SimulationInputOrderAllocator` before
 controller translation. The allocator resets on scene teardown so producers
 share one per-tick order space. Admitted external semantic payloads wait in
 `lunco-core-session::PendingSessionInputs`; core-session clears that queue on
-scene teardown, and the controller validates and commits semantic payloads at
-their assigned tick. The queue does not centralize commits across runtime
-spawns and other typed actions. Missing facts or duplicate
+scene teardown. Its fixed-step coordinator validates and captures due records,
+then publishes typed commit events in shared sequence order while simulation
+time is running; a pause leaves inputs queued for the next running tick. The
+controller applies semantic payloads before physical input sampling. Runtime
+spawns and physical-frame admission have not joined that boundary. Missing facts or duplicate
 target/session order keys hold input with a structured runtime error; ordering
 does not fall back to Bevy `Entity` bits. The frame is discarded after
 translation, while an active `SessionInputStream` capture retains sorted

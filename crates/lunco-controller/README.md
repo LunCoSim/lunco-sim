@@ -111,8 +111,11 @@ scene generation; the frame also carries the current `SimTick` and a sequence
 from the `lunco-control-core::SimulationInputOrderAllocator` used by external
 semantic inputs. Admitted external semantic payloads wait in the bounded
 `lunco-core-session::PendingSessionInputs` resource, whose owner clears it on
-scene teardown. The controller resolves stable targets and commits its semantic
-payloads at their assigned fixed tick. The allocator resets on scene teardown
+scene teardown. The session coordinator resolves stable targets, captures the
+record, and publishes its typed commit event at the assigned fixed tick while
+simulation time is running; a pause leaves it queued until play resumes. The
+controller applies its semantic payloads before physical input sampling. The
+allocator resets on scene teardown
 so producers share one per-tick sequence across scene generations. Missing
 admission facts and duplicate target/session order keys hold the input with a
 structured runtime error; ordering never falls back to Bevy `Entity` bits.

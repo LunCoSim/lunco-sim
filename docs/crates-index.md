@@ -340,10 +340,13 @@ session registries and profiles, possession/RBAC policy, prediction markers and
 input watermarks, the bounded `PendingSessionInputs` queue for future fixed-tick
 semantic inputs, and the identity-admission systems that need the current
 authority role. The queue assigns order through the shared
-`lunco-control-core::SimulationInputOrderAllocator`; the consuming owner still
-validates and commits each typed payload. Hosts that need session behavior add
-`LunCoCoreSessionPlugin` after `LunCoCoreRuntimePlugin`; headless consumers that
-only need core primitives do not compile this policy layer.
+`lunco-control-core::SimulationInputOrderAllocator`. Its fixed-step coordinator
+validates scene stamps and stable targets, captures admitted records, and
+publishes typed commit events in sequence order for domain owners to apply
+while the simulation clock is running. Hosts that need session behavior add
+`LunCoCoreSessionPlugin` after `LunCoCoreRuntimePlugin` and install `TimePlugin`;
+headless consumers that only need core primitives do not compile this policy
+layer.
 
 **`lunco-time`**
 The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/causal `WorldTime`, `SimulationPresentationTime` (interpolated between completed physical ticks), `CelestialTime` (the single affine child sample with a 100,000× rate ceiling), explicitly bound `TimeDomain` previews (`Playback`, `TimeBinding`, `ResolvedDomains`, `ControlAnimation`), and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. Celestial state and its model inputs share that sample while physics keeps its ordinary cadence. **All time-scale/JD nuance lives here; consumers delegate.**

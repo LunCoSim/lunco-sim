@@ -747,15 +747,6 @@ impl Default for SimulateIntentEdge {
     }
 }
 
-fn parse_intent_edge(name: &str) -> Option<lunco_control_core::SemanticIntentEdgeKind> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "pressed" | "press" => Some(lunco_control_core::SemanticIntentEdgeKind::Pressed),
-        "released" | "release" => Some(lunco_control_core::SemanticIntentEdgeKind::Released),
-        "pulse" => Some(lunco_control_core::SemanticIntentEdgeKind::Pulse),
-        _ => None,
-    }
-}
-
 #[on_command(SimulateIntentEdge)]
 fn on_simulate_intent_edge(
     _trigger: On<SimulateIntentEdge>,
@@ -778,7 +769,7 @@ fn on_simulate_intent_edge(
             "semantic intent edge requires a target entity".to_string(),
         ));
     }
-    let Some(kind) = parse_intent_edge(&cmd.edge) else {
+    let Some(kind) = lunco_control_core::SemanticIntentEdgeKind::parse(&cmd.edge) else {
         return Err(Reject::InvalidOp(format!(
             "unknown semantic edge '{}'; expected pressed, released, or pulse",
             cmd.edge
@@ -882,241 +873,116 @@ fn deterministic_simulation_origin(origin: Option<CommandOrigin>) -> bool {
     )
 }
 
-/// Deliver admitted external semantic inputs at their assigned fixed tick.
-/// A scene replacement clears pending work, and the identity/generation checks
-/// here make stale records fail visibly if teardown did not own that transition.
-fn dispatch_pending_semantic_inputs(
-    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
-    tick: Option<Res<lunco_core_runtime::SimTick>>,
-    target_ids: Query<(Entity, &lunco_core::GlobalEntityId)>,
-    mut pending: ResMut<PendingSessionInputs>,
+/// Apply semantic controls emitted by the session-owned ordered commit point.
+fn commit_controller_session_input(
+    trigger: On<lunco_core_session::SessionInputCommit>,
     mut simulated: ResMut<SimulatedIntents>,
-    mut recording: Option<ResMut<lunco_core_session::SessionInputStream>>,
     mut commands: Commands,
 ) {
-    enum SemanticCommit {
-        Edge {
-            intent: UserIntent,
-            kind: lunco_control_core::SemanticIntentEdgeKind,
-            correlation_id: u64,
-        },
-        Held {
-            intent: UserIntent,
-            held: bool,
-            correlation_id: u64,
-        },
-    }
-
-    if pending.is_empty() {
-        return;
-    }
-    let Some(tick) = tick.as_deref().map(|tick| tick.0) else {
-        pending.clear();
-        commands.trigger(lunco_core::RuntimeError {
-            name: "session-input-admission".to_owned(),
-            message: "pending semantic input cannot be committed without SimTick".to_owned(),
-        });
-        return;
-    };
-    let Some(scene_generation) = scene
-        .as_deref()
-        .and_then(lunco_core::SceneTransitionCoordinator::completed_generation)
-    else {
-        pending.clear();
-        commands.trigger(lunco_core::RuntimeError {
-            name: "session-input-admission".to_owned(),
-            message: "pending semantic input cannot be committed without a scene generation"
-                .to_owned(),
-        });
-        return;
-    };
-
-    for input in pending.take_due(tick) {
-        let record = input.record();
-        if record.effective_tick != tick {
-            commands.trigger(lunco_core::RuntimeError {
-                name: "session-input-admission".to_owned(),
-                message: format!(
-                    "semantic input assigned to tick {} missed its commit boundary at tick {tick}",
-                    record.effective_tick
-                ),
-            });
-            continue;
-        }
-        if record.scene_generation != scene_generation {
-            commands.trigger(lunco_core::RuntimeError {
-                name: "session-input-admission".to_owned(),
-                message: format!(
-                    "semantic input belongs to scene generation {}, current generation is {scene_generation}",
-                    record.scene_generation
-                ),
-            });
-            continue;
-        }
-        let mut matching_targets = target_ids
-            .iter()
-            .filter(|(_, target_gid)| **target_gid == record.target)
-            .map(|(entity, _)| entity);
-        let Some(target) = matching_targets.next() else {
-            commands.trigger(lunco_core::RuntimeError {
-                name: "session-input-admission".to_owned(),
-                message: format!(
-                    "semantic input target {} no longer resolves to its admitted GlobalEntityId",
-                    record.target
-                ),
-            });
-            continue;
-        };
-        if matching_targets.next().is_some() {
-            commands.trigger(lunco_core::RuntimeError {
-                name: "session-input-admission".to_owned(),
-                message: format!(
-                    "semantic input target {} resolves to multiple entities",
-                    record.target
-                ),
-            });
-            continue;
-        }
-        let action = match &record.payload {
-            lunco_core_session::SessionInputPayload::SemanticIntentEdge {
-                intent,
-                edge,
-                correlation_id,
-            } => {
-                let Some(intent) = lunco_control_core::parse_user_intent(intent) else {
-                    commands.trigger(lunco_core::RuntimeError {
-                        name: "session-input-admission".to_owned(),
-                        message: format!("unknown semantic intent '{intent}' in admitted input"),
-                    });
-                    continue;
-                };
-                let Some(kind) = parse_intent_edge(edge) else {
-                    commands.trigger(lunco_core::RuntimeError {
-                        name: "session-input-admission".to_owned(),
-                        message: format!("unknown semantic edge '{edge}' in admitted input"),
-                    });
-                    continue;
-                };
-                SemanticCommit::Edge {
-                    intent,
-                    kind,
-                    correlation_id: *correlation_id,
-                }
-            }
-            lunco_core_session::SessionInputPayload::SimulatedIntentChange {
-                intent,
-                held,
-                correlation_id,
-            } => {
-                let Some(intent) = lunco_control_core::parse_user_intent(intent) else {
-                    commands.trigger(lunco_core::RuntimeError {
-                        name: "session-input-admission".to_owned(),
-                        message: format!("unknown semantic intent '{intent}' in admitted input"),
-                    });
-                    continue;
-                };
-                SemanticCommit::Held {
-                    intent,
-                    held: *held,
-                    correlation_id: *correlation_id,
-                }
-            }
-            lunco_core_session::SessionInputPayload::PhysicalIntentFrame { .. } => {
+    let commit = trigger.event();
+    let record = commit.record();
+    match &record.payload {
+        lunco_core_session::SessionInputPayload::SemanticIntentEdge {
+            intent,
+            edge,
+            correlation_id,
+        } => {
+            let Some(intent) = lunco_control_core::parse_user_intent(intent) else {
                 commands.trigger(lunco_core::RuntimeError {
                     name: "session-input-admission".to_owned(),
-                    message:
-                        "physical intent frames cannot enter the external semantic input queue"
-                            .to_owned(),
+                    message: format!("unknown semantic intent '{intent}' in committed input"),
                 });
-                continue;
-            }
-        };
-        if let Some(stream) = recording.as_deref_mut()
-            && stream.is_recording()
-            && let Err(message) = stream.append(record.clone())
-        {
-            commands.trigger(lunco_core::RuntimeError {
-                name: "session-input-recording".to_owned(),
-                message,
-            });
-        }
-        match action {
-            SemanticCommit::Edge {
+                return;
+            };
+            let Some(kind) = lunco_control_core::SemanticIntentEdgeKind::parse(edge) else {
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "session-input-admission".to_owned(),
+                    message: format!("unknown semantic edge '{edge}' in committed input"),
+                });
+                return;
+            };
+            commands.trigger(lunco_control_core::SemanticIntentEdge {
+                target: commit.target(),
                 intent,
                 kind,
-                correlation_id,
-            } => {
-                commands.trigger(lunco_control_core::SemanticIntentEdge {
-                    target,
-                    intent,
-                    kind,
-                    correlation_id,
-                    origin: input.origin(),
-                    producer_id: record.producer.stable_id(),
-                    admission: Some(lunco_control_core::SimulationInputOrder {
-                        scene_generation: record.scene_generation,
-                        effective_tick: record.effective_tick,
-                        sequence: record.sequence,
-                    }),
+                correlation_id: *correlation_id,
+                origin: commit.origin(),
+                producer_id: record.producer.stable_id(),
+                admission: Some(lunco_control_core::SimulationInputOrder {
+                    scene_generation: record.scene_generation,
+                    effective_tick: record.effective_tick,
+                    sequence: record.sequence,
+                }),
+            });
+        }
+        lunco_core_session::SessionInputPayload::SimulatedIntentChange {
+            intent,
+            held,
+            correlation_id,
+        } => {
+            let Some(intent) = lunco_control_core::parse_user_intent(intent) else {
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "session-input-admission".to_owned(),
+                    message: format!("unknown semantic intent '{intent}' in committed input"),
                 });
+                return;
+            };
+            simulated.set(commit.target(), intent, record.producer, *held);
+            let mut data = std::collections::BTreeMap::new();
+            data.insert(
+                "intent".to_owned(),
+                lunco_telemetry_core::TelemetryValue::String(intent.canonical_name().to_owned()),
+            );
+            data.insert(
+                "held".to_owned(),
+                lunco_telemetry_core::TelemetryValue::Bool(*held),
+            );
+            data.insert(
+                "target_gid".to_owned(),
+                lunco_telemetry_core::TelemetryValue::U64(record.target.get()),
+            );
+            data.insert(
+                "correlation_id".to_owned(),
+                lunco_telemetry_core::TelemetryValue::U64(*correlation_id),
+            );
+            data.insert(
+                "scene_generation".to_owned(),
+                lunco_telemetry_core::TelemetryValue::U64(record.scene_generation),
+            );
+            data.insert(
+                "effective_tick".to_owned(),
+                lunco_telemetry_core::TelemetryValue::U64(record.effective_tick),
+            );
+            data.insert(
+                "input_sequence".to_owned(),
+                lunco_telemetry_core::TelemetryValue::U64(record.sequence),
+            );
+            data.insert(
+                "producer_kind".to_owned(),
+                lunco_telemetry_core::TelemetryValue::String(record.producer.kind().to_owned()),
+            );
+            if let Some(producer_id) = record.producer.stable_id() {
+                data.insert(
+                    "producer_id".to_owned(),
+                    lunco_telemetry_core::TelemetryValue::U64(producer_id),
+                );
             }
-            SemanticCommit::Held {
-                intent,
-                held,
-                correlation_id,
-            } => {
-                simulated.set(target, intent, record.producer, held);
-                let mut data = std::collections::BTreeMap::new();
-                data.insert(
-                    "intent".to_owned(),
-                    lunco_telemetry_core::TelemetryValue::String(
-                        intent.canonical_name().to_owned(),
-                    ),
-                );
-                data.insert(
-                    "held".to_owned(),
-                    lunco_telemetry_core::TelemetryValue::Bool(held),
-                );
-                data.insert(
-                    "target_gid".to_owned(),
-                    lunco_telemetry_core::TelemetryValue::U64(record.target.get()),
-                );
-                data.insert(
-                    "correlation_id".to_owned(),
-                    lunco_telemetry_core::TelemetryValue::U64(correlation_id),
-                );
-                data.insert(
-                    "scene_generation".to_owned(),
-                    lunco_telemetry_core::TelemetryValue::U64(record.scene_generation),
-                );
-                data.insert(
-                    "effective_tick".to_owned(),
-                    lunco_telemetry_core::TelemetryValue::U64(record.effective_tick),
-                );
-                data.insert(
-                    "input_sequence".to_owned(),
-                    lunco_telemetry_core::TelemetryValue::U64(record.sequence),
-                );
-                data.insert(
-                    "producer_kind".to_owned(),
-                    lunco_telemetry_core::TelemetryValue::String(record.producer.kind().to_owned()),
-                );
-                if let Some(producer_id) = record.producer.stable_id() {
-                    data.insert(
-                        "producer_id".to_owned(),
-                        lunco_telemetry_core::TelemetryValue::U64(producer_id),
-                    );
-                }
-                commands.trigger(lunco_telemetry_core::TelemetryEvent {
-                    name: "intent.hold".to_owned(),
-                    source: record.target.get(),
-                    severity: lunco_telemetry_core::Severity::Info,
-                    data: lunco_telemetry_core::TelemetryValue::Map(data),
-                    timestamp: 0.0,
-                    sim_secs: 0.0,
-                    sim_tick: record.effective_tick,
-                });
-            }
+            commands.trigger(lunco_telemetry_core::TelemetryEvent {
+                name: "intent.hold".to_owned(),
+                source: record.target.get(),
+                severity: lunco_telemetry_core::Severity::Info,
+                data: lunco_telemetry_core::TelemetryValue::Map(data),
+                timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: record.effective_tick,
+            });
+        }
+        lunco_core_session::SessionInputPayload::PhysicalIntentFrame { .. } => {
+            commands.trigger(lunco_core::RuntimeError {
+                name: "session-input-admission".to_owned(),
+                message: "physical intent frames cannot enter the deferred session-input queue"
+                    .to_owned(),
+            });
         }
     }
 }
@@ -1598,29 +1464,22 @@ impl Plugin for LunCoControllerPlugin {
                 "SimulateIntentEdge",
                 lunco_core_session::CommandPolicy::OWNED_CONTROL,
             );
+        app.add_observer(commit_controller_session_input);
         app.add_observer(project_intent_edge);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_control_state);
         // The blackout table the authorization gate reads. Empty by default, so an
         // app that never declares one is byte-for-byte unchanged.
         app.init_resource::<lunco_core_session::ControlPathRegistry>();
         register_all_commands(app);
+        // Session-owned commits run before physical sampling, so every producer
+        // at this tick observes the allocator's one authoritative input order.
         app.add_systems(
             FixedUpdate,
-            (
-                dispatch_pending_semantic_inputs
-                    .run_if(lunco_core_runtime::not_rolling_back)
-                    .run_if(lunco_time::simulation_is_running),
-                // Ahead of wire propagation, so the `Port` writes this tick emits
-                // reach their wired targets in the same tick. Unordered, propagation
-                // may read the port before or after this system depending on the
-                // schedule's parallel layout, and prediction diverges from the host
-                // on that coin flip.
-                drive_from_bindings
-                    .run_if(lunco_core_runtime::not_rolling_back)
-                    .run_if(lunco_time::simulation_is_running),
-            )
-                .chain()
+            drive_from_bindings
+                .run_if(lunco_core_runtime::not_rolling_back)
+                .run_if(lunco_time::simulation_is_running)
                 .after(lunco_core_runtime::SimTickSet)
+                .after(lunco_core_session::SessionInputCommitSet)
                 .before(lunco_core_runtime::ControlDacSet),
         );
         // The SELF-DRIVER half runs on the INTERACTION cadence, not the sim tick.
@@ -2872,7 +2731,8 @@ mod tests {
             .add_observer(observe_semantic_edge)
             .add_observer(observe_control_telemetry)
             .add_observer(project_intent_edge)
-            .add_systems(FixedUpdate, dispatch_pending_semantic_inputs);
+            .add_observer(commit_controller_session_input)
+            .add_systems(FixedUpdate, lunco_core_session::commit_due_session_inputs);
 
         let mut coordinator = lunco_core::SceneTransitionCoordinator::default();
         let path = "admission-test.usda".to_owned();
@@ -2981,7 +2841,8 @@ mod tests {
             .add_observer(observe_semantic_edge)
             .add_observer(observe_control_telemetry)
             .add_observer(project_intent_edge)
-            .add_systems(FixedUpdate, dispatch_pending_semantic_inputs);
+            .add_observer(commit_controller_session_input)
+            .add_systems(FixedUpdate, lunco_core_session::commit_due_session_inputs);
         app.insert_resource(lunco_core_session::SessionInputStream::default());
         app.world_mut()
             .resource_mut::<lunco_core_session::SessionInputStream>()

@@ -133,10 +133,11 @@ provenance and is not an authorization credential. External `SimulateIntent`
 changes and `SimulateIntentEdge` submissions share the bounded 4,096-record queue, require
 a stable target id and committed scene generation, and receive the next fixed
 tick plus a per-tick sequence. The fixed-step owner rechecks target and
-generation before applying either action; held-state commits publish
-`intent.hold`, while discrete edges retain their correlation id and admission
-stamp in both `CausalTrace` and the `intent.edge` event. Scene teardown clears
-pending records. Physical
+generation, captures each due record, and publishes a typed commit event in
+shared sequence order. The controller applies those events; held-state commits
+publish `intent.hold`, while discrete edges retain their correlation id and
+admission stamp in both `CausalTrace` and the `intent.edge` event. Scene
+teardown clears pending records. Physical
 `ActionState` frames receive the local input `SessionId`, target `GlobalEntityId`,
 and fixed-tick order at their controller boundary. Missing identity or committed
 scene state holds the input visibly, and duplicate target/session order keys do
@@ -381,12 +382,13 @@ contracts:
 ### Raw-file runtime-spawn input
 
 The raw-file `SpawnEntity` path is a transient simulation input. It must enter
-a shared typed commit coordinator alongside external held intents, discrete
-edges, and physical frames. `lunco-control-core` owns their shared per-tick
-order allocator, but the controller's pending-action queue remains private, so
-that cross-type coordinator is not yet installed. Separate per-crate queues
-without a coordinator would not preserve action and capture order across input
-types.
+the session-owned typed commit coordinator alongside external held intents,
+discrete edges, and physical frames. `lunco-core-session` now drains admitted
+external semantic inputs, validates their stable targets and scene stamps,
+captures each record, and publishes typed commit events in shared sequence
+order. The controller applies the current semantic payload variants. Runtime
+spawn and physical-frame admission still do not enter that coordinator, so a
+total cross-type effect order is not yet established.
 
 An admitted spawn record must retain the stable scene-root target and active
 physics-frame identities, catalog entry, original `f64` position and optional

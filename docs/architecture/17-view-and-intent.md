@@ -488,11 +488,13 @@ Simulation Rhai changes remain in their owning pass, and local-embodiment
 interaction input remains on the interaction cadence.
 
 The bounded queue and its scene-teardown lifecycle belong to
-`lunco-core-session::PendingSessionInputs`; the controller no longer owns a
-private semantic-input queue. The controller currently consumes and commits
-the semantic payload variants at the assigned fixed tick. The shared queue
-establishes one admission sequence, but a central cross-domain commit owner for
-runtime spawns and other typed actions remains open.
+`lunco-core-session::PendingSessionInputs`. At the fixed-tick boundary,
+core-session validates and captures each due record, then publishes its typed
+commit event in sequence order while simulation time is running; paused input
+remains queued for its admitted tick after play resumes. The controller applies
+the semantic payload variants. Runtime spawns and physical-frame admission have
+not joined that commit boundary, so total cross-domain effect order remains
+open.
 
 For a single transition, use `SimulateIntentEdge` with `edge` set to `pressed`,
 `released`, or `pulse`:
