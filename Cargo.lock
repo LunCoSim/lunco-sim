@@ -10288,6 +10288,7 @@ dependencies = [
  "anyhow",
  "lunco-assets-core",
  "lunco-assets-path",
+ "lunco-hash",
  "lunco-storage",
  "openusd",
  "tempfile",

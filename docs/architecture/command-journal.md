@@ -246,6 +246,13 @@ manifest, a volatile revision counter, a guessed seed, or a partial state.
 Playback stays open until the same baseline can initialize the consumer and the
 consumer can submit archived records through their normal typed owner paths.
 
+`lunco-usd-compose::StageRecipe::content_closure` now provides the USD owner's
+typed, content-addressed snapshot for a complete fetched closure. It sorts
+canonical layer identifiers and stores CIDv1 raw/SHA-256 identities, and it
+rejects missing root bytes or any unresolved dependency. This is an owner
+primitive only: no application baseline collector consumes it yet, and the
+remaining owner snapshots and playback consumer are still required.
+
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and
 cannot reproduce a live session by itself. The input stream covers transient

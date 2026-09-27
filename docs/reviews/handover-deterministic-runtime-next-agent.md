@@ -416,6 +416,17 @@ typed queues before that is safe.
   memory-backed; no storage writer, baseline manifest, or playback consumer is
   installed, so whole-session replay remains open.
 
+### D9 replay-baseline USD owner snapshot (2026-09-27)
+
+- `StageRecipe::content_closure` in `lunco-usd-compose` now freezes every
+  successfully fetched root/dependency layer as a sorted `(logical layer id,
+  CIDv1 raw/SHA-256)` row. It rejects absent root bytes, unresolved dependency
+  diagnostics, and empty layer identifiers. This does not use the volatile
+  `UsdStageRevision` counter and does not yet assemble an application baseline.
+- Focused tests cover stable ordering/content IDs and fail-closed partial
+  recipes. The remaining baseline owners and the capture/playback integration
+  still need implementation.
+
 ## Runtime and repository constraints
 
 - Do not edit authored USD through shell or patch tools. Use the live USD
