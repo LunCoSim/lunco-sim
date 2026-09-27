@@ -43,7 +43,8 @@ impl std::fmt::Display for StageDependencyDiagnostic {
 /// composition path from an authored dependency graph that is unexpectedly
 /// deep, wide, or large. Missing files do not consume the byte budget, but do
 /// consume the layer/dependency budget because they are still graph nodes that
-/// must be diagnosed.
+/// must be diagnosed. `max_parallel_reads` bounds only sibling I/O in the
+/// asynchronous Bevy loader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StageClosureLimits {
     /// Maximum number of distinct discovered layer identifiers, including the root.
@@ -54,6 +55,8 @@ pub struct StageClosureLimits {
     pub max_depth: usize,
     /// Maximum total bytes retained for successfully fetched layers.
     pub max_bytes: usize,
+    /// Maximum number of sibling layers read concurrently by the Bevy loader.
+    pub max_parallel_reads: usize,
 }
 
 impl Default for StageClosureLimits {
@@ -63,6 +66,7 @@ impl Default for StageClosureLimits {
             max_dependencies_per_layer: 4096,
             max_depth: 128,
             max_bytes: 256 * 1024 * 1024,
+            max_parallel_reads: 16,
         }
     }
 }

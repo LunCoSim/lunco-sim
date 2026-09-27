@@ -37,6 +37,13 @@ structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
 
+For startup asset graphs, separate asynchronous source reads from discovery,
+composition, and UI/physics admission. Bound independent sibling reads and
+merge their results in stable dependency order; preserve the source-change
+reload graph when using child load contexts. The USD layer-closure owner and
+its reload receipts are documented in
+[`21-domain-usd`](../../docs/architecture/21-domain-usd.md#composition-closure-and-partial-scene-loading).
+
 One-shot `RunRhai` and tool callbacks share the prepared `ScenarioDriver`
 engine. When profiling a callback stall, separate one-time startup/prelude or
 tool-generation refresh from request execution; do not rebuild the engine for

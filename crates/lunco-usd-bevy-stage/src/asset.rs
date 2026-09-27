@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bevy::asset::{AssetLoader, AssetServer, LoadContext, io::Reader};
+use bevy::asset::{AssetLoader, AssetServer, Handle, LoadContext, io::Reader};
 use bevy::prelude::{Asset, TypePath};
 
 use crate::UsdStageProjectionPlan;
@@ -25,6 +25,10 @@ pub struct UsdStageAsset {
     /// The send-safe layer closure shared by initial projection and the live
     /// canonical stage. It is absent for an externally composed stage.
     pub recipe: Option<lunco_usd_compose::recipe::StageRecipe>,
+    /// Keeps source-read receipt assets alive so Bevy can reload this stage
+    /// when one of its transitive USD layers changes.
+    #[dependency]
+    source_dependencies: Vec<Handle<UsdLayerReadReceipt>>,
     /// Structural hierarchy and default-time facts captured from the composed
     /// stage before the asset crosses the async boundary.
     pub projection_plan: Arc<UsdStageProjectionPlan>,
@@ -34,10 +38,18 @@ impl UsdStageAsset {
     /// Build an asset with the same prepared projection contract as the async
     /// loader.
     pub fn from_recipe(recipe: lunco_usd_compose::recipe::StageRecipe) -> Result<Self> {
+        Self::from_fetched_recipe(recipe, Vec::new())
+    }
+
+    pub(crate) fn from_fetched_recipe(
+        recipe: lunco_usd_compose::recipe::StageRecipe,
+        source_dependencies: Vec<Handle<UsdLayerReadReceipt>>,
+    ) -> Result<Self> {
         let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
         projection_plan.validate()?;
         Ok(Self {
             recipe: Some(recipe),
+            source_dependencies,
             projection_plan: Arc::new(projection_plan),
         })
     }
@@ -49,10 +61,16 @@ impl UsdStageAsset {
         projection_plan.validate()?;
         Ok(Self {
             recipe: None,
+            source_dependencies: Vec::new(),
             projection_plan: Arc::new(projection_plan),
         })
     }
 }
+
+/// Labeled receipt that keeps a transitive layer read in Bevy's hot-reload graph.
+/// Apps registering [`UsdLoader`] directly must also initialize this asset type.
+#[derive(Asset, TypePath)]
+pub struct UsdLayerReadReceipt;
 
 /// Resolve a USD asset path relative to the stage that authored it.
 ///
@@ -99,8 +117,8 @@ impl AssetLoader for UsdLoader {
         // platform separator normalization.
         let root_asset_path = anchor_of(load_context.path());
 
-        let recipe = fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
-        UsdStageAsset::from_recipe(recipe)
+        let fetched = fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
+        UsdStageAsset::from_fetched_recipe(fetched.recipe, fetched.source_dependencies)
     }
 
     fn extensions(&self) -> &[&str] {

@@ -352,9 +352,11 @@ directly; the visual adapter does not act as a generic USD facade, and
 OpenUSD types such as `sdf::Path` remain direct OpenUSD dependencies. It is
 implemented for both `StageView` (the live composed stage, `view.rs`) and `sdf::Data`
 (the flattened layer), so one generic reader works against live and flattened alike.
-The `UsdStageAsset` carries a `Send` `StageRecipe` (`recipe`) and a prepared
-`UsdStageProjectionPlan`; the live stage is built on the main thread from the
-recipe, and there is no stored `reader` object.
+The `UsdStageAsset` carries a `Send` `StageRecipe` (`recipe`), a prepared
+`UsdStageProjectionPlan`, and handles for the layer-read receipts that keep
+transitive source changes connected to Bevy's hot-reload graph; the live stage
+is built on the main thread from the recipe, and there is no stored `reader`
+object.
 
 ## Scene ownership — Twin → active stage → Grid
 
@@ -449,8 +451,11 @@ Loading another scene re-points that single active stage; it never stacks.
 The root layer is the load transaction's required input: if its logical asset
 cannot be read, the scene transition fails and reports the root error. Its
 transitive USD composition graph is loaded through the canonical asset-source
-resolver with shared limits for layer count, dependency width, depth, and
-retained bytes. A missing sublayer, reference, or payload does not discard
+resolver with shared limits for layer count, dependency width, depth, retained
+bytes, and concurrent reads. Sibling layers are read in bounded parallel
+batches; results and diagnostics are applied in authored dependency order.
+Labeled read receipts preserve source-change reloads through Bevy's asset
+dependency graph. A missing sublayer, reference, or payload does not discard
 already available siblings. The loader publishes the available stage, leaves
 the missing authored arc unresolved as required by OpenUSD, and records a
 scene-scoped `RuntimeDiagnostics` warning with both logical layer identifiers.

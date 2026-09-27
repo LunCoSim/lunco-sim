@@ -149,6 +149,7 @@ impl Plugin for UsdVisualPlugin {
             .register_type::<bevy::gltf::GltfMaterialExtras>()
             .register_type::<bevy::gltf::GltfMaterialName>();
         app.init_asset::<UsdStageAsset>()
+            .init_asset::<lunco_usd_bevy_stage::asset::UsdLayerReadReceipt>()
             .register_asset_loader(UsdLoader)
             // E1b: raw-source asset so a scene document's base layer can be read
             // through the same (web-ready) asset source the live world uses.
