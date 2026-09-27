@@ -124,6 +124,8 @@ pub mod models;
 
 /// Shareable model links (encode model source into a URL fragment).
 pub mod model_share;
+/// Shared Rumoca lint snapshots for the workbench and Modelica API.
+pub mod modelica_lint;
 
 /// Headless Modelica document and runtime plugin.
 ///

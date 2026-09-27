@@ -1142,6 +1142,26 @@ pub(crate) fn render_status_bar_inner(
     use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};
 
     let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
+    let runtime_fault = world
+        .get_resource::<lunco_core::RuntimeFaults>()
+        .and_then(|faults| faults.first.clone());
+    let current_fault_key = runtime_fault.as_ref().map(|fault| {
+        (
+            fault.kind.to_owned(),
+            fault.subject.clone(),
+            fault.detail.clone(),
+        )
+    });
+    let fault_key_id = ui.make_persistent_id("lunco_workbench_terminal_fault");
+    let should_auto_open_fault = ui.ctx().data_mut(|data| {
+        let previous_fault_key = data
+            .get_temp::<Option<RuntimeFaultKey>>(fault_key_id)
+            .unwrap_or_default();
+        let should_open =
+            should_auto_open_status_popup(previous_fault_key.as_ref(), current_fault_key.as_ref());
+        data.insert_temp(fault_key_id, current_fault_key);
+        should_open
+    });
 
     // Snapshot what we need from the bus into local owned values so
     // we don't hold a borrow across the popup callback (it also wants
@@ -1449,6 +1469,13 @@ pub(crate) fn render_status_bar_inner(
         // egui::Popup is the post-0.31 API. `open_memory(None)` ties
         // the open state to egui's memory keyed by `popup_id`, so the
         // `toggle_popup` call above flips it.
+        // A terminal runtime fault means simulation cannot proceed. Open the
+        // existing status history surface once for each newly recorded fault.
+        // Do this after the click handler so a simultaneous click cannot close it.
+        if should_auto_open_fault {
+            egui::Popup::open_id(ui.ctx(), popup_id);
+        }
+
         egui::Popup::from_response(&response)
             .id(popup_id)
             .width(popup_width)
@@ -1471,6 +1498,7 @@ pub(crate) fn render_status_bar_inner(
                 ui.separator();
                 let mut popup_attention_source = None;
                 egui::ScrollArea::vertical()
+                    .id_salt("recent_status_history")
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         if history.is_empty() {
@@ -1808,6 +1836,15 @@ const SETTINGS_SUBMENU_MAX_WIDTH: f32 = 640.0;
 pub fn menu_popup_max_width(content_width: f32, requested_max_width: f32) -> f32 {
     let available = (content_width - STATUS_POPUP_VIEWPORT_MARGIN).max(1.0);
     available.min(requested_max_width.max(1.0))
+}
+
+type RuntimeFaultKey = (String, String, String);
+
+fn should_auto_open_status_popup(
+    previous: Option<&RuntimeFaultKey>,
+    current: Option<&RuntimeFaultKey>,
+) -> bool {
+    current.is_some() && current != previous
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]

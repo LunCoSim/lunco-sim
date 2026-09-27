@@ -8,15 +8,11 @@
 //!
 //! # Source of truth
 //!
-//! Refreshed by [`refresh_diagnostics`] each frame. It reads the
-//! bound document's `AstCache.errors` list (populated by rumoca's
-//! `parse_to_syntax` recovery) and mirrors them into
-//! [`DiagnosticsLog`]. Empty on a clean parse; one entry per
-//! diagnostic when the parser has something to say.
-//!
-//! Modelled as a *replaced-every-frame* log (not append-only like
-//! Console) so the panel reflects the current state — fix the error
-//! in the code editor and the entry disappears automatically.
+//! Refreshed by [`refresh_diagnostics`] when the active Modelica source,
+//! compile result, or shared Rumoca lint snapshot changes. Located parse,
+//! compiler, and lint findings are collected into [`DiagnosticsLog`], whose
+//! bounded history keeps recent authoring feedback visible while the source is
+//! edited.
 
 use std::collections::VecDeque;
 
@@ -26,6 +22,7 @@ use lunco_ui::log::{LogEntry, LogLevel, SourceLoc, render_log_view};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::ui::document_context::ModelicaDocuments;
+use lunco_modelica_core::modelica_lint::{ModelicaLintSeverity, ModelicaLintState};
 
 /// Panel id.
 pub const DIAGNOSTICS_PANEL_ID: PanelId = PanelId("modelica_diagnostics");
@@ -56,9 +53,7 @@ pub(crate) fn on_diagnostic_jump_requested(
     request.request(event.doc, event.loc);
 }
 
-/// Current diagnostics for the open model. Rebuilt from AST state
-/// each frame rather than accumulated — a fixed parse becomes a
-/// cleared log.
+/// Bounded history of diagnostics for the open Modelica model.
 #[derive(Resource, Default)]
 pub struct DiagnosticsLog {
     entries: VecDeque<LogEntry>,
@@ -142,6 +137,31 @@ impl Panel for DiagnosticsPanel {
             .unwrap_or_else(lunco_theme::Theme::dark);
         let muted = theme.tokens.text_subdued;
         let mut clear_requested = false;
+        let lint_status = ctx
+            .resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|workspace| workspace.active_document)
+            .and_then(|doc| {
+                let generation = ctx
+                    .resource::<ModelicaDocuments>()?
+                    .host(doc)?
+                    .document()
+                    .ast()
+                    .generation;
+                ctx.resource::<lunco_modelica_core::modelica_lint::ModelicaLintDiagnostics>()?
+                    .for_generation(doc, generation)
+                    .map(|snapshot| snapshot.state.clone())
+            });
+        match lint_status {
+            Some(ModelicaLintState::Pending) => {
+                ui.label(
+                    egui::RichText::new("Rumoca lint is running in the background…").color(muted),
+                );
+            }
+            Some(ModelicaLintState::Unavailable(message) | ModelicaLintState::Failed(message)) => {
+                ui.label(egui::RichText::new(format!("Rumoca lint: {message}")).color(muted));
+            }
+            Some(ModelicaLintState::Ready) | None => {}
+        }
         let jump = render_log_view(
             ui,
             &snapshot,
@@ -165,16 +185,14 @@ impl Panel for DiagnosticsPanel {
     }
 }
 
-/// What changed between refreshes. Stored as `Local<DiagnosticsCursor>`
-/// so we skip work on frames where neither the bound document, its
-/// AST generation, nor the compile-error string moved.
+/// What changed between refreshes. Stored as `Local<DiagnosticsCursor>` so
+/// background lint completion also refreshes the visible diagnostics.
 #[derive(Default)]
 pub struct DiagnosticsCursor {
     bound_doc: Option<lunco_doc::DocumentId>,
     last_ast_gen: u64,
-    /// Hash of `compilation_error` — cheaper to compare than the
-    /// string itself and avoids keeping a clone around.
     last_error_hash: u64,
+    last_lint_revision: u64,
 }
 
 fn hash_str(s: Option<&str>) -> u64 {
@@ -194,10 +212,10 @@ fn hash_str(s: Option<&str>) -> u64 {
 /// the initial implementation and kept the log's internal VecDeque
 /// churning even when nothing was changing.
 pub fn refresh_diagnostics(
-    // error lives on `CompileStates`.
     workspace: Res<lunco_workspace::WorkspaceResource>,
     registry: Res<ModelicaDocuments>,
     compile_states: Res<lunco_doc_bevy::DocumentDiagnostics>,
+    lint_results: Option<Res<lunco_modelica_core::modelica_lint::ModelicaLintDiagnostics>>,
     mut diagnostics: ResMut<DiagnosticsLog>,
     mut cursor: bevy::prelude::Local<DiagnosticsCursor>,
 ) {
@@ -209,6 +227,7 @@ pub fn refresh_diagnostics(
             cursor.bound_doc = None;
             cursor.last_ast_gen = 0;
             cursor.last_error_hash = hash_str(None);
+            cursor.last_lint_revision = 0;
             // Preserve history — user may want to read the last
             // compile error after closing the tab.
         }
@@ -220,6 +239,7 @@ pub fn refresh_diagnostics(
             cursor.bound_doc = None;
             cursor.last_ast_gen = 0;
             cursor.last_error_hash = hash_str(None);
+            cursor.last_lint_revision = 0;
             // Preserve history — user may want to read the last
             // compile error after closing the tab.
         }
@@ -228,14 +248,16 @@ pub fn refresh_diagnostics(
 
     let ast_gen = host.document().ast().generation;
     let err_hash = hash_str(compile_states.error_message(doc_id));
-    // Lint depends on source content. AST gen ticks on every source
-    // mutation, so combining (ast_gen, err_hash) is enough — no extra
-    // source hash needed.
+    let lint_revision = lint_results
+        .as_deref()
+        .and_then(|results| results.for_generation(doc_id, ast_gen))
+        .map_or(0, |snapshot| snapshot.revision);
 
     // Fast-path: nothing that could affect diagnostics changed.
     if cursor.bound_doc == Some(doc_id)
         && cursor.last_ast_gen == ast_gen
         && cursor.last_error_hash == err_hash
+        && cursor.last_lint_revision == lint_revision
     {
         return;
     }
@@ -244,6 +266,7 @@ pub fn refresh_diagnostics(
     cursor.bound_doc = Some(doc_id);
     cursor.last_ast_gen = ast_gen;
     cursor.last_error_hash = err_hash;
+    cursor.last_lint_revision = lint_revision;
 
     let mut entries: Vec<LogEntry> = Vec::new();
 
@@ -271,13 +294,9 @@ pub fn refresh_diagnostics(
         });
     }
 
-    // 2. Compile / run errors — the worker stores them per-doc on
-    // `CompileStates` (B.3 phase 4). When the worker shipped structured
-    // rumoca diagnostics (compile failures, each with a code and a
-    // primary span in this doc), render one click-to-source row per
-    // finding; otherwise fall back to the flat summary string. Without
-    // mirroring them here the Diagnostics panel stayed empty even when a
-    // red "Error" chip was visible in the toolbar.
+    // 2. Compile and run errors — the worker stores them per document in
+    // `DocumentDiagnostics`. Located Rumoca findings remain click-to-source;
+    // when no structured finding is available, use the worker's error summary.
     let located = compile_states.diagnostics(doc_id);
     if !located.is_empty() {
         for diag in located {
@@ -305,174 +324,40 @@ pub fn refresh_diagnostics(
         });
     }
 
-    // 3. Lint findings — `rumoca-tool-lint` runs on the source and
-    // returns warnings/style issues with line+column. For 150KB+
-    // source library package files the lint pass used to take 100–500ms on the
-    // main thread whenever the AST generation changed (opening a
-    // class, every keystroke). We now dispatch to a background
-    // thread and merge results once they arrive. The
-    // `LintWorkerState` resource tracks the last-seen (doc, ast_gen)
-    // and caches the computed entries so most frames just return
-    // the cache without touching rumoca at all.
-    let source_owned = host.document().source().to_string();
-    let display_name = host.document().origin().display_name();
-    let dispatch_key = (doc_id, ast_gen);
-    let tag_for_worker = model_tag;
-    if !source_owned.is_empty() {
-        // Scope the first lock so it is ALWAYS released before we
-        // reach for `lint_result_slot()` below. Prior code only
-        // `drop`-ed `lint_state` inside the `else if` spawn arm —
-        // when we fell through to the "worker in-flight for same
-        // key" case the guard stayed live, and line 304's second
-        // `lint_worker_state().lock()` re-entered on the same
-        // thread → `std::sync::Mutex` is non-reentrant → main loop
-        // deadlock the moment a compile error landed (that's the
-        // state change that invalidated the cache while a lint was
-        // in flight). See manual-test log silence after any
-        // `Compile finished with error`.
-        let (cache_hit_entries, need_spawn) = {
-            // CQ-513: recover from a poisoned lock rather than panicking.
-            // A worker task that panics mid-update would otherwise crash
-            // the whole UI on the next refresh; the cached lint state is
-            // plain data, so reading through poison is safe.
-            let mut lint_state = lint_worker_state()
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let current_cache_key = lint_state.cached_for;
-            let current_inflight_key = lint_state.inflight_for;
-            let mut hit: Option<Vec<LogEntry>> = None;
-            let mut spawn = false;
-            if current_cache_key == Some(dispatch_key) {
-                hit = Some(lint_state.cached_entries.clone());
-            } else if current_inflight_key != Some(dispatch_key) {
-                lint_state.inflight_for = Some(dispatch_key);
-                spawn = true;
+    // Rumoca's shared snapshot includes Error, Warning, Note, and Help
+    // diagnostics. Keep the rule id and concrete suggestion in the message so
+    // selecting a row gives a complete, source-located fix hint.
+    if let Some(snapshot) = lint_results
+        .as_deref()
+        .and_then(|results| results.for_generation(doc_id, ast_gen))
+    {
+        let ast_has_errors = !host.document().ast().errors.is_empty();
+        for finding in &snapshot.diagnostics {
+            if ast_has_errors && finding.rule == "syntax-error" {
+                continue;
             }
-            (hit, spawn)
-        }; // lint_worker_state lock released here.
-        if let Some(cached) = cache_hit_entries {
-            entries.extend(cached);
-        }
-        if need_spawn {
-            // **Wasm: lint disabled.** `rumoca_tool_lint::lint` does a
-            // synchronous rumoca parse on the source. On
-            // `wasm32-unknown-unknown`, `AsyncComputeTaskPool` runs
-            // cooperatively on the main thread — a 150 KB source library file
-            // (e.g. `Modelica/Blocks/Continuous.mo`) freezes the UI
-            // for tens of seconds inside that single parse. Park the
-            // empty entry list as a permanent cache so the dedup gate
-            // never tries to spawn again for this (doc, ast_gen).
-            // Native gets the lint via real worker threads.
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = (source_owned, display_name, tag_for_worker);
-                if let Ok(mut state) = lint_worker_state().lock() {
-                    state.cached_for = Some(dispatch_key);
-                    state.cached_entries = Vec::new();
-                    state.inflight_for = None;
-                }
+            let level = match finding.severity {
+                ModelicaLintSeverity::Error => LogLevel::Error,
+                ModelicaLintSeverity::Warning => LogLevel::Warn,
+                ModelicaLintSeverity::Info | ModelicaLintSeverity::Hint => LogLevel::Info,
+            };
+            let mut text = format!("[{}] {}", finding.rule, finding.message);
+            if let Some(suggestion) = finding.suggestion.as_deref() {
+                text.push_str("\nSuggestion: ");
+                text.push_str(suggestion);
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let result_slot = lint_result_slot().clone();
-                bevy::tasks::AsyncComputeTaskPool::get()
-                    .spawn(async move {
-                        let opts = rumoca_tool_lint::LintOptions::default();
-                        let out: Vec<LogEntry> =
-                            rumoca_tool_lint::lint(&source_owned, &display_name, &opts)
-                                .into_iter()
-                                .map(|msg| {
-                                    let level = match msg.level {
-                                        rumoca_tool_lint::LintLevel::Error => LogLevel::Error,
-                                        rumoca_tool_lint::LintLevel::Warning => LogLevel::Warn,
-                                        _ => LogLevel::Info,
-                                    };
-                                    LogEntry {
-                                        at: web_time::Instant::now(),
-                                        level,
-                                        // Position now lives on `loc` (rendered as a
-                                        // chip + makes the row clickable), so the text
-                                        // carries just rule + message.
-                                        text: format!("[{}] {}", msg.rule, msg.message),
-                                        model: tag_for_worker.clone(),
-                                        loc: Some(SourceLoc {
-                                            line: msg.line,
-                                            column: msg.column,
-                                        }),
-                                    }
-                                })
-                                .collect();
-                        if let Ok(mut slot) = result_slot.lock() {
-                            *slot = Some((dispatch_key, out));
-                        }
-                    })
-                    .detach();
-            }
-        }
-
-        // If a worker finished since we last looked, promote its
-        // output to the cache and serve it. Intentionally after the
-        // spawn so a just-finished result for *this* key lands in
-        // `entries` on the same refresh rather than the next one.
-        if let Ok(mut slot) = lint_result_slot().lock() {
-            if let Some((key, out)) = slot.take() {
-                let mut state = lint_worker_state()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                state.cached_for = Some(key);
-                state.cached_entries = out.clone();
-                state.inflight_for = None;
-                if key == dispatch_key {
-                    entries.extend(out);
-                }
-            }
+            entries.push(LogEntry {
+                at: web_time::Instant::now(),
+                level,
+                text,
+                model: model_tag.clone(),
+                loc: Some(SourceLoc {
+                    line: finding.line,
+                    column: finding.column,
+                }),
+            });
         }
     }
 
     diagnostics.append(entries);
-}
-
-/// Shared state between the lint worker and the main-thread
-/// `refresh_diagnostics` caller. Kept as process-globals (via
-/// `OnceLock`) instead of a Bevy `Resource` because the worker runs on
-/// `AsyncComputeTaskPool` (no bevy ECS access on the worker side) and
-/// the main-thread lock is contended for ~microseconds.
-struct LintWorkerState {
-    /// Key (doc, ast_gen) of the currently cached lint output. `None`
-    /// when we've never finished a lint for any state.
-    cached_for: Option<(lunco_doc::DocumentId, u64)>,
-    /// Cached lint entries for `cached_for`. Served on every refresh
-    /// whose key matches — the hot path avoids re-linting and avoids
-    /// re-spawning.
-    cached_entries: Vec<LogEntry>,
-    /// Key of the lint currently in flight on a worker thread, or
-    /// `None` when no worker is running. Prevents a flurry of spawns
-    /// when the UI re-refreshes before the worker finishes.
-    inflight_for: Option<(lunco_doc::DocumentId, u64)>,
-}
-
-fn lint_worker_state() -> &'static std::sync::Mutex<LintWorkerState> {
-    use std::sync::OnceLock;
-    static STATE: OnceLock<std::sync::Mutex<LintWorkerState>> = OnceLock::new();
-    STATE.get_or_init(|| {
-        std::sync::Mutex::new(LintWorkerState {
-            cached_for: None,
-            cached_entries: Vec::new(),
-            inflight_for: None,
-        })
-    })
-}
-
-/// Slot the lint worker writes its result into. A single-element
-/// buffer — the main thread drains it every refresh. `None` means
-/// no completion since the last drain.
-#[allow(clippy::type_complexity)]
-fn lint_result_slot()
--> &'static std::sync::Arc<std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>>
-{
-    use std::sync::OnceLock;
-    static SLOT: OnceLock<
-        std::sync::Arc<std::sync::Mutex<Option<((lunco_doc::DocumentId, u64), Vec<LogEntry>)>>>,
-    > = OnceLock::new();
-    SLOT.get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(None)))
 }

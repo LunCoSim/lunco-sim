@@ -377,6 +377,12 @@ errors rather than crashing the app. This tolerance is essential for
 interactive parameter tuning — an unstable parameter shouldn't kill the
 whole sim.
 
+When a live solver step fails, the terminal RuntimeFault keeps the solver
+error and lists Modelica values that were not produced by the failed step. The
+list includes each value's last accepted sample and the sample and
+communication-target times. Names are sorted for stable
+diagnostics; when no successful sample exists, the message says so explicitly.
+
 ## 4. Execution pipeline
 
 All cosim and stepping happens in `FixedUpdate` at a shared fixed
@@ -477,12 +483,34 @@ Verb semantics:
 | `RestartActiveModel` | Composition of `ResetActiveModel` + `RunActiveModel`. |
 | `FastRunActiveModel` | Orthogonal: batch compile + simulate off-thread → `Experiment`. Never touches live run-state. |
 
+When strict DAE compilation rejects an unbalanced model, the compiler runs
+Rumoca's diagnostic-only unbalanced DAE path and shared structural matcher.
+It appends the unmatched unknown names, categories, and referencing equation
+rows to the compile error when available. This diagnostic DAE never reaches a
+stepper. The complete explanation is part of the ordinary Modelica Error
+status event, which opens in the existing history popup for a terminal fault.
+The same explanation is included in the document's structured diagnostics.
+The author can then add or correct enough independent equations or constraints.
+
 The toolbar (`ui/panels/model_view/render.rs`) maps these to one
 Compile button (🚀 → `CompileModel`, compile only), a Run/Pause
 toggle (▶ → `RunActiveModel`, ⏸ → `PauseActiveModel`), Reset (⟲), and
 Restart (⟳ → `RestartActiveModel`). The `CompileStatus` API query
 reports the run-state (`is_compiled`, `is_compiling`, `paused`,
 `running`, `stale`, `current_time`) alongside the compile state.
+
+`GetModelDiagnostics {doc_id}` is the authoring query for source problems. It
+returns parser and compiler diagnostics together with asynchronous Rumoca lint
+findings in one `diagnostics` array. Each row contains its source, code or rule,
+severity, message, optional 1-based line and column, file, and optional fix
+suggestion. `lint_state` reports `pending`, `ready`, `unavailable`, or `failed`,
+so a client can poll without treating unfinished lint as a clean model. Rumoca
+Help and Note findings are surfaced as hints and informational rows, along with
+warnings and errors. The query and Diagnostics panel read the same per-document
+snapshot owned by `ModelicaLintPlugin`, installed by Modelica UI and API hosts.
+Rumoca's source linter runs off the update thread for open documents; only the
+current source generation is published. This source-level feedback is separate
+from the authored `lint.modelica` policy used by explicit asset validation.
 
 ## 5. Document System integration
 

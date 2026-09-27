@@ -763,9 +763,17 @@ impl ModelicaCompiler {
             });
         }
 
-        let result = self
+        let mut result = self
             .session
             .compile_model_dae_strict_reachable_uncached_with_recovery(model_name);
+
+        if let Err(error) = &mut result {
+            if error.to_ascii_lowercase().contains("unbalanced model") {
+                if let Some(explanation) = self.structural_balance_explanation(model_name) {
+                    error.push_str(&explanation);
+                }
+            }
+        }
 
         still_compiling.store(false, Ordering::Relaxed);
         // No `join` — see spawn comment above. The thread is detached
@@ -778,6 +786,59 @@ impl ModelicaCompiler {
             if result.is_ok() { "OK" } else { "ERR" },
         );
         result
+    }
+
+    /// Explain an underdetermined Modelica compile with Rumoca's existing
+    /// structural-matching diagnosis. This runs only when strict compilation
+    /// has already rejected a model as unbalanced; the diagnostic DAE is never
+    /// returned to the simulation path.
+    fn structural_balance_explanation(&mut self, model_name: &str) -> Option<String> {
+        let compiled = self
+            .session
+            .compile_model_dae_allow_unbalanced_for_diagnostics(model_name)
+            .ok()?;
+        let diagnosis = rumoca_sim_diagnostics::diagnose_structural_singularity(
+            &compiled.dae,
+            &rumoca_sim_diagnostics::SimOptions::default(),
+        )
+        .ok()??;
+        if diagnosis.unknowns.is_empty() {
+            return None;
+        }
+        let mut unknowns = diagnosis.unknowns;
+        unknowns.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+
+        let mut explanation = format!(
+            "\n\nWhy simulation did not start: Modelica compilation found an underdetermined system: {} equations and {} unknowns, with {} unknowns left unmatched. These values cannot be uniquely calculated from the model's current equations:",
+            diagnosis.n_equations,
+            diagnosis.n_unknowns,
+            unknowns.len(),
+        );
+        for unknown in unknowns {
+            let mut referencing_rows = unknown.referencing_rows;
+            referencing_rows.sort_unstable();
+            referencing_rows.dedup();
+            let rows = if referencing_rows.is_empty() {
+                "no equation rows reference it".to_string()
+            } else {
+                format!(
+                    "referenced by {}",
+                    referencing_rows
+                        .iter()
+                        .map(|index| format!("f_x[{index}]"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            explanation.push_str(&format!(
+                "\n  • {} ({}) — {rows}",
+                unknown.name, unknown.category
+            ));
+        }
+        explanation.push_str(
+            "\nReview the listed variables and equation rows, then add or correct enough independent equations or constraints to determine them.",
+        );
+        Some(explanation)
     }
 
     /// Seat the source roots discoverable from the source text before the first

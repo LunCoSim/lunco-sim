@@ -26,7 +26,7 @@ ui = [
     "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-state", "dep:lunco-workbench-window", "dep:lunco-workbench-browser", "dep:lunco-workbench-datasets-ui", "dep:lunco-workbench-core", "dep:lunco-workbench-guided-ui", "dep:lunco-workbench-file-dialog", "dep:lunco-workbench-file-ops", "dep:lunco-workbench-widgets", "dep:lunco-workbench-help-ui", "dep:lunco-status-core", "dep:lunco-ui",
     "dep:lunco-viz", "dep:lunco-canvas",
     "lunco-doc-bevy/ui",
-    "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:arboard",
+    "dep:rumoca-tool-fmt", "dep:arboard",
     "dep:lunco-modelica-icon-ui",
     "dep:lunco-modelica-docs-ui",
     "dep:lunco-modelica-library",
@@ -156,10 +156,6 @@ rumoca-compile = { workspace = true }
 # Ctrl+Shift+F binding. Rewrites the active editor buffer with
 # the canonical layout rumoca-tool-fmt produces.
 rumoca-tool-fmt = { workspace = true, optional = true }
-# Modelica linter — surfaced into the Diagnostics panel alongside
-# parse errors. Wraps `rumoca_tool_lint::lint(source, name, opts)`
-# which returns a `Vec<LintMessage>` we map to `LogEntry`s.
-rumoca-tool-lint = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api", optional = true }
