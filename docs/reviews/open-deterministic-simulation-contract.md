@@ -52,13 +52,18 @@ Rhai/SysML closures, Modelica solver/runtime state, physics
 profile and seeds, committed entity identities, durable baseline storage, and
 playback remain open.
 
-The source owners retain reusable facts: `SysmlAnalysis::files()` preserves
-logical names and exact source text, and the Rhai runtime keeps canonical
-literal-import dependencies plus the immutable text observed by each committed
-entity compile. Rhai asset handles retain their dependency graph, but there is
-no session-level snapshot that joins active roots to their complete closures.
-SysML's 64-bit FNV revision/fingerprint and Rhai's process-local dependency
-revision are invalidation facts; the baseline still needs strong content IDs.
+The source owners retain reusable facts: `SysmlAnalysis::content_closure()`
+returns sorted CIDv1 raw/SHA-256 identities for exact project source bytes and
+all embedded standard-library files, failing on diagnostics or ambiguous names.
+Rhai retains canonical literal-import dependencies plus the immutable text
+observed by each committed entity compile. Rhai asset handles retain their
+dependency graph, but there is no session-level snapshot that joins active
+roots to their complete closures; Rhai's process-local dependency revision is
+only an invalidation fact and its source closure still needs strong content IDs.
+`cargo test -p lunco-sysml-ast content_closure -j 4` passed all four focused
+cases for stable ordering, standard-library inclusion, changed bytes, and
+fail-closed diagnostics/identities. The source closure remains an owner
+primitive; application baseline capture is not wired yet.
 
 `lunco-core::BuildIdentity` is the shared typed product/source stamp, and
 `LunCoSimRuntimePlugin` now installs the compile-time stamp when the host has

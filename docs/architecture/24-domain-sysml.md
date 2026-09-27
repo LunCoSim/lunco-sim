@@ -107,6 +107,12 @@ source-backed elements, typed attributes/literals, requirement records,
 verification records, resolved references, and syntax/name/collision
 diagnostics; the upstream model remains private to the AST boundary.
 
+`SysmlAnalysis::content_closure()` freezes this exact source set for replay
+identity. It returns sorted CIDv1 raw/SHA-256 identities for project files and
+every embedded standard-library file when enabled, and fails when diagnostics,
+empty names, or duplicate names leave the analysis incomplete or ambiguous.
+The FNV source revision and fingerprint remain cache identities only.
+
 Expression nodes use payload-carrying variants: each feature reference,
 invocation, literal, operator, index, collection, conditional, or unsupported
 syntax node carries only its own data and child topology. Fixed-arity operands

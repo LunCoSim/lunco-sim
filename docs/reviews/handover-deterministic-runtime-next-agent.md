@@ -429,10 +429,16 @@ typed queues before that is safe.
 
 ### Replay-baseline source owner audit (2026-09-27)
 
-- `SysmlAnalysis::files()` retains each analysis source's logical name and
-  exact text. Its `source_revision` and `source_fingerprint` are 64-bit FNV
-  analysis/cache values, so the baseline must derive strong content identity
-  from the retained files.
+- `SysmlAnalysis::content_closure()` supplies sorted CIDv1 raw/SHA-256
+  identities for the exact project source files and embedded standard library
+  represented by an analysis. It rejects parser/resolution diagnostics and
+  empty or duplicate logical names. `source_revision` and
+  `source_fingerprint` remain 64-bit FNV analysis/cache values.
+- `cargo test -p lunco-sysml-ast content_closure -j 4` passed all four focused
+  closure cases. Build identity now lives in `lunco-core::BuildIdentity`; the
+  headless runtime stamps it when the host does not provide one, and the
+  focused runtime test verifies host identity preservation. Application-level
+  baseline assembly still does not consume either owner snapshot.
 - `RhaiScenarioRuntime` retains canonical literal-import dependencies and the
   immutable source text observed by the last committed compile, keyed by live
   entity. `RhaiSource` assets retain their loaded dependency handles. The

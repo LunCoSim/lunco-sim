@@ -260,16 +260,17 @@ reads the same resource. This establishes the software identity component of a
 baseline, while source closures, solver/runtime snapshots, initial
 authoritative state, storage, and playback remain open.
 
-The SysML owner already retains the exact logical source names and text in
-`SysmlAnalysis::files`; its 64-bit FNV `source_revision` and
-`source_fingerprint` remain analysis/cache facts, not strong persisted content
-identities. Rhai retains each live entity's last committed literal-import
-dependencies as canonical ids with optional immutable source text, while
-`RhaiSource::dependencies` owns the loaded asset graph. Neither surface yet
-freezes a session-wide set of active Rhai roots and their complete source
-closures. The baseline collector should read those existing owner snapshots,
-identify active roots, and report owner diagnostics when a required snapshot is
-stale or incomplete.
+`SysmlAnalysis::content_closure()` now turns the exact logical names and text
+retained by `SysmlAnalysis::files()` into sorted CIDv1 raw/SHA-256 identities,
+including every embedded standard-library source when enabled. It rejects
+parser/resolution diagnostics and empty or duplicate names; the 64-bit FNV
+`source_revision` and `source_fingerprint` remain analysis/cache facts.
+Rhai retains each live entity's last committed literal-import dependencies as
+canonical ids with optional immutable source text, while
+`RhaiSource::dependencies` owns the loaded asset graph. Rhai still has no
+session-wide snapshot joining active roots to complete source closures. The
+baseline collector should read these owner snapshots, identify active roots,
+and report owner diagnostics when a required snapshot is stale or incomplete.
 
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and
