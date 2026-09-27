@@ -184,10 +184,37 @@ fn telemetry_value_to_api_value(value: &lunco_telemetry_core::TelemetryValue) ->
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiSchema {
     pub commands: Vec<CommandSchema>,
-    /// Names of read-only query providers accepted by `ExecuteCommand`.
-    pub queries: Vec<String>,
+    /// Read-only providers accepted by `ExecuteCommand`, including the input
+    /// and response contract when the provider publishes one.
+    pub queries: Vec<ApiQuerySchema>,
     /// Reflected hook contracts and their current policy implementations.
     pub hooks: Vec<HookSchema>,
+}
+
+/// Discoverable contract for a read-only API query provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiQuerySchema {
+    /// Stable query name used by `ExecuteCommand` and Rhai `query()`.
+    pub name: String,
+    /// What the query reads and when its result is current.
+    pub description: Option<String>,
+    /// Typed input fields. `None` means the provider has not published a
+    /// machine-readable parameter contract.
+    pub parameters: Option<Vec<ApiQueryParameterSchema>>,
+    /// Input fields where exactly one must be present.
+    pub exactly_one_of: Vec<Vec<String>>,
+    /// Top-level and nested response fields exposed by the query.
+    pub response: Option<String>,
+}
+
+/// One typed query parameter exposed through schema discovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiQueryParameterSchema {
+    pub name: String,
+    pub type_name: String,
+    pub required: bool,
+    pub description: String,
+    pub allowed_values: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

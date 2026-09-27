@@ -9,7 +9,7 @@
 //     → hook `lint.usd`
 //       → rules (rhai: assets/scripting/policy/lint_usd.rhai)
 //         → LintReport
-//           → the `LintReport` query
+//           → the `GetDiagnostics` query
 //
 // Any link breaking gives the same symptom — no findings — and "clean scene" and
 // "linter not running" are indistinguishable from the outside. That is why the
@@ -24,18 +24,18 @@
 // a user would:
 //
 //     cmd("RunLint", #{})            // or the tagged ExecuteCommand envelope over HTTP/MCP
-//     query("LintReport")
+//     query("GetDiagnostics", #{ scope: "loaded_stages" })
 //
 // An editor or preflight command repeats the same pair after an authored change;
 // this test deliberately invokes it once and has no per-tick lint monitor.
 //
 // HOW FAILURE IS SIGNALLED: `emit("LINT_SELFTEST", "PASS"|"FAIL")`.
 
-/// Findings whose `rule` matches, as an array.
-fn by_rule(findings, rule) {
+/// Findings whose stable diagnostic `code` matches, as an array.
+fn by_code(findings, code) {
     let out = [];
     for f in findings {
-        if f.rule == rule { out.push(f); }
+        if f.code == code { out.push(f); }
     }
     out
 }
@@ -50,7 +50,7 @@ fn mentions(findings, subject) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["LintReport"], required_inputs: [] }
+       query_reads: ["GetDiagnostics"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -59,7 +59,7 @@ fn on_start(me, ctx) {
     // facts. The independent escape_containment scene owns the dynamic escape
     // boundary, so this scenario can complete its lint verdict deterministically.
     this.lint_at = 0.0;
-    this.phase = "wait";
+    this.phase = "start";
 
     print("[lint-selftest] ── the linter, linted ─────────────────────────");
 
@@ -72,27 +72,36 @@ fn on_start(me, ctx) {
 fn on_tick(me, ctx) {
     if this.phase == "done" { return; }
     this.t += dt();
-    if this.t < this.lint_at { return; }
-
-    this.phase = "done";
-
-    // 1. RUN it. Nothing has linted anything up to this point.
-    cmd("RunLint", #{});
-
-    // 2. READ it back.
-    let report = query("LintReport");
-    if report == () {
-        fail_fast("query(\"LintReport\") returned () — the query provider is not " +
-                  "registered, so nothing about the linter is being tested",
-                  "LINT SELFTEST", "LINT_SELFTEST");
+    if this.phase == "start" {
+        if this.t < this.lint_at { return; }
+        // 1. RUN it. Nothing has linted anything up to this point.
+        cmd("RunLint", #{});
+        this.phase = "wait";
         return;
     }
 
-    let findings = report.findings;
+    // RunLint publishes a pending scope before queued scene inspection runs.
+    // Read only the terminal snapshot; pending is not evidence of a clean scene.
+    let report = query("GetDiagnostics", #{ scope: "loaded_stages" });
+    if report == () {
+        if this.t < 10.0 { return; }
+        fail_fast("GetDiagnostics returned no loaded-stage report",
+            "LINT SELFTEST", "LINT_SELFTEST");
+        return;
+    }
+    if report.available != true || report.complete != true {
+        if this.t < 10.0 { return; }
+        fail_fast("GetDiagnostics loaded-stage report did not complete; state=" + report.state,
+            "LINT SELFTEST", "LINT_SELFTEST");
+        return;
+    }
+    this.phase = "done";
+
+    let findings = report.diagnostics;
     print("[lint-selftest] " + report.errors + " error(s), " + report.warnings +
           " warning(s), " + findings.len() + " finding(s)");
     for f in findings {
-        print("[lint-selftest]   " + f.severity + "  " + f.rule + "  " + f.subject);
+        print("[lint-selftest]   " + f.severity + "  " + f.code + "  " + f.subject);
     }
 
     let f = [];
@@ -103,7 +112,7 @@ fn on_tick(me, ctx) {
             && clock.mission_epoch0_jd < 2488000.0,
         "scene without an authored epoch did not select current computer time"));
 
-    let invalid_controls = by_rule(findings, "control-binding-unknown-intent");
+    let invalid_controls = by_code(findings, "control-binding-unknown-intent");
     f.push(t_true(invalid_controls.len() == 1,
         "control-binding-unknown-intent fired " + invalid_controls.len() +
         " time(s), expected exactly 1"));
@@ -112,7 +121,7 @@ fn on_tick(me, ctx) {
             "unknown control binding was reported at " + invalid_controls[0].subject));
     }
 
-    let missing_units = by_rule(findings, "stage-meters-per-unit-missing");
+    let missing_units = by_code(findings, "stage-meters-per-unit-missing");
     f.push(t_true(missing_units.len() == 1,
         "stage-meters-per-unit-missing fired " + missing_units.len() +
         " time(s), expected exactly 1 for the intentionally incomplete stage metadata"));
@@ -120,12 +129,12 @@ fn on_tick(me, ctx) {
         f.push(t_true(missing_units[0].subject == "<stage>",
             "stage-meters-per-unit-missing named " + missing_units[0].subject +
             ", expected the stage"));
-        f.push(t_true(missing_units[0].severity == "warn",
+        f.push(t_true(missing_units[0].severity == "warning",
             "omitted metersPerUnit is severity " + missing_units[0].severity +
             ", expected warn because OpenUSD supplies a valid centimetre fallback"));
     }
 
-    let missing_epoch = by_rule(findings, "epoch-api-missing-time");
+    let missing_epoch = by_code(findings, "epoch-api-missing-time");
     f.push(t_true(missing_epoch.len() == 3,
         "epoch-api-missing-time fired " + missing_epoch.len() +
         " time(s), expected warnings for missing, zero, and misplaced root epochs"));
@@ -137,7 +146,7 @@ fn on_tick(me, ctx) {
         f.push(t_true(mentions(missing_epoch, "/LintSelftest/AuthoredEpoch"),
             "epoch-api-missing-time did not reject an epoch API outside the scene root"));
         for finding in missing_epoch {
-            f.push(t_true(finding.severity == "warn",
+            f.push(t_true(finding.severity == "warning",
                 "epoch-api-missing-time is severity " + finding.severity +
                 ", expected warn because runtime selects current computer time"));
         }
@@ -146,7 +155,7 @@ fn on_tick(me, ctx) {
     }
 
     // The motor bug, by rule id and by subject.
-    let nested = by_rule(findings, "nested-body-no-joint");
+    let nested = by_code(findings, "nested-body-no-joint");
     f.push(t_true(nested.len() == 1,
         "nested-body-no-joint fired " + nested.len() + " time(s), expected exactly 1 " +
         "(/LintSelftest/Vehicle/LooseMotor)"));
@@ -160,7 +169,7 @@ fn on_tick(me, ctx) {
 
     // A joint pointing at a prim that resolves to NO body — /LintSelftest/NotABody
     // hangs under nothing that is a body, so the joint really is dropped.
-    let bad = by_rule(findings, "joint-target-not-a-body");
+    let bad = by_code(findings, "joint-target-not-a-body");
     f.push(t_true(bad.len() == 1,
         "joint-target-not-a-body fired " + bad.len() + " time(s), expected exactly 1 " +
         "(/LintSelftest/BadJoint, whose target hangs under no body at all)"));
@@ -182,7 +191,7 @@ fn on_tick(me, ctx) {
     // statements about the same stage, not a classification — the same prim
     // being wrong in two ways is two findings, and asserting "exactly one" here
     // would be asserting that rules suppress each other.
-    let ghost = by_rule(findings, "dynamic-body-no-collider");
+    let ghost = by_code(findings, "dynamic-body-no-collider");
     f.push(t_true(ghost.len() == 2,
         "dynamic-body-no-collider fired " + ghost.len() + " time(s), expected 2 " +
         "(/LintSelftest/Ghost and the collider-less loose motor)"));
@@ -190,7 +199,7 @@ fn on_tick(me, ctx) {
         "dynamic-body-no-collider never named /LintSelftest/Ghost — the one prim in " +
         "this scene that exists only to trip it"));
 
-    let missing_collision_api = by_rule(findings, "collision-enabled-without-api");
+    let missing_collision_api = by_code(findings, "collision-enabled-without-api");
     f.push(t_true(missing_collision_api.len() == 1,
         "collision-enabled-without-api fired " + missing_collision_api.len() +
         " time(s), expected exactly 1 (/LintSelftest/MissingCollisionAPI)"));
@@ -205,7 +214,7 @@ fn on_tick(me, ctx) {
             "collision-enabled-without-api did not name the schema the author must apply"));
     }
 
-    let vehicle_contract = by_rule(findings, "vehicle-part-collision-contract");
+    let vehicle_contract = by_code(findings, "vehicle-part-collision-contract");
     f.push(t_true(vehicle_contract.len() == 1,
         "vehicle-part-collision-contract fired " + vehicle_contract.len() +
         " time(s), expected exactly 1 (/LintSelftest/Vehicle/LooseMotor)"));
@@ -220,7 +229,7 @@ fn on_tick(me, ctx) {
             "vehicle-part-collision-contract did not name the solid collision owner"));
     }
 
-    let negative_stiffness = by_rule(findings, "joint-drive-negative-stiffness");
+    let negative_stiffness = by_code(findings, "joint-drive-negative-stiffness");
     f.push(t_true(negative_stiffness.len() == 1,
         "joint-drive-negative-stiffness fired " + negative_stiffness.len() +
         " time(s), expected exactly 1 (/LintSelftest/Leg/Strut_NegativeStiffness)"));
@@ -235,12 +244,12 @@ fn on_tick(me, ctx) {
             "joint-drive-negative-stiffness did not explain why adding mass cannot fix it"));
     }
 
-    let derived_drive = by_rule(findings, "conditionally-stable-joint-drive");
+    let derived_drive = by_code(findings, "conditionally-stable-joint-drive");
     f.push(t_true(!mentions(derived_drive, "/LintSelftest/Leg/Strut_Spring"),
         "a force drive with Avian-derived inertia was reported as conditionally stable; " +
         "the composed USD path lowers it to the implicit SpringDamper realization"));
 
-    let invalid_gear = by_rule(findings, "invalid-gear-drive");
+    let invalid_gear = by_code(findings, "invalid-gear-drive");
     f.push(t_true(invalid_gear.len() == 1,
         "invalid-gear-drive fired " + invalid_gear.len() +
         " time(s), expected exactly 1 (/LintSelftest/BadGear)"));
@@ -266,7 +275,7 @@ fn on_tick(me, ctx) {
     // An authored never-collide pair whose target does not exist. The rule is
     // ERROR, not warn: the author wrote down a protection they do not have, and
     // the runtime does not say so until 600 ticks in.
-    let inert = by_rule(findings, "filtered-pair-target-missing");
+    let inert = by_code(findings, "filtered-pair-target-missing");
     f.push(t_true(inert.len() == 1,
         "filtered-pair-target-missing fired " + inert.len() + " time(s), expected " +
         "exactly 1 (/LintSelftest/Bumper, which filters against a prim that is not " +
@@ -277,12 +286,12 @@ fn on_tick(me, ctx) {
             ", expected the bumper"));
     }
 
-    let missing_telemetry_target = by_rule(findings, "telemetry-target-required");
+    let missing_telemetry_target = by_code(findings, "telemetry-target-required");
     f.push(t_true(missing_telemetry_target.len() == 1 &&
         missing_telemetry_target[0].subject == "/LintSelftest/BrokenTelemetry",
         "telemetry-target-required must name the targetless declaration exactly once"));
 
-    let struts_below_feet = by_rule(findings, "sprung-foot-not-lowest");
+    let struts_below_feet = by_code(findings, "sprung-foot-not-lowest");
     f.push(t_true(struts_below_feet.len() == 2 &&
         mentions(struts_below_feet, "/LintSelftest/Leg/Strut_Spring") &&
         mentions(struts_below_feet, "/LintSelftest/Leg/Strut_NegativeStiffness"),
@@ -292,13 +301,13 @@ fn on_tick(me, ctx) {
     // `filteredGroups` names a body instead of a group. Both are ERRORs: the
     // author wrote down protection they do not have, and nothing at runtime says
     // so — the parts just keep colliding.
-    let ghost_group = by_rule(findings, "collision-group-include-missing");
+    let ghost_group = by_code(findings, "collision-group-include-missing");
     f.push(t_true(ghost_group.len() == 1,
         "collision-group-include-missing fired " + ghost_group.len() + " time(s), " +
         "expected exactly 1 (/LintSelftest/GhostGroup groups a prim that is not " +
         "on this stage)"));
 
-    let bad_filter = by_rule(findings, "collision-group-filter-not-a-group");
+    let bad_filter = by_code(findings, "collision-group-filter-not-a-group");
     f.push(t_true(bad_filter.len() == 1,
         "collision-group-filter-not-a-group fired " + bad_filter.len() + " time(s), " +
         "expected exactly 1 (/LintSelftest/GhostGroup filters against a body)"));
@@ -310,7 +319,7 @@ fn on_tick(me, ctx) {
     // errors across the shipped tree — every motor of every rover — since
     // `components/mobility/motor.usda` declares its pin unconditionally and only
     // the `power = "battery"` variant wires it. None of those was fixable.
-    let stranded = by_rule(findings, "connector-requires-network-root");
+    let stranded = by_code(findings, "connector-requires-network-root");
     f.push(t_true(mentions(stranded, "/LintSelftest/StrandedMotor"),
         "connector-requires-network-root never named /LintSelftest/StrandedMotor, " +
         "which connects its pin while sitting in no network root — the wire reads " +

@@ -8,7 +8,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
-use lunco_doc::DocumentId;
+use lunco_doc::{
+    Diagnostic, DiagnosticSeverity, DiagnosticSourceReport, DiagnosticSourceState, DocumentId,
+};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_modelica_document::ModelicaDocument;
 
@@ -21,6 +23,7 @@ pub struct ModelicaLintPlugin;
 impl Plugin for ModelicaLintPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ModelicaLintDiagnostics>();
+        app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
         app.add_systems(Update, refresh_modelica_lint_diagnostics);
     }
 }
@@ -114,6 +117,8 @@ impl ModelicaLintDiagnostics {
 pub fn refresh_modelica_lint_diagnostics(
     registry: Res<DocumentRegistry<ModelicaDocument>>,
     mut diagnostics: ResMut<ModelicaLintDiagnostics>,
+    mut document_diagnostics: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
+    mut published: Local<HashMap<DocumentId, (u64, u64)>>,
 ) {
     let completed = {
         let mut queue = diagnostics
@@ -156,13 +161,14 @@ pub fn refresh_modelica_lint_diagnostics(
         .iter()
         .map(|(doc, _)| *doc)
         .collect::<HashSet<_>>();
+    published.retain(|doc, _| open_ids.contains(doc));
     diagnostics
         .snapshots
         .retain(|doc, _| open_ids.contains(doc));
 
     #[cfg(target_arch = "wasm32")]
     {
-        for (doc, generation) in open_documents {
+        for &(doc, generation) in &open_documents {
             if diagnostics.for_generation(doc, generation).is_some() {
                 continue;
             }
@@ -183,7 +189,7 @@ pub fn refresh_modelica_lint_diagnostics(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut active = diagnostics.in_flight.len();
-        for (doc, generation) in open_documents {
+        for &(doc, generation) in &open_documents {
             if active >= MAX_ACTIVE_LINTS {
                 break;
             }
@@ -255,5 +261,101 @@ pub fn refresh_modelica_lint_diagnostics(
                 })
                 .detach();
         }
+    }
+
+    for (doc, generation) in open_documents {
+        let Some(host) = registry.host(doc) else {
+            continue;
+        };
+        let document = host.document();
+        let uri = document.origin().session_uri();
+        let lint_snapshot = diagnostics.for_generation(doc, generation);
+        let revision = lint_snapshot.map_or(0, |snapshot| snapshot.revision);
+        if published.get(&doc) == Some(&(generation, revision)) {
+            continue;
+        }
+        let parse_diagnostics = document
+            .ast()
+            .errors
+            .iter()
+            .map(|diagnostic| {
+                let mut value =
+                    Diagnostic::error(diagnostic.message.clone(), diagnostic.line, diagnostic.col);
+                value.domain = Some("modelica".to_owned());
+                value.source = Some("rumoca-parser".to_owned());
+                value.code = Some("syntax".to_owned());
+                value.uri = Some(uri.clone());
+                value
+            })
+            .collect();
+        document_diagnostics.set_source_report(
+            doc,
+            DiagnosticSourceReport {
+                id: "modelica.parser".to_owned(),
+                domain: "modelica".to_owned(),
+                generation,
+                revision: Some(generation),
+                state: DiagnosticSourceState::Ready,
+                message: None,
+                diagnostics: parse_diagnostics,
+            },
+        );
+
+        let lint_state = lint_snapshot.map(|snapshot| &snapshot.state);
+        let (state, findings) = match lint_state {
+            Some(ModelicaLintState::Pending) | None => (DiagnosticSourceState::Pending, Vec::new()),
+            Some(ModelicaLintState::Ready) => {
+                let Some(snapshot) = lint_snapshot else {
+                    continue;
+                };
+                let has_parse_errors = !document.ast().errors.is_empty();
+                let findings = snapshot
+                    .diagnostics
+                    .iter()
+                    .filter(|finding| !(has_parse_errors && finding.rule == "syntax-error"))
+                    .map(|finding| {
+                        let severity = match finding.severity {
+                            ModelicaLintSeverity::Error => DiagnosticSeverity::Error,
+                            ModelicaLintSeverity::Warning => DiagnosticSeverity::Warning,
+                            ModelicaLintSeverity::Info => DiagnosticSeverity::Info,
+                            ModelicaLintSeverity::Hint => DiagnosticSeverity::Hint,
+                        };
+                        let mut diagnostic = Diagnostic::new(
+                            severity,
+                            finding.message.clone(),
+                            Some(finding.line),
+                            Some(finding.column),
+                        );
+                        diagnostic.domain = Some("modelica".to_owned());
+                        diagnostic.source = Some("rumoca-linter".to_owned());
+                        diagnostic.code = Some(finding.rule.clone());
+                        diagnostic.uri = Some(uri.clone());
+                        diagnostic.suggestion = finding.suggestion.clone();
+                        diagnostic
+                    })
+                    .collect();
+                (DiagnosticSourceState::Ready, findings)
+            }
+            Some(ModelicaLintState::Unavailable(message)) => (
+                DiagnosticSourceState::Unavailable(message.clone()),
+                Vec::new(),
+            ),
+            Some(ModelicaLintState::Failed(message)) => {
+                (DiagnosticSourceState::Failed(message.clone()), Vec::new())
+            }
+        };
+        document_diagnostics.set_source_report(
+            doc,
+            DiagnosticSourceReport {
+                id: "modelica.rumoca-lint".to_owned(),
+                domain: "modelica".to_owned(),
+                generation,
+                revision: lint_snapshot.map(|snapshot| snapshot.revision),
+                state,
+                message: None,
+                diagnostics: findings,
+            },
+        );
+        published.insert(doc, (generation, revision));
     }
 }

@@ -38,6 +38,7 @@
 
 use bevy::prelude::*;
 
+pub mod diagnostics;
 pub mod discovery;
 pub mod executor;
 pub mod queries;

@@ -165,9 +165,10 @@ until that point is entered after its predecessors. Active route progression
 uses the same order. This is presentation state, not a vessel component or a
 second route fact.
 The route context gesture opens its authored menu without selecting the point;
-selection and gizmo activation require the menu's explicit select action. Pass
-the resolved document, route, and direct point in each menu action context so a
-later callback does not depend on viewport query scope. Resolve a route-bearing
+selection and gizmo activation require the menu's explicit select action, and
+click-to-place movement requires the separate Move action. Pass the resolved
+document, route, and direct point in each menu action context so a later
+callback does not depend on viewport query scope. Resolve a route-bearing
 pointer target before a previously selected or controlled subject, especially
 when one subject has multiple route programs. User possession is a
 `ControlLink`/`SessionRegistry` lifecycle, while a route program is guidance

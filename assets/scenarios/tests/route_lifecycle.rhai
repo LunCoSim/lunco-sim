@@ -808,6 +808,29 @@ fn on_tick(me, ctx) {
             surface_world_position: point3(destination, "active_physics"),
             world_position: point3(destination, "active_physics"),
         };
+        let unarmed_hover = waypoint_editor::on_pointer_move(preview);
+        let unarmed_ghost = query("ResolveUsdTarget", #{
+            doc_id: this.doc,
+            path: ROUTE + "/MovePreview",
+            edit_target: "@view@",
+        });
+        this.checks.push(t_true(unarmed_hover.ok == true
+            && (unarmed_ghost == () || unarmed_ghost.ok == false
+                || unarmed_ghost.authored_here != true),
+            "hovering a selected point does not arm route movement"));
+        let move_action = waypoint_editor::on_move_begin(
+            context(this.doc, this.new_point, ()),
+        );
+        let point_parts = this.new_point.split("/");
+        let target = query("ResolveUsdTarget", #{
+            doc_id: this.doc,
+            path: ROUTE + "/MovePreview/Target_"
+                + point_parts[point_parts.len() - 1],
+            edit_target: "@view@",
+        });
+        this.checks.push(t_true(move_action.ok == true && move_action.armed == true
+            && target != () && target.ok != false && target.authored_here == true,
+            "the explicit Move action selects and arms the point with a disposable view marker"));
         let shown = waypoint_editor::on_pointer_move(preview);
         let ghost = query("ResolveUsdTarget", #{
             doc_id: this.doc,
@@ -816,7 +839,7 @@ fn on_tick(me, ctx) {
         });
         this.checks.push(t_true(shown.ok == true && ghost != ()
             && ghost.ok != false && ghost.authored_here == true,
-            "selected-point hover creates a disposable move ghost in the view layer"));
+            "armed route-point hover updates a disposable move ghost in the view layer"));
         this.move_preview_expected = destination;
         this.phase = 210;
         return;
@@ -860,7 +883,7 @@ fn on_tick(me, ctx) {
         let moved = scene_interaction::on_pointer(place);
         this.checks.push(t_true(moved.ok == true && moved.handled == true
             && moved.path == this.new_point,
-            "the next scene hit moves the selected route point before generic selection"));
+            "the next scene hit moves the explicitly armed route point before generic selection"));
         this.checks.push(t_true(find_path(SUBJECT_PATH) == this.subject,
             "moving a selected point preserves the live subject identity"));
         this.phase = 211;

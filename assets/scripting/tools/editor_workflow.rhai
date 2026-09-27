@@ -151,13 +151,22 @@ fn checkpoint(doc, expected_generation, affected_paths, preview_id, view_id) {
         return _checkpoint_result("lint", "lint_failed", false, doc, generation,
             lint_command);
     }
-    let lint = query("LintReport", #{doc_id: doc});
-    if lint == () || lint.ok == false {
+    let lint = query("GetDiagnostics", #{doc_id: doc});
+    if lint == () || lint.available != true {
         return _checkpoint_result("lint", "lint_failed", false, doc, generation,
             lint);
     }
-    if lint.projection_ready != true || lint.generation != generation {
+    let lint_channel = ();
+    for channel in lint.channels {
+        if channel.id == "usd.document-lint" { lint_channel = channel; }
+    }
+    if lint_channel == () || lint_channel.generation != generation
+        || lint_channel.state == "pending" || lint.complete != true {
         return _checkpoint_result("lint", "pending", true, doc, generation,
+            lint);
+    }
+    if lint_channel.state != "ready" {
+        return _checkpoint_result("lint", "lint_failed", false, doc, generation,
             lint);
     }
     if lint.errors != () && lint.errors > 0 {
@@ -205,11 +214,16 @@ fn verify(doc) {
     if lint_command == () || lint_command.ok != true {
         return workflow_error("lint", "RunLint could not be admitted");
     }
-    let lint = query("LintReport", #{ doc_id: doc });
-    if lint == () || lint.ok == false {
-        return workflow_error("lint", "LintReport could not be read");
+    let lint = query("GetDiagnostics", #{ doc_id: doc });
+    if lint == () || lint.available != true {
+        return workflow_error("lint", "GetDiagnostics could not read this document");
     }
-    if lint.projection_ready != true || lint.generation != inspection.generation {
+    let lint_channel = ();
+    for channel in lint.channels {
+        if channel.id == "usd.document-lint" { lint_channel = channel; }
+    }
+    if lint_channel == () || lint_channel.generation != inspection.generation
+        || lint_channel.state == "pending" || lint.complete != true {
         return #{
             ok: false,
             kind: "editor_workflow",
@@ -220,6 +234,9 @@ fn verify(doc) {
             inspection: inspection,
             lint: lint,
         };
+    }
+    if lint_channel.state != "ready" {
+        return workflow_error("lint", "USD lint did not complete for the current generation");
     }
     if lint.errors != () && lint.errors > 0 {
         return #{

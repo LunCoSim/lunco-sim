@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**240 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**241 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -115,7 +115,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-viz`](#lunco-viz) (1 command)
 - [`lunco-workbench-core`](#lunco-workbench-core) (9 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
-- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (9 commands)
+- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (10 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
 - [`lunco-workspace`](#lunco-workspace) (8 commands)
@@ -2487,8 +2487,11 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Lint what is loaded now.
 
- Findings land in [`lunco_lint::LintReport`] (readable via the `LintReport`
- query) and are logged — errors at `error!`, warnings at `warn!`.
+ Findings land in [`lunco_lint::LintReport`] and are logged — errors at
+ `error!`, warnings at `warn!`. Read them through the shared
+ [`GetDiagnostics` query](./architecture/12-api.md#getdiagnostics): use
+ `scope: "loaded_stages"` or `scope: "twin"` for scene/Twin lint, or `doc_id`
+ for the complete diagnostics of one open document.
 
 - *defined in:* `crates/lunco-scene-validation/src/lint_command.rs`
 
@@ -3518,6 +3521,20 @@ actually call, with the fields the deserializer actually accepts. See the
 - *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
 - *fields:* none — call with `GuidedSkip` (no params)
 
+#### `SetGuidedHudActions`
+
+ Replace the HUD's authored action buttons. All buttons dispatch their id to
+ one registered one-argument Rhai tool hook; an empty `actions` list clears
+ the buttons.
+
+- *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `tool` | `String` |  Registered Rhai tool namespace, e.g. `griffin_surface_ops`. |
+| `hook` | `String` |  One-argument function in that namespace, without `/1`. |
+| `actions` | `Vec < GuidedHudAction >` |  Current button set in display order. |
+
 #### `SetHint`
 
  Set the persistent one-line hint. Empty `text` clears it. Rhai: `hint(msg)`
@@ -3724,7 +3741,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 240 commands from the runtime schema; scanned 955 .rs files for docs (0 parse failure(s) skipped).
+<!-- 241 commands from the runtime schema; scanned 955 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

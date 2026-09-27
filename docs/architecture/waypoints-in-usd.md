@@ -216,14 +216,15 @@ lower blocking or context target eligible to receive the same gesture. The
 move preview and its Dome child author pass-through behavior for both buttons
 so their visual overlap cannot consume waypoint selection or context clicks.
 
-Selecting a route point from its context menu enables placement with the next
-ordinary primary scene hit. The selected point path remains its identity;
-the editor writes a `SetTranslate` opinion to `@runtime@` and leaves selection,
-the route program, and the live subject intact. Pointer movement is coalesced
-per screen position and sent through the typed UI hook. While the selected point
-is valid, Rhai creates a translucent `Xform` and Dome in the disposable `@view@`
-layer. The Dome copies the selected marker's authored radius and local offset;
-each hover update changes only the preview root transform. The terrain-sampled
+The `Move route point` context-menu action selects the point and arms placement
+for the next ordinary primary scene hit. The selected point path remains its
+identity; the editor writes a `SetTranslate` opinion to `@runtime@` and leaves
+the route program and live subject intact. Pointer movement is coalesced per
+screen position and sent through the typed UI hook. Rhai creates a translucent
+`Xform` and Dome in the disposable `@view@` layer, with a view-layer target child
+that identifies the armed point. The Dome copies the selected marker's authored
+radius and local offset; each hover update changes only the preview root
+transform. Selecting a point alone does not arm movement. The terrain-sampled
 ribbon is rebuilt after commit, not on each hover event, so preview work does
 not batch-sample terrain or resample curve geometry.
 
@@ -251,20 +252,22 @@ The `route.context` semantic intent opens the authored waypoint menu only when
 the hit prim's registered `LunCoPointerInteractionAPI` marks that button as
 `context`. The shared Rhai router gives route editing first refusal and then
 dispatches generic selection for eligible primary gestures. Only the explicit
-“Select route point” menu action selects the point and enables its transform
-gizmo. The popup host registers its foreground egui bounds as chrome in
+“Select route point” action selects the point and enables its transform gizmo;
+“Move route point” also selects it and arms ghost placement. The popup host
+registers its foreground egui bounds as chrome in
 `ScenePickGate`; this lets menu rows own clicks that overlap the selected
 point's transform handles. The windowed `route_interaction` production gate
 requires the fixture root in the live editor, verifies possessed right-click
-context on the waypoint, previews and commits a native click-to-move, then
-uses the production menu input path to delete the moved point. The menu carries
+context on the waypoint, verifies selection alone leaves movement unarmed,
+then chooses Move, previews and commits a native click-to-move, and uses the
+production menu input path to delete the moved point. The menu carries
 the document, enclosing route, and canonical point as its action context, so
 its delete callback does not depend on viewport query scope or rover
 possession. When a controlled rover remains selected, a route-bearing pointer
 target takes precedence over that stale selection; this lets right-click target
 the route point actually under the pointer. The production `route_lifecycle`
-gate covers route selection precedence, hover ghost placement, insertion
-order, and ribbon context policy.
+gate covers route selection precedence, explicit move arming, hover ghost
+placement, insertion order, and ribbon context policy.
 
 Pointer and menu tool hooks use the bounded UI queue, which runs after Bevy
 picking in `PreUpdate` and before fixed simulation. General `RunRhai` requests

@@ -273,6 +273,7 @@ impl Plugin for LunCoSimUiPlugin {
             .add_plugins(|app: &mut App| {
                 use lunco_workbench_core::WorkbenchPanelAppExt;
                 app.add_observer(on_runtime_ui_action)
+                    .add_observer(on_guided_hud_action)
                     .add_observer(on_runtime_error_warning)
                     .add_observer(on_dismiss_terrain_overlay)
                     .add_observer(scripted_menus::on_script_ui_request)
@@ -544,6 +545,21 @@ fn on_runtime_ui_action(
             });
         }
     }
+}
+
+/// Dispatch a guided-HUD button through the same typed Rhai tool-hook path as
+/// other authored UI actions. The guided presentation crate remains decoupled
+/// from the scripting runtime and carries only the semantic action id.
+fn on_guided_hud_action(
+    trigger: On<lunco_workbench_guided_ui::GuidedHudActionRequested>,
+    mut commands: Commands,
+) {
+    let action = trigger.event();
+    commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
+        tool: action.tool.clone(),
+        hook: action.hook.clone(),
+        args: lunco_telemetry_core::TelemetryValue::String(action.action.clone()),
+    });
 }
 
 /// Present recoverable runtime faults through the shared notification surface.

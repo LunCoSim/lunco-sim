@@ -2,8 +2,8 @@
 //
 // The engine exposes source identity through ListBundled, parse/lint facts
 // through ValidateAsset, and generation-scoped editor findings through
-// GetModelDiagnostics. This script owns the assertions and verdict at the
-// production API boundary.
+// GetDiagnostics. This script owns the assertions and verdict at the
+// production Rhai query boundary.
 
 import "lunco://scripting/tools/modelica_editor" as modelica_editor;
 
@@ -12,7 +12,7 @@ const DIAGNOSTIC_MODEL = "model api_diagnostic_probe\n  Real missing_value;\n  R
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
        query_reads: ["FindModel", "ListBundled", "ValidateAsset",
-                     "GetDocumentSource", "GetModelDiagnostics", "CompileStatus"],
+                     "GetDocumentSource", "GetDiagnostics"],
        required_inputs: [] }
 }
 
@@ -22,7 +22,6 @@ fn on_start(me, ctx) {
     this.phase = "assets";
     this.failures = [];
     this.diagnostics_doc = ();
-    this.lint_checked = false;
 }
 
 fn on_tick(me, ctx) {
@@ -31,99 +30,46 @@ fn on_tick(me, ctx) {
 
     if this.phase == "await_lint" {
         if this.elapsed > 15.0 {
-            this.failures.push("GetModelDiagnostics did not finish linting the scratch model generation");
+            this.failures.push("GetDiagnostics did not finish linting the scratch model generation");
             this.done = true;
             report_verdict(this.failures, "MODELICA LINT", "MODELICA_LINT");
             return;
         }
         let source = query("GetDocumentSource", #{ doc_id: this.diagnostics_doc });
         if source == () || source.generation == () { return; }
-        let diagnostics = query("GetModelDiagnostics", #{ doc_id: this.diagnostics_doc });
-        if diagnostics == () || diagnostics.lint_state == "pending" { return; }
+        let diagnostics = query("GetDiagnostics", #{ doc_id: this.diagnostics_doc });
+        if diagnostics == () || diagnostics.available != true || diagnostics.state == "pending" { return; }
 
-        if !this.lint_checked {
-            this.failures.push(t_true(
-                diagnostics.doc_id == this.diagnostics_doc
-                    && diagnostics.generation == source.generation,
-                "GetModelDiagnostics did not identify the current scratch document generation"));
-            this.failures.push(t_true(
-                diagnostics.lint_state == "ready" && diagnostics.lint_revision > 0,
-                "GetModelDiagnostics did not publish a completed Rumoca lint snapshot"));
-            let naming_finding = ();
-            if diagnostics.diagnostics != () {
-                for finding in diagnostics.diagnostics {
-                    if finding.source == "rumoca-linter" && finding.rule == "naming-convention" {
-                        naming_finding = finding;
-                    }
-                }
-            }
-            this.failures.push(t_true(
-                naming_finding != ()
-                    && naming_finding.severity == "warning"
-                    && naming_finding.line > 0
-                    && naming_finding.column > 0
-                    && naming_finding.suggestion != (),
-                "GetModelDiagnostics omitted Rumoca's source-located naming finding or fix suggestion"));
-            this.lint_checked = true;
-        }
-
-        let compile_status = query("CompileStatus", #{ doc_id: this.diagnostics_doc });
-        if compile_status == () || compile_status.ast_parsed != true
-            || compile_status.state != "idle" {
-            return;
-        }
-        let compile = cmd("CompileModel", #{
-            doc_id: this.diagnostics_doc,
-            class: "api_diagnostic_probe",
-            force: true,
-        });
-        if compile == () || compile.ok == false {
-            let detail = if compile == () || compile.error == () {
-                "missing command diagnostic"
-            } else {
-                compile.error
-            };
-            this.failures.push("CompileModel rejected the underdetermined diagnostic probe: " + detail);
-            this.done = true;
-            report_verdict(this.failures, "MODELICA LINT", "MODELICA_LINT");
-            return;
-        }
-        this.phase = "await_compile_failure";
-        this.elapsed = 0.0;
-        return;
-    }
-
-    if this.phase == "await_compile_failure" {
-        if this.elapsed > 30.0 {
-            this.failures.push("the underdetermined Modelica probe did not reach a compile error");
-            this.done = true;
-            report_verdict(this.failures, "MODELICA LINT", "MODELICA_LINT");
-            return;
-        }
-        let status = query("CompileStatus", #{ doc_id: this.diagnostics_doc });
-        if status == () || status.state == "idle" || status.state == "compiling" { return; }
         this.failures.push(t_true(
-            status.state == "error",
-            "the underdetermined Modelica probe did not fail compilation"));
+            diagnostics.doc_id == this.diagnostics_doc
+                && diagnostics.generation == source.generation,
+            "GetDiagnostics did not identify the current scratch document generation"));
+        let lint_channel = ();
+        for channel in diagnostics.channels {
+            if channel.id == "modelica.rumoca-lint" { lint_channel = channel; }
+        }
         this.failures.push(t_true(
-            status.error_message != ()
-                && status.error_message.contains("Why simulation did not start")
-                && status.error_message.contains("missing_value"),
-            "CompileStatus omitted the unmatched Modelica unknown explanation"));
-        let diagnostics = query("GetModelDiagnostics", #{ doc_id: this.diagnostics_doc });
-        let explanation_found = false;
-        if diagnostics != () && diagnostics.diagnostics != () {
+            diagnostics.complete == true
+                && lint_channel != ()
+                && lint_channel.state == "ready"
+                && lint_channel.generation == source.generation
+                && to_int(lint_channel.revision) > 0,
+            "GetDiagnostics did not publish a completed Rumoca lint snapshot"));
+        let naming_finding = ();
+        if diagnostics.diagnostics != () {
             for finding in diagnostics.diagnostics {
-                if finding.source == "rumoca-compiler"
-                    && finding.message.contains("Why simulation did not start")
-                    && finding.message.contains("missing_value") {
-                    explanation_found = true;
+                if finding.source == "rumoca-linter" && finding.code == "naming-convention" {
+                    naming_finding = finding;
                 }
             }
         }
         this.failures.push(t_true(
-            explanation_found,
-            "GetModelDiagnostics omitted the structural compile explanation"));
+            naming_finding != ()
+                && naming_finding.severity == "warning"
+                && to_int(naming_finding.line) > 0
+                && to_int(naming_finding.column) > 0
+                && naming_finding.suggestion != (),
+            "GetDiagnostics omitted Rumoca's source-located naming finding or fix suggestion"));
         this.done = true;
         report_verdict(this.failures, "MODELICA LINT", "MODELICA_LINT");
         return;

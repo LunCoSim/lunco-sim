@@ -65,7 +65,7 @@ fn route_pointer_action(context) {
         result.handled = true;
         return result;
     }
-    // A selected route point can be placed with the next ordinary scene hit.
+    // An armed route-point move is committed by the next ordinary scene hit.
     // This stays ahead of generic selection and possession routing, while
     // explicit Alt-click append keeps its existing meaning above.
     if context.button == "primary" {
@@ -86,6 +86,9 @@ fn move_selected_from_pointer(context) {
     }
     let route = route_edit_path(context);
     if route == () || !direct_route_point(context.doc_id, context.selected_path, route) {
+        return ();
+    }
+    if !move_is_armed(context.doc_id, route, context.selected_path) {
         return ();
     }
     // Keep marker-to-marker clicks available for their own context/selection
@@ -1153,15 +1156,27 @@ fn on_insert_after(context) { insert_route_point(context, false) }
 
 fn preview_path(route) { route + "/MovePreview" }
 
+fn move_target_path(route, point) {
+    preview_path(route) + "/Target_" + child_name(point)
+}
+
+fn move_is_armed(doc, route, point) {
+    let target = target_record(doc, move_target_path(route, point), "@view@");
+    target.ok && target.authored_here
+}
+
 fn clear_move_preview(doc, route) {
     let path = preview_path(route);
     let target = target_record(doc, path, "@view@");
-    if target.ok && target.exists {
-        apply_view_ops(doc, "Clear route-point move preview", [#{ RemovePrim: #{
-            edit_target: "@view@",
-            path: path,
-        }}]);
+    // ResolveUsdTarget has no successful record for an absent optional view
+    // prim; the idle editor has no preview to clear yet.
+    if !target.ok || !target.exists {
+        return #{ ok: true, changed: false };
     }
+    apply_view_ops(doc, "Clear route-point move preview", [#{ RemovePrim: #{
+        edit_target: "@view@",
+        path: path,
+    }}])
 }
 
 fn move_preview_ops(doc, route, point, position) {
@@ -1274,6 +1289,14 @@ fn move_preview_ops(doc, route, point, position) {
             type_name: "bool",
             value: "true",
         }});
+        ops.push(#{ AddPrim: #{
+            edit_target: "@view@",
+            parent_path: path,
+            name: "Target_" + child_name(point),
+            type_name: "Xform",
+            reference: (),
+            reference_prim_path: "",
+        }});
     }
     ops.push(#{ SetTranslate: #{
             edit_target: "@view@",
@@ -1289,6 +1312,9 @@ fn on_pointer_move(context) {
     }
     let route = route_edit_path(context);
     if route == () || !direct_route_point(context.doc_id, context.selected_path, route) {
+        return #{ ok: true, changed: false };
+    }
+    if !move_is_armed(context.doc_id, route, context.selected_path) {
         return #{ ok: true, changed: false };
     }
     let pointer = pointer_point(context);
@@ -1428,6 +1454,44 @@ fn on_select(context) {
     #{ ok: true, path: point }
 }
 
+// The explicit Move menu action selects its point and creates the disposable
+// ghost at that point's current route-local position. Its target marker is the
+// policy state that arms subsequent hover and placement input.
+fn on_move_begin(context) {
+    if context == () || context.doc_id == () {
+        return failure("move has no active document");
+    }
+    let route = route_edit_path(context);
+    let point = context_route_point(context, route);
+    if route == () || point == () {
+        return failure("move target is not a direct route point");
+    }
+    let authored = query("QueryUsdPrim", #{
+        doc_id: context.doc_id,
+        path: point,
+        attrs: ["xformOp:translate"],
+    });
+    if authored == () || authored.ok == false || authored.attrs == ()
+        || authored.attrs["xformOp:translate"] == () {
+        return failure("move target position is not synchronized");
+    }
+    let selected = on_select(context);
+    if selected == () || selected.ok != true { return selected; }
+    let cleared = clear_move_preview(context.doc_id, route);
+    if cleared == () || cleared.ok != true {
+        return failure("existing move preview could not be cleared");
+    }
+    let plan = move_preview_ops(context.doc_id, route, point,
+        authored.attrs["xformOp:translate"]);
+    if plan.ok != true { return failure(plan.error); }
+    let result = apply_view_ops(context.doc_id, "Begin route-point move", plan.ops);
+    if result.ok == true {
+        result.path = point;
+        result.armed = true;
+    }
+    result
+}
+
 // Secondary pointer context opens a generic authored menu without changing
 // scene selection. Selection remains an explicit menu action, so opening the
 // menu cannot also activate the transform gizmo.
@@ -1480,6 +1544,12 @@ fn on_context(context) {
             hook: "on_select",
             args: action_context,
         }];
+    items.push(#{
+        label: "Move route point",
+        tool: "waypoint_editor",
+        hook: "on_move_begin",
+        args: action_context,
+    });
     let route_read = route_positions(context.doc_id, route);
     if route_read.ok == true && route_read.paths.len() >= 2 {
         items.push(#{

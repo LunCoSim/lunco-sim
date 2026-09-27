@@ -121,7 +121,7 @@ For the active Twin in a running scene, use the live command instead:
 
 ```rhai
 cmd("RunLint", #{scope: "twin", policy: "warn"});
-query("LintReport");
+query("GetDiagnostics", #{scope: "twin"});
 ```
 
 `RunLint` and `ValidateTwin` share the same Rust namespace facts and Rhai
@@ -290,7 +290,7 @@ edited, no file describes what is running; lint **that** with the verb:
 
 ```rhai
 cmd("RunLint", #{});        // explicit loaded-stage lint
-query("LintReport");        // { ok, pending, errors, warnings, findings[] }
+query("GetDiagnostics", #{scope: "loaded_stages"}); // poll complete; read diagnostics[]
 ```
 
 or `{"type":"ExecuteCommand","command":"RunLint"}` over HTTP/MCP. Nothing lints automatically at load,
@@ -302,7 +302,7 @@ bind_policy("lint.usd", "lint_usd", my_rules);    // next RunLint obeys
 ```
 
 re-shapes the rules for the next explicit lint run without a rebuild. Loaded
-lint evidence can be deferred for one or more frames; wait until `pending:false`
+lint evidence can be deferred for one or more frames; wait until `complete:true`
 before using `ok:true` as a clean result.
 
 `RunLint` also checks the live projected port surface through the shared

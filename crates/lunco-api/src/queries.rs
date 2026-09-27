@@ -1,8 +1,8 @@
 use crate::registry::ApiEntityRegistry;
 use bevy::prelude::*;
 use lunco_api_core::{
-    ApiErrorCode, ApiResponse, ApiValue, ApiValueError, IntoApiValue, api_value_from_serializable,
-    api_value_from_u64,
+    ApiErrorCode, ApiQuerySchema, ApiResponse, ApiValue, ApiValueError, IntoApiValue,
+    api_value_from_serializable, api_value_from_u64,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,6 +48,19 @@ pub enum SimulationQueryReadScope {
 pub trait ApiQueryProvider: Send + Sync + 'static {
     /// Stable name matched against the command field of `ExecuteCommand`.
     fn name(&self) -> &'static str;
+
+    /// Machine-readable input and response contract for API schema discovery.
+    /// Providers that have not declared one remain discoverable by name, with
+    /// `parameters` and `response` unset.
+    fn schema(&self) -> ApiQuerySchema {
+        ApiQuerySchema {
+            name: self.name().to_owned(),
+            description: None,
+            parameters: None,
+            exactly_one_of: Vec::new(),
+            response: None,
+        }
+    }
 
     /// Return how simulation callers account for this provider's reads.
     ///
@@ -99,6 +112,17 @@ impl ApiQueryRegistry {
     /// Iterate the registered public names.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.providers.keys().map(String::as_str)
+    }
+
+    /// Return discoverable provider contracts in name order.
+    pub fn schemas(&self) -> Vec<ApiQuerySchema> {
+        let mut schemas = self
+            .providers
+            .values()
+            .map(|provider| provider.schema())
+            .collect::<Vec<_>>();
+        schemas.sort_unstable_by(|left, right| left.name.cmp(&right.name));
+        schemas
     }
 }
 
@@ -163,14 +187,19 @@ pub fn api_param_array<'a>(params: &'a ApiValue, name: &str) -> Option<&'a [ApiV
     }
 }
 
-/// Plugin that adds the [`ApiQueryRegistry`] resource. The API transport
-/// plugin installs it; domain crates do not need to add this plugin themselves
-/// — they just mutate the registry.
+/// Plugin that installs the query registry and generic document-diagnostics
+/// query. API-capable composition roots add it explicitly; domain API adapters
+/// then register their own providers in the shared registry.
 pub struct ApiQueryRegistryPlugin;
 
 impl Plugin for ApiQueryRegistryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ApiQueryRegistry>();
+        app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
+        let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
+        if registry.get("GetDiagnostics").is_none() {
+            registry.register(crate::diagnostics::GetDiagnosticsProvider);
+        }
     }
 }
 

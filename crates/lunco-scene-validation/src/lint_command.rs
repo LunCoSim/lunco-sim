@@ -31,17 +31,17 @@
 //! inspector; its file-only counterpart is `ValidateTwin`.
 
 use bevy::prelude::*;
+use lunco_api::ApiQueryResult;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::{ApiQueryError, ApiQueryResult, api_param_u64};
 use lunco_api_core::{ApiValue, api_value};
 use lunco_core::{Command, on_command, register_commands};
-use lunco_doc::{Document, DocumentId};
-use lunco_doc_bevy::DocumentRegistry;
+use lunco_doc::{Diagnostic, DiagnosticSourceReport, DiagnosticSourceState, Document, DocumentId};
+use lunco_doc_bevy::{DocumentChanged, DocumentRegistry};
 use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::{StageView, UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 /// Build the complete USD lint fact map from every owner of a USD simulation
 /// projection. Standard `Physics*Joint` facts come from
@@ -51,6 +51,64 @@ use std::collections::{BTreeMap, HashMap};
 /// each subject.
 pub(crate) fn usd_physics_facts(view: &StageView<'_>) -> H {
     usd_physics_facts_with_control_info(view).0
+}
+
+fn lint_command_error(
+    domain: &str,
+    code: &str,
+    subject: impl Into<String>,
+    message: impl Into<String>,
+) -> Diagnostic {
+    Diagnostic::error(message, None, None)
+        .with_domain(domain)
+        .with_source("RunLint")
+        .with_code(code)
+        .with_subject(subject)
+}
+
+fn fail_lint_scope(
+    report: &mut lunco_lint::LintReport,
+    scope: &str,
+    revision: u64,
+    finding: Diagnostic,
+) {
+    let message = finding.message.clone();
+    report.extend_logged(vec![finding]);
+    report.fail_scope(scope, revision, message);
+}
+
+fn on_usd_document_changed(
+    trigger: On<DocumentChanged>,
+    registry: Res<DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
+    mut diagnostics: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
+) {
+    let doc_id = trigger.event().doc;
+    let Some(host) = registry.host(doc_id) else {
+        return;
+    };
+    let generation = host.document().generation();
+    let Some(previous) = diagnostics
+        .get(doc_id)
+        .and_then(|entry| entry.sources.get("usd.document-lint"))
+    else {
+        return;
+    };
+    if previous.generation == generation {
+        return;
+    }
+    let revision = previous.revision.unwrap_or(0).saturating_add(1);
+    diagnostics.set_source_report(
+        doc_id,
+        DiagnosticSourceReport {
+            id: "usd.document-lint".to_owned(),
+            domain: "usd".to_owned(),
+            generation,
+            revision: Some(revision),
+            state: DiagnosticSourceState::Pending,
+            message: Some("The source changed since this report. Run `RunLint` to check the current generation".to_owned()),
+            diagnostics: Vec::new(),
+        },
+    );
 }
 
 /// Build the complete USD lint facts and the structured control-binding
@@ -169,7 +227,7 @@ fn is_controls_scope(view: &impl UsdRead, prim: &openusd::sdf::Path) -> bool {
 /// facts come from `lunco-usd-avian-lint`, while `lunco-usd-sim-authoring` owns
 /// its gear and wheel facts and this module owns synthesizer aggregation. Callers must use this entry point rather than
 /// linting a partial producer's facts.
-pub fn lint_stage(view: &StageView<'_>) -> Vec<lunco_lint::LintFinding> {
+pub fn lint_stage(view: &StageView<'_>) -> Vec<Diagnostic> {
     lunco_lint::run_lint(
         lunco_usd_avian_lint::USD_LINT_DOMAIN,
         usd_physics_facts(view),
@@ -185,7 +243,7 @@ pub fn lint_stage(view: &StageView<'_>) -> Vec<lunco_lint::LintFinding> {
 fn live_port_collision_findings(
     world: &World,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
-) -> Vec<lunco_lint::LintFinding> {
+) -> Vec<Diagnostic> {
     let Some(registry) = world.get_resource::<lunco_port_core::ports::PortRegistry>() else {
         return Vec::new();
     };
@@ -249,12 +307,9 @@ fn live_port_collision_findings(
                     "reads and writes may be routed to the winner"
                 }
             };
-            findings.push(lunco_lint::LintFinding {
-                domain: lunco_usd_avian_lint::USD_LINT_DOMAIN.to_owned(),
-                rule: "port-owner-collision".to_owned(),
-                severity: lunco_lint::LintSeverity::Warn,
-                subject: entity_path.clone(),
-                message: format!(
+            findings.push(
+                Diagnostic::warning(
+                    format!(
                     "PORT_OWNER_COLLISION: `{}` has {} {} owners on {}\n  winner: {}\n{}\n  {}; give the owners distinct public port names",
                     collision.name,
                     collision.owners.len(),
@@ -263,8 +318,15 @@ fn live_port_collision_findings(
                     winner,
                     shadowed,
                     access,
-                ),
-            });
+                    ),
+                    None,
+                    None,
+                )
+                .with_domain(lunco_usd_avian_lint::USD_LINT_DOMAIN)
+                .with_source("runtime-port-ownership")
+                .with_code("port-owner-collision")
+                .with_subject(entity_path.clone()),
+            );
         }
     }
     findings
@@ -389,7 +451,7 @@ fn lint_stage_with_runtime(
     world: &World,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     view: &StageView<'_>,
-) -> Vec<lunco_lint::LintFinding> {
+) -> Vec<Diagnostic> {
     let mut facts = usd_physics_facts(view);
     if let H::Map(entries) = &mut facts {
         let runtime = H::Array(live_runtime_connection_facts(world, stage_id, view));
@@ -411,8 +473,8 @@ fn lint_stage_with_runtime(
 
 /// Lint what is loaded now.
 ///
-/// Findings land in [`lunco_lint::LintReport`] (readable via the `LintReport`
-/// query) and are logged — errors at `error!`, warnings at `warn!`.
+/// Findings land in [`lunco_lint::LintReport`] (readable via `GetDiagnostics`)
+/// and are logged — errors at `error!`, warnings at `warn!`.
 #[Command(default)]
 pub struct RunLint {
     /// Restrict to one lint domain (`"usd"`). Empty = every domain this scene
@@ -435,28 +497,6 @@ pub struct RunLint {
     pub doc_id: Option<u64>,
 }
 
-/// The latest live lint result for each open Editor document.
-///
-/// This is separate from the loaded-scene report because a preview document is
-/// not the mounted live stage and must never replace or pollute its findings.
-#[derive(Resource, Default)]
-pub struct DocumentLintReports {
-    reports: HashMap<DocumentId, DocumentLintReport>,
-}
-
-#[derive(Default)]
-struct DocumentLintReport {
-    generation: Option<u64>,
-    projection_ready: bool,
-    lint_pending: bool,
-    findings: Vec<lunco_lint::LintFinding>,
-}
-
-/// Clear document-scoped lint state with the scene lifecycle.
-pub fn clear_document_reports(mut reports: ResMut<DocumentLintReports>) {
-    reports.reports.clear();
-}
-
 /// Observer for [`RunLint`].
 #[on_command(RunLint)]
 pub fn on_run_lint(
@@ -467,84 +507,106 @@ pub fn on_run_lint(
     // `on_spawn_entity_command`.
     mut canonical: NonSendMut<CanonicalStages>,
     mut report: ResMut<lunco_lint::LintReport>,
-    mut document_reports: ResMut<DocumentLintReports>,
+    mut document_diagnostics: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
     asset_server: Option<Res<AssetServer>>,
     documents: Option<Res<DocumentRegistry<lunco_usd_document::document::UsdDocument>>>,
     backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
+    report.clear_domain("lint");
     let scope = trigger.event().scope.trim();
     if scope == "twin" {
+        let revision = report.begin_scope("twin");
         report.clear_domain("twin");
         let domain = trigger.event().domain.trim();
         if !domain.is_empty() && domain != "twin" {
-            report.extend_logged(vec![lunco_lint::LintFinding {
-                domain: "twin".to_string(),
-                rule: "invalid-twin-lint-domain".to_string(),
-                severity: lunco_lint::LintSeverity::Error,
-                subject: "RunLint".to_string(),
-                message: format!(
-                    "scope `twin` cannot be combined with domain `{domain}`; omit domain or use `twin`"
+            fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
+                    "twin",
+                    "invalid-twin-lint-domain",
+                    "RunLint",
+                    format!(
+                        "scope `twin` cannot be combined with domain `{domain}`; omit domain or use `twin`"
+                    ),
                 ),
-            }]);
+            );
             return;
         }
         if trigger.event().doc_id.is_some() {
-            report.extend_logged(vec![lunco_lint::LintFinding {
-                domain: "twin".to_string(),
-                rule: "invalid-twin-lint-document".to_string(),
-                severity: lunco_lint::LintSeverity::Error,
-                subject: "RunLint".to_string(),
-                message: "scope `twin` inspects the active Twin and cannot take doc_id".to_string(),
-            }]);
+            fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
+                    "twin",
+                    "invalid-twin-lint-document",
+                    "RunLint",
+                    "scope `twin` inspects the active Twin and cannot take doc_id",
+                ),
+            );
             return;
         }
         let policy = match crate::twin_lint::policy_name(&trigger.event().policy) {
             Ok(policy) => policy,
             Err(message) => {
-                report.extend_logged(vec![lunco_lint::LintFinding {
-                    domain: "twin".to_string(),
-                    rule: "invalid-twin-lint-policy".to_string(),
-                    severity: lunco_lint::LintSeverity::Error,
-                    subject: "RunLint".to_string(),
-                    message,
-                }]);
+                fail_lint_scope(
+                    &mut report,
+                    "twin",
+                    revision,
+                    lint_command_error("twin", "invalid-twin-lint-policy", "RunLint", message),
+                );
                 return;
             }
         };
         let Some(workspace) = workspace.as_deref() else {
-            report.extend_logged(vec![lunco_lint::LintFinding {
-                domain: "twin".to_string(),
-                rule: "twin-lint-no-workspace".to_string(),
-                severity: lunco_lint::LintSeverity::Error,
-                subject: "RunLint".to_string(),
-                message: "Twin namespace lint requires the Workspace resource".to_string(),
-            }]);
+            fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
+                    "twin",
+                    "twin-lint-no-workspace",
+                    "RunLint",
+                    "Twin namespace lint requires the Workspace resource",
+                ),
+            );
             return;
         };
         let Some(twin_id) = workspace.active_twin else {
-            report.extend_logged(vec![lunco_lint::LintFinding {
-                domain: "twin".to_string(),
-                rule: "twin-lint-no-active-twin".to_string(),
-                severity: lunco_lint::LintSeverity::Error,
-                subject: "Workspace".to_string(),
-                message: "Twin namespace lint requires an active Twin".to_string(),
-            }]);
+            fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
+                    "twin",
+                    "twin-lint-no-active-twin",
+                    "Workspace",
+                    "Twin namespace lint requires an active Twin",
+                ),
+            );
             return;
         };
         let Some(twin) = workspace.twin(twin_id) else {
-            report.extend_logged(vec![lunco_lint::LintFinding {
-                domain: "twin".to_string(),
-                rule: "twin-lint-missing-active-twin".to_string(),
-                severity: lunco_lint::LintSeverity::Error,
-                subject: format!("TwinId({})", twin_id.raw()),
-                message: "Workspace active_twin does not resolve to an open Twin".to_string(),
-            }]);
+            fail_lint_scope(
+                &mut report,
+                "twin",
+                revision,
+                lint_command_error(
+                    "twin",
+                    "twin-lint-missing-active-twin",
+                    format!("TwinId({})", twin_id.raw()),
+                    "Workspace active_twin does not resolve to an open Twin",
+                ),
+            );
             return;
         };
         let snapshot = crate::twin_lint::inspect_twin(twin);
         let findings = lunco_lint::run_lint("twin", crate::twin_lint::facts(&snapshot, policy));
         report.extend_logged(findings);
+        report.complete_scope("twin", revision);
         info!(
             "[lint] RunLint: Twin `{}` — {} namespace collision(s), {} source read error(s), policy={policy}",
             snapshot.twin,
@@ -554,22 +616,37 @@ pub fn on_run_lint(
         return;
     }
     if !scope.is_empty() && scope != "loaded_stages" {
-        report.clear_domain("twin");
-        report.extend_logged(vec![lunco_lint::LintFinding {
-            domain: "twin".to_string(),
-            rule: "invalid-lint-scope".to_string(),
-            severity: lunco_lint::LintSeverity::Error,
-            subject: "RunLint".to_string(),
-            message: format!("unknown lint scope `{scope}`; use `loaded_stages` or `twin`"),
-        }]);
+        let revision = report.begin_scope("loaded_stages");
+        report.clear_domain(lunco_usd_avian_lint::USD_LINT_DOMAIN);
+        fail_lint_scope(
+            &mut report,
+            "loaded_stages",
+            revision,
+            lint_command_error(
+                "lint",
+                "invalid-lint-scope",
+                "RunLint",
+                format!("unknown lint scope `{scope}`; use `loaded_stages` or `twin`"),
+            ),
+        );
         return;
     }
     let domain = trigger.event().domain.trim().to_string();
     if !domain.is_empty() && domain != lunco_usd_avian_lint::USD_LINT_DOMAIN {
-        warn!(
-            "[lint] RunLint: no producer for domain '{domain}' in a loaded scene — \
-             the USD domain is the one a live stage can supply facts for; \
-             ValidateAsset covers .mo/.rhai/.wgsl files"
+        let revision = report.begin_scope("loaded_stages");
+        report.clear_domain(lunco_usd_avian_lint::USD_LINT_DOMAIN);
+        fail_lint_scope(
+            &mut report,
+            "loaded_stages",
+            revision,
+            lint_command_error(
+                "lint",
+                "live-lint-domain-unavailable",
+                "RunLint",
+                format!(
+                    "RunLint has no live producer for `{domain}`; use GetDiagnostics for open-document diagnostics or ValidateAsset for file preflight"
+                ),
+            ),
         );
         return;
     }
@@ -577,25 +654,34 @@ pub fn on_run_lint(
     if let Some(raw_doc) = trigger.event().doc_id {
         let doc = DocumentId::new(raw_doc);
         let Some(host) = documents.as_deref().and_then(|registry| registry.host(doc)) else {
-            document_reports
-                .reports
-                .insert(doc, DocumentLintReport::default());
             warn!("[lint] RunLint: document {doc} is not open");
             return;
         };
         let generation = host.document().generation();
+        let revision = document_diagnostics
+            .get(doc)
+            .and_then(|report| report.sources.get("usd.document-lint"))
+            .and_then(|report| report.revision)
+            .unwrap_or(0)
+            .saturating_add(1);
         let ready = backed
             .as_deref()
             .and_then(|scenes| scenes.synced_generation(doc))
             == Some(generation);
         if !ready {
-            document_reports.reports.insert(
+            document_diagnostics.set_source_report(
                 doc,
-                DocumentLintReport {
-                    generation: Some(generation),
-                    projection_ready: false,
-                    lint_pending: false,
-                    findings: Vec::new(),
+                lunco_doc::DiagnosticSourceReport {
+                    id: "usd.document-lint".to_owned(),
+                    domain: "usd".to_owned(),
+                    generation,
+                    revision: Some(revision),
+                    state: lunco_doc::DiagnosticSourceState::Pending,
+                    message: Some(
+                        "Waiting for the USD document projection to reach this source generation"
+                            .to_owned(),
+                    ),
+                    diagnostics: Vec::new(),
                 },
             );
             warn!(
@@ -614,25 +700,33 @@ pub fn on_run_lint(
         let stage_id = stage_handle.as_ref().map(|handle| handle.id());
         let stage = stage_handle.and_then(|handle| canonical.get(handle.id()));
         let Some(_stage) = stage else {
-            document_reports.reports.insert(
+            document_diagnostics.set_source_report(
                 doc,
-                DocumentLintReport {
-                    generation: Some(generation),
-                    projection_ready: false,
-                    lint_pending: false,
-                    findings: Vec::new(),
+                lunco_doc::DiagnosticSourceReport {
+                    id: "usd.document-lint".to_owned(),
+                    domain: "usd".to_owned(),
+                    generation,
+                    revision: Some(revision),
+                    state: lunco_doc::DiagnosticSourceState::Failed(
+                        "Projected USD document has no canonical composed stage".to_owned(),
+                    ),
+                    message: None,
+                    diagnostics: Vec::new(),
                 },
             );
             warn!("[lint] RunLint: document {doc} has no projected canonical stage");
             return;
         };
-        document_reports.reports.insert(
+        document_diagnostics.set_source_report(
             doc,
-            DocumentLintReport {
-                generation: Some(generation),
-                projection_ready: true,
-                lint_pending: stage_id.is_some(),
-                findings: Vec::new(),
+            lunco_doc::DiagnosticSourceReport {
+                id: "usd.document-lint".to_owned(),
+                domain: "usd".to_owned(),
+                generation,
+                revision: Some(revision),
+                state: lunco_doc::DiagnosticSourceState::Pending,
+                message: Some("Running lint on the current USD document projection".to_owned()),
+                diagnostics: Vec::new(),
             },
         );
         if let Some(stage_id) = stage_id {
@@ -650,11 +744,21 @@ pub fn on_run_lint(
                     .unwrap_or_default();
                 let mut findings = findings;
                 findings.extend(collisions);
-                if let Some(mut reports) = world.get_resource_mut::<DocumentLintReports>() {
-                    if let Some(report) = reports.reports.get_mut(&doc) {
-                        report.findings = findings;
-                        report.lint_pending = false;
-                    }
+                if let Some(mut diagnostics) =
+                    world.get_resource_mut::<lunco_doc_bevy::DocumentDiagnostics>()
+                {
+                    diagnostics.set_source_report(
+                        doc,
+                        lunco_doc::DiagnosticSourceReport {
+                            id: "usd.document-lint".to_owned(),
+                            domain: "usd".to_owned(),
+                            generation,
+                            revision: Some(revision),
+                            state: lunco_doc::DiagnosticSourceState::Ready,
+                            message: None,
+                            diagnostics: findings,
+                        },
+                    );
                 }
             });
         }
@@ -664,8 +768,8 @@ pub fn on_run_lint(
 
     // Re-linting REPLACES this domain's findings: a rule that was fixed between
     // two runs must disappear, not accumulate a second copy.
+    let revision = report.begin_scope("loaded_stages");
     report.clear_domain(lunco_usd_avian_lint::USD_LINT_DOMAIN);
-    report.pending = true;
 
     // Every loaded stage, composed. `get_or_build` is what the loader itself
     // calls, so this lints exactly what physics reads.
@@ -697,130 +801,19 @@ pub fn on_run_lint(
             }
         }
         if let Some(mut report) = world.get_resource_mut::<lunco_lint::LintReport>() {
+            if report
+                .scopes
+                .get("loaded_stages")
+                .is_none_or(|scope| scope.revision != revision)
+            {
+                return;
+            }
             report.extend_logged(findings);
-            report.pending = false;
+            report.complete_scope("loaded_stages", revision);
         }
     });
 
     info!("[lint] RunLint: queued {linted} stage(s) for composed and live checks");
-}
-
-/// `LintReport` — read the findings back.
-///
-/// A QUERY, not a command response: the report is state ("what is wrong with what
-/// is loaded"), and a UI panel, a scenario and an HTTP caller all want to read it
-/// without re-running the rules.
-pub struct LintReportQuery;
-
-impl ApiQueryProvider for LintReportQuery {
-    fn name(&self) -> &'static str {
-        "LintReport"
-    }
-
-    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
-        let requested_doc = match params.get("doc_id") {
-            None => None,
-            Some(_) => match api_param_u64(params, "doc_id") {
-                Some(raw) => Some(DocumentId::new(raw)),
-                None => {
-                    return Err(ApiQueryError::new(
-                        lunco_api_core::ApiErrorCode::DeserializationError,
-                        "LintReport: doc_id must be an explicit numeric document id",
-                    ));
-                }
-            },
-        };
-        if let Some(doc) = requested_doc {
-            let scoped = world
-                .get_resource::<DocumentLintReports>()
-                .and_then(|reports| reports.reports.get(&doc));
-            let current_generation = world
-                .get_resource::<DocumentRegistry<lunco_usd_document::document::UsdDocument>>()
-                .and_then(|registry| registry.host(doc))
-                .map(|host| host.document().generation());
-            let report_generation = scoped.and_then(|report| report.generation);
-            let stale = scoped.is_some_and(|_| report_generation != current_generation);
-            let findings = scoped
-                .map(|report| {
-                    report
-                        .findings
-                        .iter()
-                        .map(|f| {
-                            api_value!({
-                                "domain": f.domain.clone(),
-                                "rule": f.rule.clone(),
-                                "severity": f.severity.as_str(),
-                                "subject": f.subject.clone(),
-                                "message": f.message.clone(),
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let errors = scoped
-                .map(|report| {
-                    report
-                        .findings
-                        .iter()
-                        .filter(|finding| finding.severity == lunco_lint::LintSeverity::Error)
-                        .count()
-                })
-                .unwrap_or(0);
-            let warnings = scoped
-                .map(|report| {
-                    report
-                        .findings
-                        .iter()
-                        .filter(|finding| finding.severity == lunco_lint::LintSeverity::Warn)
-                        .count()
-                })
-                .unwrap_or(0);
-            return Ok(Some(api_value!({
-                "scope": "document",
-                "doc_id": doc.raw(),
-                "generation": report_generation,
-                "current_generation": current_generation,
-                "projection_ready": scoped.is_some_and(|report| report.projection_ready),
-                "pending": scoped.is_some_and(|report| report.lint_pending),
-                "stale": stale,
-                "ok": scoped.is_some_and(|report| report.projection_ready)
-                    && !scoped.is_some_and(|report| report.lint_pending)
-                    && !stale
-                    && errors == 0,
-                "errors": errors,
-                "warnings": warnings,
-                "findings": findings,
-            })));
-        }
-        let report = world.get_resource::<lunco_lint::LintReport>();
-        let findings: Vec<ApiValue> = report
-            .map(|r| {
-                r.findings
-                    .iter()
-                    .map(|f| {
-                        api_value!({
-                            "domain": f.domain.clone(),
-                            "rule": f.rule.clone(),
-                            "severity": f.severity.as_str(),
-                            "subject": f.subject.clone(),
-                            "message": f.message.clone(),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let errors = report.map(|r| r.errors()).unwrap_or(0);
-        let warnings = report.map(|r| r.warnings()).unwrap_or(0);
-        Ok(Some(api_value!({
-            "scope": "loaded_stages",
-            "ok": errors == 0
-                && !report.is_some_and(|report| report.pending),
-            "pending": report.is_some_and(|report| report.pending),
-            "errors": errors,
-            "warnings": warnings,
-            "findings": findings,
-        })))
-    }
 }
 
 /// Read structural runtime diagnostics from owning subsystems. These findings
@@ -873,14 +866,16 @@ impl ApiQueryProvider for RuntimeDiagnosticsQuery {
 /// the rest of this crate's verbs).
 pub fn register(app: &mut App) {
     app.init_resource::<lunco_lint::LintReport>();
-    app.init_resource::<DocumentLintReports>();
+    app.init_resource::<lunco_doc_bevy::DocumentDiagnostics>();
     // Findings belong to the loaded scene. A replacement must not leave the
     // previous scene's errors highlighted as if they were current.
     app.add_systems(lunco_core::SceneTeardown, lunco_lint::clear_report);
-    app.add_systems(lunco_core::SceneTeardown, clear_document_reports);
-    app.init_resource::<ApiQueryRegistry>();
+    app.add_observer(on_usd_document_changed);
+    lunco_api::add_plugin_once::<lunco_api::ApiQueryRegistryPlugin>(
+        app,
+        lunco_api::ApiQueryRegistryPlugin,
+    );
     let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
-    registry.register(LintReportQuery);
     registry.register(RuntimeDiagnosticsQuery);
 }
 
@@ -1025,9 +1020,9 @@ mod tests {
             live_port_collision_findings(&world, Handle::<UsdStageAsset>::default().id());
         assert_eq!(findings.len(), 1);
         let finding = &findings[0];
-        assert_eq!(finding.rule, "port-owner-collision");
-        assert_eq!(finding.severity, lunco_lint::LintSeverity::Warn);
-        assert_eq!(finding.subject, "/Lander1");
+        assert_eq!(finding.code.as_deref(), Some("port-owner-collision"));
+        assert_eq!(finding.severity, DiagnosticSeverity::Warning);
+        assert_eq!(finding.subject.as_deref(), Some("/Lander1"));
         assert!(
             finding
                 .message

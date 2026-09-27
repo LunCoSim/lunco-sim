@@ -52,6 +52,7 @@
 //! faults yields an explicit error finding without stopping a scene from loading.
 
 use bevy::prelude::*;
+use lunco_doc::{Diagnostic, DiagnosticSeverity};
 use lunco_hooks::HookValue as H;
 
 /// The hook id a domain's rules are registered under: `lint.<domain>`.
@@ -117,63 +118,6 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
-/// How much a finding matters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Reflect)]
-pub enum LintSeverity {
-    /// What was authored does not do what it says. Someone must fix it.
-    Error,
-    /// Probably wrong, or wrong in a case the author may have meant.
-    Warn,
-    /// Worth knowing, never a defect.
-    Info,
-}
-
-impl LintSeverity {
-    /// Parse the policy's spelling. Unknown values read as [`Warn`](Self::Warn):
-    /// a mistyped severity must surface the finding, not swallow it.
-    pub fn parse(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "error" | "err" => LintSeverity::Error,
-            "info" => LintSeverity::Info,
-            _ => LintSeverity::Warn,
-        }
-    }
-    /// The policy-facing spelling.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LintSeverity::Error => "error",
-            LintSeverity::Warn => "warn",
-            LintSeverity::Info => "info",
-        }
-    }
-}
-
-/// One authoring problem, in any domain.
-#[derive(Debug, Clone, Reflect)]
-pub struct LintFinding {
-    /// Which linter produced it (`usd`, `rhai`, `modelica`, …).
-    pub domain: String,
-    /// Stable rule id, e.g. `nested-body-no-joint` — greppable, and what a
-    /// suppression list would key on.
-    pub rule: String,
-    /// How much it matters.
-    pub severity: LintSeverity,
-    /// What it is about: a prim path, a script document, a model name.
-    pub subject: String,
-    /// What is wrong and what to do about it, in that order.
-    pub message: String,
-}
-
-impl LintFinding {
-    /// The one-line form used for logs, toasts and test assertions.
-    pub fn line(&self) -> String {
-        format!(
-            "[{}/{}] {} — {}",
-            self.domain, self.rule, self.subject, self.message
-        )
-    }
-}
-
 /// Every finding since the last scene load, from every domain.
 ///
 /// A resource rather than an event stream because the interesting question is
@@ -182,44 +126,116 @@ impl LintFinding {
 #[derive(Resource, Default, Debug)]
 pub struct LintReport {
     /// All findings, in the order they were produced.
-    pub findings: Vec<LintFinding>,
+    pub findings: Vec<Diagnostic>,
     /// Findings not yet shown to the user. A UI bridge drains this to raise one
     /// toast per batch instead of one per finding.
     pub unreported: usize,
-    /// True while an explicit lint command has queued evidence that is not
-    /// visible in this report yet.
-    pub pending: bool,
+    /// Independent lifecycle and revision for each explicit lint scope.
+    pub scopes: std::collections::BTreeMap<String, LintScopeReport>,
+}
+
+/// Lifecycle and revision of one explicit lint scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintScopeReport {
+    /// Monotonic run revision for this scope.
+    pub revision: u64,
+    /// Current result lifecycle.
+    pub state: LintScopeState,
+}
+
+/// Completion state for one explicit lint scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LintScopeState {
+    Pending,
+    Ready,
+    Failed(String),
+}
+
+impl LintScopeState {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+            Self::Failed(_) => "failed",
+        }
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        match self {
+            Self::Failed(message) => Some(message),
+            Self::Pending | Self::Ready => None,
+        }
+    }
 }
 
 impl LintReport {
-    /// Count of findings at [`LintSeverity::Error`].
+    /// Start a new lint pass for one scope and return its revision.
+    pub fn begin_scope(&mut self, scope: &str) -> u64 {
+        let revision = self
+            .scopes
+            .get(scope)
+            .map_or(1, |report| report.revision.saturating_add(1));
+        self.scopes.insert(
+            scope.to_owned(),
+            LintScopeReport {
+                revision,
+                state: LintScopeState::Pending,
+            },
+        );
+        revision
+    }
+
+    /// Mark the matching scope pass as complete. A superseded completion is ignored.
+    pub fn complete_scope(&mut self, scope: &str, revision: u64) {
+        if let Some(report) = self.scopes.get_mut(scope)
+            && report.revision == revision
+            && report.state == LintScopeState::Pending
+        {
+            report.state = LintScopeState::Ready;
+        }
+    }
+
+    /// Mark the matching scope pass as failed with an actionable reason.
+    pub fn fail_scope(&mut self, scope: &str, revision: u64, message: impl Into<String>) {
+        if let Some(report) = self.scopes.get_mut(scope)
+            && report.revision == revision
+            && report.state == LintScopeState::Pending
+        {
+            report.state = LintScopeState::Failed(message.into());
+        }
+    }
+
+    /// Count of error-severity findings.
     pub fn errors(&self) -> usize {
         self.findings
             .iter()
-            .filter(|f| f.severity == LintSeverity::Error)
+            .filter(|f| f.severity == DiagnosticSeverity::Error)
             .count()
     }
-    /// Count of findings at [`LintSeverity::Warn`].
+    /// Count of warning-severity findings.
     pub fn warnings(&self) -> usize {
         self.findings
             .iter()
-            .filter(|f| f.severity == LintSeverity::Warn)
+            .filter(|f| f.severity == DiagnosticSeverity::Warning)
             .count()
     }
     /// Drop everything a domain previously reported — what a domain calls before
     /// re-linting the same subject, so a fixed problem disappears instead of
     /// accumulating a duplicate.
     pub fn clear_domain(&mut self, domain: &str) {
-        self.findings.retain(|f| f.domain != domain);
+        self.findings
+            .retain(|finding| finding.domain.as_deref() != Some(domain));
     }
     /// Log a batch and file it. Errors log at `error!`, warnings at `warn!`,
     /// info at `info!` — the console is the first place anyone looks.
-    pub fn extend_logged(&mut self, findings: Vec<LintFinding>) {
+    pub fn extend_logged(&mut self, findings: Vec<Diagnostic>) {
         for f in &findings {
             match f.severity {
-                LintSeverity::Error => error!("[lint] {}", f.line()),
-                LintSeverity::Warn => warn!("[lint] {}", f.line()),
-                LintSeverity::Info => info!("[lint] {}", f.line()),
+                DiagnosticSeverity::Error => error!("[lint] {}", f.summary()),
+                DiagnosticSeverity::Warning => warn!("[lint] {}", f.summary()),
+                DiagnosticSeverity::Info | DiagnosticSeverity::Hint => {
+                    info!("[lint] {}", f.summary())
+                }
             }
         }
         self.unreported += findings.len();
@@ -233,7 +249,7 @@ impl LintReport {
 /// no-scripting case. Policy faults and invalid result shapes become explicit
 /// error findings so validation cannot report a clean result when linting did
 /// not run. Findings remain diagnostic and do not prevent scene loading.
-pub fn run_lint(domain: &str, facts: H) -> Vec<LintFinding> {
+pub fn run_lint(domain: &str, facts: H) -> Vec<Diagnostic> {
     let hook = hook_id(domain);
     let Some(outcome) = lunco_hooks::invoke_unclassified(&hook, &[facts]) else {
         // No rules authored for this domain. Not a problem, and not worth a log
@@ -287,25 +303,28 @@ pub fn run_lint(domain: &str, facts: H) -> Vec<LintFinding> {
             warn!("[lint] policy '{hook}' produced a finding with no rule/message: {item:?}");
             continue;
         }
-        out.push(LintFinding {
-            domain: domain.to_string(),
-            rule,
-            severity: LintSeverity::parse(&text("severity")),
-            subject: text("subject"),
-            message,
-        });
+        let severity = match text("severity").trim().to_ascii_lowercase().as_str() {
+            "error" | "err" => DiagnosticSeverity::Error,
+            "info" => DiagnosticSeverity::Info,
+            _ => DiagnosticSeverity::Warning,
+        };
+        out.push(
+            Diagnostic::new(severity, message, None, None)
+                .with_domain(domain)
+                .with_source(hook_id(domain))
+                .with_code(rule)
+                .with_subject(text("subject")),
+        );
     }
     out
 }
 
-fn policy_failure(domain: &str, rule: &str, hook: &str, message: String) -> LintFinding {
-    LintFinding {
-        domain: domain.to_string(),
-        rule: rule.to_string(),
-        severity: LintSeverity::Error,
-        subject: hook.to_string(),
-        message,
-    }
+fn policy_failure(domain: &str, rule: &str, hook: &str, message: String) -> Diagnostic {
+    Diagnostic::error(message, None, None)
+        .with_domain(domain)
+        .with_source(hook)
+        .with_code(rule)
+        .with_subject(hook)
 }
 
 /// Bevy wiring: the report resource, cleared when a scene is torn down.
@@ -342,7 +361,7 @@ mod tests {
 
     struct Faulting;
     impl ScriptHook for Faulting {
-        fn invoke(&self, _args: &[H]) -> lunco_hooks::HookResult {
+        fn invoke(&self, _invocation: &lunco_hooks::HookInvocation<'_>) -> lunco_hooks::HookResult {
             Err(lunco_hooks::HookError("expected lint policy fault".into()))
         }
     }
@@ -376,9 +395,9 @@ mod tests {
 
         let findings = run_lint("test_fault", H::Unit);
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].rule, "policy-execution-failed");
-        assert_eq!(findings[0].severity, LintSeverity::Error);
-        assert_eq!(findings[0].subject, "lint.test_fault");
+        assert_eq!(findings[0].code.as_deref(), Some("policy-execution-failed"));
+        assert_eq!(findings[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(findings[0].subject.as_deref(), Some("lint.test_fault"));
         assert!(findings[0].message.contains("expected lint policy fault"));
 
         lunco_hooks::unregister(&hook_id("test_fault"));
@@ -400,10 +419,10 @@ mod tests {
         );
         let f = run_lint("test_parse", H::Unit);
         assert_eq!(f.len(), 2);
-        assert_eq!(f[0].severity, LintSeverity::Error);
-        assert_eq!(f[0].rule, "nested-body-no-joint");
-        assert_eq!(f[0].domain, "test_parse");
-        assert_eq!(f[1].severity, LintSeverity::Info);
+        assert_eq!(f[0].severity, DiagnosticSeverity::Error);
+        assert_eq!(f[0].code.as_deref(), Some("nested-body-no-joint"));
+        assert_eq!(f[0].domain.as_deref(), Some("test_parse"));
+        assert_eq!(f[1].severity, DiagnosticSeverity::Info);
         lunco_hooks::unregister(&hook_id("test_parse"));
     }
 
@@ -413,7 +432,7 @@ mod tests {
     fn unknown_severity_becomes_warn() {
         register_canned("test_sev", vec![finding_map("r", "CRITICAL!!")]);
         let f = run_lint("test_sev", H::Unit);
-        assert_eq!(f[0].severity, LintSeverity::Warn);
+        assert_eq!(f[0].severity, DiagnosticSeverity::Warning);
         lunco_hooks::unregister(&hook_id("test_sev"));
     }
 
@@ -433,24 +452,38 @@ mod tests {
     fn clear_domain_only_drops_that_domain() {
         let mut r = LintReport::default();
         r.extend_logged(vec![
-            LintFinding {
-                domain: "usd".into(),
-                rule: "a".into(),
-                severity: LintSeverity::Error,
-                subject: "/x".into(),
-                message: "m".into(),
-            },
-            LintFinding {
-                domain: "rhai".into(),
-                rule: "b".into(),
-                severity: LintSeverity::Warn,
-                subject: "s.rhai".into(),
-                message: "m".into(),
-            },
+            Diagnostic::error("m", None, None)
+                .with_domain("usd")
+                .with_code("a")
+                .with_subject("/x"),
+            Diagnostic::warning("m", None, None)
+                .with_domain("rhai")
+                .with_code("b")
+                .with_subject("s.rhai"),
         ]);
         assert_eq!(r.errors(), 1);
         r.clear_domain("usd");
         assert_eq!(r.findings.len(), 1);
-        assert_eq!(r.findings[0].domain, "rhai");
+        assert_eq!(r.findings[0].domain.as_deref(), Some("rhai"));
+    }
+
+    #[test]
+    fn scope_lifecycle_is_independent_and_rejects_superseded_results() {
+        let mut report = LintReport::default();
+        let first_twin = report.begin_scope("twin");
+        let loaded = report.begin_scope("loaded_stages");
+        report.complete_scope("loaded_stages", loaded);
+        assert_eq!(report.scopes["loaded_stages"].state, LintScopeState::Ready);
+        assert_eq!(report.scopes["twin"].state, LintScopeState::Pending);
+
+        let current_twin = report.begin_scope("twin");
+        report.fail_scope("twin", first_twin, "superseded result");
+        assert_eq!(report.scopes["twin"].state, LintScopeState::Pending);
+        report.fail_scope("twin", current_twin, "source set unavailable");
+        assert_eq!(
+            report.scopes["twin"].state,
+            LintScopeState::Failed("source set unavailable".to_owned())
+        );
+        assert_eq!(report.scopes["loaded_stages"].state, LintScopeState::Ready);
     }
 }

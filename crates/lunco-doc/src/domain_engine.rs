@@ -122,7 +122,7 @@ impl DiagnosticSeverity {
 /// uses, so no source-dependent byte conversions are needed at the boundaries.
 /// (Absolute byte ranges remain available via [`offset_to_line_col`] /
 /// [`line_col_to_offset`] + [`TextRange`], used independently by index spans.)
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Diagnostic {
     /// How the diagnostic should be classified by the UI.
     pub severity: DiagnosticSeverity,
@@ -132,27 +132,152 @@ pub struct Diagnostic {
     pub line: Option<u32>,
     /// 1-based source column, if located.
     pub col: Option<u32>,
+    /// Exclusive end line for the primary source range.
+    pub end_line: Option<u32>,
+    /// Exclusive end column for the primary source range.
+    pub end_col: Option<u32>,
+    /// Inclusive zero-based byte offset for producers with byte spans.
+    pub start_offset: Option<u64>,
+    /// Exclusive zero-based byte offset for producers with byte spans.
+    pub end_offset: Option<u64>,
+    /// Stable diagnostic or lint rule identifier.
+    pub code: Option<String>,
+    /// Model or artifact domain, such as `modelica`, `rhai`, `sysml`, or `usd`.
+    pub domain: Option<String>,
+    /// Producer identifier, such as `rumoca-parser` or `lint.sysml`.
+    pub source: Option<String>,
+    /// Artifact identity understood by the owning domain (for example a USD
+    /// prim path or Modelica qualified name).
+    pub subject: Option<String>,
+    /// Logical source URI or display path, when available.
+    pub uri: Option<String>,
+    /// Actionable human-readable remediation guidance.
+    pub suggestion: Option<String>,
+    /// Additional source locations that explain or relate to this finding.
+    #[serde(default)]
+    pub related: Vec<DiagnosticRelatedInformation>,
+}
+
+/// A related source location attached to a diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DiagnosticRelatedInformation {
+    /// Logical source URI or display path, when available.
+    pub uri: Option<String>,
+    /// 1-based start line, when located.
+    pub line: Option<u32>,
+    /// 1-based start column, when located.
+    pub col: Option<u32>,
+    /// Exclusive end line, when available.
+    pub end_line: Option<u32>,
+    /// Exclusive end column, when available.
+    pub end_col: Option<u32>,
+    /// Why this location is related.
+    pub message: String,
 }
 
 impl Diagnostic {
-    /// An error diagnostic at an optional 1-based `(line, col)`.
-    pub fn error(message: impl Into<String>, line: Option<u32>, col: Option<u32>) -> Self {
+    /// A diagnostic at an optional 1-based `(line, col)`.
+    pub fn new(
+        severity: DiagnosticSeverity,
+        message: impl Into<String>,
+        line: Option<u32>,
+        col: Option<u32>,
+    ) -> Self {
         Self {
-            severity: DiagnosticSeverity::Error,
+            severity,
             message: message.into(),
             line,
             col,
+            end_line: None,
+            end_col: None,
+            start_offset: None,
+            end_offset: None,
+            code: None,
+            domain: None,
+            source: None,
+            subject: None,
+            uri: None,
+            suggestion: None,
+            related: Vec::new(),
         }
+    }
+
+    /// An error diagnostic at an optional 1-based `(line, col)`.
+    pub fn error(message: impl Into<String>, line: Option<u32>, col: Option<u32>) -> Self {
+        Self::new(DiagnosticSeverity::Error, message, line, col)
     }
 
     /// A warning diagnostic at an optional 1-based `(line, col)`.
     pub fn warning(message: impl Into<String>, line: Option<u32>, col: Option<u32>) -> Self {
-        Self {
-            severity: DiagnosticSeverity::Warning,
-            message: message.into(),
-            line,
-            col,
-        }
+        Self::new(DiagnosticSeverity::Warning, message, line, col)
+    }
+
+    /// Set a stable rule or diagnostic identifier.
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
+        self.code = Some(code.into());
+        self
+    }
+
+    /// Set the model or artifact domain that owns this finding.
+    pub fn with_domain(mut self, domain: impl Into<String>) -> Self {
+        self.domain = Some(domain.into());
+        self
+    }
+
+    /// Set the producing subsystem or authored rule policy.
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    /// Set the artifact identity that the diagnostic describes.
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
+
+    /// Set a logical source URI or display path.
+    pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
+        self.uri = Some(uri.into());
+        self
+    }
+
+    /// Set the exclusive end of the primary source range.
+    pub fn with_end(mut self, line: u32, col: u32) -> Self {
+        self.end_line = Some(line);
+        self.end_col = Some(col);
+        self
+    }
+
+    /// Set a half-open zero-based byte range when the producer supplies one.
+    pub fn with_offsets(mut self, start: u64, end: u64) -> Self {
+        self.start_offset = Some(start);
+        self.end_offset = Some(end);
+        self
+    }
+
+    /// Set actionable remediation guidance.
+    pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
+        self.suggestion = Some(suggestion.into());
+        self
+    }
+
+    /// Add related source evidence.
+    pub fn with_related(mut self, related: DiagnosticRelatedInformation) -> Self {
+        self.related.push(related);
+        self
+    }
+
+    /// Compact form for console rows, grouped with its owner and rule.
+    pub fn summary(&self) -> String {
+        let owner = self
+            .domain
+            .as_deref()
+            .or(self.source.as_deref())
+            .unwrap_or("diagnostic");
+        let code = self.code.as_deref().unwrap_or("unspecified");
+        let subject = self.subject.as_deref().unwrap_or("source");
+        format!("[{owner}/{code}] {subject} — {}", self.message)
     }
 
     /// An error diagnostic with no source location (renders but isn't clickable).

@@ -353,7 +353,8 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 It returns the indexed entries, resolver scopes, collisions, source-read
 errors, and structured `twin-namespace-collision` findings in the same response
 body. For the active Twin after `OpenFolder`/`OpenTwin`, use
-`cmd("RunLint", #{scope: "twin", policy: "warn"})` and read `LintReport`.
+`cmd("RunLint", #{scope: "twin", policy: "warn"})` and read
+`query("GetDiagnostics", #{scope: "twin"})` after `complete:true`.
 
 ## Command ownership
 

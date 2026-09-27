@@ -6,6 +6,7 @@
 //! their typed intent into the generic document registry.
 
 use bevy::prelude::*;
+use lunco_api::diagnostics::diagnostic_api_value;
 use lunco_api::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, api_param_u64};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_command_contracts::Ack;
@@ -93,7 +94,10 @@ impl Plugin for SysmlApiPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SysmlApiOp>();
         register_all_commands(app);
-        app.init_resource::<ApiQueryRegistry>();
+        lunco_api::add_plugin_once::<lunco_api::ApiQueryRegistryPlugin>(
+            app,
+            lunco_api::ApiQueryRegistryPlugin,
+        );
         app.init_resource::<PendingSysmlOpens>()
             .add_systems(Update, drain_pending_sysml_opens);
         app.world_mut()
@@ -460,17 +464,22 @@ impl ApiQueryProvider for InspectSysmlDocumentProvider {
                     analysis,
                     ..
                 } => {
-                    let diagnostics = analysis
-                        .diagnostics()
+                    let Some(report) = world
+                        .get_resource::<lunco_doc_bevy::DocumentDiagnostics>()
+                        .and_then(|store| store.get(doc_id))
+                        .and_then(|entry| entry.sources.get("sysml.analysis"))
+                        .filter(|report| report.generation == generation)
+                    else {
+                        return Err(ApiQueryError::new(
+                            ApiErrorCode::InternalError,
+                            "SysML analysis completed without publishing its shared diagnostics report",
+                        ));
+                    };
+                    let diagnostics = report
+                        .diagnostics
                         .iter()
                         .map(|diagnostic| {
-                            api_value!({
-                                "kind": format!("{:?}", diagnostic.kind),
-                                "message": diagnostic.message.clone(),
-                                "file": diagnostic.file.clone(),
-                                "start": diagnostic.start,
-                                "end": diagnostic.end,
-                            })
+                            diagnostic_api_value(diagnostic, Some("sysml"), Some("sysml.analysis"))
                         })
                         .collect::<Vec<_>>();
                     (
