@@ -214,6 +214,17 @@ are installed through Rumoca's bulk parsed-source-set operation. This keeps one
 package admission to one index/invalidation pass and makes a malformed member a
 terminal root-load error rather than exposing a partially installed package.
 
+Immutable source preparation addresses each exact UTF-8 source body with a
+CIDv1 raw/SHA-256 identity and a URI made relative to its source root before
+the compiler session commit; `PreparedSourceRoot::content_closure()` exposes
+that captured result.
+`ModelicaCompiler::source_root_content_closure(id)` exposes the current root
+content state; a failed latest admission and parsed-only source bundles return
+explicit errors instead of stale or unavailable source text. The existing
+64-bit library revision remains a cache invalidation fact. These per-root
+closures do not yet join a live participant's document, all admitted
+dependencies, solver state, and initial values into a replay baseline.
+
 Reusable vehicle accessories keep the same ownership boundary. For example,
 `assets/components/lights/headlight_controller.usda` projects
 `LunCo.Electrical.HeadlightController`: Rhai writes the vehicle's semantic

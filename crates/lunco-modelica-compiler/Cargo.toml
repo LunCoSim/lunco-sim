@@ -16,6 +16,7 @@ lunco-modelica-library = { path = "../lunco-modelica-library" }
 rumoca-compile = { workspace = true }
 rumoca-sim-diagnostics.workspace = true
 web-time = { workspace = true }
+lunco-hash = { path = "../lunco-hash", features = ["cid"] }
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
 
 [lints]

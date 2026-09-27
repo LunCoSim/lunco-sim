@@ -452,11 +452,20 @@ typed queues before that is safe.
   both focused checks for exact content IDs, stable ordering, changed bytes,
   transitive prelude imports, and fail-closed missing or duplicate source
   identities.
+- Immutable Modelica source preparation addresses each exact root file with a
+  portable URI and CIDv1 raw/SHA-256 identity before the compiler commit;
+  `PreparedSourceRoot::content_closure()` exposes the prepared result. The
+  compiler exposes current source content by source-set id; a failed latest
+  admission and parsed-only source bundles return explicit errors. Per-root
+  capture does not yet join the active model document and all compile
+  dependencies. The focused compiler tests cover ordering, exact bytes,
+  root-relative paths, portability errors, and failed latest admission state.
+  `cargo test -p lunco-modelica-compiler source_root_content_closure -j 4`
+  passed all three focused checks.
 - `lunco-core::BuildIdentity` is shared across hosts. `LunCoSimRuntimePlugin`
   installs the stamped build constants when the host has not supplied an
   identity, so headless and GUI baselines can name the software revision.
-  Source closures, solver/runtime snapshots, and the composite collector remain
-  unimplemented.
+  Solver/runtime snapshots and the composite collector remain unimplemented.
 
 ## Runtime and repository constraints
 

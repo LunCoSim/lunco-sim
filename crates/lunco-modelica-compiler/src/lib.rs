@@ -9,6 +9,228 @@ use rumoca_compile::{Session, SessionConfig};
 
 const SOURCE_SET_REVISION_VERSION: u32 = 1;
 
+/// Strong content identity for one exact Modelica source file in an admitted
+/// source root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelicaSourceFileContent {
+    /// Portable logical URI within the source root.
+    pub source_uri: String,
+    /// CIDv1 raw/SHA-256 identity for the exact UTF-8 source bytes.
+    pub cid: lunco_hash::content::Cid,
+}
+
+/// Exact source files represented by one successfully admitted source root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelicaSourceRootContent {
+    /// Stable source-root identity supplied by the admission owner.
+    pub source_set_id: String,
+    /// Sources sorted by portable logical URI.
+    pub files: Vec<ModelicaSourceFileContent>,
+}
+
+/// Why an admitted Modelica source root cannot provide an exact portable
+/// content snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModelicaSourceRootContentError {
+    /// Source preparation retained diagnostics and therefore has no complete set.
+    SourceSetHasDiagnostics,
+    /// The source-root owner did not provide a logical identity.
+    EmptySourceSetId,
+    /// The source-root identity is not a portable logical identifier.
+    NonPortableSourceSetId { source_set_id: String },
+    /// A file did not have a logical URI.
+    EmptyFileUri,
+    /// A file URI could not be made portable relative to its source root.
+    NonPortableFileUri { source_uri: String },
+    /// Multiple source bodies claim the same logical URI.
+    DuplicateFileUri { source_uri: String },
+    /// The latest source-root install did not commit.
+    SourceRootAdmissionFailed {
+        source_set_id: String,
+        details: String,
+    },
+    /// The compiler retained parsed definitions but not the original source text.
+    SourceTextUnavailable { source_set_id: String },
+}
+
+impl std::fmt::Display for ModelicaSourceRootContentError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SourceSetHasDiagnostics => {
+                formatter.write_str("Modelica source root has preparation diagnostics")
+            }
+            Self::EmptySourceSetId => {
+                formatter.write_str("Modelica source root has an empty identity")
+            }
+            Self::NonPortableSourceSetId { source_set_id } => write!(
+                formatter,
+                "Modelica source-root identity `{source_set_id}` is not portable"
+            ),
+            Self::EmptyFileUri => formatter.write_str("Modelica source file has an empty URI"),
+            Self::NonPortableFileUri { source_uri } => write!(
+                formatter,
+                "Modelica source URI `{source_uri}` is not portable within its source root"
+            ),
+            Self::DuplicateFileUri { source_uri } => write!(
+                formatter,
+                "Modelica source root duplicates file URI `{source_uri}`"
+            ),
+            Self::SourceRootAdmissionFailed {
+                source_set_id,
+                details,
+            } => write!(
+                formatter,
+                "Modelica source root `{source_set_id}` failed admission: {details}"
+            ),
+            Self::SourceTextUnavailable { source_set_id } => write!(
+                formatter,
+                "Modelica source root `{source_set_id}` has parsed definitions but no source text"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ModelicaSourceRootContentError {}
+
+fn uri_scheme(value: &str) -> Option<&str> {
+    let (scheme, _) = value.split_once(':')?;
+    let mut chars = scheme.chars();
+    let first = chars.next()?;
+    (first.is_ascii_alphabetic()
+        && chars.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-')
+        }))
+    .then_some(scheme)
+}
+
+fn has_windows_drive_prefix(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn is_file_uri(value: &str) -> bool {
+    uri_scheme(value).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file"))
+}
+
+fn is_nonportable_source_set_id(value: &str) -> bool {
+    use std::path::{Component, Path};
+
+    if is_file_uri(value)
+        || Path::new(value).is_absolute()
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || has_windows_drive_prefix(value)
+    {
+        return true;
+    }
+    if uri_scheme(value).is_some() {
+        return false;
+    }
+    Path::new(&value.replace('\\', "/"))
+        .components()
+        .any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+}
+
+fn relative_path_uri(
+    path: &std::path::Path,
+    source_uri: &str,
+) -> Result<String, ModelicaSourceRootContentError> {
+    use std::path::Component;
+
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(segment) => components.push(segment.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(ModelicaSourceRootContentError::NonPortableFileUri {
+                    source_uri: source_uri.to_owned(),
+                });
+            }
+        }
+    }
+    let uri = components.join("/");
+    if uri.is_empty() {
+        return Err(ModelicaSourceRootContentError::EmptyFileUri);
+    }
+    Ok(uri)
+}
+
+fn source_root_content_closure(
+    id: &str,
+    label: &str,
+    source_files: &[(String, String)],
+    diagnostics: &[String],
+) -> Result<ModelicaSourceRootContent, ModelicaSourceRootContentError> {
+    use std::path::Path;
+
+    if !diagnostics.is_empty() {
+        return Err(ModelicaSourceRootContentError::SourceSetHasDiagnostics);
+    }
+    if id.is_empty() {
+        return Err(ModelicaSourceRootContentError::EmptySourceSetId);
+    }
+    if is_nonportable_source_set_id(id) {
+        return Err(ModelicaSourceRootContentError::NonPortableSourceSetId {
+            source_set_id: id.to_owned(),
+        });
+    }
+
+    let mut files = Vec::with_capacity(source_files.len());
+    for (source_uri, source) in source_files {
+        if source_uri.is_empty() {
+            return Err(ModelicaSourceRootContentError::EmptyFileUri);
+        }
+        if is_file_uri(source_uri) {
+            return Err(ModelicaSourceRootContentError::NonPortableFileUri {
+                source_uri: source_uri.clone(),
+            });
+        }
+        let path = Path::new(source_uri);
+        let logical_uri = if path.is_absolute() {
+            let relative = path.strip_prefix(Path::new(label)).map_err(|_| {
+                ModelicaSourceRootContentError::NonPortableFileUri {
+                    source_uri: source_uri.clone(),
+                }
+            })?;
+            relative_path_uri(relative, source_uri)?
+        } else if has_windows_drive_prefix(source_uri)
+            || source_uri.starts_with("\\\\")
+            || source_uri.starts_with("//")
+        {
+            return Err(ModelicaSourceRootContentError::NonPortableFileUri {
+                source_uri: source_uri.clone(),
+            });
+        } else if uri_scheme(source_uri).is_some() {
+            source_uri.clone()
+        } else {
+            let normalized_path = source_uri.replace('\\', "/");
+            relative_path_uri(Path::new(&normalized_path), source_uri)?
+        };
+        files.push(ModelicaSourceFileContent {
+            source_uri: logical_uri,
+            cid: lunco_hash::content::cid(source.as_bytes()),
+        });
+    }
+    files.sort_unstable_by(|left, right| left.source_uri.cmp(&right.source_uri));
+    for pair in files.windows(2) {
+        if pair[0].source_uri == pair[1].source_uri {
+            return Err(ModelicaSourceRootContentError::DuplicateFileUri {
+                source_uri: pair[0].source_uri.clone(),
+            });
+        }
+    }
+    Ok(ModelicaSourceRootContent {
+        source_set_id: id.to_owned(),
+        files,
+    })
+}
+
 fn source_set_revision(id: &str, files: &[(String, String)]) -> u64 {
     use std::hash::{Hash, Hasher};
 
@@ -58,12 +280,22 @@ pub struct PreparedSourceRoot {
     parsed_roots: std::collections::HashSet<String>,
     diagnostics: Vec<String>,
     warnings: Vec<String>,
+    content_closure: Result<ModelicaSourceRootContent, ModelicaSourceRootContentError>,
 }
 
 impl PreparedSourceRoot {
     /// Stable source-root owner identity carried into the session commit.
     pub fn source_set_id(&self) -> &str {
         &self.id
+    }
+
+    /// Address the exact prepared source files without using their volatile
+    /// preparation revision or filesystem root path. Hashing is completed on
+    /// the preparation worker before the compiler session commit.
+    pub fn content_closure(
+        &self,
+    ) -> Result<ModelicaSourceRootContent, ModelicaSourceRootContentError> {
+        self.content_closure.clone()
     }
 
     /// Prepare a complete source set without touching a compiler session.
@@ -136,6 +368,7 @@ impl PreparedSourceRoot {
         }
 
         let parsed_roots = source_roots_from_parsed_docs(&parsed);
+        let content_closure = source_root_content_closure(&id, &label, &files, &diagnostics);
         Self {
             id,
             label,
@@ -145,6 +378,7 @@ impl PreparedSourceRoot {
             parsed_roots,
             diagnostics,
             warnings,
+            content_closure,
         }
     }
 }
@@ -216,6 +450,11 @@ pub struct ModelicaCompiler {
     /// These are computed from bytes already read by the admission boundary;
     /// the prepared solve cache uses the aggregate without rescanning disk.
     library_revisions: std::collections::HashMap<String, u64>,
+    /// Source-content state for committed roots and failed latest admissions.
+    source_root_content_closures: std::collections::HashMap<
+        String,
+        Result<ModelicaSourceRootContent, ModelicaSourceRootContentError>,
+    >,
     /// Roots whose explicit preparation failed. A live compile must report
     /// that result instead of retrying file reads synchronously on the worker.
     failed_source_roots: std::collections::HashMap<String, String>,
@@ -244,6 +483,7 @@ impl ModelicaCompiler {
             seated_user_uris: std::collections::HashSet::new(),
             library_input_defaults: std::collections::HashMap::new(),
             library_revisions: std::collections::HashMap::new(),
+            source_root_content_closures: std::collections::HashMap::new(),
             failed_source_roots: std::collections::HashMap::new(),
         }
     }
@@ -275,6 +515,12 @@ impl ModelicaCompiler {
         self.installed_roots.extend(roots);
         self.library_revisions
             .insert("source-bundle".to_string(), bundle_revision);
+        self.source_root_content_closures.insert(
+            "source-bundle".to_string(),
+            Err(ModelicaSourceRootContentError::SourceTextUnavailable {
+                source_set_id: "source-bundle".to_string(),
+            }),
+        );
         inserted > 0
     }
 
@@ -958,6 +1204,7 @@ impl ModelicaCompiler {
             parsed_roots,
             mut diagnostics,
             warnings,
+            content_closure,
         } = prepared;
         let file_count = files.len();
         for warning in warnings {
@@ -1016,8 +1263,17 @@ impl ModelicaCompiler {
         if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
             self.library_revisions
                 .insert(id, source_set_revision(&report.source_set_id, &files));
+            self.source_root_content_closures
+                .insert(report.source_set_id.clone(), content_closure);
             self.failed_source_roots.remove(&report.source_set_id);
         } else {
+            self.source_root_content_closures.insert(
+                report.source_set_id.clone(),
+                Err(ModelicaSourceRootContentError::SourceRootAdmissionFailed {
+                    source_set_id: report.source_set_id.clone(),
+                    details: report.diagnostics.join("; "),
+                }),
+            );
             self.failed_source_roots
                 .insert(report.source_set_id.clone(), report.diagnostics.join("; "));
         }
@@ -1053,6 +1309,18 @@ impl ModelicaCompiler {
             revision.hash(&mut hasher);
         }
         hasher.finish()
+    }
+
+    /// Return the current source-content state for one root. Failed latest
+    /// admissions and parsed-only source bundles return explicit errors rather
+    /// than exposing stale or unavailable source text as a closure.
+    pub fn source_root_content_closure(
+        &self,
+        source_set_id: &str,
+    ) -> Option<Result<&ModelicaSourceRootContent, &ModelicaSourceRootContentError>> {
+        self.source_root_content_closures
+            .get(source_set_id)
+            .map(Result::as_ref)
     }
 }
 
@@ -1109,6 +1377,234 @@ fn diagnostics_from_strict_report(
 #[cfg(test)]
 mod source_root_smoke {
     use super::*;
+
+    #[test]
+    fn source_root_content_closure_is_stable_exact_and_portable() {
+        let first_root = std::env::temp_dir().join("luncosim-modelica-root-one");
+        let second_root = std::env::temp_dir().join("luncosim-modelica-root-two");
+        let first = PreparedSourceRoot::prepare(
+            "DiskDemo",
+            first_root.display().to_string(),
+            vec![
+                (
+                    first_root.join("z/Zed.mo").display().to_string(),
+                    "model Zed end Zed;".into(),
+                ),
+                (
+                    first_root.join("a/Alpha.mo").display().to_string(),
+                    "model Alpha end Alpha;".into(),
+                ),
+            ],
+            Vec::new(),
+        );
+        let reordered = PreparedSourceRoot::prepare(
+            "DiskDemo",
+            second_root.display().to_string(),
+            vec![
+                (
+                    second_root.join("a/Alpha.mo").display().to_string(),
+                    "model Alpha end Alpha;".into(),
+                ),
+                (
+                    second_root.join("z/Zed.mo").display().to_string(),
+                    "model Zed end Zed;".into(),
+                ),
+            ],
+            Vec::new(),
+        );
+
+        let closure = first.content_closure().expect("complete source root");
+        assert_eq!(closure, reordered.content_closure().expect("same files"));
+        let backslash_paths = PreparedSourceRoot::prepare(
+            "DiskDemo",
+            "test-root",
+            vec![
+                (r"z\Zed.mo".into(), "model Zed end Zed;".into()),
+                (r"a\Alpha.mo".into(), "model Alpha end Alpha;".into()),
+            ],
+            Vec::new(),
+        );
+        assert_eq!(
+            closure,
+            backslash_paths.content_closure().expect("portable paths")
+        );
+        assert_eq!(
+            closure
+                .files
+                .iter()
+                .map(|file| file.source_uri.as_str())
+                .collect::<Vec<_>>(),
+            ["a/Alpha.mo", "z/Zed.mo"]
+        );
+        assert_eq!(
+            closure.files[0].cid,
+            lunco_hash::content::cid(b"model Alpha end Alpha;")
+        );
+
+        let changed = PreparedSourceRoot::prepare(
+            "DiskDemo",
+            first_root.display().to_string(),
+            vec![(
+                first_root.join("a/Alpha.mo").display().to_string(),
+                "model Alpha end Alpha; ".into(),
+            )],
+            Vec::new(),
+        )
+        .content_closure()
+        .expect("changed source remains addressable");
+        assert_ne!(closure.files[0].cid, changed.files[0].cid);
+    }
+
+    #[test]
+    fn source_root_content_closure_rejects_incomplete_or_nonportable_sources() {
+        let valid = "model Demo end Demo;".to_owned();
+        let diagnosed = PreparedSourceRoot::prepare(
+            "Demo",
+            "test-root",
+            vec![("Demo.mo".into(), valid.clone())],
+            vec!["source read failed".into()],
+        );
+        assert_eq!(
+            diagnosed.content_closure(),
+            Err(ModelicaSourceRootContentError::SourceSetHasDiagnostics)
+        );
+
+        let empty_identity = PreparedSourceRoot::prepare(
+            "",
+            "test-root",
+            vec![("Demo.mo".into(), valid.clone())],
+            Vec::new(),
+        );
+        assert_eq!(
+            empty_identity.content_closure(),
+            Err(ModelicaSourceRootContentError::EmptySourceSetId)
+        );
+
+        let duplicate = PreparedSourceRoot::prepare(
+            "Demo",
+            "test-root",
+            vec![
+                ("Demo.mo".into(), "model A end A;".into()),
+                ("Demo.mo".into(), "model B end B;".into()),
+            ],
+            Vec::new(),
+        );
+        assert_eq!(
+            duplicate.content_closure(),
+            Err(ModelicaSourceRootContentError::DuplicateFileUri {
+                source_uri: "Demo.mo".into(),
+            })
+        );
+
+        let outside_root = PreparedSourceRoot::prepare(
+            "Demo",
+            std::env::temp_dir()
+                .join("luncosim-modelica-root-one")
+                .display()
+                .to_string(),
+            vec![(
+                std::env::temp_dir()
+                    .join("luncosim-modelica-root-two/Demo.mo")
+                    .display()
+                    .to_string(),
+                valid,
+            )],
+            Vec::new(),
+        );
+        assert!(matches!(
+            outside_root.content_closure(),
+            Err(ModelicaSourceRootContentError::NonPortableFileUri { .. })
+        ));
+
+        let machine_local_identity = PreparedSourceRoot::prepare(
+            std::env::temp_dir().display().to_string(),
+            "test-root",
+            vec![("Demo.mo".into(), "model Demo end Demo;".into())],
+            Vec::new(),
+        );
+        assert!(matches!(
+            machine_local_identity.content_closure(),
+            Err(ModelicaSourceRootContentError::NonPortableSourceSetId { .. })
+        ));
+
+        let windows_identity = PreparedSourceRoot::prepare(
+            r"C:\Modelica",
+            "test-root",
+            vec![("Demo.mo".into(), "model Demo end Demo;".into())],
+            Vec::new(),
+        );
+        assert!(matches!(
+            windows_identity.content_closure(),
+            Err(ModelicaSourceRootContentError::NonPortableSourceSetId { .. })
+        ));
+
+        let traversal_identity = PreparedSourceRoot::prepare(
+            "../Modelica",
+            "test-root",
+            vec![("Demo.mo".into(), "model Demo end Demo;".into())],
+            Vec::new(),
+        );
+        assert!(matches!(
+            traversal_identity.content_closure(),
+            Err(ModelicaSourceRootContentError::NonPortableSourceSetId { .. })
+        ));
+
+        for uri in ["file:///work/Demo.mo", "FILE:/work/Demo.mo", r"C:Demo.mo"] {
+            let nonportable_uri = PreparedSourceRoot::prepare(
+                "Demo",
+                "test-root",
+                vec![(uri.into(), "model Demo end Demo;".into())],
+                Vec::new(),
+            );
+            assert!(matches!(
+                nonportable_uri.content_closure(),
+                Err(ModelicaSourceRootContentError::NonPortableFileUri { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn compiler_source_root_content_closure_tracks_latest_admission_state() {
+        let mut compiler = ModelicaCompiler::new();
+        let prepared = PreparedSourceRoot::prepare(
+            "Demo",
+            "test-root",
+            vec![("Demo.mo".into(), "model Demo end Demo;".into())],
+            Vec::new(),
+        );
+        let expected = prepared.content_closure().expect("prepared content");
+        assert!(compiler.source_root_content_closure("Demo").is_none());
+
+        let report = compiler.install_source_root(prepared);
+        assert!(report.diagnostics.is_empty(), "{report:?}");
+        assert_eq!(
+            compiler
+                .source_root_content_closure("Demo")
+                .expect("committed source root")
+                .expect("exact source text retained"),
+            &expected
+        );
+
+        let failed_replacement = PreparedSourceRoot::prepare(
+            "Demo",
+            "test-root",
+            vec![("Demo.mo".into(), "model Broken".into())],
+            vec!["source read failed".into()],
+        );
+        assert!(
+            !compiler
+                .install_source_root(failed_replacement)
+                .diagnostics
+                .is_empty()
+        );
+        let latest_state = compiler
+            .source_root_content_closure("Demo")
+            .expect("latest admission state");
+        assert!(matches!(
+            latest_state,
+            Err(&ModelicaSourceRootContentError::SourceRootAdmissionFailed { .. })
+        ));
+    }
 
     #[test]
     fn source_root_reports_unstrippable_bound_input_files() {

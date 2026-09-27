@@ -226,7 +226,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
 | **`lunco-modelica-library`** | Shared source-library capability: persisted library-root settings, parsed-source bundle admission, browser fetch/decode, lazy source unpacking, editor-index handoff, and the typed Modelica worker bridge. It is a production runtime package, not a test harness; compiler and execution hosts consume its contracts without owning its transport implementation. |
 | **`lunco-modelica-source-roots`** | Twin/workspace Modelica source-root admission: root inventory, manifest-aware Twin path resolution, demand-driven worker loading, and source-root readiness state. `ModelicaCorePlugin` installs this capability for interactive and headless Modelica hosts; the document/runtime core consumes no Twin-specific admission policy. |
-| **`lunco-modelica-compiler`** | Headless Rumoca compiler and source-admission host: one production `ModelicaCompiler` session, source-root seating, strict reachable-DAE compilation, diagnostics, and library revision tracking. It is shared directly by workers, runners, asset tooling, and command-line hosts; tests exercise this same production package. |
+| **`lunco-modelica-compiler`** | Headless Rumoca compiler and source-admission host: one production `ModelicaCompiler` session, source-root seating, per-root CID source closures, strict reachable-DAE compilation, diagnostics, and library revision tracking. It is shared directly by workers, runners, asset tooling, and command-line hosts; tests exercise this same production package. |
 | **`lunco-modelica-core`** | Headless Modelica document/runtime host: document lifecycle, compiler-engine resource synchronization, the opt-in `ModelicaLintPlugin` for shared asynchronous Rumoca lint snapshots, and UI-agnostic runtime contracts. The workbench and Modelica API install the plugin and read the same generation-scoped results. It consumes the compiler, source-library, and source-root capabilities but does not own Twin-specific source admission, Rumoca compilation, source-library transport, solver workers, Fast Run execution, browser fetch, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
 | **`lunco-modelica-runner`** | Modelica experiment backend: source snapshots, compile-once DAE caching, native scheduling, shared batch/interactive run paths, run-bound resolution, and experiment-side Bevy resources. It consumes compiler and solver contracts without owning worker transport. |
 | **`lunco-modelica-worker`** | Stateful Modelica worker engine: headless typed document-compile dispatch, live steppers, a single-owner native Rumoca actor with ordered async compile/source-root commits, worker-local prepared-solve cache, native worker loop, and the Bevy co-simulation bridge. Compile results are fenced by session and captured document generation. It is a production runtime package, not a test harness. |
@@ -1212,8 +1212,9 @@ Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco
 
 **`lunco-modelica-compiler`**
 Headless Rumoca compiler and source-admission host. It owns the production
-`ModelicaCompiler` session, source-root seating, strict reachable-DAE calls,
-located compile diagnostics, and source admission revisions. Workers, runners,
+`ModelicaCompiler` session, source-root seating and per-root CID source
+closures, strict reachable-DAE calls, located compile diagnostics, and source
+admission revisions. Workers, runners,
 asset tooling, command-line hosts, and the compiler's own tests all call this
 same package directly.
 

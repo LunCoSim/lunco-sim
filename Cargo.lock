@@ -8447,6 +8447,7 @@ dependencies = [
  "lunco-assets-core",
  "lunco-assets-runtime",
  "lunco-doc",
+ "lunco-hash",
  "lunco-modelica-ast",
  "lunco-modelica-document",
  "lunco-modelica-index",

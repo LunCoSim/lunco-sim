@@ -48,13 +48,19 @@ owner snapshot: canonical logical layer identifiers sorted for stable
 comparison, each paired with its CIDv1 raw/SHA-256 content identity. It fails
 when the root bytes are absent, any dependency is unresolved, or a layer has no
 identifier. The baseline collector is not wired to this owner primitive yet;
-Rhai/SysML closures, Modelica solver/runtime state, physics
-profile and seeds, committed entity identities, durable baseline storage, and
-playback remain open.
+session-wide Rhai/SysML/Modelica source closure assembly, Modelica solver/runtime
+state, physics profile and seeds, committed entity identities, durable baseline
+storage, and playback remain open.
 
 The source owners retain reusable facts: `SysmlAnalysis::content_closure()`
 returns sorted CIDv1 raw/SHA-256 identities for exact project source bytes and
 all embedded standard-library files, failing on diagnostics or ambiguous names.
+`PreparedSourceRoot::content_closure()` returns portable per-file CID identities
+for an exact Modelica source root, and `ModelicaCompiler` exposes current source
+content state by source-set identity. Failed latest admissions and parsed-only
+source bundles explicitly report unavailable content; these root closures do
+not yet join the live model document or every source dependency into one compile
+snapshot.
 `RhaiScenarioRuntime::active_content_closure(entity)` returns the exact root,
 source-backed literal imports reachable from the root and authored prelude,
 and authored prelude files captured with that entity's last committed compiled
@@ -63,7 +69,8 @@ ambiguous source identity makes closure capture report an error without
 changing Rhai compile or execution behavior. There is still no
 session-level snapshot that joins active roots to their complete closures, and
 the process-local dependency revision remains only an invalidation fact. The
-owner closures do not yet feed application baseline capture.
+owner closures do not yet feed application baseline capture. Modelica solver
+state, initial values, and a session-wide cross-domain snapshot remain open.
 `cargo test -p lunco-scripting-rhai-world rhai_content_closure -j 4` passed
 both focused checks for exact content IDs, stable ordering, changed bytes,
 transitive prelude imports, and fail-closed missing or duplicate source
