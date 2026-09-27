@@ -48,6 +48,7 @@
 use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian_contracts::{
     AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
@@ -56,12 +57,13 @@ use lunco_usd_avian_contracts::{
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
 use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
 use lunco_usd_bevy_scene::{
-    UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending, UsdSceneRoot, instance_key,
-    is_preview_only,
+    UsdPreviewOnly, UsdPrimPath, UsdSceneChangeBatch, UsdSceneGeometryPending, UsdSceneRoot,
+    instance_key, is_preview_only,
 };
 use lunco_usd_bevy_stage::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_stage::{
-    UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset, canonical::CanonicalStages,
+    UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset, UsdStageProjectionPlan,
+    canonical::CanonicalStages,
 };
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
@@ -90,6 +92,7 @@ use lunco_usd_sim_core::{
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 mod wheel_runtime;
 
@@ -128,6 +131,16 @@ pub struct UsdSimPlugin;
 #[derive(Default)]
 struct StageJointTopology {
     canonical_generation: Option<u64>,
+    dirty: bool,
+    /// Prim paths whose composed schemas or relationships feed this cache.
+    source_paths: HashSet<String>,
+    /// Prim paths with authored inputs consumed by this projection owner.
+    simulation_candidates: HashSet<String>,
+    simulation_candidates_ready: bool,
+    /// Prepared vehicle actuator outputs, keyed by the authored mobility root.
+    /// Attribute and Modelica collection inspection is done with the immutable
+    /// stage plan before per-prim UI projection.
+    vehicle_output_ports: HashMap<String, Vec<String>>,
     joint_targets: HashMap<String, String>,
     /// Physical wheel revolute joints and their authored carrier body. The
     /// wheel projector uses this composed relationship instead of assuming a
@@ -165,6 +178,21 @@ struct JointTopologyIndex {
     by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, StageJointTopology>,
 }
 
+#[derive(Resource, Default)]
+struct PreparedJointTopologyTasks(
+    HashMap<bevy::asset::AssetId<UsdStageAsset>, PreparedJointTopologyTask>,
+);
+
+struct PreparedJointTopologyTask {
+    plan: Arc<UsdStageProjectionPlan>,
+    task: Task<StageJointTopology>,
+}
+
+#[derive(Resource, Default)]
+struct PendingJointTopologyChanges(
+    HashMap<bevy::asset::AssetId<UsdStageAsset>, JointTopologyChangeHistory>,
+);
+
 /// Lifecycle-queued USD prims awaiting simulation projection.
 #[derive(Resource)]
 struct PendingUsdSimPrimWork(PendingEntityWork);
@@ -183,9 +211,13 @@ impl JointTopologyIndex {
         reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     ) {
         let topology = self.by_stage.entry(stage).or_default();
-        if topology.canonical_generation == Some(generation) {
+        if !topology.dirty && topology.canonical_generation == Some(generation) {
             return;
         }
+        let rebuild_simulation_candidates = !topology.simulation_candidates_ready
+            || (!topology.dirty
+                && topology.canonical_generation.is_some()
+                && topology.canonical_generation != Some(generation));
         topology.joint_targets.clear();
         topology.physical_wheel_bodies.clear();
         topology.authored_joints.clear();
@@ -194,8 +226,57 @@ impl JointTopologyIndex {
         topology.wheel_attachment_tires.clear();
         topology.wheel_attachment_indices.clear();
         topology.invalid_wheel_attachments.clear();
-        collect_joint_scan_read(reader, topology);
+        topology.vehicle_output_ports.clear();
+        topology.source_paths.clear();
+        let candidates = collect_stage_candidate_paths(reader);
+        collect_joint_scan_read(reader, topology, &candidates);
+        if rebuild_simulation_candidates {
+            topology.simulation_candidates.clear();
+            collect_simulation_candidate_paths(&candidates, &mut topology.simulation_candidates);
+            topology.simulation_candidates_ready = true;
+        }
         topology.canonical_generation = Some(generation);
+        topology.dirty = false;
+    }
+
+    fn observe_scene_change(
+        &mut self,
+        change: &UsdSceneChangeBatch,
+        reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    ) -> bool {
+        let Some(topology) = self.by_stage.get_mut(&change.stage_id) else {
+            return false;
+        };
+        let invalidates = topology_change_affects(change, &topology.source_paths, reader);
+        for path in change
+            .resynced_prim_paths
+            .iter()
+            .chain(change.info_prim_paths.iter())
+        {
+            update_simulation_candidate(reader, path, &mut topology.simulation_candidates);
+        }
+        if invalidates {
+            topology.dirty = true;
+        } else if !topology.dirty {
+            topology.canonical_generation = Some(change.stage_generation);
+        }
+        true
+    }
+
+    fn needs_refresh(&self, stage: bevy::asset::AssetId<UsdStageAsset>, generation: u64) -> bool {
+        self.by_stage.get(&stage).is_some_and(|topology| {
+            topology.dirty || topology.canonical_generation != Some(generation)
+        })
+    }
+
+    fn seed_simulation_candidates(
+        &mut self,
+        stage: bevy::asset::AssetId<UsdStageAsset>,
+        candidates: HashSet<String>,
+    ) {
+        let topology = self.by_stage.entry(stage).or_default();
+        topology.simulation_candidates = candidates;
+        topology.simulation_candidates_ready = true;
     }
 
     fn invalidate_stage(&mut self, stage: bevy::asset::AssetId<UsdStageAsset>) {
@@ -207,9 +288,46 @@ impl JointTopologyIndex {
     }
 }
 
+#[derive(Default)]
+struct JointTopologyChangeHistory {
+    latest_generation: u64,
+    resynced_paths: HashSet<String>,
+    info_paths: HashSet<String>,
+}
+
+fn track_joint_topology_changes(
+    mut changes: MessageReader<UsdSceneChangeBatch>,
+    mut topology: ResMut<JointTopologyIndex>,
+    mut history: ResMut<PendingJointTopologyChanges>,
+    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
+) {
+    for change in changes.read() {
+        if let Some(stage_asset) = stages.get(change.stage_id) {
+            let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
+            if topology.observe_scene_change(change, &reader) {
+                continue;
+            }
+        }
+        if topology.get(change.stage_id).is_some() {
+            continue;
+        }
+        let pending = history.0.entry(change.stage_id).or_default();
+        pending.latest_generation = pending.latest_generation.max(change.stage_generation);
+        pending
+            .resynced_paths
+            .extend(change.resynced_prim_paths.iter().cloned());
+        pending
+            .info_paths
+            .extend(change.info_prim_paths.iter().cloned());
+    }
+}
+
 fn invalidate_joint_topology_on_stage_asset_event(
     mut events: MessageReader<AssetEvent<UsdStageAsset>>,
     mut topology: ResMut<JointTopologyIndex>,
+    mut tasks: ResMut<PreparedJointTopologyTasks>,
+    mut changes: ResMut<PendingJointTopologyChanges>,
 ) {
     for event in events.read() {
         let stage = match event {
@@ -217,9 +335,143 @@ fn invalidate_joint_topology_on_stage_asset_event(
             | AssetEvent::Modified { id }
             | AssetEvent::Removed { id }
             | AssetEvent::LoadedWithDependencies { id } => *id,
-            AssetEvent::Unused { .. } => continue,
+            AssetEvent::Unused { id } => {
+                tasks.0.remove(id);
+                changes.0.remove(id);
+                continue;
+            }
         };
         topology.invalidate_stage(stage);
+        tasks.0.remove(&stage);
+        changes.0.remove(&stage);
+    }
+}
+
+fn reset_joint_topology_state(
+    mut topology: ResMut<JointTopologyIndex>,
+    mut tasks: ResMut<PreparedJointTopologyTasks>,
+    mut changes: ResMut<PendingJointTopologyChanges>,
+) {
+    topology.by_stage.clear();
+    tasks.0.clear();
+    changes.0.clear();
+}
+
+fn request_prepared_joint_topology(
+    stage: bevy::asset::AssetId<UsdStageAsset>,
+    plan: Arc<UsdStageProjectionPlan>,
+    tasks: &mut PreparedJointTopologyTasks,
+) {
+    if tasks
+        .0
+        .get(&stage)
+        .is_some_and(|pending| Arc::ptr_eq(&pending.plan, &plan))
+    {
+        return;
+    }
+    let worker_plan = plan.clone();
+    let task = AsyncComputeTaskPool::get().spawn(async move {
+        let mut topology = StageJointTopology::default();
+        let candidates = collect_stage_candidate_paths(worker_plan.as_ref());
+        collect_joint_scan_read(worker_plan.as_ref(), &mut topology, &candidates);
+        collect_simulation_candidate_paths(&candidates, &mut topology.simulation_candidates);
+        topology.simulation_candidates_ready = true;
+        topology
+    });
+    tasks
+        .0
+        .insert(stage, PreparedJointTopologyTask { plan, task });
+}
+
+fn poll_prepared_joint_topology(
+    tasks: &mut PreparedJointTopologyTasks,
+    stages: &Assets<UsdStageAsset>,
+    canonical: &CanonicalStages,
+    topology_index: &mut JointTopologyIndex,
+    changes: &mut PendingJointTopologyChanges,
+) {
+    let mut completed = Vec::new();
+    tasks.0.retain(|stage, pending| {
+        if let Some(topology) = block_on(future::poll_once(&mut pending.task)) {
+            completed.push((*stage, pending.plan.clone(), topology));
+            false
+        } else {
+            true
+        }
+    });
+
+    for (stage, plan, mut prepared) in completed {
+        let Some(stage_asset) = stages.get(stage) else {
+            changes.0.remove(&stage);
+            continue;
+        };
+        if !Arc::ptr_eq(&stage_asset.projection_plan, &plan) {
+            continue;
+        }
+
+        let (reader, generation) = canonical.reader_for(stage, stage_asset);
+        let change_history = changes.0.remove(&stage);
+        let relevant_resyncs = change_history.as_ref().map_or(0, |history| {
+            history
+                .resynced_paths
+                .iter()
+                .filter(|path| topology_change_affects_path(path, &prepared.source_paths, &reader))
+                .count()
+        });
+        let relevant_info_changes = change_history.as_ref().map_or(0, |history| {
+            history
+                .info_paths
+                .iter()
+                .filter(|path| prepared.source_paths.contains(*path))
+                .count()
+        });
+        let generation_without_history = generation > 0 && change_history.is_none();
+        let stale = relevant_resyncs > 0 || relevant_info_changes > 0 || generation_without_history;
+        let _validation_span = bevy::log::info_span!(
+            "usd_sim_prepared_topology_reconcile",
+            generation,
+            history_present = change_history.is_some(),
+            relevant_resyncs,
+            relevant_info_changes,
+            generation_without_history
+        )
+        .entered();
+        if stale {
+            if let Some(history) = &change_history {
+                for path in history
+                    .resynced_paths
+                    .iter()
+                    .chain(history.info_paths.iter())
+                {
+                    update_simulation_candidate(&reader, path, &mut prepared.simulation_candidates);
+                }
+                topology_index.seed_simulation_candidates(
+                    stage,
+                    std::mem::take(&mut prepared.simulation_candidates),
+                );
+            }
+            topology_index.refresh_if_stale(stage, generation, &reader);
+        } else {
+            if let Some(history) = &change_history {
+                for path in history
+                    .resynced_paths
+                    .iter()
+                    .chain(history.info_paths.iter())
+                {
+                    update_simulation_candidate(&reader, path, &mut prepared.simulation_candidates);
+                }
+            }
+            prepared.canonical_generation = Some(
+                generation.max(
+                    change_history
+                        .as_ref()
+                        .map_or(0, |history| history.latest_generation),
+                ),
+            );
+            prepared.dirty = false;
+            prepared.simulation_candidates_ready = true;
+            topology_index.by_stage.insert(stage, prepared);
+        }
     }
 }
 
@@ -358,6 +610,7 @@ impl Plugin for UsdSimPlugin {
         app.add_systems(lunco_core::SceneTeardown, retire_scene_cameras);
         app.init_resource::<PendingUsdSimPrimWork>();
         app.add_systems(lunco_core::SceneTeardown, reset_usd_sim_prim_work);
+        app.add_systems(lunco_core::SceneTeardown, reset_joint_topology_state);
         // Client-only: reconstruct a remote rover's wheels from its chassis
         // (kinematic followers — wheels are no longer replicated), then re-derive
         // the cosmetic visual roll. Chained so the visual spin layers on the
@@ -376,7 +629,17 @@ impl Plugin for UsdSimPlugin {
         .add_systems(PreUpdate, resolve_differential_coupling)
         .init_resource::<GroundColliderPending>()
         .init_resource::<JointTopologyIndex>()
-        .add_systems(PreUpdate, invalidate_joint_topology_on_stage_asset_event)
+        .init_resource::<PreparedJointTopologyTasks>()
+        .init_resource::<PendingJointTopologyChanges>()
+        .add_systems(
+            PreUpdate,
+            (
+                invalidate_joint_topology_on_stage_asset_event,
+                track_joint_topology_changes,
+            )
+                .chain()
+                .after(lunco_core::RuntimeCycleSet::Lifecycle),
+        )
         .add_systems(
             Update,
             (process_usd_sim_prims
@@ -487,35 +750,78 @@ fn process_usd_sim_prims(
     // use the live canonical stage selected by the shared reader boundary.
     canonical: NonSend<CanonicalStages>,
     mut topology_index: ResMut<JointTopologyIndex>,
+    mut topology_tasks: ResMut<PreparedJointTopologyTasks>,
+    mut topology_changes: ResMut<PendingJointTopologyChanges>,
     mut runtime_diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
     let started = web_time::Instant::now();
     let mut processed = 0usize;
     let mut authored_diagnostics = Vec::new();
-    let mut entities = pending.0.take_queued();
-    if pending.0.take_initial_discovery() {
-        // One bootstrap query covers prims that existed before this projector
-        // was installed. Normal arrivals are supplied by lifecycle observers.
-        entities.extend(query.iter().map(|(entity, ..)| entity));
-    }
-    let mut unprocessed: Vec<_> = entities
-        .into_iter()
-        .filter_map(|entity| query.get(entity).ok())
-        .collect();
-    unprocessed.sort_by(|left, right| left.1.path.cmp(&right.1.path));
-
-    // Build (or refresh) each involved stage's immutable topology once. The
-    // canonical generation is the authored-composition invalidation signal;
-    // waiting for a mesh or another sibling no longer re-scans every spec.
-    let mut seen_stages = HashSet::new();
-    for (_, prim_path, ..) in &unprocessed {
-        let id = prim_path.stage_handle.id();
-        if !seen_stages.insert(id) {
-            continue;
+    let unprocessed = {
+        let _span = bevy::log::info_span!("usd_sim_pending_collect_sort").entered();
+        let mut entities = pending.0.take_queued();
+        if pending.0.take_initial_discovery() {
+            // One bootstrap query covers prims that existed before this projector
+            // was installed. Normal arrivals are supplied by lifecycle observers.
+            entities.extend(query.iter().map(|(entity, ..)| entity));
         }
-        if let Some(stage_asset) = stages.get(&prim_path.stage_handle) {
+        let mut unprocessed: Vec<_> = entities
+            .into_iter()
+            .filter_map(|entity| query.get(entity).ok())
+            .collect();
+        unprocessed.sort_by(|left, right| left.1.path.cmp(&right.1.path));
+        unprocessed
+    };
+
+    // Initial topology reads use the immutable prepared plan on workers. Scene
+    // changes are reconciled by the typed change observer below; only structural
+    // edits or changes to topology source prims require a live-stage refresh.
+    {
+        let _span = bevy::log::info_span!("usd_sim_topology_refresh").entered();
+        let mut seen_stages = HashSet::new();
+        let mut stage_ids = Vec::new();
+        for (_, prim_path, ..) in &unprocessed {
+            let id = prim_path.stage_handle.id();
+            if !seen_stages.insert(id) {
+                continue;
+            }
+            if let Some(stage_asset) = stages.get(&prim_path.stage_handle) {
+                stage_ids.push(id);
+                if topology_index.get(id).is_none() {
+                    request_prepared_joint_topology(
+                        id,
+                        stage_asset.projection_plan.clone(),
+                        &mut topology_tasks,
+                    );
+                }
+            }
+        }
+        poll_prepared_joint_topology(
+            &mut topology_tasks,
+            &stages,
+            &canonical,
+            &mut topology_index,
+            &mut topology_changes,
+        );
+        for id in stage_ids {
+            if !topology_index.needs_refresh(id, canonical.generation_for(id)) {
+                continue;
+            }
+            let Some(stage_asset) = stages.get(id) else {
+                continue;
+            };
             let (reader, generation) = canonical.reader_for(id, stage_asset);
             topology_index.refresh_if_stale(id, generation, &reader);
+            topology_changes.0.remove(&id);
+        }
+        if unprocessed
+            .iter()
+            .any(|(_, prim_path, ..)| topology_index.get(prim_path.stage_handle.id()).is_none())
+        {
+            for (entity, ..) in &unprocessed {
+                pending.0.queue(*entity);
+            }
+            return;
         }
     }
 
@@ -526,6 +832,12 @@ fn process_usd_sim_prims(
     // that different order.  Sort by the stable composed USD path before
     // recording any simulation state.  This keeps physics admission independent
     // of loader timing while preserving the existing bounded work path.
+    let projection_prim_count = unprocessed.len();
+    let _projection_span = bevy::log::info_span!(
+        "usd_sim_prim_projection_batch",
+        prim_count = projection_prim_count
+    )
+    .entered();
     for (
         entity,
         prim_path,
@@ -577,6 +889,20 @@ fn process_usd_sim_prims(
             pending.0.queue(entity);
             continue;
         };
+        if instance_projection.is_none()
+            && !topology.simulation_candidates.contains(&prim_path.path)
+        {
+            // Keep readiness accounting complete without running USD readers
+            // for a prim whose schemas and authored properties have no sim owner.
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            processed += 1;
+            continue;
+        }
+        let _span = bevy::log::info_span!(
+            "usd_sim_prim_projection",
+            prim_path = %prim_path.path
+        )
+        .entered();
         process_usd_sim_prim_read(
             &reader,
             entity,
@@ -609,6 +935,170 @@ fn process_usd_sim_prims(
     }
 }
 
+const JOINT_TOPOLOGY_TYPES: &[&str] = &[
+    "PhysicsFixedJoint",
+    "PhysicsRevoluteJoint",
+    "PhysicsPrismaticJoint",
+    "PhysicsSphericalJoint",
+    "PhysicsDistanceJoint",
+];
+const WHEEL_ATTACHMENT_API: &str = "PhysxVehicleWheelAttachmentAPI";
+const VEHICLE_CONTEXT_API: &str = "PhysxVehicleContextAPI";
+const VEHICLE_WHEEL_API: &str = "PhysxVehicleWheelAPI";
+const SIMULATION_CANDIDATE_TYPES: &[&str] = &["PhysxPhysicsGearJoint"];
+const SIMULATION_CANDIDATE_APIS: &[&str] = &[
+    "LunCoAvatarAPI",
+    "LunCoForceActuatorAPI",
+    "LunCoMassContributionAPI",
+    "LunCoPhysicsInitializationAPI",
+    "LunCoRaycastAPI",
+    "LunCoSuspensionVisualAPI",
+    "LunCoTorqueActuatorAPI",
+    "PhysicsArticulationRootAPI",
+    "PhysicsRigidBodyAPI",
+    "PhysxVehicleContextAPI",
+    "PhysxVehicleWheelAPI",
+];
+
+fn is_simulation_candidate(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+) -> bool {
+    reader
+        .type_name(path)
+        .is_some_and(|name| SIMULATION_CANDIDATE_TYPES.contains(&name.as_str()))
+        || SIMULATION_CANDIDATE_APIS
+            .iter()
+            .any(|schema| reader.has_api_schema(path, schema))
+        || reader.any_attr_with_prefix(path, "lunco:")
+}
+
+fn collect_stage_candidate_paths(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+) -> Vec<lunco_usd_bevy_stage::read::UsdReadPrimFacts> {
+    let types = JOINT_TOPOLOGY_TYPES
+        .iter()
+        .chain(SIMULATION_CANDIDATE_TYPES)
+        .copied()
+        .collect::<Vec<_>>();
+    let apis = std::iter::once(WHEEL_ATTACHMENT_API)
+        .chain(std::iter::once(VEHICLE_CONTEXT_API))
+        .chain(std::iter::once(VEHICLE_WHEEL_API))
+        .chain(SIMULATION_CANDIDATE_APIS.iter().copied())
+        .collect::<Vec<_>>();
+    reader.prim_schema_facts_matching(&types, &apis, "lunco:")
+}
+
+fn collect_simulation_candidate_paths(
+    stage_candidates: &[lunco_usd_bevy_stage::read::UsdReadPrimFacts],
+    candidates: &mut HashSet<String>,
+) {
+    candidates.extend(
+        stage_candidates
+            .iter()
+            .filter(|candidate| {
+                candidate
+                    .type_name
+                    .as_deref()
+                    .is_some_and(|name| SIMULATION_CANDIDATE_TYPES.contains(&name))
+                    || candidate
+                        .api_schemas
+                        .iter()
+                        .any(|name| SIMULATION_CANDIDATE_APIS.contains(&name.as_str()))
+                    || candidate.has_attr_prefix
+            })
+            .map(|candidate| candidate.path.as_str().to_owned()),
+    );
+}
+
+fn update_simulation_candidate(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &str,
+    candidates: &mut HashSet<String>,
+) {
+    let Ok(path_value) = SdfPath::new(path) else {
+        candidates.remove(path);
+        return;
+    };
+    if is_simulation_candidate(reader, &path_value) {
+        candidates.insert(path.to_owned());
+    } else {
+        candidates.remove(path);
+    }
+}
+
+fn topology_change_affects(
+    change: &UsdSceneChangeBatch,
+    source_paths: &HashSet<String>,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+) -> bool {
+    change
+        .resynced_prim_paths
+        .iter()
+        .any(|path| topology_change_affects_path(path, source_paths, reader))
+        || change
+            .info_prim_paths
+            .iter()
+            .any(|path| source_paths.contains(path))
+}
+
+fn topology_change_affects_path(
+    path: &str,
+    source_paths: &HashSet<String>,
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+) -> bool {
+    if source_paths.contains(path) {
+        return true;
+    }
+    let Ok(path) = SdfPath::new(path) else {
+        return true;
+    };
+    reader
+        .type_name(&path)
+        .is_some_and(|name| JOINT_TOPOLOGY_TYPES.contains(&name.as_str()))
+        || reader.has_api_schema(&path, WHEEL_ATTACHMENT_API)
+        || reader.has_api_schema(&path, VEHICLE_CONTEXT_API)
+}
+
+fn collect_vehicle_output_ports(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    root: &SdfPath,
+) -> (Vec<String>, HashSet<String>) {
+    let root_attributes = reader.attr_names(root);
+    let network_members = reader
+        .collection_members(root, "components")
+        .unwrap_or_default();
+    let network_boundary = lunco_usd_bevy_core::program::ModelicaNetworkBoundaryIndex::new(
+        root,
+        &root_attributes,
+        &network_members,
+    );
+    let mut source_paths = HashSet::from([root.as_str().to_owned()]);
+    source_paths.extend(
+        network_members
+            .iter()
+            .filter(|path| !path.is_property_path())
+            .map(|path| path.as_str().to_owned()),
+    );
+    let mut port_names = Vec::new();
+    for attr in &root_attributes {
+        let Some(name) = attr.strip_prefix("outputs:") else {
+            continue;
+        };
+        // NUMERIC outputs only. `outputs:` is UsdShade's namespace too, so a
+        // vessel root that also carries a material network would otherwise
+        // mint a phantom actuator port from `token outputs:surface`.
+        if reader.real(root, attr).is_none()
+            || network_boundary.is_network_boundary_output(reader, attr)
+            || port_names.iter().any(|existing| existing == name)
+        {
+            continue;
+        }
+        port_names.push(name.to_owned());
+    }
+    (port_names, source_paths)
+}
+
 /// Per-stage joint scan (Pass 1), generic over the read source ([`UsdRead`]):
 /// collects `PhysicsRevoluteJoint` `body1` targets (wheel dispatch) and the matching
 /// `body0` targets (articulation roots) only when `body1` is a declared vehicle wheel.
@@ -621,69 +1111,95 @@ fn process_usd_sim_prims(
 fn collect_joint_scan_read(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     topology: &mut StageJointTopology,
+    candidates: &[lunco_usd_bevy_stage::read::UsdReadPrimFacts],
 ) {
-    for path in reader.prim_paths() {
-        let joint_type = reader.type_name(&path);
-        let body1_target = reader.rel_target(&path, "physics:body1");
-        if matches!(
-            joint_type.as_deref(),
-            Some(
-                "PhysicsFixedJoint"
-                    | "PhysicsRevoluteJoint"
-                    | "PhysicsPrismaticJoint"
-                    | "PhysicsSphericalJoint"
-                    | "PhysicsDistanceJoint"
-            )
-        ) {
-            let body0 = reader
-                .rel_target(&path, "physics:body0")
-                .and_then(|target| {
-                    lunco_usd_avian_reader::joint::resolve_joint_body_path(reader, &target)
-                })
-                .unwrap_or_default();
-            let body1 = body1_target
-                .clone()
-                .and_then(|target| {
-                    lunco_usd_avian_reader::joint::resolve_joint_body_path(reader, &target)
-                })
-                .unwrap_or_default();
-            let is_physical_wheel_joint = joint_type.as_deref() == Some("PhysicsRevoluteJoint")
-                && body1_target.as_deref().is_some_and(|target| {
-                    SdfPath::new(target)
-                        .ok()
-                        .is_some_and(|wheel| reader.has_api_schema(&wheel, "PhysxVehicleWheelAPI"))
-                });
-            debug!(
-                "USD authored joint topology: {} -> ({}, {})",
-                path.as_str(),
-                body0,
-                body1
-            );
-            // A physical wheel's authored revolute joint is the USD identity of
-            // the wheel attachment, but the mobility projector owns the runtime
-            // constraint: it creates the admitted wheel joint with the actuator
-            // motor on the wheel entity's actual carrier mount. Keeping the
-            // authored identity in the generic readiness set would wait forever,
-            // because that synthesized joint intentionally has no USD prim path.
-            if !is_physical_wheel_joint {
-                topology
-                    .authored_joints
-                    .insert(path.as_str().to_string(), (body0, body1));
-            } else if !body0.is_empty() {
-                topology.physical_wheel_bodies.insert(body1, body0);
-            }
+    let _joint_span = bevy::log::info_span!("usd_sim_joint_topology_scan").entered();
+    let vehicle_wheel_paths = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .api_schemas
+                .iter()
+                .any(|schema| schema == VEHICLE_WHEEL_API)
+        })
+        .map(|candidate| candidate.path.as_str().to_owned())
+        .collect::<HashSet<_>>();
+    let mut attachment_paths = Vec::new();
+    for candidate in candidates {
+        let path = &candidate.path;
+        let joint_type = candidate.type_name.as_deref();
+        if candidate
+            .api_schemas
+            .iter()
+            .any(|schema| schema == WHEEL_ATTACHMENT_API)
+        {
+            attachment_paths.push(path.clone());
         }
-        if joint_type.as_deref() == Some("PhysicsRevoluteJoint") {
+        if candidate
+            .api_schemas
+            .iter()
+            .any(|schema| schema == VEHICLE_CONTEXT_API)
+        {
+            let (ports, source_paths) = collect_vehicle_output_ports(reader, path);
+            topology
+                .vehicle_output_ports
+                .insert(path.as_str().to_owned(), ports);
+            topology.source_paths.extend(source_paths);
+        }
+        let Some(joint_type) = joint_type.filter(|name| JOINT_TOPOLOGY_TYPES.contains(name)) else {
+            continue;
+        };
+        topology.source_paths.insert(path.as_str().to_owned());
+        let body0_target = reader.rel_target(path, "physics:body0");
+        let body1_target = reader.rel_target(path, "physics:body1");
+        let resolve_body = |target: Option<&String>| {
+            target
+                .and_then(|target| {
+                    lunco_usd_avian_reader::joint::resolve_joint_body_path(reader, target)
+                })
+                .unwrap_or_default()
+        };
+        let body0 = resolve_body(body0_target.as_ref());
+        let body1 = resolve_body(body1_target.as_ref());
+        topology.source_paths.extend(
+            body0_target
+                .iter()
+                .cloned()
+                .chain(body1_target.iter().cloned()),
+        );
+        let is_physical_wheel_joint = joint_type == "PhysicsRevoluteJoint"
+            && body1_target
+                .as_deref()
+                .is_some_and(|target| vehicle_wheel_paths.contains(target));
+        debug!(
+            "USD authored joint topology: {} -> ({}, {})",
+            path.as_str(),
+            body0,
+            body1
+        );
+        // A physical wheel's authored revolute joint is the USD identity of
+        // the wheel attachment, but the mobility projector owns the runtime
+        // constraint: it creates the admitted wheel joint with the actuator
+        // motor on the wheel entity's actual carrier mount. Keeping the
+        // authored identity in the generic readiness set would wait forever,
+        // because that synthesized joint intentionally has no USD prim path.
+        if !is_physical_wheel_joint {
+            topology
+                .authored_joints
+                .insert(path.as_str().to_string(), (body0, body1));
+        } else if !body0.is_empty() {
+            topology.physical_wheel_bodies.insert(body1, body0);
+        }
+        if joint_type == "PhysicsRevoluteJoint" {
             if let Some(body1) = body1_target {
+                topology.source_paths.insert(body1.clone());
                 debug!("USD joint dispatch: {} → wheel {}", path.as_str(), body1);
-                let is_vehicle_wheel = SdfPath::new(&body1)
-                    .ok()
-                    .is_some_and(|wheel| reader.has_api_schema(&wheel, "PhysxVehicleWheelAPI"));
+                let is_vehicle_wheel = vehicle_wheel_paths.contains(&body1);
                 if is_vehicle_wheel {
                     topology
                         .joint_targets
                         .insert(body1, path.as_str().to_string());
-                    if let Some(body0) = reader.rel_target(&path, "physics:body0") {
+                    if let Some(body0) = body0_target {
                         topology.articulation_roots.insert(body0);
                     }
                 }
@@ -691,7 +1207,18 @@ fn collect_joint_scan_read(
         }
     }
 
-    let attachments = lunco_usd_sim_authoring::collect_wheel_attachment_topology(reader);
+    drop(_joint_span);
+    let _attachment_span = bevy::log::info_span!("usd_sim_wheel_attachment_scan").entered();
+    let attachments = lunco_usd_sim_authoring::collect_wheel_attachment_topology_from_paths(
+        reader,
+        attachment_paths,
+    );
+    topology
+        .source_paths
+        .extend(attachments.source_paths().cloned());
+    topology
+        .source_paths
+        .extend(attachments.invalid_wheels().cloned());
     topology
         .invalid_wheel_attachments
         .extend(attachments.invalid_wheels().cloned());
@@ -1304,29 +1831,28 @@ fn process_usd_sim_prim_read(
         );
 
         let mut port_map = HashMap::new();
-        let mut port_names: Vec<String> = Vec::new();
+        let port_names = if instance_projection.is_some() {
+            collect_vehicle_output_ports(reader, &sdf_path).0
+        } else if let Some(ports) = topology.vehicle_output_ports.get(&prim_path.path) {
+            ports.clone()
+        } else {
+            let message = format!(
+                "{} applies PhysxVehicleContextAPI but its prepared actuator outputs are unavailable",
+                prim_path.path
+            );
+            push_usd_sim_diagnostic(
+                diagnostics,
+                &prim_path.path,
+                "vehicle-output-preparation",
+                message.clone(),
+            );
+            warn!("USD vehicle {message}");
+            Vec::new()
+        };
         // A port is an authored numeric `outputs:` attribute, the same way a
         // command is an `inputs:` attribute. This supports conventional
         // drive_left/drive_right/steering/brake names and arbitrary per-wheel
         // channels without a Rust-side hard-coded vocabulary.
-        for attr in reader.attr_names(&sdf_path) {
-            let Some(name) = attr.strip_prefix("outputs:") else {
-                continue;
-            };
-            // NUMERIC outputs only. `outputs:` is UsdShade's namespace too, so a
-            // vessel root that also carries a material network would otherwise
-            // mint a phantom actuator port from `token outputs:surface`. An
-            // actuator port carries a number; a shader terminal does not.
-            if reader.real(&sdf_path, &attr).is_none() {
-                continue;
-            }
-            if lunco_usd_bevy_core::program::is_network_boundary_output(reader, &sdf_path, &attr) {
-                continue;
-            }
-            if !port_names.iter().any(|n| n == name) {
-                port_names.push(name.to_string());
-            }
-        }
         commands
             .entity(entity)
             .try_insert((lunco_core::SelectableRoot, lunco_core::MobilityRoot))

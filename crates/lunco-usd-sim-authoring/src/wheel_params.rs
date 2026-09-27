@@ -86,6 +86,7 @@ pub struct WheelAttachmentBinding {
 pub struct WheelAttachmentTopology {
     bindings: HashMap<String, WheelAttachmentBinding>,
     invalid_wheels: HashSet<String>,
+    source_paths: HashSet<String>,
 }
 
 impl WheelAttachmentTopology {
@@ -113,6 +114,13 @@ impl WheelAttachmentTopology {
     pub fn invalid_wheels(&self) -> impl Iterator<Item = &String> {
         self.invalid_wheels.iter()
     }
+
+    /// Iterate over every composed attachment prim read while resolving this
+    /// topology, including malformed attachments whose relationships cannot be
+    /// resolved.
+    pub fn source_paths(&self) -> impl Iterator<Item = &String> {
+        self.source_paths.iter()
+    }
 }
 
 /// Resolve every standard wheel attachment in a composed stage.
@@ -121,12 +129,21 @@ impl WheelAttachmentTopology {
 /// duplicate attachments, malformed endpoint types, and missing required
 /// endpoints are rejected; the first or last list target is never selected.
 pub fn collect_wheel_attachment_topology(reader: &dyn UsdReadObject) -> WheelAttachmentTopology {
-    let mut topology = WheelAttachmentTopology::default();
-    for attachment in reader.prim_paths() {
-        if !reader.has_api_schema(&attachment, "PhysxVehicleWheelAttachmentAPI") {
-            continue;
-        }
+    let attachments = reader.prim_paths_matching(&[], &["PhysxVehicleWheelAttachmentAPI"]);
+    collect_wheel_attachment_topology_from_paths(reader, attachments)
+}
 
+/// Resolve the supplied composed wheel-attachment prims through the same
+/// authoritative relationship checks as [`collect_wheel_attachment_topology`].
+/// Callers that already queried a union of joint and vehicle schemas can pass
+/// the matching attachment paths here to avoid a second stage traversal.
+pub fn collect_wheel_attachment_topology_from_paths(
+    reader: &dyn UsdReadObject,
+    attachments: impl IntoIterator<Item = SdfPath>,
+) -> WheelAttachmentTopology {
+    let mut topology = WheelAttachmentTopology::default();
+    for attachment in attachments {
+        topology.source_paths.insert(attachment.as_str().to_owned());
         let endpoint = |relationship: &str, api: &str| {
             attachment_endpoint(reader, &attachment, relationship, api)
         };
@@ -145,6 +162,7 @@ pub fn collect_wheel_attachment_topology(reader: &dyn UsdReadObject) -> WheelAtt
                 continue;
             }
         };
+        topology.source_paths.insert(wheel.clone());
 
         let suspension = match endpoint(
             "physxVehicleWheelAttachment:suspension",
@@ -160,6 +178,7 @@ pub fn collect_wheel_attachment_topology(reader: &dyn UsdReadObject) -> WheelAtt
                 continue;
             }
         };
+        topology.source_paths.insert(suspension.clone());
 
         let tire = match endpoint("physxVehicleWheelAttachment:tire", "PhysxVehicleTireAPI") {
             Ok(Some(target)) => target,
@@ -172,6 +191,7 @@ pub fn collect_wheel_attachment_topology(reader: &dyn UsdReadObject) -> WheelAtt
                 continue;
             }
         };
+        topology.source_paths.insert(tire.clone());
 
         let Some(index) = reader
             .attr_value(&attachment, "physxVehicleWheelAttachment:index")

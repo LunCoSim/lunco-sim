@@ -79,6 +79,21 @@ fn numeric_value_as_f64(value: &Value) -> Option<f64> {
     }
 }
 
+/// Composed schema and authored-property facts for a prim selected by one
+/// candidate query. Carrying these facts with the path lets consumers reuse
+/// the same native USD reads instead of probing the prim again.
+#[derive(Clone, Debug)]
+pub struct UsdReadPrimFacts {
+    /// The composed prim path.
+    pub path: SdfPath,
+    /// Composed schema type, when present.
+    pub type_name: Option<String>,
+    /// All composed applied API schemas.
+    pub api_schemas: Vec<String>,
+    /// Whether the prim owns a property with the queried prefix.
+    pub has_attr_prefix: bool,
+}
+
 /// Composed, default-time reads served by either the worker-produced initial
 /// plan or the live canonical `StageView`. Extractors depend on this seam rather
 /// than reaching into OpenUSD directly.
@@ -454,6 +469,70 @@ pub trait UsdRead {
     /// this is `Stage::traverse`.
     fn prim_paths(&self) -> Vec<SdfPath>;
 
+    /// Every composed prim path matching any listed schema type or applied API
+    /// schema, in composed traversal order. The default filters the live path
+    /// set; prepared readers can answer from their immutable schema indexes.
+    fn prim_paths_matching(&self, type_names: &[&str], api_schemas: &[&str]) -> Vec<SdfPath> {
+        if type_names.is_empty() && api_schemas.is_empty() {
+            return Vec::new();
+        }
+
+        self.prim_paths()
+            .into_iter()
+            .filter(|prim| {
+                let matches_type = if type_names.is_empty() {
+                    false
+                } else {
+                    let composed_type = self.type_name(prim);
+                    type_names
+                        .iter()
+                        .any(|type_name| composed_type.as_deref() == Some(*type_name))
+                };
+                matches_type
+                    || api_schemas
+                        .iter()
+                        .any(|schema| self.has_api_schema(prim, schema))
+            })
+            .collect()
+    }
+
+    /// Read the schema and property facts for every prim matching any supplied
+    /// schema type, applied API schema, or authored property prefix. One native
+    /// pass returns both the candidates and the facts consumers need to
+    /// classify them.
+    fn prim_schema_facts_matching(
+        &self,
+        type_names: &[&str],
+        api_schemas: &[&str],
+        attr_prefix: &str,
+    ) -> Vec<UsdReadPrimFacts> {
+        if type_names.is_empty() && api_schemas.is_empty() && attr_prefix.is_empty() {
+            return Vec::new();
+        }
+
+        self.prim_paths()
+            .into_iter()
+            .filter_map(|path| {
+                let type_name = self.type_name(&path);
+                let applied = self.api_schemas(&path);
+                let has_attr_prefix =
+                    !attr_prefix.is_empty() && self.any_attr_with_prefix(&path, attr_prefix);
+                let matches_type = type_name
+                    .as_deref()
+                    .is_some_and(|name| type_names.contains(&name));
+                let matches_api = applied
+                    .iter()
+                    .any(|name| api_schemas.contains(&name.as_str()));
+                (matches_type || matches_api || has_attr_prefix).then_some(UsdReadPrimFacts {
+                    path,
+                    type_name,
+                    api_schemas: applied,
+                    has_attr_prefix,
+                })
+            })
+            .collect()
+    }
+
     /// The leaf names of every authored property on `prim` (e.g.
     /// `"primvars:baseColor"`, `"xformOp:translate"`) — the set the shader
     /// authoring pass enumerates to apply arbitrary `primvars:*`. On the live
@@ -619,6 +698,13 @@ pub trait UsdReadObject {
         instance_name: &str,
     ) -> Result<Vec<SdfPath>, String>;
     fn prim_paths(&self) -> Vec<SdfPath>;
+    fn prim_paths_matching(&self, type_names: &[&str], api_schemas: &[&str]) -> Vec<SdfPath>;
+    fn prim_schema_facts_matching(
+        &self,
+        type_names: &[&str],
+        api_schemas: &[&str],
+        attr_prefix: &str,
+    ) -> Vec<UsdReadPrimFacts>;
     fn attr_names(&self, prim: &SdfPath) -> Vec<String>;
     fn any_attr_with_prefix(&self, prim: &SdfPath, prefix: &str) -> bool;
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value>;
@@ -1189,6 +1275,19 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::prim_paths(self)
     }
 
+    fn prim_paths_matching(&self, type_names: &[&str], api_schemas: &[&str]) -> Vec<SdfPath> {
+        UsdRead::prim_paths_matching(self, type_names, api_schemas)
+    }
+
+    fn prim_schema_facts_matching(
+        &self,
+        type_names: &[&str],
+        api_schemas: &[&str],
+        attr_prefix: &str,
+    ) -> Vec<UsdReadPrimFacts> {
+        UsdRead::prim_schema_facts_matching(self, type_names, api_schemas, attr_prefix)
+    }
+
     fn attr_names(&self, prim: &SdfPath) -> Vec<String> {
         UsdRead::attr_names(self, prim)
     }
@@ -1463,6 +1562,86 @@ impl UsdRead for StageView<'_> {
         paths
     }
 
+    fn prim_paths_matching(&self, type_names: &[&str], api_schemas: &[&str]) -> Vec<SdfPath> {
+        if type_names.is_empty() && api_schemas.is_empty() {
+            return Vec::new();
+        }
+
+        let stage = self.stage();
+        let mut matching = Vec::new();
+        let mut seen = HashSet::new();
+        let _ = stage.traverse(openusd::usd::PrimPredicate::DEFAULT, |path| {
+            if !seen.insert(path.clone()) {
+                return;
+            }
+            let prim = stage.prim(path.clone());
+            let matches_type = !type_names.is_empty()
+                && prim
+                    .type_name()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|name| type_names.contains(&name.as_str()));
+            let matches_api = !matches_type
+                && !api_schemas.is_empty()
+                && prim.api_schemas().ok().is_some_and(|schemas| {
+                    schemas
+                        .iter()
+                        .any(|schema| api_schemas.contains(&schema.as_str()))
+                });
+            if matches_type || matches_api {
+                matching.push(path.clone());
+            }
+        });
+        matching
+    }
+
+    fn prim_schema_facts_matching(
+        &self,
+        type_names: &[&str],
+        api_schemas: &[&str],
+        attr_prefix: &str,
+    ) -> Vec<UsdReadPrimFacts> {
+        if type_names.is_empty() && api_schemas.is_empty() && attr_prefix.is_empty() {
+            return Vec::new();
+        }
+
+        let stage = self.stage();
+        let mut matching = Vec::new();
+        let mut seen = HashSet::new();
+        let _ = stage.traverse(openusd::usd::PrimPredicate::DEFAULT, |path| {
+            if !seen.insert(path.clone()) {
+                return;
+            }
+            let prim = stage.prim(path.clone());
+            let type_name = prim.type_name().ok().flatten();
+            let applied_api_schemas = prim.api_schemas().ok().unwrap_or_default();
+            let has_attr_prefix = !attr_prefix.is_empty()
+                && prim.property_names().ok().is_some_and(|properties| {
+                    properties
+                        .iter()
+                        .any(|property| property.as_str().starts_with(attr_prefix))
+                });
+            let matches_type = type_name
+                .as_ref()
+                .is_some_and(|name| type_names.contains(&name.as_str()));
+            let matches_api = applied_api_schemas
+                .iter()
+                .any(|schema| api_schemas.contains(&schema.as_str()));
+            if matches_type || matches_api || has_attr_prefix {
+                matching.push(UsdReadPrimFacts {
+                    path: path.clone(),
+                    type_name: type_name.map(|name| name.to_string()),
+                    api_schemas: applied_api_schemas
+                        .into_iter()
+                        .map(|schema| schema.to_string())
+                        .collect(),
+                    has_attr_prefix,
+                });
+            }
+        });
+        matching
+    }
+
     fn attr_names(&self, prim: &SdfPath) -> Vec<String> {
         self.stage()
             .prim(prim.clone())
@@ -1708,6 +1887,31 @@ impl UsdRead for UsdReadSource<'_> {
         match self {
             Self::Prepared(reader) => UsdRead::prim_paths(*reader),
             Self::Live(reader) => UsdRead::prim_paths(reader),
+        }
+    }
+
+    fn prim_paths_matching(&self, type_names: &[&str], api_schemas: &[&str]) -> Vec<SdfPath> {
+        match self {
+            Self::Prepared(reader) => {
+                UsdRead::prim_paths_matching(*reader, type_names, api_schemas)
+            }
+            Self::Live(reader) => UsdRead::prim_paths_matching(reader, type_names, api_schemas),
+        }
+    }
+
+    fn prim_schema_facts_matching(
+        &self,
+        type_names: &[&str],
+        api_schemas: &[&str],
+        attr_prefix: &str,
+    ) -> Vec<UsdReadPrimFacts> {
+        match self {
+            Self::Prepared(reader) => {
+                UsdRead::prim_schema_facts_matching(*reader, type_names, api_schemas, attr_prefix)
+            }
+            Self::Live(reader) => {
+                UsdRead::prim_schema_facts_matching(reader, type_names, api_schemas, attr_prefix)
+            }
         }
     }
 
