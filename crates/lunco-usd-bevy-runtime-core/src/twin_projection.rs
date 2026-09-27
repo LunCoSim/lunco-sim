@@ -1686,10 +1686,8 @@ fn refresh_dependent_stage_assets(
     layer_id: &str,
     active_twin_document: bool,
 ) {
-    let candidates: Vec<(
-        AssetId<UsdStageAsset>,
-        lunco_usd_compose::recipe::StageRecipe,
-    )> = {
+    let candidates: Vec<AssetId<UsdStageAsset>> = {
+        let _span = bevy::log::info_span!("usd_twin_projection_dependent_candidate_scan").entered();
         let assets = world.resource::<Assets<UsdStageAsset>>();
         assets
             .iter()
@@ -1698,10 +1696,7 @@ fn refresh_dependent_stage_assets(
                     return None;
                 }
                 let recipe = asset.recipe.as_ref()?;
-                recipe
-                    .bytes
-                    .contains_key(layer_id)
-                    .then(|| (id, recipe.clone()))
+                recipe.bytes.contains_key(layer_id).then_some(id)
             })
             .collect()
     };
@@ -1746,7 +1741,7 @@ fn refresh_dependent_stage_assets(
     };
     let source_bytes = source.into_bytes();
 
-    for (stage_id, mut recipe) in candidates {
+    for stage_id in candidates {
         match component_refresh_decision(changed_doc, layer_id, stage_id, policy_context) {
             ComponentRefreshDecision::Propagate => {}
             ComponentRefreshDecision::Defer => {
@@ -1762,30 +1757,69 @@ fn refresh_dependent_stage_assets(
                 continue;
             }
         }
-        if recipe.bytes.get(layer_id) == Some(&source_bytes) {
-            info!("[usd-live] dependent stage {stage_id:?} already has current layer {layer_id}");
-            continue;
-        }
+        let mut recipe = {
+            let Some(asset) = world.resource::<Assets<UsdStageAsset>>().get(stage_id) else {
+                continue;
+            };
+            let Some(recipe) = asset.recipe.as_ref() else {
+                continue;
+            };
+            if recipe.bytes.get(layer_id) == Some(&source_bytes) {
+                info!(
+                    "[usd-live] dependent stage {stage_id:?} already has current layer {layer_id}"
+                );
+                continue;
+            }
+            recipe.clone()
+        };
         recipe
             .bytes
             .insert(layer_id.to_string(), source_bytes.clone());
-        let projection_plan = match UsdStageProjectionPlan::from_recipe(&recipe) {
-            Ok(plan) => plan,
+        // Build the non-Send live stage once, then derive the immutable worker
+        // projection from that exact composition. Building a projection from
+        // the recipe first and reopening it for the canonical stage parsed the
+        // same dependent closure twice on this exclusive app-thread path.
+        let replacement = match {
+            let _span =
+                bevy::log::info_span!("usd_twin_projection_dependent_live_stage_build").entered();
+            lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
+        } {
+            Ok(stage) => stage,
             Err(error) => {
                 warn!(
-                    "[usd-e1b] component edit from document {changed_doc} could not rebuild dependent stage {stage_id:?}: {error}"
+                    "[usd-e1b] component edit from document {changed_doc} could not prepare dependent stage {stage_id:?}: {error}"
                 );
                 continue;
             }
         };
-        if !prepare_stage_projection_reset(world, stage_id) {
-            continue;
+        let projection_plan = match {
+            let _span =
+                bevy::log::info_span!("usd_twin_projection_dependent_plan_snapshot").entered();
+            UsdStageProjectionPlan::from_stage(replacement.stage())
+        } {
+            Ok(plan) => plan,
+            Err(error) => {
+                warn!(
+                    "[usd-e1b] component edit from document {changed_doc} could not project dependent stage {stage_id:?}: {error}"
+                );
+                continue;
+            }
+        };
+        {
+            let _span =
+                bevy::log::info_span!("usd_twin_projection_dependent_reset_prepare").entered();
+            if !prepare_stage_projection_reset(world, stage_id) {
+                continue;
+            }
         }
 
-        let rebuilt = world
+        let replaced = world
             .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-            .is_some_and(|mut stages| stages.rebuild(stage_id, &recipe));
-        if rebuilt {
+            .is_some_and(|mut stages| {
+                stages.replace_rebuilt(stage_id, replacement);
+                true
+            });
+        if replaced {
             // Keep the async asset cache and the live canonical stage on the
             // same closure. Future previews then read the accepted component
             // bytes through the normal loader boundary.
@@ -1793,12 +1827,14 @@ fn refresh_dependent_stage_assets(
                 .resource_mut::<Assets<UsdStageAsset>>()
                 .get_mut(stage_id)
             {
-                asset.recipe = Some(recipe.clone());
+                asset.recipe = Some(recipe);
                 asset.projection_plan = Arc::new(projection_plan);
             }
             // This stage-scoped refresh retires only projected USD entities.  A
             // detached preview camera is owned by `UsdViewportState` and stays
             // exactly where the user left it.
+            let _span =
+                bevy::log::info_span!("usd_twin_projection_dependent_visual_refresh").entered();
             refresh_scene_visuals_prepared(world, stage_id);
         } else {
             report_stage_projection_reset_failure(

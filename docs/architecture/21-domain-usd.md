@@ -113,6 +113,12 @@ simulation instead of committing a partial reset. Avian retires joint graph
 edges before native joint components and collider markers; a constraint owned
 by another stage rejects the reset until its topology can be rebuilt together.
 
+When a component document changes, a dependent stage refresh builds its
+replacement `CanonicalStage` once and derives the immutable projection plan from
+that same composed stage before the reset boundary. This keeps plan preparation
+and the live-stage swap on one source revision without reopening the same recipe
+twice on the app thread.
+
 Default Twin scene admission uses `AsyncWorkAdmission` to parse the exact
 `UsdSourceText` revision and serialize the restored persistent document
 snapshot off the main schedule. The file-backed registry still owns path
