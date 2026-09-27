@@ -759,6 +759,7 @@ pub struct TextEditorPlugin;
 
 impl Plugin for TextEditorPlugin {
     fn build(&self, app: &mut App) {
+        register_all_commands(app);
         app.init_resource::<EditorTabs<SourceTabState>>()
             .init_resource::<PendingTabCloses>()
             .init_resource::<PendingSourceRequests>()

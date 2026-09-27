@@ -37,6 +37,11 @@ Read the focused contract when implementing one:
 - Put a Twin-specific builder, component lint, or requirement helper in
   `<twin>/tools/<name>.rhai`. It is persisted with that Twin and must not leak
   into unrelated Twins.
+- Edit an existing Twin `.rhai` asset through the source Editor: open its
+  Twin-relative path with `OpenTwinSource`, edit the buffer, and persist it
+  with `SaveSourceText`. Use Save & Update when the source needs to be
+  reloaded. The save command only accepts a registered Twin and a file already
+  open in that Editor; do not patch a loaded source file behind its buffer.
 - Put a one-off mission sequence in a scenario, not a tool library. Use
   [`author-scenario`](../author-scenario/SKILL.md).
 - Put continuous control equations in Modelica and generic substrate in Rust.
@@ -126,6 +131,15 @@ checks. Use `sysml_model_is`, `sysml_quantity_is`, and `sysml_enum_is` for
 SysML wrapper values. Do not compare `type_of(value)` strings for ordinary
 numeric, array, map, string, or SysML-wrapper dispatch. Keep semantic strings
 for paths, qualified names, relation labels, and enum literals only.
+
+Keep complex Rhai plans readable to the compiler as well as to reviewers.
+Extract long compound validation conditions and large record construction into
+named predicates and constructors instead of one deeply nested expression. For
+`UsdGeomMesh` edits, keep points and topology as numeric arrays until the
+schema boundary, then use `assembly_builder::mesh_points_update_plan` or
+`assembly_builder::mesh_geometry_update_plan`. These return ordinary
+`SetAttribute` operations and preserve the rest of the composed mesh contract;
+only the USD attribute's canonical literal is serialized as text.
 
 Resolve a numerical profile from `numerical_settings.rhai` once per report or
 solve. Keep length, angle, scalar, time, and solver tolerances as distinct
