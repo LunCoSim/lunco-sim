@@ -3,8 +3,9 @@
 **Prepared:** 2026-09-27
 **Workspace:** `/home/rod/Documents/luncosim-workspace/lunar-soil`
 **Branch:** `codex/lunar-soil`
-**D3/D9 acceptance commit:** `b1747728e`
-**Local main merge commit:** `da7b244d044e0fc466944510c0d8780da80b51cc`
+**D3/D9 physical-input acceptance commit:** `b1747728e`
+**D9 direct-command owner test commit:** `211d7d495`
+**Latest local main merge commit:** `7c65820584b846df914cc88f4204bf6340e085bc`
 
 The D9 session-input boundary at `4acf09915` had previously been integrated
 across the local worktrees. The 2026-09-27 D3/D9 acceptance commit
@@ -15,9 +16,11 @@ edits preserved. The tutorial celestial LOD changes stayed in place; the USD
 status-bar edit and optimization source, documentation, and profiling edits
 were reapplied successfully after fast-forwarding. New task-scoped stashes hold
 recovery copies, and the previous stashes remain intact. The five local heads
-share the tip containing this handover update. No push was made. The evidence
-below stays tied to the individual builds and source revisions named in each
-section.
+share the tip containing this handover update. The D9 direct-command owner
+test commit `211d7d495` was merged into local `main` as
+`7c65820584b846df914cc88f4204bf6340e085bc`; all five heads were fast-forwarded
+to the handover follow-up. No push was made. The evidence below stays tied to
+the individual builds and source revisions named in each section.
 
 ## Active user objective
 
