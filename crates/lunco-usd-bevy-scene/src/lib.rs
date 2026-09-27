@@ -167,6 +167,10 @@ pub struct UsdSceneChangeBatch {
     pub resynced_prim_paths: Vec<String>,
     /// Owning prim paths for authored, non-structural property changes.
     pub info_prim_paths: Vec<String>,
+    /// Info-only prim paths whose changed properties are exclusively USD
+    /// transform opinions. A structural resync on the same path remains a
+    /// separate invalidation signal.
+    pub transform_only_prim_paths: Vec<String>,
 }
 
 /// Boundary after the USD asset has been synchronized into the live ECS scene.

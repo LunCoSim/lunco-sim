@@ -139,8 +139,10 @@ attachments, vehicle roots, or policy prims. Live canonical edits keep using
 their owning-thread reader. Invalidate cached topology from
 `UsdSceneChangeBatch`: resynced paths that match an indexed source or currently
 carry a relevant schema, and info changes on indexed source prims, require
-refresh; unrelated paths only advance the cached generation. Check intervening
-changes before accepting prepared worker output.
+refresh; unrelated paths only advance the cached generation. Transform-only
+info changes on topology source paths also advance the generation without a
+topology rebuild; structural resyncs or mixed edits still refresh. Check
+intervening changes before accepting prepared worker output.
 
 For whole-index projectors such as USD telemetry, use one initial bootstrap,
 then coalesce relevant insert/remove observers into an invalidation flag. Keep

@@ -1036,10 +1036,11 @@ fn topology_change_affects(
         .resynced_prim_paths
         .iter()
         .any(|path| topology_change_affects_path(path, source_paths, reader))
-        || change
-            .info_prim_paths
-            .iter()
-            .any(|path| source_paths.contains(path))
+        || change.info_prim_paths.iter().any(|path| {
+            source_paths.contains(path)
+                && !(change.transform_only_prim_paths.contains(path)
+                    && !change.resynced_prim_paths.contains(path))
+        })
 }
 
 fn topology_change_affects_path(

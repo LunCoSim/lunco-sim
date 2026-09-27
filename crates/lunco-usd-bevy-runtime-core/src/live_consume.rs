@@ -85,6 +85,7 @@ fn publish_scene_change_batch(
     stage_id: AssetId<UsdStageAsset>,
     resynced_prim_paths: Vec<String>,
     info_prim_paths: Vec<String>,
+    transform_only_prim_paths: Vec<String>,
 ) {
     let generation = world
         .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
@@ -96,6 +97,7 @@ fn publish_scene_change_batch(
             stage_generation,
             resynced_prim_paths,
             info_prim_paths,
+            transform_only_prim_paths,
         });
     }
 }
@@ -155,6 +157,25 @@ fn transform_edits(info_only: &[String]) -> HashMap<String, TransformEditChannel
         edits.entry(prim.to_string()).or_default().merge(channels);
     }
     edits
+}
+
+fn transform_only_prim_paths(info_only: &[String]) -> Vec<String> {
+    let mut paths = BTreeMap::<String, bool>::new();
+    for path in info_only {
+        let (prim, attribute) = path
+            .split_once('.')
+            .map_or((path.as_str(), ""), |(prim, attribute)| (prim, attribute));
+        let transform_only = attribute.starts_with("xformOp:")
+            || matches!(attribute, "xformOpOrder" | "resetXformStack");
+        paths
+            .entry(prim.to_string())
+            .and_modify(|only_transforms| *only_transforms &= transform_only)
+            .or_insert(transform_only);
+    }
+    paths
+        .into_iter()
+        .filter_map(|(path, transform_only)| transform_only.then_some(path))
+        .collect()
 }
 
 /// Returns whether an authored standard USD `inputs:*` value changed.
@@ -454,6 +475,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
             .collect();
         info_prim_paths.sort();
         info_prim_paths.dedup();
+        let transform_only_prim_paths = transform_only_prim_paths(&info_only);
         input_defaults_changed |= authored_input_defaults_changed(&info_only);
         for path in &info_only {
             if let Some((prim_path, attribute)) = path.split_once('.') {
@@ -464,7 +486,13 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         }
 
         if resynced.is_empty() && info_only.is_empty() && authored_transform_edits.is_empty() {
-            publish_scene_change_batch(world, id, resynced, info_prim_paths);
+            publish_scene_change_batch(
+                world,
+                id,
+                resynced,
+                info_prim_paths,
+                transform_only_prim_paths,
+            );
             if let Some((doc, generation)) = mark_stage_projected(world, id) {
                 publish_stage_projected(world, doc, generation);
                 remove_pending_stage_projection(world, id);
@@ -484,7 +512,13 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         // so a live edit shows up without reloading the scene.
         refresh_edited_prims_live(world, id, &info_only);
         reconcile_structural_live(world, id, &resynced);
-        publish_scene_change_batch(world, id, resynced, info_prim_paths);
+        publish_scene_change_batch(
+            world,
+            id,
+            resynced,
+            info_prim_paths,
+            transform_only_prim_paths,
+        );
         // The write-side projector has already authored this batch onto the
         // canonical stage. Publish the read-side generation only after this
         // sink batch has been reconciled into the live ECS projection. A query

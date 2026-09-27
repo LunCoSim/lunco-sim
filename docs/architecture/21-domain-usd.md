@@ -45,7 +45,7 @@ domain-owned live-edit registry;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
 projection ordering boundaries, the generic projection-reset and coalesced
 `UsdSceneChangeBatch` messages carrying the projected canonical generation,
-resynced paths, and info-changed owning prim paths,
+resynced paths, info-changed owning prim paths, and info-only transform paths,
 visual-split markers, authored billboard
 contracts, shared geometry decoding, and composed collision/placement
 envelopes; `lunco-usd-bevy-camera` owns render-free camera
@@ -560,8 +560,11 @@ that set instead of querying all projected prims on idle frames, and stage
 topology is prepared only for stages represented in the current batch. Initial
 topology and candidate indexes run on a worker; live topology refresh follows
 `UsdSceneChangeBatch` and is limited to resynced joint/attachment sources and
-info changes to indexed topology paths. Live USD invalidation requeues the
-affected prim, while `SceneTeardown` retires the scene-owned work and cache.
+non-transform info changes to indexed topology paths. Transform-only info
+changes advance the cached generation without rebuilding joint topology;
+structural resyncs and mixed edits still refresh it. Live USD invalidation
+requeues the affected prim, while `SceneTeardown` retires the scene-owned work
+and cache.
 
 Authored controls and generic executable programs are resolved by the separate
 `UsdAuthoredRuntimePlugin` after visual projection. It observes
