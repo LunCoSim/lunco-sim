@@ -309,11 +309,13 @@ The same rule applies below the UI boundary. The Modelica engine-sync pass is
 woken by the document registry revision and still compares document generations
 before dispatching work. Modelica and physics telemetry retain producer-owned
 model/fixed-time cursors while the shared signal registry remains the channel
-authority. Autopilot target paths are cached per behavior entity and invalidated
-by authored XML or active-frame ancestry changes. Celestial terrain curvature is
-reconciled only when its authoritative inputs change, and globe LOD caches the
-pure desired leaf selection separately from readiness and bounded tile
-streaming. Globe LOD also builds fresh cube-sphere meshes on the compute pool;
+authority. Physics telemetry keeps static presentation labels borrowed while
+sampling and constructs owned signal metadata only when a channel is new or its
+metadata is dirty. Autopilot target paths are cached per behavior entity and
+invalidated by authored XML or active-frame ancestry changes. Celestial terrain
+curvature is reconciled only when its authoritative inputs change. Globe LOD
+caches the pure desired leaf selection separately from readiness and bounded
+tile streaming. Globe LOD also builds fresh cube-sphere meshes on the compute pool;
 the frame thread only installs a bounded number of completed `Mesh` assets per
 body per frame and reconciles residency. Completed worker results remain queued
 until that asset-upload budget admits them, so off-thread generation cannot turn

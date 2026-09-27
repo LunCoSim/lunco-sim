@@ -273,6 +273,10 @@ For live composed-stage discovery of a known USD type, use the typed
 semantics while avoiding a full materialized path list followed by a separate
 type lookup for every prim.
 
+For fixed-step telemetry, keep static channel-presentation facts borrowed in
+the per-sample path and allocate their owned signal metadata only when that
+channel's metadata is first created or changes.
+
 Dependent USD-stage refresh is owner work behind `sync_twin_overlays`. Snapshot
 the base/runtime revisions, serialize each persistent source snapshot once on
 bounded workers, share its bytes across dependent stages, and coalesce changed

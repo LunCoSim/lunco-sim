@@ -580,7 +580,7 @@ fn explicit_vector_channels(
     value: DVec3,
     unit: &'static str,
     description: &'static str,
-    group: &str,
+    group: &'static str,
 ) -> [PhysicsSample; 3] {
     [
         PhysicsSample::component(group, "x", value.x, unit, description),
@@ -590,7 +590,7 @@ fn explicit_vector_channels(
 }
 
 fn vector_channels(
-    prefix: &str,
+    prefix: &'static str,
     value: DVec3,
     unit: &'static str,
     description: &'static str,
@@ -603,7 +603,44 @@ struct PhysicsSample {
     value: f64,
     unit: &'static str,
     description: &'static str,
-    presentation: SignalPresentation,
+    presentation: PhysicsSamplePresentation,
+}
+
+/// Borrowed static presentation facts for a sample; owned labels are built only
+/// when the shared signal catalog needs metadata.
+#[derive(Clone, Copy)]
+enum PhysicsSamplePresentation {
+    Scalar,
+    Component {
+        group: &'static str,
+        component: &'static str,
+    },
+    Summary {
+        group: &'static str,
+        label: &'static str,
+        formula: &'static str,
+    },
+}
+
+impl PhysicsSamplePresentation {
+    fn to_signal_presentation(self) -> SignalPresentation {
+        match self {
+            Self::Scalar => SignalPresentation::Scalar,
+            Self::Component { group, component } => SignalPresentation::Component {
+                group: group.to_string(),
+                component: component.to_string(),
+            },
+            Self::Summary {
+                group,
+                label,
+                formula,
+            } => SignalPresentation::Summary {
+                group: group.to_string(),
+                label: label.to_string(),
+                formula: formula.to_string(),
+            },
+        }
+    }
 }
 
 impl PhysicsSample {
@@ -618,13 +655,13 @@ impl PhysicsSample {
             value,
             unit,
             description,
-            presentation: SignalPresentation::Scalar,
+            presentation: PhysicsSamplePresentation::Scalar,
         }
     }
 
     fn component(
-        group: &str,
-        component: &str,
+        group: &'static str,
+        component: &'static str,
         value: f64,
         unit: &'static str,
         description: &'static str,
@@ -641,8 +678,8 @@ impl PhysicsSample {
 
     fn named_component(
         name: impl Into<String>,
-        group: &str,
-        component: &str,
+        group: &'static str,
+        component: &'static str,
         value: f64,
         unit: &'static str,
         description: &'static str,
@@ -652,18 +689,15 @@ impl PhysicsSample {
             value,
             unit,
             description,
-            presentation: SignalPresentation::Component {
-                group: group.to_string(),
-                component: component.to_string(),
-            },
+            presentation: PhysicsSamplePresentation::Component { group, component },
         }
     }
 
     fn summary(
         name: impl Into<String>,
-        group: &str,
-        label: &str,
-        formula: &str,
+        group: &'static str,
+        label: &'static str,
+        formula: &'static str,
         value: f64,
         unit: &'static str,
         description: &'static str,
@@ -673,10 +707,10 @@ impl PhysicsSample {
             value,
             unit,
             description,
-            presentation: SignalPresentation::Summary {
-                group: group.to_string(),
-                label: label.to_string(),
-                formula: formula.to_string(),
+            presentation: PhysicsSamplePresentation::Summary {
+                group,
+                label,
+                formula,
             },
         }
     }
@@ -717,7 +751,7 @@ fn retain_samples(
                 unit: Some(sample.unit.to_string()),
                 provenance: Some("avian".to_string()),
                 group_path: Some(group_path.to_string()),
-                presentation: sample.presentation.clone(),
+                presentation: sample.presentation.to_signal_presentation(),
                 exposure: Default::default(),
                 ..Default::default()
             };
@@ -786,7 +820,7 @@ mod tests {
 
         assert_eq!(samples[0].name, "linear_velocity.x");
         assert_eq!(
-            samples[0].presentation,
+            samples[0].presentation.to_signal_presentation(),
             SignalPresentation::Component {
                 group: "linear_velocity".into(),
                 component: "x".into(),
