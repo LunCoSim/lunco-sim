@@ -32,6 +32,12 @@ situation; a lint catches it by reading what was written.
 `lunco-lint` is substrate: it knows what a finding is and how a domain asks
 policy for one. It knows nothing about USD, rhai or Modelica.
 
+Modelica source-editor diagnostics from Rumoca's maintained `rumoca-tool-lint`
+are a separate parser-facing service. `ModelicaLintPlugin` runs that source
+linter asynchronously for open document generations and shares its findings
+with the workbench and `GetModelDiagnostics`; it does not run the authored
+`lint.modelica` policy or replace explicit `ValidateAsset`/`RunLint` checks.
+
 ## One linter per domain
 
 Domains are separate because their subjects, vocabulary and audiences are

@@ -254,7 +254,7 @@ Two kinds of `command` share this envelope:
   while the numerical solve continues asynchronously.
 - **Query providers** (return data): return the payload directly, e.g.
   `{"runs":[...]}`. `ListRuns`, `GetExperimentResult`, `DescribeModel`,
-  `SnapshotVariables`, `CompileStatus`, `ListCompileCandidates`,
+  `SnapshotVariables`, `CompileStatus`, `GetModelDiagnostics`, `ListCompileCandidates`,
   `ListBundled`, `ListOpenDocuments`, `FindModel` are all query providers —
   invoked with the same tagged `ExecuteCommand` form. Built-in discovery and
   entity listing use their own explicit `type` values.
@@ -285,6 +285,9 @@ post '{"type":"ExecuteCommand","command":"Open","params":{"uri":"bundled://Sprin
 
 # 2. Wait for the AST parse (background). Poll CompileStatus until ast_parsed:true:
 post '{"type":"ExecuteCommand","command":"CompileStatus","params":{"doc_id":0}}'   # -> {state, ast_parsed, candidates, picker_pending, ...}
+#    Read parser/compiler/lint findings and actionable Rumoca suggestions.
+#    Poll while lint_state is "pending"; pending is not a clean result.
+post '{"type":"ExecuteCommand","command":"GetModelDiagnostics","params":{"doc_id":0}}' # -> {lint_state, diagnostics:[{source,code,rule,severity,message,line,column,suggestion,file}]}
 
 # 3. Compile + play. class REQUIRED if the file has >1 non-package class
 #    (the GUI picker can't be shown over the API). Discover choices:
@@ -305,6 +308,15 @@ post '{"type":"ExecuteCommand","command":"RestartActiveModel","params":{"doc_id"
 `RunActiveModel` = compile-if-stale then play. If already compiled & clean it
 just unpauses (no recompile). `CompileModel` compiles only (stays paused);
 `ResumeActiveModel` unpauses only.
+
+If a live compile fails on an unbalanced DAE, its ordinary Modelica Error event
+in Recent status events explains why simulation did not start and lists the
+unknowns Rumoca's structural matcher could not pair with equations, plus their
+categories and referencing equation rows. Selecting the row expands the full
+message. `GetModelDiagnostics` also returns the explanation with the structured
+compiler findings. Those names identify values the current equations cannot
+determine; add or correct independent equations or constraints. The diagnostic
+DAE is never simulated.
 
 ## 4. Recipe B — build an experiment (batch + parameter sweep)
 
@@ -469,6 +481,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 | `ListOpenDocuments` | `{}` | `doc_id, title, kind, origin, dirty, active` per tab |
 | `DescribeModel` | `{doc, class?}` | AST: components, connections, inputs, parameters, outputs (pre-compile) |
 | `CompileStatus` | `{doc}` | `state, ast_parsed, candidates, picker_pending, drilled_in_class` |
+| `GetModelDiagnostics` | `{doc_id}` | parser/compiler/lint findings with severity, code/rule, 1-based location, and Rumoca suggestion; `lint_state` is `pending`, `ready`, `unavailable`, or `failed` |
 | `ListCompileCandidates` | `{doc}` | `{candidates:[{qualified,short}]}` — the picker choices |
 
 **Compile & run**

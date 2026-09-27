@@ -89,10 +89,19 @@ Progress, Warn, Error, and Attention through the same responsive
 level/source/message/progress/action row. Its popup is compact, sized to roughly
 half the available parent window and clamped to 420–960 logical px;
 the message column consumes the remaining inner width rather than an arbitrary
-fixed fraction. Diagnostic rows keep the shared column geometry, expose row
-activation through the cursor and tooltip, and add the complete diagnostic as
-an optional body under that row. Emit the existing typed action for Attention;
-do not create level-specific row layouts or source-specific styling. StatusBus
+fixed fraction. A new terminal RuntimeFault opens the popup automatically, but
+its explanation is published as the ordinary Modelica Error event in history.
+Selecting that row expands the complete message. Compile failures explain why
+simulation did not start and include unmatched unknown names, categories, and
+referencing equation rows when Rumoca can diagnose them. Step failures list
+Modelica values not produced, their last accepted values, and sample and target times.
+Use one scroll area with a stable `id_salt` in this popup so egui keeps one
+history surface and does not report duplicate scroll-state IDs. Ordinary
+warnings and non-terminal errors remain in history without opening the popup.
+Diagnostic rows keep the shared column geometry, expose row activation through
+the cursor and tooltip, and add the complete diagnostic as an optional body
+under that row. Emit the existing typed action for Attention; do not create
+level-specific row layouts or source-specific styling. StatusBus
 coalesces consecutive identical discrete snapshots before this shared reader;
 do not hide producer floods in a renderer-specific filter.
 

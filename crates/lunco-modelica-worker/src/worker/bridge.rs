@@ -551,6 +551,47 @@ pub fn spawn_modelica_requests(
     }
 }
 
+/// Describes values that were not produced by a failed live Modelica step.
+///
+/// The worker reports the solver cause; the main-thread model still owns the
+/// last accepted output sample. Sorting keeps this diagnostic stable across
+/// runs despite the model's hash-map storage.
+fn failed_modelica_step_detail(model: &ModelicaModel, error: &str) -> String {
+    let mut values = model.variables.iter().collect::<Vec<_>>();
+    values.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut detail = format!(
+        "{error}\n\nValues not produced by the failed Modelica step (communication target t={} s; last accepted sample t={} s):",
+        model.next_communication_time, model.current_time
+    );
+    if values.is_empty() {
+        detail.push_str("\n  No previously calculated Modelica values are available.");
+    } else {
+        for (name, value) in values {
+            detail.push_str(&format!("\n  {name} = {value} (last accepted value)"));
+        }
+    }
+    detail
+}
+
+fn include_compile_explanation(diagnostics: &mut [lunco_doc::Diagnostic], error: &str) {
+    let Some((_, explanation)) = error.split_once("Why simulation did not start:") else {
+        return;
+    };
+    let index = diagnostics
+        .iter()
+        .position(|diagnostic| diagnostic.severity == lunco_doc::DiagnosticSeverity::Error)
+        .or_else(|| (!diagnostics.is_empty()).then_some(0));
+    if let Some(diagnostic) = index.and_then(|index| diagnostics.get_mut(index)) {
+        if !diagnostic.message.contains("Why simulation did not start:") {
+            diagnostic
+                .message
+                .push_str("\n\nWhy simulation did not start: ");
+            diagnostic.message.push_str(explanation);
+        }
+    }
+}
+
 /// System that processes results from the background worker.
 ///
 /// Updates `ModelicaModel` components with fresh simulation outputs, handles
@@ -948,11 +989,12 @@ pub fn handle_modelica_responses(
                     // shipped them (compile failures) so the panel can
                     // render click-to-source rows; empty for solver/reset
                     // errors falls back to the flat `err` string.
-                    let diags = if result.compile_diagnostics.is_empty() {
+                    let mut diags = if result.compile_diagnostics.is_empty() {
                         vec![lunco_doc::Diagnostic::message_only(err.clone())]
                     } else {
                         result.compile_diagnostics.clone()
                     };
+                    include_compile_explanation(&mut diags, err);
                     cs.set_error(model.document, diags);
                 }
                 if result.is_new_model
@@ -984,9 +1026,14 @@ pub fn handle_modelica_responses(
                 } else {
                     "Solver error"
                 };
+                let detail = if result.step_id.is_some() {
+                    failed_modelica_step_detail(&model, err)
+                } else {
+                    err.clone()
+                };
                 notices.write(ModelicaNotice {
                     level: NoticeLevel::Error,
-                    text: format!("[{}] {prefix}: {err}", model.model_name),
+                    text: format!("[{}] {prefix}: {detail}", model.model_name),
                 });
                 // A failed in-flight solver step has no valid replacement
                 // state. It is a terminal shared-simulation fault, not a
@@ -1001,7 +1048,7 @@ pub fn handle_modelica_responses(
                             "modelica-step-failed",
                             Some(result.entity),
                             model.model_name.clone(),
-                            err.clone(),
+                            detail.clone(),
                         );
                     }
                 }
@@ -1016,7 +1063,7 @@ pub fn handle_modelica_responses(
                 // fresh Compile rather than a doomed Step. Compile
                 // errors flip this in the `is_new_model` block below.
                 model.is_compiled = false;
-                model.last_error = Some(err.clone());
+                model.last_error = Some(detail);
             } else {
                 model.last_error = None;
                 if let Some(cs) = compile_states.as_mut() {

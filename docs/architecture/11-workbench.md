@@ -182,9 +182,18 @@ private dock layout.
    progress row inside a compact popup sized to roughly half the parent
    window (clamped to 420–960 logical px); the popup owns a fixed width while
    its vertical history viewport fills that width, and each message column
-   uses the remaining inner width after present progress and action controls;
-   diagnostic
-   rows expand or collapse their complete diagnostics when the row is clicked
+   uses the remaining inner width after present progress and action controls.
+   The popup opens automatically for a new terminal RuntimeFault. Its
+   explanation is the ordinary Modelica error event in the shared history;
+   selecting that row expands the complete message. Compile failures explain
+   why simulation did not start and list unmatched Modelica unknowns when
+   Rumoca can identify them. Step failures list Modelica values that were not
+   produced by the failed step, their last accepted values, and sample and
+   target times. Ordinary
+   warnings and non-terminal errors remain in history without opening the
+   popup. The history uses one uniquely identified scroll area.
+   Diagnostic rows
+   expand or collapse their complete diagnostics when the row is clicked
    and expose that affordance
    through the row cursor and tooltip, while attention rows retain their typed
    action control. The performance HUD reserves room for the FPS, frame-time,

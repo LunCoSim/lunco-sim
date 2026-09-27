@@ -8447,6 +8447,7 @@ dependencies = [
  "lunco-modelica-index",
  "lunco-modelica-library",
  "rumoca-compile",
+ "rumoca-sim",
  "web-time",
 ]
 
@@ -8481,6 +8482,7 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-workspace",
  "rumoca-compile",
+ "rumoca-tool-lint",
  "serde",
  "serde_json",
  "web-sys",
@@ -8764,7 +8766,6 @@ dependencies = [
  "mimalloc",
  "rumoca-compile",
  "rumoca-tool-fmt",
- "rumoca-tool-lint",
  "serde",
  "serde_json",
  "wasm-bindgen",

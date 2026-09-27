@@ -556,6 +556,9 @@ pub struct ModelicaUiPlugin;
 
 impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_modelica_core::modelica_lint::ModelicaLintPlugin>() {
+            app.add_plugins(lunco_modelica_core::modelica_lint::ModelicaLintPlugin);
+        }
         // Read embed config once. Defaults to "everything on" (lunica).
         // Sandbox-class embeds insert `ModelicaUiConfig { include_*: false }`
         // before adding this plugin. See `lib.rs::ModelicaUiConfig`.

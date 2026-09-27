@@ -52,6 +52,9 @@ pub struct ModelicaApiQueriesPlugin;
 
 impl Plugin for ModelicaApiQueriesPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_modelica_core::modelica_lint::ModelicaLintPlugin>() {
+            app.add_plugins(lunco_modelica_core::modelica_lint::ModelicaLintPlugin);
+        }
         if !app.is_plugin_added::<edit::ModelicaApiEditPlugin>() {
             app.add_plugins(edit::ModelicaApiEditPlugin);
         }
@@ -76,11 +79,163 @@ impl Plugin for ModelicaApiQueriesPlugin {
         registry.register(ListRunsProvider);
         registry.register(GetExperimentResultProvider);
         registry.register(GetDocumentSourceProvider);
+        registry.register(GetModelDiagnosticsProvider);
         registry.register(DescribeModelProvider);
         registry.register(SnapshotVariablesProvider);
         registry.register(FindModelProvider);
         registry.register(GetShareLinkProvider);
     }
+}
+
+// ─── GetModelDiagnostics ──────────────────────────────────────────────
+
+/// Complete source diagnostics for a Modelica document, including parser,
+/// compiler, and background Rumoca lint findings.
+struct GetModelDiagnosticsProvider;
+
+impl ApiQueryProvider for GetModelDiagnosticsProvider {
+    fn name(&self) -> &'static str {
+        "GetModelDiagnostics"
+    }
+
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let Some(doc_id) = parse_doc_id(params, "doc_id") else {
+            return err_missing_field("doc_id");
+        };
+        let Some(registry) = world.get_resource::<ModelicaDocuments>() else {
+            return query_error(
+                ApiErrorCode::InternalError,
+                "Modelica document registry is not installed",
+            );
+        };
+        let Some(host) = registry.host(doc_id) else {
+            return err_doc_not_found(doc_id);
+        };
+        let document = host.document();
+        let generation = document.ast().generation;
+        let file = document.origin().display_name();
+        let ast_has_errors = !document.ast().errors.is_empty();
+        let mut findings = Vec::new();
+
+        for diagnostic in &document.ast().errors {
+            findings.push(diagnostic_api_value(
+                "rumoca-parser",
+                Some("syntax"),
+                None,
+                "error",
+                &diagnostic.message,
+                diagnostic.line,
+                diagnostic.col,
+                None,
+                &file,
+            ));
+        }
+
+        let compile = world.get_resource::<DocumentDiagnostics>();
+        if let Some(compile) = compile {
+            for diagnostic in compile.diagnostics(doc_id) {
+                findings.push(diagnostic_api_value(
+                    "rumoca-compiler",
+                    diagnostic_code(&diagnostic.message).as_deref(),
+                    None,
+                    diagnostic.severity.as_str(),
+                    &diagnostic.message,
+                    diagnostic.line,
+                    diagnostic.col,
+                    None,
+                    &file,
+                ));
+            }
+        }
+
+        let lint_snapshot = world
+            .get_resource::<lunco_modelica_core::modelica_lint::ModelicaLintDiagnostics>()
+            .and_then(|lint| lint.for_generation(doc_id, generation));
+        let (lint_state, lint_message) = match lint_snapshot.map(|snapshot| &snapshot.state) {
+            Some(lunco_modelica_core::modelica_lint::ModelicaLintState::Pending) => {
+                ("pending", None)
+            }
+            Some(lunco_modelica_core::modelica_lint::ModelicaLintState::Ready) => ("ready", None),
+            Some(lunco_modelica_core::modelica_lint::ModelicaLintState::Unavailable(reason)) => {
+                ("unavailable", Some(reason.as_str()))
+            }
+            Some(lunco_modelica_core::modelica_lint::ModelicaLintState::Failed(reason)) => {
+                ("failed", Some(reason.as_str()))
+            }
+            None if world
+                .get_resource::<lunco_modelica_core::modelica_lint::ModelicaLintDiagnostics>()
+                .is_some() =>
+            {
+                (
+                    "pending",
+                    Some("Rumoca lint has not completed for this source generation"),
+                )
+            }
+            None => (
+                "unavailable",
+                Some("Modelica lint service is not installed"),
+            ),
+        };
+        if let Some(snapshot) = lint_snapshot {
+            for diagnostic in &snapshot.diagnostics {
+                if ast_has_errors && diagnostic.rule == "syntax-error" {
+                    continue;
+                }
+                findings.push(diagnostic_api_value(
+                    "rumoca-linter",
+                    None,
+                    Some(&diagnostic.rule),
+                    diagnostic.severity.as_str(),
+                    &diagnostic.message,
+                    Some(diagnostic.line),
+                    Some(diagnostic.column),
+                    diagnostic.suggestion.as_deref(),
+                    &diagnostic.file,
+                ));
+            }
+        }
+
+        let count = findings.len();
+        query_ok(api_value!({
+            "doc_id": doc_id.raw(),
+            "generation": generation,
+            "file": file,
+            "lint_state": lint_state,
+            "lint_message": lint_message,
+            "lint_revision": lint_snapshot.map_or(0, |snapshot| snapshot.revision),
+            "diagnostics": findings,
+            "count": count,
+        }))
+    }
+}
+
+fn diagnostic_api_value(
+    source: &str,
+    code: Option<&str>,
+    rule: Option<&str>,
+    severity: &str,
+    message: &str,
+    line: Option<u32>,
+    column: Option<u32>,
+    suggestion: Option<&str>,
+    file: &str,
+) -> ApiValue {
+    api_value!({
+        "source": source,
+        "code": code,
+        "rule": rule,
+        "severity": severity,
+        "message": message,
+        "line": line,
+        "column": column,
+        "suggestion": suggestion,
+        "file": file,
+    })
+}
+
+fn diagnostic_code(message: &str) -> Option<String> {
+    let code = message.strip_prefix('[')?.split_once(']')?.0;
+    (!code.is_empty()).then(|| code.to_owned())
 }
 
 // ─── ListBundled ───────────────────────────────────────────────────────
