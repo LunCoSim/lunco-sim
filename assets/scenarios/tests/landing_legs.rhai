@@ -30,12 +30,31 @@
 /// One log row. Built by successive `+=`: rhai caps EXPRESSION complexity and a
 /// single multi-value concatenation chain trips it at compile time.
 fn simulation_dependencies(me, ctx) {
+    let hull = find_path("/LandingLegsTest/Lander");
+    let rcs = find_path("/LandingLegsTest/Lander/AttitudePropulsion");
+    let springs = [
+        find_path("/LandingLegsTest/Lander/LegPX_Spring"),
+        find_path("/LandingLegsTest/Lander/LegNX_Spring"),
+        find_path("/LandingLegsTest/Lander/LegPZ_Spring"),
+        find_path("/LandingLegsTest/Lander/LegNZ_Spring"),
+    ];
+    let reads = [hull, rcs,
+        find_path("/LandingLegsTest/Lander/LegPX"),
+        find_path("/LandingLegsTest/Lander/LegNX"),
+        find_path("/LandingLegsTest/Lander/LegPZ"),
+        find_path("/LandingLegsTest/Lander/LegNZ"),
+        find_path("/LandingLegsTest/Lander/LegPX/PadPX"),
+        find_path("/LandingLegsTest/Lander/LegNX/PadNX"),
+        find_path("/LandingLegsTest/Lander/LegPZ/PadPZ"),
+        find_path("/LandingLegsTest/Lander/LegNZ/PadNZ"),
+        find_path("/LandingLegsTest/Ground"),
+        find_path("/LandingLegsTest"),
+        find_path("/LandingLegsTest/SolarSystem/Moon"),
+        find_path("/LandingLegsTest/Lander/Environment")];
+    for spring in springs { reads.push(spring); }
     #{
-        modelica_entities: [
-            find_path("/LandingLegsTest/Lander"),
-            find_path("/LandingLegsTest/Lander/AttitudePropulsion"),
-        ],
-        entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
+        modelica_entities: [hull, rcs],
+        entity_reads: reads, entity_writes: [], query_reads: [], required_inputs: [],
     }
 }
 
