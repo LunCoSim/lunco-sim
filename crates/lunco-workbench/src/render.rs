@@ -1925,14 +1925,14 @@ fn perf_hud_text(
     // Keep the required metrics together at the front. The width-aware
     // renderer can then discard optional p99 detail without ellipsizing the
     // FPS/frame/physics readout.
-    let mut required = format!("FPS {:.1} · {:.1}ms", fps, frame_ms);
+    let mut required = format!("FPS {:05.1} · {:05.1}ms", fps, frame_ms);
     if let Some(ms) = physics_ms {
-        required.push_str(&format!(" · phys {:.1}ms", ms));
+        required.push_str(&format!(" · phys {:05.1}ms", ms));
     }
 
     let mut full = required.clone();
     if let Some(ms) = p99_ms {
-        full.push_str(&format!(" · p99 {:.1}ms", ms));
+        full.push_str(&format!(" · p99 {:05.1}ms", ms));
     }
     (required, full)
 }
@@ -3198,12 +3198,11 @@ mod tests {
 
     #[test]
     fn perf_hud_keeps_required_metrics_before_optional_detail() {
-        let (required, full) = perf_hud_text(22.3, 44.8, Some(0.5), Some(492.4));
+        let (required, full) = perf_hud_text(22.3, 44.8, Some(0.5), Some(92.4));
 
         assert!(full.starts_with(&required));
-        assert!(required.contains("FPS"));
-        assert!(required.contains("44.8ms"));
-        assert!(required.contains("phys"));
+        assert_eq!(required, "FPS 022.3 · 044.8ms · phys 000.5ms");
+        assert_eq!(full, "FPS 022.3 · 044.8ms · phys 000.5ms · p99 092.4ms");
         assert!(full.find("phys").unwrap() < full.find("p99").unwrap());
     }
 
