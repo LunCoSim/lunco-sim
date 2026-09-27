@@ -169,7 +169,11 @@ For whole-index projectors such as USD telemetry, use one initial bootstrap,
 then coalesce relevant insert/remove observers into an invalidation flag. Keep
 stage-generation and asset-store invalidation as scalar checks. Do not repeat
 the same `Added`/`Changed` population filters in both the run condition and the
-projector, and do not reproject until the index is invalidated.
+projector, and do not reproject until the index is invalidated. When structural
+projection arrives in bounded batches, keep the index dirty and coalesce further
+invalidations until the owning queue settles; clear derived outputs once for
+that dirty interval. Keep processed markers on entities without declarations
+so the next rebuild does not reread every non-declaration prim.
 
 When a USD reader already exposes `has_authored_attribute`, use it to test one
 known property instead of enumerating every attribute name. If one enumeration

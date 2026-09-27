@@ -422,9 +422,12 @@ owns one initial discovery pass for prims that predate plugin installation;
 after that, insert/remove observers for `UsdPrimPath`, generated-source and
 signal-layout metadata, `SimComponent`, and ready port surfaces coalesce into a
 single invalidation bit. Stage revisions and USD asset changes are checked as
-scalar invalidation sources. The dirty projector rebuilds its path/output maps
-and channels only after one of those sources changes; stable updates do not
-scan the entity population to rediscover lifecycle changes.
+scalar invalidation sources. The first invalidation in a dirty interval clears
+stale markers and channels once; further changes coalesce until projection
+finishes. The projector waits while prims are awaiting their stage or structural
+USD projection, then rebuilds its path/output maps and channels against the
+settled scene. Stable updates do not scan the entity population to rediscover
+lifecycle changes.
 
 The telemetry index and its emitted channels are derived scene state. Scene
 teardown clears the index, and the next initial projection is the only bootstrap

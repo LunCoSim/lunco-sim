@@ -241,11 +241,12 @@ The same ownership rule applies to the measured presentation paths:
 
 - **USD telemetry projection** keeps its generated-wrapper port map and
   domain-member index in a projection-owned resource. The projector is
-  scheduled only while an unprojected prim or a changed generated wrapper
-  exists, and runs after Wiring has published that wrapper's
-  `DeclaredOutputPorts`. Steady frames do not rebuild maps or clone authored
-  path keys, and compile-time wrapper publication cannot be mistaken for a
-  missing telemetry port.
+  scheduled only while its lifecycle index is dirty, waits for stage admission
+  and queued structural projection to settle, and runs after Wiring has
+  published that wrapper's `DeclaredOutputPorts`. One dirty interval clears
+  prior markers and channels once even when more prims arrive during admission.
+  Steady frames do not rebuild maps or clone authored path keys, and a wrapper
+  becoming available cannot be mistaken for a missing telemetry port.
 - **Generated Modelica source metadata** is invalidated by the generated USD
   source component and by explicit document-link/removal dirtiness. The
   publisher does not treat `ModelicaModel` output/time updates as source

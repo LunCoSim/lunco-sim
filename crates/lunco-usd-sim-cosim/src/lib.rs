@@ -82,9 +82,9 @@ enum CosimUpdateSet {
     Wiring,
 }
 
-/// Marks a USD prim after its authored telemetry declaration has been projected
-/// into the runtime sampling plan. The marker is scene-lifetime state: a scene
-/// reload despawns the prim and therefore naturally re-projects its channels.
+/// Marks a USD prim after its telemetry declaration (or lack of one) has been
+/// checked for the current index revision. A scene reload despawns the prim and
+/// therefore naturally rechecks its authored state.
 #[derive(Component)]
 struct UsdTelemetryProjected;
 
@@ -99,8 +99,10 @@ struct UsdTelemetryChannel;
 /// `dirty` admits a projection pass; `invalidation_pending` is the coalesced
 /// lifecycle signal that makes the index and its output channels stale. The
 /// first pass is also the one-time discovery for entities that predate this
-/// plugin. Normal invalidation is fed by component lifecycle observers rather
-/// than population queries in Update.
+/// plugin. `stale_outputs_cleared` keeps repeated invalidations during staged
+/// scene admission from clearing the same derived state more than once. Normal
+/// invalidation is fed by component lifecycle observers rather than population
+/// queries in Update.
 #[derive(Resource)]
 struct UsdTelemetryProjectionIndex {
     generated_outputs: HashMap<
@@ -117,6 +119,7 @@ struct UsdTelemetryProjectionIndex {
     diagnostics: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), RuntimeDiagnostic>,
     observed_stage_revision: u64,
     invalidation_pending: bool,
+    stale_outputs_cleared: bool,
     dirty: bool,
 }
 
@@ -129,6 +132,7 @@ impl Default for UsdTelemetryProjectionIndex {
             diagnostics: HashMap::new(),
             observed_stage_revision: 0,
             invalidation_pending: false,
+            stale_outputs_cleared: false,
             dirty: true,
         }
     }
@@ -168,10 +172,15 @@ fn mark_usd_telemetry_projection_index_dirty(
     }
 
     index.dirty = true;
-    index.diagnostics.clear();
     if let Some(revision) = stage_revision {
         index.observed_stage_revision = revision.0;
     }
+    if index.stale_outputs_cleared {
+        return;
+    }
+
+    index.stale_outputs_cleared = true;
+    index.diagnostics.clear();
     for entity in &projected {
         commands.entity(entity).remove::<UsdTelemetryProjected>();
     }
@@ -194,8 +203,17 @@ fn telemetry_projection_index_invalidation_due(
             .is_some_and(|assets| assets.is_changed())
 }
 
-fn telemetry_projection_needed(index: Res<UsdTelemetryProjectionIndex>) -> bool {
-    index.dirty
+fn telemetry_projection_needed(
+    index: Res<UsdTelemetryProjectionIndex>,
+    projecting: Query<
+        (),
+        Or<(
+            With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>,
+            With<lunco_usd_bevy_scene::UsdSceneProjectionQueued>,
+        )>,
+    >,
+) -> bool {
+    index.dirty && projecting.is_empty()
 }
 
 fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjectionIndex>) {
@@ -205,6 +223,7 @@ fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjection
     index.diagnostics.clear();
     index.observed_stage_revision = 0;
     index.invalidation_pending = false;
+    index.stale_outputs_cleared = false;
     index.dirty = true;
 }
 
@@ -745,6 +764,7 @@ fn project_usd_telemetry(
             }
         }
         index.dirty = false;
+        index.stale_outputs_cleared = false;
     }
 
     for (entity, prim_path, provenance, gid, is_root, instance_projection) in &pending_query {
