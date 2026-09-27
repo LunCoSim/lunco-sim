@@ -126,8 +126,9 @@ Griffin component model:
   most-specific quantity kind classified through resolved SysML inheritance
   (rather than a hard-coded quantity-name table);
 - collection cardinality kept separate from its scalar element category;
-- authored quantity-literal unit suffixes retained as source spelling, with
-  typed quantity-kind references;
+- authored quantity-literal unit suffixes retained as lexical source data,
+  with resolved measurement-unit feature identity and declared unit type when
+  the source reference resolves;
 - enumeration and structured-value categories;
 - part, item, and port element categories from resolved definitions;
 - an explicit Modelica mapping for scalar/quantity values, primitive arrays,
@@ -141,10 +142,13 @@ are `Quantity` and `Unit` values from `lunco-engineering-values`; an observation
 does not carry a second unit field. Compatibility is based on SI dimensions,
 and compatible quantities are converted for addition, subtraction, comparison,
 minimum, and maximum. Multiplication, division, powers, and square roots return
-coherent SI units. SysML unit suffixes remain authored source spelling in
-`SysmlQuantityLiteral`; they are not yet resolved through SysML unit definitions
-into the engineering-value catalog, and therefore cannot themselves enter the
-constraint evaluator as quantities.
+coherent SI units. `SysmlQuantityLiteral.measurement_reference` now carries the
+resolved SysML unit feature handle and declared unit type. The sibling
+`unit_symbol` is source spelling only. Unit dimensions and scale/offset are not
+yet projected from the standard `MeasurementUnit` and `MeasurementScale`
+definitions into `lunco-engineering-values`, so source literals with units
+still cannot enter the constraint evaluator as quantities without a
+provider-supplied `Unit`.
 
 Spatial values do not use a second vector implementation. The Rhai adapter
 lowers the standard `CartesianThreeVectorValue` to the existing f64 Bevy/glam

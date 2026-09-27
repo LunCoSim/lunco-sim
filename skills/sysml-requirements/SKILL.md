@@ -309,19 +309,24 @@ package-prefix guess or a second registry. Use
 `sysml_requirements::verification_name(report, id)` when a canonical identity
 is needed before constructing additional evidence.
 
-Unit-bearing vector components are preserved as arrays of native `Quantity`
-values. A geometry policy must validate the declared quantity kind, fixed
-cardinality, and each component's unit before lowering them to the shared
-`Vec3`; never read only `number_value` and drop unit metadata. The shared
-`lunco-engineering-values` seam performs dimension-safe conversion, while the
-authored `engineering_units.rhai` catalog selects the supported UCUM-compatible
-symbols. The current SysML-to-Modelica geometry adapter accepts a bounded
-`LengthValue[3]` catalog and converts compatible entries to metres; it is not a
-full UCUM parser and must fail closed for unsupported units.
-Other physical-property quantities, including material properties, need the
-same unit-preserving treatment. Do not reuse the geometry-only length adapter,
-strip units, or assume an unimplemented material projection; capability-check
-the property kind and consumer before generating a model.
+Unit-bearing literals expose `measurement_reference`, a snapshot-scoped handle
+to the resolved SysML measurement-unit feature and its declared unit type.
+`unit_symbol` is only the spelling in source. New SysML verification and
+projection code must use the resolved reference; do not use the spelling as a
+unit registry key. The source-to-`Unit` projection of standard conversion
+relationships is still incomplete, so source quantities without a resolved
+runtime `Unit` must remain unavailable rather than being converted through a
+parallel symbol table. `engineering_units.rhai` serves explicit unit input at
+non-SysML boundaries; it is not authoritative for SysML source values.
+
+Before lowering a unit-bearing vector to shared `Vec3` or a Modelica parameter,
+validate the declared quantity kind, fixed cardinality, each resolved unit,
+and compatible dimensions. Do not read only `number_value` and drop unit
+identity. Replace the current bounded SysML-to-Modelica `LengthValue[3]`
+catalog path with source-resolved unit conversions before extending it to other
+quantity kinds. Other physical-property quantities, including material
+properties, need the same unit-preserving treatment; capability-check the
+property kind and consumer before generating a model.
 
 For CAD/mechanical intent, keep the requirement and tolerance in SysML, then
 call the reloadable `assets/scripting/tools/mechanical_relations.rhai` policy

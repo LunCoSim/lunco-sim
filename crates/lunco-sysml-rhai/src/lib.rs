@@ -11,9 +11,10 @@ use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraintKind, SysmlDiagnostic, SysmlElement,
     SysmlElementHandle, SysmlEnumValue, SysmlExpression, SysmlExpressionKind,
     SysmlExpressionOperator, SysmlFeature, SysmlFeatureDirection, SysmlFeatureHandle,
-    SysmlFeaturePath, SysmlFunctionReference, SysmlModelicaType, SysmlMultiplicity,
-    SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord, SysmlSourceRef, SysmlStandardConstant,
-    SysmlSubject, SysmlType, SysmlTypeCategory, SysmlTypeRef, SysmlUnsupportedExpression,
+    SysmlFeaturePath, SysmlFunctionReference, SysmlMeasurementReference, SysmlModelicaType,
+    SysmlMultiplicity, SysmlPrimitiveType, SysmlQuantityValue, SysmlRecord, SysmlSourceRef,
+    SysmlStandardConstant, SysmlSubject, SysmlType, SysmlTypeCategory, SysmlTypeRef,
+    SysmlUnsupportedExpression,
 };
 use lunco_sysml_ir::{
     BindingContract, BindingProvider, CompiledConstraint, ConstraintIr, DiagnosticSeverity,
@@ -1483,6 +1484,16 @@ pub fn register_sysml_types(engine: &mut Engine) {
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT)
         })
+        .register_get(
+            "measurement_reference",
+            |quantity: &mut SysmlQuantityValue| {
+                quantity
+                    .measurement_reference
+                    .clone()
+                    .map(Dynamic::from)
+                    .unwrap_or(Dynamic::UNIT)
+            },
+        )
         .register_get("kind", |quantity: &mut SysmlQuantityValue| {
             quantity
                 .quantity_kind
@@ -1490,6 +1501,31 @@ pub fn register_sysml_types(engine: &mut Engine) {
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT)
         })
+        .register_type_with_name::<SysmlMeasurementReference>("SysmlMeasurementReference")
+        .register_get("feature", |reference: &mut SysmlMeasurementReference| {
+            Dynamic::from(reference.feature)
+        })
+        .register_get(
+            "qualified_name",
+            |reference: &mut SysmlMeasurementReference| reference.qualified_name.clone(),
+        )
+        .register_get("short_name", |reference: &mut SysmlMeasurementReference| {
+            reference
+                .short_name
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
+        })
+        .register_get(
+            "declared_type",
+            |reference: &mut SysmlMeasurementReference| {
+                reference
+                    .declared_type
+                    .clone()
+                    .map(Dynamic::from)
+                    .unwrap_or(Dynamic::UNIT)
+            },
+        )
         .register_type_with_name::<SysmlEnumValue>("EnumValue")
         .register_get("type_ref", |value: &mut SysmlEnumValue| {
             value
@@ -1808,6 +1844,7 @@ fn typed_literal_dynamic(
         return Some(Dynamic::from(SysmlQuantityValue {
             value: literal.number_value?,
             unit_symbol: literal.unit_symbol.clone(),
+            measurement_reference: literal.measurement_reference.clone(),
             quantity_kind: declared.and_then(|value| value.quantity_kind.clone()),
         }));
     }
@@ -2530,6 +2567,12 @@ fn literal_dynamic(literal: &lunco_sysml_ast::SysmlLiteral) -> Dynamic {
     }
     if let Some(unit_symbol) = &literal.unit_symbol {
         value.insert("unit_symbol".into(), Dynamic::from(unit_symbol.clone()));
+    }
+    if let Some(measurement_reference) = &literal.measurement_reference {
+        value.insert(
+            "measurement_reference".into(),
+            Dynamic::from(measurement_reference.clone()),
+        );
     }
     value.insert(
         "literal_kind".into(),

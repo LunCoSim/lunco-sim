@@ -8,9 +8,10 @@
 use crate::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlConstraintBinding, SysmlDiagnostic,
     SysmlElement, SysmlElementHandle, SysmlExpression, SysmlExpressionKind,
-    SysmlExpressionOperator, SysmlFeatureHandle, SysmlLiteral, SysmlReference, SysmlRelationship,
-    SysmlRequirementRecord, SysmlStandardConstant, SysmlStandardFunction, SysmlSubject, SysmlType,
-    SysmlTypeRef, SysmlUnsupportedExpression, SysmlVerificationRecord,
+    SysmlExpressionOperator, SysmlFeatureHandle, SysmlLiteral, SysmlMeasurementReference,
+    SysmlReference, SysmlRelationship, SysmlRequirementRecord, SysmlStandardConstant,
+    SysmlStandardFunction, SysmlSubject, SysmlType, SysmlTypeRef, SysmlUnsupportedExpression,
+    SysmlVerificationRecord,
 };
 use lunco_hooks::HookValue as H;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -899,6 +900,14 @@ fn literal(value: &SysmlLiteral) -> H {
                 .map(|symbol| H::str(symbol.clone()))
                 .unwrap_or(H::Unit),
         ),
+        (
+            "measurement_reference",
+            value
+                .measurement_reference
+                .as_ref()
+                .map(measurement_reference_facts)
+                .unwrap_or(H::Unit),
+        ),
     ];
     if let Some(number) = value.number_value {
         facts.push(("number_value", H::Float(number.as_f64())));
@@ -984,6 +993,29 @@ fn type_ref_facts(value: &SysmlTypeRef) -> H {
     H::map([
         ("element", element_handle(value.element)),
         ("qualified_name", H::str(value.qualified_name.clone())),
+    ])
+}
+
+fn measurement_reference_facts(value: &SysmlMeasurementReference) -> H {
+    H::map([
+        ("feature", feature_handle(value.feature)),
+        ("qualified_name", H::str(value.qualified_name.clone())),
+        (
+            "short_name",
+            value
+                .short_name
+                .as_ref()
+                .map(|name| H::str(name.clone()))
+                .unwrap_or(H::Unit),
+        ),
+        (
+            "declared_type",
+            value
+                .declared_type
+                .as_ref()
+                .map(type_ref_facts)
+                .unwrap_or(H::Unit),
+        ),
     ])
 }
 
