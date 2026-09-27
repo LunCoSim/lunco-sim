@@ -221,3 +221,10 @@ Twin-open and readiness milestones: one startup outlier can stall UI even when
 the same system is nearly free on settled frames. If the outer system is hot,
 attribute time to its internal owner operations before choosing an async
 boundary or cache.
+
+For `project_usd_policies`, distinguish the initial prepared-plan lookup and
+live-stage traversal from generation-batch cache promotion. A promoted cache
+means every intervening `UsdSceneChangeBatch` was observed and the changed
+paths did not affect policy prims; a missing batch or changed policy subtree
+must remain a visible full extraction. Compare both startup and settled edit
+captures after changing this path.

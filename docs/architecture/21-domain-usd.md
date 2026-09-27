@@ -241,11 +241,16 @@ a worker. This dependency-recipe cache removes redundant snapshots while the
 domain pipeline keeps non-critical computation off the UI and physics cycles.
 The USD policy projector caches authored policy facts per stage asset, prepared
 projection-plan identity, and canonical generation. A source-asset revision
-reuses those facts, while a change to one stage rescans only that stage; live
-canonical reads remain on their owning thread. The async-prepared projection
-plan also indexes prims by composed schema type, so startup policy extraction
-visits only `LunCoPolicy` prims instead of rebuilding paths and type lookups
-across the entire prepared stage on the UI thread.
+reuses those facts. For live stage changes, contiguous
+`UsdSceneChangeBatch` generations let the projector promote unaffected cached
+facts when resynced subtrees and info-changed prims do not contain a policy.
+Relevant changes rescan only that stage; missing batches, plan replacement, or
+generation gaps use a full extraction. Unrelated stage edits also skip policy
+asset resolution and registry installation. Live canonical reads remain on
+their owning thread. The async-prepared projection plan indexes prims by
+composed schema type, so startup policy extraction visits only `LunCoPolicy`
+prims instead of rebuilding paths and type lookups across the entire prepared
+stage on the UI thread.
 
 A newly authored `SetAttribute` uses `RemoveAttribute` as its inverse, so adding
 attributes to a growing runtime layer does not serialize the entire layer into

@@ -8135,6 +8135,7 @@ dependencies = [
  "lunco-usd-document",
  "lunco-usd-sim-domain",
  "lunco-workspace",
+ "openusd",
 ]
 
 [[package]]
