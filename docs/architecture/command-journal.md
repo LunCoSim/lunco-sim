@@ -122,9 +122,11 @@ admission stamp to `SessionInputStream`; the controller-local frame object is
 discarded after translation. `StartSessionInputCapture`,
 `StopSessionInputCapture`, and `ClearSessionInputCapture` control the bounded
 in-memory stream;
-`ReadSessionInputStream` returns its state and typed records. A capacity or
-ordering violation stops capture visibly and preserves admitted records. The
-held resource keys API transport by its caller-supplied nonzero `producer_id`,
+`ReadSessionInputStream` returns its state and typed records. Before retention,
+the session owner validates canonical payload names, stable stamps,
+producer/payload pairing, and runtime-spawn pose invariants. Malformed records,
+capacity limits, or ordering violations stop capture visibly and preserve prior
+records. The held resource keys API transport by its caller-supplied nonzero `producer_id`,
 Twin Rhai by route and actor, actorless Rhai by route and `producer_id`, and
 direct typed commands by `producer_id`; a release removes only that producer's
 hold. API clients and direct typed producers must keep the same ID for their

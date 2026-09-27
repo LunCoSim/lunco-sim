@@ -392,6 +392,11 @@ typed queues before that is safe.
   The package suite passed 44 unit tests and 2 authorization integration
   tests. Durable recording/playback, broader typed commands, physical-frame
   playback, and full cross-domain causal closure remain open.
+- The replay feature specification had stale text saying raw-file spawns and
+  stable producer identity were outside capture. `specs/020-world-state-and-replay/spec.md`
+  and the command-journal contract now describe the current in-memory typed
+  payloads and validation boundary; durable input persistence and playback
+  remain unimplemented.
 
 ## Runtime and repository constraints
 
