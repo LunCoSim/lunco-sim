@@ -7,10 +7,12 @@
 //! derived engine capability.
 use bevy::ecs::entity::EntityHashSet;
 use bevy::input::mouse::AccumulatedMouseScroll;
+use bevy::picking::Pickable;
 use bevy::picking::events::{Click, Drag, Pointer};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
+use bevy::ui::picking_backend::{UiPickingCamera, UiPickingSettings};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{PrimaryEguiContext, egui};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
@@ -526,6 +528,13 @@ pub struct RuntimeUiPlugin;
 
 impl Plugin for RuntimeUiPlugin {
     fn build(&self, app: &mut App) {
+        // Bevy UI nodes block scene picks by default, including decorative
+        // retained nodes. Require explicit targets so transparent UI layout
+        // does not intercept the scene pointer.
+        app.init_resource::<UiPickingSettings>();
+        app.world_mut()
+            .resource_mut::<UiPickingSettings>()
+            .require_markers = true;
         app.add_plugins((
             bevy_hui::HuiPlugin,
             bevy_flair::FlairPlugin,
@@ -1579,6 +1588,7 @@ fn bind_runtime_ui_to_camera(
     mut commands: Commands,
     viewport: Option<Res<SceneViewport>>,
     cameras: Query<(Entity, &Camera, Has<PrimaryEguiContext>, Has<SceneCamera>)>,
+    ui_picking_cameras: Query<(), With<UiPickingCamera>>,
     roots: Query<(Entity, Option<&UiTargetCamera>), With<RuntimeUiSurface>>,
 ) {
     // Windowed runtime UI is owned by the single egui host. Windowless
@@ -1608,6 +1618,9 @@ fn bind_runtime_ui_to_camera(
     let Some(camera) = camera else {
         return;
     };
+    if ui_picking_cameras.get(camera).is_err() {
+        commands.entity(camera).insert(UiPickingCamera);
+    }
 
     for (entity, target) in &roots {
         if target.is_none_or(|target| target.entity() != camera) {
@@ -2279,8 +2292,11 @@ fn runtime_ui_surface_ancestor(
 /// a `viewport` surface is intentionally full-window, so registering its
 /// placement rectangle would make the complete 3D scene non-interactive. HUI's
 /// explicit `OnUiPress` marker is the input contract; Bevy's computed node
-/// geometry supplies the actual child hit rectangle.
+/// geometry supplies the actual child hit rectangle. These controls also
+/// receive `Pickable` so Bevy's marker-filtered UI backend can ignore layout
+/// nodes that do not own pointer input.
 fn register_runtime_ui_input_regions(
+    mut commands: Commands,
     roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
     controls: Query<(
         Entity,
@@ -2288,6 +2304,7 @@ fn register_runtime_ui_input_regions(
         &UiGlobalTransform,
         Option<&InheritedVisibility>,
         Option<&OnUiPress>,
+        Option<&Pickable>,
     )>,
     parents: Query<&ChildOf>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -2299,8 +2316,14 @@ fn register_runtime_ui_input_regions(
             (surface.interactive && matches!(*visibility, Visibility::Visible)).then_some(entity)
         })
         .collect();
+    let draggable_roots: HashSet<Entity> = roots
+        .iter()
+        .filter_map(|(entity, surface, visibility)| {
+            (surface.draggable && matches!(*visibility, Visibility::Visible)).then_some(entity)
+        })
+        .collect();
 
-    if interactive_roots.is_empty() {
+    if interactive_roots.is_empty() && draggable_roots.is_empty() {
         return;
     }
 
@@ -2317,11 +2340,20 @@ fn register_runtime_ui_input_regions(
         }
     }
 
-    for (entity, node, transform, inherited_visibility, press) in &controls {
-        if press.is_none()
-            || !inherited_visibility.is_some_and(|visibility| visibility.get())
-            || !is_descendant_of_runtime_surface(entity, &interactive_roots, &parents)
-        {
+    for (entity, node, transform, inherited_visibility, press, pickable) in &controls {
+        if !inherited_visibility.is_some_and(|visibility| visibility.get()) {
+            continue;
+        }
+
+        let explicit_control = press.is_some()
+            && is_descendant_of_runtime_surface(entity, &interactive_roots, &parents);
+        let draggable_content =
+            is_descendant_of_runtime_surface(entity, &draggable_roots, &parents);
+        if (explicit_control || draggable_content) && pickable.is_none() {
+            commands.entity(entity).insert(Pickable::default());
+        }
+
+        if !explicit_control {
             continue;
         }
         if let Some(rect) = runtime_ui_input_rect(node, transform) {
@@ -2958,20 +2990,43 @@ mod tests {
                 Visibility::Visible,
             ))
             .id();
-        app.world_mut().spawn((
-            Node::default(),
-            ComputedNode {
-                size: Vec2::new(80.0, 20.0),
-                inverse_scale_factor: 1.0,
-                ..Default::default()
-            },
-            UiGlobalTransform::from_xy(100.0, 60.0),
-            InheritedVisibility::VISIBLE,
-            OnUiPress(vec!["runtime_action".to_owned()]),
-            ChildOf(root),
-        ));
+        let control = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(80.0, 20.0),
+                    inverse_scale_factor: 1.0,
+                    ..Default::default()
+                },
+                UiGlobalTransform::from_xy(100.0, 60.0),
+                InheritedVisibility::VISIBLE,
+                OnUiPress(vec!["runtime_action".to_owned()]),
+                ChildOf(root),
+            ))
+            .id();
+        let decoration = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(80.0, 20.0),
+                    inverse_scale_factor: 1.0,
+                    ..Default::default()
+                },
+                UiGlobalTransform::from_xy(200.0, 60.0),
+                InheritedVisibility::VISIBLE,
+                ChildOf(root),
+            ))
+            .id();
         app.add_systems(Update, register_runtime_ui_input_regions);
         app.update();
+
+        assert_eq!(
+            app.world().get::<Pickable>(control),
+            Some(&Pickable::default())
+        );
+        assert!(app.world().get::<Pickable>(decoration).is_none());
 
         let mut gate = app.world_mut().remove_resource::<ScenePickGate>().unwrap();
         gate.mark_rendered();

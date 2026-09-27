@@ -205,6 +205,16 @@ is an authored semantic action. Authored semantic actions are intentionally
 open-ended; their meaning belongs to the active Twin Rhai program, not to the
 runtime UI crate.
 
+The retained UI picker uses Bevy's marker filter because its camera renders
+after the scene camera and otherwise every visible UI node blocks the scene,
+including decorative or transparent layout nodes. The runtime marks only
+visible `on_press` controls on interactive surfaces and visible HUI nodes in
+draggable window surfaces, including their roots, as `Pickable`; those are the
+retained nodes that own pointer input. The active presentation camera is marked
+for UI picking when a runtime surface is mounted. This keeps ordinary HUI
+controls and surface dragging on the native pointer path while allowing
+unmarked UI layout to pass scene hits through.
+
 Window surfaces may opt into movement with `draggable: true`. The manifest
 remains the default and visibility authority; the workbench stores only a
 validated logical top-left override in the active Twin's existing workspace
