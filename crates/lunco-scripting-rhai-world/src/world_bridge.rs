@@ -4721,9 +4721,10 @@ fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
 
 /// Bounded execution policy for one-shot scripts that need live World access.
 ///
-/// These scripts remain serial because bridge functions can read and mutate
-/// the live World. A small FIFO batch and per-invocation operation ceiling
-/// keep that work from consuming an unbounded application frame.
+/// REPL snippets and UI tool calls use separate queues and remain serial
+/// because bridge functions can read and mutate the live World. Per-queue
+/// capacity, a small per-frame FIFO batch, and a per-invocation operation
+/// ceiling keep that work bounded.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorldScriptExecutionLimits {
     max_pending: usize,
@@ -4735,7 +4736,7 @@ const MAX_PENDING_WORLD_SCRIPTS: usize = 256;
 const MAX_WORLD_SCRIPTS_PER_UPDATE: usize = 16;
 
 impl WorldScriptExecutionLimits {
-    /// Create validated limits for the live-world REPL queue.
+    /// Create validated per-queue limits for live-world script work.
     pub fn new(
         max_pending: usize,
         max_per_update: usize,
@@ -4772,12 +4773,12 @@ impl WorldScriptExecutionLimits {
         })
     }
 
-    /// Default bounded FIFO capacity for pending world-bound requests.
+    /// Bounded capacity of each world-script queue.
     pub const fn max_pending(self) -> usize {
         self.max_pending
     }
 
-    /// Maximum world-bound scripts evaluated during one application update.
+    /// Maximum requests evaluated from each queue during one application update.
     pub const fn max_per_update(self) -> usize {
         self.max_per_update
     }
@@ -4798,19 +4799,31 @@ impl Default for WorldScriptExecutionLimits {
     }
 }
 
-/// World-bound script requests submitted by `RunRhai` or `RunRhaiTool`, waiting
-/// to run inside the exclusive [`drain_world_scripts`] system where `&mut World`
-/// is available. A tool request keeps its [`TelemetryValue`] payload typed until
-/// the Rhai backend constructs its native `Dynamic`. `correlation_id` is present
-/// only for a transport request waiting for the completed response. `authority`
-/// is the submitting session whose `cmd()` calls are gated — `None` for a
-/// local/host launch (§3.4).
+/// World-bound script requests waiting to run inside an exclusive drain where
+/// `&mut World` is available. General `RunRhai` work stays in the REPL queue;
+/// typed UI-tool requests use `ui_queue` so pointer and menu input runs in the
+/// pre-simulation UI pass. A tool request keeps its [`TelemetryValue`] payload
+/// typed until the Rhai backend constructs its native `Dynamic`.
+/// `correlation_id` is present only for a transport request waiting for the
+/// completed response. `authority` is the submitting session whose `cmd()`
+/// calls are gated — `None` for a local/host launch (§3.4).
 #[derive(Resource, Default)]
 pub struct PendingWorldScripts {
     queue: Vec<PendingWorldScript>,
+    ui_queue: Vec<PendingWorldScript>,
 }
 
 impl PendingWorldScripts {
+    fn ensure_capacity(queue_len: usize, limits: WorldScriptExecutionLimits) -> Result<(), String> {
+        if queue_len >= limits.max_pending() {
+            return Err(format!(
+                "world script queue is full ({} pending requests)",
+                limits.max_pending()
+            ));
+        }
+        Ok(())
+    }
+
     /// Append one request in command-admission order, rejecting overload at
     /// the command boundary instead of allowing the queue to grow without a
     /// bound.
@@ -4819,13 +4832,24 @@ impl PendingWorldScripts {
         request: PendingWorldScript,
         limits: WorldScriptExecutionLimits,
     ) -> Result<(), String> {
-        if self.queue.len() >= limits.max_pending() {
-            return Err(format!(
-                "world script queue is full ({} pending requests)",
-                limits.max_pending()
-            ));
-        }
+        Self::ensure_capacity(self.queue.len(), limits)?;
         self.queue.push(request);
+        Ok(())
+    }
+
+    /// Append a typed UI-tool invocation for the pre-simulation UI cycle.
+    /// Keeping it in its own bounded queue prevents general REPL work from
+    /// delaying pointer and menu input.
+    pub fn enqueue_ui(
+        &mut self,
+        request: PendingWorldScript,
+        limits: WorldScriptExecutionLimits,
+    ) -> Result<(), String> {
+        if !matches!(&request, PendingWorldScript::Tool { .. }) {
+            return Err("UI interaction queue accepts typed tool calls only".to_owned());
+        }
+        Self::ensure_capacity(self.ui_queue.len(), limits)?;
+        self.ui_queue.push(request);
         Ok(())
     }
 
@@ -4834,9 +4858,19 @@ impl PendingWorldScripts {
         !self.queue.is_empty()
     }
 
+    /// Whether UI-tool work is waiting for the next pre-simulation input pass.
+    pub fn has_ui_pending(&self) -> bool {
+        !self.ui_queue.is_empty()
+    }
+
     fn take_batch(&mut self, maximum: usize) -> Vec<PendingWorldScript> {
         let count = maximum.min(self.queue.len());
         self.queue.drain(..count).collect()
+    }
+
+    fn take_ui_batch(&mut self, maximum: usize) -> Vec<PendingWorldScript> {
+        let count = maximum.min(self.ui_queue.len());
+        self.ui_queue.drain(..count).collect()
     }
 }
 
@@ -4940,17 +4974,34 @@ fn world_script_engine(world: &mut World) -> Result<Option<std::sync::Arc<Engine
 }
 
 /// Exclusive system: run one bounded FIFO batch against the live World, record
-/// each result, and leave later requests queued for the next application update.
+/// each result, and leave later requests queued for the next REPL update.
 pub fn drain_world_scripts(world: &mut World) {
+    drain_world_script_queue(world, false);
+}
+
+/// Exclusive system: run one bounded FIFO batch of UI tools before fixed
+/// simulation work, so pointer and menu input is handled on the UI thread
+/// without waiting behind physics or general REPL requests.
+pub fn drain_ui_world_scripts(world: &mut World) {
+    drain_world_script_queue(world, true);
+}
+
+fn drain_world_script_queue(world: &mut World, ui: bool) {
     let engine = match world_script_engine(world) {
         Ok(Some(engine)) => Ok(engine),
         Ok(None) => return,
         Err(error) => Err(error),
     };
     let limits = *world.resource::<WorldScriptExecutionLimits>();
-    let pending = world
-        .resource_mut::<PendingWorldScripts>()
-        .take_batch(limits.max_per_update());
+    let pending = if ui {
+        world
+            .resource_mut::<PendingWorldScripts>()
+            .take_ui_batch(limits.max_per_update())
+    } else {
+        world
+            .resource_mut::<PendingWorldScripts>()
+            .take_batch(limits.max_per_update())
+    };
     if pending.is_empty() {
         return;
     }
@@ -4958,7 +5009,7 @@ pub fn drain_world_scripts(world: &mut World) {
         .get_resource::<Time<Real>>()
         .map(|time| time.elapsed_secs_f64());
     for request in pending {
-        if let Some(wall_secs) = wall_secs {
+        if !ui && let Some(wall_secs) = wall_secs {
             if let Some(mut cadence) =
                 world.get_resource_mut::<lunco_core_runtime::ApplicationCadence>()
             {
@@ -4990,9 +5041,19 @@ pub fn drain_world_scripts(world: &mut World) {
                 id,
                 correlation_id,
                 match &engine {
-                    Ok(engine) => {
-                        eval_tool_with_engine(world, engine, &tool, &hook, &args, authority)
-                    }
+                    Ok(engine) => eval_tool_with_engine(
+                        world,
+                        engine,
+                        &tool,
+                        &hook,
+                        &args,
+                        authority,
+                        if ui {
+                            lunco_core::RuntimeCycle::Ui
+                        } else {
+                            lunco_core::RuntimeCycle::Repl
+                        },
+                    ),
                     Err(error) => Err(error.clone()),
                 },
             ),
@@ -5087,7 +5148,15 @@ pub fn eval_tool_with_world_as(
 ) -> Result<String, String> {
     let engine = world_script_engine(world)?
         .ok_or_else(|| "Rhai runtime preparation is still in progress".to_owned())?;
-    eval_tool_with_engine(world, &engine, tool, hook, args, authority)
+    eval_tool_with_engine(
+        world,
+        &engine,
+        tool,
+        hook,
+        args,
+        authority,
+        lunco_core::RuntimeCycle::Repl,
+    )
 }
 
 /// Invoke a typed tool hook against the warmed engine used by scenario scripts.
@@ -5098,6 +5167,7 @@ fn eval_tool_with_engine(
     hook: &str,
     args: &TelemetryValue,
     authority: Option<lunco_command_contracts::SessionId>,
+    cycle: lunco_core::RuntimeCycle,
 ) -> Result<String, String> {
     if tool.is_empty()
         || !tool
@@ -5118,11 +5188,7 @@ fn eval_tool_with_engine(
     let out = Arc::new(Mutex::new(String::new()));
     let _print_capture = OneShotRhaiPrintCapture::enter(out.clone());
 
-    let context = application_execution_context(
-        world,
-        lunco_core::RuntimeCycle::Repl,
-        lunco_core::RuntimePhase::Evaluation,
-    );
+    let context = application_execution_context(world, cycle, lunco_core::RuntimePhase::Evaluation);
     let _scope = bridge_core::WorldScope::enter(world, context);
     bridge_core::set_script_authority(authority);
     let mut scope = rhai::Scope::new();
@@ -5150,6 +5216,23 @@ fn application_execution_context(
     cycle: lunco_core::RuntimeCycle,
     phase: lunco_core::RuntimePhase,
 ) -> lunco_core::RuntimeExecutionContext {
+    if cycle == lunco_core::RuntimeCycle::Ui {
+        let time = world.get_resource::<Time<Real>>();
+        return lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::application(cycle)),
+            phase,
+            clock: if time.is_some() {
+                lunco_core::RuntimeClock::Application
+            } else {
+                lunco_core::RuntimeClock::None
+            },
+            time_seconds: time.map(|time| time.elapsed_secs_f64()),
+            delta_seconds: time.map(|time| time.delta_secs_f64()),
+            sequence: None,
+            producer: None,
+        };
+    }
+
     let clock = world
         .get_resource::<lunco_core_runtime::ApplicationCadence>()
         .map(|cadence| match cycle {
@@ -5249,6 +5332,7 @@ mod tests {
                 authority: None,
                 correlation_id: None,
             }],
+            ui_queue: Vec::new(),
         });
         world.insert_resource(WorldScriptExecutionLimits::default());
 

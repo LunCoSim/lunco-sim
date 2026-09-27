@@ -55,10 +55,10 @@ pub struct RunRhai {
 /// Invoke a registered Rhai tool with a typed value.
 ///
 /// This is the structured counterpart to [`RunRhai`]. It is intended for
-/// engine adapters such as scene click tools: the payload crosses the Bevy
-/// command queue as the shared [`TelemetryValue`] model and becomes a native
-/// Rhai value inside the scripting backend. It uses the same bounded FIFO and
-/// per-invocation operation ceiling as [`RunRhai`]. No source snippet or JSON
+/// engine adapters such as scene click tools: the typed payload is queued for
+/// the UI interaction pass before fixed simulation, independently of general
+/// REPL work. It has its own bounded queue capacity and shares the
+/// per-invocation operation ceiling with [`RunRhai`]. No source snippet or JSON
 /// literal is used to carry the payload.
 #[cfg(feature = "rhai")]
 #[Command(default)]
@@ -73,8 +73,9 @@ pub struct RunRhaiTool {
 ///
 /// This is the generic interaction seam used by authored pointer policies and
 /// menus. The hook name is validated against the tool registry before it is
-/// queued; the payload remains a typed [`TelemetryValue`] until the Rhai
-/// adapter creates its native value.
+/// queued for the UI interaction pass before fixed simulation; the payload
+/// remains a typed [`TelemetryValue`] until the Rhai adapter creates its native
+/// value.
 #[cfg(feature = "rhai")]
 #[Command(default)]
 pub struct RunRhaiToolHook {
@@ -252,7 +253,7 @@ fn on_run_rhai_tool(
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
-    pending.enqueue(
+    pending.enqueue_ui(
         PendingWorldScript::Tool {
             id,
             tool: cmd.tool.clone(),
@@ -302,7 +303,7 @@ fn on_run_rhai_tool_hook(
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
-    pending.enqueue(
+    pending.enqueue_ui(
         PendingWorldScript::Tool {
             id,
             tool: cmd.tool.clone(),

@@ -127,13 +127,18 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   per `Update`, each invocation is limited to 100,000 Rhai operations, and a
   full 64-request queue rejects new work with a terminal error. Stdout is
   returned in the original deferred response.
-- **Structured tool invocation:** `RunRhaiTool { tool, args }` queues a registered
-  `on_click(context)` tool in the same bounded FIFO and uses the same per-update
-  and per-invocation limits. `args` uses the shared typed `TelemetryValue` model
-  and is converted directly to a native Rhai value at the backend boundary.
-  Scene click contexts include `button` (`primary`, `secondary`, or `middle`) so
-  the Rhai tool owns button-specific policy; adapters never build source
-  snippets or JSON literals for tool arguments.
+- **Structured UI tools:** `RunRhaiTool { tool, args }` and
+  `RunRhaiToolHook { tool, hook, args }` enqueue typed calls in a bounded UI
+  queue. The exclusive drain runs after Bevy picking in `PreUpdate`, before
+  fixed simulation, and admits a bounded batch per application frame (one by
+  default). Its capacity is independent of the REPL queue, so general `RunRhai`
+  work cannot delay or consume admission for pointer and menu hooks. These calls
+  receive an `Application/Ui/Evaluation` context; general `RunRhai` remains in the bounded
+  FIFO `Repl` cycle in `Update`. Tool arguments use `TelemetryValue` and are
+  converted directly to native Rhai values at the backend boundary. Scene click
+  contexts include `button` (`primary`, `secondary`, or `middle`) so the Rhai
+  tool owns button-specific policy; adapters never build source snippets or
+  JSON literals for tool arguments.
 - **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
   attach `ScriptedModel { language: Rhai, document_id }`.
 
@@ -351,7 +356,7 @@ captures output for the active request while scenario output continues to use
 the application log.
 
 The owning system supplies a typed `RuntimeExecutionContext` for each scenario
-phase and one-shot REPL/tool evaluation. Rhai reads it with
+phase and one-shot REPL or UI-tool evaluation. Rhai reads it with
 `execution_context()`; nested functions inherit their caller's phase and clock.
 Registered hook functions receive the same context in their immutable
 `runtime_context` map. When a Rhai callback invokes another registered hook,

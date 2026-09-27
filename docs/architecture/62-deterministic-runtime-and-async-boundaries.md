@@ -43,7 +43,7 @@ The runtime uses these existing cycle families:
 | `Interaction` | avatar and camera interaction | wall-rooted `interaction` domain |
 | `Command` / `Repl` | typed command admission and one-shot script evaluation | application/wall cadence; never advances simulation time |
 | `Telemetry` | delivery of fixed-tick samples to retention and external subscribers | bounded application-frame work; each sample keeps its source tick and domain time |
-| `Ui` | egui and workbench updates | host frame/input cadence |
+| `Ui` | egui/workbench updates and authored pointer/menu tool hooks | host frame/input cadence; typed tool hooks run after picking in `PreUpdate`, before fixed simulation, while egui paints in `PostUpdate` |
 | `Visualization` / `Presentation` | LOD selection, render preparation, visual projection | presentation cadence or an explicitly selected visual time domain; terrain cover reselection is capped at 30 Hz using `Time<Real>` |
 
 The USD-to-telemetry bridge samples connected co-simulation event edges only
@@ -110,11 +110,15 @@ authoritative owner.
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
 Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled
 delta guard permits up to 64 fixed steps in one app update at the highest
-transport rate. Every step still receives the same `Time<Fixed>` delta, but a
-long tick or catch-up burst delays UI/input work, and the raw-delta cap means
-simulation time can fall behind wall time under sustained overload. Reducing
-the step cap by discarding accumulated time would hide that lag by dropping
-authoritative ticks, not fix it. `SimulationTimingProfile` is the shared,
+transport rate. Every step still receives the same `Time<Fixed>` delta. Typed
+scene-tool and menu hooks run in a separate bounded UI queue after picking in
+`PreUpdate`, before that fixed loop, so they do not wait behind general REPL
+requests or the current frame's fixed-step work. The UI and simulation still
+share the GUI thread: a long tick or catch-up burst delays the next native input
+poll and the next visible frame. The raw-delta cap means simulation time can
+also fall behind wall time under sustained overload. Reducing the step cap by
+discarding accumulated time would hide that lag by dropping authoritative
+ticks, not fix it. `SimulationTimingProfile` is the shared,
 bounded observation path until ownership is split: it reports the most recent
 240 completed `FixedMain` tick service times and rate-derived service budgets,
 plus per-app-update fixed-loop duration, completed-step count, remaining

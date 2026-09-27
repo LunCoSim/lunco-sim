@@ -362,7 +362,9 @@ Bevy's owning schedules provide the actual execution boundary. A typed
 `RuntimeExecutionContext` carries the current owner route, cycle, phase, clock
 sample, logical sequence, and optional event producer stamp into synchronous
 Rhai calls. Scenario hooks and one-shot REPL/tool calls use their owning
-contexts; `execution_context()` exposes a read-only Rhai map. Generic hook
+contexts: `RunRhai` runs as `Application/Repl`, while typed UI tool callbacks
+run as `Application/Ui` after picking in `PreUpdate` and before fixed
+simulation. `execution_context()` exposes a read-only Rhai map. Generic hook
 calls carry `HookInvocation`; nested `invoke_hook` forwards its active context,
 and an isolated Rhai hook reads it from the immutable `runtime_context` map.
 The shared hook registry rejects a clock that does not belong to its cycle,

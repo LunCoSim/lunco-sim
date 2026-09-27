@@ -62,6 +62,13 @@ manager. The editor gizmo has a local captured lifecycle: a same-frame handle
 hit owns primary input through release or cancellation and suppresses preview
 pan for that gesture. A route fixture passing does not prove global viewport
 arbitration.
+
+`RunRhaiTool` and `RunRhaiToolHook` callbacks use a bounded UI queue drained
+after picking in `PreUpdate`, before fixed simulation. Keep authored pointer
+and menu policy in those tool hooks rather than sending it through the general
+REPL queue or a fixed-tick scenario. The UI and simulation still share the GUI
+thread, so a long fixed-step catch-up can delay the next native input poll and
+visible frame.
 The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
 run by `scripts/run_editor_scene_tests.sh`; it sends typed native-window input
 through picking and verifies the mounted fixture, waypoint hit, semantic

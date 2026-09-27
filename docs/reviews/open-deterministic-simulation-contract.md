@@ -41,6 +41,16 @@ contract remains open.
 | D26 | Fixed | A mounted primary USD document can receive simulation-affecting edits in application or fixed-script cycles after its last projection. A catch-up burst could then start another authoritative tick before the edit is reconciled into live ECS state. Document generations coalesce under a typed progress key: `SimulationProgressAdmissionSet` runs after entity indexing and before `TimeSpineSet`, while `FixedLast` admits fixed-cycle edits before closing remaining catch-up iterations. Typed view-layer-only suffixes avoid the hold; unavailable suffixes conservatively hold. Projection publication releases only after reaching the latest admitted generation, so stale completions retain the hold. The production `route_lifecycle` Rhai gate now exercises fixed-script and Application/Repl edits. For the Repl edit, it confirms the public entity index has not caught up immediately after the document operation, observes paused simulation while projection is pending, and requires the first later simulation tick to see the projected prim; it also checks Application/Repl context and event tick. Four runs with seed `6840157149251759617` passed at 52 simulation ticks, with 103–114 application updates. Focused tests cover generation coalescing/stale completion, PreUpdate ordering, and stopping the current fixed catch-up burst. | Fixed-step and Application/Repl projection admission acceptance passes through the production scene runner; the focused generic admission tests pass |
 | D27 | Partial | External semantic controls enter the bounded session-owned `PendingSessionInputs` resource. `lunco-core-session` owns admission storage, scene-teardown clearing, stable target and generation validation, capture, and a fixed-tick commit set that synchronously publishes typed events in shared `(effective_tick, sequence)` order while simulation time is running. Paused input remains queued until play resumes. The controller applies semantic edges and held changes before physical sampling. Runtime spawns and physical frames have not joined the shared queue, so total cross-domain effect order is still incomplete. | `cargo test -p lunco-core-session -p lunco-controller -j 4` passes (42 session tests including authz integration, 24 controller tests); whole-session cross-domain ordering and spawn replay remain open |
 
+### UI tool callback boundary (2026-09-27)
+
+Authored pointer and menu tool hooks use a separate bounded queue drained after
+Bevy picking in `PreUpdate`, before fixed simulation, with an
+`Application/Ui/Evaluation` context. This removes general REPL head-of-line
+blocking and the current frame's fixed work from the callback path. The GUI and
+fixed simulation still share a thread, so a long fixed-step catch-up can delay
+the next native input poll and visible frame; the dedicated simulation owner
+remains necessary for a hard responsiveness guarantee.
+
 ## Latest local-main integration evidence (2026-09-27)
 
 Commit `b41f7c6e9` centralizes ordered fixed-tick commits for external semantic
