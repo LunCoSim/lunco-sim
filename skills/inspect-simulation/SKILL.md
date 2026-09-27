@@ -91,8 +91,12 @@ through the `assembly_edit` wrappers `save_inspection_preset`,
 viewport's `active_preset`. These presets do not modify USD or simulation
 state.
 
-To perturb-then-observe: `set_input` / `SetPorts {target, writes:[[name,val]]}` to
-poke an input, `possess_vessel` to take control, then re-read.
+To perturb-then-observe: `set_input` / `SetPorts {target, writes:[[name,val]],
+producer_id}` to poke a live input through the next fixed tick; reuse one stable
+nonzero producer id for the same external caller, then re-read. Use
+`ReleasePort` / `ReleaseControl` with the same producer id when releasing a
+live hold or applying a safe state externally. Use `possess_vessel` when the
+target also requires an explicit control claim.
 
 ## Recipe
 

@@ -345,14 +345,24 @@ prim applies `LunCoProgramAPI` in place — see
 
 ## Decision 2 — the PortRegistry is the ONE input-write path
 
-`SetModelInput`, `SetPorts`, rhai `set(id,name,v)`, Python, and wires all use the
-shared `PortRegistry`. On a generated Modelica root that also carries
+`SetModelInput` uses the shared `PortRegistry` for a declared live input port;
+`SetPorts`, Rhai `set(id,name,v)`, Python, and wires use the same port owner.
+External live-session `SetModelInput` and external API/direct/non-Simulation
+Rhai `SetPorts` inputs enter the bounded session queue and reach that port at
+their admitted fixed tick. External `SetPorts` callers supply a stable producer
+id; Twin Rhai uses its actor identity. Local Modelica UI input changes use the
+local session id. Simulation-clock Rhai writes remain derived behavior.
+External `ReleasePort` and `ReleaseControl` commands use the same stable
+producer and fixed-tick admission contract; lifecycle-derived safe-stops remain
+owned by the authority transition. A
+bare editor-only model without a live port keeps its `ModelicaModel.inputs`
+owner. On a generated Modelica root that also carries
 `InputPorts`, `InputPorts` is the authored public command boundary and therefore
 wins for names it declares; the generic bridge mirrors those accepted values
 into `ModelicaModel.inputs`. Other propagated model inputs remain on
 `SimComponent.inputs`. A direct `ModelicaModel.inputs` write is clobbered within
-one frame. Always write through a port (`SetPorts`, `set_input`, rhai `set()`),
-never bypass to the model.
+one frame. Simulation-clock Rhai writes remain derived from deterministic
+scenario evaluation and are applied by that evaluation pass.
 
 Use `SimulateIntent` for a held semantic control and
 `SimulateIntentEdge`/Rhai `intent_pulse` for a discrete transition. The latter
@@ -445,7 +455,7 @@ compiled, ready, numerically observed, or visually accepted.
 ## Gotchas
 
 - **Don't apply gravity in `.mo`** — `lunco-environment` applies it separately; doing both double-counts.
-- **Don't `SetModelInput` directly on a cosim'd entity** — clobbered every tick (Decision 2). Write the port.
+- **Don't write `ModelicaModel.inputs` directly** — co-simulation sync owns those values each tick. `SetModelInput` uses the shared port-first input path.
 - **`set_input(me,…)` is not a rhai verb** — inside a scenario use `set(me, "port", v)` (routes through `write_port`).
 - **A vehicle is a USD file** — spawn/param it in USD; if you're writing a Rust struct for a specific rover, stop.
 - **Unwired algebraic Modelica inputs fold to their default** — see [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md) for the `der`-feed / wiring fix.

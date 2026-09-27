@@ -39,13 +39,15 @@ authority, and manual-writability contract. Consumers do not reconstruct those
 facts from a port name; writes still go through the existing typed `SetPorts`
 command.
 
-`SetPorts` validates every named input before changing any value. A valid batch
-returns `applied` after the port backend writes and control holds complete; an
-unknown input or a paused/lifecycle-fenced endpoint returns a terminal
-`rejected` result. Its API/script response is completed by the same deferred
-world closure that applies the writes, so `pending` means the owner has not
-finished yet rather than being the permanent result of a fire-and-forget
-observer.
+`SetPorts` validates every named input before accepting it. External API,
+direct typed, and non-Simulation Rhai commands with stable producer identity
+return an admission receipt for the next fixed tick; the receipt does not claim
+that the value has already reached the port backend. The ordered session commit
+then applies or visibly faults the admitted write. Simulation-clock Rhai and
+fixed-step controller writes keep their owning execution path. Explicit
+external `ReleasePort`/`ReleaseControl` commands share the admission queue;
+immediate lifecycle safe-stops use the internal `ControlSafeStop` event and
+cancel any older queued port writes for that endpoint.
 
 `PortRegistry::port_entities` is the corresponding discovery projection. Each
 backend enumerates the component or authored surface it owns, and the registry

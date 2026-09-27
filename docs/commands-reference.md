@@ -382,20 +382,23 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetModelInput`
 
- Push a runtime input value into a compiled model's stepper.
+ Admit a live Modelica input at the next fixed simulation tick, or update an
+ editor-only model through its canonical input owner.
 
  This command is owned by the UI-free Modelica core, so the same reflected
- command is available to headless API hosts, the workbench, Rhai, and any
- future transport. Its observer queues the exclusive port/model write using
- the same helper as the canvas path and reports the actual apply result.
+ command is available to headless API hosts, the workbench, and Rhai. Its
+ live-session acknowledgement includes the target and admission stamp, and
+ its fixed-tick commit uses the same port-first helper as local UI writes.
 
 - *defined in:* `crates/lunco-modelica-core/src/model_commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `doc_id` | `DocumentId` |  Document id; zero selects the documented active-document default. |
+| `target_gid` | `Option < GlobalEntityId >` |  Stable live Modelica entity identity; selects a runtime participant directly.  When provided, `doc_id` must be zero. |
 | `name` | `String` |  Declared Modelica input name. |
-| `value` | `f64` |  Runtime input value. |
+| `value` | `f64` |  Finite runtime input value; live-session inputs are admitted unchanged for their next tick. |
+| `producer_id` | `Option < u64 >` |  Stable caller identity for API, direct typed, and actorless Rhai inputs.  Twin Rhai calls use their actor identity and omit this field. |
 
 ### `lunco-modelica-ui` <a id="lunco-modelica-ui"></a>
 

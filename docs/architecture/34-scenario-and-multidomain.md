@@ -144,21 +144,28 @@ and publishes the result causally into the other.
 Every public mutation now uses the existing command/port substrate:
 
 - `SetModelInput` is a reflected Modelica command owned by the UI-free core;
-  its shared helper writes through `PortRegistry` whenever the entity exposes
-  a cosimulation port, and its deferred response reports the actual apply result.
+  live API callers select a runtime participant by stable `target_gid`, while
+  workbench callers select an editor document with `doc_id`. External
+  live-session `SetModelInput` commands and local Modelica canvas writes enter
+  the bounded session-input queue for the next fixed tick. The ordered
+  Modelica commit uses the existing port-first helper; the acknowledgement
+  returns the target,
+  correlation, producer kind, optional stable producer id, and admission stamp.
+  Editor-only models keep immediate writes; Simulation-clock Rhai writes
+  remain derived behavior in their authored evaluation pass.
 - `SetPorts` / wires / the scalar-port form of Rhai `set(id,name,v)` →
   `PortRegistry::write_port` → `SimComponent.inputs`. Rhai `set` also owns the
   separate host-local reflected component/resource tuning surface.
 
 `sync_modelica_inputs` copies `SimComponent.inputs → ModelicaModel.inputs` **every
-tick**, so a direct `SetModelInput` write is **clobbered** within one frame on any
-cosim'd entity. (This is why engine-cut-via-`set_input` silently fails on the
-lander, and why the embedded script's `set_input(...)` — which isn't even a
-registered rhai verb — is dead.)
+tick**, so writing `ModelicaModel.inputs` directly is **clobbered** within one
+frame on any cosim'd entity. `SetModelInput` and the scalar-port APIs use the
+shared port owner instead. The embedded script's `set_input(...)` is not a
+registered Rhai verb.
 
 The `PortRegistry` remains the single write surface for cosim entities:
 
-1. `apply_set_model_input` is **port-first**: if the entity exposes a
+1. `SetModelInput` is **port-first**: if the entity exposes a
    writable port of that name (`PortRegistry::write_port` succeeds), use the
    shared port surface. A bare workbench/batch model without a `SimComponent`
    uses its own `ModelicaModel.inputs` state, which is the authoritative input
@@ -169,8 +176,8 @@ The `PortRegistry` remains the single write surface for cosim entities:
 3. Net: `SetModelInput`, `SetPorts`, scalar-port Rhai `set()`, Python, and wires
    all converge on `SimComponent.inputs` for co-simulated entities → the cosim
    value *is* the value everyone sees → no clobber, one source of truth. The
-   MCP `set_input` tool keeps its ergonomic name + input-name validation but now
-   actually sticks.
+   MCP `set_input` accepts a live participant's stable `target_gid` or an
+   editor document's `doc` and preserves the same admission and validation.
 
 This keeps the cosim propagation core untouched (per "don't rewrite the core") and
 matches the existing "one canonical form" principle.

@@ -120,7 +120,9 @@ placement math. A `position` you pass to `SpawnEntity` is Y-up metres.
 | `TransformEntity` | `{entity_id, translation, rotation}` | Set an existing entity's complete active-frame pose as one undoable USD edit. |
 | `SetObjectProperty` | `{entity_id:u64, property, value}` | Set a named property (both strings; value is coerced by property type). |
 | `SelectEntity` | `{…}` | Select (drives the gizmo/inspector). |
-| `SetPorts` | `{target, writes:[[name,val]]}` | Set a persistent input intent (e.g. drive a spawned rover); use `ReleasePort` or `ReleaseControl` to release it — see [`author-scenario`](../author-scenario/SKILL.md) for behaviour. |
+| `SetPorts` | `{target, writes:[[name,val]], producer_id?}` | Set a persistent input intent (e.g. drive a spawned rover); external API/direct and actorless Rhai callers provide a stable nonzero `producer_id` and receive the next-tick admission stamp. Twin Rhai uses its actor identity. Use `ReleasePort` or `ReleaseControl` to release it — see [`author-scenario`](../author-scenario/SKILL.md) for behavior. |
+| `ReleasePort` | `{target, name, producer_id?}` | Release a named hold. External API/direct and actorless Rhai callers provide a stable nonzero `producer_id` and receive the next-tick admission stamp. Twin Rhai uses its actor identity. |
+| `ReleaseControl` | `{target, producer_id?}` | Apply the endpoint safe state. External API/direct and actorless Rhai callers provide a stable nonzero `producer_id` and receive the next-tick admission stamp. Twin Rhai uses its actor identity. |
 
 Discover the live set with `DiscoverSchema`; discover spawnables with `list_bundled`.
 For scene selection readback, use `query("InspectSelection")`; it returns

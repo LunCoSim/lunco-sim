@@ -10,11 +10,13 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-api = { path = "../lunco-api" }
 lunco-api-core = { path = "../lunco-api-core" }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
+lunco-hooks = { path = "../lunco-hooks" }
 bevy.workspace = true
 avian3d.workspace = true
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-control-core = { path = "../lunco-control-core" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }

@@ -659,6 +659,8 @@ pub enum SessionInputProducer {
     },
     /// In-process typed command with a caller assigned stable identity.
     DirectCommand { producer_id: u64 },
+    /// Local user interaction associated with the current peer session.
+    LocalUser { session_id: SessionId },
 }
 
 impl SessionInputProducer {
@@ -726,6 +728,7 @@ impl SessionInputProducer {
             Self::ApiTransport { .. } => "api_transport",
             Self::Rhai { .. } => "rhai",
             Self::DirectCommand { .. } => "direct_command",
+            Self::LocalUser { .. } => "local_user",
         }
     }
 
@@ -737,7 +740,7 @@ impl SessionInputProducer {
                 Some(producer_id)
             }
             Self::Rhai { producer_id, .. } => producer_id,
-            Self::PhysicalController { .. } => None,
+            Self::PhysicalController { .. } | Self::LocalUser { .. } => None,
         }
     }
 }
@@ -783,6 +786,37 @@ pub enum SessionInputPayload {
         correlation_id: u64,
         /// Identity reserved by the session owner for the spawned runtime root.
         spawned_root: lunco_core::GlobalEntityId,
+    },
+    /// Discrete Modelica input change admitted for a fixed simulation tick.
+    ModelicaInputChange {
+        /// Declared Modelica input or scalar port name.
+        name: String,
+        /// Exact authored/runtime input value retained as `f64`.
+        value: f64,
+        /// Correlation id from the command or local interaction.
+        correlation_id: u64,
+    },
+    /// Named generic input-port writes admitted for a fixed simulation tick.
+    /// Values retain their original f64 representation and authored batch
+    /// order; the port owner validates and applies them at commit.
+    PortInputWrites {
+        /// Ordered `(port_name, value)` input batch.
+        writes: Vec<(String, f64)>,
+        /// Correlation id from the admitted command.
+        correlation_id: u64,
+    },
+    /// Release one named port hold at a fixed simulation tick.
+    PortInputRelease {
+        /// Port whose manual hold is released.
+        name: String,
+        /// Correlation id from the admitted command.
+        correlation_id: u64,
+    },
+    /// Release an endpoint's control intent and apply its safe state at a
+    /// fixed simulation tick.
+    ControlInputRelease {
+        /// Correlation id from the admitted command.
+        correlation_id: u64,
     },
 }
 
@@ -883,6 +917,54 @@ fn validate_session_input(
                 return Err("runtime spawn requires a reserved root identity".to_owned());
             }
         }
+        SessionInputPayload::ModelicaInputChange {
+            name,
+            value,
+            correlation_id,
+        } => {
+            if name.trim().is_empty() {
+                return Err("Modelica input change requires a non-empty input name".to_owned());
+            }
+            if !value.is_finite() {
+                return Err("Modelica input change value must be finite".to_owned());
+            }
+            if *correlation_id == 0 {
+                return Err("Modelica input change requires a nonzero correlation id".to_owned());
+            }
+        }
+        SessionInputPayload::PortInputWrites {
+            writes,
+            correlation_id,
+        } => {
+            if writes.is_empty() {
+                return Err("port input write batch must not be empty".to_owned());
+            }
+            if writes.iter().any(|(name, _)| name.trim().is_empty()) {
+                return Err("port input write names must not be empty".to_owned());
+            }
+            if writes.iter().any(|(_, value)| !value.is_finite()) {
+                return Err("port input write values must be finite".to_owned());
+            }
+            if *correlation_id == 0 {
+                return Err("port input writes require a nonzero correlation id".to_owned());
+            }
+        }
+        SessionInputPayload::PortInputRelease {
+            name,
+            correlation_id,
+        } => {
+            if name.trim().is_empty() {
+                return Err("port input release requires a non-empty port name".to_owned());
+            }
+            if *correlation_id == 0 {
+                return Err("port input release requires a nonzero correlation id".to_owned());
+            }
+        }
+        SessionInputPayload::ControlInputRelease { correlation_id } => {
+            if *correlation_id == 0 {
+                return Err("control input release requires a nonzero correlation id".to_owned());
+            }
+        }
     }
 
     if target.get() == 0 {
@@ -957,12 +1039,32 @@ fn validate_session_input(
             SessionInputPayload::SimulatedIntentChange { .. }
             | SessionInputPayload::SemanticIntentEdge { .. }
             | SessionInputPayload::RuntimeSpawn { .. },
+        )
+        | (
+            SessionInputProducer::ApiTransport { .. }
+            | SessionInputProducer::DirectCommand { .. }
+            | SessionInputProducer::Rhai { .. }
+            | SessionInputProducer::LocalUser { .. },
+            SessionInputPayload::ModelicaInputChange { .. }
+            | SessionInputPayload::PortInputWrites { .. },
+        )
+        | (
+            SessionInputProducer::ApiTransport { .. }
+            | SessionInputProducer::DirectCommand { .. }
+            | SessionInputProducer::Rhai { .. },
+            SessionInputPayload::PortInputRelease { .. }
+            | SessionInputPayload::ControlInputRelease { .. },
         ) => {}
         (SessionInputProducer::PhysicalController { .. }, _) => {
             return Err("physical controller producer requires a physical intent frame".to_owned());
         }
         (_, SessionInputPayload::PhysicalIntentFrame { .. }) => {
             return Err("physical intent frame requires a physical controller producer".to_owned());
+        }
+        (SessionInputProducer::LocalUser { .. }, _) => {
+            return Err(
+                "local user session inputs require a Modelica or port input change".to_owned(),
+            );
         }
     }
 
@@ -1074,6 +1176,67 @@ impl PendingSessionInputs {
     /// Pending entries in their current queue order, for owner diagnostics.
     pub fn entries(&self) -> impl Iterator<Item = &PendingSessionInput> {
         self.pending.iter()
+    }
+
+    /// Remove pending `SetPorts` writes superseded by an immediate release.
+    /// An explicit release is ordered after every item already admitted to
+    /// this queue, so those older setpoints cannot be allowed to re-arm the
+    /// endpoint after its release boundary.
+    pub fn cancel_port_input_writes(
+        &mut self,
+        target: lunco_core::GlobalEntityId,
+        port: Option<&str>,
+    ) -> Vec<SessionInputRecord> {
+        let mut canceled = Vec::new();
+        let mut index = 0;
+        while index < self.pending.len() {
+            let (remove_input, canceled_record) = {
+                let input = &mut self.pending[index];
+                if input.record.target != target {
+                    (false, None)
+                } else {
+                    let original_record = input.record.clone();
+                    match &mut input.record.payload {
+                        SessionInputPayload::PortInputWrites {
+                            writes,
+                            correlation_id,
+                        } => {
+                            let mut removed_writes = Vec::new();
+                            writes.retain(|(name, value)| {
+                                if port.is_none_or(|port| name == port) {
+                                    removed_writes.push((name.clone(), *value));
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
+                            let has_removed_writes = !removed_writes.is_empty();
+                            let canceled_record = if has_removed_writes {
+                                let mut record = original_record;
+                                record.payload = SessionInputPayload::PortInputWrites {
+                                    writes: removed_writes,
+                                    correlation_id: *correlation_id,
+                                };
+                                Some(record)
+                            } else {
+                                None
+                            };
+                            (writes.is_empty(), canceled_record)
+                        }
+                        _ => (false, None),
+                    }
+                }
+            };
+            if let Some(record) = canceled_record {
+                canceled.push(record);
+            }
+            if remove_input {
+                self.pending.remove(index);
+            } else {
+                index += 1;
+            }
+        }
+        canceled
     }
 
     /// Take inputs whose tick is due, preserving their shared admission order.
@@ -3082,6 +3245,62 @@ mod session_input_stream_tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending.take_due(11)[0].record().sequence, second.sequence);
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn immediate_port_release_cancels_only_older_matching_admitted_writes() {
+        let mut pending = PendingSessionInputs::default();
+        let mut order = lunco_control_core::SimulationInputOrderAllocator::default();
+        let target = lunco_core::GlobalEntityId::from_raw(42);
+        let producer = SessionInputProducer::DirectCommand { producer_id: 7 };
+        for (writes, correlation_id) in [
+            (vec![("throttle", 0.5), ("steer", 0.25)], 19),
+            (vec![("steer", -0.25)], 20),
+            (vec![("throttle", -0.5)], 21),
+        ] {
+            pending
+                .admit(
+                    &mut order,
+                    producer,
+                    target,
+                    3,
+                    10,
+                    SessionInputPayload::PortInputWrites {
+                        writes: writes
+                            .into_iter()
+                            .map(|(name, value)| (name.to_owned(), value))
+                            .collect(),
+                        correlation_id,
+                    },
+                    None,
+                )
+                .expect("typed SetPorts input is admitted");
+        }
+
+        let canceled = pending.cancel_port_input_writes(target, Some("throttle"));
+        assert_eq!(
+            canceled
+                .iter()
+                .map(|record| match &record.payload {
+                    SessionInputPayload::PortInputWrites { correlation_id, .. } => *correlation_id,
+                    _ => unreachable!("cancellation returns port writes only"),
+                })
+                .collect::<Vec<_>>(),
+            vec![19, 21]
+        );
+        assert_eq!(pending.len(), 2);
+        let due = pending.take_due(10);
+        assert_eq!(due.len(), 2);
+        assert!(matches!(
+            &due[0].record().payload,
+            SessionInputPayload::PortInputWrites { writes, .. }
+                if writes == &[("steer".to_owned(), 0.25)]
+        ));
+        assert!(matches!(
+            &due[1].record().payload,
+            SessionInputPayload::PortInputWrites { writes, .. }
+                if writes == &[("steer".to_owned(), -0.25)]
+        ));
     }
 
     #[test]

@@ -212,7 +212,12 @@ is a projection defect, not an acceptable fallback.
 When an authored Modelica endpoint also carries `InputPorts`, that component is
 the single public command boundary. `SetPorts` and Rhai writes land there, and
 the generic Modelica bridge mirrors only names accepted by the compiled model
-into its solver input buffer. Do not add a vehicle-specific setter. Battery
+into its solver input buffer. External live `SetPorts` commands with a stable
+producer id enter the shared next-fixed-tick queue and are captured as ordered
+named writes; Simulation-clock Rhai writes remain derived behavior. Do not add a
+vehicle-specific setter. External API/direct and non-Simulation Rhai
+`ReleasePort`/`ReleaseControl` commands use the same producer identity and
+ordered session boundary. Battery
 empty events use the authored 0.1% usable-storage reserve in `Battery.mo`, not
 a solver-epsilon comparison.
 
@@ -275,7 +280,7 @@ Two kinds of `command` share this envelope:
 | Pace | wall-clock realtime, steps forever | as fast as possible, `t_start→t_end`, then stops |
 | Use for | inspection, physics-in-loop, 3D viz, possession | parameter sweeps, regression, "what if I bump this constant?" |
 | Read results | `SnapshotVariables` (live), `ReadPorts`/`WatchPorts` | `GetExperimentResult` (full trajectory) |
-| Poke inputs | `SetModelInput` (takes effect next step) | overrides baked into the run request |
+| Poke inputs | `SetModelInput` (admitted for the next fixed tick in a live session) | overrides baked into the run request |
 | Stored as | live stepping model | first-class `Experiment` in the registry (plot/compare) |
 
 ## 3. Recipe A — run a model live (interactive)
@@ -303,8 +308,12 @@ post '{"type":"ExecuteCommand","command":"RunActiveModel","params":{"doc_id":0,"
 # 4. Read live values (t + parameters + inputs + variables). Filter with names:
 post '{"type":"ExecuteCommand","command":"SnapshotVariables","params":{"doc_id":0,"names":["x","v"]}}'
 
-# 5. Poke a runtime input live (no recompile, applies next step):
-post '{"type":"ExecuteCommand","command":"SetModelInput","params":{"doc_id":0,"name":"F","value":10.0}}'
+# 5. Poke a runtime input live (no recompile, admitted for the next fixed tick):
+#    For an open workbench model, use doc_id and keep producer_id stable.
+post '{"type":"ExecuteCommand","command":"SetModelInput","params":{"doc_id":0,"name":"F","value":10.0,"producer_id":4101}}'
+#    For a live Twin participant, use its stable target_gid from ListEntities
+#    and leave doc_id at 0; do not pass both selectors.
+post '{"type":"ExecuteCommand","command":"SetModelInput","params":{"doc_id":0,"target_gid":123456,"name":"throttle","value":0.5,"producer_id":4101}}'
 
 # 6. Pause / Resume / Reset / Restart:
 post '{"type":"ExecuteCommand","command":"PauseActiveModel","params":{"doc_id":0}}'
@@ -499,7 +508,7 @@ curl -s -X POST $API -H "Content-Type: application/json" \
 | `RestartActiveModel` | `{doc}` | reset t=0 then run |
 | `FastRunActiveModel` | `{doc, class?, t_end?, dt?, n_intervals?, tolerance?, solver?, h0?}` | batch, bounds from UI draft |
 | `RunExperiment` | `{doc, class?, overrides[], inputs[], t_start?, t_end?, dt?, n_intervals?, tolerance?, solver?, h0?, label?}` | dispatch a batch run; acknowledgement returns exact `experiment_id` |
-| `SetModelInput` | `{doc, name, value}` | push live input value |
+| `SetModelInput` | `{doc_id, target_gid?, name, value, producer_id?}` | select an editor model by `doc_id` or a live Twin participant by `target_gid`; live API, direct typed, and actorless Rhai callers need a stable nonzero `producer_id` |
 | `ConfirmClassPicker` | `{qualified?, cancel?}` | only if a picker modal opened in the GUI |
 
 **Results & viz**

@@ -875,16 +875,19 @@ one running world. It does not provide cross-session replay identity. Any actor
 or model included in a cross-peer/replay guarantee needs its stable
 `GlobalEntityId` or another source-owned, replicated identity.
 
-External held-input changes, discrete edges, and raw-file runtime spawns share
-the bounded session-owned ingress queue and assigned per-tick sequence. While
+External held-input changes, discrete edges, live `SetModelInput` changes, and
+raw-file runtime spawns share the bounded session-owned ingress queue and
+assigned per-tick sequence. `SetModelInput` identifies live participants by
+stable `target_gid`; editor-only documents keep their document selector. While
 capture is active, `SessionInputStream` retains their typed payloads,
 correlation ids, producer class and stable caller ID, target, committed
 generation, tick, and sequence. Spawn records additionally retain the scene
 root, active frame, catalog entry, exact `f64` pose, and reserved spawned-root
 `GlobalEntityId`. API and direct typed commands require a nonzero
 `producer_id`; actorless Rhai requires one, while Twin Rhai retains its route
-and actor identity. Document-backed spawns remain `ApplyUsdOps` in the Twin
-journal. The fixed-step controller captures physical
+and actor identity. Modelica records retain the declared input name, exact
+`f64` value, and command correlation. Document-backed spawns remain
+`ApplyUsdOps` in the Twin journal. The fixed-step controller captures physical
 `ActionState<UserIntent>` into a
 by-value `PhysicalIntentFrame` semantic snapshot. When the controller and
 target have stable `GlobalEntityId`s and a committed scene generation, the
@@ -1082,9 +1085,14 @@ The whole-simulation guarantee remains open because:
    input log and replay verdict. Networking rollback's bounded per-vessel input
    frames retain ordered, latched `SetPorts` setpoints for owned-body replay;
    the fixed-step host consumes vessel frames in stable `GlobalEntityId` order.
-   These frames do not capture scene lifecycle, authored external commands, or
-   all Rhai and Modelica state. Adaptive Modelica is not a cross-machine
-   bitwise deterministic solver.
+   The session stream captures API and classified non-Simulation Rhai
+   `SetPorts`, `ReleasePort`, and `ReleaseControl` commands, explicitly
+   identified direct typed port inputs, and live `SetModelInput` changes at
+   their fixed-tick boundaries. Unclassified direct `SetPorts`, `ReleasePort`, and `ReleaseControl`
+   events, port-inspector UI commands, lifecycle-derived safe-stops, scene lifecycle,
+   other authored commands, and all Rhai/Modelica runtime state still need
+   capture or a replay owner. Adaptive Modelica is not a cross-machine bitwise
+   deterministic solver.
 7. `RuntimeCycleSet` is ordering vocabulary rather than an independent cadence
    driver. Typed context reaches scenario preparation/start/event/behavior/stop
    calls and one-shot Rhai evaluation. Generic registered hooks now receive a
