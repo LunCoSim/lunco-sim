@@ -438,6 +438,7 @@ def Xform "World"
             max_dependencies_per_layer: 2,
             max_depth: 2,
             max_bytes: 8,
+            max_parallel_reads: 2,
         };
 
         assert!(check_stage_closure_limits(&limits, 3, 0, 0, 0).is_err());

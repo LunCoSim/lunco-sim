@@ -39,7 +39,8 @@ impl Plugin for UsdSceneRuntimePlugin {
             bevy::prelude::Update,
             (
                 schema_assets::request_schema_assets,
-                schema_assets::register_ready_schema_assets,
+                schema_assets::register_ready_schema_assets
+                    .run_if(schema_assets::schema_registration_pending),
             )
                 .chain(),
         );

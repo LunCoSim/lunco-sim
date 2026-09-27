@@ -5,8 +5,8 @@ description: Diagnose or improve LunCoSim FPS, physics time, periodic stalls, Bu
 
 # Performance profiling: measure the owner, then remove avoidable work
 
-Read [`scripts/perf/README.md`](../../scripts/perf/README.md) and the current
-open handover in [`docs/reviews/open-400fps-performance-handover.md`](../../docs/reviews/open-400fps-performance-handover.md)
+Read the current handover in
+[`docs/reviews/open-400fps-performance-handover.md`](../../docs/reviews/open-400fps-performance-handover.md)
 before changing code. A status-bar FPS number is a symptom, not an attribution.
 
 ## Required separation
@@ -36,6 +36,13 @@ should be gated by a revision/change event. Structural edits should invalidate
 structural caches; transform propagation and telemetry output are not by
 themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
+
+For startup asset graphs, separate asynchronous source reads from discovery,
+composition, and UI/physics admission. Bound independent sibling reads and
+merge their results in stable dependency order; preserve the source-change
+reload graph when using child load contexts. The USD layer-closure owner and
+its reload receipts are documented in
+[`21-domain-usd`](../../docs/architecture/21-domain-usd.md#composition-closure-and-partial-scene-loading).
 
 One-shot `RunRhai` and tool callbacks share the prepared `ScenarioDriver`
 engine. When profiling a callback stall, separate one-time startup/prelude or
@@ -78,7 +85,9 @@ Keep readiness checks separate from reconciliation requests. An unresolved
 async participant may require a cheap readiness check on later frames, but a
 shared revision that wakes full topology or causal-graph work should advance
 only when topology or endpoint lifecycle facts actually change—not merely
-because readiness is still pending.
+because readiness is still pending. Guard `ResMut` revisions by comparing the
+owner's state before calling a mutating method: Bevy marks the resource changed
+on mutable dereference even when an idempotent method leaves its value alone.
 
 `SimComponent` input/output shape is tracked by `lunco-port-core::ScalarPortMap`.
 Its identity key changes at insert/remove/clear boundaries, while numeric sample
@@ -170,6 +179,15 @@ bounded profile rather than guessing.
 
 ## Evidence
 
+For whole fixed-step timing, use the `PhysicsPerformance` query's
+`step_time_samples_ms` history in every host that installs the shared USD
+physics runtime. It returns retained `PhysicsTotalDiagnostics.step_time`
+samples, one per completed physics step; compute p50/p95/p99/max from that
+array after the measurement window. The query also returns the current
+`step_time_ms` and `step_number`, and the editor publishes the same current
+sample through `engine-health.physics_step_ms`. Query once per window because
+`PhysicsPerformance` also counts live topology and is not a per-step sampler.
+
 Record the clean FPS window, physics and render timings, Tracy capture path,
 scene/settings, and whether the result is startup or settled. Rebuild the
 production binary after a code change and repeat one clean A/B plus one Tracy
@@ -203,3 +221,10 @@ Twin-open and readiness milestones: one startup outlier can stall UI even when
 the same system is nearly free on settled frames. If the outer system is hot,
 attribute time to its internal owner operations before choosing an async
 boundary or cache.
+
+For `project_usd_policies`, distinguish the initial prepared-plan lookup and
+live-stage traversal from generation-batch cache promotion. A promoted cache
+means every intervening `UsdSceneChangeBatch` was observed and the changed
+paths did not affect policy prims; a missing batch or changed policy subtree
+must remain a visible full extraction. Compare both startup and settled edit
+captures after changing this path.

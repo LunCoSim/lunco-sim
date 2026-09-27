@@ -81,6 +81,45 @@ pub fn source_library_asset_path(file_name: &str) -> Result<String, String> {
 static GLOBAL_PARSED_SOURCE_BUNDLE: OnceLock<
     Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>,
 > = OnceLock::new();
+static GLOBAL_PARSED_SOURCE_BUNDLE_REVISION: OnceLock<Option<u64>> = OnceLock::new();
+
+struct HashWriter<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+
+impl std::io::Write for HashWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        std::hash::Hasher::write(self.0, bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn parsed_bundle_revision(
+    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
+) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+
+    let mut entries = docs
+        .iter()
+        .map(|(uri, definition)| (uri.as_str(), definition))
+        .collect::<Vec<_>>();
+    entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+
+    let mut revision = std::collections::hash_map::DefaultHasher::new();
+    1_u32.hash(&mut revision);
+    "source-bundle".hash(&mut revision);
+    for (uri, definition) in entries {
+        uri.hash(&mut revision);
+        let mut definition_revision = std::collections::hash_map::DefaultHasher::new();
+        let mut writer = HashWriter(&mut definition_revision);
+        bincode::serde::encode_into_std_write(definition, &mut writer, bincode::config::standard())
+            .ok()?;
+        definition_revision.finish().hash(&mut revision);
+    }
+    Some(revision.finish())
+}
 
 /// Serializes the native lazy decode of `parsed-library.bin`. `GLOBAL_PARSED_SOURCE_BUNDLE`
 /// (a `OnceLock`) dedupes the stored *value* but not the *work*: two callers
@@ -97,6 +136,16 @@ static SOURCE_BUNDLE_DECODE_LOCK: Mutex<()> = Mutex::new(());
 pub fn global_parsed_source_bundle()
 -> Option<&'static Arc<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>> {
     GLOBAL_PARSED_SOURCE_BUNDLE.get()
+}
+
+/// Return the stable content revision of the parsed source bundle. This is
+/// computed only when a compiler admits that bundle, so ordinary bundle reads
+/// do not serialize the AST just to maintain cache identity.
+pub fn parsed_source_bundle_revision() -> Option<u64> {
+    let docs = parsed_source_bundle()?;
+    GLOBAL_PARSED_SOURCE_BUNDLE_REVISION
+        .get_or_init(|| parsed_bundle_revision(docs.as_ref()))
+        .to_owned()
 }
 
 /// Publish a freshly parsed source library bundle to the process-wide slot. Only

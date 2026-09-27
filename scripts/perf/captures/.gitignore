@@ -1,3 +1,0 @@
-# Profiler captures are large + machine-specific. Commit the fix, not the capture.
-*
-!.gitignore

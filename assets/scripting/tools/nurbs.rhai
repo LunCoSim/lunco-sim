@@ -5,6 +5,8 @@
 //! command, so the authored value is journaled, undoable, replicated, and
 //! re-composed by the normal USD projection.
 
+import "assembly_builder" as assembly_builder;
+
 fn ui_label() { "NURBS points" }
 fn ui_hint() { "Edit NURBS points with set_point; create a reviewed collision proxy with propose_collision_proxy(doc, source, name, approximation, max_refinement_delta_m, layer, scope)" }
 
@@ -21,56 +23,15 @@ fn on_click(context) {
     });
 }
 
-fn point_literal(point) {
-    return "(" + point[0].to_string() + ", "
-        + point[1].to_string() + ", " + point[2].to_string() + ")";
-}
-
-fn points_literal(points) {
-    let text = "[";
-    for i in 0..points.len() {
-        if i > 0 { text += ", "; }
-        text += point_literal(points[i]);
-    }
-    return text + "]";
-}
-
 /// Replace the standard USD control net at `path` in the explicit document.
 fn set_points(doc, path, points, parent_gen) {
+    let plan = assembly_builder::mesh_points_update_plan("@runtime@", path, points);
+    if !plan.ok { return plan; }
     return cmd("ApplyUsdOp", #{
         doc_id: doc,
         parent_gen: parent_gen,
-        op: #{ SetAttribute: #{
-            edit_target: "@runtime@",
-            path: path,
-            name: "points",
-            type_name: "point3f[]",
-            value: points_literal(points),
-        }},
+        op: plan.ops[0],
     });
-}
-
-fn collision_point_literal(point) {
-    return "(" + point[0].to_string() + ", "
-        + point[1].to_string() + ", " + point[2].to_string() + ")";
-}
-
-fn collision_array_literal(values) {
-    let text = "[";
-    for i in 0..values.len() {
-        if i > 0 { text += ", "; }
-        text += values[i].to_string();
-    }
-    return text + "]";
-}
-
-fn collision_points_literal(points) {
-    let text = "[";
-    for i in 0..points.len() {
-        if i > 0 { text += ", "; }
-        text += collision_point_literal(points[i]);
-    }
-    return text + "]";
 }
 
 fn collision_attribute_op(edit_target, path, name, type_name, value) {
@@ -114,12 +75,10 @@ fn collision_proxy_ops(plan, edit_target) {
         }});
     }
 
-    ops.push(collision_attribute_op(edit_target, path, "points", "point3f[]",
-        collision_points_literal(plan.points)));
-    ops.push(collision_attribute_op(edit_target, path, "faceVertexCounts", "int[]",
-        collision_array_literal(plan.face_vertex_counts)));
-    ops.push(collision_attribute_op(edit_target, path, "faceVertexIndices", "int[]",
-        collision_array_literal(plan.face_vertex_indices)));
+    let geometry = assembly_builder::mesh_geometry_update_plan(edit_target,
+        path, plan.points, plan.face_vertex_counts, plan.face_vertex_indices);
+    if !geometry.ok { return geometry; }
+    for op in geometry.ops { ops.push(op); }
     ops.push(collision_attribute_op(edit_target, path, "subdivisionScheme", "token", "\"none\""));
     ops.push(collision_attribute_op(edit_target, path, "orientation", "token", "\"rightHanded\""));
     ops.push(collision_attribute_op(edit_target, path, "purpose", "token", "\"proxy\""));
@@ -167,6 +126,7 @@ fn propose_collision_proxy(doc, source_path, proxy_name, approximation,
 
 fn _propose_collision_plan(doc, plan, edit_target, scope) {
     let ops = collision_proxy_ops(plan, edit_target);
+    if type_of(ops) != "array" { return ops; }
     return assembly_edit::propose(doc, scope,
         "Derive NURBS collision proxy " + plan.proxy_path,
         ops, plan.generation);

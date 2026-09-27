@@ -147,9 +147,9 @@ impl GlobalEntityId {
         Self(v)
     }
 
-    /// Server-only mint for [`Provenance::Authoritative`] entities. The
-    /// `lunco-core-session` identity-admission system is the sole production
-    /// owner that calls this boundary.
+    /// Server-only mint for [`Provenance::Authoritative`] identities. The
+    /// `lunco-core-session` owner reserves runtime-command identities and
+    /// admits authoritative entities through this boundary.
     pub fn allocate_authoritative() -> Self {
         Self(lunco_id::make_id_53())
     }

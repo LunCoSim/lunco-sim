@@ -43,7 +43,7 @@ The runtime uses these existing cycle families:
 | `Interaction` | avatar and camera interaction | wall-rooted `interaction` domain |
 | `Command` / `Repl` | typed command admission and one-shot script evaluation | application/wall cadence; never advances simulation time |
 | `Telemetry` | delivery of fixed-tick samples to retention and external subscribers | bounded application-frame work; each sample keeps its source tick and domain time |
-| `Ui` | egui and workbench updates | host frame/input cadence |
+| `Ui` | egui/workbench updates and authored pointer/menu tool hooks | host frame/input cadence; typed tool hooks run after picking in `PreUpdate`, before fixed simulation, while egui paints in `PostUpdate` |
 | `Visualization` / `Presentation` | LOD selection, render preparation, visual projection | presentation cadence or an explicitly selected visual time domain; terrain cover reselection is capped at 30 Hz using `Time<Real>` |
 
 The USD-to-telemetry bridge samples connected co-simulation event edges only
@@ -110,11 +110,15 @@ authoritative owner.
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
 Bevy drains `FixedMain` synchronously before `Update`; LunCoSim's rate-scaled
 delta guard permits up to 64 fixed steps in one app update at the highest
-transport rate. Every step still receives the same `Time<Fixed>` delta, but a
-long tick or catch-up burst delays UI/input work, and the raw-delta cap means
-simulation time can fall behind wall time under sustained overload. Reducing
-the step cap by discarding accumulated time would hide that lag by dropping
-authoritative ticks, not fix it. `SimulationTimingProfile` is the shared,
+transport rate. Every step still receives the same `Time<Fixed>` delta. Typed
+scene-tool and menu hooks run in a separate bounded UI queue after picking in
+`PreUpdate`, before that fixed loop, so they do not wait behind general REPL
+requests or the current frame's fixed-step work. The UI and simulation still
+share the GUI thread: a long tick or catch-up burst delays the next native input
+poll and the next visible frame. The raw-delta cap means simulation time can
+also fall behind wall time under sustained overload. Reducing the step cap by
+discarding accumulated time would hide that lag by dropping authoritative
+ticks, not fix it. `SimulationTimingProfile` is the shared,
 bounded observation path until ownership is split: it reports the most recent
 240 completed `FixedMain` tick service times and rate-derived service budgets,
 plus per-app-update fixed-loop duration, completed-step count, remaining
@@ -271,10 +275,14 @@ that boundary; process-local ECS ids do not.
 Generated Modelica source synthesis uses the same active-or-committed Twin
 generation in `Twin/Lifecycle/Preparation`, with no elapsed clock. The owner
 captures this context before dispatching synthesis to the async worker, so both
-the async startup path and synchronous live projection invoke the same policy
-contract. Both shipped synthesis policies reject calls from scenario, UI, or
-REPL cycles. Async results must still match that Twin generation as well as the
-canonical USD generation or exact prepared instance plan before publication.
+the async startup path and live projection invoke the same policy contract.
+Immutable prepared plans run full graph extraction, Rhai policy, and source
+validation on workers. A live canonical OpenUSD reader stays main-thread-owned;
+its typed network snapshot is sent through the bounded worker admission path,
+which performs policy and source validation off-cycle. Completed networks
+publish in request order, at most one per Update, after matching the Twin,
+canonical USD, or exact prepared instance generation. Both shipped synthesis
+policies reject calls from scenario, UI, or REPL cycles.
 The settled USD scene-time owner uses the completed edge's `SceneTransitionId`
 for `scene.time.select` in the same `Twin/Lifecycle/Preparation` context. The
 typed selection carries that id through its deferred application; the time
@@ -404,13 +412,22 @@ asynchronous completion never selects the visible simulation tick.
 External `SimulateIntentEdge` and `SimulateIntent` commands targeting fixed
 simulation state enter the bounded `lunco-core-session::PendingSessionInputs`
 queue. The session owner assigns the next fixed tick and a shared per-tick
-sequence; the controller validates scene generation and resolves the stable
-target identity again before applying semantic actions ahead of control
-propagation. The held-state commit publishes `intent.hold`; edge delivery also
-records its `CausalTrace`. A shared admission queue does not yet centralize
-commits across semantic input, physical frames, and runtime spawns.
-Simulation-clock Rhai actions stay in their derived behavior pass, and
-local-embodiment input stays on the interaction cadence.
+sequence, then validates scene generation and stable target identity, captures
+the record, and publishes its typed commit event before fixed-step producers
+run while simulation time is running. A pause leaves admitted inputs queued for
+the next running fixed tick. The controller applies semantic actions at that
+boundary. The held-state commit publishes `intent.hold`; edge delivery also
+records its `CausalTrace`.
+Raw-file runtime `SpawnEntity` requests use the same queue and order allocator.
+Their records retain producer provenance, correlation, stable scene-root and
+active-frame identities, original f64 pose, and a reserved root identity. The
+scene-command owner revalidates those facts and commits the spawn at its
+assigned tick before identity admission; `NetSpawn` uses the reserved identity.
+Document-backed spawns remain `ApplyUsdOps` entries in the Twin journal and do
+not also enter the session stream. Physical-frame snapshots are sampled and
+captured at their consuming fixed tick with the same per-tick allocator after
+queued session events. Simulation-clock Rhai actions stay in their derived
+behavior pass, and local-embodiment input stays on the interaction cadence.
 
 ## 4. Async preparation, priority, and result commit
 
@@ -840,12 +857,16 @@ one running world. It does not provide cross-session replay identity. Any actor
 or model included in a cross-peer/replay guarantee needs its stable
 `GlobalEntityId` or another source-owned, replicated identity.
 
-External held-input changes and discrete edges share one assigned per-tick
-sequence. While capture is active, `SessionInputStream` retains their typed
-payloads, correlation ids, producer class and stable caller ID, target,
-committed generation, tick, and sequence. API and direct typed commands require
-a nonzero `producer_id`; actorless Rhai requires one, while Twin Rhai retains its
-route and actor identity. The fixed-step controller captures physical
+External held-input changes, discrete edges, and raw-file runtime spawns share
+the bounded session-owned ingress queue and assigned per-tick sequence. While
+capture is active, `SessionInputStream` retains their typed payloads,
+correlation ids, producer class and stable caller ID, target, committed
+generation, tick, and sequence. Spawn records additionally retain the scene
+root, active frame, catalog entry, exact `f64` pose, and reserved spawned-root
+`GlobalEntityId`. API and direct typed commands require a nonzero
+`producer_id`; actorless Rhai requires one, while Twin Rhai retains its route
+and actor identity. Document-backed spawns remain `ApplyUsdOps` in the Twin
+journal. The fixed-step controller captures physical
 `ActionState<UserIntent>` into a
 by-value `PhysicalIntentFrame` semantic snapshot. When the controller and
 target have stable `GlobalEntityId`s and a committed scene generation, the
@@ -853,9 +874,22 @@ fixed-step owner stamps the frame with those identities, the current `SimTick`,
 and the shared per-tick input sequence before combining physical and simulated
 holds for control translation. Capture also retains that frame as sorted
 canonical intent ids with its producer session and admission stamp. The shared
-stream has a record bound, stops visibly on overflow or invalid order, and is
-observable through `ReadSessionInputStream`. It remains in memory only; other
-typed commands, durable writing, and playback remain open.
+stream has a record bound, validates canonical payload names, stable stamps,
+and producer/payload pairing before retention, and stops visibly on invalid
+input, overflow, or invalid order. It is observable through
+`ReadSessionInputStream`. Physical frames are admitted at their consuming
+controller boundary and cannot be deferred by the external queue. A completed
+capture can be exported on native hosts with `ExportSessionInputCapture`:
+immutable records enter the shared background admission queue for versioned
+encoding, then `lunco-storage` writes and reads back the bounded archive on
+Bevy's I/O pool. Each capture has a monotonic app-local identity and can be
+durably exported only once after a successful write; failed writes may be
+retried. The typed export status reports the capture and export identities plus
+the read-back result.
+Archives are capped at 65,536 records and 16 MiB and stored under the app's
+user-config session-captures directory. The archive still has no baseline
+manifest or playback consumer, so it does not provide whole-session replay.
+Other typed commands remain outside capture.
 
 Floating-point addition is order dependent. Every reduction that contributes
 to authoritative state needs a stable input order. Parallel physics is

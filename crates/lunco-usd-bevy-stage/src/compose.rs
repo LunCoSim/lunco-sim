@@ -27,14 +27,20 @@
 //! referenced wrappers use the same path (openusd has no `SdfFileFormat` plugin
 //! system).
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    pin::Pin,
+    task::Poll,
+};
 
-use anyhow::{Result, anyhow};
-use bevy::asset::{AssetPath, LoadContext, ReadAssetBytesError, io::AssetReaderError};
+use anyhow::{Result, anyhow, ensure};
+use bevy::asset::{AssetPath, Handle, LoadContext, ReadAssetBytesError, io::AssetReaderError};
 use openusd::usd::Stage;
 
 use lunco_assets_path::canonicalize_root;
 
+use crate::asset::UsdLayerReadReceipt;
 use lunco_usd_compose::recipe::{StageClosureLimits, StageDependencyDiagnostic, StageRecipe};
 use lunco_usd_compose::{
     LuncoUsdResolver, SharedLayerBytes, check_stage_closure_limits, child_layer_ids,
@@ -62,7 +68,7 @@ pub async fn fetch_layer_closure(
     load_context: &mut LoadContext<'_>,
     root_asset_path: &str,
     root_bytes: Vec<u8>,
-) -> Result<StageRecipe> {
+) -> Result<FetchedStageClosure> {
     fetch_layer_closure_with_limits(
         load_context,
         root_asset_path,
@@ -84,7 +90,11 @@ pub async fn fetch_layer_closure_with_limits(
     root_asset_path: &str,
     root_bytes: Vec<u8>,
     limits: StageClosureLimits,
-) -> Result<StageRecipe> {
+) -> Result<FetchedStageClosure> {
+    ensure!(
+        limits.max_parallel_reads > 0,
+        "USD layer closure parallel read limit must be greater than zero"
+    );
     let root_id = canonicalize_root(root_asset_path);
     check_stage_closure_limits(&limits, 1, 0, 0, root_bytes.len())?;
 
@@ -96,11 +106,14 @@ pub async fn fetch_layer_closure_with_limits(
     let mut missing_ids = HashSet::new();
     let mut queue = vec![(root_id.clone(), 0_usize)];
     let mut dependency_diagnostics = Vec::new();
+    let mut source_dependencies = Vec::new();
+    let mut source_label = 0_usize;
 
     while let Some((id, depth)) = queue.pop() {
         let raw = bytes.get(&id).expect("queued id is present in map");
         let child_ids = child_layer_ids(&id, raw)?;
         check_stage_closure_limits(&limits, seen.len(), depth, child_ids.len(), total_bytes)?;
+        let mut requests = Vec::new();
         for child_id in child_ids {
             if !seen.insert(child_id.clone()) {
                 if missing_ids.contains(&child_id) {
@@ -119,38 +132,131 @@ pub async fn fetch_layer_closure_with_limits(
             // default-source relative path → `assets/lunco://vessels/…` →
             // "Path not found". `AssetPath::parse` routes `lunco://…` to the
             // registered `lunco` source; plain relative ids stay default-source.
-            let fetched = match load_context
-                .read_asset_bytes(AssetPath::parse(&child_id).into_owned())
-                .await
-            {
-                Ok(fetched) => fetched,
-                Err(error) if is_missing_asset_read(&error) => {
-                    missing_ids.insert(child_id.clone());
-                    dependency_diagnostics.push(StageDependencyDiagnostic::missing(
-                        id.clone(),
-                        child_id.clone(),
-                    ));
-                    continue;
+            requests.push((id.clone(), child_id, child_depth));
+        }
+
+        for request_batch in requests.chunks(limits.max_parallel_reads) {
+            let reads = request_batch
+                .iter()
+                .map(|(referring_id, child_id, child_depth)| {
+                    let mut child_context = load_context.begin_labeled_asset();
+                    let referring_id = referring_id.clone();
+                    let child_id = child_id.clone();
+                    let child_depth = *child_depth;
+                    async move {
+                        let fetched = child_context
+                            .read_asset_bytes(AssetPath::parse(&child_id).into_owned())
+                            .await;
+                        (referring_id, child_id, child_depth, child_context, fetched)
+                    }
+                });
+            let read_results = join_all_ordered(reads).await;
+            let mut completed = Vec::with_capacity(read_results.len());
+
+            for (referring_id, child_id, child_depth, child_context, result) in read_results {
+                match result {
+                    Ok(fetched) => {
+                        total_bytes = total_bytes
+                            .checked_add(fetched.len())
+                            .ok_or_else(|| anyhow!("USD layer closure byte count overflowed"))?;
+                        check_stage_closure_limits(
+                            &limits,
+                            seen.len(),
+                            child_depth,
+                            0,
+                            total_bytes,
+                        )?;
+                        let label = format!("usd-layer-read-{source_label}");
+                        source_label += 1;
+                        completed.push((
+                            label,
+                            child_id,
+                            child_depth,
+                            fetched,
+                            child_context.finish(UsdLayerReadReceipt),
+                        ));
+                    }
+                    Err(error) if is_missing_asset_read(&error) => {
+                        missing_ids.insert(child_id.clone());
+                        dependency_diagnostics
+                            .push(StageDependencyDiagnostic::missing(referring_id, child_id));
+                    }
+                    Err(error) => {
+                        return Err(anyhow!(
+                            "USD composition dependency `{child_id}` referenced by \
+                             `{referring_id}` could not be fetched: {error}"
+                        ));
+                    }
                 }
-                Err(error) => {
-                    return Err(anyhow!(
-                        "USD composition dependency `{child_id}` referenced by `{id}` could not \
-                         be fetched: {error}"
-                    ));
-                }
-            };
-            total_bytes = total_bytes
-                .checked_add(fetched.len())
-                .ok_or_else(|| anyhow!("USD layer closure byte count overflowed"))?;
-            check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
-            bytes.insert(child_id.clone(), fetched);
-            queue.push((child_id, child_depth));
+            }
+
+            // Finish every child context before mutably registering its labeled
+            // receipt with the parent LoadContext.
+            for (label, child_id, child_depth, fetched, loaded_receipt) in completed {
+                source_dependencies
+                    .push(load_context.add_loaded_labeled_asset(label, loaded_receipt));
+                bytes.insert(child_id.clone(), fetched);
+                queue.push((child_id, child_depth));
+            }
         }
     }
 
     let mut recipe = StageRecipe::new(root_id, bytes);
     recipe.dependency_diagnostics = dependency_diagnostics;
-    Ok(recipe)
+    Ok(FetchedStageClosure {
+        recipe,
+        source_dependencies,
+    })
+}
+
+/// Fetched stage data plus Bevy handles that retain the loader dependency graph
+/// for the transitive source layers.
+pub struct FetchedStageClosure {
+    /// Send-safe bytes and diagnostics for the composed stage.
+    pub recipe: StageRecipe,
+    pub(crate) source_dependencies: Vec<Handle<UsdLayerReadReceipt>>,
+}
+
+async fn join_all_ordered<F>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output>
+where
+    F: Future,
+{
+    let mut futures = futures
+        .into_iter()
+        .map(|future| Some(Box::pin(future) as Pin<Box<F>>))
+        .collect::<Vec<_>>();
+    let mut outputs = std::iter::repeat_with(|| None)
+        .take(futures.len())
+        .collect::<Vec<Option<F::Output>>>();
+    let mut remaining = futures.len();
+
+    std::future::poll_fn(|context| {
+        for index in 0..futures.len() {
+            let output = match futures[index].as_mut() {
+                Some(future) => match future.as_mut().poll(context) {
+                    Poll::Ready(output) => Some(output),
+                    Poll::Pending => None,
+                },
+                None => None,
+            };
+            if let Some(output) = output {
+                outputs[index] = Some(output);
+                futures[index] = None;
+                remaining -= 1;
+            }
+        }
+        if remaining == 0 {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
+
+    outputs
+        .into_iter()
+        .map(|output| output.expect("all dependency reads completed"))
+        .collect()
 }
 
 /// Build an editable stage and return its resolver's
@@ -162,12 +268,17 @@ pub async fn fetch_layer_closure_with_limits(
 ///
 /// The runtime adapter owns the live canonical stage.
 pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedLayerBytes)> {
+    let _resolver_span = bevy::log::info_span!("usd_live_resolver_snapshot").entered();
     let resolver = LuncoUsdResolver::new(recipe.bytes.clone());
+    drop(_resolver_span);
     let shared = resolver.shared();
-    let stage = Stage::builder()
-        .resolver(resolver)
-        .open(&recipe.root_id)
-        .map_err(|e| anyhow!("USD composition error: {e}"))?;
+    let stage = {
+        let _open_span = bevy::log::info_span!("usd_live_open_stage").entered();
+        Stage::builder()
+            .resolver(resolver)
+            .open(&recipe.root_id)
+            .map_err(|e| anyhow!("USD composition error: {e}"))?
+    };
     Ok((stage, shared))
 }
 

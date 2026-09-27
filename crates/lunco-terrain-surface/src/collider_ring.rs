@@ -1350,6 +1350,7 @@ pub fn hold_physics_until_dem_ready(
 ) {
     let Some(mut holds) = holds else { return };
     let mut wait = !building.is_empty();
+    let mut blocker = wait.then_some(TerrainReadinessBlocker::DemGeneration);
     if !wait {
         'terrains: for (terrain, hf, ring, tiles) in &rings {
             let Some((terrain_world, terrain_rotation)) = lunco_spatial::coords::pose_in_grid(
@@ -1361,6 +1362,7 @@ pub fn hold_physics_until_dem_ready(
             )
             .map(|(position, rotation)| (GridPos(position), GridRot(rotation))) else {
                 wait = true;
+                blocker = Some(TerrainReadinessBlocker::TerrainPoseUnavailable { terrain });
                 break 'terrains;
             };
             let half = hf.0.half_extent() as f64;
@@ -1390,13 +1392,19 @@ pub fn hold_physics_until_dem_ready(
                 // collider — the tunnel. Require every footprint tile to be truly
                 // collidable.
                 for coord in required_nodes.iter() {
-                    let live = tiles.map.get(coord).is_some_and(|&e| {
+                    let tile = tiles.map.get(coord).copied();
+                    let live = tile.is_some_and(|entity| {
                         q_live
-                            .get(e)
+                            .get(entity)
                             .is_ok_and(|aabb| aabb.min.x.is_finite() && aabb.max.x.is_finite())
                     });
                     if !live {
                         wait = true;
+                        blocker = Some(TerrainReadinessBlocker::ColliderTileUnavailable {
+                            terrain,
+                            coord: *coord,
+                            tile,
+                        });
                         break 'terrains;
                     }
                 }
@@ -1408,9 +1416,64 @@ pub fn hold_physics_until_dem_ready(
     // the scene is not born "paused" (the user never has to press play to undo an
     // engine wait) and the planets don't stop while a heightfield bakes. Edge-guarded
     // so the `ResMut` is only dereferenced when the state actually flips.
-    if holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY) != wait {
+    let was_waiting = holds.holds(lunco_physics::PhysicsHolds::TERRAIN_READY);
+    if was_waiting != wait {
+        if wait {
+            match blocker {
+                Some(TerrainReadinessBlocker::DemGeneration) => {
+                    let requests = building.iter().count();
+                    info!(
+                        "[terrain] physics admission hold started: DEM generation pending ({requests} request(s))"
+                    );
+                }
+                Some(TerrainReadinessBlocker::TerrainPoseUnavailable { terrain }) => {
+                    info!(
+                        "[terrain] physics admission hold started: terrain pose unavailable for {terrain:?}"
+                    );
+                }
+                Some(TerrainReadinessBlocker::ColliderTileUnavailable {
+                    terrain,
+                    coord,
+                    tile: Some(tile),
+                }) => {
+                    info!(
+                        "[terrain] physics admission hold started: collider tile {:?} for {terrain:?} exists as {tile:?} but has no live broad-phase AABB",
+                        coord
+                    );
+                }
+                Some(TerrainReadinessBlocker::ColliderTileUnavailable {
+                    terrain,
+                    coord,
+                    tile: None,
+                }) => {
+                    info!(
+                        "[terrain] physics admission hold started: collider tile {:?} for {terrain:?} is not resident",
+                        coord
+                    );
+                }
+                None => {
+                    info!(
+                        "[terrain] physics admission hold started: blocking condition unavailable"
+                    );
+                }
+            }
+        } else {
+            info!("[terrain] physics admission hold released");
+        }
         holds.set(lunco_physics::PhysicsHolds::TERRAIN_READY, wait);
     }
+}
+
+enum TerrainReadinessBlocker {
+    DemGeneration,
+    TerrainPoseUnavailable {
+        terrain: Entity,
+    },
+    ColliderTileUnavailable {
+        terrain: Entity,
+        coord: QuadCoord,
+        tile: Option<Entity>,
+    },
 }
 
 /// Clearance above the surface a rescued assembly's deepest member is placed at.
@@ -1429,7 +1492,7 @@ pub struct JointGraph<'w, 's> {
     spherical: Query<'w, 's, &'static avian3d::prelude::SphericalJoint>,
     distance: Query<'w, 's, &'static avian3d::prelude::DistanceJoint>,
     links: Query<'w, 's, &'static lunco_physics::PhysicsJointLink>,
-    topology_pending: Query<'w, 's, (), With<lunco_physics::PhysicsJointTopologyPending>>,
+    topology_pending: Query<'w, 's, Entity, With<lunco_physics::PhysicsJointTopologyPending>>,
 }
 
 impl JointGraph<'_, '_> {
@@ -1461,6 +1524,18 @@ impl JointGraph<'_, '_> {
     /// can be admitted.
     fn has_unresolved_topology(&self) -> bool {
         !self.topology_pending.is_empty()
+    }
+
+    fn unresolved_topology_snapshot(&self) -> (usize, Vec<Entity>) {
+        let mut count = 0;
+        let mut entities = Vec::new();
+        for entity in &self.topology_pending {
+            count += 1;
+            if entities.len() < 16 {
+                entities.push(entity);
+            }
+        }
+        (count, entities)
     }
 
     /// Body pairs connected by a native joint. The shared joint owner filters
@@ -1658,9 +1733,10 @@ fn exact_static_support_penetration(
 /// clears contact state. A body remains kinematic and pending until the pose is
 /// valid or an explicitly authored policy accepts it.
 #[derive(SystemParam)]
-pub(crate) struct InitialPhysicsLifecycle<'w> {
+pub(crate) struct InitialPhysicsLifecycle<'w, 's> {
     active_frame: Res<'w, lunco_spatial::ActivePhysicsFrame>,
     coordinator: Option<Res<'w, lunco_core::SceneTransitionCoordinator>>,
+    topology_wait_logged: Local<'s, bool>,
 }
 
 pub(crate) fn validate_initial_physics_poses(
@@ -1707,12 +1783,13 @@ pub(crate) fn validate_initial_physics_poses(
     local_gravity: Query<&lunco_environment::LocalGravity>,
     flat_sites: Query<(), With<crate::georef::FlatSiteSurface>>,
     holds: Option<Res<lunco_physics::PhysicsHolds>>,
-    lifecycle: InitialPhysicsLifecycle,
+    mut lifecycle: InitialPhysicsLifecycle,
     mut commands: Commands,
     mut diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
     let mut findings = Vec::new();
     if q_needs.is_empty() {
+        *lifecycle.topology_wait_logged = false;
         diagnostics.replace_producer("physics-initialization", findings);
         return;
     }
@@ -1720,7 +1797,18 @@ pub(crate) fn validate_initial_physics_poses(
     // incomplete assembly: the authored topology is part of the initial-state
     // contract and the diagnostic must describe the complete body set.
     if joints.has_unresolved_topology() {
+        if !*lifecycle.topology_wait_logged {
+            let (count, entities) = joints.unresolved_topology_snapshot();
+            info!(
+                "[terrain] initial pose validation waiting for {count} unresolved joint(s): {entities:?}"
+            );
+            *lifecycle.topology_wait_logged = true;
+        }
         return;
+    }
+    if *lifecycle.topology_wait_logged {
+        info!("[terrain] initial pose validation resumed after joint topology settled");
+        *lifecycle.topology_wait_logged = false;
     }
     // The terrain oracle and its collider ring become usable in different
     // frames. Validate only after the terrain readiness gate has confirmed the

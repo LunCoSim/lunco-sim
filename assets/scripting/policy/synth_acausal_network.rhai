@@ -71,28 +71,50 @@ fn rect(x1, y1, x2, y2) {
         + x2.to_string() + "," + y2.to_string() + "}}"
 }
 
-fn position(layout, path) {
+fn member_position_index(layout) {
+    let result = #{};
     for item in layout.members {
-        if item.path == path {
-            let result = #{};
-            result.x = item.x;
-            result.y = item.y;
-            return result;
-        }
+        if !result.contains(item.path) { result[item.path] = item; }
     }
-    throw "generated Modelica layout is missing member position: " + path
+    result
 }
 
-fn unit_position(layout, name) {
+fn unit_position_index(layout) {
+    let result = #{};
     for item in layout.units {
-        if item.name == name {
-            let result = #{};
-            result.x = item.x;
-            result.y = item.y;
-            return result;
-        }
+        if !result.contains(item.name) { result[item.name] = item; }
     }
-    throw "generated Modelica layout is missing unit position: " + name
+    result
+}
+
+fn position(index, path) {
+    if !index.contains(path) {
+        throw "generated Modelica layout is missing member position: " + path;
+    }
+    index[path]
+}
+
+fn unit_position(index, name) {
+    if !index.contains(name) {
+        throw "generated Modelica layout is missing unit position: " + name;
+    }
+    index[name]
+}
+
+fn member_index(members) {
+    let result = #{};
+    for path in members { result[path] = true; }
+    result
+}
+
+fn component_index(net) {
+    let result = #{};
+    for component in net.components {
+        // Preserve component_for's first-match behavior if malformed facts
+        // ever contain a duplicate path.
+        if !result.contains(component.path) { result[component.path] = component; }
+    }
+    result
 }
 
 fn generated_unit_position(index, count) {
@@ -115,17 +137,12 @@ fn generated_unit_position(index, count) {
     }
 }
 
-fn has_member(members, path) {
-    for member in members {
-        if member == path { return true; }
-    }
-    false
+fn has_member(index, path) {
+    index.contains(path)
 }
 
-fn component_for(net, path) {
-    for component in net.components {
-        if component.path == path { return component; }
-    }
+fn component_for(index, path) {
+    if index.contains(path) { return index[path]; }
     throw "generated Modelica facts are missing component: " + path
 }
 
@@ -137,16 +154,17 @@ fn path_leaf(path) {
     leaf
 }
 
-fn connection_degree(net, path, members) {
-    let degree = 0;
+fn connection_degree_index(net, members, membership) {
+    let degrees = #{};
+    for path in members { degrees[path] = 0; }
     for edge in net.connections {
-        if !members.contains(edge.left_path) || !members.contains(edge.right_path) {
+        if !membership.contains(edge.left_path) || !membership.contains(edge.right_path) {
             continue;
         }
-        if edge.left_path == path { degree += 1; }
-        if edge.right_path == path { degree += 1; }
+        degrees[edge.left_path] = degrees[edge.left_path] + 1;
+        degrees[edge.right_path] = degrees[edge.right_path] + 1;
     }
-    degree
+    degrees
 }
 
 // Acausal flow has no compile-time source or sink: Pin.i can reverse sign at
@@ -154,17 +172,13 @@ fn connection_degree(net, path, members) {
 // not an inference from a connector name or a Modelica class string. It only
 // chooses a readable side of the visual bus; runtime Pin.i sign controls
 // animated direction, never the diagram's geometry.
-fn topology_role(net, path) {
-    let component = component_for(net, path);
+fn topology_role(components, path) {
+    let component = component_for(components, path);
     if component.contains("topology_role") {
         component.topology_role
     } else {
         "neutral"
     }
-}
-
-fn hub_role_priority(net, path) {
-    if topology_role(net, path) == "storage" { 1 } else { 0 }
 }
 
 fn stable_path_precedes(path, best) {
@@ -182,13 +196,13 @@ fn should_replace_hub(path, degree, role_priority, best, best_degree, best_role_
     stable_path_precedes(path, best)
 }
 
-fn topology_hub(net, members) {
+fn topology_hub(members, degrees, roles) {
     let best = "";
     let best_degree = -1;
     let best_role_priority = -1;
     for path in members {
-        let degree = connection_degree(net, path, members);
-        let role_priority = hub_role_priority(net, path);
+        let degree = degrees[path];
+        let role_priority = if roles[path] == "storage" { 1 } else { 0 };
         let replace = should_replace_hub(
             path, degree, role_priority, best, best_degree, best_role_priority
         );
@@ -248,11 +262,11 @@ fn layout_groups(net, units) {
     groups
 }
 
-fn classify_members(net, members, hub) {
+fn classify_members(roles, members, hub) {
     let result = #{ sources: [], loads: [], neutral: [] };
     for path in members {
         if path == hub { continue; }
-        let role = topology_role(net, path);
+        let role = roles[path];
         if role == "source" {
             result.sources.push(path);
         } else if role == "load" {
@@ -264,11 +278,15 @@ fn classify_members(net, members, hub) {
     result
 }
 
-fn group_member_layout(net, members) {
+fn group_member_layout(net, members, components) {
     let placements = [];
-    let hub = topology_hub(net, members);
+    let membership = member_index(members);
+    let degrees = connection_degree_index(net, members, membership);
+    let roles = #{};
+    for path in members { roles[path] = topology_role(components, path); }
+    let hub = topology_hub(members, degrees, roles);
     placements.push(#{ path: hub, x: HUB_X, y: BUS_Y });
-    let classified = classify_members(net, members, hub);
+    let classified = classify_members(roles, members, hub);
     // Explicit source/load roles form opposite banks of the bus. This is a
     // semantic layout policy, not an electrical direction assumption: the
     // generated equations remain the authored acausal connect graph.
@@ -308,7 +326,7 @@ fn group_member_layout(net, members) {
     placements
 }
 
-fn visual_layout(net, units) {
+fn visual_layout(net, units, components) {
     let layout = #{ units: [], members: [] };
     let index = 0;
     for unit in units {
@@ -325,18 +343,18 @@ fn visual_layout(net, units) {
     // belong to each unit's own diagram, so every group gets the same local
     // coordinate system; root-level spacing never leaks into a child class.
     for members in layout_groups(net, units) {
-        for placement in group_member_layout(net, members) {
+        for placement in group_member_layout(net, members, components) {
             layout.members.push(placement);
         }
     }
     layout
 }
 
-fn member_extent(layout, members) {
+fn member_extent(positions, members) {
     let half_width = MEMBER_MIN_HALF_WIDTH;
     let half_height = MEMBER_MIN_HALF_HEIGHT;
     for path in members {
-        let p = position(layout, path);
+        let p = position(positions, path);
         if p.x + MEMBER_EXTENT_MARGIN_X > half_width {
             half_width = p.x + MEMBER_EXTENT_MARGIN_X;
         }
@@ -356,11 +374,11 @@ fn member_extent(layout, members) {
     result
 }
 
-fn unit_extent(layout, units) {
+fn unit_extent(positions, units) {
     let half_width = UNIT_MIN_HALF_WIDTH;
     let half_height = UNIT_MIN_HALF_HEIGHT;
     for unit in units {
-        let p = unit_position(layout, unit.name);
+        let p = unit_position(positions, unit.name);
         if p.x + UNIT_EXTENT_MARGIN_X > half_width {
             half_width = p.x + UNIT_EXTENT_MARGIN_X;
         }
@@ -452,9 +470,9 @@ fn append_point(line, x, y) {
 // Every branch visits its own feeder lane and then the central bus, so a
 // SolarPanel-to-motor equation cannot render as a direct wire or cut through
 // another repeated component.
-fn power_bus_annotation(edge, layout) {
-    let left = position(layout, edge.left_path);
-    let right = position(layout, edge.right_path);
+fn power_bus_annotation(edge, positions) {
+    let left = position(positions, edge.left_path);
+    let right = position(positions, edge.right_path);
     let rail_x = power_rail_x();
     // Include the horizontal icon stubs as well as the rail crossing. A
     // two-point vertical annotation leaves the renderer's default straight
@@ -501,12 +519,12 @@ fn power_bus_annotation(edge, layout) {
     line
 }
 
-fn bus_bounds(layout, members) {
+fn bus_bounds(positions, members) {
     let min_y = 0;
     let max_y = 0;
     let first = true;
     for path in members {
-        let p = position(layout, path);
+        let p = position(positions, path);
         if first {
             min_y = p.y;
             max_y = p.y;
@@ -522,8 +540,8 @@ fn bus_bounds(layout, members) {
     result
 }
 
-fn unit_bus_graphics(layout, members) {
-    let bounds = bus_bounds(layout, members);
+fn unit_bus_graphics(positions, members) {
+    let bounds = bus_bounds(positions, members);
     let rail = "Line(points={{";
     rail += power_rail_x().to_string();
     rail += ",";
@@ -618,7 +636,7 @@ fn member_output_equation(output, instance) {
     line
 }
 
-fn component_declaration(component, layout) {
+fn component_declaration(component, positions) {
     let line = "  " + component.class + " " + component.instance;
     if component.constant_modifications.len > 0 {
         line += "(";
@@ -629,7 +647,7 @@ fn component_declaration(component, layout) {
         }
         line += ")";
     }
-    let p = position(layout, component.path);
+    let p = position(positions, component.path);
     let component_extent = rect(
         -COMPONENT_HALF_WIDTH,
         -COMPONENT_HALF_HEIGHT,
@@ -643,44 +661,44 @@ fn component_declaration(component, layout) {
     line
 }
 
-fn emit_unit(net, unit, layout) {
+fn emit_unit(net, unit, components, members, positions) {
     let source = "model " + unit.name + "\n";
     let mutable = source;
     for input in unit.inputs { mutable += "  input Real " + input + ";\n"; }
     for output in unit.outputs { mutable += "  output Real " + output + ";\n"; }
     for member_output in net.member_outputs {
-        if has_member(unit.components, member_output.member_path) {
+        if has_member(members, member_output.member_path) {
             mutable += "  output Real " + member_output.alias + ";\n";
         }
     }
     for path in unit.components {
-        mutable += component_declaration(component_for(net, path), layout);
+        mutable += component_declaration(component_for(components, path), positions);
     }
     mutable += "equation\n";
     for edge in net.connections {
-        if has_member(unit.components, edge.left_path) && has_member(unit.components, edge.right_path) {
+        if has_member(members, edge.left_path) && has_member(members, edge.right_path) {
             mutable += connect_equation(edge);
-            mutable += power_bus_annotation(edge, layout);
+            mutable += power_bus_annotation(edge, positions);
             mutable += ";\n";
         }
     }
     for link in net.boundary_links {
-        if has_member(unit.components, link.target_path) {
+        if has_member(members, link.target_path) {
             mutable += boundary_equation(link);
         }
     }
     for link in net.causal_links {
-        if has_member(unit.components, link.source_path) && has_member(unit.components, link.target_path) {
+        if has_member(members, link.source_path) && has_member(members, link.target_path) {
             mutable += causal_equation(link);
         }
     }
     for boundary in net.boundary_outputs {
-        if has_member(unit.components, boundary.source_path) {
+        if has_member(members, boundary.source_path) {
             mutable += output_equation(boundary);
         }
     }
     for member_output in net.member_outputs {
-        if has_member(unit.components, member_output.member_path) {
+        if has_member(members, member_output.member_path) {
             let line = "  " + member_output.alias;
             line += " = ";
             line += member_output.member_instance;
@@ -690,10 +708,10 @@ fn emit_unit(net, unit, layout) {
             mutable += line;
         }
     }
-    let size = member_extent(layout, unit.components);
+    let size = member_extent(positions, unit.components);
     mutable += "annotation(" + compact_icon(UNIT_ICON_LINE_COLOR, UNIT_ICON_FILL_COLOR) + ","
         + "Diagram(coordinateSystem(extent=" + rect(-size.width, -size.height, size.width, size.height)
-        + "), graphics={" + unit_bus_graphics(layout, unit.components) + "})" + ");\n";
+        + "), graphics={" + unit_bus_graphics(positions, unit.components) + "})" + ");\n";
     mutable += "end " + unit.name + ";\n\n";
     mutable
 }
@@ -715,15 +733,20 @@ fn synthesize(net) {
         throw("synth.acausal-network requires its Twin lifecycle preparation context");
     }
 
+    let components = component_index(net);
     let units = policy_units(net);
-    let layout = visual_layout(net, units);
+    let layout = visual_layout(net, units, components);
+    let positions = member_position_index(layout);
+    let unit_positions = unit_position_index(layout);
+    let unit_members = #{};
+    for unit in units { unit_members[unit.name] = member_index(unit.components); }
     let source = "model " + net.model_name + "\n";
     let mutable = source;
     for input in net.inputs { mutable += "  input Real " + input + ";\n"; }
     for boundary in net.boundary_outputs { mutable += "  output Real " + boundary.name + ";\n"; }
     for member_output in net.member_outputs { mutable += "  output Real " + member_output.alias + ";\n"; }
     for unit in units {
-        let p = unit_position(layout, unit.name);
+        let p = unit_position(unit_positions, unit.name);
         let unit_extent = rect(
             -UNIT_HALF_WIDTH,
             -UNIT_HALF_HEIGHT,
@@ -742,17 +765,20 @@ fn synthesize(net) {
     }
     for member_output in net.member_outputs {
         for unit in units {
-            if has_member(unit.components, member_output.member_path) {
+            let members = unit_members[unit.name];
+            if has_member(members, member_output.member_path) {
                 mutable += member_output_equation(member_output, unit.instance);
             }
         }
     }
-    let size = unit_extent(layout, units);
+    let size = unit_extent(unit_positions, units);
     let title = path_leaf(net.root) + " network | " + units.len.to_string() + " unit(s)";
     mutable += "annotation(" + compact_icon(ROOT_ICON_LINE_COLOR, ROOT_ICON_FILL_COLOR) + ","
         + diagram_annotation(size.width, size.height, title) + ");\n";
     mutable += "end " + net.model_name + ";\n\n";
-    for unit in units { mutable += emit_unit(net, unit, layout); }
+    for unit in units {
+        mutable += emit_unit(net, unit, components, unit_members[unit.name], positions);
+    }
     #{
         source: mutable,
         units: units,

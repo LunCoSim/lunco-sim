@@ -187,6 +187,16 @@ pub enum SemanticIntentEdgeKind {
 }
 
 impl SemanticIntentEdgeKind {
+    /// Parse the command spelling for one semantic edge.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "pressed" | "press" => Some(Self::Pressed),
+            "released" | "release" => Some(Self::Released),
+            "pulse" => Some(Self::Pulse),
+            _ => None,
+        }
+    }
+
     /// Canonical wire/script spelling for this edge kind.
     pub const fn as_str(self) -> &'static str {
         match self {

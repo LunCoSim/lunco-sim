@@ -62,6 +62,22 @@ manager. The editor gizmo has a local captured lifecycle: a same-frame handle
 hit owns primary input through release or cancellation and suppresses preview
 pan for that gesture. A route fixture passing does not prove global viewport
 arbitration.
+
+The retained Bevy UI backend shares the window target with scene picking. The
+Workbench's UI camera sorts above the scene, so unmarked Bevy UI nodes would
+block scene hits even when they are decorative. `RuntimeUiPlugin` requires UI
+pick markers and marks only visible authored press controls and draggable
+surface content as `Pickable`; keep that explicit target policy when adding UI
+nodes. Native pointer routing and tool dispatch run in the application input
+schedule before fixed simulation, so route context handling must not wait for a
+physics tick.
+
+`RunRhaiTool` and `RunRhaiToolHook` callbacks use a bounded UI queue drained
+after picking in `PreUpdate`, before fixed simulation. Keep authored pointer
+and menu policy in those tool hooks rather than sending it through the general
+REPL queue or a fixed-tick scenario. Heavy synchronous work in an input hook
+would still occupy the application thread, so keep the hook bounded and move
+preparation or I/O to its owning asynchronous boundary.
 The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
 run by `scripts/run_editor_scene_tests.sh`; it sends typed native-window input
 through picking and verifies the mounted fixture, waypoint hit, semantic

@@ -2,9 +2,10 @@
 //!
 //! This package owns lifecycle and integration services that are deliberately
 //! outside the simulation substrate: startup Twin resolution, API/query
-//! registration, networking, journal projection, and persisted experiment
-//! artifacts. Keeping these services here means changing a transport or
-//! application policy does not rebuild the generic simulation core.
+//! registration, networking, journal projection, persisted experiment
+//! artifacts, and durable export of completed session-input captures. Keeping
+//! these services here means application persistence does not rebuild the
+//! generic simulation core.
 
 use bevy::asset::AssetLoadFailedEvent;
 #[cfg(feature = "networking")]
@@ -20,6 +21,9 @@ use bevy::prelude::*;
 use lunco_usd_bevy_runtime_core::scene::LoadScene;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_stage::UsdStageAsset;
+
+#[cfg(all(feature = "session-input-archive-export", not(target_arch = "wasm32")))]
+mod session_input_archive;
 
 /// Production application-service composition.
 pub struct LunCoSimServicesPlugin {
@@ -44,6 +48,9 @@ impl Plugin for LunCoSimServicesPlugin {
             .add_systems(Startup, load_startup_scene_on_boot)
             .add_observer(startup_twin_scan_failguard)
             .add_systems(Update, startup_scene_failguard);
+
+        #[cfg(all(feature = "session-input-archive-export", not(target_arch = "wasm32")))]
+        session_input_archive::install(app);
 
         if self.headless && !app.is_plugin_added::<lunco_workspace::WorkspacePlugin>() {
             app.add_plugins(lunco_workspace::WorkspacePlugin);

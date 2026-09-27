@@ -31,6 +31,7 @@ use lunco_modelica_runtime::ModelicaModel;
 use lunco_readiness::{ReadinessRegistry, ReadinessTicket, Subject, kinds};
 
 use lunco_cosim_core::{SimComponent, UsdSourcedCosim};
+use lunco_physics::PhysicsInitializationPending;
 use lunco_usd_avian_contracts::ShouldBeDynamic;
 use lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
@@ -179,9 +180,11 @@ fn track_physics_admission(
         &UsdPrimPath,
         Or<(
             With<lunco_core::PhysicsStatePending>,
-            With<lunco_physics::PhysicsInitializationPending>,
+            With<PhysicsInitializationPending>,
         )>,
     >,
+    physics_state_pending: Query<&UsdPrimPath, With<lunco_core::PhysicsStatePending>>,
+    initialization_pending: Query<&UsdPrimPath, With<PhysicsInitializationPending>>,
     wait: Option<Res<PhysicsAdmissionWait>>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
@@ -189,15 +192,24 @@ fn track_physics_admission(
     let waiting = !still_kinematic.is_empty() || !still_pending.is_empty();
     match (waiting, wait) {
         (true, None) => {
-            let held = still_kinematic
+            let kinematic = still_kinematic
                 .iter()
                 .map(|path| path.path.as_str())
-                .chain(still_pending.iter().map(|path| path.path.as_str()))
                 .take(16)
                 .collect::<Vec<_>>();
             info!(
-                "[readiness] physics admission held by authored paths: {:?}",
-                held
+                "[readiness] physics admission held: kinematic={:?}, state_pending={:?}, initialization_pending={:?}",
+                kinematic,
+                physics_state_pending
+                    .iter()
+                    .take(16)
+                    .map(|path| path.path.as_str())
+                    .collect::<Vec<_>>(),
+                initialization_pending
+                    .iter()
+                    .take(16)
+                    .map(|path| path.path.as_str())
+                    .collect::<Vec<_>>(),
             );
             let ticket = registry.begin(
                 Subject::World,
@@ -207,6 +219,7 @@ fn track_physics_admission(
             commands.insert_resource(PhysicsAdmissionWait { ticket });
         }
         (false, Some(wait)) => {
+            info!("[readiness] physics admission complete");
             registry.finish(wait.ticket);
             commands.remove_resource::<PhysicsAdmissionWait>();
         }

@@ -136,8 +136,20 @@ We classify them by *how they're edited*, not by where they live:
 | Kind | Editable inside LunCoSim? | How user edits | Examples |
 |------|---------------------------|----------------|----------|
 | **Document** | Yes — typed ops, undo/redo | LunCoSim panels (CodeEditor, Diagram, ParameterInspector, ...) or external domain tool | `*.mo`, `*.usda`, `*.sysml`, `*.mission.ron` |
+| **Text source** | Yes — source buffer with Save / Save & Update | Source Editor; Twin-relative file identity | `*.rhai`, `*.wgsl` |
 | **File reference** | No — opaque container | External tool only (Photoshop, Blender, a text editor) | `*.png`, `*.glb`, `*.wav`, `*.pdf`, `*.md` |
 | **Endpoint** *(future)* | N/A — remote, live | Connection config in `twin.toml`; not stored in Twin | FMI slave URL, telemetry stream, Nucleus server |
+
+`OpenTwinSource { twin_root, relative_path, pinned, focus }` opens an editable
+Twin-relative source buffer. `SaveSourceText { twin_root, relative_path, text,
+update }` saves that buffer; the command accepts only a registered Twin and a
+file already open in its Source Editor. `update = true` reopens the saved asset
+through the normal file owner so its Rhai or shader source is reloaded. Domain
+documents such as Modelica, USD, and SysML continue to use their own editors
+and document journals for normal authoring. A Twin `.usda` layer can also be
+opened explicitly in the Source Editor for precise authored-text changes; that
+path saves the selected layer text instead of serializing the composed USD
+document.
 
 Most files the user creates during normal engineering work (models,
 scenes, missions, requirements) are Documents. Assets referenced by
@@ -193,7 +205,7 @@ filters `can_create_new` kinds and orders them by display name, so File → New
 and the default `Ctrl+N` command share one source of truth. In the current
 production composition, USD Stage and Modelica Model are the registered
 authorable document kinds. Rhai, BTXML, and WGSL remain source assets handled
-by the shared source viewer; they do not have a standalone document-creation
+by the shared source editor; they do not have a standalone document-creation
 owner or lifecycle, so they are not fabricated as New entries. Generated
 libraries and composed outputs are likewise read-only/non-creatable until an
 owning domain registers a complete creation and save contract.

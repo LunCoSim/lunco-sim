@@ -235,6 +235,11 @@ pointer. The production `route_lifecycle` gate covers that route selection
 precedence. Moving a point still resolves its target from the original pointer
 context.
 
+Pointer and menu tool hooks use the bounded UI queue, which runs after Bevy
+picking in `PreUpdate` and before fixed simulation. General `RunRhai` requests
+stay in the separate `Repl` queue, so unrelated script work cannot delay route
+input policy.
+
 In the editor, the runtime edit panel identifies `@runtime@` as the target for
 route points, runtime spawns, and gizmo edits. Its Twin setting tells the user
 whether those authored edits persist across sessions or remain session-only.

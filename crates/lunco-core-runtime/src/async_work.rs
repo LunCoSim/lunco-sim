@@ -50,6 +50,8 @@ pub enum AsyncWorkKind {
     ModelicaSourceParse,
     /// Prepare a Modelica source library.
     ModelicaLibraryPreparation,
+    /// Synthesize and validate a Modelica network from an immutable USD snapshot.
+    ModelicaNetworkSynthesis,
     /// Compile a Rhai scenario source revision.
     RhaiCompilation,
     /// Analyze a SysML source revision.
@@ -58,6 +60,8 @@ pub enum AsyncWorkKind {
     UsdPreparation,
     /// Prepare presentation-only derived work.
     VisualizationPreparation,
+    /// Encode an immutable session-input capture for durable export.
+    SessionInputArchiveExport,
 }
 
 /// Stable identity for one preparation operation.

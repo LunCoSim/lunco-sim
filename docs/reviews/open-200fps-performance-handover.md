@@ -54,11 +54,11 @@ gone before starting another run. Never use `pkill`, overlap runs, or reuse an
 owned port.
 
 For a Tracy capture, start the capture before the app and keep the capture in
-the repository's ignored capture directory:
+the repository's ignored `target/` directory:
 
 ```sh
 ../tracy/capture/build/tracy-capture \
-  -o scripts/perf/captures/apollo-high-200fps-YYYYMMDD.tracy \
+  -o target/apollo-high-200fps-YYYYMMDD.tracy \
   -a 127.0.0.1 -p 8086 -f -s 20 \
   >target/tracy-apollo-high.log 2>&1 &
 ```
@@ -70,10 +70,9 @@ longest paths be fixed even when observed under Tracy. Report both clean-run
 and profiled-run results, clearly labelled.
 
 Do not create custom temporary directories or temporary files. Use `target/`
-for logs and the existing `scripts/perf/captures/` directory for profiler
-artifacts. Do not export or repeatedly parse the 100+ MB Tracy capture unless a
-specific question requires it; inspect the longest paths first with the Tracy
-GUI or the existing profiling tools.
+for logs and profiler artifacts. Do not export or repeatedly parse the 100+ MB
+Tracy capture unless a specific question requires it; inspect the longest
+paths first with the Tracy GUI.
 
 ## Evidence collected
 
@@ -1162,8 +1161,8 @@ production session:
 
 ## Related canonical docs
 
-- [`scripts/perf/README.md`](../../scripts/perf/README.md) — profiling tools and
-  measure-first rules.
+- [`../../skills/performance-profiling/SKILL.md`](../../skills/performance-profiling/SKILL.md)
+  — profiling workflow and measure-first rules.
 - [`../architecture/42-ui-frame-discipline.md`](../architecture/42-ui-frame-discipline.md)
   — change detection and frame-budget discipline.
 - [`../architecture/45-big-space-correct-usage.md`](../architecture/45-big-space-correct-usage.md)

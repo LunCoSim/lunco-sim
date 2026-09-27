@@ -205,6 +205,16 @@ is an authored semantic action. Authored semantic actions are intentionally
 open-ended; their meaning belongs to the active Twin Rhai program, not to the
 runtime UI crate.
 
+The retained UI picker uses Bevy's marker filter because its camera renders
+after the scene camera and otherwise every visible UI node blocks the scene,
+including decorative or transparent layout nodes. The runtime marks only
+visible `on_press` controls on interactive surfaces and visible HUI nodes in
+draggable window surfaces, including their roots, as `Pickable`; those are the
+retained nodes that own pointer input. The active presentation camera is marked
+for UI picking when a runtime surface is mounted. This keeps ordinary HUI
+controls and surface dragging on the native pointer path while allowing
+unmarked UI layout to pass scene hits through.
+
 Window surfaces may opt into movement with `draggable: true`. The manifest
 remains the default and visibility authority; the workbench stores only a
 validated logical top-left override in the active Twin's existing workspace
@@ -357,6 +367,11 @@ Use `<template>`, `<property>`, `<node>`, `<text>`, and `<button>` with stable
 button's visible caption must be a nested `<text>` node; raw text directly under
 `<button>` is not part of the retained HUI contract and can render as an empty
 control.
+Every template, including a keyed collection row, must use `<node>` as its
+single root and put `<button>` and `<text>` elements beneath it. HUI reuses the
+template scope entity during reload, while Flair retains selector metadata on
+that entity; a typed leaf element at the root can therefore panic when its type
+is applied again. Leaf controls below the root are recreated with the subtree.
 HUI supports more template features, but features outside this contract need a
 real surface test before they become a shared interface convention. A surface
 callback receives only the pressed entity. The manifest turns it into a

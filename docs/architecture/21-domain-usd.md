@@ -113,6 +113,12 @@ simulation instead of committing a partial reset. Avian retires joint graph
 edges before native joint components and collider markers; a constraint owned
 by another stage rejects the reset until its topology can be rebuilt together.
 
+When a component document changes, a dependent stage refresh builds its
+replacement `CanonicalStage` once and derives the immutable projection plan from
+that same composed stage before the reset boundary. This keeps plan preparation
+and the live-stage swap on one source revision without reopening the same recipe
+twice on the app thread.
+
 Default Twin scene admission uses `AsyncWorkAdmission` to parse the exact
 `UsdSourceText` revision and serialize the restored persistent document
 snapshot off the main schedule. The file-backed registry still owns path
@@ -126,7 +132,9 @@ admission queue reports its missing wasm worker transport visibly.
 Core USD schema assets register incrementally through
 `lunco-usd-bevy-runtime-core`. `lunco-usd-authoring` applies matching linear-unit
 facts as declarations arrive and validates missing entries only after all
-vendored core schema sources load successfully.
+vendored core schema sources load successfully. The registration pass sleeps
+after every source reaches a terminal load state and that validation completes;
+it does not clone or rescan the manifest entries on settled frames.
 
 Public command and document-lifecycle coverage for the document boundary lives
 in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
@@ -224,9 +232,25 @@ The command owner reuses the live stage's dependency recipe by canonical-stage
 identity and resolver-closure revision. An ordinary edit does not deep-copy
 every referenced layer's bytes; a newly injected dependency or rebuilt stage
 invalidates that recipe. The live `Stage` remains thread-affine, and edits,
-journaling, and projection still commit through their ordered owner path. This
-cache removes redundant dependency snapshots; it does not make USD authoring or
-live projection asynchronous.
+journaling, and ECS projection still commit through their ordered owner path.
+Domain-network fact extraction from that live stage is bounded to one network
+per update; Rhai policy, graph synthesis, Modelica parsing, and validation run
+through `AsyncWorkAdmission`. Results commit in request order after Twin, stage,
+and instance-generation checks. Initial prepared-plan synthesis runs entirely on
+a worker. This dependency-recipe cache removes redundant snapshots while the
+domain pipeline keeps non-critical computation off the UI and physics cycles.
+The USD policy projector caches authored policy facts per stage asset, prepared
+projection-plan identity, and canonical generation. A source-asset revision
+reuses those facts. For live stage changes, contiguous
+`UsdSceneChangeBatch` generations let the projector promote unaffected cached
+facts when resynced subtrees and info-changed prims do not contain a policy.
+Relevant changes rescan only that stage; missing batches, plan replacement, or
+generation gaps use a full extraction. Unrelated stage edits also skip policy
+asset resolution and registry installation. Live canonical reads remain on
+their owning thread. The async-prepared projection plan indexes prims by
+composed schema type, so startup policy extraction visits only `LunCoPolicy`
+prims instead of rebuilding paths and type lookups across the entire prepared
+stage on the UI thread.
 
 A newly authored `SetAttribute` uses `RemoveAttribute` as its inverse, so adding
 attributes to a growing runtime layer does not serialize the entire layer into
@@ -333,9 +357,11 @@ directly; the visual adapter does not act as a generic USD facade, and
 OpenUSD types such as `sdf::Path` remain direct OpenUSD dependencies. It is
 implemented for both `StageView` (the live composed stage, `view.rs`) and `sdf::Data`
 (the flattened layer), so one generic reader works against live and flattened alike.
-The `UsdStageAsset` carries a `Send` `StageRecipe` (`recipe`) and a prepared
-`UsdStageProjectionPlan`; the live stage is built on the main thread from the
-recipe, and there is no stored `reader` object.
+The `UsdStageAsset` carries a `Send` `StageRecipe` (`recipe`), a prepared
+`UsdStageProjectionPlan`, and handles for the layer-read receipts that keep
+transitive source changes connected to Bevy's hot-reload graph; the live stage
+is built on the main thread from the recipe, and there is no stored `reader`
+object.
 
 ## Scene ownership — Twin → active stage → Grid
 
@@ -430,9 +456,15 @@ Loading another scene re-points that single active stage; it never stacks.
 The root layer is the load transaction's required input: if its logical asset
 cannot be read, the scene transition fails and reports the root error. Its
 transitive USD composition graph is loaded through the canonical asset-source
-resolver with shared limits for layer count, dependency width, depth, and
-retained bytes. A missing sublayer, reference, or payload does not discard
-already available siblings. The loader publishes the available stage, leaves
+resolver with shared limits for layer count, dependency width, depth, retained
+bytes, and concurrent reads. Sibling layers are read in bounded parallel
+batches; results and diagnostics are applied in authored dependency order.
+Labeled read receipts preserve source-change reloads through Bevy's asset
+dependency graph. On native, USD composition and prepared-plan extraction run
+on Bevy's async-compute pool so they do not occupy an asset I/O worker. The
+browser path still composes on the browser main thread until a Web Worker
+transport is available. A missing sublayer, reference, or payload does not
+discard already available siblings. The loader publishes the available stage, leaves
 the missing authored arc unresolved as required by OpenUSD, and records a
 scene-scoped `RuntimeDiagnostics` warning with both logical layer identifiers.
 
@@ -841,7 +873,7 @@ interaction, and panels; `lunco-luncosim-edit-gizmo-ui` owns the focused
 transform-gizmo frontend and pose transaction adapter;
 `lunco-luncosim-edit-inspector-ui` owns the Inspector and authored USD panels;
 and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
-- **Spawning**: `SpawnEntity` lowers to `ApplyUsdOp` with `UsdOp::AddPrim { reference: Some(...) }` against its explicit document and parent path.
+- **Spawning**: document-backed `SpawnEntity` lowers to `ApplyUsdOp` with `UsdOp::AddPrim { reference: Some(...) }` against its explicit document and parent path. Raw-file scenes admit runtime spawns through the fixed-tick `PendingSessionInputs` owner and preserve the reserved root identity for replication; see the [command journal](command-journal.md).
   A palette spawn mounts the stage's `defaultPrim` via the **empty-path sentinel**
   (`UsdPrimPath { path: "" }`) — the loader resolves and writes back the concrete
   prim path. USD stays the source of truth for the root prim; the loader resolves

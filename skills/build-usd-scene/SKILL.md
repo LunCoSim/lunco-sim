@@ -115,7 +115,7 @@ placement math. A `position` you pass to `SpawnEntity` is Y-up metres.
 | `LoadScene` | `{path, root_prim}` | Load a USD scene. `path` is a root-qualified `lunco://…` or `twin://…` address. `root_prim` empty = the stage's `defaultPrim`. |
 | `ClearScene` | `{}` | Tear down the current scene. |
 | `RestartScene` | `{}` | Reload/reset the current scene. |
-| `SpawnEntity` | `{target, entry_id, position:[x,y,z], rotation?}` | Instance a catalogued prefab. `entry_id` comes from the **spawn catalog** (`list_bundled` / `ListBundled`). |
+| `SpawnEntity` | `{entry_id, position:[x,y,z], rotation?, producer_id?}` | Instance a catalogued prefab from the **spawn catalog** (`list_bundled` / `ListBundled`). Raw-file runtime spawns are admitted for the next fixed tick and return their stamp plus reserved root id. API, direct typed, and actorless Rhai callers supply a stable nonzero `producer_id`; Twin Rhai keeps its stable actor identity and omits it. Document-backed spawns remain USD journal operations. |
 | `MoveEntity` | `{…}` | Reposition an existing entity. |
 | `TransformEntity` | `{entity_id, translation, rotation}` | Set an existing entity's complete active-frame pose as one undoable USD edit. |
 | `SetObjectProperty` | `{entity_id:u64, property, value}` | Set a named property (both strings; value is coerced by property type). |
@@ -136,8 +136,10 @@ runtime prim or caching an entity id.
    scene, or start from the loaded default and add to it. `ClearScene` first if
    replacing.
 2. **What can I spawn?** `list_bundled` → pick an `entry_id`.
-3. **Place it:** `SpawnEntity {entry_id, position:[x,y,z], rotation?}` (Y-up metres).
-   The response `data` carries the new entity id.
+3. **Place it:** `SpawnEntity {entry_id, position:[x,y,z], rotation?, producer_id?}` (Y-up metres).
+   For raw-file runtime scenes, the response `data` carries the fixed-tick
+   admission stamp and reserved root id; the root receives that same id when
+   it materializes. API and actorless Rhai calls include a stable producer id.
 4. **Adjust:** `MoveEntity` or `TransformEntity` / `SetObjectProperty` (colour, mass, material, scale) /
    `SelectEntity` to inspect.
 5. **Confirm:** `CaptureScreenshot` → `target/x.png` → Read it (see

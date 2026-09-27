@@ -90,23 +90,51 @@ pub fn read_network(
     root: &SdfPath,
     classes: &MemberClasses,
 ) -> Result<Option<DomainNetwork>, Vec<DomainProjectionError>> {
+    read_network_with_members(view, root, classes, None)
+}
+
+pub(super) fn read_network_with_members(
+    view: &dyn ComposedReader,
+    root: &SdfPath,
+    classes: &MemberClasses,
+    cached_members: Option<&[String]>,
+) -> Result<Option<DomainNetwork>, Vec<DomainProjectionError>> {
     let root_string = root.to_string();
-    if !is_domain_network_root(view, root) {
-        return Ok(None);
-    }
-    let member_paths = view
-        .collection_members(root, "components")
-        .map_err(|error| {
-            vec![DomainProjectionError {
-                path: root_string.clone(),
-                message: format!("could not read component collection: {error}"),
-            }]
-        })?;
+    let member_paths = {
+        let _span = bevy::log::info_span!("domain_network_membership").entered();
+        if !is_domain_network_root(view, root) {
+            return Ok(None);
+        }
+        if let Some(cached_members) = cached_members {
+            cached_members
+                .iter()
+                .map(|path| {
+                    SdfPath::new(path).map_err(|error| {
+                        vec![DomainProjectionError {
+                            path: root_string.clone(),
+                            message: format!(
+                                "cached component collection contains invalid path `{path}`: {error}"
+                            ),
+                        }]
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            view.collection_members(root, "components")
+                .map_err(|error| {
+                    vec![DomainProjectionError {
+                        path: root_string.clone(),
+                        message: format!("could not read component collection: {error}"),
+                    }]
+                })?
+        }
+    };
     let mut components = Vec::new();
     let mut extraction_errors = Vec::new();
     // Set when a member's class is not knowable yet — see `pending_sources`.
     let mut pending_sources = false;
-    for path in member_paths {
+    let _component_facts_span = bevy::log::info_span!("domain_network_component_facts").entered();
+    for path in &member_paths {
         if path.is_property_path() || path.is_prim_variant_selection_path() {
             continue;
         }
@@ -244,6 +272,7 @@ pub fn read_network(
             topology_role,
         });
     }
+    drop(_component_facts_span);
     if !extraction_errors.is_empty() {
         return Err(extraction_errors);
     }
@@ -268,12 +297,24 @@ pub fn read_network(
     // island rather than rejecting unrelated connected equipment.
     // Causal-only components remain: they may be complete models without an
     // acausal connector at all.
-    let omitted = retain_connected_acausal_components(&mut components);
+    let omitted = {
+        let _span = bevy::log::info_span!("domain_network_topology").entered();
+        retain_connected_acausal_components(&mut components)
+    };
     if components.is_empty() {
         return Ok(None);
     }
-    let communication_period_secs = network_communication_period(view, &components)?;
+    let communication_period_secs = {
+        let _span = bevy::log::info_span!("domain_network_communication_period").entered();
+        network_communication_period(view, &components)?
+    };
+    let _boundary_span = bevy::log::info_span!("domain_network_boundary").entered();
     let attrs = view.attr_names(root);
+    let boundary_index = lunco_usd_bevy_core::program::ModelicaNetworkBoundaryIndex::new(
+        root,
+        &attrs,
+        &member_paths,
+    );
     let authored_inputs: BTreeSet<_> = attrs
         .iter()
         .filter_map(|attr| {
@@ -300,7 +341,8 @@ pub fn read_network(
     let internal_inputs: BTreeMap<String, String> = authored_inputs
         .iter()
         .filter_map(|name| {
-            lunco_usd_bevy_core::program::internal_network_input_source(view, root, name)
+            boundary_index
+                .internal_network_input_source(view, name)
                 .map(|source| (name.clone(), source))
         })
         .collect();
@@ -310,7 +352,8 @@ pub fn read_network(
             let name = attr
                 .strip_prefix("outputs:")
                 .map(|name| name.strip_suffix(".connect").unwrap_or(name))?;
-            lunco_usd_bevy_core::program::network_member_output_source(view, root, name)
+            boundary_index
+                .network_member_output_source(view, name)
                 .map(|source| (name.to_string(), source))
         })
         .collect();
@@ -358,7 +401,7 @@ pub fn read_network(
         // `drive_left`. Only an output sourced from a member in this root's
         // component collection is part of the generated Modelica interface.
         // The other outputs remain available to physics and control wiring.
-        if !lunco_usd_bevy_core::program::is_network_boundary_output(view, root, attr) {
+        if !boundary_index.is_network_boundary_output(view, attr) {
             continue;
         }
         let targets = view.connections(root, attr);
@@ -392,6 +435,7 @@ pub fn read_network(
     if !extraction_errors.is_empty() {
         return Err(extraction_errors);
     }
+    drop(_boundary_span);
     // A boundary input nothing consumes is authored intent that reaches no
     // equation: the wire into it lands, the value updates every tick, and the
     // DAE never reads it. Silent, and indistinguishable from a working feed.
@@ -420,7 +464,10 @@ pub fn read_network(
         communication_period_secs,
         pending_sources: false,
     };
-    let mut errors = validate_network(&network);
+    let mut errors = {
+        let _span = bevy::log::info_span!("domain_network_validation").entered();
+        validate_network(&network)
+    };
     // Say WHY a causal source is missing when the answer is "it was installed
     // but never wired, so the island omitted it" — otherwise the only report is
     // `outside collection`, about a prim the author can see listed in their own

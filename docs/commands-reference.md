@@ -1586,6 +1586,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entry_id` | `String` |  The independent catalog entry ID (e.g. "ball_dynamic", "skid_rover"). |
 | `position` | `[f64 ; 3]` |  Position in the active physics frame, in metres. Kept as f64 through  command transport and frame conversion; narrowing occurs only at the  final scene-root-local Bevy `Transform` boundary. |
 | `rotation` | `Option < [f64 ; 4] >` |  Rotation in the active physics frame as an `(x, y, z, w)` unit  quaternion (optional; omitted → identity). Kept as f64 across the  command boundary for the same reason as `position`; Bevy's f32  [`bevy::prelude::Quat`] is a render/local-transform representation, not a  simulation-frame interchange type. |
+| `producer_id` | `Option < u64 >` |  Stable producer identity required for raw-file runtime admission from  API, direct typed, and actorless Rhai callers. Twin Rhai uses its actor  identity and omits this field. |
 
 ## Other (source location unknown)
 
@@ -2577,10 +2578,10 @@ actually call, with the fields the deserializer actually accepts. See the
  Invoke a registered Rhai tool with a typed value.
 
  This is the structured counterpart to [`RunRhai`]. It is intended for
- engine adapters such as scene click tools: the payload crosses the Bevy
- command queue as the shared [`TelemetryValue`] model and becomes a native
- Rhai value inside the scripting backend. It uses the same bounded FIFO and
- per-invocation operation ceiling as [`RunRhai`]. No source snippet or JSON
+ engine adapters such as scene click tools: the typed payload is queued for
+ the UI interaction pass before fixed simulation, independently of general
+ REPL work. It has its own bounded queue capacity and shares the
+ per-invocation operation ceiling with [`RunRhai`]. No source snippet or JSON
  literal is used to carry the payload.
 
 - *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
@@ -2596,8 +2597,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
  This is the generic interaction seam used by authored pointer policies and
  menus. The hook name is validated against the tool registry before it is
- queued; the payload remains a typed [`TelemetryValue`] until the Rhai
- adapter creates its native value.
+ queued for the UI interaction pass before fixed simulation; the payload
+ remains a typed [`TelemetryValue`] until the Rhai adapter creates its native
+ value.
 
 - *defined in:* `crates/lunco-scripting-rhai-runtime/src/commands.rs`
 

@@ -274,13 +274,18 @@ Manifest reconciliation prunes unknown surface ids, and `TwinClosed` clears the
 in-memory layout scope.
 
 `interactive: true` enables input ownership for visible HUI controls that carry
-an authored `on_press` action. The runtime feeds each control's computed Bevy UI
-rectangle into the existing `ScenePickGate`; it never registers the surface root
-or a full-window `viewport` rectangle. This keeps HUDs transparent to camera
-dragging and scene clicks outside their explicit controls. Do not add a parallel
-pointer/interception system. Do not add per-frame position correction; placement
-is applied after HUI/Flair style work with change detection, and the startup
-resolver ignores a zero-sized target in favor of the live primary window
+an authored `on_press` action. The runtime adds `Pickable` to those visible
+controls and feeds each computed Bevy UI rectangle into the existing
+`ScenePickGate`; it never registers the surface root or a full-window
+`viewport` rectangle. The active presentation camera is enabled for UI picking
+with Bevy's marker filter, so decorative retained nodes without `Pickable` pass
+scene hits through. Visible HUI nodes in a `draggable` window surface,
+including its root, receive pick markers so pointer drags can bubble to that
+surface's owner. This keeps HUDs transparent to camera dragging and scene clicks
+outside their explicit controls. Do not add a parallel pointer/interception
+system. Do not add per-frame position correction; placement is applied after
+HUI/Flair style work with change detection, and the startup resolver ignores a
+zero-sized target in favor of the live primary window
 dimensions.
 
 ### 4. Map actions through the existing command path
@@ -328,6 +333,11 @@ HUI caveats: one root per template component, no recursive imports, and a
 nested component template reload may require reloading the top-level template
 again. Never manually write Bevy styling components under the surface from Rust;
 HUI/Flair owns those components.
+
+Use a single `<node>` as the root of every template, including collection-row
+templates. Keep `<button>` and `<text>` elements below that root because HUI
+reuses the scope entity during hot reload and Flair retains its selector type
+metadata there.
 
 Lifecycle invariant: when an exposure or presentation gate turns off, the
 bridge removes the retained root whenever any HUI state remains, even if its

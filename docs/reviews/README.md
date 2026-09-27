@@ -24,8 +24,9 @@ lesson, which belongs in the architecture doc for that subsystem.
   the Apollo High-quality frame loop is below the stable 200 FPS target; the
   handover records the Tracy evidence and owner-first optimization plan.
 - [`open-400fps-performance-handover.md`](open-400fps-performance-handover.md) —
-  the current 400-FPS target, change-driven globe LOD implementation, and the
-  measured upstream/render blocker.
+  the current 150-FPS and sub-0.5 ms physics targets, separate app/Twin
+  readiness milestones, change-driven globe LOD implementation, and measured
+  startup/render blockers.
 - [`open-builder-perspective-render-stalls.md`](open-builder-perspective-render-stalls.md) —
   Tracy diagnosis of the event-driven render-initialisation bursts seen when
   opening the Builder perspective; telemetry is not the dominant cause.

@@ -7584,11 +7584,14 @@ name = "lunco-core-session"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "bincode 2.0.1",
  "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-hooks",
  "lunco-port-core",
+ "lunco-time",
  "serde",
 ]
 
@@ -7872,6 +7875,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
+ "lunco-command-contracts",
  "lunco-control-core",
  "lunco-core",
  "lunco-interaction-core",
@@ -8136,6 +8140,7 @@ dependencies = [
  "lunco-usd-document",
  "lunco-usd-sim-domain",
  "lunco-workspace",
+ "openusd",
 ]
 
 [[package]]
@@ -8157,9 +8162,11 @@ dependencies = [
  "lunco-assets-path",
  "lunco-command-contracts",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-core-session",
  "lunco-doc-bevy",
  "lunco-experiments",
+ "lunco-hooks",
  "lunco-modelica-api",
  "lunco-modelica-core",
  "lunco-modelica-document",
@@ -8168,6 +8175,7 @@ dependencies = [
  "lunco-networking-sync",
  "lunco-obstacle-field",
  "lunco-scene-authoring",
+ "lunco-settings",
  "lunco-storage",
  "lunco-telemetry-core",
  "lunco-twin",
@@ -9162,6 +9170,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
+ "lunco-hooks",
  "lunco-physics",
  "lunco-scene-authoring",
  "lunco-scene-catalog",

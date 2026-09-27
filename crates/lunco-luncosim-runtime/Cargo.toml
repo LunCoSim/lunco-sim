@@ -10,6 +10,7 @@ name = "lunco_luncosim_runtime"
 path = "src/lib.rs"
 
 [dependencies]
+openusd = { workspace = true }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_shader"] }
@@ -19,7 +20,7 @@ lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
 lunco-luncosim-simulation = { path = "../lunco-luncosim-simulation", default-features = false }
-lunco-luncosim-services = { path = "../lunco-luncosim-services", default-features = false }
+lunco-luncosim-services = { path = "../lunco-luncosim-services", default-features = false, features = ["session-input-archive-export"] }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core" }

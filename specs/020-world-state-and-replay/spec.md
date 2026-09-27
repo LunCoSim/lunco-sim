@@ -7,43 +7,44 @@
   `DomainKind::{Usd, Modelica, Script, Shader, Experiment, ObstacleField, ToolLibrary, Timeline}`,
   each with its inverse, undo/redo, cross-peer merge, `to_bytes` persistence, and **document-level**
   replay (journal → document → scene projection).
-- **NOT built — US3 (Deterministic Replay):** there is no complete whole-session input log. `#[Command]`s are not
-  journaled. HTTP, MCP, and Rhai transport calls use `api_command_dispatcher`, but UI and subsystem
-  code can also trigger registered typed command events directly. The generated `CommandOccurred`
-  projection carries API transport or Rhai execution origin; scenario Rhai origins include the
-  stable actor `GlobalEntityId`. The fact still lacks typed command parameters, target, admitted
-  scene generation, effective tick, and per-tick sequence; direct typed triggers remain unclassified.
-  External API, application-Rhai, and direct typed `SimulateIntentEdge` submissions, plus external
-  held/released `SimulateIntent` changes for fixed-simulation targets, share a bounded input queue.
-  Admission assigns the committed scene generation, effective `SimTick`, and shared per-tick
-  sequence before fixed-step delivery; the owner validates generation and target again at commit.
-  Edge acknowledgements, `CausalTrace`, and `intent.edge` retain edge correlation and admission;
-  held-command acknowledgements and `intent.hold` retain the same held-input correlation and stamp.
-  The fixed-step controller also captures physical `ActionState<UserIntent>` as a by-value semantic
+- **NOT built — US3 (Deterministic Replay):** there is no complete, durable whole-session input log or playback consumer. `#[Command]`s are not
+  comprehensively journaled. HTTP, MCP, and Rhai transport calls use `api_command_dispatcher`, while
+  UI and subsystem code can also trigger registered typed command events directly. The generated
+  `CommandOccurred` projection carries API transport or Rhai execution origin; scenario Rhai origins
+  include the stable actor `GlobalEntityId`, but this general projection does not retain typed
+  parameters, target, admitted generation, effective tick, or per-tick sequence.
+  External API, application-Rhai, and direct typed `SimulateIntentEdge` submissions, external
+  held/released `SimulateIntent` changes for fixed-simulation targets, and raw-file runtime spawns
+  share a bounded fixed-tick input queue. Admission assigns the committed scene generation,
+  effective `SimTick`, and shared per-tick sequence before delivery; the owner validates generation
+  and target again at commit. Edge acknowledgements, `CausalTrace`, and `intent.edge` retain edge
+  correlation and admission; held-command acknowledgements and `intent.hold` retain the same
+  held-input correlation and stamp. Raw-file spawn records also retain their producer, scene root,
+  active frame, catalog entry, exact `f64` pose, correlation, and reserved root `GlobalEntityId`.
+  Document-backed Twin spawns instead record `ApplyUsdOps` in the document journal.
+  The fixed-step controller captures physical `ActionState<UserIntent>` as a by-value semantic
   frame. Admission requires the local input `SessionId`, target `GlobalEntityId`, and committed
   scene generation; it receives the current `SimTick` and a sequence from the shared per-tick
   allocator before control translation. Missing admission facts or duplicate target/session order
   keys hold the input with a structured runtime error instead of using world-local entity bits.
-  When explicitly active, `SessionInputStream` retains a bounded record of sorted canonical intent
-  ids plus producer, target, generation, tick, and sequence. Typed commands start, stop, or clear
-  capture, and `ReadSessionInputStream` returns the record stream through the typed API.
+  When explicitly active, `SessionInputStream` retains bounded physical, semantic, and raw-spawn
+  records with their typed producer identity, stable target, generation, tick, sequence, and payload.
+  `SessionInputRecord::validate` checks canonical payload names, stable stamps, producer/payload
+  pairing, and spawn-pose invariants before retention. A malformed record, capacity limit, or order
+  violation stops capture visibly while preserving prior records. Typed commands start, stop, or
+  clear capture, and `ReadSessionInputStream` returns the records through the typed API.
   Deterministic simulation-Rhai actions remain derived behavior, and local-embodiment input remains
-  on the interaction cadence.
-  This capture is in memory and records physical intent frames plus admitted `SimulateIntent` and
-  `SimulateIntentEdge` payloads; it has no durable writer or playback consumer. Other typed command
-  payloads and distinct API-client/direct-producer identity remain outside capture. `SpawnEntity` is
-  owner-dependent: a document-backed Twin records the resulting `ApplyUsdOps` in its document
-  journal, while a raw-file scene uses direct ECS spawning plus `NetSpawn`. Neither path records
-  producer and effective tick as a session input, and runtime-spawn identity remains outside the
-  input stream.
-  The existing bounded per-vessel `InputFrame` log retains all latched `SetPorts`
-  setpoints for opt-in owned-body prediction rollback; it is not a persistent whole-session input log. Therefore
-  runtime actions such as `SpawnEntity`, `AcquireControl`, `DriveRover`, `SetPorts`, terrain spawn, and
-  time control cannot be reconstructed as a session from the current Twin journal. A document-backed
-  spawn's authored result can be restored as document state without reconstructing when or by whom it
-  was requested in a running session. Reopening a Twin restores *document* state only. See
-  [`docs/architecture/command-journal.md`](../../docs/architecture/command-journal.md) for the separate
-  authored-document and session-input lifecycles.
+  on the interaction cadence. Other typed command payloads remain outside capture. Runtime capture
+  is memory-backed and has a bounded, versioned binary record-archive codec. Native hosts can export
+  one verified archive per completed capture through bounded background admission and the storage
+  I/O pool; failed exports can be retried. There is no baseline manifest or playback consumer. The
+  per-vessel `InputFrame` log
+  retains latched `SetPorts` setpoints for opt-in owned-body prediction rollback; it is not a
+  persistent whole-session log. Runtime actions such as `AcquireControl`, `DriveRover`, external
+  `SetPorts`, terrain operations, and time control therefore cannot be reconstructed as a session
+  from the current Twin journal and input capture. Reopening a Twin restores *document* state only.
+  See [`docs/architecture/command-journal.md`](../../docs/architecture/command-journal.md) for the
+  separate authored-document and session-input lifecycles.
 - **NOT built — US1/US2/US4/US5:** no ECS `WorldSnapshot`, no `PeriodicSave`, no MCAP/ROSbag export or
   playback.
 **Input**: Unified ECS State Persistence, check-pointing, deterministic replay, MCAP streaming, and replaying missions.

@@ -3,18 +3,30 @@
 **Prepared:** 2026-09-27
 **Workspace:** `/home/rod/Documents/luncosim-workspace/lunar-soil`
 **Branch:** `codex/lunar-soil`
-**Integrated local-main base before this continuation:** `4d8b139f0634842bfe8b0d0188989544db815529`
+**D3/D9 physical-input acceptance commit:** `b1747728e`
+**D9 direct-command owner test commit:** `211d7d495`
+**D9 session-record validation commit:** `d4937baff`
+**D9 archive feature commit:** `935a527322bc9ab8c753920aa1e31ee7cf1059ca`
+**D9 archive merge commit:** `61737e56e645ab58f3b033c5e2968c0bc119dc75`
+**Latest observed `origin/main` before this handover refresh:** `6b8258edf`
 
-The D9 producer-identity change (`acf996add`) was merged into local `main` by
-`13137c115`. Local `main` then advanced through `54acee747` and
-`4d8b139f0`; the latter contains the possessed route-context UI acceptance
-change. This checkout and the `tutorials` worktree were fast-forwarded to
-`4d8b139f0`. The `main`, `usd`, and `optimization` worktrees were already at
-that commit. No push was made and there is no active merge. The optimization
-worktree has unrelated edits and must remain untouched. The pre-merge D9/D14
-backup remains in `stash@{0}`. Evidence below stays tied to the individual
-builds and source revisions named in each section; the full source baseline is
-now `4d8b139f0`.
+The D9 session-input boundary at `4acf09915` and its 2026-09-27 acceptance,
+direct-command, record-validation, and archive-codec commits are integrated on
+local `main`. Archive feature commit `935a52732` was merged with first-parent
+history preserved as `61737e56e` (base `18a826e21`). Local `main` later gained
+the optimization and terrain-streaming integrations (`14b88558f`,
+`2828983f1`, `e00664d88`, `eaa9baded`, and `9768cc1d1`), then advanced to
+`6b8258edf` for the generated `.tracy` ignore rule. All five worktrees were
+then at `6b8258edf`; this handover-only update was committed locally and
+fast-forwarded across `main`, `codex/lunar-soil`, `tutorials`, `usd`, and
+`optimization`. The tutorial celestial LOD edits and optimization source and
+documentation edits remain in their worktrees; the tutorials backup stash
+`d22f8f25d` and earlier recovery stashes remain intact. The USD worktree is
+clean. A Tracy build was active in optimization at the last check and was not
+interrupted. The last observed `origin/main` was `6b8258edf`; its reflog shows
+an `update by push` during this continuation, but this agent did not run a
+push. The evidence below stays tied to the individual builds and source
+revisions named in each section.
 
 ## Active user objective
 
@@ -80,8 +92,10 @@ the input with a structured runtime error; ordering does not fall back to Bevy
 `SessionInputStream` retains physical frames and admitted external
 `SimulateIntent`/`SimulateIntentEdge` payloads in memory, with producer class,
 stable producer id or Rhai route and actor, stable target, generation, tick,
-sequence, and correlation where applicable. Other commands, runtime spawns,
-durable writing, and playback are still outside this capture.
+sequence, and correlation where applicable. Raw-file `SpawnEntity` admissions
+also share this stream and fixed-tick queue. Document-backed spawns remain
+authored `ApplyUsdOps` in the Twin journal. Other commands, durable writing,
+and playback remain outside this capture.
 
 Verification for this increment:
 
@@ -196,24 +210,22 @@ this task. No performance measurement was taken.
   gone. Port 47123 was left untouched. No visual or performance acceptance was
   run.
 
-The next D9 step is a typed commit coordinator across input types. The bounded
-queue and scene-teardown clearing now belong to `lunco-core-session`; it
-assigns order through `SimulationInputOrderAllocator`, while the controller
-currently validates and commits semantic edges and held changes. Physical
-frames still enter at their consuming fixed tick, and runtime spawn is not yet
-admitted to this queue. Raw-file `SpawnEntity` currently creates ECS entities
-in the command observer, and the session identity owner assigns their root ids
-on a later `PreUpdate`. A replayable runtime spawn needs a fixed-tick admission
-record with the scene-root and active-frame `GlobalEntityId`s, catalog entry,
-original `f64` pose, producer provenance, correlation id, and a reserved
-spawned-root id. Its action and capture record must commit in the same stable
-per-tick order as held intents, edges, and physical frames. Preserve the
-existing network replication contract by inserting that reserved id on the
-spawned root. Document-backed spawns remain `ApplyUsdOps` entries in the Twin
-journal and must not be duplicated in the session stream. See the owner and
-record-shape requirements in [`command-journal.md`](../architecture/command-journal.md).
-Durable recording/playback and supported-profile divergence evidence remain
-open.
+The session-owned commit coordinator now drains external semantic inputs at
+their assigned fixed tick, validates target and scene stamps, captures records,
+and publishes typed commit events synchronously in `(effective_tick, sequence)`
+order. Raw-file runtime spawns also commit at their assigned fixed tick and
+order. Spawn records retain producer, scene-root and active-frame identities,
+catalog entry, exact `f64` pose, correlation, and reserved root GID; the commit
+inserts that identity before normal admission and network replication. The
+canonical `WorldGrid` uses deterministic content provenance so its active-frame
+identity is stable. Document-backed spawns remain `ApplyUsdOps` entries in the
+Twin journal. The controller applies held and edge payloads;
+`drive_from_bindings` is ordered after this commit set. Physical frames enter
+at their consuming fixed tick through the controller boundary and share the
+per-tick allocator, but are not deferred through the external queue. See
+[`command-journal.md`](../architecture/command-journal.md) for the owner and
+record shape. Other typed command payloads, durable recording/playback, and
+supported-profile divergence evidence remain open.
 
 ### D14: owner context for camera, runtime UI, render, and USD projection policies
 
@@ -284,9 +296,10 @@ typed queues before that is safe.
   The route-context test is a windowed UI acceptance and was not run in this
   review; no visual or performance result is claimed.
 - The shared order allocator is owned by `lunco-control-core`, with
-  scene-teardown reset there. Core-session now owns the bounded pending input
-  queue that uses it; the controller still commits semantic payloads, while a
-  cross-domain commit coordinator and runtime-spawn admission remain open.
+  scene-teardown reset there. Core-session owns the bounded queue and ordered
+  fixed-tick commit boundary; the controller applies semantic payloads and
+  admits physical frames at their consuming tick. Raw runtime spawns enter the
+  same queue; physical frames remain controller-boundary admissions.
 - After that extraction, `cargo test -p lunco-control-core -p lunco-controller -j 4`
   passed all 7 control-core and 24 controller tests, including same-tick
   sequence sharing by external semantic input and physical frames, forward-tick
@@ -294,36 +307,114 @@ typed queues before that is safe.
 
 ### D9 shared session-input queue continuation (2026-09-27)
 
-- Moved pending semantic payload storage and scene-teardown clearing from the
-  controller into `lunco-core-session::PendingSessionInputs`. The bounded queue
-  stores only stable target identity, producer, origin, scene generation,
-  effective tick, sequence, and the typed session payload; the controller
-  resolves the live target and commits admitted semantic actions. Physical
-  frames remain admitted at the consuming fixed tick and cannot be deferred
-  through this external queue.
+- `lunco-core-session::PendingSessionInputs` owns bounded semantic payload
+  storage and scene-teardown clearing. The queue stores stable target identity,
+  producer, origin, scene generation,
+  effective tick, sequence, and the typed session payload. The session owner
+  validates and resolves each due target, records it when capture is active,
+  and synchronously publishes one typed commit event before physical sampling
+  while simulation time is running. Paused inputs remain queued for their
+  admitted tick after play resumes. The controller applies held and edge
+  payloads. Physical frames remain admitted at their consuming fixed tick and
+  cannot be deferred through this external queue.
 - `cargo test -p lunco-core-session -p lunco-controller -j 4` passed after the
-  move: 24 controller tests, 38 core-session unit tests, and 2 authz integration
-  tests. The added queue tests cover shared sequence assignment across ticks,
-  due-tick draining, physical-frame rejection without sequence consumption,
+  coordinator change: 24 controller tests, 40 core-session unit tests, and 2
+  authz integration tests. The tests cover ordered event publication at the
+  assigned tick, shared sequence assignment across ticks, due-tick draining,
+  invalid-payload and physical-frame rejection without sequence consumption,
   plugin ownership, and teardown clearing.
-- `cargo build -p lunco-luncosim --bin luncosim -j 4` passed. On the rebuilt
-  production binary, a live API session on owned port 4178 attached
-  `simulate_intent_input_admission.rhai` to the authored skid rover and sent an
-  API `SimulateIntent` from producer 8181. The acknowledgement, `intent.hold`,
-  and completed `ReadSessionInputStream` record matched correlation 1 and
-  `{scene_generation: 1, effective_tick: 1051, sequence: 1}`; the observer
-  reported `TESTS_OK 11` and `SIMULATE INTENT INPUT ADMISSION: PASS`. API `Exit`
-  closed port 4178 and process 1074468 is gone.
-- The attempted production scene-test runner on
-  `physical_rover_controls.usda` was stopped before verdict after the existing
-  scenario repeatedly rejected the joint-angle read at
-  `physical_rover_controls.rhai:212` because its `simulation_dependencies`
-  omits that entity. This independent fixture issue does not affect the focused
-  API observer, but the full vehicle scene-test verdict was not obtained.
-- `python3 scripts/validate_skills.py` passed with 43 skills. The change does
-  not centralize effects across runtime spawns and semantic controls, add
-  durable replay, or close physical-frame replay. No visual or performance
-  acceptance was run.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4` passed in 6m01s. On the
+  rebuilt production binary, a live API session on owned port 4192 attached
+  `simulate_intent_input_admission.rhai` after its capture reached `recording`,
+  then sent API `SimulateIntent` from producer 8181. The acknowledgement,
+  `intent.hold`, and completed `ReadSessionInputStream` record matched
+  correlation 1 and `{scene_generation: 1, effective_tick: 17, sequence: 1}`;
+  the observer reported `TESTS_OK 11` and
+  `SIMULATE INTENT INPUT ADMISSION: PASS`. API `Exit` closed port 4192 and
+  process 1183357 is gone.
+- The vehicle scene's dependency plan and physical input capture are now
+  covered by separate production checks. The exact scene-test gate passed
+  `physical_rover_controls` (`TESTS_OK 33`, 2,220 ticks) after declaring the
+  steering-hinge and front-wheel reads. A headful API observer on port 4196
+  passed `physical_input_stream_capture.rhai` (`TESTS_OK 1`), retaining 15
+  configured-forward physical-controller frames in a completed 21-record
+  stream, with no `ScriptStatus` diagnostics.
+- `cargo test -p lunco-core-session -p lunco-controller -p lunco-scene-commands -p lunco-luncosim-edit-core -j 4` passed: 24 controller, 43 core-session, 5 edit-core, and 12 scene-command tests, plus 1 observer and 2 authz integration tests.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4` passed. Production `spawn_follows_physics` passed (`TESTS_OK 4`) in the scene runner and through an owned API session loading the raw-file scene. The API run captured one spawn at tick 3, sequence 1, verified producer, exact pose, correlation, scene root, active frame, and reserved root identity, and rejected an overflowing quaternion before admission. API `Exit` stopped the owned process and closed port 4196.
+- Raw spawns and semantic controls share the queue and capture stream. Physical
+  frames remain controller-boundary admissions; direct-command producer
+  acceptance, other typed commands, durable recording/playback, physical-frame
+  playback, and supported-profile divergence remain open. No visual or
+  performance acceptance was run.
+
+### D3 vehicle dependencies and D9 physical input capture (2026-09-27)
+
+- `assets/scenarios/tests/physical_rover_controls.rhai` now declares its live
+  dependency surface: `ReadPorts`, reads of both rover control entities, both
+  Ackermann steering hinges and front wheels, and writes to both rover controls.
+  The exact production scene-test gate passed
+  `physical_rover_controls PASS`, `TESTS_OK 33`, and 2,220 fixed ticks on the
+  current production binary. Its log had no undeclared-dependency diagnostic.
+- Added `physical_input_stream_capture.rhai` as a headful production observer
+  attached with `RunScenarioAsset` to `physical_rover_controls.usda`. On owned
+  port 4196 it started capture, acquired the skid control, resolved the
+  configured forward binding, injected press/release through the native-window
+  event path, then asserted a retained physical-controller frame for that
+  stable target with scene generation, effective tick, and sequence. Result:
+  `TESTS_OK 1`, 15 matching frames in a completed 21-record stream, and
+  `ScriptStatus` `ok:true` with no diagnostics. This covers the application
+  input mapping and controller path; it does not claim external hardware input.
+- The task-owned API process (PID 1510869) exited through API `Exit`; PID and
+  port 4196 were confirmed gone. No Rust source changed, so the existing
+  production binary was reused. The earlier requested checkout-local Cargo
+  cleanup was already completed; it was not repeated.
+- Focused owner test `cargo test -p lunco-controller
+  api_and_direct_command_inputs_commit_in_order_with_capture -j 4` passed.
+  An unclassified in-process `SimulateIntentEdge` with producer 9091 retained
+  acknowledgement 302 and `{scene_generation: 1, effective_tick: 21,
+  sequence: 3}` through causal trace, telemetry, and the captured
+  `direct_command` record. API and Rhai ingress classify origin, so this
+  owner path has no production Rhai/API scenario surface. Other typed
+  payloads, durable recording/playback, physical-frame playback,
+  supported-profile divergence, cross-domain causal closure, and
+  performance evidence remain open.
+
+### D9 session-record validation continuation (2026-09-27)
+
+- `SessionInputRecord::validate` centralizes stable stamp, canonical semantic
+  name, physical-frame ordering, runtime-spawn pose, and producer/payload
+  pairing checks. `PendingSessionInputs::admit` uses the same validation before
+  allocating order, with physical frames reserved for their consuming tick.
+  `SessionInputStream::append` validates before retention and moves capture to
+  `Failed` on malformed input without dropping earlier records.
+- `cargo test -p lunco-core-session
+  capture_fails_closed_on_invalid_payload_and_producer_pairing -j 4` passed.
+  The package suite passed 44 unit tests and 2 authorization integration
+  tests. Durable recording/playback, broader typed commands, physical-frame
+  playback, and full cross-domain causal closure remain open.
+- The replay feature specification had stale text saying raw-file spawns and
+  stable producer identity were outside capture. `specs/020-world-state-and-replay/spec.md`
+  and the command-journal contract now describe the current in-memory typed
+  payloads and validation boundary; durable input persistence and playback
+  remain unimplemented.
+
+### D9 bounded session-input archive codec (2026-09-27)
+
+- Added `SessionInputCaptureArchive` to `lunco-core-session`. Its versioned
+  binary framing accepts at most 65,536 validated, strictly ordered records
+  and 16 MiB; decoding checks the header, exact payload consumption, record
+  count, semantic payloads, and producer pairing. The wire projection uses
+  ordinary typed enum variants so the existing internally tagged Serde enums
+  do not leak JSON or fail the binary codec. It preserves exact `f64` spawn
+  poses and all current producer and payload variants.
+- `cargo test -p lunco-core-session -j 4` passed 49 unit tests and 2 authz
+  integration tests. Archive tests cover variant round-trip, invalid decoded
+  records, bad magic/version/count/length, trailing payload bytes, and the byte
+  limit. `SessionInputStream::begin` rejects configured limits above the
+  archive's record cap.
+- The archive is an encode/decode capability only. Runtime capture remains
+  memory-backed; no storage writer, baseline manifest, or playback consumer is
+  installed, so whole-session replay remains open.
 
 ## Runtime and repository constraints
 

@@ -340,12 +340,20 @@ the integrator state.
    structural artifact cache that shares immutable DAE compilation across
    scene instances. The prepared live solve IR is reused by structural source
    identity in RAM and persisted by structural source key plus the compiler-owned library
-   admission revision, solver, and parameter overrides. `ModelicaCompiler`
-   computes each root revision while it is already reading that root into its
-   Rumoca session; the cache never rescans the full Modelica tree during the
-   first live stepper build. Generated USD wrapper names and runtime-root
-   identity are excluded from that key; authored source identity remains part
-   of it.
+   admission revision, solver, and parameter overrides. The persistent key
+   includes solver identity because Rumoca's lowering mode can change the solve
+   model. Root admission clears only the worker-local cache; its deterministic,
+   content-sensitive revision keeps disk entries for other admitted source sets
+   isolated without disabling reuse for the worker's lifetime. `ModelicaCompiler`
+   computes file-root revisions while reading each root into its Rumoca
+   session, and the source-library owner hashes parsed bundle content only when
+   that bundle is admitted. The cache never rescans the full Modelica tree
+   during the first live stepper build. Generated USD wrapper names,
+   runtime-root identity, sibling document IDs, and sibling-document iteration
+   order are excluded from source identity; primary and sibling source text
+   remain part of it. The admitted-library content revision is a separate key
+   field, so a worker-local generation counter does not prevent reuse across
+   launches.
 
    Live solve-IR lowering is an immutable operation over the compiled DAE, so
    native startup submits cache misses to a small bounded Rayon pool. The
@@ -356,6 +364,13 @@ the integrator state.
    drains. This keeps the readiness barrier and physics admission ordering
    unchanged while overlapping independent models; it does not parallelize
    mutable compilation or simulation stepping.
+
+5. **Stage-local USD joint topology index** — `lunco-usd-sim/src/lib.rs`
+   caches composed joint and wheel-attachment facts by canonical stage. Live
+   authored edits invalidate through canonical stage generation; replacement
+   or reload invalidates on `UsdStageAsset` asset events. ECS prim projection
+   revisions do not change authored topology and must not trigger another
+   full-stage scan as prims materialize.
 
 **Static-scene shortcut (architectural):** the Moon scene is static terrain +
 slow sun + a few dynamic movers. Baked horizon visibility owns long-range

@@ -534,13 +534,16 @@ impl CollisionHooks for UsdCollisionFilter<'_, '_> {
                     .is_ok_and(|f| f.0.contains_key(&b) || f.0.contains_key(&b_body))
         };
 
-        !(names(collider1, collider2, body2)
-            || names(body1, collider2, body2)
-            || names(collider2, collider1, body1)
-            || names(body2, collider1, body1))
+        // Both writers store a pair on both endpoints: authored pairs are
+        // accumulated symmetrically in `resolve_filtered_pairs`, and joint
+        // pairs are inserted/released on both bodies. Checking the collider
+        // and body on one side therefore covers the pair; looking it up again
+        // from the opposite side repeats the same set and component queries.
+        !(names(collider1, collider2, body2) || names(body1, collider2, body2))
     }
 
     fn modify_contacts(&self, contacts: &mut ContactPair, _commands: &mut Commands) -> bool {
+        let _span = bevy::log::info_span!("usd_avian_modify_contacts").entered();
         let surface_friction = |collider: Entity, body: Option<Entity>| {
             self.friction
                 .get(collider)

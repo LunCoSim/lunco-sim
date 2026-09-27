@@ -9,9 +9,12 @@ description = "Always-on session, authority, prediction markers, and identity ad
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
+lunco-time = { path = "../lunco-time" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-hooks = { path = "../lunco-hooks" }
+bincode = { workspace = true }
 serde = { workspace = true }
 
 [lints]

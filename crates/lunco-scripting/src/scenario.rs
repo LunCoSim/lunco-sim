@@ -1618,6 +1618,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 bridge_core::set_script_authority(*authority);
                 let _scope = bridge_core::WorldScope::enter(world, context);
                 let _phase = bridge_core::ExecutionContextScope::enter(context);
+                let _visualization_span = bevy::log::info_span!(
+                    "scenario_run_visualization_hook",
+                    document_id = raw,
+                    document_generation,
+                    entity = ?entity,
+                )
+                .entered();
                 if let Some(diagnostic) = driver.runtime.call_visualization(*entity, gid) {
                     if let Some(mut diagnostics) = world.get_resource_mut::<DocumentDiagnostics>() {
                         let document = DocumentId::new(raw);

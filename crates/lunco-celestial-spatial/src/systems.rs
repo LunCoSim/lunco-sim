@@ -224,8 +224,11 @@ pub fn celestial_visuals_system(
     // overwritten". Watching `Changed<ShaderLook>` directly would need read
     // access to the component this system writes.
     q_relooked: Query<(), Changed<crate::globe_lod::GlobeLod>>,
-    // Last frame's per-body transitions, and a short "keep writing" countdown.
+    // Reusable current/previous body transitions, and a short "keep writing"
+    // countdown. The current map retains capacity across frames; dirty updates
+    // swap it with the previous map instead of allocating a clone.
     mut last_per_body: Local<std::collections::HashMap<Entity, f32>>,
+    mut current_per_body: Local<std::collections::HashMap<Entity, f32>>,
     mut force_frames: Local<u8>,
 ) {
     // The blueprint grid is an EDITOR affordance, and a scene with a site anchor is
@@ -282,7 +285,7 @@ pub fn celestial_visuals_system(
     // High (0.0 transition) at 100 km, Blueprint (1.0 transition) at 10 km.
     let start_transition_alt = 100_000.0;
     let end_transition_alt = 10_000.0;
-    let mut per_body: std::collections::HashMap<Entity, f32> = std::collections::HashMap::new();
+    current_per_body.clear();
     for (body_ent, body_cell, body_tf, body) in q_bodies.iter() {
         let transition = if let Some(cam_abs) = camera_abs {
             let Ok(body_abs) = world_position_seeded(
@@ -301,7 +304,7 @@ pub fn celestial_visuals_system(
         } else {
             0.0
         };
-        per_body.insert(body_ent, transition);
+        current_per_body.insert(body_ent, transition);
     }
 
     // Whole-pass gate over the ~600 resident tiles. The per-body altitudes above
@@ -321,7 +324,8 @@ pub fn celestial_visuals_system(
     // that is about to be overwritten would silently lose it until the next time
     // something else moved, so the write is repeated once the replacement has
     // landed.
-    let dirty = *last_per_body != per_body || !q_new_tiles.is_empty() || !q_relooked.is_empty();
+    let dirty =
+        *last_per_body != *current_per_body || !q_new_tiles.is_empty() || !q_relooked.is_empty();
     if dirty {
         *force_frames = 2;
     }
@@ -329,8 +333,6 @@ pub fn celestial_visuals_system(
         return;
     }
     *force_frames -= 1;
-    *last_per_body = per_body.clone();
-
     // Write the transition into each tile's appearance INTENT; `lunco-render-bevy`
     // rebinds the material. Every tile of a body gets the SAME value, so the binder's
     // content-keyed cache still resolves the body's whole tile set to one material and
@@ -342,7 +344,7 @@ pub fn celestial_visuals_system(
     // rebind system does no work. Unguarded, all ~600 resident tiles would re-key and
     // re-bind every frame.
     for (mut look, coord) in q_tiles.iter_mut() {
-        let Some(&transition) = per_body.get(&coord.body) else {
+        let Some(&transition) = current_per_body.get(&coord.body) else {
             continue;
         };
         let next = ParamValue::F32(transition);
@@ -350,4 +352,5 @@ pub fn celestial_visuals_system(
             look.set_value("transition", next);
         }
     }
+    std::mem::swap(&mut *last_per_body, &mut *current_per_body);
 }

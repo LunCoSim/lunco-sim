@@ -319,6 +319,21 @@ the existing USD wiring and member-source invalidation signals. This keeps
 ownership resolution on the composed USD reader without scanning every scene
 prim when an unrelated runtime instance descendant receives its identity.
 
+Network synthesis is admitted through the shared bounded async-work owner.
+Immutable prepared USD plans run graph extraction, Rhai policy, source parsing,
+and validation on workers. A live canonical OpenUSD reader remains
+main-thread-owned, so the projector snapshots typed network facts there and
+dispatches the policy and validation work to a worker. Results publish in
+request order, at most one network commit per Update, after Twin, stage, and
+instance generation checks. Live readers snapshot at most one network per
+Update so independent edits cannot stack their extraction cost in one frame.
+Admission pressure defers candidates until capacity changes; it never falls
+back to synchronous synthesis. Prepared-plan telemetry ownership
+indexes are built once on the worker and shared by the resulting network
+commits; generation-specific live-stage indexes remain cached at their owner.
+Worker requests copy only the resolved class facts used by their network,
+leaving asset handles and pending-resolution state in the resource owner.
+
 The browser opens generated roots through the normal Modelica document/diagram
 route and exposes the boundary interface, units, member source assets, and
 promoted telemetry in an expandable topology inspector. Bundled class roots

@@ -115,22 +115,25 @@ the shared `lunco-control-core::SimulationInputOrderAllocator` before
 controller translation. The allocator resets on scene teardown so producers
 share one per-tick order space. Admitted external semantic payloads wait in
 `lunco-core-session::PendingSessionInputs`; core-session clears that queue on
-scene teardown, and the controller validates and commits semantic payloads at
-their assigned tick. The queue does not centralize commits across runtime
-spawns and other typed actions. Missing facts or duplicate
-target/session order keys hold input with a structured runtime error; ordering
-does not fall back to Bevy `Entity` bits. The frame is discarded after
-translation, while an active `SessionInputStream` capture retains sorted
-canonical intent ids and the admission stamp in bounded memory. The typed
-start/stop/clear commands and `ReadSessionInputStream` query expose physical
-frames plus admitted `SimulateIntent` and `SimulateIntentEdge` payloads while
-capture is active. Records retain producer class and stable producer id (or
-Rhai route and actor), target, admission stamp, and semantic payload. Other
-typed commands, durable writing, and playback remain open.
-Runtime spawn handling is owner-dependent: document-backed `SpawnEntity`
-authors `ApplyUsdOps` into the Twin journal, while raw-file scenes use direct
-ECS spawning plus `NetSpawn`. Neither path currently records the spawn's
-producer and effective tick in `SessionInputStream`.
+scene teardown. Its fixed-step coordinator validates and captures due records,
+then publishes typed commit events in shared sequence order while simulation
+time is running; a pause leaves inputs queued for the next running tick. The
+controller applies semantic payloads before physical input sampling.
+Raw-file runtime spawns also enter this commit boundary; the scene-command
+owner checks the current frame and catalog and inserts the reserved root
+identity before identity admission. Physical frames remain sampled at their
+consuming fixed tick through the same per-tick allocator. Missing facts or
+duplicate target/session order keys hold input with a structured runtime
+error; ordering does not fall back to Bevy `Entity` bits. An active
+`SessionInputStream` captures sorted canonical intent ids, admitted controls,
+and raw-file spawn records. Spawn records retain producer, correlation, stable
+scene-root and active-frame identities, original f64 pose, admission stamp, and
+reserved root id; acknowledgements expose that stamp. Document-backed
+`SpawnEntity` still authors only `ApplyUsdOps` into the Twin journal. Capture
+remains bounded and in-memory; durable writing, playback, and other typed
+commands remain open.
+The persistent canonical `WorldGrid` has deterministic content provenance, so
+the default active physics frame also has a stable `GlobalEntityId`.
 
 Scenario actor compile submission, completion commit, and hook execution use the
 source-owned `GlobalEntityId` component directly; the Update-synchronized API
@@ -360,7 +363,9 @@ Bevy's owning schedules provide the actual execution boundary. A typed
 `RuntimeExecutionContext` carries the current owner route, cycle, phase, clock
 sample, logical sequence, and optional event producer stamp into synchronous
 Rhai calls. Scenario hooks and one-shot REPL/tool calls use their owning
-contexts; `execution_context()` exposes a read-only Rhai map. Generic hook
+contexts: `RunRhai` runs as `Application/Repl`, while typed UI tool callbacks
+run as `Application/Ui` after picking in `PreUpdate` and before fixed
+simulation. `execution_context()` exposes a read-only Rhai map. Generic hook
 calls carry `HookInvocation`; nested `invoke_hook` forwards its active context,
 and an isolated Rhai hook reads it from the immutable `runtime_context` map.
 The shared hook registry rejects a clock that does not belong to its cycle,

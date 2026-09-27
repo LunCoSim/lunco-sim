@@ -92,6 +92,15 @@ impl Plugin for LunCoScriptingRhaiRuntimePlugin {
         timelines::register_twin_timeline_loading(app);
         app.add_systems(lunco_core::SceneTeardown, stop_scene_owned_scripts)
             .add_systems(
+                PreUpdate,
+                lunco_scripting_rhai_world::world_bridge::drain_ui_world_scripts
+                    .in_set(lunco_core::RuntimeCycleSet::Ui)
+                    .after(bevy::picking::PickingSystems::Last)
+                    .after(lunco_core::RuntimeCycleSet::EntityIndex)
+                    .run_if(scripts_run_here)
+                    .run_if(ui_world_scripts_are_queued),
+            )
+            .add_systems(
                 Update,
                 lunco_scripting_rhai_world::world_bridge::prepare_builtin_rhai_assets
                     .in_set(lunco_scripting_rhai_world::world_bridge::RhaiBuiltinPreparationSet)
@@ -225,6 +234,13 @@ fn world_scripts_are_queued(
     pending: Res<lunco_scripting_rhai_world::world_bridge::PendingWorldScripts>,
 ) -> bool {
     pending.has_pending()
+}
+
+#[cfg(feature = "rhai")]
+fn ui_world_scripts_are_queued(
+    pending: Res<lunco_scripting_rhai_world::world_bridge::PendingWorldScripts>,
+) -> bool {
+    pending.has_ui_pending()
 }
 
 #[cfg(all(test, feature = "rhai"))]

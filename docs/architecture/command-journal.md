@@ -1,21 +1,23 @@
 # Command Journal — authored mutations and session replay inputs
 
-> Status: Design · Audience: contributors adding new domain mutations
+> Status: Partial typed input capture with bounded archive export; whole-session replay remains design work · Audience: contributors adding new domain mutations
 >
 > This page covers the future command/session journal. The current authored
 > document journal is defined in [`18-unified-journal-and-history.md`](18-unified-journal-and-history.md).
 
 `#[Command]` dispatch is not journaled as a general session input. A bounded
-in-memory `SessionInputStream` now captures physical intent frames and admitted
-external `SimulateIntent`/`SimulateIntentEdge` payloads, but it is not a complete
-session log. Some command owners translate actions into authored document
-operations: document-backed `SpawnEntity` uses `ApplyUsdOps` and the Twin
-journal, while a raw-file scene uses direct ECS spawning plus `NetSpawn`. The
-document journal can reconstruct authored state, but neither spawn path records
-the command's producer and effective simulation tick as a session input.
+in-memory `SessionInputStream` captures physical intent frames, admitted
+external `SimulateIntent`/`SimulateIntentEdge` payloads, and raw-file runtime
+spawns, but it is not a complete session log. Some command owners translate
+actions into authored document operations: document-backed `SpawnEntity` uses
+`ApplyUsdOps` and the Twin journal, while a raw-file scene admits a fixed-tick
+`RuntimeSpawn` and preserves its reserved root identity for `NetSpawn`
+replication.
 `AcquireControl`, `SetPorts`, terrain spawning, time control, and other
 transient runtime actions still lack complete session capture, so deterministic
-session replay is not built.
+session replay is not built. A completed capture can be exported as a bounded,
+versioned binary archive; baseline state, remaining command inputs, and a
+playback consumer are still absent.
 
 The Twin journal owns authored document mutations. A separate session replay
 input stream must own transient external inputs such as per-tick controls and
@@ -122,9 +124,11 @@ admission stamp to `SessionInputStream`; the controller-local frame object is
 discarded after translation. `StartSessionInputCapture`,
 `StopSessionInputCapture`, and `ClearSessionInputCapture` control the bounded
 in-memory stream;
-`ReadSessionInputStream` returns its state and typed records. A capacity or
-ordering violation stops capture visibly and preserves admitted records. The
-held resource keys API transport by its caller-supplied nonzero `producer_id`,
+`ReadSessionInputStream` returns its state and typed records. Before retention,
+the session owner validates canonical payload names, stable stamps,
+producer/payload pairing, and runtime-spawn pose invariants. Malformed records,
+capacity limits, or ordering violations stop capture visibly and preserve prior
+records. The held resource keys API transport by its caller-supplied nonzero `producer_id`,
 Twin Rhai by route and actor, actorless Rhai by route and `producer_id`, and
 direct typed commands by `producer_id`; a release removes only that producer's
 hold. API clients and direct typed producers must keep the same ID for their
@@ -133,10 +137,11 @@ provenance and is not an authorization credential. External `SimulateIntent`
 changes and `SimulateIntentEdge` submissions share the bounded 4,096-record queue, require
 a stable target id and committed scene generation, and receive the next fixed
 tick plus a per-tick sequence. The fixed-step owner rechecks target and
-generation before applying either action; held-state commits publish
-`intent.hold`, while discrete edges retain their correlation id and admission
-stamp in both `CausalTrace` and the `intent.edge` event. Scene teardown clears
-pending records. Physical
+generation, captures each due record, and publishes a typed commit event in
+shared sequence order. The controller applies those events; held-state commits
+publish `intent.hold`, while discrete edges retain their correlation id and
+admission stamp in both `CausalTrace` and the `intent.edge` event. Scene
+teardown clears pending records. Physical
 `ActionState` frames receive the local input `SessionId`, target `GlobalEntityId`,
 and fixed-tick order at their controller boundary. Missing identity or committed
 scene state holds the input visibly, and duplicate target/session order keys do
@@ -148,16 +153,39 @@ committed generation, tick, sequence, and command correlation id. The typed
 commands reject missing or zero IDs for API, direct typed, and actorless Rhai
 producers; Twin Rhai commands use their stable actor identity. Physical records
 retain the local input session and canonical intent ids. Capacity/order
-failures stop capture without evicting admitted records. The external ingress
-queue and `CausalTrace` are still separate from durable replay storage. Other
-command payloads, runtime-spawn identity, durable writing, and playback remain
-open.
+failures stop capture without evicting admitted records. Raw-file `SpawnEntity`
+uses that external ingress queue and capture stream. Its typed record retains
+the producer, scene-root and active-frame identities, catalog entry, exact
+`f64` pose, correlation id, assigned tick and sequence, and reserved root
+`GlobalEntityId`; commit applies the reserved identity before ordinary entity
+admission and network replication. The canonical `WorldGrid` has deterministic
+content provenance for stable active-frame identity. Document-backed spawning
+continues through `ApplyUsdOps` and the Twin journal, without a duplicate
+session-input record. `SessionInputCaptureArchive` checks the record contract
+and encodes a versioned archive bounded to 65,536 records and 16 MiB.
+On native hosts, `ExportSessionInputCapture` accepts a completed capture,
+shares its immutable records with a `Background`-priority `AsyncWorkAdmission`
+job, encodes away from the simulation schedule, and writes through
+`lunco-storage` on Bevy's I/O pool. The app writes under
+`<user-config>/session-captures/` using a validated filename stem and unique
+operation suffix, refuses an existing output, reads the file back, decodes it,
+and compares the records before reporting `complete`. Capture IDs are
+monotonic for the app session, and a successfully exported capture cannot be
+exported twice; failed exports retain retry eligibility.
+`ReadSessionInputArchiveExport` exposes the capture and export IDs with pending,
+complete, or failed status.
+This persists the bounded input slice; it does not include a baseline manifest
+or playback consumer, so whole-session replay remains open. The ingress queue
+and `CausalTrace` remain separate from durable replay storage. Other command
+payloads also remain open.
 
 ## Replay implementation boundary
 
 The current session-input slice covers external `SimulateIntentEdge`
-submissions, held/released `SimulateIntent` changes, and physical semantic
-frames while explicit capture is active. A complete session-input
+submissions, held/released `SimulateIntent` changes, raw-file runtime spawns,
+and physical semantic frames while explicit capture is active. Physical frames
+are admitted at their consuming controller boundary and are not deferred
+through the external queue. A complete session-input
 implementation must extend the same typed ingress to all supported external
 authoritative inputs, retain stable source and target identities, and persist
 records outside the fixed schedule. High-rate controls need semantic per-tick
@@ -171,14 +199,15 @@ recorded semantic input through controller translation and the normal
 event/command path, so Rhai and Modelica behavior are re-derived once.
 Capturing a derived command as an external input would apply its effect twice.
 
-The current queue and in-memory stream have explicit bounds. A durable writer
-must run outside the fixed schedule. A full queue, record limit, or failed
-writer must end recording with a visible error; it must not drop frames
-silently or stall simulation. Runtime-spawned
-entities need their recorded authoritative identity in the spawn action, while
-content-derived entities can use their existing stable `GlobalEntityId`.
-Recording and playback remain unimplemented until these lifecycle, identity,
-origin, and persistence requirements have a real producer and consumer.
+The current queue and in-memory stream have explicit bounds. Archive encoding
+uses the shared background admission queue and durable file access uses the
+I/O task pool, outside the fixed schedule. A full queue, record limit, or
+failed writer leaves visible failure status; it must not drop frames silently
+or stall simulation. Runtime-spawned entities carry their reserved
+authoritative identity in the spawn action, while content-derived entities use
+their existing stable `GlobalEntityId`.
+Playback remains unimplemented until a baseline manifest and playback consumer
+satisfy the lifecycle, ordering, and failure requirements above.
 
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and
@@ -374,29 +403,34 @@ contracts:
 |---|---|---|
 | Dig / raise authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
 | Flatten pad authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
-| Spawn a rover during a session | Document-backed scene: resulting `ApplyUsdOps` in the Twin journal; raw-file scene: direct ECS spawn plus `NetSpawn`; neither path records a session input stamp | document operation uses `EntryId` and merged order; whole-session replay also needs producer, scene generation, target, `SimTick`, and stable sequence |
+| Spawn a rover during a session | Document-backed scene: resulting `ApplyUsdOps` in the Twin journal; raw-file scene: `RuntimeSpawn` admitted through `PendingSessionInputs`, then committed by the scene-command owner with `NetSpawn` | document operation uses `EntryId` and merged order; raw-file record retains producer, scene generation, scene-root and active-frame identities, original `f64` pose, correlation, reserved root id, `SimTick`, and shared sequence |
 | Possess during a session | semantic user intent; whole-session capture is not implemented | scene generation, controlled target, `SimTick`, stable sequence |
 | USD prim edit | USD document operation in the Twin journal | `EntryId` and merged journal order |
 
 ### Raw-file runtime-spawn input
 
-The raw-file `SpawnEntity` path is a transient simulation input. It must enter
-a shared typed commit coordinator alongside external held intents, discrete
-edges, and physical frames. `lunco-control-core` owns their shared per-tick
-order allocator, but the controller's pending-action queue remains private, so
-that cross-type coordinator is not yet installed. Separate per-crate queues
-without a coordinator would not preserve action and capture order across input
-types.
+The raw-file `SpawnEntity` path is a transient simulation input. It enters the
+session-owned typed commit coordinator alongside external held intents and
+discrete edges. `lunco-core-session` drains admitted records, validates their
+stable targets, related frame identities, and scene stamps, captures each
+record, and publishes typed commit events in shared sequence order. The
+controller applies semantic-control payloads; the scene-command owner resolves
+the catalog and commits runtime spawns. Physical frames are sampled and
+captured at their consuming fixed tick through the same per-tick order
+allocator, after admitted session events and before control propagation.
 
-An admitted spawn record must retain the stable scene-root target and active
+An admitted spawn record retains the stable scene-root target and active
 physics-frame identities, catalog entry, original `f64` position and optional
-rotation, producer provenance, command correlation id, and the reserved
-`GlobalEntityId` for the runtime-spawn root. The owner commits the spawn and its
-session record at the same fixed tick and sequence; it inserts the reserved id
-before the identity-admission system can mint another one. `NetSpawn` and
-network replication continue to use that same root identity. Invalid producer,
-scene, frame, catalog, queue, or generation state rejects the command or holds
-the admitted operation with a structured error.
+rotation, producer provenance, command correlation id, and reserved
+`GlobalEntityId` for the runtime-spawn root. The command acknowledgement
+returns the producer and admission stamp plus the reserved id. At its fixed
+tick, the scene-command owner revalidates the scene root, active frame, catalog
+entry, and pose, then inserts the reserved id before identity admission.
+`NetSpawn` and network replication use that same root identity. Invalid
+admission state is a typed command rejection; stale commit-time scene, frame,
+catalog, or identity state raises a structured runtime error.
+The persistent canonical `WorldGrid` has deterministic content provenance, so
+even a scene using the default world frame has a stable active-frame identity.
 
 The document-backed path stays outside this session-input record: it authors
 `ApplyUsdOps`, whose Twin-journal entry already owns its identity and order.

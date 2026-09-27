@@ -89,7 +89,7 @@ The full catalogue with trigger phrases is in
 | [`numeric-experiments/`](numeric-experiments/README.md) | Solver/numerics investigations with reproducible setups |
 | [`../specs/`](../specs/README.md) | Feature contracts, with an Implemented/Partial/Not-built index |
 | `../crates/<crate>/README.md` | Per-crate quick-start — "how do I use this crate now" |
-| [`../scripts/perf/README.md`](../scripts/perf/README.md) | Performance profiling subsystem |
+| [`../skills/performance-profiling/SKILL.md`](../skills/performance-profiling/SKILL.md) | Performance profiling workflow and current handover |
 
 ## Reading order for newcomers
 

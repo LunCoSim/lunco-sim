@@ -8,10 +8,12 @@ extern crate self as lunco_core_session;
 
 use bevy::prelude::*;
 
+pub mod archive;
 pub mod authority;
 pub mod commands;
 pub mod session;
 
+pub use archive::*;
 pub use authority::*;
 pub use session::*;
 
@@ -34,6 +36,7 @@ impl Plugin for LunCoCoreSessionPlugin {
             .init_resource::<OwnedInputLog>()
             .init_resource::<SessionInputStream>()
             .init_resource::<SessionInputStreamSettings>()
+            .init_resource::<SessionInputArchiveExportStatus>()
             .init_resource::<BufferedClientInputs>()
             .init_resource::<LocalDriveInput>()
             .init_resource::<AppliedInputSeq>()
@@ -41,6 +44,15 @@ impl Plugin for LunCoCoreSessionPlugin {
             .add_systems(
                 PreUpdate,
                 assign_global_entity_ids.in_set(lunco_core::RuntimeCycleSet::IdentityAdmission),
+            )
+            .add_systems(
+                FixedUpdate,
+                commit_due_session_inputs
+                    .in_set(SessionInputCommitSet)
+                    .after(lunco_core_runtime::SimTickSet)
+                    .before(lunco_core_runtime::ControlDacSet)
+                    .run_if(lunco_time::simulation_is_running)
+                    .run_if(lunco_core_runtime::not_rolling_back),
             )
             .add_systems(FixedFirst, sync_applied_seq_owners);
         commands::register_all_commands(app);

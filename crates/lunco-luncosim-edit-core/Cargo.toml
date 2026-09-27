@@ -32,6 +32,7 @@ avian3d = { workspace = true }
 
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-control-core = { path = "../lunco-control-core" }
 lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-spatial = { path = "../lunco-spatial" }

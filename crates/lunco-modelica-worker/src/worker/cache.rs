@@ -1,4 +1,8 @@
 //! In-memory and persistent prepared-solve cache for the Modelica worker.
+//!
+//! Library admission clears worker-local solve models. Persistent entries stay
+//! usable because their keys include the deterministic admitted-library
+//! revision, solver identity, structural source identity, and parameter values.
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::PREPARED_SOLVE_CACHE_VERSION;
@@ -29,6 +33,7 @@ struct PreparedSolveDiskRecord {
     version: u32,
     source_key: u64,
     library_revision: u64,
+    solver_id: String,
     parameter_overrides: Vec<(String, u64)>,
     model: rumoca_ir_solve::SolveModel,
 }
@@ -36,8 +41,6 @@ struct PreparedSolveDiskRecord {
 #[derive(Default)]
 pub(super) struct PreparedSolveCache {
     pub(super) models: HashMap<PreparedSolveKey, rumoca_ir_solve::SolveModel>,
-    #[cfg(not(target_arch = "wasm32"))]
-    persistent_enabled: bool,
 }
 
 impl PreparedSolveCache {
@@ -45,7 +48,6 @@ impl PreparedSolveCache {
     pub(super) fn new() -> Self {
         Self {
             models: HashMap::default(),
-            persistent_enabled: true,
         }
     }
 
@@ -74,6 +76,7 @@ impl PreparedSolveCache {
     fn disk_path(
         source_key: u64,
         library_revision: u64,
+        solver_id: &str,
         parameter_overrides: &[(String, u64)],
     ) -> std::path::PathBuf {
         use std::hash::{Hash, Hasher};
@@ -82,36 +85,22 @@ impl PreparedSolveCache {
         PREPARED_SOLVE_CACHE_VERSION.hash(&mut hasher);
         source_key.hash(&mut hasher);
         library_revision.hash(&mut hasher);
+        solver_id.hash(&mut hasher);
         parameter_overrides.hash(&mut hasher);
         let key = hasher.finish();
         modelica_dir()
-            .join("prepared-solve-v4")
+            .join("prepared-solve-v5")
             .join(format!("{source_key:016x}-{key:016x}.bin.zst"))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn persistent_library_revision(&self, revision: Option<u64>) -> Option<u64> {
-        revision.filter(|_| self.persistent_enabled)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn disable_persistent(&mut self) {
-        self.persistent_enabled = false;
-        self.clear();
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(super) fn disable_persistent(&mut self) {
-        self.clear();
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn load_disk(
         source_key: u64,
         library_revision: u64,
+        solver_id: &str,
         parameter_overrides: &[(String, u64)],
     ) -> Option<rumoca_ir_solve::SolveModel> {
-        let path = Self::disk_path(source_key, library_revision, parameter_overrides);
+        let path = Self::disk_path(source_key, library_revision, solver_id, parameter_overrides);
         let compressed = read_file_sync(&path).ok()?;
         let bytes = zstd::stream::decode_all(compressed.as_slice()).ok()?;
         let (record, _): (PreparedSolveDiskRecord, usize) =
@@ -119,6 +108,7 @@ impl PreparedSolveCache {
         if record.version != PREPARED_SOLVE_CACHE_VERSION
             || record.source_key != source_key
             || record.library_revision != library_revision
+            || record.solver_id != solver_id
             || record.parameter_overrides != parameter_overrides
         {
             return None;
@@ -130,14 +120,16 @@ impl PreparedSolveCache {
     pub(super) fn save_disk(
         source_key: u64,
         library_revision: u64,
+        solver_id: &str,
         parameter_overrides: &[(String, u64)],
         model: &rumoca_ir_solve::SolveModel,
     ) {
-        let path = Self::disk_path(source_key, library_revision, parameter_overrides);
+        let path = Self::disk_path(source_key, library_revision, solver_id, parameter_overrides);
         let record = PreparedSolveDiskRecord {
             version: PREPARED_SOLVE_CACHE_VERSION,
             source_key,
             library_revision,
+            solver_id: solver_id.to_owned(),
             parameter_overrides: parameter_overrides.to_vec(),
             model: model.clone(),
         };

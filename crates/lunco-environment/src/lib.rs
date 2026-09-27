@@ -12,6 +12,7 @@ use avian3d::prelude::{ConstantLinearAcceleration, RigidBody};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
+use lunco_spatial::coords::GridPos;
 // All render-FREE: `CascadeShadowConfig` / `GlobalAmbientLight` are `bevy_light`,
 // `Exposure` is `bevy_camera`. Neither depends on `bevy_render`. The one knob in
 // `SetEnvironmentLight` that IS render-bound — `bloom_intensity` — is applied by a
@@ -21,6 +22,7 @@ use bevy::camera::Exposure;
 use bevy::camera::visibility::RenderLayers;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
 use lunco_core::{Command, on_command, register_commands};
+use std::collections::HashMap;
 
 /// USD prim type for the scene-level **environment settings** prim (a singleton
 /// under the default prim, e.g. `/World/Environment`). It carries the render
@@ -163,6 +165,7 @@ fn update_local_gravity_for_entity(
     entity: Entity,
     gravity_body: Option<Ref<GravityBody>>,
     existing: Option<&LocalGravity>,
+    body_pose_cache: &mut HashMap<Entity, (GridPos, DQuat)>,
     q_bodies: &Query<&GravityProvider>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&Grid>,
@@ -191,19 +194,28 @@ fn update_local_gravity_for_entity(
                 clear_unresolved_local_gravity(commands, entity, existing);
                 return;
             };
-            let Some((body_world, body_rotation)) = lunco_spatial::coords::world_pose(
-                body_link.body_entity,
-                q_parents,
-                q_grids,
-                q_spatial,
-            )
-            .ok() else {
+            let body_pose = body_pose_cache
+                .get(&body_link.body_entity)
+                .copied()
+                .or_else(|| {
+                    let (body_world, body_rotation) = lunco_spatial::coords::world_pose(
+                        body_link.body_entity,
+                        q_parents,
+                        q_grids,
+                        q_spatial,
+                    )
+                    .ok()?;
+                    let pose = (body_world, body_rotation.0);
+                    body_pose_cache.insert(body_link.body_entity, pose);
+                    Some(pose)
+                });
+            let Some((body_world, body_rotation)) = body_pose else {
                 clear_unresolved_local_gravity(commands, entity, existing);
                 return;
             };
-            let relative_body = body_rotation.0.inverse() * (entity_world - body_world);
+            let relative_body = body_rotation.inverse() * (entity_world - body_world);
             let acceleration = provider.model.acceleration(relative_body);
-            let g_world = body_rotation.0 * acceleration;
+            let g_world = body_rotation * acceleration;
             // Surface gravity is evaluated in the celestial body's
             // body-fixed frame and therefore needs the one explicit
             // conversion into the active Avian frame.
@@ -249,6 +261,7 @@ pub fn compute_local_gravity(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    mut body_pose_cache: Local<HashMap<Entity, (GridPos, DQuat)>>,
 ) {
     // The field is entity-local, so a quiet frame must visit only entities
     // whose inputs changed. A provider edit/removal or a global/frame change
@@ -267,6 +280,9 @@ pub fn compute_local_gravity(
     if !has_work {
         return;
     }
+    // Several moving consumers can share one gravity body. Its world pose is
+    // stable for this read-only system pass, so resolve it once per provider.
+    body_pose_cache.clear();
     let frame_rotation = matches!(gravity.as_ref(), Gravity::Surface)
         .then(|| {
             active_frame.as_deref().and_then(|frame| {
@@ -285,6 +301,7 @@ pub fn compute_local_gravity(
                 entity,
                 gravity_body,
                 existing,
+                &mut body_pose_cache,
                 &q_bodies,
                 &q_parents,
                 &q_grids,
@@ -300,6 +317,7 @@ pub fn compute_local_gravity(
                 entity,
                 gravity_body,
                 existing,
+                &mut body_pose_cache,
                 &q_bodies,
                 &q_parents,
                 &q_grids,
