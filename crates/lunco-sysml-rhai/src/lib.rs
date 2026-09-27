@@ -6,6 +6,7 @@
 
 use bevy::math::{DQuat, DVec2, DVec3};
 use lunco_core::DTransform;
+use lunco_engineering_values::{Quantity, Unit};
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraintKind, SysmlDiagnostic, SysmlElement,
     SysmlElementHandle, SysmlEnumValue, SysmlExpression, SysmlExpressionKind,
@@ -201,9 +202,13 @@ fn model_source_literal_observation(
         Some(value) if dynamic_ir_value(&value).is_some() => {
             observation.insert("state".into(), Dynamic::from("value"));
             observation.insert("value".into(), value.clone());
-            if let Some(quantity) = value.clone().try_cast::<SysmlQuantityValue>() {
-                observation.insert("unit".into(), Dynamic::from(quantity.unit));
-            }
+        }
+        Some(value) if value.clone().is::<SysmlQuantityValue>() => {
+            observation.insert("state".into(), Dynamic::from("unavailable"));
+            observation.insert(
+                "detail".into(),
+                Dynamic::from("SysML quantity literal has no resolved engineering Unit"),
+            );
         }
         Some(_) => {
             observation.insert("state".into(), Dynamic::from("invalid"));
@@ -600,16 +605,37 @@ fn evaluation_context_from_dynamic(
             });
             continue;
         };
-        let value = record
-            .get("value")
-            .and_then(dynamic_ir_value)
-            .or_else(|| (state == ObservationState::Value).then_some(IrValue::Null));
+        let resolved_value = record.get("value").and_then(dynamic_ir_value);
+        if state == ObservationState::Value
+            && record.contains_key("value")
+            && resolved_value.is_none()
+        {
+            diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ObservationValueInvalid,
+                source: source.clone(),
+                message: format!(
+                    "value for `{feature_name}` is not a typed SysML IR value; quantities must carry a resolved EngineeringUnit"
+                ),
+            });
+            continue;
+        }
+        let value =
+            resolved_value.or_else(|| (state == ObservationState::Value).then_some(IrValue::Null));
         let detail = record
             .get("detail")
             .and_then(|value| value.clone().into_string().ok());
-        let unit = record
-            .get("unit")
-            .and_then(|value| value.clone().into_string().ok());
+        if record.get("unit").is_some() {
+            diagnostics.push(IrDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: IrDiagnosticCode::ObservationValueInvalid,
+                source: source.clone(),
+                message: format!(
+                    "observation for `{feature_name}` cannot carry separate unit metadata; use a typed Quantity value"
+                ),
+            });
+            continue;
+        }
         let frame = record
             .get("frame")
             .and_then(|value| value.clone().into_string().ok());
@@ -664,6 +690,20 @@ fn evaluation_context_from_dynamic(
                 });
                 continue;
             };
+            if contract_record
+                .get("unit")
+                .is_some_and(|value| value.clone().try_cast::<Unit>().is_none())
+            {
+                diagnostics.push(IrDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: IrDiagnosticCode::InvalidBindingContract,
+                    source: source.clone(),
+                    message: format!(
+                        "unit in the binding contract for `{feature_name}` must be a resolved EngineeringUnit"
+                    ),
+                });
+                continue;
+            }
             Some(BindingContract {
                 path: path.clone(),
                 provider: contract_provider,
@@ -673,7 +713,7 @@ fn evaluation_context_from_dynamic(
                     .unwrap_or(true),
                 unit: contract_record
                     .get("unit")
-                    .and_then(|value| value.clone().into_string().ok()),
+                    .and_then(|value| value.clone().try_cast::<Unit>()),
                 frame: contract_record
                     .get("frame")
                     .and_then(|value| value.clone().into_string().ok()),
@@ -691,7 +731,6 @@ fn evaluation_context_from_dynamic(
             state,
             value,
             detail,
-            unit,
             frame,
             time_basis,
             source_revision,
@@ -780,6 +819,12 @@ fn feature_path_source(
 }
 
 fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
+    if value.is_unit() {
+        return Some(IrValue::Null);
+    }
+    if let Some(value) = value.clone().try_cast::<Quantity>() {
+        return Some(IrValue::Quantity(value));
+    }
     if let Ok(value) = value.as_bool() {
         return Some(IrValue::Boolean(value));
     }
@@ -810,19 +855,8 @@ fn dynamic_ir_value(value: &Dynamic) -> Option<IrValue> {
     }
     let map = value.clone().try_cast::<Map>()?;
     let nested = map.get("value").and_then(dynamic_ir_value)?;
-    if let Some(unit) = map
-        .get("unit")
-        .and_then(|value| value.clone().into_string().ok())
-    {
-        let scalar = match nested {
-            IrValue::Integer(value) => value as f64,
-            IrValue::Real(value) => value,
-            _ => return None,
-        };
-        return scalar.is_finite().then_some(IrValue::Quantity {
-            value: scalar,
-            unit,
-        });
+    if map.contains_key("unit") {
+        return None;
     }
     Some(nested)
 }
@@ -1396,9 +1430,6 @@ pub fn register_sysml_types(engine: &mut Engine) {
                 .map(Dynamic::from)
                 .unwrap_or(Dynamic::UNIT)
         })
-        .register_get("unit", |value: &mut SysmlType| {
-            value.unit.clone().unwrap_or_default()
-        })
         .register_get("modelica_type", |value: &mut SysmlType| {
             value.modelica_type()
         })
@@ -1441,12 +1472,16 @@ pub fn register_sysml_types(engine: &mut Engine) {
         })
         .register_get("ordered", |value: &mut SysmlMultiplicity| value.ordered)
         .register_get("unique", |value: &mut SysmlMultiplicity| value.unique)
-        .register_type_with_name::<SysmlQuantityValue>("Quantity")
+        .register_type_with_name::<SysmlQuantityValue>("SysmlQuantityLiteral")
         .register_get("value", |quantity: &mut SysmlQuantityValue| {
             quantity.value.as_f64()
         })
-        .register_get("unit", |quantity: &mut SysmlQuantityValue| {
-            quantity.unit.clone()
+        .register_get("unit_symbol", |quantity: &mut SysmlQuantityValue| {
+            quantity
+                .unit_symbol
+                .clone()
+                .map(Dynamic::from)
+                .unwrap_or(Dynamic::UNIT)
         })
         .register_get("kind", |quantity: &mut SysmlQuantityValue| {
             quantity
@@ -1765,18 +1800,14 @@ fn typed_literal_dynamic(
         return Some(Dynamic::from_array(values));
     }
 
-    if literal.unit.is_some()
+    if literal.unit_symbol.is_some()
         || declared.is_some_and(|value| {
             value.value_category == lunco_sysml_ast::SysmlTypeCategory::Quantity
         })
     {
         return Some(Dynamic::from(SysmlQuantityValue {
             value: literal.number_value?,
-            unit: literal
-                .unit
-                .clone()
-                .or_else(|| declared.and_then(|value| value.unit.clone()))
-                .unwrap_or_default(),
+            unit_symbol: literal.unit_symbol.clone(),
             quantity_kind: declared.and_then(|value| value.quantity_kind.clone()),
         }));
     }
@@ -2497,8 +2528,8 @@ fn literal_dynamic(literal: &lunco_sysml_ast::SysmlLiteral) -> Dynamic {
     if let Some(string) = &literal.string_value {
         value.insert("string_value".into(), Dynamic::from(string.clone()));
     }
-    if let Some(unit) = &literal.unit {
-        value.insert("unit".into(), Dynamic::from(unit.clone()));
+    if let Some(unit_symbol) = &literal.unit_symbol {
+        value.insert("unit_symbol".into(), Dynamic::from(unit_symbol.clone()));
     }
     value.insert(
         "literal_kind".into(),

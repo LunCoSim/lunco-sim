@@ -83,7 +83,7 @@ fn literal_record(literal: &SysmlLiteral) -> Value {
         "integer_value": literal.integer_value,
         "boolean_value": literal.boolean_value,
         "string_value": literal.string_value,
-        "unit": literal.unit,
+        "unit_symbol": literal.unit_symbol,
         "elements": elements,
     })
 }

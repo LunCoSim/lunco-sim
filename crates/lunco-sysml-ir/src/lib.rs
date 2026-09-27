@@ -10,6 +10,7 @@
 //! unsupported construct is retained as a source-linked diagnostic and cannot
 //! accidentally become a passing verification result.
 
+use lunco_engineering_values::{Quantity, Unit};
 use lunco_hash::Fnv1a;
 use lunco_sysml_ast::{
     SysmlAnalysis, SysmlAttribute, SysmlConstraint, SysmlConstraintKind, SysmlDiagnosticKind,
@@ -139,11 +140,11 @@ impl IrValueType {
 }
 
 /// A fully typed IR value shape, including SysML multiplicity.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct IrType {
     pub value: IrValueType,
     pub multiplicity: IrMultiplicity,
-    pub unit: Option<String>,
+    pub unit: Option<Unit>,
 }
 
 impl IrType {
@@ -433,6 +434,7 @@ define_ir_diagnostic_codes! {
     ConstraintUsageBindingInvalid => "SYSML-IR-058",
     ConstraintUsageBindingTypeMismatch => "SYSML-IR-059",
     ConstraintUsageBindingNavigationUnsupported => "SYSML-IR-060",
+    ObservationValueInvalid => "SYSML-IR-061",
 }
 
 /// A source-linked diagnostic. Diagnostics are part of the contract and are
@@ -1533,7 +1535,7 @@ fn predicate_argument_types_compatible(formal: &IrType, actual: &IrType) -> bool
         return false;
     }
     formal.multiplicity == actual.multiplicity
-        && formal.unit == actual.unit
+        && units_compatible(formal.unit.as_ref(), actual.unit.as_ref())
         && formal.value == actual.value
 }
 
@@ -1589,16 +1591,23 @@ fn validate_standard_function(
             && matches!(ty.value, IrValueType::Integer | IrValueType::Real)
     };
     let valid = match function {
-        IrStandardFunction::Abs => types.first().is_some_and(|ty| scalar_numeric(ty)),
+        IrStandardFunction::Abs => types
+            .first()
+            .is_some_and(|ty| scalar_numeric(ty) && has_linear_unit(ty)),
         IrStandardFunction::Min | IrStandardFunction::Max => {
             types.len() == 2
                 && scalar_numeric(types[0])
                 && scalar_numeric(types[1])
                 && types[0].value.is_comparable(&types[1].value)
-                && types[0].unit == types[1].unit
+                && units_compatible(types[0].unit.as_ref(), types[1].unit.as_ref())
         }
-        IrStandardFunction::Sqrt
-        | IrStandardFunction::Floor
+        IrStandardFunction::Sqrt => types.first().is_some_and(|ty| {
+            scalar_numeric(ty)
+                && ty.unit.as_ref().is_none_or(|unit| {
+                    unit.offset_to_si() == 0.0 && unit.dimension().checked_sqrt().is_ok()
+                })
+        }),
+        IrStandardFunction::Floor
         | IrStandardFunction::Round
         | IrStandardFunction::Sin
         | IrStandardFunction::Cos
@@ -1609,12 +1618,8 @@ fn validate_standard_function(
         | IrStandardFunction::ArcTan
         | IrStandardFunction::Deg
         | IrStandardFunction::Rad => types.first().is_some_and(|ty| scalar_real(ty)),
-        IrStandardFunction::Sum => types
-            .first()
-            .is_some_and(|ty| ty.multiplicity.is_collection() && ty.value.is_numeric()),
-        IrStandardFunction::Product => types.first().is_some_and(|ty| {
-            ty.multiplicity.is_collection()
-                && matches!(ty.value, IrValueType::Integer | IrValueType::Real)
+        IrStandardFunction::Sum | IrStandardFunction::Product => types.first().is_some_and(|ty| {
+            ty.multiplicity.is_collection() && ty.value.is_numeric() && has_linear_unit(ty)
         }),
         IrStandardFunction::IsZero | IrStandardFunction::IsUnit => {
             types.first().is_some_and(|ty| scalar_numeric(ty))
@@ -1669,12 +1674,12 @@ fn collection_result_type(elements: &[IrExpression]) -> Option<IrType> {
     let mut result = first.result_type.clone();
     for element in &elements[1..] {
         if !result.value.is_comparable(&element.result_type.value)
-            || result.unit != element.result_type.unit
+            || !units_compatible(result.unit.as_ref(), element.result_type.unit.as_ref())
         {
             return None;
         }
         if result.value.is_numeric() && element.result_type.value.is_numeric() {
-            result = numeric_result_type(&result, &element.result_type);
+            result = numeric_result_type(&result, &element.result_type, IrOperator::Add);
         }
     }
     result.multiplicity = IrMultiplicity {
@@ -1737,7 +1742,9 @@ fn infer_result_type(
             | IrOperator::Subtract
             | IrOperator::Multiply
             | IrOperator::Divide
-            | IrOperator::Power => numeric_result_type(&left.result_type, &right.result_type),
+            | IrOperator::Power => {
+                numeric_result_type(&left.result_type, &right.result_type, *operator)
+            }
             _ => IrType::scalar(IrValueType::Unknown),
         },
         IrExpressionKind::Conditional {
@@ -1785,15 +1792,33 @@ fn infer_standard_function_result(
         IrStandardFunction::Min | IrStandardFunction::Max => arguments
             .first()
             .zip(arguments.get(1))
-            .map(|(left, right)| numeric_result_type(&left.result_type, &right.result_type))
+            .map(|(left, right)| {
+                numeric_result_type(&left.result_type, &right.result_type, IrOperator::Add)
+            })
             .unwrap_or_else(|| IrType::scalar(IrValueType::Unknown)),
-        IrStandardFunction::Sum | IrStandardFunction::Product => {
+        IrStandardFunction::Sum => {
             let mut result = argument_type();
             result.multiplicity = IrMultiplicity::one();
             result
         }
+        IrStandardFunction::Product => {
+            let mut result = argument_type();
+            result.multiplicity = IrMultiplicity::one();
+            result.unit = None;
+            result
+        }
         IrStandardFunction::Floor | IrStandardFunction::Round | IrStandardFunction::Size => {
             IrType::scalar(IrValueType::Integer)
+        }
+        IrStandardFunction::Sqrt
+            if matches!(argument_type().value, IrValueType::Quantity { .. }) =>
+        {
+            let mut result = argument_type();
+            result.unit = result
+                .unit
+                .as_ref()
+                .and_then(|unit| unit.dimension().checked_sqrt().ok().map(Unit::coherent_si));
+            result
         }
         IrStandardFunction::Sqrt
         | IrStandardFunction::Sin
@@ -1877,30 +1902,86 @@ fn ir_type_from_sysml(value: &SysmlType) -> IrType {
     IrType {
         value: value_type,
         multiplicity: IrMultiplicity::from_sysml(value.multiplicity),
-        unit: value.unit.clone(),
+        unit: None,
     }
 }
 
-fn numeric_result_type(left: &IrType, right: &IrType) -> IrType {
-    let value = match (&left.value, &right.value) {
-        (IrValueType::Quantity { quantity_kind }, _) => IrValueType::Quantity {
-            quantity_kind: quantity_kind.clone(),
+fn units_compatible(left: Option<&Unit>, right: Option<&Unit>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.is_compatible_with(right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn has_linear_unit(ty: &IrType) -> bool {
+    ty.unit
+        .as_ref()
+        .is_none_or(|unit| unit.offset_to_si() == 0.0)
+}
+
+fn numeric_result_type(left: &IrType, right: &IrType, operator: IrOperator) -> IrType {
+    let has_quantity = matches!(left.value, IrValueType::Quantity { .. })
+        || matches!(right.value, IrValueType::Quantity { .. });
+    let value = match operator {
+        IrOperator::Power if matches!(left.value, IrValueType::Quantity { .. }) => {
+            IrValueType::Quantity {
+                quantity_kind: None,
+            }
+        }
+        IrOperator::Power => IrValueType::Real,
+        IrOperator::Multiply | IrOperator::Divide if has_quantity => IrValueType::Quantity {
+            quantity_kind: None,
         },
-        (_, IrValueType::Quantity { quantity_kind }) => IrValueType::Quantity {
-            quantity_kind: quantity_kind.clone(),
+        _ => match (&left.value, &right.value) {
+            (IrValueType::Quantity { quantity_kind }, _) => IrValueType::Quantity {
+                quantity_kind: quantity_kind.clone(),
+            },
+            (_, IrValueType::Quantity { quantity_kind }) => IrValueType::Quantity {
+                quantity_kind: quantity_kind.clone(),
+            },
+            (IrValueType::Real, _) | (_, IrValueType::Real) => IrValueType::Real,
+            _ => IrValueType::Integer,
         },
-        (IrValueType::Real, _) | (_, IrValueType::Real) => IrValueType::Real,
-        _ => IrValueType::Integer,
+    };
+    let unit = match operator {
+        IrOperator::Add | IrOperator::Subtract => left.unit.clone(),
+        IrOperator::Multiply => match (left.unit.as_ref(), right.unit.as_ref()) {
+            (Some(left), Some(right)) => left
+                .dimension()
+                .checked_product(right.dimension())
+                .ok()
+                .map(Unit::coherent_si),
+            (Some(unit), None) | (None, Some(unit)) => Some(Unit::coherent_si(unit.dimension())),
+            (None, None) => None,
+        },
+        IrOperator::Divide => match (left.unit.as_ref(), right.unit.as_ref()) {
+            (Some(left), Some(right)) => left
+                .dimension()
+                .checked_quotient(right.dimension())
+                .ok()
+                .map(Unit::coherent_si),
+            (Some(unit), None) => Some(Unit::coherent_si(unit.dimension())),
+            (None, Some(unit)) => lunco_engineering_values::Dimension::NONE
+                .checked_quotient(unit.dimension())
+                .ok()
+                .map(Unit::coherent_si),
+            (None, None) => None,
+        },
+        IrOperator::Power => None,
+        _ => left.unit.clone().or_else(|| right.unit.clone()),
     };
     IrType {
         value,
         multiplicity: left.multiplicity,
-        unit: left.unit.clone().or_else(|| right.unit.clone()),
+        unit,
     }
 }
 
 fn condition_types_compatible(left: &IrType, right: &IrType) -> bool {
-    left.multiplicity == right.multiplicity && left.value.is_comparable(&right.value)
+    left.multiplicity == right.multiplicity
+        && left.value.is_comparable(&right.value)
+        && units_compatible(left.unit.as_ref(), right.unit.as_ref())
 }
 
 fn validate_unary(
@@ -1910,7 +1991,8 @@ fn validate_unary(
     diagnostics: &mut Vec<IrDiagnostic>,
 ) {
     let valid = match operator {
-        IrOperator::Positive | IrOperator::Negative => operand.is_numeric_shape(),
+        IrOperator::Positive => operand.is_numeric_shape(),
+        IrOperator::Negative => operand.is_numeric_shape() && has_linear_unit(operand),
         IrOperator::Not => operand.is_boolean_scalar(),
         _ => false,
     };
@@ -1931,20 +2013,53 @@ fn validate_binary(
     diagnostics: &mut Vec<IrDiagnostic>,
 ) {
     let same_shape = left.multiplicity == right.multiplicity;
+    let same_units = units_compatible(left.unit.as_ref(), right.unit.as_ref());
     let valid = match operator {
-        IrOperator::Add
-        | IrOperator::Subtract
-        | IrOperator::Multiply
-        | IrOperator::Divide
-        | IrOperator::Power => same_shape && left.value.is_numeric() && right.value.is_numeric(),
+        IrOperator::Add | IrOperator::Subtract => {
+            same_shape
+                && left.value.is_numeric()
+                && right.value.is_numeric()
+                && left.value.is_comparable(&right.value)
+                && same_units
+                && has_linear_unit(left)
+                && has_linear_unit(right)
+        }
+        IrOperator::Multiply | IrOperator::Divide => {
+            same_shape
+                && left.value.is_numeric()
+                && right.value.is_numeric()
+                && has_linear_unit(left)
+                && has_linear_unit(right)
+                && left
+                    .unit
+                    .as_ref()
+                    .zip(right.unit.as_ref())
+                    .is_none_or(|(left, right)| {
+                        if operator == IrOperator::Multiply {
+                            left.dimension().checked_product(right.dimension()).is_ok()
+                        } else {
+                            left.dimension().checked_quotient(right.dimension()).is_ok()
+                        }
+                    })
+        }
+        IrOperator::Power => {
+            same_shape
+                && left.value.is_numeric()
+                && right.value.is_numeric()
+                && has_linear_unit(left)
+                && has_linear_unit(right)
+                && right.unit.as_ref().is_none_or(|unit| {
+                    unit.dimension() == lunco_engineering_values::Dimension::NONE
+                })
+        }
         IrOperator::Equal | IrOperator::NotEqual => {
-            same_shape && left.value.is_comparable(&right.value)
+            same_shape && left.value.is_comparable(&right.value) && same_units
         }
         IrOperator::Less
         | IrOperator::LessEqual
         | IrOperator::Greater
         | IrOperator::GreaterEqual => {
-            same_shape && left.value.is_numeric() && right.value.is_numeric()
+            same_shape && left.value.is_numeric() && right.value.is_numeric() && same_units
         }
         IrOperator::And | IrOperator::Or | IrOperator::Implies | IrOperator::Equivalent => {
             left.is_boolean_scalar() && right.is_boolean_scalar()
@@ -2159,10 +2274,7 @@ pub enum IrValue {
     },
     /// Snapshot-scoped semantic identity resolved by the SysML model.
     Reference(SysmlElementHandle),
-    Quantity {
-        value: f64,
-        unit: String,
-    },
+    Quantity(Quantity),
     Collection(Vec<IrValue>),
     Null,
 }
@@ -2182,12 +2294,12 @@ pub enum BindingProvider {
 /// value provider. A provider must publish one of the explicit observation
 /// states below; absence is never interpreted as a numeric zero or Boolean
 /// false.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BindingContract {
     pub path: SysmlFeaturePath,
     pub provider: BindingProvider,
     pub required: bool,
-    pub unit: Option<String>,
+    pub unit: Option<Unit>,
     pub frame: Option<String>,
     pub time_basis: Option<String>,
     #[serde(default)]
@@ -2228,8 +2340,6 @@ pub struct FeatureObservation {
     pub state: ObservationState,
     pub value: Option<IrValue>,
     pub detail: Option<String>,
-    #[serde(default)]
-    pub unit: Option<String>,
     #[serde(default)]
     pub frame: Option<String>,
     #[serde(default)]
@@ -3081,10 +3191,7 @@ enum EvaluationValue {
         literal: String,
     },
     Reference(SysmlElementHandle),
-    Quantity {
-        value: f64,
-        unit: String,
-    },
+    Quantity(Quantity),
     Collection(Vec<EvaluationValue>),
     Null,
 }
@@ -3413,6 +3520,22 @@ fn evaluate_standard_function(
             .ok_or_else(|| EvaluationFailure::Error("function argument is missing".to_owned()))
     };
     match function {
+        IrStandardFunction::Sqrt => match unary()? {
+            EvaluationValue::Quantity(value) => coerce_numeric_result(
+                value
+                    .sqrt()
+                    .map_err(unit_failure)
+                    .map(EvaluationValue::Quantity)?,
+                result_type,
+            ),
+            EvaluationValue::Integer(value) if value >= 0 => {
+                finite_real((value as f64).sqrt(), "sqrt")
+            }
+            EvaluationValue::Real(value) if value >= 0.0 => finite_real(value.sqrt(), "sqrt"),
+            _ => Err(EvaluationFailure::Error(
+                "sqrt requires a non-negative numeric scalar with a supported dimension".to_owned(),
+            )),
+        },
         IrStandardFunction::Abs => match unary()? {
             EvaluationValue::Integer(value) => value
                 .checked_abs()
@@ -3421,11 +3544,11 @@ fn evaluate_standard_function(
             EvaluationValue::Real(value) if value.is_finite() => {
                 Ok(EvaluationValue::Real(value.abs()))
             }
-            EvaluationValue::Quantity { value, unit } if value.is_finite() => {
-                Ok(EvaluationValue::Quantity {
-                    value: value.abs(),
-                    unit,
-                })
+            EvaluationValue::Quantity(value) if value.value().is_finite() => {
+                Ok(EvaluationValue::Quantity(
+                    Quantity::with_unit(value.value().abs(), value.unit().clone())
+                        .map_err(unit_failure)?,
+                ))
             }
             _ => Err(EvaluationFailure::Error(
                 "abs requires a finite numeric scalar".to_owned(),
@@ -3442,8 +3565,7 @@ fn evaluate_standard_function(
             };
             coerce_numeric_result(if select_left { left } else { right }, result_type)
         }
-        IrStandardFunction::Sqrt
-        | IrStandardFunction::Floor
+        IrStandardFunction::Floor
         | IrStandardFunction::Round
         | IrStandardFunction::Sin
         | IrStandardFunction::Cos
@@ -3456,13 +3578,23 @@ fn evaluate_standard_function(
         | IrStandardFunction::Rad => {
             let value = unary()?;
             let (number, unit) = numeric_value(value)?;
-            if unit.is_some() || !number.is_finite() {
+            if !number.is_finite() {
                 return Err(EvaluationFailure::Error(
-                    "real standard function requires a finite unitless scalar".to_owned(),
+                    "real standard function requires a finite scalar".to_owned(),
                 ));
             }
+            let number = match unit {
+                Some(unit) if unit.dimension() == lunco_engineering_values::Dimension::NONE => {
+                    unit.to_si(number).map_err(unit_failure)?
+                }
+                Some(_) => {
+                    return Err(EvaluationFailure::Error(
+                        "real standard function requires a dimensionless value".to_owned(),
+                    ));
+                }
+                None => number,
+            };
             match function {
-                IrStandardFunction::Sqrt if number >= 0.0 => finite_real(number.sqrt(), "sqrt"),
                 IrStandardFunction::Floor => checked_integer(number.floor(), "floor"),
                 IrStandardFunction::Round => checked_integer(number.round(), "round"),
                 IrStandardFunction::Sin => finite_real(number.sin(), "sin"),
@@ -3495,7 +3627,11 @@ fn evaluate_standard_function(
             evaluate_numeric_aggregate(function, collection, result_type)
         }
         IrStandardFunction::IsZero | IrStandardFunction::IsUnit => {
-            let (number, _) = numeric_value(unary()?)?;
+            let (number, unit) = numeric_value(unary()?)?;
+            let number = match unit {
+                Some(unit) => unit.to_si(number).map_err(unit_failure)?,
+                None => number,
+            };
             if !number.is_finite() {
                 return Err(EvaluationFailure::Error(
                     "numeric predicate requires a finite scalar".to_owned(),
@@ -3599,11 +3735,20 @@ fn numeric_ordering(
             "numeric comparison requires finite values".to_owned(),
         ));
     }
-    if left_unit != right_unit {
-        return Err(EvaluationFailure::Error(
-            "numeric comparison requires matching units".to_owned(),
-        ));
-    }
+    let (left_value, right_value) = match (left_unit, right_unit) {
+        (Some(left_unit), Some(right_unit)) => {
+            let right_value = Quantity::with_unit(right_value, right_unit)
+                .and_then(|right| right.value_in(left_unit))
+                .map_err(unit_failure)?;
+            (left_value, right_value)
+        }
+        (None, None) => (left_value, right_value),
+        _ => {
+            return Err(EvaluationFailure::Error(
+                "numeric comparison requires quantities on both sides or neither side".to_owned(),
+            ));
+        }
+    };
     left_value
         .partial_cmp(&right_value)
         .ok_or_else(|| EvaluationFailure::Error("numeric comparison is undefined".to_owned()))
@@ -3620,10 +3765,12 @@ fn evaluate_numeric_aggregate(
         return match (&result_type.value, &result_type.unit) {
             (IrValueType::Integer, _) => Ok(EvaluationValue::Integer(identity as i64)),
             (IrValueType::Real, _) => Ok(EvaluationValue::Real(identity)),
-            (IrValueType::Quantity { .. }, Some(unit)) if is_sum => Ok(EvaluationValue::Quantity {
-                value: identity,
-                unit: unit.clone(),
-            }),
+            (IrValueType::Quantity { .. }, Some(unit)) if is_sum => Ok(EvaluationValue::Quantity(
+                Quantity::with_unit(identity, unit.clone()).map_err(unit_failure)?,
+            )),
+            (IrValueType::Quantity { .. }, _) if !is_sum => {
+                unitless_quantity(identity).map(EvaluationValue::Quantity)
+            }
             (IrValueType::Quantity { .. }, _) => Err(EvaluationFailure::Error(
                 "empty quantity aggregate has no supported unit identity".to_owned(),
             )),
@@ -3653,9 +3800,9 @@ fn evaluate_numeric_aggregate(
     } else {
         for value in values {
             accumulator = if is_sum {
-                numeric_binary(accumulator, value, |left, right| left + right)?
+                numeric_binary(accumulator, value, IrOperator::Add)?
             } else {
-                numeric_binary(accumulator, value, |left, right| left * right)?
+                numeric_binary(accumulator, value, IrOperator::Multiply)?
             };
         }
     }
@@ -3679,13 +3826,14 @@ fn coerce_numeric_result(
             }
             Ok(EvaluationValue::Real(value))
         }
-        (IrValueType::Quantity { .. }, EvaluationValue::Quantity { value, unit })
-            if result_type
-                .unit
-                .as_deref()
-                .is_none_or(|expected| expected == unit) =>
-        {
-            Ok(EvaluationValue::Quantity { value, unit })
+        (IrValueType::Quantity { .. }, EvaluationValue::Quantity(value)) => {
+            if let Some(expected) = &result_type.unit {
+                Ok(EvaluationValue::Quantity(
+                    value.in_unit(expected.clone()).map_err(unit_failure)?,
+                ))
+            } else {
+                Ok(EvaluationValue::Quantity(value))
+            }
         }
         _ => Err(EvaluationFailure::Error(
             "standard function result did not match its inferred SysML type".to_owned(),
@@ -3733,7 +3881,6 @@ fn validate_observation_contract(
         )));
     }
     for (label, expected, actual) in [
-        ("unit", contract.unit.as_ref(), observation.unit.as_ref()),
         ("frame", contract.frame.as_ref(), observation.frame.as_ref()),
         (
             "time basis",
@@ -3748,6 +3895,20 @@ fn validate_observation_contract(
                     actual, expected
                 )));
             }
+        }
+    }
+    if let Some(expected_unit) = &contract.unit {
+        let Some(IrValue::Quantity(actual)) = observation.value.as_ref() else {
+            return Err(EvaluationFailure::Error(
+                "binding contract requires a unit-aware Quantity value".to_owned(),
+            ));
+        };
+        if !expected_unit.is_compatible_with(actual.unit()) {
+            return Err(EvaluationFailure::Error(format!(
+                "observation quantity dimension {:?} does not satisfy contract dimension {:?}",
+                actual.dimension(),
+                expected_unit.dimension()
+            )));
         }
     }
     if let Some(expected) = contract.source_revision {
@@ -3766,18 +3927,6 @@ fn validate_observation_contract(
             }
         }
     }
-    if let Some(IrValue::Quantity { unit, .. }) = observation.value.as_ref() {
-        if observation
-            .unit
-            .as_ref()
-            .is_some_and(|reported| reported != unit)
-        {
-            return Err(EvaluationFailure::Error(format!(
-                "observation metadata unit {:?} disagrees with quantity value unit `{unit}`",
-                observation.unit
-            )));
-        }
-    }
     Ok(())
 }
 
@@ -3792,10 +3941,7 @@ fn runtime_value(value: &IrValue) -> EvaluationValue {
             literal: literal.clone(),
         },
         IrValue::Reference(target) => EvaluationValue::Reference(*target),
-        IrValue::Quantity { value, unit } => EvaluationValue::Quantity {
-            value: *value,
-            unit: unit.clone(),
-        },
+        IrValue::Quantity(value) => EvaluationValue::Quantity(value.clone()),
         IrValue::Collection(values) => {
             EvaluationValue::Collection(values.iter().map(runtime_value).collect())
         }
@@ -3816,16 +3962,16 @@ fn runtime_value_matches_type(value: &EvaluationValue, ty: &IrType) -> bool {
         }
         return values
             .iter()
-            .all(|value| runtime_value_matches_scalar_type(value, &ty.value, ty.unit.as_deref()));
+            .all(|value| runtime_value_matches_scalar_type(value, &ty.value, ty.unit.as_ref()));
     }
     !ty.multiplicity.is_collection()
-        && runtime_value_matches_scalar_type(value, &ty.value, ty.unit.as_deref())
+        && runtime_value_matches_scalar_type(value, &ty.value, ty.unit.as_ref())
 }
 
 fn runtime_value_matches_scalar_type(
     value: &EvaluationValue,
     ty: &IrValueType,
-    unit: Option<&str>,
+    unit: Option<&Unit>,
 ) -> bool {
     match (ty, value) {
         (IrValueType::Unknown, _) => true,
@@ -3833,8 +3979,8 @@ fn runtime_value_matches_scalar_type(
         (IrValueType::Integer, EvaluationValue::Integer(_)) => true,
         (IrValueType::Real, EvaluationValue::Integer(_) | EvaluationValue::Real(_)) => true,
         (IrValueType::String, EvaluationValue::String(_)) => true,
-        (IrValueType::Quantity { .. }, EvaluationValue::Quantity { unit: actual, .. }) => {
-            unit.is_none_or(|expected| expected == actual)
+        (IrValueType::Quantity { .. }, EvaluationValue::Quantity(actual)) => {
+            unit.is_none_or(|expected| expected.is_compatible_with(actual.unit()))
         }
         (
             IrValueType::Enumeration {
@@ -3908,11 +4054,11 @@ fn evaluate_binary(
         IrOperator::GreaterEqual => compare_binary(operator, left, right, options, |ordering| {
             ordering != std::cmp::Ordering::Less
         }),
-        IrOperator::Add => numeric_binary(left, right, |left, right| left + right),
-        IrOperator::Subtract => numeric_binary(left, right, |left, right| left - right),
-        IrOperator::Multiply => numeric_binary(left, right, |left, right| left * right),
-        IrOperator::Divide => numeric_binary(left, right, |left, right| left / right),
-        IrOperator::Power => numeric_binary(left, right, |left, right| left.powf(right)),
+        IrOperator::Add
+        | IrOperator::Subtract
+        | IrOperator::Multiply
+        | IrOperator::Divide
+        | IrOperator::Power => numeric_binary(left, right, operator),
         _ => Err(EvaluationFailure::Error(
             "binary operator is not executable for runtime values".to_owned(),
         )),
@@ -3937,7 +4083,7 @@ fn bool_binary(
 fn numeric_binary(
     left: EvaluationValue,
     right: EvaluationValue,
-    operation: impl Fn(f64, f64) -> f64 + Copy,
+    operator: IrOperator,
 ) -> Result<EvaluationValue, EvaluationFailure> {
     match (left, right) {
         (EvaluationValue::Collection(left), EvaluationValue::Collection(right)) => {
@@ -3949,32 +4095,114 @@ fn numeric_binary(
             Ok(EvaluationValue::Collection(
                 left.into_iter()
                     .zip(right)
-                    .map(|(left, right)| numeric_binary(left, right, operation))
+                    .map(|(left, right)| numeric_binary(left, right, operator))
                     .collect::<Result<Vec<_>, _>>()?,
             ))
         }
         (left, right) => {
             let (left_number, left_quantity) = numeric_value(left)?;
             let (right_number, right_quantity) = numeric_value(right)?;
-            if let (Some(left_unit), Some(right_unit)) = (&left_quantity, &right_quantity) {
-                if left_unit != right_unit {
-                    return Err(EvaluationFailure::Error(format!(
-                        "quantity units `{left_unit}` and `{right_unit}` require an explicit conversion"
-                    )));
+            match (left_quantity, right_quantity) {
+                (Some(left_unit), Some(right_unit)) => {
+                    if operator == IrOperator::Power {
+                        if right_unit.dimension() != lunco_engineering_values::Dimension::NONE {
+                            return Err(EvaluationFailure::Error(
+                                "quantity exponent must be dimensionless".to_owned(),
+                            ));
+                        }
+                        return Quantity::with_unit(left_number, left_unit)
+                            .and_then(|left| {
+                                Quantity::with_unit(right_number, right_unit)
+                                    .and_then(|right| left.power(right.si_value()?))
+                            })
+                            .map(EvaluationValue::Quantity)
+                            .map_err(unit_failure);
+                    }
+                    let left = Quantity::with_unit(left_number, left_unit).map_err(unit_failure)?;
+                    let right =
+                        Quantity::with_unit(right_number, right_unit).map_err(unit_failure)?;
+                    quantity_operation(&left, &right, operator)
+                }
+                (Some(unit), None) => {
+                    if operator == IrOperator::Power {
+                        return Quantity::with_unit(left_number, unit)
+                            .and_then(|left| left.power(right_number))
+                            .map(EvaluationValue::Quantity)
+                            .map_err(unit_failure);
+                    }
+                    let left = Quantity::with_unit(left_number, unit).map_err(unit_failure)?;
+                    let right = unitless_quantity(right_number)?;
+                    quantity_operation(&left, &right, operator)
+                }
+                (None, Some(unit)) if operator == IrOperator::Power => {
+                    if unit.dimension() != lunco_engineering_values::Dimension::NONE {
+                        return Err(EvaluationFailure::Error(
+                            "quantity exponent must be dimensionless".to_owned(),
+                        ));
+                    }
+                    let exponent = unit.to_si(right_number).map_err(unit_failure)?;
+                    finite_real(left_number.powf(exponent), "power")
+                }
+                (None, Some(unit)) => {
+                    let left = unitless_quantity(left_number)?;
+                    let right = Quantity::with_unit(right_number, unit).map_err(unit_failure)?;
+                    quantity_operation(&left, &right, operator)
+                }
+                (None, None) => {
+                    let value = match operator {
+                        IrOperator::Add => left_number + right_number,
+                        IrOperator::Subtract => left_number - right_number,
+                        IrOperator::Multiply => left_number * right_number,
+                        IrOperator::Divide => left_number / right_number,
+                        IrOperator::Power => left_number.powf(right_number),
+                        _ => {
+                            return Err(EvaluationFailure::Error(
+                                "operator is not numeric".to_owned(),
+                            ));
+                        }
+                    };
+                    if value.is_finite() {
+                        Ok(EvaluationValue::Real(value))
+                    } else {
+                        Err(EvaluationFailure::Error(
+                            "numeric operation produced a non-finite value".to_owned(),
+                        ))
+                    }
                 }
             }
-            let unit = left_quantity.or(right_quantity);
-            let value = operation(left_number, right_number);
-            if !value.is_finite() {
-                return Err(EvaluationFailure::Error(
-                    "numeric operation produced a non-finite value".to_owned(),
-                ));
-            }
-            Ok(unit.map_or(EvaluationValue::Real(value), |unit| {
-                EvaluationValue::Quantity { value, unit }
-            }))
         }
     }
+}
+
+fn quantity_operation(
+    left: &Quantity,
+    right: &Quantity,
+    operator: IrOperator,
+) -> Result<EvaluationValue, EvaluationFailure> {
+    let result = match operator {
+        IrOperator::Add => left.add(right),
+        IrOperator::Subtract => left.subtract(right),
+        IrOperator::Multiply => left.multiply(right),
+        IrOperator::Divide => left.divide(right),
+        _ => {
+            return Err(EvaluationFailure::Error(
+                "operator is not supported for quantity values".to_owned(),
+            ));
+        }
+    };
+    result.map(EvaluationValue::Quantity).map_err(unit_failure)
+}
+
+fn unitless_quantity(value: f64) -> Result<Quantity, EvaluationFailure> {
+    Quantity::with_unit(
+        value,
+        Unit::coherent_si(lunco_engineering_values::Dimension::NONE),
+    )
+    .map_err(unit_failure)
+}
+
+fn unit_failure(error: lunco_engineering_values::UnitError) -> EvaluationFailure {
+    EvaluationFailure::Error(error.to_string())
 }
 
 fn numeric_map(
@@ -3996,21 +4224,21 @@ fn numeric_map(
                     "numeric operation produced a non-finite value".to_owned(),
                 ));
             }
-            Ok(unit.map_or(EvaluationValue::Real(number), |unit| {
-                EvaluationValue::Quantity {
-                    value: number,
-                    unit,
-                }
-            }))
+            Ok(match unit {
+                Some(unit) => EvaluationValue::Quantity(
+                    Quantity::with_unit(number, unit).map_err(unit_failure)?,
+                ),
+                None => EvaluationValue::Real(number),
+            })
         }
     }
 }
 
-fn numeric_value(value: EvaluationValue) -> Result<(f64, Option<String>), EvaluationFailure> {
+fn numeric_value(value: EvaluationValue) -> Result<(f64, Option<Unit>), EvaluationFailure> {
     match value {
         EvaluationValue::Integer(value) => Ok((value as f64, None)),
         EvaluationValue::Real(value) => Ok((value, None)),
-        EvaluationValue::Quantity { value, unit } => Ok((value, Some(unit))),
+        EvaluationValue::Quantity(value) => Ok((value.value(), Some(value.unit().clone()))),
         _ => Err(EvaluationFailure::Error(
             "numeric operator received a non-numeric value".to_owned(),
         )),
@@ -4071,9 +4299,15 @@ fn compare_binary(
                 (left, right) => {
                     let (left_number, left_unit) = numeric_value(left)?;
                     let (right_number, right_unit) = numeric_value(right)?;
-                    if left_unit != right_unit {
+                    let (left_number, right_number) = numeric_si_values(
+                        left_number,
+                        left_unit.as_ref(),
+                        right_number,
+                        right_unit.as_ref(),
+                    )?;
+                    if !left_number.is_finite() || !right_number.is_finite() {
                         return Err(EvaluationFailure::Error(
-                            "quantity comparison requires canonical matching units".to_owned(),
+                            "numeric comparison requires finite values".to_owned(),
                         ));
                     }
                     let scale = left_number.abs().max(right_number.abs()).max(1.0);
@@ -4090,6 +4324,27 @@ fn compare_binary(
             };
             Ok(EvaluationValue::Boolean(operation(ordering)))
         }
+    }
+}
+
+fn numeric_si_values(
+    left_value: f64,
+    left_unit: Option<&Unit>,
+    right_value: f64,
+    right_unit: Option<&Unit>,
+) -> Result<(f64, f64), EvaluationFailure> {
+    match (left_unit, right_unit) {
+        (Some(left), Some(right)) if left.is_compatible_with(right) => Ok((
+            left.to_si(left_value).map_err(unit_failure)?,
+            right.to_si(right_value).map_err(unit_failure)?,
+        )),
+        (Some(_), Some(_)) => Err(EvaluationFailure::Error(
+            "numeric comparison received incompatible quantity dimensions".to_owned(),
+        )),
+        (None, None) => Ok((left_value, right_value)),
+        _ => Err(EvaluationFailure::Error(
+            "numeric comparison requires quantities on both sides or neither side".to_owned(),
+        )),
     }
 }
 

@@ -213,10 +213,10 @@ fn position_m(report, feature_selector) {
         }
         let values = [];
         for element in attribute.value.elements {
-            if element.number_value == () || element.unit == () {
+            if element.number_value == () || element.unit_symbol == () {
                 return #{ok: false, error: "SysML position components must be finite quantities: " + qualified_name};
             }
-            let source_unit = engineering_units::ucum_unit(element.unit);
+            let source_unit = engineering_units::ucum_unit(element.unit_symbol);
             let metre_unit = engineering_units::ucum_unit("m");
             let source_quantity = if source_unit == () || metre_unit == () {
                 ()

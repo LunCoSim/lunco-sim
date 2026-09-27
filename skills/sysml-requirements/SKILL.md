@@ -76,12 +76,16 @@ match. The handle is scoped to its SysML source revision and fingerprint, so
 reject values assembled from a different snapshot.
 
 For unit-bearing model data, author standard quantity-value and unit-reference
-features where the model needs them. Keep unit symbols as authored/presentation
-metadata; do not use symbol strings as identity, dimensional proof, or an
-implicit conversion rule. The current generic constraint/provider path does
-not yet resolve SysML unit definitions into dimension-safe conversion, so do
-not claim mixed-unit verification is supported until the unit catalog and
-provider boundary use resolved unit identities.
+features where the model needs them. Keep a unit suffix from source syntax as
+source spelling; it is not a resolved unit definition. Provider observations
+must carry a native `Quantity` constructed with a resolved `EngineeringUnit`,
+and a binding contract's optional unit must also be an `EngineeringUnit`. Do
+not add a second `unit` string to an observation or pass `{ value, unit: "m" }`:
+those forms do not establish dimension or scale and are rejected by the adapter.
+The evaluator checks SI dimensions and converts compatible units during
+arithmetic and comparison. The remaining gap is resolving a SysML unit usage or
+literal suffix to the shared unit catalog; do not claim SysML-authored suffixes
+are automatically converted until that semantic resolver is connected.
 
 For a mission Twin, apply the generic
 [mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)

@@ -295,7 +295,7 @@ fn modelica_declaration(ty: &IrType, name: &str) -> Result<String, ModelicaLower
                 ));
             }
             if let Some(unit) = &ty.unit {
-                attributes.push(format!("unit=\"{}\"", modelica_string(unit)));
+                attributes.push(format!("unit=\"{}\"", modelica_string(unit.symbol())));
             }
             ("Real".to_owned(), attributes)
         }

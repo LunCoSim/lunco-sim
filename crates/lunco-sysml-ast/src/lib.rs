@@ -991,9 +991,6 @@ pub struct SysmlType {
     /// resolved inheritance chain, when the declared type has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantity_kind: Option<SysmlTypeRef>,
-    /// Unit attached to an authored quantity literal, when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
 }
 
 impl SysmlType {
@@ -1050,7 +1047,6 @@ impl SysmlType {
             primitive,
             multiplicity,
             quantity_kind: None,
-            unit: None,
         })
     }
 
@@ -1187,15 +1183,16 @@ impl SysmlLiteralKind {
     }
 }
 
-/// A quantity literal kept in a native, unit-aware form for language
-/// adapters.  The numeric payload remains the validated f64 wrapper used by
-/// the source projection, so non-finite values cannot cross the boundary.
+/// A source quantity literal with its authored unit spelling.
+///
+/// `unit_symbol` is lexical source data, not a resolved engineering unit or
+/// dimensional identity. Consumers must resolve it before numeric use.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlQuantityValue {
     pub value: SysmlNumber,
-    /// Authored unit symbol. Unit definition, dimensional compatibility, and
-    /// conversion are resolved separately from this lossless source spelling.
-    pub unit: String,
+    /// Authored unit suffix, when the source literal contains one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_symbol: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quantity_kind: Option<SysmlTypeRef>,
 }
@@ -1241,9 +1238,9 @@ pub struct SysmlLiteral {
     /// Unquoted string projection when the literal is a String.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub string_value: Option<String>,
-    /// Unit suffix when the literal is a quantity value, for example `m`.
+    /// Authored unit suffix, for example `m`; this is source spelling only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
+    pub unit_symbol: Option<String>,
     /// Nested values when the initializer is a literal vector/tuple.
     ///
     /// This is deliberately a recursive lossless projection rather than a
@@ -1283,10 +1280,10 @@ impl SysmlLiteral {
                     .collect::<Option<Vec<_>>>()?,
             ));
         }
-        if let (Some(value), Some(unit)) = (self.number_value, self.unit.as_ref()) {
+        if let (Some(value), Some(unit_symbol)) = (self.number_value, self.unit_symbol.as_ref()) {
             return Some(SysmlValue::Quantity(SysmlQuantityValue {
                 value,
-                unit: unit.clone(),
+                unit_symbol: Some(unit_symbol.clone()),
                 quantity_kind: None,
             }));
         }
@@ -3070,8 +3067,8 @@ fn project_records(attributes: &[SysmlAttribute], revision: u64) -> Vec<SysmlRec
 fn parse_literal(literal: &str) -> SysmlLiteral {
     let literal = literal.trim();
     let elements = parse_vector_literal(literal);
-    let (number_text, number_value, unit) = parse_number_with_unit(literal);
-    let integer_value = if unit.is_none() {
+    let (number_text, number_value, unit_symbol) = parse_number_with_unit(literal);
+    let integer_value = if unit_symbol.is_none() {
         literal.parse::<i64>().ok()
     } else {
         None
@@ -3084,7 +3081,7 @@ fn parse_literal(literal: &str) -> SysmlLiteral {
     let string_value = parse_string_literal(literal);
     let literal_kind = if elements.is_some() {
         SysmlLiteralKind::Collection
-    } else if unit.is_some() {
+    } else if unit_symbol.is_some() {
         SysmlLiteralKind::Quantity
     } else if integer_value.is_some() {
         SysmlLiteralKind::Integer
@@ -3106,7 +3103,7 @@ fn parse_literal(literal: &str) -> SysmlLiteral {
         integer_value,
         boolean_value,
         string_value,
-        unit,
+        unit_symbol,
         elements,
     }
 }

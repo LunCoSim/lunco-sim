@@ -892,11 +892,11 @@ fn literal(value: &SysmlLiteral) -> H {
                 .unwrap_or(H::Unit),
         ),
         (
-            "unit",
+            "unit_symbol",
             value
-                .unit
+                .unit_symbol
                 .as_ref()
-                .map(|unit| H::str(unit.clone()))
+                .map(|symbol| H::str(symbol.clone()))
                 .unwrap_or(H::Unit),
         ),
     ];
@@ -969,14 +969,6 @@ fn type_facts(value: &SysmlType) -> H {
                 .quantity_kind
                 .as_ref()
                 .map(type_ref_facts)
-                .unwrap_or(H::Unit),
-        ),
-        (
-            "unit",
-            value
-                .unit
-                .as_ref()
-                .map(|unit| H::str(unit.clone()))
                 .unwrap_or(H::Unit),
         ),
         (
