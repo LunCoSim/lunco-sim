@@ -232,6 +232,9 @@ pub struct SemanticIntentEdge {
     /// inspection. Physical input edges mint an id locally; API/Rhai dispatch
     /// reuses the active command id.
     pub correlation_id: u64,
+    /// Caller-assigned stable identity for API, direct typed, or actorless Rhai
+    /// producers. Twin actor identity remains in `origin`.
+    pub producer_id: Option<u64>,
     /// Classified API/Rhai producer for commands routed through the typed
     /// dispatcher. Direct controller and Bevy producers leave this absent.
     #[reflect(ignore)]
@@ -261,6 +264,9 @@ pub struct CausalTraceRecord {
     pub kind: SemanticIntentEdgeKind,
     /// Producer classification retained from the typed semantic edge.
     pub origin: Option<lunco_core::CommandOrigin>,
+    /// Caller-assigned stable identity when the producer is API, direct typed,
+    /// or actorless Rhai.
+    pub producer_id: Option<u64>,
     /// Fixed-tick admission stamp when the edge came through external ingress.
     pub admission: Option<SimulationInputOrder>,
 }
@@ -290,6 +296,7 @@ impl CausalTrace {
             intent: edge.intent,
             kind: edge.kind,
             origin: edge.origin,
+            producer_id: edge.producer_id,
             admission: edge.admission,
         });
         while self.records.len() > Self::MAX_RECORDS {

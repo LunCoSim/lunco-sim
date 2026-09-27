@@ -40,11 +40,17 @@ fn api_u64(value: &ApiValue) -> Option<u64> {
     }
 }
 
-fn causal_origin_value(origin: Option<lunco_core::CommandOrigin>) -> ApiValue {
+fn causal_origin_value(
+    origin: Option<lunco_core::CommandOrigin>,
+    producer_id: Option<u64>,
+) -> ApiValue {
     use lunco_core::{CommandOrigin, RuntimeCycle, RuntimePhase, RuntimeScope};
 
     let Some(origin) = origin else {
-        return ApiValue::Unit;
+        return producer_id.map_or(
+            ApiValue::Unit,
+            |producer_id| api_value!({ "kind": "direct_command", "producer_id": producer_id }),
+        );
     };
     let fields = match origin {
         CommandOrigin::ApiTransport => {
@@ -111,6 +117,10 @@ fn causal_origin_value(origin: Option<lunco_core::CommandOrigin>) -> ApiValue {
             fields
         }
     };
+    let mut fields = fields;
+    if let Some(producer_id) = producer_id {
+        fields.push(("producer_id".to_owned(), ApiValue::UInt(producer_id)));
+    }
     ApiValue::Map(fields)
 }
 
@@ -647,7 +657,7 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
             "correlation_id": record.correlation_id,
             "intent": record.intent.canonical_name(),
             "edge": record.kind.as_str(),
-            "origin": causal_origin_value(record.origin),
+            "origin": causal_origin_value(record.origin, record.producer_id),
             "admission": causal_admission_value(record.admission),
             "control_binding": {
                 "matched_intent": !binding_entries.is_empty(),

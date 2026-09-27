@@ -116,13 +116,14 @@ When `SessionInputStream` capture is active, the admitted frame is retained as
 a bounded record of sorted canonical intent ids, producer session, stable
 target, scene generation, tick, and shared sequence. Admitted external
 `SimulateIntent` and `SimulateIntentEdge` changes are also retained with their
-typed payload, correlation id, producer class, and admission stamp.
+typed payload, correlation id, producer class and stable producer id, and
+admission stamp.
 `StartSessionInputCapture`,
 `StopSessionInputCapture`, and `ClearSessionInputCapture` control the in-memory
 capture; `ReadSessionInputStream` exposes its typed state and records. The frame
-itself is still discarded after translation. API producer identity remains
-transport-wide and direct typed commands have no stable source id. The stream
-is not durably written or played back.
+itself is still discarded after translation. API, direct typed, and actorless
+Rhai callers provide a stable nonzero `producer_id`; Twin Rhai uses its actor
+identity. The stream is not durably written or played back.
 
 `SimulateIntent` remains the level-triggered held-control command. External
 commands targeting fixed-simulation state enter the bounded input queue for the

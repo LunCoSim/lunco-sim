@@ -359,9 +359,10 @@ Use `SimulateIntent` for a held semantic control and
 publishes one target-scoped `intent.edge` event; Rhai owns the action policy and
 Modelica owns continuous state, so the edge must not be translated into a
 vehicle-specific Rust write or emulated with two ordered held commands.
-Held intents keep API transport, Rhai runtime route plus scenario actor id, and
-direct typed-command sources separate; releasing one source does not release
-another. This is live control state, not tick-assigned session replay input.
+API and direct typed callers provide a stable nonzero `producer_id`; actorless
+Rhai callers provide one too. Twin Rhai uses its route and stable actor id, so
+leave `producer_id` out of scenario commands. Releasing one producer does not
+release another. This is live control state, not a durable session replay.
 
 For an operator-facing causal check, keep the edge result `id` and call
 `query("CausalTrace", #{target: target, correlation_id: edge.id})`. The

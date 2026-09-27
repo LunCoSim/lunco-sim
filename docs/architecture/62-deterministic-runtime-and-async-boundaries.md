@@ -839,9 +839,10 @@ or model included in a cross-peer/replay guarantee needs its stable
 
 External held-input changes and discrete edges share one assigned per-tick
 sequence. While capture is active, `SessionInputStream` retains their typed
-payloads, correlation ids, producer class, target, committed generation, tick,
-and sequence. API producer identity remains transport-wide, and direct typed
-commands have no stable source id. The fixed-step controller captures physical
+payloads, correlation ids, producer class and stable caller ID, target,
+committed generation, tick, and sequence. API and direct typed commands require
+a nonzero `producer_id`; actorless Rhai requires one, while Twin Rhai retains its
+route and actor identity. The fixed-step controller captures physical
 `ActionState<UserIntent>` into a
 by-value `PhysicalIntentFrame` semantic snapshot. When the controller and
 target have stable `GlobalEntityId`s and a committed scene generation, the
@@ -851,8 +852,7 @@ holds for control translation. Capture also retains that frame as sorted
 canonical intent ids with its producer session and admission stamp. The shared
 stream has a record bound, stops visibly on overflow or invalid order, and is
 observable through `ReadSessionInputStream`. It remains in memory only; other
-typed commands, durable writing, playback, and stable per-client API identities
-remain open.
+typed commands, durable writing, and playback remain open.
 
 Floating-point addition is order dependent. Every reduction that contributes
 to authoritative state needs a stable input order. Parallel physics is

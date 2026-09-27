@@ -77,27 +77,28 @@ are:
 | One-shot Rhai / workbench tool evaluation | Bounded `Repl` or tool queue → live-world evaluation outside the fixed simulation transaction | This is an external action when it changes authoritative state. The replay contract must retain the source/tool revision and typed arguments, assign an effective simulation boundary, and reproduce the result there; an application-cycle evaluation cannot mutate authoritative state at an arrival-dependent time. This path is not yet captured or fenced to a simulation tick. |
 | Async preparation and owner results | Prepared off-thread, then validated and committed by the owning lifecycle or simulation boundary | Worker completion is not an input. Replay the admitted source revision and deterministic commit order, not completion timing. |
 
-`ApiCommandEvent` now carries its producer origin. The reflected command
+`ApiCommandEvent` carries its transport origin. The reflected command
 dispatcher scopes that origin with the active command id, and the generated
-`CommandOccurred` fact carries it to downstream observers. The fact still does
-not retain typed command parameters, stable target identity, scene generation,
-effective tick, or per-tick input order. Rhai scenario origins also carry the
-executing actor's stable `GlobalEntityId` and source execution sequence;
-application-level Rhai calls may have no actor. Direct typed triggers publish
-no classified origin unless their producer routes them through an explicit
-boundary. This metadata alone is not a replay record.
+`CommandOccurred` fact carries it to downstream observers. `CommandOccurred`
+does not retain typed parameters, target identity, scene generation, effective
+tick, or per-tick input order. The bounded session-input owner records those
+facts for its admitted semantic-control commands. Rhai scenario origins also
+carry the executing actor's stable `GlobalEntityId` and source execution
+sequence; application-level Rhai calls may have no actor. Direct typed triggers
+remain outside the API dispatcher.
 
 `SimulateIntentEdge` copies the reflected command origin onto its
 `SemanticIntentEdge`. The bounded `CausalTrace` query now exposes API transport
-origin or Rhai scope, cycle, phase, generation, sequence, and scenario actor id
-for that discrete edge. API, application-Rhai, and direct typed submissions
+origin or Rhai scope, cycle, phase, generation, sequence, scenario actor id,
+and explicit producer id for that discrete edge. API, application-Rhai, and direct typed submissions
 also enter a bounded controller queue. Admission requires a stable target id, a
 completed scene generation, and a fixed simulation clock; it assigns the next
 tick and a per-tick sequence. The fixed-step owner validates generation and
 target again, then emits the semantic edge before control propagation.
-`CausalTrace` and `intent.edge` retain that admission stamp. The command
-acknowledgement includes the same `correlation_id` and optional admission
-fields, so a client can query this exact edge after later edges arrive.
+`CausalTrace` and `intent.edge` retain that producer id and admission stamp.
+The command acknowledgement includes the same `producer_id`, `correlation_id`,
+and optional admission fields, so a client can query this exact edge after later
+edges arrive.
 Simulation-clock Rhai edges stay in their deterministic hook pass and carry no
 external-input stamp.
 
@@ -118,13 +119,13 @@ discarded after translation. `StartSessionInputCapture`,
 in-memory stream;
 `ReadSessionInputStream` returns its state and typed records. A capacity or
 ordering violation stops capture visibly and preserves admitted records. The
-held resource keeps API transport, Rhai
-runtime route plus scenario actor id,
-and direct typed-command sources in separate buckets; a
-release removes only that source's hold. API calls still share one
-transport-wide source class, app-level Rhai calls may lack an actor, and direct
-typed commands share one source class. External `SimulateIntent` changes and
-`SimulateIntentEdge` submissions share the bounded 4,096-record queue, require
+held resource keys API transport by its caller-supplied nonzero `producer_id`,
+Twin Rhai by route and actor, actorless Rhai by route and `producer_id`, and
+direct typed commands by `producer_id`; a release removes only that producer's
+hold. API clients and direct typed producers must keep the same ID for their
+session and use distinct IDs within each producer class. The ID records input
+provenance and is not an authorization credential. External `SimulateIntent`
+changes and `SimulateIntentEdge` submissions share the bounded 4,096-record queue, require
 a stable target id and committed scene generation, and receive the next fixed
 tick plus a per-tick sequence. The fixed-step owner rechecks target and
 generation before applying either action; held-state commits publish
@@ -137,13 +138,15 @@ scene state holds the input visibly, and duplicate target/session order keys do
 not use process-local entity bits to break ties. While active,
 `SessionInputStream` captures physical frames and admitted `SimulateIntent` /
 `SimulateIntentEdge` payloads in bounded memory. Semantic records retain the
-producer class, Rhai actor when available, target, committed generation, tick,
-sequence, and command correlation id. Physical records retain the local input
-session and canonical intent ids. Capacity/order failures stop capture without
-evicting admitted records. API producer identity remains transport-wide, and
-direct typed commands have no stable producer id. The external ingress queue
-and `CausalTrace` are still separate from durable replay storage. Other command
-payloads, runtime-spawn identity, durable writing, and playback remain open.
+producer class and stable producer ID (or Rhai route and actor), target,
+committed generation, tick, sequence, and command correlation id. The typed
+commands reject missing or zero IDs for API, direct typed, and actorless Rhai
+producers; Twin Rhai commands use their stable actor identity. Physical records
+retain the local input session and canonical intent ids. Capacity/order
+failures stop capture without evicting admitted records. The external ingress
+queue and `CausalTrace` are still separate from durable replay storage. Other
+command payloads, runtime-spawn identity, durable writing, and playback remain
+open.
 
 ## Replay implementation boundary
 
