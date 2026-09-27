@@ -38,10 +38,11 @@ themselves topology changes. Check both the Builder and View registration paths
 before fixing only one.
 
 For startup asset graphs, separate asynchronous source reads from discovery,
-composition, and UI/physics admission. Bound independent sibling reads and
-merge their results in stable dependency order; preserve the source-change
-reload graph when using child load contexts. The USD layer-closure owner and
-its reload receipts are documented in
+composition, and UI/physics admission. Read all known dependencies in each
+breadth-first frontier through bounded batches, then merge results in stable
+authored order; this avoids serializing independent branches behind one parent
+at a time. Preserve the source-change reload graph when using child load
+contexts. The USD layer-closure owner and its reload receipts are documented in
 [`21-domain-usd`](../../docs/architecture/21-domain-usd.md#composition-closure-and-partial-scene-loading).
 
 One-shot `RunRhai` and tool callbacks share the prepared `ScenarioDriver`

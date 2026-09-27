@@ -104,56 +104,78 @@ pub async fn fetch_layer_closure_with_limits(
     bytes.insert(root_id.clone(), root_bytes);
     let mut seen = HashSet::from([root_id.clone()]);
     let mut missing_ids = HashSet::new();
-    let mut queue = vec![(root_id.clone(), 0_usize)];
+    let mut frontier = vec![(root_id.clone(), 0_usize)];
     let mut dependency_diagnostics = Vec::new();
+    let mut next_dependency_order = 0_usize;
     let mut source_dependencies = Vec::new();
     let mut source_label = 0_usize;
 
-    while let Some((id, depth)) = queue.pop() {
-        let raw = bytes.get(&id).expect("queued id is present in map");
-        let child_ids = child_layer_ids(&id, raw)?;
-        check_stage_closure_limits(&limits, seen.len(), depth, child_ids.len(), total_bytes)?;
+    while !frontier.is_empty() {
         let mut requests = Vec::new();
-        for child_id in child_ids {
-            if !seen.insert(child_id.clone()) {
-                if missing_ids.contains(&child_id) {
-                    dependency_diagnostics.push(StageDependencyDiagnostic::missing(
-                        id.clone(),
-                        child_id.clone(),
-                    ));
+        let mut duplicate_referrers: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+        for (id, depth) in frontier {
+            let raw = bytes.get(&id).expect("frontier id is present in map");
+            let child_ids = child_layer_ids(&id, raw)?;
+            check_stage_closure_limits(&limits, seen.len(), depth, child_ids.len(), total_bytes)?;
+            for child_id in child_ids {
+                let dependency_order = next_dependency_order;
+                next_dependency_order += 1;
+                if !seen.insert(child_id.clone()) {
+                    if missing_ids.contains(&child_id) {
+                        dependency_diagnostics.push((
+                            dependency_order,
+                            StageDependencyDiagnostic::missing(id.clone(), child_id.clone()),
+                        ));
+                    } else if !bytes.contains_key(&child_id) {
+                        duplicate_referrers
+                            .entry(child_id)
+                            .or_default()
+                            .push((dependency_order, id.clone()));
+                    }
+                    continue;
                 }
-                continue;
+                let child_depth = depth + 1;
+                check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
+                // Parse `child_id` as an `AssetPath` (NOT a `PathBuf`): only the
+                // string form parses a `source://` scheme into an asset source.
+                // `PathBuf::from("lunco://vessels/…")` keeps the whole string as a
+                // default-source relative path → `assets/lunco://vessels/…` →
+                // "Path not found". `AssetPath::parse` routes `lunco://…` to the
+                // registered `lunco` source; plain relative ids stay default-source.
+                requests.push((id.clone(), child_id, child_depth, dependency_order));
             }
-            let child_depth = depth + 1;
-            check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
-            // Parse `child_id` as an `AssetPath` (NOT a `PathBuf`): only the
-            // string form parses a `source://` scheme into an asset source.
-            // `PathBuf::from("lunco://vessels/…")` keeps the whole string as a
-            // default-source relative path → `assets/lunco://vessels/…` →
-            // "Path not found". `AssetPath::parse` routes `lunco://…` to the
-            // registered `lunco` source; plain relative ids stay default-source.
-            requests.push((id.clone(), child_id, child_depth));
         }
 
+        let mut next_frontier = Vec::new();
         for request_batch in requests.chunks(limits.max_parallel_reads) {
-            let reads = request_batch
-                .iter()
-                .map(|(referring_id, child_id, child_depth)| {
+            let reads = request_batch.iter().map(
+                |(referring_id, child_id, child_depth, dependency_order)| {
                     let mut child_context = load_context.begin_labeled_asset();
                     let referring_id = referring_id.clone();
                     let child_id = child_id.clone();
                     let child_depth = *child_depth;
+                    let dependency_order = *dependency_order;
                     async move {
                         let fetched = child_context
                             .read_asset_bytes(AssetPath::parse(&child_id).into_owned())
                             .await;
-                        (referring_id, child_id, child_depth, child_context, fetched)
+                        (
+                            dependency_order,
+                            referring_id,
+                            child_id,
+                            child_depth,
+                            child_context,
+                            fetched,
+                        )
                     }
-                });
+                },
+            );
             let read_results = join_all_ordered(reads).await;
             let mut completed = Vec::with_capacity(read_results.len());
 
-            for (referring_id, child_id, child_depth, child_context, result) in read_results {
+            for (dependency_order, referring_id, child_id, child_depth, child_context, result) in
+                read_results
+            {
                 match result {
                     Ok(fetched) => {
                         total_bytes = total_bytes
@@ -178,8 +200,23 @@ pub async fn fetch_layer_closure_with_limits(
                     }
                     Err(error) if is_missing_asset_read(&error) => {
                         missing_ids.insert(child_id.clone());
-                        dependency_diagnostics
-                            .push(StageDependencyDiagnostic::missing(referring_id, child_id));
+                        dependency_diagnostics.push((
+                            dependency_order,
+                            StageDependencyDiagnostic::missing(referring_id, child_id.clone()),
+                        ));
+                        if let Some(referrers) = duplicate_referrers.remove(&child_id) {
+                            dependency_diagnostics.extend(referrers.into_iter().map(
+                                |(order, referring)| {
+                                    (
+                                        order,
+                                        StageDependencyDiagnostic::missing(
+                                            referring,
+                                            child_id.clone(),
+                                        ),
+                                    )
+                                },
+                            ));
+                        }
                     }
                     Err(error) => {
                         return Err(anyhow!(
@@ -196,13 +233,18 @@ pub async fn fetch_layer_closure_with_limits(
                 source_dependencies
                     .push(load_context.add_loaded_labeled_asset(label, loaded_receipt));
                 bytes.insert(child_id.clone(), fetched);
-                queue.push((child_id, child_depth));
+                next_frontier.push((child_id, child_depth));
             }
         }
+        frontier = next_frontier;
     }
 
+    dependency_diagnostics.sort_by_key(|(order, _)| *order);
     let mut recipe = StageRecipe::new(root_id, bytes);
-    recipe.dependency_diagnostics = dependency_diagnostics;
+    recipe.dependency_diagnostics = dependency_diagnostics
+        .into_iter()
+        .map(|(_, diagnostic)| diagnostic)
+        .collect();
     Ok(FetchedStageClosure {
         recipe,
         source_dependencies,

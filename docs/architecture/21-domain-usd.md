@@ -477,8 +477,10 @@ The root layer is the load transaction's required input: if its logical asset
 cannot be read, the scene transition fails and reports the root error. Its
 transitive USD composition graph is loaded through the canonical asset-source
 resolver with shared limits for layer count, dependency width, depth, retained
-bytes, and concurrent reads. Sibling layers are read in bounded parallel
-batches; results and diagnostics are applied in authored dependency order.
+bytes, and concurrent reads. All dependencies discovered across the current
+breadth-first frontier are read in bounded parallel batches; results and
+diagnostics are applied in authored dependency order. This keeps independent
+branches in flight without letting I/O completion order affect the recipe.
 Labeled read receipts preserve source-change reloads through Bevy's asset
 dependency graph. On native, USD composition and prepared-plan extraction run
 on Bevy's async-compute pool so they do not occupy an asset I/O worker. The
