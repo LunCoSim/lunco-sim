@@ -439,12 +439,19 @@ typed queues before that is safe.
   headless runtime stamps it when the host does not provide one, and the
   focused runtime test verifies host identity preservation. Application-level
   baseline assembly still does not consume either owner snapshot.
-- `RhaiScenarioRuntime` retains canonical literal-import dependencies and the
-  immutable source text observed by the last committed compile, keyed by live
-  entity. `RhaiSource` assets retain their loaded dependency handles. The
-  runtime does not yet retain one session-wide snapshot joining active roots
-  to complete source closures; baseline capture must not infer roots from the
-  global script registry.
+- `RhaiScenarioRuntime::active_content_closure(entity)` returns sorted
+  CIDv1 raw/SHA-256 identities for the exact root, source-backed literal
+  imports reachable from the root and authored prelude, and the prelude files
+  captured with that entity's last committed program. Inline roots use a
+  CID-derived identity. Missing source text or duplicate source identities
+  produce a closure error without changing Rhai execution. `RhaiSource` assets
+  retain their loaded dependency handles. A
+  session-wide snapshot joining active roots to complete closures remains open;
+  baseline capture must not infer roots from the global script registry.
+- `cargo test -p lunco-scripting-rhai-world rhai_content_closure -j 4` passed
+  both focused checks for exact content IDs, stable ordering, changed bytes,
+  transitive prelude imports, and fail-closed missing or duplicate source
+  identities.
 - `lunco-core::BuildIdentity` is shared across hosts. `LunCoSimRuntimePlugin`
   installs the stamped build constants when the host has not supplied an
   identity, so headless and GUI baselines can name the software revision.

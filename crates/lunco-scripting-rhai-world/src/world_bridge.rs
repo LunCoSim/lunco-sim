@@ -1050,6 +1050,203 @@ fn scenario_compile_key(source: &str, asset_id: Option<&str>) -> u64 {
         .finish()
 }
 
+/// Role of one exact source body incorporated into a compiled Rhai scenario.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RhaiSourceRole {
+    /// The scenario source passed to the runtime, either inline or asset-backed.
+    ScenarioRoot,
+    /// A transitive source-backed literal import.
+    ImportedModule,
+    /// An authored source installed into the scenario prelude.
+    Prelude,
+}
+
+/// Strong content identity for one exact Rhai source body.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RhaiSourceContent {
+    /// The source's role in the compiled scenario.
+    pub role: RhaiSourceRole,
+    /// Stable asset identity, or a content-derived identity for an inline root.
+    pub source_id: String,
+    /// CIDv1 raw/SHA-256 address of the exact UTF-8 source bytes.
+    pub cid: lunco_hash::content::Cid,
+}
+
+/// Exact root, source-backed import, and prelude inputs represented by a
+/// successfully prepared Rhai scenario.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RhaiContentClosure {
+    /// Sources sorted by role and stable source identity.
+    pub sources: Vec<RhaiSourceContent>,
+}
+
+/// Why a prepared scenario cannot provide a complete, unambiguous source set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RhaiContentClosureError {
+    /// A source role has no stable identity.
+    EmptySourceId { role: RhaiSourceRole },
+    /// Two sources of the same role use one stable identity.
+    DuplicateSourceId {
+        role: RhaiSourceRole,
+        source_id: String,
+    },
+    /// A prelude's literal import graph could not be resolved unambiguously.
+    ImportDiscoveryFailed { source_id: String, message: String },
+    /// An import was resolved outside the retained source registry or is absent.
+    MissingDependencySource { source_id: String },
+}
+
+impl std::fmt::Display for RhaiContentClosureError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptySourceId { role } => {
+                write!(formatter, "Rhai {role:?} source has an empty identity")
+            }
+            Self::DuplicateSourceId { role, source_id } => write!(
+                formatter,
+                "Rhai {role:?} sources duplicate identity `{source_id}`"
+            ),
+            Self::ImportDiscoveryFailed { source_id, message } => write!(
+                formatter,
+                "Rhai prelude `{source_id}` import discovery failed: {message}"
+            ),
+            Self::MissingDependencySource { source_id } => write!(
+                formatter,
+                "Rhai import `{source_id}` has no retained source text"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RhaiContentClosureError {}
+
+fn collect_rhai_source_dependencies(
+    root_dependencies: &[lunco_scripting_rhai_core::module_resolver::AssetModuleDependency],
+    prelude_files: &[(String, String)],
+    sources: &std::collections::BTreeMap<String, String>,
+) -> (
+    Vec<lunco_scripting_rhai_core::module_resolver::AssetModuleDependency>,
+    Option<RhaiContentClosureError>,
+) {
+    use lunco_scripting_rhai_core::module_resolver::AssetModuleDependency;
+
+    fn insert_dependency(
+        dependencies: &mut std::collections::BTreeMap<String, Option<String>>,
+        dependency: &AssetModuleDependency,
+    ) -> Option<RhaiContentClosureError> {
+        if let Some(source) = dependencies.get(&dependency.id) {
+            if source != &dependency.source {
+                return Some(RhaiContentClosureError::DuplicateSourceId {
+                    role: RhaiSourceRole::ImportedModule,
+                    source_id: dependency.id.clone(),
+                });
+            }
+        } else {
+            dependencies.insert(dependency.id.clone(), dependency.source.clone());
+        }
+        None
+    }
+
+    let mut dependencies = std::collections::BTreeMap::new();
+    let mut error = None;
+    for dependency in root_dependencies {
+        let dependency_error = insert_dependency(&mut dependencies, dependency);
+        if error.is_none() {
+            error = dependency_error;
+        }
+    }
+    for (source_id, source) in prelude_files {
+        match lunco_scripting_rhai_core::module_resolver::asset_import_closure(
+            source,
+            Some(source_id),
+            sources,
+        ) {
+            Ok(closure) => {
+                for dependency in closure.dependencies {
+                    let dependency_error = insert_dependency(&mut dependencies, &dependency);
+                    if error.is_none() {
+                        error = dependency_error;
+                    }
+                }
+            }
+            Err(import_error) => {
+                if error.is_none() {
+                    error = Some(RhaiContentClosureError::ImportDiscoveryFailed {
+                        source_id: source_id.clone(),
+                        message: import_error.message,
+                    });
+                }
+                for dependency in import_error.dependencies {
+                    let dependency_error = insert_dependency(&mut dependencies, &dependency);
+                    if error.is_none() {
+                        error = dependency_error;
+                    }
+                }
+            }
+        }
+    }
+    (
+        dependencies
+            .into_iter()
+            .map(|(id, source)| AssetModuleDependency { id, source })
+            .collect(),
+        error,
+    )
+}
+
+fn build_rhai_content_closure(
+    root_source: &str,
+    root_asset_id: Option<&str>,
+    dependencies: &[lunco_scripting_rhai_core::module_resolver::AssetModuleDependency],
+    prelude_files: &[(String, String)],
+) -> Result<RhaiContentClosure, RhaiContentClosureError> {
+    let root_cid = lunco_hash::content::cid(root_source.as_bytes());
+    let root_id = root_asset_id
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("inline:{root_cid}"));
+    let mut sources = Vec::with_capacity(1 + dependencies.len() + prelude_files.len());
+    let mut add_source = |role, source_id: String, source: &str| {
+        if source_id.is_empty() {
+            return Err(RhaiContentClosureError::EmptySourceId { role });
+        }
+        sources.push(RhaiSourceContent {
+            role,
+            source_id,
+            cid: lunco_hash::content::cid(source.as_bytes()),
+        });
+        Ok(())
+    };
+
+    add_source(RhaiSourceRole::ScenarioRoot, root_id, root_source)?;
+    for dependency in dependencies {
+        let source = dependency.source.as_deref().ok_or_else(|| {
+            RhaiContentClosureError::MissingDependencySource {
+                source_id: dependency.id.clone(),
+            }
+        })?;
+        add_source(
+            RhaiSourceRole::ImportedModule,
+            dependency.id.clone(),
+            source,
+        )?;
+    }
+    for (source_id, source) in prelude_files {
+        add_source(RhaiSourceRole::Prelude, source_id.clone(), source)?;
+    }
+
+    sources
+        .sort_by(|left, right| (&left.role, &left.source_id).cmp(&(&right.role, &right.source_id)));
+    for pair in sources.windows(2) {
+        if pair[0].role == pair[1].role && pair[0].source_id == pair[1].source_id {
+            return Err(RhaiContentClosureError::DuplicateSourceId {
+                role: pair[0].role,
+                source_id: pair[0].source_id.clone(),
+            });
+        }
+    }
+    Ok(RhaiContentClosure { sources })
+}
+
 fn prepare_compiled_program(
     engine: &Engine,
     prelude_ast: &AST,
@@ -1083,6 +1280,7 @@ fn prepare_rhai_artifact(
     prelude_ast: &AST,
     source: &str,
     asset_id: Option<&str>,
+    prelude_files: &[(String, String)],
     cached_program: Option<Arc<CompiledProgram>>,
     sources: &lunco_assets_runtime::script_source::ScriptSources,
     prepared_modules: &lunco_scripting_rhai_core::module_resolver::PreparedModuleAsts,
@@ -1106,7 +1304,12 @@ fn prepare_rhai_artifact(
             };
         }
     };
-    let dependencies = closure.dependencies;
+    let (dependencies, dependency_error) =
+        collect_rhai_source_dependencies(&closure.dependencies, prelude_files, &source_map);
+    let content_closure = dependency_error.map_or_else(
+        || build_rhai_content_closure(source, asset_id, &dependencies, prelude_files),
+        Err,
+    );
     let prepared_root = asset_id.and_then(|id| prepared_modules.get(id, source));
     let program = match cached_program {
         Some(program) => Ok(program),
@@ -1145,7 +1348,13 @@ fn prepare_rhai_artifact(
     PreparedRhaiWorkerResult {
         source_revision,
         dependencies,
-        result: modules.map(|modules| Arc::new(PreparedRhaiArtifact { program, modules })),
+        result: modules.map(|modules| {
+            Arc::new(PreparedRhaiArtifact {
+                program,
+                modules,
+                content_closure,
+            })
+        }),
         cache_error: false,
     }
 }
@@ -2834,6 +3043,7 @@ enum CacheEntry {
 struct PreparedRhaiArtifact {
     program: Arc<CompiledProgram>,
     modules: Vec<(String, String, AST)>,
+    content_closure: Result<RhaiContentClosure, RhaiContentClosureError>,
 }
 
 #[derive(Clone)]
@@ -2956,6 +3166,8 @@ thread_local! {
 struct RhaiScenarioState {
     /// Shared, content-addressed compiled program (AST + hook mask).
     program: Arc<CompiledProgram>,
+    /// Exact source identity for this committed program, or why it is incomplete.
+    content_closure: Result<RhaiContentClosure, RhaiContentClosureError>,
     /// Top-level `const` globals, populated by running the body once at compile.
     scope: rhai::Scope<'static>,
     /// Per-entity mutable state bound as `this` in every hook.
@@ -3089,6 +3301,19 @@ impl RhaiScenarioRuntime {
     /// what lets a script loaded after engine construction still be importable.
     pub fn script_sources(&self) -> lunco_assets_runtime::script_source::ScriptSources {
         self.sources.clone()
+    }
+
+    /// Source closure captured from the compiled inputs of this entity's last
+    /// committed scenario program. `None` means no compiled scenario is active;
+    /// an error means an import did not expose source text or source identity
+    /// was ambiguous, so the runtime cannot claim complete replay provenance.
+    pub fn active_content_closure(
+        &self,
+        entity: Entity,
+    ) -> Option<Result<&RhaiContentClosure, &RhaiContentClosureError>> {
+        self.states
+            .get(&entity)
+            .map(|state| state.content_closure.as_ref())
     }
 
     pub(crate) fn commit_source_asset(
@@ -3588,7 +3813,12 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             if matches!(
                 lunco_scripting_rhai_core::module_resolver::imported_paths(&source),
                 Ok(paths) if paths.is_empty()
-            ) {
+            ) && self.prelude_files.iter().all(|(_, prelude)| {
+                matches!(
+                    lunco_scripting_rhai_core::module_resolver::imported_paths(prelude),
+                    Ok(paths) if paths.is_empty()
+                )
+            }) {
                 return CompilePreparation::Ready(PreparedRhaiCompile {
                     key,
                     runtime_revision,
@@ -3599,6 +3829,12 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         result: Ok(Arc::new(PreparedRhaiArtifact {
                             program: program.clone(),
                             modules: Vec::new(),
+                            content_closure: build_rhai_content_closure(
+                                &source,
+                                asset_id.as_deref(),
+                                &[],
+                                &self.prelude_files,
+                            ),
                         })),
                         cache_error: false,
                     },
@@ -3608,6 +3844,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
 
         let engine = self.engine.clone();
         let prelude_ast = self.prelude_ast.clone();
+        let prelude_files = self.prelude_files.clone();
         let sources = self.sources.clone();
         let prepared_modules = self.prepared_modules.clone();
         let cached_program = match cached {
@@ -3636,6 +3873,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                             &prelude_ast,
                             &source,
                             asset_id.as_deref(),
+                            &prelude_files,
                             cached_program,
                             &sources,
                             &prepared_modules,
@@ -3726,6 +3964,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 .insert(id.clone(), source.clone(), ast.clone());
         }
         let program = artifact.program.clone();
+        let content_closure = artifact.content_closure.clone();
         if self.compiled.len() >= COMPILED_CACHE_CAP {
             self.compiled.clear();
         }
@@ -3741,6 +3980,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
             entity,
             RhaiScenarioState {
                 program,
+                content_closure,
                 scope,
                 this: Dynamic::from_map(Map::new()),
                 params: params_value,
@@ -5256,13 +5496,148 @@ mod tests {
     //! validated by the production `scripting_asset_contracts` scene so adding
     //! or editing a `.rhai` file does not require rebuilding this crate.
 
-    use super::{PendingWorldScript, PendingWorldScripts, WorldScriptExecutionLimits};
+    use super::{
+        PendingWorldScript, PendingWorldScripts, RhaiContentClosureError, RhaiSourceRole,
+        WorldScriptExecutionLimits, build_rhai_content_closure,
+    };
     use bevy::math::DVec3;
     use lunco_core::{
         RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeRoute,
     };
     use lunco_scripting::scenario::{CompileOutcome, CompilePreparation, ScenarioRuntime};
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
+
+    #[test]
+    fn rhai_content_closure_addresses_exact_root_imports_and_prelude_in_stable_order() {
+        use lunco_scripting_rhai_core::module_resolver::AssetModuleDependency;
+
+        let dependencies = vec![
+            AssetModuleDependency {
+                id: "asset://z-module".to_owned(),
+                source: Some("fn z() { 1 }".to_owned()),
+            },
+            AssetModuleDependency {
+                id: "asset://a-module".to_owned(),
+                source: Some("fn a() { 2 }".to_owned()),
+            },
+        ];
+        let prelude = vec![(
+            "twin://mission/prelude.rhai".to_owned(),
+            "import \"shared\" as shared; fn answer() { shared::value() }".to_owned(),
+        )];
+        let source_map = std::collections::BTreeMap::from([
+            (
+                "twin://mission/nested.rhai".to_owned(),
+                "fn value() { 3 }".to_owned(),
+            ),
+            (
+                "twin://mission/shared.rhai".to_owned(),
+                "import \"nested\" as nested; fn value() { nested::value() }".to_owned(),
+            ),
+        ]);
+        let (dependencies, dependency_error) =
+            super::collect_rhai_source_dependencies(&dependencies, &prelude, &source_map);
+        assert!(dependency_error.is_none());
+
+        let closure = build_rhai_content_closure(
+            "fn on_start() {}",
+            Some("asset://scenario"),
+            &dependencies,
+            &prelude,
+        )
+        .expect("complete scenario inputs must have a content closure");
+
+        assert_eq!(
+            closure
+                .sources
+                .iter()
+                .map(|source| (source.role, source.source_id.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (RhaiSourceRole::ScenarioRoot, "asset://scenario"),
+                (RhaiSourceRole::ImportedModule, "asset://a-module"),
+                (RhaiSourceRole::ImportedModule, "asset://z-module"),
+                (RhaiSourceRole::ImportedModule, "twin://mission/nested.rhai"),
+                (RhaiSourceRole::ImportedModule, "twin://mission/shared.rhai"),
+                (RhaiSourceRole::Prelude, "twin://mission/prelude.rhai"),
+            ]
+        );
+        assert_eq!(
+            closure.sources[0].cid,
+            lunco_hash::content::cid(b"fn on_start() {}")
+        );
+        assert_eq!(
+            closure.sources[1].cid,
+            lunco_hash::content::cid(b"fn a() { 2 }")
+        );
+        assert_eq!(
+            closure.sources[3].cid,
+            lunco_hash::content::cid(b"fn value() { 3 }")
+        );
+        assert_eq!(
+            closure.sources[4].cid,
+            lunco_hash::content::cid(
+                b"import \"nested\" as nested; fn value() { nested::value() }"
+            )
+        );
+
+        let changed = build_rhai_content_closure(
+            "fn on_start() { 1 }",
+            Some("asset://scenario"),
+            &dependencies,
+            &prelude,
+        )
+        .expect("changed source remains addressable");
+        assert_ne!(closure.sources[0].cid, changed.sources[0].cid);
+    }
+
+    #[test]
+    fn rhai_content_closure_rejects_incomplete_or_ambiguous_inputs() {
+        use lunco_scripting_rhai_core::module_resolver::AssetModuleDependency;
+
+        let missing_source = [AssetModuleDependency {
+            id: "tool://dynamic".to_owned(),
+            source: None,
+        }];
+        assert_eq!(
+            build_rhai_content_closure("1", None, &missing_source, &[]),
+            Err(RhaiContentClosureError::MissingDependencySource {
+                source_id: "tool://dynamic".to_owned(),
+            })
+        );
+
+        let duplicate_prelude = vec![
+            ("asset://same".to_owned(), "fn a() {}".to_owned()),
+            ("asset://same".to_owned(), "fn b() {}".to_owned()),
+        ];
+        assert_eq!(
+            build_rhai_content_closure("1", None, &[], &duplicate_prelude),
+            Err(RhaiContentClosureError::DuplicateSourceId {
+                role: RhaiSourceRole::Prelude,
+                source_id: "asset://same".to_owned(),
+            })
+        );
+        assert_eq!(
+            build_rhai_content_closure("1", Some(""), &[], &[]),
+            Err(RhaiContentClosureError::EmptySourceId {
+                role: RhaiSourceRole::ScenarioRoot,
+            })
+        );
+
+        let malformed_prelude = [(
+            "twin://mission/prelude.rhai".to_owned(),
+            "import".to_owned(),
+        )];
+        let (_, error) = super::collect_rhai_source_dependencies(
+            &[],
+            &malformed_prelude,
+            &std::collections::BTreeMap::new(),
+        );
+        assert!(matches!(
+            error,
+            Some(RhaiContentClosureError::ImportDiscoveryFailed { .. })
+        ));
+    }
 
     #[test]
     fn one_shot_eval_reuses_prepared_runtime_engine_and_captures_print() {

@@ -265,12 +265,17 @@ retained by `SysmlAnalysis::files()` into sorted CIDv1 raw/SHA-256 identities,
 including every embedded standard-library source when enabled. It rejects
 parser/resolution diagnostics and empty or duplicate names; the 64-bit FNV
 `source_revision` and `source_fingerprint` remain analysis/cache facts.
-Rhai retains each live entity's last committed literal-import dependencies as
-canonical ids with optional immutable source text, while
-`RhaiSource::dependencies` owns the loaded asset graph. Rhai still has no
-session-wide snapshot joining active roots to complete source closures. The
-baseline collector should read these owner snapshots, identify active roots,
-and report owner diagnostics when a required snapshot is stale or incomplete.
+`RhaiScenarioRuntime::active_content_closure(entity)` returns the exact root,
+source-backed literal imports reachable from the root and authored prelude,
+and prelude files captured for that entity's last committed program, with
+CIDv1 raw/SHA-256 identities. Inline roots use a CID-derived logical identity.
+A non-source-backed or missing import, or ambiguous import discovery, is an
+explicit closure error; that affects replay provenance, not Rhai execution.
+`RhaiSource::dependencies` continues to own the loaded asset graph. There is
+still no session-wide snapshot joining active roots to complete source
+closures. The baseline collector should read these owner snapshots, identify
+active roots, and report owner diagnostics when a required snapshot is stale or
+incomplete.
 
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and

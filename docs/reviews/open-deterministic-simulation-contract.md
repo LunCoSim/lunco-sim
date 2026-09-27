@@ -55,15 +55,19 @@ playback remain open.
 The source owners retain reusable facts: `SysmlAnalysis::content_closure()`
 returns sorted CIDv1 raw/SHA-256 identities for exact project source bytes and
 all embedded standard-library files, failing on diagnostics or ambiguous names.
-Rhai retains canonical literal-import dependencies plus the immutable text
-observed by each committed entity compile. Rhai asset handles retain their
-dependency graph, but there is no session-level snapshot that joins active
-roots to their complete closures; Rhai's process-local dependency revision is
-only an invalidation fact and its source closure still needs strong content IDs.
-`cargo test -p lunco-sysml-ast content_closure -j 4` passed all four focused
-cases for stable ordering, standard-library inclusion, changed bytes, and
-fail-closed diagnostics/identities. The source closure remains an owner
-primitive; application baseline capture is not wired yet.
+`RhaiScenarioRuntime::active_content_closure(entity)` returns the exact root,
+source-backed literal imports reachable from the root and authored prelude,
+and authored prelude files captured with that entity's last committed compiled
+program. Inline roots use a CID-derived identity. A missing import body or
+ambiguous source identity makes closure capture report an error without
+changing Rhai compile or execution behavior. There is still no
+session-level snapshot that joins active roots to their complete closures, and
+the process-local dependency revision remains only an invalidation fact. The
+owner closures do not yet feed application baseline capture.
+`cargo test -p lunco-scripting-rhai-world rhai_content_closure -j 4` passed
+both focused checks for exact content IDs, stable ordering, changed bytes,
+transitive prelude imports, and fail-closed missing or duplicate source
+identities.
 
 `lunco-core::BuildIdentity` is the shared typed product/source stamp, and
 `LunCoSimRuntimePlugin` now installs the compile-time stamp when the host has
