@@ -1024,6 +1024,7 @@ fn project_intent_edge(
     );
     let producer_kind = match edge.origin {
         Some(CommandOrigin::ApiTransport) => Some("api_transport"),
+        Some(CommandOrigin::LocalUser { .. }) => Some("local_user"),
         Some(CommandOrigin::Rhai { .. }) => Some("rhai"),
         None if edge.producer_id.is_some() => Some("direct_command"),
         None => None,

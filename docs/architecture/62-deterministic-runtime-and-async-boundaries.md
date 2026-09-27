@@ -435,6 +435,11 @@ not also enter the session stream. Physical-frame snapshots are sampled and
 captured at their consuming fixed tick with the same per-tick allocator after
 queued session events. Simulation-clock Rhai actions stay in their derived
 behavior pass, and local-embodiment input stays on the interaction cadence.
+Live port-inspector writes and releases use the same queue with a `LocalUser`
+producer identity. `PanelCtx::trigger_command` scopes that session origin over
+deferred workbench dispatch so the cosim owner can admit and capture each
+action. Lifecycle-derived safe-stops and unclassified direct port events remain
+outside this stream.
 
 ## 4. Async preparation, priority, and result commit
 
@@ -1086,11 +1091,12 @@ The whole-simulation guarantee remains open because:
    frames retain ordered, latched `SetPorts` setpoints for owned-body replay;
    the fixed-step host consumes vessel frames in stable `GlobalEntityId` order.
    The session stream captures API and classified non-Simulation Rhai
-   `SetPorts`, `ReleasePort`, and `ReleaseControl` commands, explicitly
-   identified direct typed port inputs, and live `SetModelInput` changes at
-   their fixed-tick boundaries. Unclassified direct `SetPorts`, `ReleasePort`, and `ReleaseControl`
-   events, port-inspector UI commands, lifecycle-derived safe-stops, scene lifecycle,
-   other authored commands, and all Rhai/Modelica runtime state still need
+   `SetPorts`, `ReleasePort`, and `ReleaseControl` commands, local
+   port-inspector actions, explicitly identified direct typed port inputs, and
+   live `SetModelInput` changes at their fixed-tick boundaries. Unclassified
+   direct `SetPorts`, `ReleasePort`, and `ReleaseControl` events,
+   lifecycle-derived safe-stops, scene lifecycle, other authored commands, and
+   all Rhai/Modelica runtime state still need
    capture or a replay owner. Adaptive Modelica is not a cross-machine bitwise
    deterministic solver.
 7. `RuntimeCycleSet` is ordering vocabulary rather than an independent cadence

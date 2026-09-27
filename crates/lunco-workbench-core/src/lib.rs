@@ -23,7 +23,8 @@ pub mod presentation;
 
 pub use menu::{
     CustomMenu, DeferredWorldTriggers, MenuCallback, MenuCtx, MenuIntents, ScriptedMenu,
-    SettingsSubmenu, UndoProbe, UndoProbeCtx, WorkbenchMenuRegistry, trigger_or_defer,
+    SettingsSubmenu, UndoProbe, UndoProbeCtx, WorkbenchMenuRegistry, trigger_command_with_origin,
+    trigger_or_defer,
 };
 pub use panel::{
     InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelIntents, PanelMenuGroup,

@@ -90,10 +90,13 @@ are open.
 
 Reflected commands sent through `ApiCommandEvent` retain whether they came from
 an API transport or a Rhai evaluation; generated `CommandOccurred` facts carry
-that origin. Direct typed Bevy triggers remain unclassified, and the occurrence
-fact still lacks command parameters, target, scene generation, effective tick,
-and per-tick input order. Rhai scenario origins carry their stable actor id and
-source execution sequence.
+that origin. The workbench uses `PanelCtx::trigger_command` to carry an
+explicit local-user `SessionId` across deferred UI dispatch; the port inspector
+therefore enters fixed-tick input admission. Direct typed Bevy triggers without
+an explicit origin remain unclassified, and the occurrence fact still lacks
+command parameters, target, scene generation, effective tick, and per-tick
+input order. Rhai scenario origins carry their stable actor id and source
+execution sequence.
 `SimulateIntentEdge` preserves the complete origin through its typed semantic
 edge into the bounded `CausalTrace` query; Rhai records include owner route,
 phase, generation, sequence, and actor id. API, application-Rhai, and direct

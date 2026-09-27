@@ -29,6 +29,17 @@ impl DeferredWorldTriggers {
             .push(Box::new(move |world| world.trigger(event)));
     }
 
+    /// Defer one typed command while retaining its UI interaction origin.
+    pub fn push_command<E>(&mut self, event: E, origin: lunco_core::CommandOrigin)
+    where
+        E: bevy::ecs::event::Event,
+        for<'a> E::Trigger<'a>: Default,
+    {
+        self.triggers.push(Box::new(move |world| {
+            trigger_command_with_origin(world, event, origin)
+        }));
+    }
+
     /// Run queued events in the order in which the callbacks emitted them.
     pub fn apply(self, world: &mut World) {
         for trigger in self.triggers {
@@ -48,6 +59,32 @@ where
         deferred.push(event);
     } else {
         world.trigger(event);
+    }
+}
+
+/// Trigger a typed command with an explicit producer origin, preserving that
+/// origin until the command observers have copied it into their owner records.
+pub fn trigger_command_with_origin<E>(
+    world: &mut World,
+    event: E,
+    origin: lunco_core::CommandOrigin,
+) where
+    E: bevy::ecs::event::Event,
+    for<'a> E::Trigger<'a>: Default,
+{
+    if let Some(mut deferred) = world.get_resource_mut::<DeferredWorldTriggers>() {
+        deferred.push_command(event, origin);
+        return;
+    }
+
+    let previous = world.remove_resource::<lunco_core::ActiveCommandId>();
+    let mut active = previous.clone().unwrap_or_default();
+    active.set_origin(Some(origin));
+    world.insert_resource(active);
+    world.trigger(event);
+    world.remove_resource::<lunco_core::ActiveCommandId>();
+    if let Some(previous) = previous {
+        world.insert_resource(previous);
     }
 }
 
@@ -315,6 +352,9 @@ mod tests {
     #[derive(bevy::prelude::Resource)]
     struct LayoutOwner;
 
+    #[derive(bevy::prelude::Resource, Default)]
+    struct SeenOrigins(Vec<Option<lunco_core::CommandOrigin>>);
+
     #[test]
     fn deferred_trigger_runs_after_the_scoped_owner_is_restored() {
         let mut app = App::new();
@@ -339,5 +379,57 @@ mod tests {
             .expect("render queue remains owned by the pass");
         app.world_mut().insert_resource(LayoutOwner);
         deferred.apply(app.world_mut());
+    }
+
+    #[test]
+    fn deferred_panel_command_retains_and_restores_its_user_origin() {
+        let mut app = App::new();
+        app.init_resource::<SeenOrigins>();
+        app.world_mut()
+            .insert_resource(lunco_core::ActiveCommandId::default());
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set_with_origin(41, Some(lunco_core::CommandOrigin::ApiTransport));
+        app.add_observer(
+            |_: On<RenderIntent>,
+             active: bevy::prelude::Res<lunco_core::ActiveCommandId>,
+             mut seen: bevy::prelude::ResMut<SeenOrigins>| {
+                seen.0.push(active.origin());
+            },
+        );
+        app.world_mut()
+            .insert_resource(DeferredWorldTriggers::default());
+
+        let intents = {
+            let mut panel = crate::PanelCtx::new(app.world_mut());
+            panel.trigger_command(
+                RenderIntent,
+                lunco_core::CommandOrigin::LocalUser {
+                    session_id: lunco_command_contracts::SessionId(7),
+                },
+            );
+            panel.take_intents()
+        };
+        intents.apply(app.world_mut());
+        assert!(app.world().resource::<SeenOrigins>().0.is_empty());
+
+        let deferred = app
+            .world_mut()
+            .remove_resource::<DeferredWorldTriggers>()
+            .expect("render queue remains owned by the pass");
+        deferred.apply(app.world_mut());
+
+        assert_eq!(
+            app.world().resource::<SeenOrigins>().0,
+            [Some(lunco_core::CommandOrigin::LocalUser {
+                session_id: lunco_command_contracts::SessionId(7),
+            })]
+        );
+        let active = app.world().resource::<lunco_core::ActiveCommandId>();
+        assert_eq!(active.get(), Some(41));
+        assert_eq!(
+            active.origin(),
+            Some(lunco_core::CommandOrigin::ApiTransport)
+        );
     }
 }

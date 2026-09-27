@@ -56,6 +56,10 @@ fn causal_origin_value(
         CommandOrigin::ApiTransport => {
             vec![("kind".to_owned(), ApiValue::Str("api_transport".to_owned()))]
         }
+        CommandOrigin::LocalUser { session_id } => vec![
+            ("kind".to_owned(), ApiValue::Str("local_user".to_owned())),
+            ("session_id".to_owned(), ApiValue::UInt(session_id.0)),
+        ],
         CommandOrigin::Rhai { context, actor } => {
             let mut fields = vec![("kind".to_owned(), ApiValue::Str("rhai".to_owned()))];
             if let Some(actor) = actor {

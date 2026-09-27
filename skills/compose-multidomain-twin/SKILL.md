@@ -347,11 +347,12 @@ prim applies `LunCoProgramAPI` in place — see
 
 `SetModelInput` uses the shared `PortRegistry` for a declared live input port;
 `SetPorts`, Rhai `set(id,name,v)`, Python, and wires use the same port owner.
-External live-session `SetModelInput` and external API/direct/non-Simulation
-Rhai `SetPorts` inputs enter the bounded session queue and reach that port at
-their admitted fixed tick. External `SetPorts` callers supply a stable producer
-id; Twin Rhai uses its actor identity. Local Modelica UI input changes use the
-local session id. Simulation-clock Rhai writes remain derived behavior.
+External live-session `SetModelInput`, external API/direct/non-Simulation Rhai
+`SetPorts`, and live port-inspector writes to stable scene targets enter the
+bounded session queue and reach that port at their admitted fixed tick. External `SetPorts` callers
+supply a stable producer id; Twin Rhai uses its actor identity. Local Modelica
+canvas and port-inspector inputs use the local session id. Simulation-clock
+Rhai writes remain derived behavior.
 External `ReleasePort` and `ReleaseControl` commands use the same stable
 producer and fixed-tick admission contract; lifecycle-derived safe-stops remain
 owned by the authority transition. A

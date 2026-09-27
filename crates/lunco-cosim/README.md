@@ -40,10 +40,12 @@ facts from a port name; writes still go through the existing typed `SetPorts`
 command.
 
 `SetPorts` validates every named input before accepting it. External API,
-direct typed, and non-Simulation Rhai commands with stable producer identity
-return an admission receipt for the next fixed tick; the receipt does not claim
-that the value has already reached the port backend. The ordered session commit
-then applies or visibly faults the admitted write. Simulation-clock Rhai and
+identified direct typed, and non-Simulation Rhai commands with stable producer
+identity receive an admission receipt for the next fixed tick. Live
+port-inspector commands carry the active local session identity into that same
+admission path. A receipt does not claim that the value has already reached
+the port backend. The ordered session commit then applies or visibly faults
+the admitted write. Simulation-clock Rhai and
 fixed-step controller writes keep their owning execution path. Explicit
 external `ReleasePort`/`ReleaseControl` commands share the admission queue;
 immediate lifecycle safe-stops use the internal `ControlSafeStop` event and

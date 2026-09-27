@@ -8004,6 +8004,7 @@ dependencies = [
  "lunco-control-core",
  "lunco-core",
  "lunco-core-runtime",
+ "lunco-core-session",
  "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -10868,6 +10869,7 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "egui",
+ "lunco-command-contracts",
  "lunco-core",
  "lunco-core-runtime",
  "lunco-interaction-core",

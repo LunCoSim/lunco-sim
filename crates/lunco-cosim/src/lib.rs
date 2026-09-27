@@ -1181,6 +1181,7 @@ fn should_admit_port_input(
 ) -> bool {
     match origin {
         Some(CommandOrigin::ApiTransport) => true,
+        Some(CommandOrigin::LocalUser { .. }) => world.get::<GlobalEntityId>(target).is_some(),
         Some(CommandOrigin::Rhai { context, .. }) => {
             context.clock != RuntimeClock::Simulation
                 && (context

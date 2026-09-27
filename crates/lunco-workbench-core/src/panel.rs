@@ -114,6 +114,20 @@ where
     }
 }
 
+struct CommandIntent<E> {
+    event: E,
+    origin: lunco_core::CommandOrigin,
+}
+
+impl<E: bevy::ecs::event::Event> PanelIntent for CommandIntent<E>
+where
+    for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
+{
+    fn apply(self: Box<Self>, world: &mut World) {
+        crate::menu::trigger_command_with_origin(world, self.event, self.origin);
+    }
+}
+
 /// Deferred panel intents collected during an egui pass.
 pub struct PanelIntents(Vec<Box<dyn PanelIntent>>);
 
@@ -195,6 +209,18 @@ impl<'w> PanelCtx<'w> {
         for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
     {
         self.intents.push(Box::new(TriggerIntent(event)));
+    }
+
+    /// Queue a typed command with the explicit user or agent origin that
+    /// initiated it. The origin remains scoped through deferred UI dispatch.
+    pub fn trigger_command<E: bevy::ecs::event::Event>(
+        &mut self,
+        event: E,
+        origin: lunco_core::CommandOrigin,
+    ) where
+        for<'a> <E as bevy::ecs::event::Event>::Trigger<'a>: Default,
+    {
+        self.intents.push(Box::new(CommandIntent { event, origin }));
     }
 
     /// Temporarily borrow one resource while preserving the narrow context.

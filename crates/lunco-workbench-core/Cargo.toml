@@ -14,5 +14,8 @@ lunco-interaction-core = { path = "../lunco-interaction-core" }
 lunco-viewport-core = { path = "../lunco-viewport-core" }
 serde = { workspace = true }
 
+[dev-dependencies]
+lunco-command-contracts = { path = "../lunco-command-contracts" }
+
 [lints]
 workspace = true

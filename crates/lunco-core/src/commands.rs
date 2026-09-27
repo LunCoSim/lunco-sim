@@ -186,12 +186,17 @@ pub enum CommandOrigin {
         /// Stable source actor when the call came from a Twin program.
         actor: Option<crate::GlobalEntityId>,
     },
+    /// Local interaction dispatched by a user-facing workbench surface.
+    LocalUser {
+        /// Session that owns the interaction.
+        session_id: lunco_command_contracts::SessionId,
+    },
 }
 
 /// The request id and origin of the command currently being dispatched. The
 /// API dispatcher scopes these facts around the reflected command trigger so
 /// command observers can record outcomes and input provenance.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct ActiveCommandId {
     id: Option<u64>,
     origin: Option<CommandOrigin>,
@@ -217,6 +222,12 @@ impl ActiveCommandId {
     /// Scope a reflected command id and its classified producer origin.
     pub fn set_with_origin(&mut self, id: u64, origin: Option<CommandOrigin>) {
         self.id = Some(id);
+        self.origin = origin;
+    }
+
+    /// Scope a local interaction origin without creating a request id.
+    pub fn set_origin(&mut self, origin: Option<CommandOrigin>) {
+        self.id = None;
         self.origin = origin;
     }
 }

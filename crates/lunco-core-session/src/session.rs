@@ -686,6 +686,14 @@ impl SessionInputProducer {
                 })?;
                 Ok(Self::ApiTransport { producer_id })
             }
+            Some(lunco_core::CommandOrigin::LocalUser { session_id }) => {
+                if requested_producer_id.is_some() {
+                    return Err(format!(
+                        "local-user {input_name} uses its session identity; omit producer_id"
+                    ));
+                }
+                Ok(Self::LocalUser { session_id })
+            }
             Some(lunco_core::CommandOrigin::Rhai { context, actor }) => {
                 let route = context.route.ok_or_else(|| {
                     format!("{verb} from Rhai requires a classified runtime route")
@@ -3124,6 +3132,22 @@ mod session_input_stream_tests {
         SessionInputStream, SessionInputStreamState,
     };
     use lunco_command_contracts::SessionId;
+
+    #[test]
+    fn local_user_input_uses_the_local_session_as_its_producer_identity() {
+        let origin = lunco_core::CommandOrigin::LocalUser {
+            session_id: SessionId(7),
+        };
+        assert_eq!(
+            SessionInputProducer::from_command_origin(Some(origin), None, "SetPorts"),
+            Ok(SessionInputProducer::LocalUser {
+                session_id: SessionId(7),
+            })
+        );
+        assert!(
+            SessionInputProducer::from_command_origin(Some(origin), Some(8), "SetPorts").is_err()
+        );
+    }
 
     use crate::MAX_SESSION_INPUT_RECORDS;
 

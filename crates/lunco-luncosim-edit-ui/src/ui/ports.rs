@@ -554,6 +554,11 @@ impl PortPanel {
 impl PortPanel {
     fn render_row(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx, row: &PortRow) {
         let info = &row.info;
+        let local_origin = ctx
+            .resource::<lunco_core_session::LocalSession>()
+            .map(|session| lunco_core::CommandOrigin::LocalUser {
+                session_id: session.0,
+            });
         ui.vertical(|ui| {
             ui.label(&info.name);
             ui.small(direction_label(info.direction));
@@ -603,32 +608,48 @@ impl PortPanel {
         ui.horizontal(|ui| {
             ui.add(lunco_workbench_widgets::text_editor::singleline(draft).desired_width(82.0));
             if ui
-                .add_enabled(validation.is_ok(), egui::Button::new("Apply"))
+                .add_enabled(
+                    validation.is_ok() && local_origin.is_some(),
+                    egui::Button::new("Apply"),
+                )
                 .clicked()
             {
-                if let Ok(value) = validation.as_ref() {
-                    ctx.trigger(lunco_cosim_core::commands::SetPorts {
-                        target: row.entity,
-                        writes: vec![(info.name.clone(), *value)],
-                        seq: 0,
-                        tick: 0,
-                        producer_id: None,
-                    });
+                if let (Ok(value), Some(origin)) = (validation.as_ref(), local_origin) {
+                    ctx.trigger_command(
+                        lunco_cosim_core::commands::SetPorts {
+                            target: row.entity,
+                            writes: vec![(info.name.clone(), *value)],
+                            seq: 0,
+                            tick: 0,
+                            producer_id: None,
+                        },
+                        origin,
+                    );
                 }
             }
             if row.held.is_some()
                 && ui
-                    .button("Release")
+                    .add_enabled(local_origin.is_some(), egui::Button::new("Release"))
                     .on_hover_text("Return this input to its authored wiring")
                     .clicked()
             {
-                ctx.trigger(lunco_cosim_core::commands::ReleasePort {
-                    target: row.entity,
-                    name: info.name.clone(),
-                    producer_id: None,
-                });
+                if let Some(origin) = local_origin {
+                    ctx.trigger_command(
+                        lunco_cosim_core::commands::ReleasePort {
+                            target: row.entity,
+                            name: info.name.clone(),
+                            producer_id: None,
+                        },
+                        origin,
+                    );
+                }
             }
         });
+        if local_origin.is_none() {
+            ui.small(
+                egui::RichText::new("local control session unavailable").color(egui::Color32::RED),
+            );
+        }
         if let Err(error) = validation {
             ui.small(egui::RichText::new(error).color(egui::Color32::RED));
         }
