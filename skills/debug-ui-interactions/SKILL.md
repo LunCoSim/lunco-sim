@@ -49,8 +49,10 @@ pointer event for context menus. Do not combine press and release events in
 one same-frame script step when testing focus, modifier state, or picking.
 
 A route-point secondary click opens its authored context menu without changing
-scene selection. Selecting the point is a separate menu action; the context
-gesture itself must not enable the transform gizmo. The hit prim's registered
+scene selection. Selecting a point is separate from the `Move route point`
+action: select enables the generic gizmo, while Move arms click-to-place with a
+disposable ghost. Hover alone must not arm movement. The context gesture itself
+must not enable the transform gizmo. The hit prim's registered
 `LunCoPointerInteractionAPI` must authorize that button as `context`; the
 generic viewport adapter applies its per-button blocking behavior before the
 ordered-hit pass, and route policy uses canonical hit paths rather than screen
@@ -88,18 +90,19 @@ REPL queue or a fixed-tick scenario. Heavy synchronous work in an input hook
 would still occupy the application thread, so keep the hook bounded and move
 preparation or I/O to its owning asynchronous boundary.
 
-Scene `Pointer<Move>` observers used for a selected-object preview must
+Scene `Pointer<Move>` observers used for an armed route-point preview must
 coalesce the Bevy bubble to one typed hook per pointer position in a frame.
 Keep the hook presentation-only: update one disposable transform and do not
 rebuild route geometry or sample a full terrain path during hover. The next
-primary click commits the selected route point through the canonical
-`@runtime@` USD edit path.
+primary click commits the armed route point through the canonical `@runtime@`
+USD edit path.
 The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
 run by `scripts/run_editor_scene_tests.sh`; it sends typed native-window input
 through picking and verifies the mounted fixture, waypoint hit, semantic
-context intent, unchanged pre-menu selection, and explicit menu selection
-action. The runner waits for `/api/ready` and requires
-the API `Exit` command and port release after every verdict.
+context intent, unchanged pre-menu selection, standalone selection, explicit
+Move menu action, ghost placement, and deletion. The runner waits for
+`/api/ready` and requires the API `Exit` command and port release after every
+verdict.
 
 Runtime-authored route edits belong in Twin `@runtime@`. Run
 `scripts/run_scene_tests.sh --exact route_runtime_persistence` to exercise a

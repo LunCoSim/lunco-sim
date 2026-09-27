@@ -342,7 +342,7 @@ fn on_tick(me, ctx) {
         if second_marker == () || second_marker.len() != 2 {
             this.done = true;
             report(this, false,
-                "could not project a second route point for the native move-preview check");
+                "could not project a second route point for the native move-mode check");
             return;
         }
         input_pointer_move(second_marker[0], second_marker[1]);
@@ -352,21 +352,104 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 20 {
+        let ghost = query("ResolveUsdTarget", #{
+            doc_id: this.doc,
+            path: ROUTE + "/MovePreview",
+            edit_target: "@view@",
+        });
+        if ghost != () && ghost.ok != false && ghost.authored_here == true {
+            this.done = true;
+            report(this, false,
+                "selecting P0 armed movement without the explicit Move menu action");
+            return;
+        }
+        this.scene_pointer_seen = false;
+        input_pointer_move(this.screen[0], this.screen[1]);
+        this.phase = 21;
+        return;
+    }
+
+    if this.phase == 21 {
+        input_pointer_press("secondary", this.screen[0], this.screen[1]);
+        this.phase = 22;
+        return;
+    }
+
+    if this.phase == 22 {
+        input_pointer_release("secondary", this.screen[0], this.screen[1]);
+        this.phase = 23;
+        this.phase_elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == 23 {
+        if !this.scene_pointer_seen {
+            if this.phase_elapsed < 2.0 { return; }
+            this.done = true;
+            report(this, false, "right-clicking selected P0 produced no scene.pointer event");
+            return;
+        }
+        let context = this.scene_pointer_context;
+        let paths = context["prim_paths"];
+        let point_hit = context["hit_path"] == this.context_delete_path + "/Dome"
+            || context["target_path"] == this.context_delete_path
+            || (paths != () && paths.contains(this.context_delete_path + "/Dome"));
+        if !point_hit || context["pointer_policy"] == ()
+            || context.pointer_policy["right"] != "context" {
+            this.done = true;
+            report(this, false, "selected P0 did not retain its authored context target");
+            return;
+        }
+        this.menu_x = this.screen[0] + 58.0;
+        this.menu_y = this.screen[1] + 37.0;
+        input_pointer_move(this.menu_x, this.menu_y);
+        this.phase = 24;
+        this.phase_elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == 24 {
+        if this.phase_elapsed < 0.25 { return; }
+        input_pointer_press("primary", this.menu_x, this.menu_y);
+        this.phase = 25;
+        return;
+    }
+
+    if this.phase == 25 {
+        input_pointer_release("primary", this.menu_x, this.menu_y);
+        this.phase = 26;
+        this.phase_elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == 26 {
+        if !selected_only(this.point) {
+            if this.phase_elapsed < 3.0 { return; }
+            this.done = true;
+            report(this, false, "the Move route point menu action did not select P0");
+            return;
+        }
         let ghost = query("QueryUsdPrim", #{
             doc_id: this.doc,
             path: ROUTE + "/MovePreview",
             attrs: ["lunco:interaction:left", "lunco:interaction:right", "xformOp:translate"],
             schemas: true,
         });
+        let target = query("ResolveUsdTarget", #{
+            doc_id: this.doc,
+            path: ROUTE + "/MovePreview/Target_P0",
+            edit_target: "@view@",
+        });
         if ghost == () || ghost.ok == false || ghost.attrs == () || ghost.api_schemas == ()
             || !ghost.api_schemas.contains("LunCoPointerInteractionAPI")
             || ghost.attrs["lunco:interaction:left"] != "pass_through"
             || ghost.attrs["lunco:interaction:right"] != "pass_through"
-            || ghost.attrs["xformOp:translate"] == () {
+            || ghost.attrs["xformOp:translate"] == ()
+            || target == () || target.ok == false || target.authored_here != true {
             if this.phase_elapsed < 3.0 { return; }
             this.done = true;
             report(this, false,
-                "hovering another scene surface after selecting P0 did not create its view-layer move ghost");
+                "the Move route point menu action did not arm a pass-through view ghost for P0");
             return;
         }
         let point = query("QueryUsdPrim", #{
@@ -386,18 +469,20 @@ fn on_tick(me, ctx) {
             return;
         }
         this.first_ghost_position = ghost.world_position;
-        // Move away from the existing P1 marker to make the live preview
-        // independently visible and prove that subsequent pointer motion
-        // updates its authored view transform.
+        if !is_controlled(this.subject) {
+            this.done = true;
+            report(this, false, "starting a route move released rover possession");
+            return;
+        }
         this.move_x = this.screen[0] + 460.0;
         this.move_y = this.screen[1];
         input_pointer_move(this.move_x, this.move_y);
-        this.phase = 21;
+        this.phase = 27;
         this.phase_elapsed = 0.0;
         return;
     }
 
-    if this.phase == 21 {
+    if this.phase == 27 {
         let ghost = query("QueryUsdPrim", #{
             doc_id: this.doc,
             path: ROUTE + "/MovePreview",
@@ -411,25 +496,25 @@ fn on_tick(me, ctx) {
             report(this, false, "the move ghost did not follow pointer movement across the scene");
             return;
         }
-        this.phase = 22;
+        this.phase = 28;
         this.phase_elapsed = 0.0;
         return;
     }
 
-    if this.phase == 22 {
+    if this.phase == 28 {
         input_pointer_press("primary", this.move_x, this.move_y);
-        this.phase = 23;
+        this.phase = 29;
         return;
     }
 
-    if this.phase == 23 {
+    if this.phase == 29 {
         input_pointer_release("primary", this.move_x, this.move_y);
-        this.phase = 24;
+        this.phase = 30;
         this.phase_elapsed = 0.0;
         return;
     }
 
-    if this.phase == 24 {
+    if this.phase == 30 {
         let moved_point = query("QueryUsdPrim", #{
             doc_id: this.doc,
             path: this.context_delete_path,
@@ -478,25 +563,25 @@ fn on_tick(me, ctx) {
         }
         this.scene_pointer_seen = false;
         input_pointer_move(this.screen[0], this.screen[1]);
-        this.phase = 25;
+        this.phase = 31;
         this.phase_elapsed = 0.0;
         return;
     }
 
-    if this.phase == 25 {
+    if this.phase == 31 {
         input_pointer_press("secondary", this.screen[0], this.screen[1]);
-        this.phase = 26;
+        this.phase = 32;
         return;
     }
 
-    if this.phase == 26 {
+    if this.phase == 32 {
         input_pointer_release("secondary", this.screen[0], this.screen[1]);
-        this.phase = 27;
+        this.phase = 33;
         this.phase_elapsed = 0.0;
         return;
     }
 
-    if this.phase == 27 {
+    if this.phase == 33 {
         if !this.scene_pointer_seen {
             if this.phase_elapsed < 2.0 { return; }
             this.done = true;
@@ -515,30 +600,30 @@ fn on_tick(me, ctx) {
             return;
         }
         this.delete_x = this.screen[0] + 60.0;
-        this.delete_y = this.screen[1] + 79.0;
+        this.delete_y = this.screen[1] + 100.0;
         input_pointer_move(this.delete_x, this.delete_y);
-        this.phase = 28;
+        this.phase = 34;
         this.phase_elapsed = 0.0;
         return;
     }
 
-    if this.phase == 28 {
+    if this.phase == 34 {
         // Let the foreground egui menu paint and register its bounds before
         // delivering the row click through the native window input path.
         if this.phase_elapsed < 0.25 { return; }
         input_pointer_press("primary", this.delete_x, this.delete_y);
-        this.phase = 29;
+        this.phase = 35;
         return;
     }
 
-    if this.phase == 29 {
+    if this.phase == 35 {
         input_pointer_release("primary", this.delete_x, this.delete_y);
-        this.phase = 32;
+        this.phase = 36;
         this.phase_elapsed = 0.0;
         return;
     }
 
-    if this.phase == 32 {
+    if this.phase == 36 {
         let deleted = query("QueryUsdPrim", #{
             doc_id: this.doc,
             path: this.context_delete_path,
@@ -559,7 +644,7 @@ fn on_tick(me, ctx) {
         }
         this.done = true;
         report(this, true,
-            "unpossessed edit works; possessed native selection, preview, click-to-move, right-click, and delete all preserve route and rover state");
+            "unpossessed edit works; possessed native selection, explicit Move, ghost placement, right-click, and delete preserve route and rover state");
     }
 }
 
