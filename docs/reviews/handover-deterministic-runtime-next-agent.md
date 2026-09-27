@@ -8,7 +8,7 @@
 **D9 session-record validation commit:** `d4937baff`
 **D9 archive feature commit:** `935a527322bc9ab8c753920aa1e31ee7cf1059ca`
 **D9 archive merge commit:** `61737e56e645ab58f3b033c5e2968c0bc119dc75`
-**Latest local `main` and `origin/main`:** `6b8258edf`
+**Latest observed `origin/main` before this handover refresh:** `6b8258edf`
 
 The D9 session-input boundary at `4acf09915` and its 2026-09-27 acceptance,
 direct-command, record-validation, and archive-codec commits are integrated on
@@ -16,16 +16,17 @@ local `main`. Archive feature commit `935a52732` was merged with first-parent
 history preserved as `61737e56e` (base `18a826e21`). Local `main` later gained
 the optimization and terrain-streaming integrations (`14b88558f`,
 `2828983f1`, `e00664d88`, `eaa9baded`, and `9768cc1d1`), then advanced to
-`6b8258edf` for the generated `.tracy` ignore rule. `main`,
-`codex/lunar-soil`, `tutorials`, `usd`, and `optimization` now share
-`6b8258edf`. The tutorial celestial LOD edits and optimization source and
+`6b8258edf` for the generated `.tracy` ignore rule. All five worktrees were
+then at `6b8258edf`; this handover-only update was committed locally and
+fast-forwarded across `main`, `codex/lunar-soil`, `tutorials`, `usd`, and
+`optimization`. The tutorial celestial LOD edits and optimization source and
 documentation edits remain in their worktrees; the tutorials backup stash
 `d22f8f25d` and earlier recovery stashes remain intact. The USD worktree is
 clean. A Tracy build was active in optimization at the last check and was not
-interrupted. `origin/main` matches local `main`; its reflog shows an
-`update by push` during this continuation, but this agent did not run a push.
-The evidence below stays tied to the individual builds and source revisions
-named in each section.
+interrupted. The last observed `origin/main` was `6b8258edf`; its reflog shows
+an `update by push` during this continuation, but this agent did not run a
+push. The evidence below stays tied to the individual builds and source
+revisions named in each section.
 
 ## Active user objective
 
