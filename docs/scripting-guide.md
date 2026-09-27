@@ -33,7 +33,10 @@ prelude. This emits one target-scoped semantic edge and the `intent.edge` event;
 the Twin's Rhai/Modelica policy decides whether to latch, release, toggle, or
 actuate it. External `SimulateIntent` held changes for fixed-simulation targets
 are admitted at the next tick and publish `intent.hold`; Simulation Rhai holds
-remain derived behavior. Keep `SetPorts` for direct continuous values.
+remain derived behavior. API and direct typed commands supply a nonzero stable
+`producer_id`; Twin scenarios use their actor identity, while actorless
+application Rhai supplies its own. Keep `SetPorts` for direct continuous
+values.
 
 For UI automation, use the native input helpers from `prelude/input.rhai`.
 They compose typed Bevy window events rather than calling an editor or scene

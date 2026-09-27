@@ -48,19 +48,21 @@ id lets clients query the exact edge while later edges are being emitted.
 Simulation-clock Rhai edges stay in their deterministic hook pass and carry no
 external-input stamp.
 
-`SimulatedIntents` keys held state by target, intent, and producer class. API
-transport, Rhai route plus actor identity, and direct typed-command holds remain
-separate; releasing one scenario actor leaves another actor on the same route
-held. External API, application-Rhai, and direct typed `SimulateIntent` changes
-for fixed-simulation targets now share the bounded input queue with
-`SimulateIntentEdge`. Both action types require a stable target id and committed
-scene generation, receive the next fixed tick and shared per-tick sequence, and
-are revalidated at the fixed-step owner before control propagation. Held commits
-publish `intent.hold`; the command acknowledgement and event retain the same
-correlation id and admission stamp. Deterministic Simulation Rhai behavior stays
-in its current pass, while local-embodiment commands keep their interaction
-cadence. API identity remains transport-wide, application Rhai may have no
-actor, and direct typed commands remain one source class. The fixed-step vessel
+`SimulatedIntents` keys held state by target, intent, and stable producer
+identity. API transport and direct typed callers use a nonzero caller-supplied
+`producer_id`; Twin Rhai uses route plus stable actor identity, and actorless
+Rhai uses route plus `producer_id`. IDs distinguish producers within each
+source class and are not authorization credentials. Releasing one producer
+leaves other producers' holds intact. External API, application-Rhai, and direct
+typed `SimulateIntent` changes for fixed-simulation targets share the bounded
+input queue with `SimulateIntentEdge`. Both action types require producer
+identity, a stable target id, and committed scene generation, receive the next
+fixed tick and shared per-tick sequence, and are revalidated at the fixed-step
+owner before control propagation. Held commits publish `intent.hold`; the
+command acknowledgement and event retain the same producer id, correlation id,
+and admission stamp. Edges also carry the producer id through `intent.edge` and
+`CausalTrace`. Deterministic Simulation Rhai behavior stays in its current pass,
+while local-embodiment commands keep their interaction cadence. The fixed-step vessel
 controller captures physical `ActionState<UserIntent>` into a by-value
 `PhysicalIntentFrame` semantic snapshot, separate from simulated holds until
 intent translation. Frame admission requires the local input `SessionId`,
@@ -71,10 +73,9 @@ the input with a structured runtime error; ordering does not fall back to Bevy
 `Entity` bits. The frame is discarded after the pass. An active bounded
 `SessionInputStream` retains physical frames and admitted external
 `SimulateIntent`/`SimulateIntentEdge` payloads in memory, with producer class,
-available Rhai actor identity, stable target, generation, tick, sequence, and
-correlation where applicable. Other commands, distinct API/direct producer
-identity, runtime spawns, durable writing, and playback are still outside this
-capture.
+stable producer id or Rhai route and actor, stable target, generation, tick,
+sequence, and correlation where applicable. Other commands, runtime spawns,
+durable writing, and playback are still outside this capture.
 
 Verification for this increment:
 
@@ -159,11 +160,40 @@ Older sessions on port 4103 were also stopped through API `Exit`; they are not
 evidence for this merged-main run. No runtime session is currently owned by
 this task. No performance measurement was taken.
 
+### D9 producer identity and typed rejection continuation (2026-09-27)
+
+- `cargo test -p lunco-core -p lunco-controller -j 4` passed after the typed
+  rejection change: 17 core tests and 24 controller tests. The new core test
+  distinguishes `Failed` handler results from terminal `Rejected` results;
+  controller coverage exercises producer-scoped admission and capture.
+- `cargo build -p lunco-luncosim --bin luncosim -j 4` passed. The live command
+  schema reports `SimulateIntent` and `SimulateIntentEdge` as defaulted so
+  missing optional inputs reach owner validation. The new binary returned HTTP
+  409 for a missing API producer ID and for missing `held`, with explicit
+  terminal rejection messages.
+- On the production app's owned port 4131, the attached
+  `simulate_intent_input_admission.rhai` observer passed `TESTS_OK 11`. It
+  verified an actor-backed Twin Rhai submission without `producer_id` and a
+  rejected submission when Rhai supplied one. The app's log also reported
+  `SIMULATE INTENT INPUT ADMISSION: PASS`.
+- API `SimulateIntent` producer 8181 returned correlation 3 and
+  `{scene_generation: 1, effective_tick: 1726, sequence: 1}`. `intent.hold`
+  telemetry and the completed `ReadSessionInputStream` record retained the
+  same values, target `1975542653690512`, and `{intent: "action", held: true}`.
+- API `SimulateIntentEdge` producer 9191 returned correlation 4 and
+  `{scene_generation: 1, effective_tick: 1743, sequence: 1}`. `CausalTrace`
+  queried with that exact correlation reported `api_transport` producer 9191
+  and the same admission stamp.
+- This `physical_rover_controls` run continues to emit its independent Rhai
+  undeclared-dependency diagnostics. The D9 observer verdict passed despite
+  those fixture diagnostics. API `Exit` closed port 4131 and process 728693 is
+  gone. Port 47123 was left untouched. No visual or performance acceptance was
+  run.
+
 Next D9 work is to capture other typed inputs and runtime-spawn admission plus
 stable spawned identity without duplicating document-backed `ApplyUsdOps` in
-the Twin journal. Give API clients and direct typed producers stable
-identities, then build durable recording/playback through the normal controller
-path. See the owner and record-shape requirements in
+the Twin journal, then build durable recording/playback through the normal
+controller path. See the owner and record-shape requirements in
 [`command-journal.md`](../architecture/command-journal.md). Whole-session
 capture/replay and supported-profile divergence evidence remain open.
 

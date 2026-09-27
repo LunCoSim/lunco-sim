@@ -94,7 +94,7 @@ The rendering bridge.
 ### **Typed Command** (The Pulse)
 A discrete instruction event.
 - **Self-Describing**: Commands are typed structs (derived with `#[Command]`) and carry their own parameters and documentation, discovered via reflection.
-- **Feedback**: Every command execution triggers an acknowledgment result (`Result<Ack, String>`) for verification.
+- **Feedback**: Result-returning commands preserve success, typed rejection (`Reject`), or handler failure (`String`) for verification.
 
 Typed camera commands in `lunco-camera-core` express generic rig operations;
 typed control commands in `lunco-control-core` express producer/target
@@ -478,9 +478,12 @@ application-Rhai, and direct typed commands targeting a fixed-simulation entity
 require a stable target id and committed scene generation, then enter the
 bounded controller queue for the next `SimTick`. Held changes and discrete
 edges share its per-tick sequence. The acknowledgement returns a correlation
-id and admission stamp; fixed-step commit publishes `intent.hold` with that
-stamp. Deterministic Simulation Rhai changes remain in their owning pass, and
-local-embodiment interaction input remains on the interaction cadence.
+id, producer id, and admission stamp; fixed-step commit publishes `intent.hold`
+with the same producer id and stamp. API and direct typed producers supply a
+nonzero `producer_id` stable for that caller's session. Actorless application
+Rhai supplies one too; Twin Rhai uses its stable actor identity. Deterministic
+Simulation Rhai changes remain in their owning pass, and local-embodiment
+interaction input remains on the interaction cadence.
 
 For a single transition, use `SimulateIntentEdge` with `edge` set to `pressed`,
 `released`, or `pulse`:
@@ -496,9 +499,10 @@ mutate the Twin. Authored Rhai/Modelica policy consumes the edge and decides
 whether it means a latch, release, toggle, or other action. Rhai `on_event`
 hooks receive the same edge on the existing telemetry bus as `intent.edge`,
 with typed `value.correlation_id`, `value.intent`, `value.edge`, and
-`value.target_gid`; the event source is also the target gid. The target remains
-subject to the normal command authority policy, so two spawned vehicles cannot
-receive one another's edge.
+`value.target_gid`; API/direct/actorless Rhai events also include
+`value.producer_kind` and `value.producer_id`. The event source is also the
+target gid. The target remains subject to the normal command authority policy,
+so two spawned vehicles cannot receive one another's edge.
 
 ### 6.9 Editor keyboard input
 

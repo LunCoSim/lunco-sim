@@ -914,8 +914,9 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `intent` | `String` |  Intent name (`forward`, `backward`, `left`, `right`, `yaw_left`, `yaw_right`,  `action`, `release`, …). |
-| `held` | `bool` |  `true` = hold it down, `false` = release it. |
+| `held` | `Option < bool >` |  Required: `true` holds the intent; `false` releases it. |
 | `target` | `Entity` |  The **entity this intent drives** (normally a vessel or avatar command  surface). An intent is meaningless without its target: two spawns of one  asset are two distinct entities, and a targetless intent is rejected. Over  the API this takes the target's `api_id` — the `GlobalEntityId` reported by  `ListEntities` — and is resolved to the live entity. |
+| `producer_id` | `Option < u64 >` |  Stable caller identity for API, direct typed, and actorless Rhai input.  It must be nonzero and remain the same across that producer's session.  Twin Rhai scenarios use their stable actor identity instead. |
 
 #### `SimulateIntentEdge`
 
@@ -933,6 +934,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `target` | `Entity` |  The entity whose semantic control surface receives the edge. |
 | `intent` | `String` |  Intent name (`action`, `release`, `forward`, …). |
 | `edge` | `String` |  `pressed`, `released`, or `pulse`. |
+| `producer_id` | `Option < u64 >` |  Stable caller identity for API, direct typed, and actorless Rhai input.  It must be nonzero and remain the same across that producer's session.  Twin Rhai scenarios use their stable actor identity instead. |
 
 ## Embodiment & possession
 

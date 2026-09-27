@@ -614,12 +614,14 @@ The consuming Twin decides what the edge means and whether to write a port.
 Use `SimulateIntent`/`SetPorts`
 for held or continuous values, and never build a pulse from two ordered writes.
 Held `SimulateIntent` state is keyed by target, intent, and producer identity:
-API transport, Rhai runtime route plus scenario actor id, or direct typed
-command. A release clears only that source's hold. External commands targeting
-fixed simulation state are admitted for the next tick and publish `intent.hold`
-with their correlation id and input-order stamp; Simulation-clock Rhai behavior
-stays in its current pass, and local-embodiment input uses the interaction
-cadence. The live held state is not a durable session replay record.
+API and direct typed producers use a stable nonzero `producer_id`; actorless
+Rhai supplies one too. A Twin scenario uses its runtime route and stable actor
+identity, so omit `producer_id` there. A release clears only that producer's
+hold. External commands targeting fixed simulation state are admitted for the
+next tick and publish `intent.hold` with producer identity, correlation id, and
+input-order stamp; Simulation-clock Rhai behavior stays in its current pass,
+and local-embodiment input uses the interaction cadence. The live held state is
+not a durable session replay record.
 
 The helper result's `id` correlates the edge with the read-only
 `query("CausalTrace", #{target: target, correlation_id: edge.id})` snapshot.

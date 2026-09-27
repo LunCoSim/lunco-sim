@@ -102,9 +102,11 @@ per-tick sequence, then reach the event bus from the fixed-step owner.
 Simulation-clock Rhai edges remain derived behavior and do not receive this
 external-input stamp. The queue is bounded to 4,096 pending records and clears
 on scene teardown; the trace is not durable replay storage. External held
-`SimulateIntent` changes share the bounded queue and per-tick order with edges;
-their source buckets retain API transport, Rhai runtime route plus actor id, and
-direct typed-command producer class. `drive_from_bindings` captures physical
+`SimulateIntent` changes share the bounded queue and per-tick order with edges.
+API, direct typed, and actorless Rhai producers provide a stable nonzero
+`producer_id`; Twin Rhai retains its route and stable actor identity. Held
+acknowledgements, telemetry, `CausalTrace`, and session records retain producer
+identity. `drive_from_bindings` captures physical
 `ActionState<UserIntent>` into a by-value `PhysicalIntentFrame` semantic
 snapshot. Admission requires the local input `SessionId`, target
 `GlobalEntityId`, and committed scene generation. The fixed-step owner stamps
@@ -116,10 +118,9 @@ translation, while an active `SessionInputStream` capture retains sorted
 canonical intent ids and the admission stamp in bounded memory. The typed
 start/stop/clear commands and `ReadSessionInputStream` query expose physical
 frames plus admitted `SimulateIntent` and `SimulateIntentEdge` payloads while
-capture is active. Records retain producer class, Rhai actor when available,
-target, admission stamp, and semantic payload. API identities remain
-transport-wide; direct typed commands have no stable producer id. Other typed
-commands, durable writing, and playback remain open.
+capture is active. Records retain producer class and stable producer id (or
+Rhai route and actor), target, admission stamp, and semantic payload. Other
+typed commands, durable writing, and playback remain open.
 Runtime spawn handling is owner-dependent: document-backed `SpawnEntity`
 authors `ApplyUsdOps` into the Twin journal, while raw-file scenes use direct
 ECS spawning plus `NetSpawn`. Neither path currently records the spawn's

@@ -64,6 +64,13 @@ impl Plugin for MobilityPlugin {
 - Use **typed identifiers** (`DocumentId`, `Entity`, custom enums), not raw `u64` shims. `lunco-doc::DocumentId` derives `Reflect`; new domain id types should too.
 - The HTTP wire layer auto-converts JSON `1` to `DocumentId(1)` via reflection — no manual conversion needed.
 
+## Result-returning handlers
+
+The macro preserves the handler's declared result type when recording a
+terminal outcome. `Result<Ack, String>` reports a handler failure; use
+`Result<Ack, Reject>` when validation or current state rejects the command.
+The latter remains a typed `Rejected` outcome and maps to API 409.
+
 ## Anti-patterns
 
 ```rust

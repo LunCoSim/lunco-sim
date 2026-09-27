@@ -113,19 +113,61 @@ impl CommandResults {
         }
     }
 
-    /// Record a handler's `Result<Ack, String>` as a terminal outcome.
-    /// `Ok` → [`CommandOutcome::Succeeded`], `Err` → [`CommandOutcome::Failed`]
-    /// (a handler that ran and errored — not a pre-execution `Rejected`).
+    /// Record a legacy string-error result as a terminal handler outcome.
     pub fn record(&mut self, id: u64, result: Result<Ack, String>) {
-        let outcome = match result {
-            Ok(ack) => CommandOutcome::Succeeded(ack),
-            Err(msg) => CommandOutcome::Failed(msg),
-        };
-        self.insert(id, outcome);
+        self.record_handler_result(id, result);
+    }
+
+    /// Record a command handler's declared result type as a terminal outcome.
+    pub fn record_handler_result(&mut self, id: u64, result: impl Into<CommandOutcome>) {
+        self.insert(id, result.into());
     }
 
     pub fn get(&self, id: u64) -> Option<&CommandOutcome> {
         self.map.get(&id)
+    }
+}
+
+impl From<Result<Ack, String>> for CommandOutcome {
+    fn from(result: Result<Ack, String>) -> Self {
+        match result {
+            Ok(ack) => Self::Succeeded(ack),
+            Err(message) => Self::Failed(message),
+        }
+    }
+}
+
+impl From<Result<Ack, Reject>> for CommandOutcome {
+    fn from(result: Result<Ack, Reject>) -> Self {
+        match result {
+            Ok(ack) => Self::Succeeded(ack),
+            Err(rejection) => Self::Rejected(rejection),
+        }
+    }
+}
+
+#[cfg(test)]
+mod command_result_tests {
+    use super::*;
+
+    #[test]
+    fn handler_results_preserve_failure_and_rejection_classes() {
+        let mut results = CommandResults::default();
+        results.record_handler_result(1, Err::<Ack, _>("handler failed".to_owned()));
+        results.record_handler_result(
+            2,
+            Err::<Ack, _>(Reject::InvalidOp("input was rejected".to_owned())),
+        );
+
+        assert!(matches!(
+            results.get(1),
+            Some(CommandOutcome::Failed(message)) if message == "handler failed"
+        ));
+        assert!(matches!(
+            results.get(2),
+            Some(CommandOutcome::Rejected(Reject::InvalidOp(message)))
+                if message == "input was rejected"
+        ));
     }
 }
 

@@ -249,8 +249,9 @@ authoring through explicit document ids).
   application roots add `lunco-api-transport` separately when they expose HTTP
   or the browser bridge.
 - wasm needs `--cfg getrandom_backend="wasm_js"` (set by `build_web.sh`).
-- A `Result`-returning `#[on_command]` records to `CommandResults` — that resource
-  must exist.
+- A result-returning `#[on_command]` records its declared outcome in
+  `CommandResults`: `Result<Ack, Reject>` is `rejected`, while
+  `Result<Ack, String>` is `failed`. That resource must exist.
 
 ### Deferred (design-only / separate scope)
 
@@ -463,8 +464,11 @@ authored policy owns its meaning and any port writes. Keep `SimulateIntent` or
 
 An externally issued `SimulateIntent` for a fixed-simulation target is applied
 at its admitted next fixed tick and published as `intent.hold`, carrying the
-command correlation id and input-order stamp. A Rhai Simulation command remains
-derived behavior in its current pass.
+command correlation id, producer class/id, and input-order stamp. API and direct
+typed callers provide a nonzero `producer_id` that stays stable for that
+producer's session. Actorless application Rhai provides one; Twin Rhai uses its
+stable actor identity. A Rhai Simulation command remains derived behavior in its
+current pass.
 
 The exact node contract is documented in
 [`rhai-task-tree.md`](rhai-task-tree.md): every node has an explicit `kind`,

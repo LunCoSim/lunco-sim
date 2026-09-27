@@ -620,20 +620,47 @@ pub struct SessionInputRecord {
 }
 
 /// Producer class and identity retained with an admitted session input.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SessionInputProducer {
     /// Physical controller attached to the local input session.
     PhysicalController { session_id: SessionId },
-    /// Command accepted through the external API transport. The transport does
-    /// not yet expose a stable per-client identity.
-    ApiTransport,
+    /// Command accepted through the external API transport. The caller assigns
+    /// a nonzero identity that remains stable for that client across a session.
+    ApiTransport { producer_id: u64 },
     /// Rhai command; Twin actor identity is retained when the caller has one.
+    /// Actorless Rhai producers supply a stable nonzero identity.
     Rhai {
+        route: Option<lunco_core::RuntimeRoute>,
         actor: Option<lunco_core::GlobalEntityId>,
+        producer_id: Option<u64>,
     },
-    /// In-process typed command without a classified producer identity.
-    DirectCommand,
+    /// In-process typed command with a caller assigned stable identity.
+    DirectCommand { producer_id: u64 },
+}
+
+impl SessionInputProducer {
+    /// Serialized producer class used by API and telemetry projections.
+    pub const fn kind(self) -> &'static str {
+        match self {
+            Self::PhysicalController { .. } => "physical_controller",
+            Self::ApiTransport { .. } => "api_transport",
+            Self::Rhai { .. } => "rhai",
+            Self::DirectCommand { .. } => "direct_command",
+        }
+    }
+
+    /// Caller-assigned stable identity, when the producer is not identified by
+    /// its physical session or Twin actor.
+    pub const fn stable_id(self) -> Option<u64> {
+        match self {
+            Self::ApiTransport { producer_id } | Self::DirectCommand { producer_id } => {
+                Some(producer_id)
+            }
+            Self::Rhai { producer_id, .. } => producer_id,
+            Self::PhysicalController { .. } => None,
+        }
+    }
 }
 
 /// Stable payloads accepted by the session-input stream.

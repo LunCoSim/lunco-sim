@@ -8,6 +8,7 @@ fn simulation_dependencies(me, ctx) {
 
 fn on_start(me, ctx) {
     this.target = find_path("/PhysicalRoverControls/SkidPhysical");
+    this.expected_producer_id = 8181;
     this.elapsed = 0.0;
     this.done = false;
     if this.target < 0 {
@@ -45,6 +46,10 @@ fn on_event(me, evt, ctx) {
                        type_of(value["effective_tick"]) == "u64" &&
                        type_of(value["input_sequence"]) == "u64",
         "intent.hold did not expose its fixed-tick admission stamp"));
+    checks.push(t_true(value["producer_kind"] == "api_transport" &&
+                       type_of(value["producer_id"]) == "u64" &&
+                       value["producer_id"].to_string() == this.expected_producer_id.to_string(),
+        "intent.hold did not retain the stable API producer identity"));
     checks.push(t_true(evt.sim_tick.to_string() == value["effective_tick"].to_string(),
         "intent.hold telemetry did not land at its admitted fixed tick"));
 
@@ -58,6 +63,7 @@ fn on_event(me, evt, ctx) {
             let producer = record["producer"];
             if payload["kind"] == "simulated_intent_change"
                 && producer["kind"] == "api_transport"
+                && producer["value"]["producer_id"].to_string() == this.expected_producer_id.to_string()
                 && record["target"].to_string() == value["target_gid"].to_string()
                 && record["scene_generation"].to_string() == value["scene_generation"].to_string()
                 && record["effective_tick"].to_string() == value["effective_tick"].to_string()
@@ -71,6 +77,23 @@ fn on_event(me, evt, ctx) {
     }
     checks.push(t_true(matching_record,
         "session input capture did not retain the admitted API intent payload and producer"));
+    let scenario_release = cmd("SimulateIntent", #{
+        intent: "action",
+        held: false,
+        target: this.target,
+    });
+    checks.push(t_true(scenario_release.ok,
+        "Twin Rhai could not submit its actor-scoped held input without producer_id"));
+    let supplied_actor_identity = cmd("SimulateIntent", #{
+        intent: "action",
+        held: false,
+        target: this.target,
+        producer_id: this.expected_producer_id,
+    });
+    checks.push(t_true(!supplied_actor_identity.ok &&
+                       supplied_actor_identity.status == "rejected" &&
+                       supplied_actor_identity.error.contains("Twin Rhai semantic input"),
+        "Twin Rhai did not reject a caller ID in favor of its stable actor identity"));
     let stopped = cmd("StopSessionInputCapture", #{});
     checks.push(t_true(stopped.ok && stopped.data["state"] == "complete",
         "session input capture did not stop with a complete record stream"));
