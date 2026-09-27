@@ -50,9 +50,9 @@
 //! scheme-qualified scene sources enter the typed `LoadScene` path directly.
 
 use lunco_usd_document::document::UsdDocument;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::scene::LoadScene;
 use bevy::asset::AssetId;
@@ -131,6 +131,87 @@ struct TwinDocCompletion {
 enum TwinDocCompletionResult {
     Source(Result<PreparedUsdSource, String>),
     PersistentSource(Result<String, String>),
+}
+
+/// Worker-prepared replacement plans for dependent stage recipes.
+#[derive(Resource, Default)]
+pub(crate) struct PendingDependentStageRefreshes {
+    by_stage: HashMap<AssetId<UsdStageAsset>, PendingDependentStageRefresh>,
+    completions: Arc<Mutex<Vec<DependentStageRefreshCompletion>>>,
+    next_operation: u64,
+}
+
+struct PendingDependentStageRefresh {
+    operation: u64,
+    target_plan: Arc<UsdStageProjectionPlan>,
+    base_recipe: Arc<lunco_usd_compose::recipe::StageRecipe>,
+    changed_layers: BTreeMap<String, Arc<DependentStageLayerSource>>,
+    desired_revision: u64,
+    submitted_revision: Option<u64>,
+    work_key: Option<AsyncWorkKey>,
+    capacity_revision: Option<u64>,
+    work_identity: u128,
+    work_order: u64,
+    progress_key: Option<SimulationProgressKey>,
+    priority: AsyncWorkPriority,
+}
+
+struct DependentStageLayerSource {
+    doc: DocumentId,
+    persistent_revision: (u64, u64),
+    snapshot: Arc<UsdDocument>,
+    serialized: OnceLock<Result<Arc<[u8]>, Arc<str>>>,
+}
+
+impl DependentStageLayerSource {
+    fn persistent_bytes(&self) -> Result<Arc<[u8]>, String> {
+        self.serialized
+            .get_or_init(|| {
+                let _span = bevy::log::info_span!(
+                    "usd_twin_projection_dependent_source_serialize",
+                    doc = %self.doc,
+                    base_revision = self.persistent_revision.0,
+                    runtime_revision = self.persistent_revision.1
+                )
+                .entered();
+                self.snapshot
+                    .persistent_composed_source()
+                    .map(|source| Arc::from(source.into_bytes()))
+                    .map_err(|error| Arc::<str>::from(error.to_string()))
+            })
+            .clone()
+            .map_err(|error| error.to_string())
+    }
+}
+
+struct DependentStageRefreshCompletion {
+    stage: AssetId<UsdStageAsset>,
+    operation: u64,
+    revision: u64,
+    result: Result<
+        Option<(
+            lunco_usd_compose::recipe::StageRecipe,
+            UsdStageProjectionPlan,
+        )>,
+        String,
+    >,
+}
+
+impl PendingDependentStageRefreshes {
+    fn allocate_operation(&mut self) -> Option<u64> {
+        let operation = self.next_operation.checked_add(1)?;
+        self.next_operation = operation;
+        Some(operation)
+    }
+
+    fn has_admission_retry(&self, capacity_revision: u64) -> bool {
+        self.by_stage.values().any(|pending| {
+            pending.work_key.is_none()
+                && pending
+                    .capacity_revision
+                    .is_none_or(|revision| revision != capacity_revision)
+        })
+    }
 }
 
 /// Default twin scenes whose base source is still loading. Drained by
@@ -863,7 +944,9 @@ pub(crate) fn fail_pending_instance_projection(
 pub(crate) fn reset_scene_projection_state(
     mut pending_refs: ResMut<PendingRefSpawns>,
     mut pending_document_projections: Option<ResMut<PendingDocumentProjectionAdmissions>>,
+    mut pending_dependent_refreshes: Option<ResMut<PendingDependentStageRefreshes>>,
     mut pending_instances: Option<ResMut<PendingInstanceProjections>>,
+    mut admission: Option<ResMut<AsyncWorkAdmission>>,
     mut progress: Option<ResMut<SimulationProgress>>,
 ) {
     if let Some(progress) = progress.as_deref_mut() {
@@ -873,6 +956,22 @@ pub(crate) fn reset_scene_projection_state(
         if let Some(admissions) = pending_document_projections.as_deref_mut() {
             admissions.clear(progress);
         }
+    }
+    if let Some(pending) = pending_dependent_refreshes.as_deref_mut() {
+        for refresh in pending.by_stage.values() {
+            if let (Some(admission), Some(key)) = (admission.as_deref_mut(), refresh.work_key) {
+                admission.cancel_queued(key);
+            }
+            if let (Some(progress), Some(key)) = (progress.as_deref_mut(), refresh.progress_key) {
+                progress.release(key);
+            }
+        }
+        pending.by_stage.clear();
+        pending
+            .completions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
     pending_refs.items.clear();
     pending_refs.ready.clear();
@@ -1034,7 +1133,7 @@ pub(crate) fn drain_pending_twin_docs(
     mut admission: ResMut<AsyncWorkAdmission>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut backed: ResMut<DocBackedTwinScenes>,
-    mut wake: ResMut<TwinProjectionWake>,
+    wake: Res<TwinProjectionWake>,
     sources: Res<Assets<UsdSourceText>>,
     twin_roots: Res<TwinRoots>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -1446,6 +1545,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     // installs all wake this owner. Consume the wake before inspecting the
     // tracked set so the normal render loop never performs a generation probe.
     world.resource_mut::<TwinProjectionWake>().consume();
+    poll_dependent_stage_refreshes(world);
 
     // Snapshot tracked scenes (owned) so no resource borrow is held across the
     // world mutations below.
@@ -1729,6 +1829,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             bevy::log::info_span!("usd_twin_projection_refresh_dependent_stage_assets").entered();
         refresh_dependent_stage_assets(world, doc, scene_id, &twin_path, active_twin_document);
     }
+    submit_pending_dependent_stage_refreshes(world);
 }
 
 /// Propagate an edited component layer into already-loaded assembly stages.
@@ -1786,21 +1887,21 @@ fn refresh_dependent_stage_assets(
     } else {
         None
     };
-    let Some(source) = world
+    let Some(layer_source) = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(changed_doc)
-        .map(|host| host.document().persistent_composed_source())
+        .map(|host| {
+            let snapshot = Arc::new(host.document().clone());
+            Arc::new(DependentStageLayerSource {
+                doc: changed_doc,
+                persistent_revision: (snapshot.base_revision(), snapshot.runtime_revision()),
+                snapshot,
+                serialized: OnceLock::new(),
+            })
+        })
     else {
         return;
     };
-    let source = match source {
-        Ok(source) => source,
-        Err(error) => {
-            warn!("[usd-live] cannot serialize persistent source for {changed_doc}: {error}");
-            return;
-        }
-    };
-    let source_bytes = source.into_bytes();
 
     for stage_id in candidates {
         match component_refresh_decision(changed_doc, layer_id, stage_id, policy_context) {
@@ -1818,93 +1919,519 @@ fn refresh_dependent_stage_assets(
                 continue;
             }
         }
-        let mut recipe = {
+        let (base_recipe, target_plan) = {
             let Some(asset) = world.resource::<Assets<UsdStageAsset>>().get(stage_id) else {
                 continue;
             };
             let Some(recipe) = asset.recipe.as_ref() else {
                 continue;
             };
-            if recipe.bytes.get(layer_id) == Some(&source_bytes) {
-                info!(
-                    "[usd-live] dependent stage {stage_id:?} already has current layer {layer_id}"
-                );
+            (recipe.clone(), asset.projection_plan.clone())
+        };
+        request_dependent_stage_refresh(
+            world,
+            stage_id,
+            base_recipe,
+            target_plan,
+            layer_id,
+            Arc::clone(&layer_source),
+        );
+    }
+}
+
+fn request_dependent_stage_refresh(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    base_recipe: Arc<lunco_usd_compose::recipe::StageRecipe>,
+    target_plan: Arc<UsdStageProjectionPlan>,
+    layer_id: &str,
+    layer_source: Arc<DependentStageLayerSource>,
+) {
+    let compatible = world
+        .resource::<PendingDependentStageRefreshes>()
+        .by_stage
+        .get(&stage_id)
+        .is_some_and(|pending| Arc::ptr_eq(&pending.target_plan, &target_plan));
+    if compatible {
+        let Some(pending) = world
+            .resource::<PendingDependentStageRefreshes>()
+            .by_stage
+            .get(&stage_id)
+        else {
+            return;
+        };
+        let current_source = pending.changed_layers.get(layer_id);
+        if current_source.is_some_and(|current| {
+            current.doc == layer_source.doc
+                && current.persistent_revision == layer_source.persistent_revision
+        }) {
+            return;
+        }
+        let Some(desired_revision) = pending.desired_revision.checked_add(1) else {
+            warn!("[usd-live] dependent stage refresh revision exhausted for {stage_id:?}");
+            return;
+        };
+        let mut refreshes = world.resource_mut::<PendingDependentStageRefreshes>();
+        if let Some(pending) = refreshes.by_stage.get_mut(&stage_id) {
+            pending
+                .changed_layers
+                .insert(layer_id.to_owned(), layer_source);
+            pending.desired_revision = desired_revision;
+        }
+        return;
+    }
+
+    if let Some(retired) = world
+        .resource_mut::<PendingDependentStageRefreshes>()
+        .by_stage
+        .remove(&stage_id)
+    {
+        if let Some(key) = retired.work_key {
+            world
+                .resource_mut::<AsyncWorkAdmission>()
+                .cancel_queued(key);
+        }
+        release_dependent_stage_progress(world, retired.progress_key);
+    }
+    let desired_revision = 1;
+
+    let Some(operation) = world
+        .resource_mut::<PendingDependentStageRefreshes>()
+        .allocate_operation()
+    else {
+        warn!("[usd-live] dependent stage refresh operation id exhausted");
+        return;
+    };
+    let active = is_authoritative_scene_stage(world, stage_id);
+    let progress_key = active.then_some(SimulationProgressKey {
+        owner: SimulationProgressOwner::UsdDependentStageProjection,
+        operation_id: operation,
+    });
+    if let (Some(key), Some(mut progress)) =
+        (progress_key, world.get_resource_mut::<SimulationProgress>())
+    {
+        progress.acquire(
+            key,
+            format!("Preparing updated dependent USD stage {stage_id:?}"),
+        );
+    }
+    let identity = u128::from(lunco_hash::fnv1a64(base_recipe.root_id.as_bytes()));
+    let work_order = lunco_hash::fnv1a64(base_recipe.root_id.as_bytes());
+
+    let pending = PendingDependentStageRefresh {
+        operation,
+        target_plan,
+        base_recipe,
+        changed_layers: BTreeMap::from([(layer_id.to_owned(), layer_source)]),
+        desired_revision,
+        submitted_revision: None,
+        work_key: None,
+        capacity_revision: None,
+        work_identity: identity,
+        work_order,
+        progress_key,
+        priority: if active {
+            AsyncWorkPriority::SimulationRequired
+        } else {
+            AsyncWorkPriority::Interactive
+        },
+    };
+    world
+        .resource_mut::<PendingDependentStageRefreshes>()
+        .by_stage
+        .insert(stage_id, pending);
+}
+
+fn poll_dependent_stage_refreshes(world: &mut World) {
+    let completions = {
+        let pending = world.resource::<PendingDependentStageRefreshes>();
+        std::mem::take(
+            &mut *pending
+                .completions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    };
+    for completion in completions {
+        let layer_sources = {
+            let refreshes = world.resource::<PendingDependentStageRefreshes>();
+            let Some(current) = refreshes.by_stage.get(&completion.stage) else {
+                continue;
+            };
+            if current.operation != completion.operation
+                || current.submitted_revision != Some(completion.revision)
+            {
                 continue;
             }
-            recipe.clone()
+            current.changed_layers.values().cloned().collect::<Vec<_>>()
         };
-        recipe
-            .bytes
-            .insert(layer_id.to_string(), source_bytes.clone());
-        // Build the non-Send live stage once, then derive the immutable worker
-        // projection from that exact composition. Building a projection from
-        // the recipe first and reopening it for the canonical stage parsed the
-        // same dependent closure twice on this exclusive app-thread path.
-        let replacement = match {
-            let _span =
-                bevy::log::info_span!("usd_twin_projection_dependent_live_stage_build").entered();
-            lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
-        } {
-            Ok(stage) => stage,
-            Err(error) => {
+        let document_state = {
+            let registry = world.resource::<DocumentRegistry<UsdDocument>>();
+            layer_sources.iter().find_map(|source| {
+                let Some(host) = registry.host(source.doc) else {
+                    return Some((source.doc, false));
+                };
+                let document = host.document();
+                ((document.base_revision(), document.runtime_revision())
+                    != source.persistent_revision)
+                    .then_some((source.doc, true))
+            })
+        };
+        if let Some((doc, changed)) = document_state {
+            if !changed {
+                let retired = {
+                    let mut refreshes = world.resource_mut::<PendingDependentStageRefreshes>();
+                    refreshes
+                        .by_stage
+                        .get(&completion.stage)
+                        .is_some_and(|pending| pending.operation == completion.operation)
+                        .then(|| refreshes.by_stage.remove(&completion.stage))
+                        .flatten()
+                };
+                if let Some(retired) = retired {
+                    if let Some(key) = retired.work_key {
+                        world
+                            .resource_mut::<AsyncWorkAdmission>()
+                            .cancel_queued(key);
+                    }
+                    release_dependent_stage_progress(world, retired.progress_key);
+                }
                 warn!(
-                    "[usd-e1b] component edit from document {changed_doc} could not prepare dependent stage {stage_id:?}: {error}"
+                    "[usd-live] dependent stage {:?} refresh ignored because source document {doc} closed before commit",
+                    completion.stage
                 );
-                continue;
+            } else if let Some(pending) = world
+                .resource_mut::<PendingDependentStageRefreshes>()
+                .by_stage
+                .get_mut(&completion.stage)
+                && pending.operation == completion.operation
+                && pending.submitted_revision == Some(completion.revision)
+            {
+                pending.work_key = None;
+                pending.submitted_revision = None;
+                pending.capacity_revision = None;
             }
-        };
-        let projection_plan = match {
-            let _span =
-                bevy::log::info_span!("usd_twin_projection_dependent_plan_snapshot").entered();
-            UsdStageProjectionPlan::from_stage(replacement.stage())
-        } {
-            Ok(plan) => plan,
-            Err(error) => {
-                warn!(
-                    "[usd-e1b] component edit from document {changed_doc} could not project dependent stage {stage_id:?}: {error}"
-                );
-                continue;
-            }
-        };
-        {
-            let _span =
-                bevy::log::info_span!("usd_twin_projection_dependent_reset_prepare").entered();
-            if !prepare_stage_projection_reset(world, stage_id) {
-                continue;
-            }
+            continue;
         }
 
-        let replaced = world
-            .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-            .is_some_and(|mut stages| {
-                stages.replace_rebuilt(stage_id, replacement);
-                true
-            });
-        if replaced {
-            // Keep the async asset cache and the live canonical stage on the
-            // same closure. Future previews then read the accepted component
-            // bytes through the normal loader boundary.
-            if let Some(mut asset) = world
-                .resource_mut::<Assets<UsdStageAsset>>()
-                .get_mut(stage_id)
+        let prepared = {
+            let mut pending = world.resource_mut::<PendingDependentStageRefreshes>();
+            let Some(current) = pending.by_stage.get_mut(&completion.stage) else {
+                continue;
+            };
+            if current.operation != completion.operation
+                || current.submitted_revision != Some(completion.revision)
             {
-                asset.recipe = Some(recipe);
-                asset.projection_plan = Arc::new(projection_plan);
+                continue;
             }
-            // This stage-scoped refresh retires only projected USD entities.  A
-            // detached preview camera is owned by `UsdViewportState` and stays
-            // exactly where the user left it.
-            let _span =
-                bevy::log::info_span!("usd_twin_projection_dependent_visual_refresh").entered();
-            refresh_scene_visuals_prepared(world, stage_id);
+            current.work_key = None;
+            current.submitted_revision = None;
+            current.capacity_revision = None;
+            if current.desired_revision != completion.revision {
+                continue;
+            }
+            pending.by_stage.remove(&completion.stage)
+        };
+        let Some(mut prepared) = prepared else {
+            continue;
+        };
+        if is_authoritative_scene_stage(world, completion.stage) {
+            let key = prepared.progress_key.unwrap_or(SimulationProgressKey {
+                owner: SimulationProgressOwner::UsdDependentStageProjection,
+                operation_id: prepared.operation,
+            });
+            if let Some(mut progress) = world.get_resource_mut::<SimulationProgress>() {
+                progress.acquire(
+                    key,
+                    format!(
+                        "Committing updated dependent USD stage {:?}",
+                        completion.stage
+                    ),
+                );
+            }
+            prepared.progress_key = Some(key);
+        }
+        match completion.result {
+            Err(error) => {
+                warn!(
+                    "[usd-e1b] dependent stage {:?} refresh preparation failed: {error}",
+                    completion.stage
+                );
+                release_dependent_stage_progress(world, prepared.progress_key);
+            }
+            Ok(None) => {
+                release_dependent_stage_progress(world, prepared.progress_key);
+            }
+            Ok(Some((recipe, projection_plan))) => {
+                let current_plan = world
+                    .resource::<Assets<UsdStageAsset>>()
+                    .get(completion.stage)
+                    .map(|asset| Arc::ptr_eq(&asset.projection_plan, &prepared.target_plan));
+                if current_plan != Some(true) {
+                    release_dependent_stage_progress(world, prepared.progress_key);
+                    continue;
+                }
+
+                let replacement = match {
+                    let _span =
+                        bevy::log::info_span!("usd_twin_projection_dependent_live_stage_build")
+                            .entered();
+                    lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
+                } {
+                    Ok(stage) => stage,
+                    Err(error) => {
+                        warn!(
+                            "[usd-e1b] dependent stage {:?} live rebuild failed: {error}",
+                            completion.stage
+                        );
+                        release_dependent_stage_progress(world, prepared.progress_key);
+                        continue;
+                    }
+                };
+                {
+                    let _span =
+                        bevy::log::info_span!("usd_twin_projection_dependent_reset_prepare")
+                            .entered();
+                    if !prepare_stage_projection_reset(world, completion.stage) {
+                        release_dependent_stage_progress(world, prepared.progress_key);
+                        continue;
+                    }
+                }
+
+                let replaced = world
+                    .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+                    .is_some_and(|mut stages| {
+                        stages.replace_rebuilt(completion.stage, replacement);
+                        true
+                    });
+                if replaced {
+                    if let Some(mut asset) = world
+                        .resource_mut::<Assets<UsdStageAsset>>()
+                        .get_mut(completion.stage)
+                    {
+                        asset.recipe = Some(Arc::new(recipe));
+                        asset.projection_plan = Arc::new(projection_plan);
+                    }
+                    let _span =
+                        bevy::log::info_span!("usd_twin_projection_dependent_visual_refresh")
+                            .entered();
+                    refresh_scene_visuals_prepared(world, completion.stage);
+                } else {
+                    report_stage_projection_reset_failure(
+                        world,
+                        completion.stage,
+                        "dependent stage plan was ready but its canonical stage could not be replaced"
+                            .to_owned(),
+                    );
+                }
+                release_dependent_stage_progress(world, prepared.progress_key);
+            }
+        }
+    }
+}
+
+fn release_dependent_stage_progress(
+    world: &mut World,
+    progress_key: Option<SimulationProgressKey>,
+) {
+    if let (Some(key), Some(mut progress)) =
+        (progress_key, world.get_resource_mut::<SimulationProgress>())
+    {
+        progress.release(key);
+    }
+}
+
+fn submit_pending_dependent_stage_refreshes(world: &mut World) {
+    let capacity_revision = world.resource::<AsyncWorkAdmission>().capacity_revision();
+    let mut requests = world
+        .resource::<PendingDependentStageRefreshes>()
+        .by_stage
+        .iter()
+        .filter(|(_, pending)| {
+            pending.work_key.is_none()
+                && pending
+                    .capacity_revision
+                    .is_none_or(|revision| revision != capacity_revision)
+        })
+        .map(|(stage, pending)| {
+            let changed_layers = pending
+                .changed_layers
+                .iter()
+                .map(|(layer_id, source)| (layer_id.clone(), Arc::clone(source)))
+                .collect::<Vec<_>>();
+            (
+                *stage,
+                pending.operation,
+                pending.desired_revision,
+                pending.work_identity,
+                pending.work_order,
+                pending.priority,
+                Arc::clone(&pending.base_recipe),
+                changed_layers,
+                pending.progress_key,
+            )
+        })
+        .collect::<Vec<_>>();
+    requests.sort_by_key(|(_, operation, _, identity, order, priority, _, _, _)| {
+        (*priority, *order, *identity, *operation)
+    });
+
+    for (
+        stage,
+        operation,
+        revision,
+        identity,
+        order,
+        priority,
+        base_recipe,
+        changed_layers,
+        progress_key,
+    ) in requests
+    {
+        let active = is_authoritative_scene_stage(world, stage);
+        let priority = if active {
+            AsyncWorkPriority::SimulationRequired
         } else {
-            report_stage_projection_reset_failure(
-                world,
-                stage_id,
-                format!(
-                    "dependent stage matched layer {layer_id} but its canonical stage could not be rebuilt"
-                ),
-            );
+            priority
+        };
+        let progress_key = if active {
+            let key = progress_key.unwrap_or(SimulationProgressKey {
+                owner: SimulationProgressOwner::UsdDependentStageProjection,
+                operation_id: operation,
+            });
+            if let Some(mut progress) = world.get_resource_mut::<SimulationProgress>() {
+                progress.acquire(
+                    key,
+                    format!("Preparing updated dependent USD stage {stage:?}"),
+                );
+            }
+            Some(key)
+        } else {
+            progress_key
+        };
+        let key = AsyncWorkKey::new(
+            AsyncWorkKind::UsdPreparation,
+            world
+                .get_resource::<lunco_core::SceneTransitionCoordinator>()
+                .and_then(lunco_core::SceneTransitionCoordinator::lifecycle_generation)
+                .unwrap_or_default(),
+            identity,
+            revision,
+            operation,
+        );
+        let (completions, wake) = {
+            let pending = world.resource::<PendingDependentStageRefreshes>();
+            (
+                Arc::clone(&pending.completions),
+                world.resource::<TwinProjectionWake>().clone(),
+            )
+        };
+        let worker_base_recipe = Arc::clone(&base_recipe);
+        let worker_completions = Arc::clone(&completions);
+        let worker_wake = wake.clone();
+        let job = move || {
+            let _span =
+                bevy::log::info_span!("usd_twin_projection_dependent_plan_prepare", revision)
+                    .entered();
+            let result: Result<
+                Option<(
+                    lunco_usd_compose::recipe::StageRecipe,
+                    UsdStageProjectionPlan,
+                )>,
+                String,
+            > = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut recipe = (*worker_base_recipe).clone();
+                let mut changed = false;
+                for (layer_id, source) in changed_layers {
+                    let bytes = source.persistent_bytes()?;
+                    if recipe
+                        .bytes
+                        .get(&layer_id)
+                        .is_some_and(|existing| existing.as_slice() == bytes.as_ref())
+                    {
+                        continue;
+                    }
+                    recipe.bytes.insert(layer_id, bytes.to_vec());
+                    changed = true;
+                }
+                if !changed {
+                    return Ok(None);
+                }
+                let projection_plan = {
+                    let _span = bevy::log::info_span!(
+                        "usd_twin_projection_dependent_plan_compose",
+                        revision
+                    )
+                    .entered();
+                    UsdStageProjectionPlan::from_recipe(&recipe)
+                        .map_err(|error| error.to_string())?
+                };
+                Ok(Some((recipe, projection_plan)))
+            }))
+            .unwrap_or_else(|_| Err("dependent USD stage plan preparation panicked".to_owned()));
+            worker_completions
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(DependentStageRefreshCompletion {
+                    stage,
+                    operation,
+                    revision,
+                    result,
+                });
+            worker_wake.wake();
+        };
+
+        {
+            let mut refreshes = world.resource_mut::<PendingDependentStageRefreshes>();
+            let Some(pending) = refreshes.by_stage.get_mut(&stage) else {
+                continue;
+            };
+            if pending.operation != operation || pending.desired_revision != revision {
+                continue;
+            }
+            pending.work_key = Some(key);
+            pending.submitted_revision = Some(revision);
+            pending.capacity_revision = None;
+            pending.priority = priority;
+            pending.progress_key = progress_key;
+        }
+
+        match world
+            .resource_mut::<AsyncWorkAdmission>()
+            .submit_ordered(priority, key, order, job)
+        {
+            Ok(()) | Err(lunco_core_runtime::AsyncWorkRejection::DuplicateKey) => {}
+            Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+                let capacity_revision = world.resource::<AsyncWorkAdmission>().capacity_revision();
+                if let Some(pending) = world
+                    .resource_mut::<PendingDependentStageRefreshes>()
+                    .by_stage
+                    .get_mut(&stage)
+                    && pending.operation == operation
+                    && pending.submitted_revision == Some(revision)
+                {
+                    pending.work_key = None;
+                    pending.submitted_revision = None;
+                    pending.capacity_revision = Some(capacity_revision);
+                }
+            }
+            Err(lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable) => {
+                world
+                    .resource::<PendingDependentStageRefreshes>()
+                    .completions
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(DependentStageRefreshCompletion {
+                        stage,
+                        operation,
+                        revision,
+                        result: Err(
+                            "dependent USD stage preparation requires a worker transport"
+                                .to_owned(),
+                        ),
+                    });
+                world.resource::<TwinProjectionWake>().wake();
+            }
         }
     }
 }
@@ -2019,8 +2546,12 @@ fn parse_component_refresh_decision(
     }
 }
 
-pub(crate) fn twin_projection_ready(wake: Res<TwinProjectionWake>) -> bool {
-    wake.is_pending()
+pub(crate) fn twin_projection_ready(
+    wake: Res<TwinProjectionWake>,
+    pending: Res<PendingDependentStageRefreshes>,
+    admission: Res<AsyncWorkAdmission>,
+) -> bool {
+    wake.is_pending() || pending.has_admission_retry(admission.capacity_revision())
 }
 
 /// A USD document change is the authoritative input for live projection.
@@ -2029,7 +2560,7 @@ pub(crate) fn twin_projection_ready(wake: Res<TwinProjectionWake>) -> bool {
 pub(crate) fn wake_twin_projection_on_document_changed(
     trigger: On<DocumentChanged>,
     registry: Res<DocumentRegistry<UsdDocument>>,
-    mut wake: ResMut<TwinProjectionWake>,
+    wake: Res<TwinProjectionWake>,
 ) {
     if registry.contains(trigger.event().doc) {
         wake.wake();
@@ -2094,7 +2625,7 @@ pub(crate) fn admit_pending_primary_document_projection(world: &mut World) {
             admissions.admit(doc, generation, &mut progress);
         },
     );
-    if let Some(mut wake) = world.get_resource_mut::<TwinProjectionWake>() {
+    if let Some(wake) = world.get_resource::<TwinProjectionWake>() {
         wake.wake();
     }
 }
@@ -2120,7 +2651,7 @@ pub(crate) fn release_document_projection_progress(
 /// referenced-spawn transaction that consumes the same Bevy message stream.
 pub(crate) fn wake_twin_projection_on_stage_event(
     mut events: MessageReader<bevy::asset::AssetEvent<UsdStageAsset>>,
-    mut wake: ResMut<TwinProjectionWake>,
+    wake: Res<TwinProjectionWake>,
 ) {
     let mut changed = false;
     for _ in events.read() {

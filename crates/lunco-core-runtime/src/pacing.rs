@@ -497,6 +497,8 @@ pub enum SimulationProgressOwner {
     SceneReferences,
     /// Live projection of an authored USD document revision.
     UsdDocumentProjection,
+    /// Preparation and replacement of an authored dependent USD stage.
+    UsdDependentStageProjection,
     /// Authored terrain data and collider preparation.
     TerrainPreparation,
     /// USD document source preparation and revision admission.

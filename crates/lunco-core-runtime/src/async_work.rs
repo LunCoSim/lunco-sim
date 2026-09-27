@@ -56,7 +56,7 @@ pub enum AsyncWorkKind {
     RhaiCompilation,
     /// Analyze a SysML source revision.
     SysmlAnalysis,
-    /// Prepare a USD source revision.
+    /// Prepare a USD source, recipe, or immutable projection plan revision.
     UsdPreparation,
     /// Prepare presentation-only derived work.
     VisualizationPreparation,

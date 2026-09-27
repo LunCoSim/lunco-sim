@@ -113,11 +113,17 @@ simulation instead of committing a partial reset. Avian retires joint graph
 edges before native joint components and collider markers; a constraint owned
 by another stage rejects the reset until its topology can be rebuilt together.
 
-When a component document changes, a dependent stage refresh builds its
-replacement `CanonicalStage` once and derives the immutable projection plan from
-that same composed stage before the reset boundary. This keeps plan preparation
-and the live-stage swap on one source revision without reopening the same recipe
-twice on the app thread.
+When a component document changes, the dependent-stage owner snapshots its
+base/runtime revisions and coalesces layer updates against the immutable recipe.
+Bounded `UsdPreparation` workers serialize the persistent document snapshot once
+per revision, share those bytes across dependent stages, apply the changed-layer
+overlay, and build each immutable projection plan. Identical layer bytes skip
+the rebuild. The owner accepts only current document revisions, operation/revision,
+and target-plan identity, then opens the thread-affine `CanonicalStage`, prepares
+registered reset owners, and swaps the stage and plan together. An active stage
+holds its exact simulation-progress key through that commit. `UsdStageAsset`
+shares its immutable `StageRecipe` through `Arc`, so ordinary asset and
+pending-job snapshots do not copy the layer closure on the app thread.
 
 Default Twin scene admission uses `AsyncWorkAdmission` to parse the exact
 `UsdSourceText` revision and serialize the restored persistent document
@@ -371,7 +377,7 @@ directly; the visual adapter does not act as a generic USD facade, and
 OpenUSD types such as `sdf::Path` remain direct OpenUSD dependencies. It is
 implemented for both `StageView` (the live composed stage, `view.rs`) and `sdf::Data`
 (the flattened layer), so one generic reader works against live and flattened alike.
-The `UsdStageAsset` carries a `Send` `StageRecipe` (`recipe`), a prepared
+The `UsdStageAsset` carries an `Arc`-shared `Send` `StageRecipe` (`recipe`), a prepared
 `UsdStageProjectionPlan`, and handles for the layer-read receipts that keep
 transitive source changes connected to Bevy's hot-reload graph; the live stage
 is built on the main thread from the recipe, and there is no stored `reader`

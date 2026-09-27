@@ -8,6 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy::asset::{AssetId, AssetServer};
 use bevy::prelude::*;
@@ -358,25 +360,25 @@ pub fn canonical_stage_for_document(world: &World, doc: DocumentId) -> Option<&C
 }
 
 /// Event-driven invalidation state for the live Twin projection owner.
-#[derive(Resource, Default)]
+#[derive(Resource, Clone, Default)]
 pub struct TwinProjectionWake {
-    pending: bool,
+    pending: Arc<AtomicBool>,
 }
 
 impl TwinProjectionWake {
     /// Mark projection work as pending.
-    pub fn wake(&mut self) {
-        self.pending = true;
+    pub fn wake(&self) {
+        self.pending.store(true, Ordering::Release);
     }
 
     /// Consume the pending invalidation.
-    pub fn consume(&mut self) {
-        self.pending = false;
+    pub fn consume(&self) {
+        self.pending.swap(false, Ordering::AcqRel);
     }
 
     /// Whether projection work is pending.
     pub fn is_pending(&self) -> bool {
-        self.pending
+        self.pending.load(Ordering::Acquire)
     }
 }
 

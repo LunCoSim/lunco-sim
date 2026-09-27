@@ -440,7 +440,7 @@ behavior pass, and local-embodiment input stays on the interaction cadence.
 
 | Domain/work | May run async | Must run at the owner boundary |
 |---|---|---|
-| USD | Asset I/O, dependency discovery, immutable layer parsing/composition, and send-safe projection-plan preparation | Check source generation; mutate the live, thread-affine stage and publish ECS projection in stable scene order |
+| USD | Asset I/O, dependency discovery, immutable layer parsing/composition, and send-safe projection-plan preparation; dependent-stage source snapshots are serialized once per revision and recipe overlays are coalesced through bounded admission | Check source revisions, operation/revision, and target-plan identity; mutate the live, thread-affine stage and publish ECS projection in stable scene order. An active dependent-stage refresh retains its exact progress key through commit |
 | Modelica | Source I/O, declaration/interface extraction, parsing/lowering, solver construction, and requested numerical step | Check model generation/session/step; publish outputs and propagate ports at the fixed co-simulation boundary |
 | SysML | Source-set I/O, parse, resolve, typed analysis, and requirement report preparation | Publish only the current source revision; verification that reads live simulation values consumes the committed tick snapshot |
 | Rhai | Parse file-backed `.rhai` assets in Bevy's async asset-loading tasks; prepare inline roots and immutable compile artifacts through shared admission | Publish canonical source/AST revisions; validate and commit the dependency closure; evaluate imported module bodies, top-level initialization, and lifecycle hooks against the live world in stable actor order; apply commands at their declared boundary |

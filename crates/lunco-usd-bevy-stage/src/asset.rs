@@ -26,7 +26,9 @@ use lunco_assets_core::asset_path::anchor_of;
 pub struct UsdStageAsset {
     /// The send-safe layer closure shared by initial projection and the live
     /// canonical stage. It is absent for an externally composed stage.
-    pub recipe: Option<lunco_usd_compose::recipe::StageRecipe>,
+    /// Cloned handles share the immutable closure instead of copying its layer
+    /// bytes on the app thread.
+    pub recipe: Option<Arc<lunco_usd_compose::recipe::StageRecipe>>,
     /// Keeps source-read receipt assets alive so Bevy can reload this stage
     /// when one of its transitive USD layers changes.
     #[dependency]
@@ -51,7 +53,7 @@ impl UsdStageAsset {
     ) -> Result<Self> {
         projection_plan.validate()?;
         Ok(Self {
-            recipe: Some(recipe),
+            recipe: Some(Arc::new(recipe)),
             source_dependencies,
             projection_plan: Arc::new(projection_plan),
         })

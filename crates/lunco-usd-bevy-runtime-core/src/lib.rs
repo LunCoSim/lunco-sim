@@ -80,6 +80,7 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.add_plugins(lunco_usd_bevy_runtime_persistence::UsdRuntimePersistencePlugin);
 
         app.init_resource::<twin_projection::PendingTwinDocs>();
+        app.init_resource::<twin_projection::PendingDependentStageRefreshes>();
         app.init_resource::<lunco_usd_bevy_twin::TwinProjectionWake>();
         app.add_observer(twin_projection::wake_twin_projection_on_document_changed);
         app.init_resource::<live_consume::LiveTransformEditHints>();

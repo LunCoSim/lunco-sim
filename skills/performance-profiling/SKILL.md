@@ -238,6 +238,16 @@ the same system is nearly free on settled frames. If the outer system is hot,
 attribute time to its internal owner operations before choosing an async
 boundary or cache.
 
+Dependent USD-stage refresh is owner work behind `sync_twin_overlays`. Snapshot
+the base/runtime revisions, serialize each persistent source snapshot once on
+bounded workers, share its bytes across dependent stages, and coalesce changed
+layers per target stage. Compare recipe bytes on workers and skip unchanged
+rebuilds. The main-thread owner validates source revisions, operation/revision,
+and target-plan identity before opening the live stage and committing the plan.
+Measure serialization and plan preparation separately from the live-stage
+build, reset owners, and visual projection; do not move the thread-affine stage
+across the worker boundary or let completion order select a commit.
+
 For `project_usd_policies`, distinguish the initial prepared-plan lookup and
 live-stage traversal from generation-batch cache promotion. A promoted cache
 means every intervening `UsdSceneChangeBatch` was observed and the changed
