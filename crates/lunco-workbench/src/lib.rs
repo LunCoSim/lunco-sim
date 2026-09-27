@@ -212,7 +212,7 @@ enum TabRequest {
 enum LayoutRequest {
     Reset,
     SetActivityBar(bool),
-    AddSingleton { id: PanelId, slot: PanelSlot },
+    FocusPanel(PanelId),
     RemoveSingleton(PanelId),
     ActivatePerspective(String),
 }
@@ -259,44 +259,7 @@ fn drain_pending_layout_requests(
                     perspective_command::report_unknown_perspective(&mut commands, &id);
                 }
             }
-            LayoutRequest::AddSingleton { id, slot } => {
-                if !layout.panels.contains_key(&id) {
-                    continue;
-                }
-                let already_docked = layout
-                    .dock
-                    .iter_all_tabs()
-                    .any(|(_, tab)| matches!(tab, TabId::Singleton(tab_id) if *tab_id == id));
-                if already_docked {
-                    continue;
-                }
-                match slot {
-                    PanelSlot::SideBrowser => {
-                        if !layout.side_browser.contains(&id) {
-                            layout.side_browser.push(id);
-                        }
-                    }
-                    PanelSlot::Center => {
-                        if !layout.center.contains(&id) {
-                            layout.center.push(id);
-                        }
-                    }
-                    PanelSlot::RightInspector => {
-                        if !layout.right_inspector.contains(&id) {
-                            layout.right_inspector.push(id);
-                        }
-                    }
-                    PanelSlot::Bottom => {
-                        if !layout.bottom.contains(&id) {
-                            layout.bottom.push(id);
-                        }
-                    }
-                    PanelSlot::Hidden => {
-                        unreachable!("hidden panels are normalized before queueing")
-                    }
-                }
-                layout.insert_panel_into_dock(id, slot);
-            }
+            LayoutRequest::FocusPanel(id) => focus_registered_panel(&mut layout, id.0),
             LayoutRequest::RemoveSingleton(id) => {
                 layout.side_browser.retain(|panel| *panel != id);
                 layout.side_browser_bottom.retain(|panel| *panel != id);
@@ -405,7 +368,26 @@ fn on_focus_panel(
         );
         return;
     };
-    focus_panel_now(&mut layout, &trigger.event().id);
+    focus_registered_panel(&mut layout, &trigger.event().id);
+}
+
+fn focus_registered_panel(layout: &mut WorkbenchLayout, want: &str) {
+    let preferred_perspective = layout
+        .panels
+        .iter()
+        .find(|(id, _)| id.0 == want)
+        .and_then(|(_, panel)| panel.preferred_perspective());
+    if let Some(preferred_perspective) = preferred_perspective
+        && layout.active_perspective() != Some(preferred_perspective)
+        && layout
+            .perspectives
+            .iter()
+            .any(|perspective| perspective.id() == preferred_perspective)
+    {
+        layout.activate_perspective(preferred_perspective);
+    }
+
+    focus_panel_now(layout, want);
 }
 
 fn focus_panel_now(layout: &mut WorkbenchLayout, want: &str) {
@@ -468,7 +450,7 @@ fn drain_pending_panel_focus(
     mut layout: ResMut<WorkbenchLayout>,
 ) {
     for id in std::mem::take(&mut pending.0) {
-        focus_panel_now(&mut layout, &id);
+        focus_registered_panel(&mut layout, &id);
     }
 }
 

@@ -45,7 +45,7 @@ pub struct CloseTab {
     pub instance: u64,
 }
 
-/// Bring a registered singleton panel forward in the concrete shell.
+/// Open and focus a registered singleton panel, activating its preferred perspective when set.
 #[Command(default)]
 pub struct FocusPanel {
     /// The singleton panel's stable id.

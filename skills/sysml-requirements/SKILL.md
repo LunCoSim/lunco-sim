@@ -38,6 +38,28 @@ IR. Rhai selects providers, queries observations, orchestrates behavior, and
 formats evidence. A verification registry selects a scene and script but does
 not duplicate requirement text or thresholds.
 
+Windowed LunCoSim builds with the `sysml` feature also provide the
+**SysML Requirements** panel in `View → Editor`. It reads the active Twin's
+prepared analysis, displays requirement documentation, formal `require`
+criteria, resolved `verify` cases, parser diagnostics, and source locations.
+Selecting **SysML Requirements** from another perspective opens its owning
+Editor perspective. The panel starts with a compact requirement list and a
+detail pane; search and status filters narrow the list. **Open at line** opens
+the canonical `SysmlDocument` at the declaration or diagnostic location.
+**Save source** applies revision-checked `ApplySysmlOps` and
+`SaveSysmlDocument` commands. The text editor is read-only when the document is
+not writable or its source revision conflicts with the open draft.
+
+The panel presents three independent status dimensions: structured requirement
+evidence, linked scene-test execution, and source quality (`require` criteria
+and resolved `verify` links). Running a mapped case uses the same production
+headless scene-test runner as the CLI; the panel shows elapsed time and live
+output, supports cancellation, and retains the run summary and output for the
+Twin session. Save or discard open SysML edits before running because tests
+read saved Twin files. Results are cleared when their Twin closes. The panel
+lives in the existing workbench Editor alongside the other native document
+tools.
+
 ### Preserve declared collection shape
 
 Read model values through the typed `SysmlModel.value` projection. A structured
@@ -681,6 +703,33 @@ component/value/relationship. Add a failing or unavailable-source case only
 when rejection or fail-closed behavior is itself an explicit contract (for
 example, stale-source rejection or a safety-critical missing relationship).
 `--validate` alone cannot prove any of these runtime facts.
+
+In the desktop workbench, open **Editor → SysML Requirements** to inspect the
+active Twin, search requirements, filter by test status, and open a linked
+source at its declaration. The detail pane initially selects a requirement
+with a Twin-mapped test when one is available. The panel offers **Run test** for
+each Twin-mapped verification case, displays elapsed time and live output, and
+allows a running test to be cancelled. Save or discard open SysML edits before
+running; the runner reads the saved Twin source.
+
+Read the three status dimensions separately; they answer different questions:
+
+- **Requirement evidence** is `PASS`, `FAIL`, `STALE`, or `NO EVIDENCE`, based
+  on structured `<CHANNEL>_EVIDENCE` telemetry for the active Twin and source
+  revision. `NO EVIDENCE` means no current checks were emitted.
+- **Test execution** is per linked scene test. `PASS` and `FAIL` are current
+  runner verdicts; `PARTIAL` means some linked tests passed while others still
+  need results. `NOT RUN` means mapped tests have no current result; `RUNNING`
+  includes elapsed time; `CANCELLED` has no verdict; `STALE` belongs to an older
+  source revision; `NO VERDICT` means the runner finished without a verdict;
+  `RUN ERROR` means the runner could not start or be monitored.
+- **NO VERIFY** means the source has no resolved `verify` link. **NO RUNNER**
+  means a link exists without a Twin test mapping.
+- **Source quality** reports whether a formal `require` criterion exists and
+  how many `verify` links have Twin test mappings. A missing criterion or link
+  is a model gap; it does not mean a test failed.
+- Panel results are in-session evidence for the source revision that was run.
+  Rerun after edits; closing the Twin clears its result set.
 
 ## Development cycle
 

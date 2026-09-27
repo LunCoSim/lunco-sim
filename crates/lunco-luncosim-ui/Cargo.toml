@@ -30,6 +30,8 @@ python = []
 # Embodiment's egui presentation belongs to the application UI shell rather than
 # the headless-safe simulation runtime.
 avatar-ui = ["dep:lunco-avatar-ui"]
+# SysML requirements presentation is included only by app builds with SysML.
+sysml = ["dep:lunco-sysml-ui"]
 # Downloaded Twin presentation in the Scenarios menu.
 networking = [
     "dep:lunco-networking",
@@ -136,6 +138,7 @@ lunco-scripting = { path = "../lunco-scripting", default-features = false, featu
 lunco-scripting-rhai-core = { path = "../lunco-scripting-rhai-core" }
 lunco-scripting-rhai-runtime = { path = "../lunco-scripting-rhai-runtime" }
 lunco-scripting-bridge-core = { path = "../lunco-scripting-bridge-core", optional = true }
+lunco-sysml-ui = { path = "../lunco-sysml-ui", optional = true }
 lunco-settings = { path = "../lunco-settings" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }

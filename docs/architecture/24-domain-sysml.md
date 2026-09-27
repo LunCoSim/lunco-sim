@@ -95,9 +95,26 @@ fields, and the Rhai editor reports them as retryable instead of treating an
 unfinished parse as clean. Source edits themselves only validate and update
 text; they do not parse on the caller's schedule.
 
-This document lifecycle is not a claim that SysML has dedicated BDD, IBD,
-requirements-tree or text-editor UI. The production surface is the generic
-document API, typed reports, and Rhai verification described below.
+The optional `lunco-sysml-ui` application adapter provides a focused
+requirements panel: it browses analyzed Twin sources, jumps to declaration and
+diagnostic lines, and edits through the canonical `SysmlDocument`
+command/save lifecycle. Requirement evidence, per-case test execution, and
+source quality (`require` criteria and resolved `verify` coverage) are shown as
+separate status dimensions. Each Twin-mapped verification can be run from its
+linked requirement; the panel starts the production headless scene-test runner,
+shows elapsed time and live output, and allows cancellation. Completed runs
+retain their summary and captured output for the open Twin session. Tests read
+saved Twin files, so running is disabled while an indexed SysML document or
+local source draft has unsaved edits. Statuses distinguish missing evidence,
+missing `verify` links, missing Twin runner mappings, unrun or stale results,
+and execution errors. A missing formal `require` criterion is a source-quality
+issue, not a test failure.
+
+The panel belongs to the existing workbench Editor level, alongside native
+document tools; it does not add a Twin HUD surface or a new workspace. This is a
+requirements/source view, not full BDD, IBD, or general-purpose SysML editor
+support. The headless document and analysis owners remain usable without this
+UI crate.
 
 ## 5. Parser strategy
 

@@ -2487,11 +2487,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Lint what is loaded now.
 
- Findings land in [`lunco_lint::LintReport`] and are logged — errors at
- `error!`, warnings at `warn!`. Read them through the shared
- [`GetDiagnostics` query](./architecture/12-api.md#getdiagnostics): use
- `scope: "loaded_stages"` or `scope: "twin"` for scene/Twin lint, or `doc_id`
- for the complete diagnostics of one open document.
+ Findings land in [`lunco_lint::LintReport`] (readable via `GetDiagnostics`)
+ and are logged — errors at `error!`, warnings at `warn!`.
 
 - *defined in:* `crates/lunco-scene-validation/src/lint_command.rs`
 
@@ -3337,7 +3334,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `FocusPanel`
 
- Bring a registered singleton panel forward in the concrete shell.
+ Open and focus a registered singleton panel, activating its preferred perspective when set.
 
 - *defined in:* `crates/lunco-workbench-core/src/commands.rs`
 
@@ -3741,7 +3738,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 241 commands from the runtime schema; scanned 955 .rs files for docs (0 parse failure(s) skipped).
+<!-- 241 commands from the runtime schema; scanned 961 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->
