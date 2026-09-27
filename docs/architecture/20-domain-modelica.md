@@ -525,15 +525,17 @@ Restart (⟳ → `RestartActiveModel`). The `CompileStatus` API query
 reports the run-state (`is_compiled`, `is_compiling`, `paused`,
 `running`, `stale`, `current_time`) alongside the compile state.
 
-`GetModelDiagnostics {doc_id}` is the authoring query for source problems. It
-returns parser and compiler diagnostics together with asynchronous Rumoca lint
-findings in one `diagnostics` array. Each row contains its source, code or rule,
-severity, message, optional 1-based line and column, file, and optional fix
-suggestion. `lint_state` reports `pending`, `ready`, `unavailable`, or `failed`,
-so a client can poll without treating unfinished lint as a clean model. Rumoca
-Help and Note findings are surfaced as hints and informational rows, along with
-warnings and errors. The query and Diagnostics panel read the same per-document
-snapshot owned by `ModelicaLintPlugin`, installed by Modelica UI and API hosts.
+`GetDiagnostics {doc_id}` is the shared authoring query for source problems
+across Modelica, USD, Rhai, SysML, and other document owners. It combines
+compile diagnostics with each installed parser, semantic-analysis, and lint
+channel. Every diagnostic has the same shape: domain, source, stable code,
+severity, message, URI, optional one-based source range, optional zero-based
+byte offsets, subject, suggestion, and related locations. The report exposes
+each channel's generation and `pending`, `ready`, `failed`, or `unavailable`
+state; clients must wait for `complete: true` before treating no findings as a
+clean result. Rumoca Help and Note findings are surfaced as hints and
+informational rows, along with warnings and errors. The Modelica diagnostics
+panel and API query read the same per-document `DocumentDiagnostics` snapshot.
 Rumoca's source linter runs off the update thread for open documents; only the
 current source generation is published. This source-level feedback is separate
 from the authored `lint.modelica` policy used by explicit asset validation.

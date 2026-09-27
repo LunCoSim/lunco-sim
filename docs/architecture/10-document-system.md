@@ -533,12 +533,24 @@ Once the Document System is in place:
 - **Network collaboration.** Eventually. The op stream is already a wire
   protocol.
 
+### Cross-domain diagnostics
+
+The shared `Diagnostic` contract carries severity, stable code, producer,
+domain, URI, source range, byte offsets, subject, remediation, and related
+locations. `DocumentDiagnostics` stores compile and producer channels by
+`DocumentId`; every document snapshot has a monotonic revision, and each
+producer channel reports its analyzed generation and lifecycle.
+`GetDiagnostics {doc_id}` is the API/Rhai read path for any open document; the
+API's `doc_id: 0` active-document alias is available when Workspace is installed.
+`GetDiagnostics {scope}` reads the explicit loaded-stage or Twin lint result
+produced by `RunLint`. `DiscoverSchema` publishes the `GetDiagnostics`
+parameter and response contract for command clients.
+
 ## 12. Future Work
 
 - **Mission document:** Create a first-class mission scenario document domain.
 - **SysML document:** Support SysML v2 documents (structure + requirements only — see principles.md Article III).
 - **Live-sync layer:** Add a live-sync layer (Nucleus / CRDT / Yjs integration) for multi-peer collaboration.
-- **Unified diagnostics:** Extend the neutral diagnostics substrate (`Diagnostic` / `DiagnosticSeverity` / `CompileState`) to all remaining domains.
 
 
 ## 13. Open questions (to resolve as we migrate the first domain)

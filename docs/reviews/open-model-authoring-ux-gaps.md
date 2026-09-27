@@ -75,14 +75,14 @@ of those records, not another assembly-specific API:
 | Workflow need | Existing owners to compose | Smallest useful addition |
 |---|---|---|
 | Discover an assembly | `authoring_context`, `InspectUsdDocument`, `QueryUsdPrim`, `assembly_audit` | `model_authoring::model_context` delivered; returns identity, generation, children, references, variants, frames, mounts, bodies, joints, colliders, ports, and available actions |
-| Know whether it is buildable | `RunLint`/`LintReport`, `assembly_audit`, `connection_preflight`, `physics_acceptance` | `model_authoring::readiness_report` delivered; Twin supplies model policy, the generic facade supplies universal checks |
+| Know whether it is buildable | `RunLint`/`GetDiagnostics`, `assembly_audit`, `connection_preflight`, `physics_acceptance` | `model_authoring::readiness_report` delivered; Twin supplies model policy, the generic facade supplies universal checks |
 | Create a simulation scene | `assembly_edit`, reference/variant plans, `waypoint_editor`, camera and program attach commands | `model_authoring::scene_recipe` delivered for references, placement, start state, terrain/environment, camera, route, and program hand-offs |
 | Connect Modelica/Rhai/physics | USD `inputs:`/`outputs:`, `AttachProgram`, typed `SetConnection`, lint | `model_authoring::port_graph`/`wiring_plan` delivered with endpoint direction/type validation and one typed connection plan |
 | Publish a reusable part | `component_bundle_plan`, typed references/metadata, explicit Save-As | `model_authoring::publish_component` delivered for root, `defaultPrim`, `kind`, schemas, references, provenance, and explicit Save-As |
 | Compare alternatives | `DocumentRegistry::fork`, isolated preview, typed plans | `authoring_inspection::candidate_diff` compares exact affected paths and reports topology, collision, frame, material, port, and lint consequences |
 | Act on diagnostics | selection owner, prim-tree reveal, preview framing | `authoring_inspection::navigate_diagnostic` selects/reveals and frames the exact authored subject |
 | Inspect one model | `QueryUsdPrim`, `InspectUsdDocument`, diagnostic leases | `authoring_inspection::inspection_mode` combines visual, collision, joint/frame, material, connection, schema, and provenance evidence |
-| Organize findings | `LintReport` and structured subjects | `authoring_inspection::group_diagnostics` groups by owner/severity while retaining raw findings |
+| Organize findings | `GetDiagnostics` and structured subjects | `authoring_inspection::group_diagnostics` groups by owner/severity while retaining raw findings |
 | Revisit a view | shared settings document and preview camera | named view-only inspection presets are persisted through `lunco-settings` |
 
 The authored policy additions are Rhai-only. They fail loudly, carry the
@@ -155,7 +155,7 @@ before launch and present the source prim, requested output, expected type, and
 nearest valid candidates. Runtime should retain the same diagnostic as a
 structured binding failure rather than relying on a scrolling log.
 
-**Current status:** strict `RunLint`, live `LintReport`, and the authored
+**Current status:** strict `RunLint`, live `GetDiagnostics`, and the authored
 `connection_preflight` regression now reject missing source prims, missing
 ports, direction errors, and type mismatches before they can be mistaken for
 runtime success. The remaining UX gap is diagnostic-to-selection/reveal/frame
@@ -257,7 +257,7 @@ Show the diagnostic at the exact authored consumer path and provide a generic
 “select/reveal/frame this path” action carrying the explicit preview/document
 identity. Never resolve by display name alone.
 
-`RunLint`, `LintReport`, and the authored `connection_preflight` fixture now
+`RunLint`, `GetDiagnostics`, and the authored `connection_preflight` fixture now
 cover the fail-closed validation. The remaining reusable improvement is to
 return a finding that can directly select/reveal/frame its exact authored
 consumer in the focused preview. The historical missing-altimeter path must

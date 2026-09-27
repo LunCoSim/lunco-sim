@@ -42,6 +42,7 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::{ApiQueryError, ApiQueryResult, api_param_str};
 use lunco_api_core::ApiErrorCode;
 use lunco_api_core::{ApiValue, api_value};
+use lunco_doc::DiagnosticSeverity;
 use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_stage::{UsdRead, canonical::CanonicalStage};
 use serde_json::json;
@@ -344,15 +345,17 @@ pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationR
     let mut warnings = Vec::new();
     let mut findings = Vec::with_capacity(lint_findings.len());
     for finding in lint_findings {
-        let line = finding.line();
+        let line = finding.summary();
         match finding.severity {
-            lunco_lint::LintSeverity::Error => errors.push(line),
+            DiagnosticSeverity::Error => errors.push(line),
             _ => warnings.push(line),
         }
         findings.push(TwinValidationFinding {
-            rule: finding.rule,
+            rule: finding.code.expect("run_lint validates every rule id"),
             severity: finding.severity.as_str().to_string(),
-            subject: finding.subject,
+            subject: finding
+                .subject
+                .expect("run_lint preserves the subject field"),
             message: finding.message,
         });
     }
@@ -439,16 +442,18 @@ fn apply_lint_policy(mut report: ValidationReport, text: &str) -> ValidationRepo
     }
 
     for finding in lunco_lint::run_lint(&report.kind, H::Map(facts)) {
-        let line = finding.line();
+        let line = finding.summary();
         report.findings.push(ValidationFinding {
-            domain: finding.domain,
-            rule: finding.rule,
+            domain: finding.domain.expect("run_lint sets the requested domain"),
+            rule: finding.code.expect("run_lint validates every rule id"),
             severity: finding.severity.as_str().to_owned(),
-            subject: finding.subject,
+            subject: finding
+                .subject
+                .expect("run_lint preserves the subject field"),
             message: finding.message,
         });
         match finding.severity {
-            lunco_lint::LintSeverity::Error => report.errors.push(line),
+            DiagnosticSeverity::Error => report.errors.push(line),
             _ => report.warnings.push(line),
         }
     }

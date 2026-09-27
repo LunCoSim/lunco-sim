@@ -73,7 +73,7 @@ resources.
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/health` | Liveness. Answered by the transport thread; no world access. |
-| `GET` | `/api/commands/schema` | The runtime `DiscoverSchema` — every callable command and its field types. |
+| `GET` | `/api/commands/schema` | The runtime `DiscoverSchema` — every callable command and field type, plus registered query names and their declared input/response contracts. |
 | `POST` | `/api/commands` | Execute a tagged command or discovered query (`ListEntities`, `DiscoverSchema`, `SubscribeTelemetry`, `ReadPorts`, `GetReadiness`, and domain providers). |
 
 ## API Queries (Data Retrieval)
@@ -84,6 +84,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 
 | Query | Parameters | Description |
 |---|---|---|
+| `GetDiagnostics` | Exactly one of `{"doc_id": u64}` or `{"scope": "loaded_stages" | "twin"}` | Read the current diagnostics snapshot for an open document or an explicit lint scope. `doc_id: 0` selects the active document when Workspace is installed. The query returns source channels, completion state, severity counts, and standardized diagnostics with stable code, owner, URI, source range, related locations, and remediation guidance. It is listed in `DiscoverSchema` with its parameter and response contract. |
 | `ListBundled` | `{}` | List the runtime example-model inventory (`bundled://` ids retained for the API contract) and the complete source inventory (`sources[]`) used by authored validation. |
 | `ListOpenDocuments` | `{}` | List all documents currently open in the workspace, including origin and dirty state. |
 | `ListRecentFiles` | `{}` | List recently opened files and Twins from `recents.json`. |
@@ -113,6 +114,51 @@ Queries return structured data from the simulation. They use the same `POST /api
 hosts whenever the API and Workspace plugins are enabled. Modelica registers
 only Modelica-specific queries; a USD document does not depend on the Modelica
 UI to appear in `ListOpenDocuments`.
+
+### GetDiagnostics
+
+This provider is installed by `ApiQueryRegistryPlugin` and uses the same
+`ApiQueryRegistry` as Rhai `query()`. A script reads an open document with:
+
+```rhai
+let report = query("GetDiagnostics", #{doc_id: document_id});
+// When Workspace is installed, use doc_id: 0 for the active document.
+```
+
+An external caller sends the same query name through the existing command
+envelope:
+
+```bash
+curl -s http://127.0.0.1:4101/api/commands \
+  -H 'content-type: application/json' \
+  -d '{"type":"ExecuteCommand","command":"GetDiagnostics","params":{"doc_id":42}}'
+```
+
+Use exactly one of `doc_id` and `scope`. Pass the exact document id returned by
+`ListOpenDocuments` or the document open command; `doc_id: 0` selects the active
+document when Workspace is installed. Document scope combines the compile
+diagnostics with every installed producer channel. Scene scope reads the
+current report from `RunLint` and never starts another lint pass. `scope` accepts
+`loaded_stages` or `twin`.
+
+Each diagnostic exposes `domain`, `source`, `code`, `severity`, `message`,
+`uri`, `line`, `column`, `end_line`, `end_column`, `start_offset`, `end_offset`,
+`subject`, `suggestion`, and `related`. Line and column are one-based;
+byte-offset ranges are zero-based and half-open. Each source channel exposes
+its analyzed `generation`, `revision`, `state`, `message`, and finding `count`.
+Document channels can include `modelica.parser`, `modelica.rumoca-lint`,
+`sysml.analysis`, and `usd.document-lint`; `diagnostics[]` uses the shared
+cross-domain record with stable code, source range, subject, suggestion, and
+related locations. The `scope` form reads the report produced by `RunLint`; it
+does not start a lint pass. Call `RunLint` first and poll until `complete` is
+true. The `loaded_stages` and `twin` scopes have independent status and
+revision.
+`complete` is true after every installed channel has reached a terminal state;
+`ok` is true only for a completed report without errors. A warning-only report
+is okay. A failed or unavailable producer stays visible in the channel status.
+The document snapshot's top-level `revision` advances whenever its diagnostic
+content changes. `DiscoverSchema` lists this contract, including the exactly-
+one-of input rule.
 
 `ReadPorts` is the read-only projection of the shared `lunco-port-core::ports::PortRegistry`.
 Each returned port has `metadata.type` (currently `scalar`), optional `unit`,

@@ -7057,11 +7057,15 @@ dependencies = [
  "lunco-core",
  "lunco-core-runtime",
  "lunco-core-session",
+ "lunco-doc",
+ "lunco-doc-bevy",
  "lunco-exposure-core",
  "lunco-hooks",
+ "lunco-lint",
  "lunco-port-core",
  "lunco-readiness",
  "lunco-telemetry-core",
+ "lunco-workspace",
  "serde",
 ]
 
@@ -7813,6 +7817,7 @@ name = "lunco-lint"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
+ "lunco-doc",
  "lunco-hooks",
 ]
 

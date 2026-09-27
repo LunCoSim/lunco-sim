@@ -4,10 +4,10 @@
 // contract: RunLint must expose one structured collision for the duplicate
 // boundary and remain silent for the clean assembly.
 
-fn by_rule(findings, rule) {
+fn by_code(findings, code) {
     let out = [];
     for finding in findings {
-        if finding.rule == rule { out.push(finding); }
+        if finding.code == code { out.push(finding); }
     }
     out
 }
@@ -36,7 +36,7 @@ fn has_subject(findings, subject) {
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["LintReport", "ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
+       query_reads: ["GetDiagnostics", "ListOpenDocuments", "QueryUsdPrim"], required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -64,17 +64,17 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    let report = query("LintReport");
-    if report == () {
+    let report = query("GetDiagnostics", #{ scope: "loaded_stages" });
+    if report == () || report.available != true || report.complete != true {
         if this.elapsed > 10.0 {
-            fail_fast("LintReport query returned () after RunLint",
+            fail_fast("GetDiagnostics did not produce a completed loaded-stage report after RunLint",
                 "PORT OWNER COLLISION", "PORT_OWNER_COLLISION");
         }
         return;
     }
 
-    let findings = report.findings;
-    let collisions = by_rule(findings, "port-owner-collision");
+    let findings = report.diagnostics;
+    let collisions = by_code(findings, "port-owner-collision");
     let failures = [];
     failures.push(t_true(collisions.len() == 1,
         "expected one port-owner-collision finding, got " + collisions.len()));
@@ -82,8 +82,8 @@ fn on_tick(me, ctx) {
         let finding = collisions[0];
         failures.push(t_true(finding.subject == "/PortOwnerCollision/CollisionCase",
             "collision subject was " + finding.subject));
-        failures.push(t_true(finding.severity == "warn",
-            "collision severity was " + finding.severity + ", expected warn"));
+        failures.push(t_true(finding.severity == "warning",
+            "collision severity was " + finding.severity + ", expected warning"));
         failures.push(t_true(finding.message.contains("PORT_OWNER_COLLISION: `mass` has 2 input owners"),
             "collision message did not describe the duplicate input owners"));
         failures.push(t_true(finding.message.contains("winner: ")

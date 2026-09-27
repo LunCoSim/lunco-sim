@@ -4,6 +4,7 @@ use crate::queries::{ApiQueryRegistry, ApiVisibility};
 use bevy::prelude::*;
 use bevy::reflect::std_traits::ReflectDefault;
 use bevy::reflect::{TypeInfo, TypeRegistration, TypeRegistry};
+use lunco_api_core::ApiQuerySchema;
 use lunco_api_core::{ApiSchema, CommandSchema, FieldSchema, HookParameterSchema, HookSchema};
 use std::collections::HashMap;
 
@@ -154,18 +155,9 @@ pub fn discover_commands(
     commands
 }
 
-/// Discover data-returning query providers registered by the runtime.
-///
-/// Providers are intentionally represented by their stable names here. Their
-/// parameter and response contracts live with the provider implementation, and
-/// the result is still self-describing JSON. Sorting makes the wire schema
-/// stable despite the registry's hash-map storage.
-pub fn discover_queries(registry: Option<&ApiQueryRegistry>) -> Vec<String> {
-    let mut queries = registry
-        .map(|registry| registry.names().map(str::to_owned).collect::<Vec<_>>())
-        .unwrap_or_default();
-    queries.sort_unstable();
-    queries
+/// Discover data-returning query contracts registered by the runtime.
+pub fn discover_queries(registry: Option<&ApiQueryRegistry>) -> Vec<ApiQuerySchema> {
+    registry.map_or_else(Vec::new, ApiQueryRegistry::schemas)
 }
 
 /// Discover every link-collected hook contract and its active policy state.

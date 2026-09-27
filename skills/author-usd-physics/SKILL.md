@@ -609,7 +609,7 @@ inside the body </SkidRover> but no joint names it — …
 and on the **loaded** scene, run the same rules through the verb:
 
 ```rhai
-cmd("RunLint", #{}); query("LintReport");
+cmd("RunLint", #{}); query("GetDiagnostics", #{scope: "loaded_stages"});
 ```
 
 The rules are authored in `assets/scripting/policy/lint_usd.rhai` — add one there

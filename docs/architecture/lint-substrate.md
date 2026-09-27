@@ -27,16 +27,17 @@ situation; a lint catches it by reading what was written.
 |---|---|---|
 | **Facts** | Rust, in the crate that owns the subject (`lunco_usd_avian` for standard joints, `lunco_usd_sim` for gear drives, `lunco_modelica_ast` for Rumoca AST facts) | Only the owning projection or parser can answer its subject questions. Each owner supplies the fields its runtime reader actually consumes, and the command layer composes them into one fact map |
 | **Rules** | rhai policy, `assets/scripting/policy/lint_<domain>.rhai` | A rule that needs a rebuild is a rule nobody writes, tunes, or silences. These are editable against a **running** sim |
-| **Findings** | `lunco_lint::LintReport` for mounted stages; `lunco_scene_validation::lint_command::DocumentLintReports` for explicit Editor documents | Reports stay scoped to the stage/document that was actually linted |
+| **Findings** | `lunco_lint::LintReport` for mounted-stage and Twin passes; `lunco_doc_bevy::DocumentDiagnostics` for explicit documents | Reports stay scoped to the stage/document that was actually analyzed |
 
 `lunco-lint` is substrate: it knows what a finding is and how a domain asks
 policy for one. It knows nothing about USD, rhai or Modelica.
 
 Modelica source-editor diagnostics from Rumoca's maintained `rumoca-tool-lint`
 are a separate parser-facing service. `ModelicaLintPlugin` runs that source
-linter asynchronously for open document generations and shares its findings
-with the workbench and `GetModelDiagnostics`; it does not run the authored
-`lint.modelica` policy or replace explicit `ValidateAsset`/`RunLint` checks.
+linter asynchronously for open document generations and publishes its findings
+to `DocumentDiagnostics`; the workbench and `GetDiagnostics` read that shared
+report. It does not run the authored `lint.modelica` policy or replace explicit
+`ValidateAsset`/`RunLint` checks.
 
 ## One linter per domain
 
@@ -246,9 +247,10 @@ reader to scroll past it and taxes play with an opinion about authoring. So:
 
 ```rhai
 cmd("RunLint", #{});             // explicit; live checks are queued
-query("LintReport");             // { ok, pending, errors, warnings, findings[] }
+query("GetDiagnostics", #{scope: "loaded_stages"});
+                                // { complete, ok, errors, warnings, diagnostics[] }
 cmd("RunLint", #{domain: "usd", doc_id: 7});
-query("LintReport", #{doc_id: 7}); // includes generation, pending, and projection_ready
+query("GetDiagnostics", #{doc_id: 7}); // includes per-producer generation and state
 ```
 
 …and the same verb over HTTP/MCP (`{"type":"ExecuteCommand","command":"RunLint"}`).
@@ -259,9 +261,11 @@ applies the file-derived rules to one composed file; it cannot observe projected
 runtime port owners. Automatic discovery may call loader-only preflight to hide
 assets that cannot load, but it must not invoke authored lint policies. Policies
 run only when a user explicitly invokes `RunLint`, `ValidateAsset`,
-`ValidateSysml`, `ValidateTwin`, or the CLI validation command. `RunLint`
-reports `pending:true` until its composed and live evidence pass completes;
-only `ok:true` is a clean acceptance result.
+`ValidateSysml`, `ValidateTwin`, or the CLI validation command.
+`GetDiagnostics` reports `complete:false` while its composed and live evidence
+pass is pending; only a completed `ok:true` report is a clean acceptance
+result. Status and revision are tracked independently for `loaded_stages` and
+`twin`.
 The runtime connection facts are produced in Rust, while direction, pending
 versus missing severity, and message text remain in the Rhai policy. Emergent contact/topology failures still require
 the relevant behavioral test; a static lint must report "conditionally stable"

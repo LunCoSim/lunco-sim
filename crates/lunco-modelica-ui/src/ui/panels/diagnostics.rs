@@ -22,7 +22,6 @@ use lunco_ui::log::{LogEntry, LogLevel, SourceLoc, render_log_view};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::ui::document_context::ModelicaDocuments;
-use lunco_modelica_core::modelica_lint::{ModelicaLintSeverity, ModelicaLintState};
 
 /// Panel id.
 pub const DIAGNOSTICS_PANEL_ID: PanelId = PanelId("modelica_diagnostics");
@@ -147,20 +146,26 @@ impl Panel for DiagnosticsPanel {
                     .document()
                     .ast()
                     .generation;
-                ctx.resource::<lunco_modelica_core::modelica_lint::ModelicaLintDiagnostics>()?
-                    .for_generation(doc, generation)
+                ctx.resource::<lunco_doc_bevy::DocumentDiagnostics>()?
+                    .get(doc)?
+                    .sources
+                    .get("modelica.rumoca-lint")
+                    .filter(|snapshot| snapshot.generation == generation)
                     .map(|snapshot| snapshot.state.clone())
             });
         match lint_status {
-            Some(ModelicaLintState::Pending) => {
+            Some(lunco_doc::DiagnosticSourceState::Pending) => {
                 ui.label(
                     egui::RichText::new("Rumoca lint is running in the background…").color(muted),
                 );
             }
-            Some(ModelicaLintState::Unavailable(message) | ModelicaLintState::Failed(message)) => {
+            Some(
+                lunco_doc::DiagnosticSourceState::Unavailable(message)
+                | lunco_doc::DiagnosticSourceState::Failed(message),
+            ) => {
                 ui.label(egui::RichText::new(format!("Rumoca lint: {message}")).color(muted));
             }
-            Some(ModelicaLintState::Ready) | None => {}
+            Some(lunco_doc::DiagnosticSourceState::Ready) | None => {}
         }
         let jump = render_log_view(
             ui,
@@ -190,16 +195,7 @@ impl Panel for DiagnosticsPanel {
 #[derive(Default)]
 pub struct DiagnosticsCursor {
     bound_doc: Option<lunco_doc::DocumentId>,
-    last_ast_gen: u64,
-    last_error_hash: u64,
-    last_lint_revision: u64,
-}
-
-fn hash_str(s: Option<&str>) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
-    h.finish()
+    last_revision: Option<u64>,
 }
 
 /// Bevy system: refresh [`DiagnosticsLog`] only when the set of
@@ -214,8 +210,7 @@ fn hash_str(s: Option<&str>) -> u64 {
 pub fn refresh_diagnostics(
     workspace: Res<lunco_workspace::WorkspaceResource>,
     registry: Res<ModelicaDocuments>,
-    compile_states: Res<lunco_doc_bevy::DocumentDiagnostics>,
-    lint_results: Option<Res<lunco_modelica_core::modelica_lint::ModelicaLintDiagnostics>>,
+    document_diagnostics: Res<lunco_doc_bevy::DocumentDiagnostics>,
     mut diagnostics: ResMut<DiagnosticsLog>,
     mut cursor: bevy::prelude::Local<DiagnosticsCursor>,
 ) {
@@ -225,9 +220,7 @@ pub fn refresh_diagnostics(
     let Some(doc_id) = doc_id else {
         if cursor.bound_doc.is_some() {
             cursor.bound_doc = None;
-            cursor.last_ast_gen = 0;
-            cursor.last_error_hash = hash_str(None);
-            cursor.last_lint_revision = 0;
+            cursor.last_revision = None;
             // Preserve history — user may want to read the last
             // compile error after closing the tab.
         }
@@ -237,36 +230,25 @@ pub fn refresh_diagnostics(
     let Some(host) = registry.host(doc_id) else {
         if cursor.bound_doc.is_some() {
             cursor.bound_doc = None;
-            cursor.last_ast_gen = 0;
-            cursor.last_error_hash = hash_str(None);
-            cursor.last_lint_revision = 0;
+            cursor.last_revision = None;
             // Preserve history — user may want to read the last
             // compile error after closing the tab.
         }
         return;
     };
 
-    let ast_gen = host.document().ast().generation;
-    let err_hash = hash_str(compile_states.error_message(doc_id));
-    let lint_revision = lint_results
-        .as_deref()
-        .and_then(|results| results.for_generation(doc_id, ast_gen))
-        .map_or(0, |snapshot| snapshot.revision);
+    let revision = document_diagnostics
+        .get(doc_id)
+        .map(|report| report.revision);
 
     // Fast-path: nothing that could affect diagnostics changed.
-    if cursor.bound_doc == Some(doc_id)
-        && cursor.last_ast_gen == ast_gen
-        && cursor.last_error_hash == err_hash
-        && cursor.last_lint_revision == lint_revision
-    {
+    if cursor.bound_doc == Some(doc_id) && cursor.last_revision == revision {
         return;
     }
 
     // Something moved — rebuild the entry list.
     cursor.bound_doc = Some(doc_id);
-    cursor.last_ast_gen = ast_gen;
-    cursor.last_error_hash = err_hash;
-    cursor.last_lint_revision = lint_revision;
+    cursor.last_revision = revision;
 
     let mut entries: Vec<LogEntry> = Vec::new();
 
@@ -278,71 +260,47 @@ pub fn refresh_diagnostics(
     // or "Untitled" when the doc has no explicit name yet.
     let model_tag = Some(host.document().origin().display_name());
 
-    // 1. AST parse errors — caught by rumoca's recovering parser.
-    for diag in host.document().ast().errors.iter() {
-        entries.push(LogEntry {
-            at: web_time::Instant::now(),
-            level: LogLevel::Error,
-            text: diag.message.clone(),
-            model: model_tag.clone(),
-            // Located when the lenient parser gave us a span — makes
-            // the row click-to-source like lint findings.
-            loc: diag
-                .line
-                .zip(diag.col)
-                .map(|(line, column)| SourceLoc { line, column }),
-        });
-    }
-
-    // 2. Compile and run errors — the worker stores them per document in
-    // `DocumentDiagnostics`. Located Rumoca findings remain click-to-source;
-    // when no structured finding is available, use the worker's error summary.
-    let located = compile_states.diagnostics(doc_id);
-    if !located.is_empty() {
-        for diag in located {
-            entries.push(LogEntry {
-                at: web_time::Instant::now(),
-                level: LogLevel::Error,
-                text: diag.message.clone(),
-                model: model_tag.clone(),
-                // Located when the failure's primary span sits in this
-                // doc — makes the row click-to-source like lint findings.
-                loc: diag
-                    .line
-                    .zip(diag.col)
-                    .map(|(line, column)| SourceLoc { line, column }),
-            });
-        }
-    } else if let Some(msg) = compile_states.error_message(doc_id) {
-        entries.push(LogEntry {
-            at: web_time::Instant::now(),
-            level: LogLevel::Error,
-            text: msg.to_string(),
-            model: model_tag.clone(),
-            // Worker error is a stringified summary; no location.
-            loc: None,
-        });
-    }
-
-    // Rumoca's shared snapshot includes Error, Warning, Note, and Help
-    // diagnostics. Keep the rule id and concrete suggestion in the message so
-    // selecting a row gives a complete, source-located fix hint.
-    if let Some(snapshot) = lint_results
-        .as_deref()
-        .and_then(|results| results.for_generation(doc_id, ast_gen))
-    {
-        let ast_has_errors = !host.document().ast().errors.is_empty();
-        for finding in &snapshot.diagnostics {
-            if ast_has_errors && finding.rule == "syntax-error" {
-                continue;
-            }
-            let level = match finding.severity {
-                ModelicaLintSeverity::Error => LogLevel::Error,
-                ModelicaLintSeverity::Warning => LogLevel::Warn,
-                ModelicaLintSeverity::Info | ModelicaLintSeverity::Hint => LogLevel::Info,
+    // Every domain producer publishes to this same document snapshot. The
+    // panel keeps its bounded history, while its rows retain the API's code,
+    // remediation, and source-location fields.
+    if let Some(report) = document_diagnostics.get(doc_id) {
+        let generation = host.document().ast().generation;
+        let current_diagnostics = report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic, None))
+            .chain(
+                report
+                    .sources
+                    .values()
+                    .filter(|channel| channel.generation == generation)
+                    .flat_map(|channel| {
+                        channel
+                            .diagnostics
+                            .iter()
+                            .map(move |diagnostic| (diagnostic, Some(channel.id.as_str())))
+                    }),
+            );
+        for (diagnostic, source) in current_diagnostics {
+            let level = match diagnostic.severity {
+                lunco_doc::DiagnosticSeverity::Error => LogLevel::Error,
+                lunco_doc::DiagnosticSeverity::Warning => LogLevel::Warn,
+                lunco_doc::DiagnosticSeverity::Info | lunco_doc::DiagnosticSeverity::Hint => {
+                    LogLevel::Info
+                }
             };
-            let mut text = format!("[{}] {}", finding.rule, finding.message);
-            if let Some(suggestion) = finding.suggestion.as_deref() {
+            let mut text = String::new();
+            if let Some(code) = diagnostic.code.as_deref() {
+                text.push('[');
+                text.push_str(code);
+                text.push_str("] ");
+            } else if let Some(source) = source {
+                text.push('[');
+                text.push_str(source);
+                text.push_str("] ");
+            }
+            text.push_str(&diagnostic.message);
+            if let Some(suggestion) = diagnostic.suggestion.as_deref() {
                 text.push_str("\nSuggestion: ");
                 text.push_str(suggestion);
             }
@@ -351,10 +309,10 @@ pub fn refresh_diagnostics(
                 level,
                 text,
                 model: model_tag.clone(),
-                loc: Some(SourceLoc {
-                    line: finding.line,
-                    column: finding.column,
-                }),
+                loc: diagnostic
+                    .line
+                    .zip(diagnostic.col)
+                    .map(|(line, column)| SourceLoc { line, column }),
             });
         }
     }

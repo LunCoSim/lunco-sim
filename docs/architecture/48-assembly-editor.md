@@ -433,13 +433,12 @@ type (or to an exact projected runtime port). Missing prims, malformed source
 paths, type mismatches, and unavailable runtime endpoints are terminal errors,
 not silently dropped graph edges.
 
-After an explicit `RunLint`, `LintReport` exposes the same evidence as
-actionable findings. A document-scoped report includes its authored
-`generation`, `current_generation`, `projection_ready`, `pending`,
-`stale`, and `ok` state. The editor should keep the lint action pending
-until `pending:false`, focus the finding's sink `subject`, and offer
-source-path reveal/frame from the structured message; it must not present a
-stale or half-complete report as clean.
+After an explicit `RunLint`, `GetDiagnostics` exposes the same evidence as
+actionable findings. A document-scoped report includes producer channels with
+the analyzed `generation`, lifecycle `state`, `revision`, and finding count.
+The editor should keep the lint action pending until the current
+`usd.document-lint` channel is ready, focus the finding's `subject`, and offer
+source-path reveal/frame; it must not present an incomplete report as clean.
 
 Transform commands validate referenced children through the document's loaded
 dependency closure, supplied by the existing canonical stage. The document
