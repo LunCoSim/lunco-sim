@@ -195,11 +195,16 @@ struct PendingJointTopologyChanges(
 
 /// Lifecycle-queued USD prims awaiting simulation projection.
 #[derive(Resource)]
-struct PendingUsdSimPrimWork(PendingEntityWork);
+struct PendingUsdSimPrimWork(PendingEntityWork, Vec<lunco_core::RuntimeDiagnostic>);
+
+// Deferred Commands are applied at the end of this Update system. Keep the
+// authored-path ordering while limiting the command batch that can occupy one
+// UI frame.
+const MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE: usize = 32;
 
 impl Default for PendingUsdSimPrimWork {
     fn default() -> Self {
-        Self(PendingEntityWork::with_initial_discovery())
+        Self(PendingEntityWork::with_initial_discovery(), Vec::new())
     }
 }
 
@@ -789,6 +794,14 @@ fn process_usd_sim_prims(
             .filter_map(|entity| query.get(entity).ok())
             .collect();
         unprocessed.sort_by(|left, right| left.1.path.cmp(&right.1.path));
+        let remainder = if unprocessed.len() > MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE {
+            unprocessed.split_off(MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE)
+        } else {
+            Vec::new()
+        };
+        pending
+            .0
+            .extend(remainder.into_iter().map(|(entity, ..)| entity));
         unprocessed
     };
 
@@ -945,7 +958,10 @@ fn process_usd_sim_prims(
         );
         processed += 1;
     }
-    runtime_diagnostics.replace_producer("usd-sim", authored_diagnostics);
+    pending.1.extend(authored_diagnostics);
+    if !pending.0.has_work() {
+        runtime_diagnostics.replace_producer("usd-sim", std::mem::take(&mut pending.1));
+    }
     if processed > 0 {
         bevy::log::debug!(
             "[usd-sim] processed {processed} prim(s) in {:.2} ms",
@@ -3616,6 +3632,7 @@ fn queue_invalidated_usd_sim_prim(
 
 fn reset_usd_sim_prim_work(mut pending: ResMut<PendingUsdSimPrimWork>) {
     pending.0.clear();
+    pending.1.clear();
 }
 
 #[cfg(test)]
