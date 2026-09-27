@@ -181,10 +181,15 @@ package checks after changing skill metadata or packaging.
   affected skill in the same change. Keep owner, API, lifecycle, and verification
   guidance current; remove obsolete instructions instead of documenting both
   generations.
-- Before handoff, review the complete diff for legacy code, shims, fallbacks,
-  compatibility branches, duplicated logic, stale comments, and stale docs.
-  Update all APIs and call sites together. If a required capability is missing,
-  implement it at its authoritative owner or report the blocker explicitly.
+- Before committing or handing off, verify the solution addresses the root cause,
+  fits its authoritative architectural owner, and is robust for its real
+  consumer. Review the complete diff for workarounds, legacy implementations,
+  shims, fallbacks, compatibility branches, duplicated logic, stale comments,
+  stale docs, and descriptions of retired or failed approaches. Keep historical
+  context only when it serves a concrete maintenance need; state the current
+  contract directly. Update all APIs and call sites together. If a required
+  capability is missing, implement it at its authoritative owner or report the
+  blocker explicitly.
 - Comments must describe the code as it stands. Do not describe discarded
   approaches, previous solutions, or missing capabilities.
 - A replacement is a clean cutover: delete the retired implementation, API,
@@ -315,12 +320,14 @@ package checks after changing skill metadata or packaging.
   command or source-checkout binary. Networking is opt-in:
   `cargo build -p lunco-luncosim --features networking`; local builds and scene
   tests must not start a multiplayer host.
-- Every agent doing runtime work owns its own LunCoSim session on an explicit,
-  free API port; launch it even when another user or agent session is active.
-  Sessions may run concurrently on distinct ports. Never send commands to,
-  stop, restart, or reuse another session's port. For FPS profiling, use this
-  task's production binary and scene in the owned session; record concurrent
-  workloads that may affect the result instead of stopping someone else's app.
+- Every agent doing debugging, processing, scene inspection, or other runtime
+  work must launch and use its own LunCoSim session with API access enabled on
+  an explicit, free API port. Do this even when another user or agent session
+  is active; sessions may run concurrently on distinct ports. Never send
+  commands to, stop, restart, or reuse another session's port. For FPS
+  profiling, use this task's production binary and scene in the owned session;
+  record concurrent workloads that may affect the result instead of stopping
+  someone else's app.
   Launch from the same repository checkout and working directory being used
   for the task. Verify `/proc/<pid>/cwd`, the binary path, PID, and port match
   your checkout before controlling or replacing your own session; never use
