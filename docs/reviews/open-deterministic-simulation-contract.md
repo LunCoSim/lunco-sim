@@ -63,6 +63,18 @@ crates. `python3 scripts/validate_skills.py` passed with 43 skills valid.
 This is focused integrated evidence; it does not close whole-simulation
 determinism or performance acceptance.
 
+After this integration, commit `791cda5e` advanced the task branch and was
+fast-forwarded to local `main`; no push was made. A windowed production API run
+on port 4123 attached the capture gate to its authored `ControlsTest` actor and
+again passed `TESTS_OK 8`. The API receipt, `intent.hold` event, and completed
+stream record matched correlation id `2` and
+`{scene_generation: 1, effective_tick: 659, sequence: 1}`, retaining target
+`1975542653690512`, producer `api_transport`, and the held `action` payload.
+Launching the gate on `WorldRoot` was invalid because no live scenario owned its
+simulation query. An injected `W` produced an avatar self-driver edge, but no
+controlled-vessel physical-frame record was observed; physical-frame runtime
+acceptance remains open.
+
 ## Earlier main-integration behavior evidence (2026-09-26)
 
 After integrating local `main` at `4bde746aa`, the clean production

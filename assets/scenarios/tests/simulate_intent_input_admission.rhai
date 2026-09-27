@@ -50,7 +50,7 @@ fn on_event(me, evt, ctx) {
 
     let recording = query("ReadSessionInputStream", #{});
     checks.push(t_true(recording["state"] == "recording",
-        "session input capture was not active during admitted input"));
+        "session input capture was not active during admitted input: " + recording.to_string()));
     let matching_record = false;
     if type_of(recording["records"]) == "array" {
         for record in recording["records"] {
@@ -77,7 +77,7 @@ fn on_event(me, evt, ctx) {
     let complete = query("ReadSessionInputStream", #{});
     checks.push(t_true(complete["state"] == "complete" &&
                        type_of(complete["records"]) == "array",
-        "completed session input stream was not readable through the typed API"));
+        "completed session input stream was not readable through the typed API: " + complete.to_string()));
     this.done = true;
     report_verdict(checks, "SIMULATE INTENT INPUT ADMISSION",
         "SIMULATE_INTENT_INPUT_ADMISSION");

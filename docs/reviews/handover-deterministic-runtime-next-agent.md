@@ -3,15 +3,14 @@
 **Prepared:** 2026-09-27
 **Workspace:** `/home/rod/Documents/luncosim-workspace/lunar-soil`
 **Branch:** `codex/lunar-soil`
-**HEAD:** `19c1c3e27ae2fc469b0a236ea0581368103d671a`
-**Integrated main:** `277fced5da73cda8448492ab9f25b5a7c827eb6a`
+**Behavioral source baseline:** `791cda5e30c16dc10046dc324a7a53be54f57e6f`
 
 The in-progress optimization merge was completed as `c8740ceaf`; latest local
-`main` was then integrated by merge commit `19c1c3e27`. There is no active
-merge and no unresolved path. The task work remains uncommitted: 54 modified
-tracked files and three untracked files, with nothing staged. No push was made.
-The pre-merge `D9`/`D14` backup remains in `stash@{0}`; the work was restored
-and reviewed after the merge.
+`main` was integrated by merge commit `19c1c3e27`. The follow-up D9/D14 capture
+commit `791cda5e` was then fast-forwarded to the separate local `main` worktree.
+The local `main` worktree includes that commit. There is no active merge or
+unresolved path, and no push was made. The pre-merge `D9`/`D14` backup remains
+in `stash@{0}`. The API evidence below was captured from that source baseline.
 
 ## Active user objective
 
@@ -135,16 +134,26 @@ Fresh evidence after the `main` merge:
   The fixture still emitted its independent undeclared-dependency diagnostics.
   This verifies one admitted API held input and capture lifecycle; the run did
   not exercise physical-key capture or durable replay.
+- A follow-up windowed production API run on port 4123 attached that Rhai gate
+  to the fixture's authored `ControlsTest` actor and again passed `TESTS_OK 8`.
+  The API receipt, `intent.hold`, and completed stream record matched
+  correlation id `2` and `{scene_generation: 1, effective_tick: 659,
+  sequence: 1}`, target `1975542653690512`, and the `action` held payload.
+  Running the gate dynamically on `WorldRoot` was invalid: its declared
+  simulation query correctly reported that no live scenario owned the query.
+  Injected `W` produced an avatar self-driver edge, but the fixture emitted no
+  controlled-vessel physical-frame record, so physical-frame runtime
+  acceptance remains open.
 - An earlier port 4120 attempt of that gate reported `FAIL`; the fixture's
   repeated steering dependency diagnostic obscured its assertion output. The
   prompt port 4121 rerun passed. Keep the fixture diagnostics separate from
   the D9 result.
 - The command reference was regenerated from the merged build's live runtime
   schema: 235 runtime-visible commands across 53 crates.
-- The owned sessions on ports 4119, 4120, 4121, and 4122 were stopped through
+- The owned sessions on ports 4119, 4120, 4121, 4122, and 4123 were stopped through
   API `Exit`; their processes and listeners are gone. The 4121 process was PID
-  142057; the new capture run on 4122 used PID 226406. No visual or performance
-  acceptance was run.
+  142057; the new capture run on 4122 used PID 226406. The two owned 4123 runs
+  used PIDs 256878 and 265459. No visual or performance acceptance was run.
 
 Older sessions on port 4103 were also stopped through API `Exit`; they are not
 evidence for this merged-main run. No runtime session is currently owned by
