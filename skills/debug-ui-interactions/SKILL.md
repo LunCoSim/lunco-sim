@@ -54,7 +54,10 @@ gesture itself must not enable the transform gizmo. The hit prim's registered
 `LunCoPointerInteractionAPI` must authorize that button as `context`; the
 generic viewport adapter applies its per-button blocking behavior before the
 ordered-hit pass, and route policy uses canonical hit paths rather than screen
-proximity. A semantic chord alone does not create a menu. Unarmed route-edit
+proximity. The popup host registers the foreground menu rectangle with
+`ScenePickGate` as chrome, even when that rectangle lies inside the 3D viewport;
+menu clicks must not also start a gizmo drag. A semantic chord alone does not
+create a menu. Unarmed route-edit
 and selection clicks go through one `scene_interaction` Rhai policy; simulation
 possession accepts only an exclusive `selection.replace` intent. Spawn, terrain,
 attachment, and camera consumers are not yet under one captured gesture
@@ -62,6 +65,12 @@ manager. The editor gizmo has a local captured lifecycle: a same-frame handle
 hit owns primary input through release or cancellation and suppresses preview
 pan for that gesture. A route fixture passing does not prove global viewport
 arbitration.
+
+An authored pass-through hit can still emit its own Bevy pointer event. The
+shared scene dispatcher must stop that hit's ancestor propagation before
+de-duplicating the gesture, so a lower blocking or context target can receive
+it. Disposable scene previews that overlap interactive geometry must author
+pass-through behavior for the buttons they should not consume.
 
 The retained Bevy UI backend shares the window target with scene picking. The
 Workbench's UI camera sorts above the scene, so unmarked Bevy UI nodes would
@@ -78,6 +87,13 @@ and menu policy in those tool hooks rather than sending it through the general
 REPL queue or a fixed-tick scenario. Heavy synchronous work in an input hook
 would still occupy the application thread, so keep the hook bounded and move
 preparation or I/O to its owning asynchronous boundary.
+
+Scene `Pointer<Move>` observers used for a selected-object preview must
+coalesce the Bevy bubble to one typed hook per pointer position in a frame.
+Keep the hook presentation-only: update one disposable transform and do not
+rebuild route geometry or sample a full terrain path during hover. The next
+primary click commits the selected route point through the canonical
+`@runtime@` USD edit path.
 The repeatable production gate is `assets/scenes/tests/editor/route_interaction/route_interaction.usda`,
 run by `scripts/run_editor_scene_tests.sh`; it sends typed native-window input
 through picking and verifies the mounted fixture, waypoint hit, semantic

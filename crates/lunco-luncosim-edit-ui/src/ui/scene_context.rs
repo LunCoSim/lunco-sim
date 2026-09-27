@@ -18,7 +18,10 @@ impl Default for ActivePointerButton {
     }
 }
 
-fn interaction_for_button(policy: ScenePointerPolicy, button: PointerButton) -> PointerInteraction {
+pub(crate) fn interaction_for_button(
+    policy: ScenePointerPolicy,
+    button: PointerButton,
+) -> PointerInteraction {
     match button {
         PointerButton::Primary => policy.left,
         PointerButton::Secondary => policy.right,

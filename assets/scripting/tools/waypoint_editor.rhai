@@ -56,14 +56,49 @@ fn route_pointer_action(context) {
     if pointer_intent(context, "route.context")
         && side != "" && policy != () && policy[side] == "context" {
         let route = route_edit_path(context);
-        if route == () || context_route_point(context, route) == () {
+        let point = context_route_point(context, route);
+        let ribbon = context_route_ribbon(context, route);
+        if route == () || (point == () && !ribbon) {
             return #{ ok: true, changed: false, handled: false };
         }
         let result = on_context(context);
         result.handled = true;
         return result;
     }
+    // A selected route point can be placed with the next ordinary scene hit.
+    // This stays ahead of generic selection and possession routing, while
+    // explicit Alt-click append keeps its existing meaning above.
+    if context.button == "primary" {
+        let move = move_selected_from_pointer(context);
+        if move != () && move.handled == true { return move; }
+        let route = route_edit_path(context);
+        if route != () && context.doc_id != ()
+            && direct_route_point(context.doc_id, context.selected_path, route) {
+            clear_move_preview(context.doc_id, route);
+        }
+    }
     #{ ok: true, changed: false, handled: false }
+}
+
+fn move_selected_from_pointer(context) {
+    if context == () || context.doc_id == () || context.selected_path == () {
+        return ();
+    }
+    let route = route_edit_path(context);
+    if route == () || !direct_route_point(context.doc_id, context.selected_path, route) {
+        return ();
+    }
+    // Keep marker-to-marker clicks available for their own context/selection
+    // semantics. Placement is for a world surface or another scene surface.
+    if context_route_point(context, route) != () { return (); }
+    let pointer = pointer_point(context);
+    if pointer.ok != true {
+        return #{ ok: true, changed: false, handled: false };
+    }
+    let result = move_route_point(context.doc_id, route, context.selected_path,
+        point_values(pointer.point));
+    result.handled = true;
+    result
 }
 
 fn failure(message) {
@@ -90,11 +125,8 @@ fn target_record(doc, path, edit_target) {
 }
 
 fn generation(doc) {
-    let result = query("InspectUsdDocument", #{ doc_id: doc });
-    if result == () || result.ok == false || result.generation == () {
-        return ();
-    }
-    result.generation
+    if doc == () { return (); }
+    usd_document_generation(doc)
 }
 
 fn prim_exists(doc, path) {
@@ -446,6 +478,21 @@ fn context_route_point(context, route) {
     ()
 }
 
+fn context_route_ribbon(context, route) {
+    if context == () || route == () { return false; }
+    let ribbon = ribbon_geometry_path(route);
+    let candidates = [];
+    if context.target_path != () { candidates.push(context.target_path); }
+    if context.hit_path != () { candidates.push(context.hit_path); }
+    if context.prim_paths != () {
+        for path in context.prim_paths { candidates.push(path); }
+    }
+    for path in candidates {
+        if path == ribbon || path.starts_with(ribbon + "/") { return true; }
+    }
+    false
+}
+
 fn delete_route_point(context, route) {
     let point = context_route_point(context, route);
     if point != () { return point; }
@@ -738,7 +785,9 @@ fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, local_normal
     let shape = query("QueryUsdPrim", #{
         doc_id: doc,
         path: geometry,
-        attrs: ["type", "wrap", "curveVertexCounts", "points", "widths", "normals"],
+        schemas: true,
+        attrs: ["type", "wrap", "curveVertexCounts", "points", "widths", "normals",
+            "lunco:interaction:left", "lunco:interaction:right"],
     });
     if root == () || root.ok == false || root.attrs == ()
         || shape == () || shape.ok == false || shape.attrs == () {
@@ -751,10 +800,63 @@ fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, local_normal
         || shape.attrs["curveVertexCounts"] != [local_points.len()]
         || !ribbon_width_matches(shape.attrs["widths"])
         || !points_equal(shape.attrs["points"], local_points)
-        || !points_equal(shape.attrs["normals"], local_normals) {
+        || !points_equal(shape.attrs["normals"], local_normals)
+        || shape.api_schemas == ()
+        || !shape.api_schemas.contains("LunCoPointerInteractionAPI")
+        || shape.attrs["lunco:interaction:left"] != "pass_through"
+        || shape.attrs["lunco:interaction:right"] != "context" {
         return true;
     }
     false
+}
+
+fn ribbon_interaction_ops(doc, geometry, geometry_exists) {
+    let api_schemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"];
+    let left = ();
+    let right = ();
+    if geometry_exists {
+        let shape = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: geometry,
+            attrs: ["lunco:interaction:left", "lunco:interaction:right"],
+            schemas: true,
+        });
+        if shape == () || shape.ok == false || shape.attrs == ()
+            || shape.api_schemas == () {
+            return ();
+        }
+        api_schemas = shape.api_schemas;
+        left = shape.attrs["lunco:interaction:left"];
+        right = shape.attrs["lunco:interaction:right"];
+    }
+    let ops = [];
+    if !api_schemas.contains("LunCoPointerInteractionAPI") {
+        api_schemas.push("LunCoPointerInteractionAPI");
+        ops.push(#{ SetApiSchemas: #{
+            edit_target: "@view@",
+            path: geometry,
+            schemas: api_schemas,
+        }});
+    }
+    if left != "pass_through" {
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: geometry,
+            name: "lunco:interaction:left",
+            type_name: "token",
+            value: "\"pass_through\"",
+        }});
+    }
+    if right != "context" {
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: geometry,
+            name: "lunco:interaction:right",
+            type_name: "token",
+            value: "\"context\"",
+        }});
+    }
+    ops
 }
 
 fn ribbon_ops(doc, route, points) {
@@ -776,6 +878,7 @@ fn ribbon_ops(doc, route, points) {
         return #{ ok: true, ops: [] };
     }
     let geometry = ribbon_geometry_path(route);
+    let geometry_exists = prim_exists(doc, geometry);
     // Keep the route root at the exact first sampled surface point so its USD
     // identity remains aligned with P0. Offset each curve vertex along the
     // sampled support normal instead of translating the child geometry in a
@@ -862,6 +965,12 @@ fn ribbon_ops(doc, route, points) {
         type_name: "normal3f[]",
         value: ribbon_normals_literal(encoded_normals),
     }});
+    let interaction_ops = ribbon_interaction_ops(doc, geometry, geometry_exists);
+    if interaction_ops == () {
+        return #{ ok: false, retryable: true,
+            error: "route ribbon pointer policy is not synchronized" };
+    }
+    for op in interaction_ops { ops.push(op); }
     #{ ok: true, ops: ops }
 }
 
@@ -924,6 +1033,295 @@ fn marker_ops(doc, route, position) {
     ] }
 }
 
+fn move_route_point(doc, route, point, position) {
+    if doc == () || route == () || point == () || position == () {
+        return failure("move has an incomplete route target or position");
+    }
+    if !direct_route_point(doc, point, route) {
+        return failure("move target is not a direct route point");
+    }
+    let target = target_record(doc, point, "@runtime@");
+    if !target.ok || !target.exists {
+        return failure("move target does not exist");
+    }
+    let result = apply_ops(doc, "Move route point", [#{ SetTranslate: #{
+        edit_target: "@runtime@",
+        path: point,
+        value: position,
+    }}]);
+    if result.ok {
+        result.path = point;
+        clear_move_preview(doc, route);
+    }
+    result
+}
+
+fn insertion_position(doc, route, target, before) {
+    let read = route_positions(doc, route);
+    if read.ok != true || read.paths.len() < 2 { return (); }
+    let index = -1;
+    for i in 0..read.paths.len() {
+        if read.paths[i] == target { index = i; break; }
+    }
+    if index < 0 { return (); }
+    let here = read.points[index];
+    if before && index > 0 {
+        let adjacent = read.points[index - 1];
+        return [
+            (adjacent[0] + here[0]) * 0.5,
+            (adjacent[1] + here[1]) * 0.5,
+            (adjacent[2] + here[2]) * 0.5,
+        ];
+    }
+    if !before && index + 1 < read.paths.len() {
+        let adjacent = read.points[index + 1];
+        return [
+            (here[0] + adjacent[0]) * 0.5,
+            (here[1] + adjacent[1]) * 0.5,
+            (here[2] + adjacent[2]) * 0.5,
+        ];
+    }
+    // At an endpoint, extend the neighboring segment by the same distance.
+    // The route has at least two points, so this direction is authored data.
+    let adjacent = if before { read.points[1] }
+        else { read.points[read.points.len() - 2] };
+    [
+        here[0] * 2.0 - adjacent[0],
+        here[1] * 2.0 - adjacent[1],
+        here[2] * 2.0 - adjacent[2],
+    ]
+}
+
+fn child_name(path) {
+    let parts = path.split("/");
+    parts[parts.len() - 1]
+}
+
+fn insert_route_point(context, before) {
+    if context == () || context.doc_id == () {
+        return failure("insert has no active document");
+    }
+    let route = route_edit_path(context);
+    let target = context_route_point(context, route);
+    if route == () || target == () {
+        return failure("insert target is not a direct route point");
+    }
+    let position = insertion_position(context.doc_id, route, target, before);
+    if position == () {
+        return failure("before/after insertion needs an adjacent route point");
+    }
+    let children = query("QueryUsdPrim", #{
+        doc_id: context.doc_id,
+        path: route,
+        children: true,
+    });
+    if children == () || children.ok == false || children.children == () {
+        return failure("route child order is not synchronized");
+    }
+    let marker = marker_ops(context.doc_id, route, position);
+    if marker.ok != true { return failure(marker.error); }
+    let name = child_name(marker.path);
+    let order = [];
+    let inserted = false;
+    for child in children.children {
+        if !is_route_point(context.doc_id, child) { continue; }
+        if child == target && before && !inserted {
+            order.push(name);
+            inserted = true;
+        }
+        order.push(child_name(child));
+        if child == target && !before && !inserted {
+            order.push(name);
+            inserted = true;
+        }
+    }
+    if !inserted { return failure("insert target is no longer a direct route child"); }
+    marker.ops.push(#{ SetPrimOrder: #{
+        edit_target: "@runtime@",
+        path: route,
+        order: order,
+    }});
+    let result = apply_ops(context.doc_id,
+        if before { "Insert route point before" } else { "Insert route point after" },
+        marker.ops);
+    if result.ok { result.path = marker.path; }
+    result
+}
+
+fn on_insert_before(context) { insert_route_point(context, true) }
+fn on_insert_after(context) { insert_route_point(context, false) }
+
+fn preview_path(route) { route + "/MovePreview" }
+
+fn clear_move_preview(doc, route) {
+    let path = preview_path(route);
+    let target = target_record(doc, path, "@view@");
+    if target.ok && target.exists {
+        apply_view_ops(doc, "Clear route-point move preview", [#{ RemovePrim: #{
+            edit_target: "@view@",
+            path: path,
+        }}]);
+    }
+}
+
+fn move_preview_ops(doc, route, point, position) {
+    let path = preview_path(route);
+    let target = target_record(doc, path, "@view@");
+    let ops = [];
+    if !target.ok || !target.exists {
+        let marker = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: point + "/Dome",
+            attrs: ["radius", "xformOp:translate"],
+        });
+        if marker == () || marker.ok == false || marker.attrs == ()
+            || marker.attrs["radius"] == () || marker.attrs["xformOp:translate"] == () {
+            return #{ ok: false, retryable: true,
+                error: "selected route point marker geometry is not synchronized" };
+        }
+        ops.push(#{ AddPrim: #{
+            edit_target: "@view@",
+            parent_path: route,
+            name: "MovePreview",
+            type_name: "Xform",
+            reference: (),
+            reference_prim_path: "",
+        }});
+        ops.push(#{ SetApiSchemas: #{
+            edit_target: "@view@",
+            path: path,
+            schemas: ["LunCoPointerInteractionAPI"],
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: path,
+            name: "lunco:interaction:left",
+            type_name: "token",
+            value: "\"pass_through\"",
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: path,
+            name: "lunco:interaction:right",
+            type_name: "token",
+            value: "\"pass_through\"",
+        }});
+        ops.push(#{ AddPrim: #{
+            edit_target: "@view@",
+            parent_path: path,
+            name: "Dome",
+            type_name: "Sphere",
+            reference: (),
+            reference_prim_path: "",
+        }});
+        let dome = path + "/Dome";
+        ops.push(#{ SetApiSchemas: #{
+            edit_target: "@view@",
+            path: dome,
+            schemas: ["LunCoSurfaceAPI", "LunCoPointerInteractionAPI"],
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: dome,
+            name: "lunco:interaction:left",
+            type_name: "token",
+            value: "\"pass_through\"",
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: dome,
+            name: "lunco:interaction:right",
+            type_name: "token",
+            value: "\"pass_through\"",
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: dome,
+            name: "radius",
+            type_name: "double",
+            value: marker.attrs["radius"].to_string(),
+        }});
+        ops.push(#{ SetTranslate: #{
+            edit_target: "@view@",
+            path: dome,
+            value: marker.attrs["xformOp:translate"],
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: dome,
+            name: "primvars:displayColor",
+            type_name: "color3f[]",
+            value: "[(0.05, 0.75, 1.0)]",
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: dome,
+            name: "primvars:displayOpacity",
+            type_name: "float[]",
+            value: "[0.72]",
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: dome,
+            name: "lunco:surface:unlit",
+            type_name: "bool",
+            value: "true",
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: "@view@",
+            path: dome,
+            name: "primvars:doNotCastShadows",
+            type_name: "bool",
+            value: "true",
+        }});
+    }
+    ops.push(#{ SetTranslate: #{
+            edit_target: "@view@",
+            path: path,
+            value: position,
+        }});
+    #{ ok: true, ops: ops }
+}
+
+fn on_pointer_move(context) {
+    if context == () || context.doc_id == () || context.selected_path == () {
+        return #{ ok: true, changed: false };
+    }
+    let route = route_edit_path(context);
+    if route == () || !direct_route_point(context.doc_id, context.selected_path, route) {
+        return #{ ok: true, changed: false };
+    }
+    let pointer = pointer_point(context);
+    if pointer.ok != true { return #{ ok: true, changed: false }; }
+    let plan = move_preview_ops(context.doc_id, route, context.selected_path,
+        point_values(pointer.point));
+    if plan.ok != true { return plan; }
+    let result = apply_view_ops(context.doc_id, "Preview route-point move", plan.ops);
+    if result.retryable == true { return result; }
+    result
+}
+
+fn on_add_here(context) {
+    if context == () || context.doc_id == () {
+        return failure("ribbon add has no active document");
+    }
+    let route = route_edit_path(context);
+    if route == () { return failure("ribbon is not part of an authored route"); }
+    let pointer = pointer_point(context);
+    if pointer.ok != true { return failure(pointer.error); }
+    let position = point_values(pointer.point);
+    let heights = query("TerrainHeights", #{ points: [[position[0], position[2]]], eps: 1.0 });
+    if heights != () && heights.len() == 1 && heights[0].found == true
+        && heights[0].height != () {
+        position[1] = heights[0].height;
+    }
+    let marker = marker_ops(context.doc_id, route, position);
+    if marker.ok != true { return failure(marker.error); }
+    let result = apply_ops(context.doc_id, "Add route point on ribbon", marker.ops);
+    if result.ok { result.path = marker.path; }
+    result
+}
+
 fn on_click(context) {
     if context == () || context.button != "primary" {
         return #{ ok: true, changed: false, handled: false };
@@ -953,16 +1351,7 @@ fn on_move(context) {
     let route = route_edit_path(context);
     let point = context_route_point(context, route);
     if point == () { return failure("move target is not a direct route point"); }
-    let target = target_record(context.doc_id, point, "@runtime@");
-    if !target.ok || !target.exists { return failure("move target does not exist"); }
-    let ops = [#{ SetTranslate: #{
-            edit_target: "@runtime@",
-            path: point,
-            value: point_values(pointer.point),
-        }}];
-    let result = apply_ops(context.doc_id, "Move route point", ops);
-    if result.ok { result.path = point; }
-    result
+    move_route_point(context.doc_id, route, point, point_values(pointer.point))
 }
 
 fn on_delete(context) {
@@ -990,9 +1379,11 @@ fn on_delete(context) {
     } else {
         #{ SetActive: #{ edit_target: "@runtime@", path: point, active: false } }
     };
-    let ops = [op];
-    let result = apply_ops(context.doc_id, "Delete route point", ops);
-    if result.ok { result.path = point; }
+    let result = apply_ops(context.doc_id, "Delete route point", [op]);
+    if result.ok {
+        result.path = point;
+        clear_move_preview(context.doc_id, route);
+    }
     result
 }
 
@@ -1046,10 +1437,34 @@ fn on_context(context) {
     }
     let route = route_edit_path(context);
     let point = context_route_point(context, route);
-    if point == () { return failure("context target is not a direct route point"); }
-    if is_unattended() { return #{ ok: true, path: point, selected: false }; }
+    let ribbon = point == () && context_route_ribbon(context, route);
+    if point == () && !ribbon {
+        return failure("context target is not a direct route point or its route ribbon");
+    }
+    if is_unattended() {
+        let path = if ribbon { ribbon_geometry_path(route) } else { point };
+        return #{ ok: true, path: path, selected: false };
+    }
     if context.screen_position == () {
         return failure("context click has no screen position");
+    }
+    if ribbon {
+        let action_context = #{
+            doc_id: context["doc_id"],
+            route_path: route,
+            target_path: context["target_path"],
+            hit_path: context["hit_path"],
+            prim_paths: context["prim_paths"],
+            world_position: context["world_position"],
+        };
+        let opened = open_context_menu(context.screen_position, [#{
+            label: "Add route point here",
+            tool: "waypoint_editor",
+            hook: "on_add_here",
+            args: action_context,
+        }]);
+        if !opened { return failure("the scene context-menu host is unavailable"); }
+        return #{ ok: true, path: ribbon_geometry_path(route), menu: true, selected: false };
     }
     let action_context = #{
         doc_id: context["doc_id"],
@@ -1059,20 +1474,34 @@ fn on_context(context) {
         hit_path: point,
         prim_paths: [point],
     };
-    let opened = open_context_menu(context.screen_position, [
-        #{
+    let items = [#{
             label: "Select route point",
             tool: "waypoint_editor",
             hook: "on_select",
             args: action_context,
-        },
-        #{
+        }];
+    let route_read = route_positions(context.doc_id, route);
+    if route_read.ok == true && route_read.paths.len() >= 2 {
+        items.push(#{
+            label: "Add point before",
+            tool: "waypoint_editor",
+            hook: "on_insert_before",
+            args: action_context,
+        });
+        items.push(#{
+            label: "Add point after",
+            tool: "waypoint_editor",
+            hook: "on_insert_after",
+            args: action_context,
+        });
+    }
+    items.push(#{
             label: "Delete route point",
             tool: "waypoint_editor",
             hook: "on_delete",
             args: action_context,
-        },
-    ]);
+        });
+    let opened = open_context_menu(context.screen_position, items);
     if !opened { return failure("the scene context-menu host is unavailable"); }
     #{ ok: true, path: point, menu: true, selected: false }
 }

@@ -474,6 +474,14 @@ labels. Invalid paths, invalid kind identifiers, composed-only prims, and stale
 generations fail before journaling; each metadata edit triggers the required
 composed projection refresh.
 
+`UsdOp::SetPrimOrder` authors the standard USD `primOrder` metadata on a parent
+prim. Its ordered child identifiers must be unique valid names that resolve to
+direct composed children; unlisted children retain USD's normal composed
+ordering. Clearing the opinion reveals weaker ordering. The live projector
+updates child traversal without changing child paths or entity identity, so
+route editors can insert points without renaming the points used by progress
+state.
+
 `UsdOp::SetStageDocumentation`, `UsdOp::SetPrimDocumentation`, and
 `UsdOp::SetAttributeDocumentation` author the standard USD `doc` metadata
 through the same journalled path. A prim-level documentation edit can create a
@@ -559,15 +567,16 @@ commands. The browser exposes the same review actions for humans; agents use
 the query and commands through the shared Rhai library.
 
 `ResolveUsdTarget` requires `doc_id`, a prim `path`, and an explicit `edit_target`
-(`@root@` or `@runtime@`). Local authored and runtime opinions are resolved by
-`UsdDocument`; referenced or payloaded paths are resolved by the already-mounted
-`CanonicalStage` when the composed projection is available, and the returned
-OpenUSD prim stack identifies the actual composed opinions. A path authored in
-the current document remains an editable document-layer target while its
-canonical projection catches up; composed-only paths still require the mounted
-canonical stage. The query never guesses a composed-only target from a flat
-authored layer. `SyncUsdDocument`
-uses the document's bounded typed-op ring: a covered generation returns an
+(`@root@`, `@runtime@`, or `@view@`). Local authored and runtime opinions are
+resolved by `UsdDocument`; referenced or payloaded paths are resolved by the
+already-mounted `CanonicalStage` when the composed projection is available, and
+the returned OpenUSD prim stack identifies the actual composed opinions. The
+disposable `@view@` layer is also resolvable by exact target identity so transient
+presentation tools can verify their own authored prims. A path authored in the
+current document remains an editable document-layer target while its canonical
+projection catches up; composed-only paths still require the mounted canonical
+stage. The query never guesses a composed-only target from a flat authored
+layer. `SyncUsdDocument` uses the document's bounded typed-op ring: a covered generation returns an
 ordered delta, while an expired cursor returns the complete base/runtime layer
 snapshot needed to resync. A future cursor is rejected. Neither query creates a
 second composition cache, resolver, or history log.

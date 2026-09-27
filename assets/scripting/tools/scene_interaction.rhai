@@ -59,3 +59,10 @@ fn on_pointer(context) {
     });
     #{ ok: true, handled: true, action: "select" }
 }
+
+// High-frequency movement is delivered only to the selected entity's Twin
+// document and coalesced by the viewport adapter. Route policy validates
+// that selection before it applies a one-prim @view@ transform.
+fn on_pointer_move(context) {
+    waypoint_editor::on_pointer_move(context)
+}

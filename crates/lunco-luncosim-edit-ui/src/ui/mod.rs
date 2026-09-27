@@ -447,6 +447,7 @@ impl Plugin for SceneEditUiPlugin {
         app.add_observer(crate::selection::on_select_entity_target);
         app.add_systems(Update, crate::selection::handle_deselect_keys);
         app.add_observer(crate::script_tools::on_scene_pointer_event);
+        app.add_observer(crate::script_tools::on_scene_pointer_move_event);
         app.add_observer(scene_context_menu::on_script_ui_request);
         app.add_observer(crate::selection::on_usd_viewport_click);
         app.add_observer(crate::script_tools::on_scene_click_script_tool);

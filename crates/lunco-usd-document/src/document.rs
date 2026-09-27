@@ -77,7 +77,7 @@
 //! complete snapshot/rebuild. This keeps authored sync payloads truthful and
 //! gives the stage projector one explicit recovery path.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use bevy::log::warn;
 use bevy::math::DVec3;
@@ -1154,6 +1154,18 @@ pub enum UsdOp {
         /// New absolute USD path for the prim.
         to_path: String,
     },
+    /// Author the standard USD `primOrder` metadata for a prim's direct
+    /// children. `order` contains child identifiers in their requested order;
+    /// omitted children retain USD's composed ordering rules. `None` clears
+    /// this layer's opinion and reveals weaker ordering.
+    SetPrimOrder {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the parent prim whose children are ordered.
+        path: String,
+        /// Child identifiers to reorder, or `None` to clear this layer's opinion.
+        order: Option<Vec<String>>,
+    },
     /// Author the prim's **applied API schemas** (`apiSchemas`) — the list that
     /// turns a plain prim into a rigid body, a collider, an articulation root.
     /// Without this op a prim built at runtime can never be made physical, so
@@ -1292,6 +1304,7 @@ impl UsdOp {
             | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
+            | Self::SetPrimOrder { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
             | Self::SetVariantSelection { edit_target, .. }
             | Self::SetPayload { edit_target, .. }
@@ -1339,6 +1352,7 @@ impl UsdOp {
             | Self::SetPrimDocumentation { edit_target, .. }
             | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
+            | Self::SetPrimOrder { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
             | Self::SetVariantSelection { edit_target, .. }
             | Self::SetPayload { edit_target, .. }
@@ -1381,6 +1395,7 @@ impl UsdOp {
             | Self::SetRelationship { path, .. }
             | Self::SetConnection { path, .. }
             | Self::SetPrimKind { path, .. }
+            | Self::SetPrimOrder { path, .. }
             | Self::SetPrimDocumentation { path, .. }
             | Self::SetApiSchemas { path, .. }
             | Self::SetVariantSelection { path, .. }
@@ -2322,11 +2337,14 @@ fn parse_prim_path(path: &str) -> Result<SdfPath, DocumentError> {
         .map_err(|e| DocumentError::ValidationFailed(format!("invalid prim path `{path}`: {e}")))
 }
 
-fn validate_reference_asset_path(asset_path: &str) -> Result<String, DocumentError> {
+fn validate_reference_asset_path(
+    asset_path: &str,
+    operation: &str,
+) -> Result<String, DocumentError> {
     let normalized = lunco_assets_path::slashed(asset_path);
     if normalized.is_empty() || normalized.contains('@') || normalized.contains('\0') {
         return Err(DocumentError::ValidationFailed(format!(
-            "SetReferenceArcs requires a non-empty asset identity without `@` or NUL: `{asset_path}`"
+            "{operation} requires a non-empty asset identity without `@` or NUL: `{asset_path}`"
         )));
     }
     if let Some((scheme, rest)) = lunco_assets_path::split_scheme(&normalized) {
@@ -2337,7 +2355,7 @@ fn validate_reference_asset_path(asset_path: &str) -> Result<String, DocumentErr
                 .any(|segment| segment == "." || segment == ".." || segment.contains('\0'))
         {
             return Err(DocumentError::ValidationFailed(format!(
-                "SetReferenceArcs asset identity is not safe: `{asset_path}`"
+                "{operation} asset identity is not safe: `{asset_path}`"
             )));
         }
     } else {
@@ -2648,6 +2666,7 @@ impl Document for UsdDocument {
             | UsdOp::SetPrimDocumentation { edit_target, .. }
             | UsdOp::SetPrimKind { edit_target, .. }
             | UsdOp::MovePrim { edit_target, .. }
+            | UsdOp::SetPrimOrder { edit_target, .. }
             | UsdOp::SetApiSchemas { edit_target, .. }
             | UsdOp::SetVariantSelection { edit_target, .. }
             | UsdOp::SetPayload { edit_target, .. }
@@ -2696,6 +2715,9 @@ impl Document for UsdDocument {
                 reference_prim_path,
                 ..
             } => {
+                let reference = reference
+                    .map(|asset_path| validate_reference_asset_path(&asset_path, "AddPrim"))
+                    .transpose()?;
                 let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
                 // A child under a referenced/payloaded parent is a valid local
                 // USD opinion even though that parent has no spec in this
@@ -4125,6 +4147,112 @@ impl Document for UsdDocument {
                 Ok(inverse)
             }
 
+            UsdOp::SetPrimOrder { path, order, .. } => {
+                let prim_sdf = parse_prim_path(&path)?;
+                if prim_sdf.is_property_path() {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "SetPrimOrder target {path} must name a prim, not a property"
+                    )));
+                }
+                let data = self.composed_arc();
+                let composed_stage = match &self.authoring_recipe {
+                    Some(recipe) => author::open_doc_stage_with_recipe(&data, recipe),
+                    None => open_doc_stage(&data),
+                }
+                .map_err(author_err)?;
+                let composed_parent = composed_stage.prim(prim_sdf.clone());
+                if !composed_parent.is_valid().map_err(author_err)? {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "SetPrimOrder parent {path} is not a composed prim"
+                    )));
+                }
+                if let Some(order) = &order {
+                    let mut direct_children = HashSet::new();
+                    for child in composed_parent.children().map_err(author_err)? {
+                        let Some(name) = child.path().name() else {
+                            return Err(DocumentError::ValidationFailed(format!(
+                                "SetPrimOrder parent {path} contains a child without an identifier"
+                            )));
+                        };
+                        direct_children.insert(name.to_owned());
+                    }
+                    let mut names = HashSet::with_capacity(order.len());
+                    for name in order {
+                        if !SdfPath::is_valid_identifier(name) {
+                            return Err(DocumentError::ValidationFailed(format!(
+                                "SetPrimOrder: `{name}` is not a valid child identifier"
+                            )));
+                        }
+                        if !names.insert(name) {
+                            return Err(DocumentError::ValidationFailed(format!(
+                                "SetPrimOrder: child `{name}` appears more than once"
+                            )));
+                        }
+                        if !direct_children.contains(name) {
+                            return Err(DocumentError::ValidationFailed(format!(
+                                "SetPrimOrder child `{name}` is not a direct composed child of {path}"
+                            )));
+                        }
+                    }
+                }
+
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::PrimOrder.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::TokenVec(names)) => UsdOp::SetPrimOrder {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        order: Some(
+                            names
+                                .into_iter()
+                                .map(|name| name.as_str().to_owned())
+                                .collect(),
+                        ),
+                    },
+                    None => UsdOp::SetPrimOrder {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        order: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(path.as_str()).map_err(author_err)?;
+                match order {
+                    Some(names) => {
+                        let tokens = names
+                            .into_iter()
+                            .map(openusd::tf::Token::from)
+                            .collect::<Vec<_>>();
+                        stage
+                            .prim(path.as_str())
+                            .set_metadata(
+                                sdf::FieldKey::PrimOrder.as_str(),
+                                sdf::Value::TokenVec(tokens),
+                            )
+                            .map_err(author_err)?;
+                    }
+                    None => {
+                        let root_id = stage.root_layer().identifier().to_owned();
+                        let mut layer = stage
+                            .layer_mut(&root_id)
+                            .ok_or_else(|| author_err("document stage has no root layer"))?;
+                        layer
+                            .edit(|edit| {
+                                edit.data_mut()
+                                    .erase_field(&prim_sdf, sdf::FieldKey::PrimOrder.as_str());
+                                Ok(())
+                            })
+                            .map_err(author_err)?;
+                    }
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
             UsdOp::SetApiSchemas { path, schemas, .. } => {
                 let prim_sdf = match self.require_prim_anywhere(&path) {
                     Ok(prim) => prim,
@@ -4328,7 +4456,10 @@ impl Document for UsdDocument {
                 let arcs = references
                     .iter()
                     .map(|reference| {
-                        let asset_path = validate_reference_asset_path(&reference.asset_path)?;
+                        let asset_path = validate_reference_asset_path(
+                            &reference.asset_path,
+                            "SetReferenceArcs",
+                        )?;
                         let prim_path =
                             normalize_reference_prim_path(reference.prim_path.as_deref())?;
                         Ok((asset_path, prim_path))

@@ -1324,6 +1324,59 @@ fn set_api_schemas_overwrite_inverts_to_typed_op() {
     );
 }
 
+#[test]
+fn set_prim_order_authors_standard_metadata_inverts_and_rejects_invalid_children() {
+    let source = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Scope \"Route\"\n    {\n        def Xform \"P0\" {}\n        def Xform \"P1\" {}\n        def Xform \"P2\" {}\n    }\n}\n";
+    let mut doc = UsdDocument::new(DocumentId::new(58), source);
+    let route = SdfPath::new("/World/Route").unwrap();
+    let order = vec!["P2".into(), "P0".into(), "P1".into()];
+
+    let inverse = doc
+        .apply(UsdOp::SetPrimOrder {
+            edit_target: LayerId::runtime(),
+            path: "/World/Route".into(),
+            order: Some(order.clone()),
+        })
+        .expect("runtime child order applies");
+    assert!(
+        matches!(inverse, UsdOp::SetPrimOrder { order: None, .. }),
+        "a first runtime ordering opinion must invert to clearing that opinion"
+    );
+    assert!(matches!(
+        doc.runtime_data().field(&route, sdf::FieldKey::PrimOrder.as_str()),
+        Some(sdf::Value::TokenVec(names)) if names.iter().map(|name| name.as_str()).collect::<Vec<_>>() == ["P2", "P0", "P1"]
+    ));
+
+    doc.apply(inverse).expect("clear runtime child order");
+    assert!(
+        doc.runtime_data()
+            .field(&route, sdf::FieldKey::PrimOrder.as_str())
+            .is_none()
+    );
+
+    assert!(
+        doc.apply(UsdOp::SetPrimOrder {
+            edit_target: LayerId::runtime(),
+            path: "/World/Route".into(),
+            order: Some(vec!["P1".into(), "P1".into()]),
+        })
+        .is_err()
+    );
+    assert!(
+        doc.apply(UsdOp::SetPrimOrder {
+            edit_target: LayerId::runtime(),
+            path: "/World/Route".into(),
+            order: Some(vec!["NotAChild".into()]),
+        })
+        .is_err()
+    );
+    assert!(
+        doc.runtime_data()
+            .field(&route, sdf::FieldKey::PrimOrder.as_str())
+            .is_none()
+    );
+}
+
 /// Re-selecting a variant inverts to a typed `SetVariantSelection` carrying
 /// the prior selection; the set's first selection inverts coarse (the only
 /// way to express "unselected").
@@ -1738,6 +1791,24 @@ fn add_prim_unknown_parent_validation_error() {
         .unwrap_err();
     assert!(matches!(err, DocumentError::ValidationFailed(_)));
     assert_eq!(doc.generation(), 0);
+}
+
+#[test]
+fn add_prim_rejects_an_empty_reference_asset_identity() {
+    let mut doc = UsdDocument::new(DocumentId::new(905), TINY_USDA);
+    let err = doc
+        .apply(UsdOp::AddPrim {
+            edit_target: LayerId::view(),
+            parent_path: "/World".into(),
+            name: "Preview".into(),
+            type_name: Some("Sphere".into()),
+            reference: Some(String::new()),
+            reference_prim_path: None,
+        })
+        .expect_err("an empty asset identity must not create a broken USD reference");
+    assert!(matches!(err, DocumentError::ValidationFailed(_)));
+    assert_eq!(doc.generation(), 0, "rejected authoring is atomic");
+    assert!(!prim_exists(&doc, "/World/Preview"));
 }
 
 #[test]

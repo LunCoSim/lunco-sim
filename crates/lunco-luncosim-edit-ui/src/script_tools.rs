@@ -49,6 +49,7 @@ pub(crate) fn tool_map(entries: Vec<(String, TelemetryValue)>) -> TelemetryValue
 #[derive(Resource, Default)]
 pub struct ScenePointerDispatch {
     seen: HashSet<ScenePointerKey>,
+    seen_moves: HashSet<ScenePointerMoveKey>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -59,8 +60,15 @@ struct ScenePointerKey {
     screen_position: [u32; 2],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ScenePointerMoveKey {
+    pointer: PointerId,
+    screen_position: [u32; 2],
+}
+
 pub fn clear_scene_pointer_dispatch(mut dispatch: ResMut<ScenePointerDispatch>) {
     dispatch.seen.clear();
+    dispatch.seen_moves.clear();
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -461,6 +469,25 @@ fn pointer_interaction_name(
     }
 }
 
+fn inherited_pointer_interaction(
+    target: Entity,
+    button: PointerButton,
+    policies: &Query<&lunco_interaction_core::ScenePointerPolicy>,
+    parents: &Query<&ChildOf>,
+) -> Option<lunco_interaction_core::PointerInteraction> {
+    let mut ancestor = Some(target);
+    for _ in 0..32 {
+        let entity = ancestor?;
+        if let Ok(policy) = policies.get(entity) {
+            return Some(crate::ui::scene_context::interaction_for_button(
+                *policy, button,
+            ));
+        }
+        ancestor = parents.get(entity).ok().map(|parent| parent.0);
+    }
+    None
+}
+
 /// Return a hit in the renderer's floating-origin frame.
 ///
 /// The mesh picker reports positions in the picked entity's local frame. That
@@ -592,112 +619,16 @@ fn coordinate_point(position: bevy::math::DVec3, frame: &str, source: &str) -> T
 /// no Rust code assigns meaning to Alt, Shift, or Ctrl.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn on_scene_pointer_event(
-    click: On<Pointer<Click>>,
+    mut click: On<Pointer<Click>>,
     keys: Res<ButtonInput<KeyCode>>,
     armed: Res<lunco_interaction_core::ArmedScriptTool>,
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
-    scene_gate: Option<Res<lunco_workbench_core::scene_pick::ScenePickGate>>,
-    ray_map: Option<Res<bevy::picking::backend::ray::RayMap>>,
-    picking_settings: Option<Res<bevy::picking::mesh_picking::MeshPickingSettings>>,
-    q_view_visibility: Query<&ViewVisibility>,
-    q_pickable: Query<&bevy::picking::Pickable>,
-    q_render_layers: Query<&bevy::camera::visibility::RenderLayers>,
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,
-    mut mesh_ray: bevy::picking::mesh_picking::ray_cast::MeshRayCast,
     mut commands: Commands,
 ) {
-    let ray_hits = world
-        .viewport
-        .active_camera
-        .and_then(|camera_entity| world.q_scene_cameras.get(camera_entity).ok())
-        .and_then(|(camera, transform)| {
-            camera
-                .viewport_to_world(transform, click.pointer_location.position)
-                .ok()
-        })
-        .map(|ray| {
-            use bevy::picking::mesh_picking::ray_cast::{MeshRayCastSettings, RayCastVisibility};
-            mesh_ray
-                .cast_ray(
-                    ray,
-                    &MeshRayCastSettings {
-                        visibility: RayCastVisibility::Any,
-                        filter: &|_| true,
-                        early_exit_test: &|_| false,
-                    },
-                )
-                .iter()
-                .filter_map(|(entity, _)| {
-                    world.q_prim.get(*entity).ok().map(|path| {
-                        (
-                            path.path.as_str(),
-                            q_view_visibility
-                                .get(*entity)
-                                .is_ok_and(|visibility| visibility.get()),
-                            q_pickable
-                                .get(*entity)
-                                .ok()
-                                .map(|pickable| pickable.is_hoverable),
-                            world
-                                .viewport
-                                .active_camera
-                                .and_then(|camera| q_render_layers.get(camera).ok())
-                                .cloned()
-                                .unwrap_or_default()
-                                .intersects(
-                                    &q_render_layers.get(*entity).cloned().unwrap_or_default(),
-                                ),
-                        )
-                    })
-                })
-                .take(8)
-                .collect::<Vec<_>>()
-        });
-    let visible_ray_hits = ray_map.as_deref().map(|map| {
-        use bevy::picking::mesh_picking::ray_cast::{MeshRayCastSettings, RayCastVisibility};
-        map.iter()
-            .map(|(ray_id, ray)| {
-                let paths = mesh_ray
-                    .cast_ray(
-                        *ray,
-                        &MeshRayCastSettings {
-                            visibility: RayCastVisibility::VisibleInView,
-                            filter: &|_| true,
-                            early_exit_test: &|_| false,
-                        },
-                    )
-                    .iter()
-                    .filter_map(|(entity, _)| {
-                        world
-                            .q_prim
-                            .get(*entity)
-                            .ok()
-                            .map(|path| path.path.as_str())
-                    })
-                    .take(8)
-                    .collect::<Vec<_>>();
-                (ray_id.camera, paths)
-            })
-            .collect::<Vec<_>>()
-    });
-    info!(
-        target = ?click.entity,
-        button = ?click.button,
-        screen = ?click.pointer_location.position,
-        hit_position = ?click.hit.position,
-        hit_prim = ?world.q_prim.get(click.entity).ok().map(|path| path.path.as_str()),
-        scene_target = ?scene_gate.as_deref().and_then(|gate| gate.resolved()),
-        viewport_camera = ?world.viewport.active_camera,
-        rays = ?ray_map.as_deref().map(|map| map.iter().map(|(id, ray)| (id.camera, id.pointer, ray.direction)).collect::<Vec<_>>()),
-        require_pick_markers = ?picking_settings.as_deref().map(|settings| settings.require_markers),
-        mesh_ray_hits = ?ray_hits,
-        visible_ray_hits = ?visible_ray_hits,
-        viewport_layers = ?world.viewport.active_camera.and_then(|camera| q_render_layers.get(camera).ok()),
-        "[scene-pointer-debug] received click"
-    );
     if armed.armed()
         || !matches!(
             spawn_state.as_ref(),
@@ -706,20 +637,23 @@ pub(crate) fn on_scene_pointer_event(
         || terrain_active.0
         || egui_focus.wants_pointer
     {
-        info!(
-            armed = armed.armed(),
-            spawn_idle = matches!(
-                spawn_state.as_ref(),
-                lunco_luncosim_edit_core::SpawnState::Idle
-            ),
-            terrain = terrain_active.0,
-            egui = egui_focus.wants_pointer,
-            "[scene-pointer-debug] click suppressed"
-        );
         return;
     }
     if click.hit.position.is_none() && world.q_prim.get(click.entity).is_err() {
-        info!("[scene-pointer-debug] click has no scene hit");
+        return;
+    }
+    // Pass-through targets still emit their own Bevy event before lower hits.
+    // Stop that event's ancestor bubble before it can win the frame's
+    // deduplication key; Bevy then delivers the gesture to the lower blocking
+    // hit (for example, a waypoint behind a move-preview sphere).
+    if inherited_pointer_interaction(
+        click.entity,
+        click.button,
+        &world.q_pointer_policy,
+        &world.q_parents,
+    ) == Some(lunco_interaction_core::PointerInteraction::PassThrough)
+    {
+        click.propagate(false);
         return;
     }
     let key = ScenePointerKey {
@@ -732,7 +666,6 @@ pub(crate) fn on_scene_pointer_event(
         ],
     };
     if !dispatch.seen.insert(key) {
-        info!("[scene-pointer-debug] duplicate click suppressed");
         return;
     }
     let context = scene_tool_context(
@@ -777,5 +710,133 @@ pub(crate) fn on_scene_pointer_event(
         sim_secs: 0.0,
         sim_tick: 0,
     });
-    info!("[scene-pointer-debug] published scene.pointer");
+}
+
+/// Feed one coalesced scene-hover position to the authored interaction policy.
+/// Pointer movement is presentation input: it only updates a disposable view
+/// ghost and never waits for a physics event or rebuilds route geometry.
+pub(crate) fn on_scene_pointer_move_event(
+    pointer_move: On<Pointer<Move>>,
+    armed: Res<lunco_interaction_core::ArmedScriptTool>,
+    spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
+    terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
+    egui_focus: Res<lunco_control_core::EguiFocus>,
+    mut dispatch: ResMut<ScenePointerDispatch>,
+    world: SceneToolWorld,
+    mut commands: Commands,
+) {
+    if armed.armed()
+        || !matches!(
+            spawn_state.as_ref(),
+            lunco_luncosim_edit_core::SpawnState::Idle
+        )
+        || terrain_active.0
+        || egui_focus.wants_pointer
+    {
+        return;
+    }
+    let position = pointer_move.pointer_location.position;
+    let key = ScenePointerMoveKey {
+        pointer: pointer_move.pointer_id,
+        screen_position: [position.x.to_bits(), position.y.to_bits()],
+    };
+    if !dispatch.seen_moves.insert(key) {
+        return;
+    }
+    let Some(selected) = world.selected.primary() else {
+        return;
+    };
+    let Ok(selected_path) = world.q_prim.get(selected) else {
+        return;
+    };
+    let Some(doc) = lunco_usd_bevy_twin::scene_document_for(
+        &world.backed,
+        &world.asset_server,
+        selected_path.stage_handle.id(),
+    ) else {
+        return;
+    };
+    let direct_surface = pointer_move
+        .hit
+        .extra_as::<lunco_terrain_surface::SurfaceHit>()
+        .and_then(|hit| world.surface.to_render(hit.point));
+    let hit_is_terrain = std::iter::successors(Some(pointer_move.entity), |entity| {
+        world.q_parents.get(*entity).ok().map(|parent| parent.0)
+    })
+    .any(|entity| world.q_lod_tiles.get(entity).is_ok());
+    let surface_render_position = direct_surface.or_else(|| {
+        if !hit_is_terrain {
+            return None;
+        }
+        let camera_entity = world.viewport.active_camera?;
+        let (camera, camera_transform) = world.q_scene_cameras.get(camera_entity).ok()?;
+        let ray = lunco_viewport_core::scene_click_ray(false, camera, camera_transform, position)?;
+        let hit = world.surface.raycast_render(
+            RenderPos(ray.origin.as_dvec3()),
+            ray.direction,
+            f64::INFINITY,
+        )?;
+        world.surface.to_render(hit.point)
+    });
+    let is_surface_hit = surface_render_position.is_some();
+    let render_position = if let Some(surface_position) = surface_render_position {
+        surface_position
+    } else if !hit_is_terrain {
+        let Some(position) = pointer_move.hit.position else {
+            return;
+        };
+        RenderPos(position.as_dvec3())
+    } else {
+        return;
+    };
+    let Some(world_position) = world.coordinates.render_to_active(render_position) else {
+        return;
+    };
+    let scene_root = world
+        .q_scene_roots
+        .iter()
+        .find(|root| root.stage_handle.id() == selected_path.stage_handle.id());
+    let mut entries = vec![
+        ("doc_id".to_string(), TelemetryValue::U64(doc.raw())),
+        (
+            "selected_path".to_string(),
+            TelemetryValue::String(selected_path.path.clone()),
+        ),
+        (
+            "screen_position".to_string(),
+            TelemetryValue::Array(vec![
+                TelemetryValue::F64(position.x as f64),
+                TelemetryValue::F64(position.y as f64),
+            ]),
+        ),
+        (
+            "world_position".to_string(),
+            coordinate_point(
+                world_position.0,
+                ACTIVE_FRAME_NAME,
+                if is_surface_hit {
+                    "terrain_surface"
+                } else {
+                    "pointer_hit"
+                },
+            ),
+        ),
+    ];
+    if is_surface_hit {
+        entries.push((
+            "surface_world_position".to_string(),
+            coordinate_point(world_position.0, ACTIVE_FRAME_NAME, "terrain_surface"),
+        ));
+    }
+    if let Some(scene_root) = scene_root {
+        entries.push((
+            "scene_root_path".to_string(),
+            TelemetryValue::String(scene_root.path.clone()),
+        ));
+    }
+    commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
+        tool: "scene_interaction".to_string(),
+        hook: "on_pointer_move".to_string(),
+        args: tool_map(entries),
+    });
 }
