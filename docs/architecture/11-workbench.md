@@ -441,6 +441,7 @@ pub trait Panel: Send + Sync + 'static {
     fn id(&self) -> PanelId;                 // newtype over &'static str
     fn title(&self) -> String;
     fn default_slot(&self) -> PanelSlot;     // Left / RightInspector / Bottom / Center / …
+    fn preferred_perspective(&self) -> Option<PerspectiveId> { None } // optional owner workflow
     // Render reads through the capability-narrowed `PanelCtx` (no raw `&mut World`);
     // mutations emit typed events/resources and are applied after paint.
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx);
@@ -476,13 +477,16 @@ materializes that plan and uses the instance panel's authoritative
 `default_slot()`. Because the plan is evaluated for a first visit, layout
 revision rebuild, or explicit reset, switching back to a visited perspective
 restores its cached user layout and does not reopen a closed tab. Opening a
-panel from the View menu is an explicit user request and uses the same shell
-insertion path. The menu keeps Reset Layout and Toggle Activity Bar directly
+panel from the View menu or a typed `FocusPanel` command is an explicit focus
+request. If the registered panel declares a registered
+`preferred_perspective()`, the shell activates that perspective before opening
+and focusing the panel; panels without an owner perspective keep the active
+perspective. The menu keeps Reset Layout and Toggle Activity Bar directly
 available, then groups panel checkboxes into Builder, Editor, and Lunica
 submenus according to `PanelMenuGroup`; unclassified integrations use Other.
-The SysML Requirements panel is grouped under Editor and opens in Center from
-the View menu. It remains available inside the existing workbench and does not
-add another editor session or perspective.
+The SysML Requirements panel is grouped under Editor, belongs to the Editor
+perspective, and opens in Center. It remains available inside the existing
+workbench and does not add another editor session or perspective.
 
 ### 5a. Side-browser architecture — Twin panel + Files panel
 

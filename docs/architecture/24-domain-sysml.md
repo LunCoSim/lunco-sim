@@ -96,17 +96,19 @@ unfinished parse as clean. Source edits themselves only validate and update
 text; they do not parse on the caller's schedule.
 
 The optional `lunco-sysml-ui` application adapter provides a focused
-requirements panel: it browses analyzed Twin sources, shows requirement
-acceptance and resolved `verify` coverage, displays current-session structured
-verdicts only when their source revision matches, and edits through the
-canonical `SysmlDocument` command/save lifecycle. Each Twin-mapped verification
-can also be run from its linked requirement; the panel starts the production
-headless scene-test runner and displays PASS, FAIL, NO VERDICT, RUN ERROR, or
-STALE against the source revision used for that run. Results live for the open
-Twin session and can be rerun after source changes. Running is disabled while
-an indexed SysML document or local source draft has unsaved edits. Statuses
-distinguish a missing `verify` link or Twin runner mapping from an unrun test; a
-missing formal `require` criterion is shown as a separate source-quality issue.
+requirements panel: it browses analyzed Twin sources, jumps to declaration and
+diagnostic lines, and edits through the canonical `SysmlDocument`
+command/save lifecycle. Requirement evidence, per-case test execution, and
+source quality (`require` criteria and resolved `verify` coverage) are shown as
+separate status dimensions. Each Twin-mapped verification can be run from its
+linked requirement; the panel starts the production headless scene-test runner,
+shows elapsed time and live output, and allows cancellation. Completed runs
+retain their summary and captured output for the open Twin session. Tests read
+saved Twin files, so running is disabled while an indexed SysML document or
+local source draft has unsaved edits. Statuses distinguish missing evidence,
+missing `verify` links, missing Twin runner mappings, unrun or stale results,
+and execution errors. A missing formal `require` criterion is a source-quality
+issue, not a test failure.
 
 The panel belongs to the existing workbench Editor level, alongside native
 document tools; it does not add a Twin HUD surface or a new workspace. This is a

@@ -552,13 +552,13 @@ pub(super) fn render_layout(
                 // Panels are grouped into workflow submenus using the category
                 // each one declares (`Panel::menu_group`). Each row is a
                 // checkbox showing whether the panel is currently in the dock;
-                // clicking a closed one re-docks it in its default slot.
+                // opening a panel routes through the same perspective-aware
+                // focus path as the typed `FocusPanel` command.
                 // `Hidden` panels never appear (fixtures like the viewport,
                 // layout-only entries, instance-tab facets).
                 struct ViewPanelEntry {
                     group: PanelMenuGroup,
                     title: String,
-                    slot: PanelSlot,
                     open: bool,
                     singleton: Option<PanelId>,
                     instance: Option<(PanelId, u64)>,
@@ -582,7 +582,6 @@ pub(super) fn render_layout(
                                 ViewPanelEntry {
                                     group: p.menu_group(),
                                     title: p.title(),
-                                    slot: p.default_slot(),
                                     open: docked.contains(&id),
                                     singleton: Some(id),
                                     instance: None,
@@ -604,7 +603,6 @@ pub(super) fn render_layout(
                         sorted.push(ViewPanelEntry {
                             group: entry.group,
                             title: entry.title.to_owned(),
-                            slot: panel.default_slot(),
                             open: layout.dock.find_tab(&tab).is_some(),
                             singleton: None,
                             instance: Some((*kind, entry.instance)),
@@ -650,7 +648,6 @@ pub(super) fn render_layout(
                         for entry in entries {
                             let ViewPanelEntry {
                                 title,
-                                slot,
                                 open: is_open,
                                 singleton,
                                 instance,
@@ -671,23 +668,10 @@ pub(super) fn render_layout(
                                         ui.close();
                                         continue;
                                     };
-                                    // Track in the slot list so persistence /
-                                    // perspective queries see it. Insert into
-                                    // the *live* dock without a full rebuild
-                                    // — rebuild_dock would wipe instance tabs
-                                    // (model views) the user has open.
-                                    //
-                                    // A hidden default slot has no preset dock region;
-                                    // opening it explicitly gives it a stable side-browser
-                                    // home until Reset Layout.
-                                    let slot = match slot {
-                                        PanelSlot::Hidden => PanelSlot::SideBrowser,
-                                        other => other,
-                                    };
                                     world
                                         .resource_mut::<PendingLayoutRequests>()
                                         .0
-                                        .push(LayoutRequest::AddSingleton { id, slot });
+                                        .push(LayoutRequest::FocusPanel(id));
                                 } else if !checked && is_open {
                                     if let Some((kind, instance)) = instance {
                                         world

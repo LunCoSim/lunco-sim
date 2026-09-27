@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::prelude::*;
 use lunco_workspace::{TwinClosed, TwinId};
 
@@ -8,10 +10,17 @@ pub(crate) struct RunSysmlVerification {
     pub name: String,
 }
 
+#[derive(Event, Clone, Debug)]
+pub(crate) struct CancelSysmlVerification {
+    pub twin_id: TwinId,
+    pub name: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum VerificationRunOutcome {
     Passed,
     Failed,
+    Cancelled,
     NoVerdict,
     Error(String),
 }
@@ -23,6 +32,8 @@ pub(crate) struct VerificationRunResult {
     pub name: String,
     pub outcome: VerificationRunOutcome,
     pub summary: String,
+    pub output: String,
+    pub elapsed: Duration,
 }
 
 #[derive(Resource, Default)]
@@ -44,6 +55,10 @@ impl SysmlVerificationRuns {
     pub(crate) fn active_case(&self) -> Option<(TwinId, &str)> {
         None
     }
+
+    pub(crate) fn active_output(&self, _twin_id: TwinId, _name: &str) -> Option<(&str, Duration)> {
+        None
+    }
 }
 
 pub(crate) fn start_sysml_verification(
@@ -53,6 +68,12 @@ pub(crate) fn start_sysml_verification(
 }
 
 pub(crate) fn poll_sysml_verification_run(_runs: ResMut<SysmlVerificationRuns>) {}
+
+pub(crate) fn cancel_sysml_verification(
+    _trigger: On<CancelSysmlVerification>,
+    _runs: ResMut<SysmlVerificationRuns>,
+) {
+}
 
 pub(crate) fn clear_sysml_verification_results(
     _trigger: On<TwinClosed>,

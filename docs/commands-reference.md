@@ -3334,7 +3334,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `FocusPanel`
 
- Bring a registered singleton panel forward in the concrete shell.
+ Open and focus a registered singleton panel, activating its preferred perspective when set.
 
 - *defined in:* `crates/lunco-workbench-core/src/commands.rs`
 
@@ -3724,7 +3724,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 240 commands from the runtime schema; scanned 955 .rs files for docs (0 parse failure(s) skipped).
+<!-- 240 commands from the runtime schema; scanned 960 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

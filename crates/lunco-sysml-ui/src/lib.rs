@@ -26,6 +26,7 @@ impl Plugin for SysmlUiPlugin {
             .add_systems(Update, view_model::produce_sysml_requirements_view_model)
             .add_systems(Update, verification::poll_sysml_verification_run)
             .add_observer(verification::start_sysml_verification)
+            .add_observer(verification::cancel_sysml_verification)
             .add_observer(verification::clear_sysml_verification_results)
             .add_observer(view_model::capture_verification_evidence)
             .add_observer(view_model::clear_verification_evidence_on_twin_closed);

@@ -3,6 +3,7 @@ use std::io::Read;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
@@ -18,10 +19,17 @@ pub(crate) struct RunSysmlVerification {
     pub name: String,
 }
 
+#[derive(Event, Clone, Debug)]
+pub(crate) struct CancelSysmlVerification {
+    pub twin_id: TwinId,
+    pub name: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum VerificationRunOutcome {
     Passed,
     Failed,
+    Cancelled,
     NoVerdict,
     Error(String),
 }
@@ -33,6 +41,8 @@ pub(crate) struct VerificationRunResult {
     pub name: String,
     pub outcome: VerificationRunOutcome,
     pub summary: String,
+    pub output: String,
+    pub elapsed: Duration,
 }
 
 #[derive(Resource, Default)]
@@ -50,6 +60,13 @@ struct ActiveRun {
     stdout: Option<Result<String, String>>,
     stderr: Option<Result<String, String>>,
     exit_status: Option<ExitStatus>,
+    stdout_complete: bool,
+    stderr_complete: bool,
+    output_log: String,
+    last_log_stream: Option<ProcessStream>,
+    started_at: Instant,
+    cancel_requested: bool,
+    cancelled: bool,
 }
 
 impl Drop for ActiveRun {
@@ -61,6 +78,7 @@ impl Drop for ActiveRun {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ProcessStream {
     Stdout,
     Stderr,
@@ -68,7 +86,8 @@ enum ProcessStream {
 
 struct ProcessOutput {
     stream: ProcessStream,
-    content: Result<String, String>,
+    chunk: Option<String>,
+    complete: Option<Result<String, String>>,
 }
 
 impl SysmlVerificationRuns {
@@ -90,6 +109,12 @@ impl SysmlVerificationRuns {
         self.active
             .as_ref()
             .map(|active| (active.twin_id, active.name.as_str()))
+    }
+
+    pub(crate) fn active_output(&self, twin_id: TwinId, name: &str) -> Option<(&str, Duration)> {
+        let active = self.active.as_ref()?;
+        (active.twin_id == twin_id && active.name == name)
+            .then(|| (active.output_log.as_str(), active.started_at.elapsed()))
     }
 }
 
@@ -186,7 +211,7 @@ pub(crate) fn start_sysml_verification(
         }
     };
 
-    let (sender, output) = mpsc::channel();
+    let (sender, output) = mpsc::sync_channel(128);
     let stdout = child.stdout.take().expect("piped stdout is available");
     let stderr = child.stderr.take().expect("piped stderr is available");
     if let Err(error) = spawn_output_reader(stdout, ProcessStream::Stdout, sender.clone()) {
@@ -217,13 +242,20 @@ pub(crate) fn start_sysml_verification(
         stdout: None,
         stderr: None,
         exit_status: None,
+        stdout_complete: false,
+        stderr_complete: false,
+        output_log: String::new(),
+        last_log_stream: None,
+        started_at: Instant::now(),
+        cancel_requested: false,
+        cancelled: false,
     });
 }
 
 fn spawn_output_reader<R: Read + Send + 'static>(
     mut reader: R,
     stream: ProcessStream,
-    sender: mpsc::Sender<ProcessOutput>,
+    sender: mpsc::SyncSender<ProcessOutput>,
 ) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("sysml-verification-output".to_owned())
@@ -240,6 +272,11 @@ fn spawn_output_reader<R: Read + Send + 'static>(
                             let excess = tail.len() - MAX_CAPTURED_OUTPUT_BYTES;
                             tail.drain(..excess);
                         }
+                        let _ = sender.send(ProcessOutput {
+                            stream,
+                            chunk: Some(String::from_utf8_lossy(&chunk[..read]).into_owned()),
+                            complete: None,
+                        });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(error) => break Err(error),
@@ -248,7 +285,11 @@ fn spawn_output_reader<R: Read + Send + 'static>(
             let content = read_result
                 .map(|()| String::from_utf8_lossy(&tail).into_owned())
                 .map_err(|error| error.to_string());
-            let _ = sender.send(ProcessOutput { stream, content });
+            let _ = sender.send(ProcessOutput {
+                stream,
+                chunk: None,
+                complete: Some(content),
+            });
         })
         .map(|_| ())
 }
@@ -269,8 +310,23 @@ fn store_setup_error(
                 name: request.name.clone(),
                 outcome: VerificationRunOutcome::Error(message.to_owned()),
                 summary: message.to_owned(),
+                output: String::new(),
+                elapsed: Duration::ZERO,
             },
         );
+}
+
+pub(crate) fn cancel_sysml_verification(
+    trigger: On<CancelSysmlVerification>,
+    mut runs: ResMut<SysmlVerificationRuns>,
+) {
+    let request = trigger.event();
+    if let Some(active) = runs.active.as_mut()
+        && active.twin_id == request.twin_id
+        && active.name == request.name
+    {
+        active.cancel_requested = true;
+    }
 }
 
 pub(crate) fn poll_sysml_verification_run(
@@ -280,6 +336,13 @@ pub(crate) fn poll_sysml_verification_run(
     let Some(active) = runs.active.as_mut() else {
         return;
     };
+    if active.cancel_requested {
+        active.cancel_requested = false;
+        if active.exit_status.is_none() {
+            active.cancelled = true;
+            let _ = active.child.kill();
+        }
+    }
     let output = match active.output.get_mut() {
         Ok(output) => output,
         Err(_) => {
@@ -291,6 +354,8 @@ pub(crate) fn poll_sysml_verification_run(
                     "scene-test output channel is unavailable".to_owned(),
                 ),
                 summary: "The scene-test output channel could not be read.".to_owned(),
+                output: active.output_log.clone(),
+                elapsed: active.started_at.elapsed(),
             };
             runs.active = None;
             store_result_if_twin_open(&mut runs, workspace.as_deref(), result);
@@ -299,21 +364,37 @@ pub(crate) fn poll_sysml_verification_run(
     };
     loop {
         match output.try_recv() {
-            Ok(ProcessOutput {
-                stream: ProcessStream::Stdout,
-                content,
-            }) => active.stdout = Some(content),
-            Ok(ProcessOutput {
-                stream: ProcessStream::Stderr,
-                content,
-            }) => active.stderr = Some(content),
+            Ok(message) => {
+                if let Some(chunk) = message.chunk {
+                    append_output_log(
+                        &mut active.output_log,
+                        &mut active.last_log_stream,
+                        message.stream,
+                        &chunk,
+                    );
+                }
+                if let Some(content) = message.complete {
+                    match message.stream {
+                        ProcessStream::Stdout => {
+                            active.stdout = Some(content);
+                            active.stdout_complete = true;
+                        }
+                        ProcessStream::Stderr => {
+                            active.stderr = Some(content);
+                            active.stderr_complete = true;
+                        }
+                    }
+                }
+            }
             Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Disconnected) => {
                 if active.stdout.is_none() {
                     active.stdout = Some(Err("stdout reader disconnected".to_owned()));
+                    active.stdout_complete = true;
                 }
                 if active.stderr.is_none() {
                     active.stderr = Some(Err("stderr reader disconnected".to_owned()));
+                    active.stderr_complete = true;
                 }
                 break;
             }
@@ -331,6 +412,8 @@ pub(crate) fn poll_sysml_verification_run(
                         "could not read scene-test process status: {error}"
                     )),
                     summary: "The scene-test process could not be monitored.".to_owned(),
+                    output: active.output_log.clone(),
+                    elapsed: active.started_at.elapsed(),
                 };
                 runs.active = None;
                 store_result_if_twin_open(&mut runs, workspace.as_deref(), result);
@@ -338,13 +421,38 @@ pub(crate) fn poll_sysml_verification_run(
             }
         }
     }
-    if active.exit_status.is_none() || active.stdout.is_none() || active.stderr.is_none() {
+    if active.exit_status.is_none() || !active.stdout_complete || !active.stderr_complete {
         return;
     }
 
     let active = runs.active.take().expect("active run was just checked");
     let result = build_run_result(active);
     store_result_if_twin_open(&mut runs, workspace.as_deref(), result);
+}
+
+fn append_output_log(
+    output: &mut String,
+    last_stream: &mut Option<ProcessStream>,
+    stream: ProcessStream,
+    chunk: &str,
+) {
+    const MAX_VISIBLE_OUTPUT_BYTES: usize = 64 * 1024;
+    if *last_stream != Some(stream) {
+        output.push_str(match stream {
+            ProcessStream::Stdout => "\n[stdout] ",
+            ProcessStream::Stderr => "\n[stderr] ",
+        });
+        *last_stream = Some(stream);
+    }
+    output.push_str(chunk);
+    if output.len() > MAX_VISIBLE_OUTPUT_BYTES {
+        let excess = output.len() - MAX_VISIBLE_OUTPUT_BYTES;
+        let boundary = output
+            .char_indices()
+            .find_map(|(index, _)| (index >= excess).then_some(index))
+            .unwrap_or(output.len());
+        output.drain(..boundary);
+    }
 }
 
 fn store_result_if_twin_open(
@@ -361,6 +469,8 @@ fn store_result_if_twin_open(
 }
 
 fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
+    let elapsed = active.started_at.elapsed();
+    let output_log = active.output_log.clone();
     let stdout = active
         .stdout
         .take()
@@ -375,11 +485,18 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
         .expect("run result waits for process exit");
     let stdout = stdout.unwrap_or_else(|error| format!("stdout capture failed: {error}"));
     let stderr = stderr.unwrap_or_else(|error| format!("stderr capture failed: {error}"));
-    let summary = test_summary(&stdout, &stderr, status);
-    let outcome = match status.code() {
-        Some(0) => VerificationRunOutcome::Passed,
-        Some(1) => VerificationRunOutcome::Failed,
-        Some(_) | None => VerificationRunOutcome::NoVerdict,
+    let (outcome, summary) = if active.cancelled {
+        (
+            VerificationRunOutcome::Cancelled,
+            format!("Cancelled after {:.1} s", elapsed.as_secs_f32()),
+        )
+    } else {
+        let outcome = match status.code() {
+            Some(0) => VerificationRunOutcome::Passed,
+            Some(1) => VerificationRunOutcome::Failed,
+            Some(_) | None => VerificationRunOutcome::NoVerdict,
+        };
+        (outcome, test_summary(&stdout, &stderr, status))
     };
     VerificationRunResult {
         twin_id: active.twin_id,
@@ -387,6 +504,8 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
         name: active.name.clone(),
         outcome,
         summary,
+        output: output_log,
+        elapsed,
     }
 }
 

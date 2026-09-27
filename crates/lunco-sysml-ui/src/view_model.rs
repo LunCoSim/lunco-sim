@@ -53,6 +53,13 @@ pub(crate) struct VerificationCaseView {
     pub verdict_channel: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ParserDiagnosticView {
+    pub logical_uri: String,
+    pub line: usize,
+    pub message: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeRequirementResult {
     pub checks: u64,
@@ -90,7 +97,7 @@ pub struct SysmlRequirementsViewModel {
     pub(crate) requirements: Vec<RequirementView>,
     pub(crate) verification_cases: Vec<VerificationCaseView>,
     pub(crate) verification_setup_errors: Vec<String>,
-    pub(crate) parser_diagnostics: Vec<String>,
+    pub(crate) parser_diagnostics: Vec<ParserDiagnosticView>,
     pub(crate) verification_revision: Option<u64>,
     pub(crate) verification_channel: Option<String>,
     pub(crate) verification_sim_tick: Option<u64>,
@@ -274,20 +281,17 @@ fn build_view_model(
         parser_diagnostics: analysis
             .diagnostics()
             .iter()
-            .map(|diagnostic| {
-                format!(
-                    "{}:{} — {}",
-                    diagnostic.file,
-                    line_for_offset(
-                        analysis
-                            .files()
-                            .iter()
-                            .find(|file| file.name == diagnostic.file)
-                            .map_or("", |file| file.text.as_str()),
-                        diagnostic.start,
-                    ),
-                    diagnostic.message
-                )
+            .map(|diagnostic| ParserDiagnosticView {
+                logical_uri: diagnostic.file.clone(),
+                line: line_for_offset(
+                    analysis
+                        .files()
+                        .iter()
+                        .find(|file| file.name == diagnostic.file)
+                        .map_or("", |file| file.text.as_str()),
+                    diagnostic.start,
+                ),
+                message: diagnostic.message.clone(),
             })
             .collect(),
         verification_revision,
