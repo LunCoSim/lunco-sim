@@ -2786,7 +2786,7 @@ mod tests {
     }
 
     #[test]
-    fn external_held_intent_commits_at_its_admitted_tick_and_publishes_its_stamp() {
+    fn api_and_direct_command_inputs_commit_in_order_with_capture() {
         let mut app = App::new();
         app.init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>()
@@ -2853,13 +2853,27 @@ mod tests {
             .resource_mut::<lunco_core::ActiveCommandId>()
             .set(None);
 
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(Some(302));
+        app.world_mut().trigger(SimulateIntentEdge {
+            target,
+            intent: "action".to_owned(),
+            edge: "pulse".to_owned(),
+            producer_id: Some(9091),
+        });
+        app.world_mut()
+            .resource_mut::<lunco_core::ActiveCommandId>()
+            .set(None);
+        app.world_mut().flush();
+
         assert!(
             !app.world()
                 .resource::<SimulatedIntents>()
                 .is_held(target, UserIntent::MoveForward),
             "external held state stays unchanged until its admitted fixed tick"
         );
-        assert_eq!(app.world().resource::<PendingSessionInputs>().len(), 2);
+        assert_eq!(app.world().resource::<PendingSessionInputs>().len(), 3);
         let Some(lunco_core::CommandOutcome::Succeeded(ack)) = app
             .world()
             .resource::<lunco_core::CommandResults>()
@@ -2905,6 +2919,39 @@ mod tests {
                 .any(|(key, value)| { key == "sequence" && value == &HookValue::UInt(2) })
         );
 
+        let Some(lunco_core::CommandOutcome::Succeeded(direct_ack)) = app
+            .world()
+            .resource::<lunco_core::CommandResults>()
+            .get(302)
+        else {
+            panic!("direct typed input must retain its command acknowledgement");
+        };
+        let Some(HookValue::Map(direct_ack_data)) = direct_ack.data.as_ref() else {
+            panic!("direct typed input acknowledgement must carry typed data");
+        };
+        assert!(
+            direct_ack_data
+                .iter()
+                .any(|(key, value)| { key == "producer_id" && value == &HookValue::UInt(9091) })
+        );
+        let Some(HookValue::Map(direct_admission)) = direct_ack_data
+            .iter()
+            .find(|(key, _)| key == "admission")
+            .map(|(_, value)| value)
+        else {
+            panic!("direct typed input acknowledgement must include an admission stamp");
+        };
+        assert!(
+            direct_admission
+                .iter()
+                .any(|(key, value)| { key == "effective_tick" && value == &HookValue::UInt(21) })
+        );
+        assert!(
+            direct_admission
+                .iter()
+                .any(|(key, value)| { key == "sequence" && value == &HookValue::UInt(3) })
+        );
+
         app.world_mut().run_schedule(FixedUpdate);
         assert!(
             !app.world()
@@ -2931,7 +2978,7 @@ mod tests {
         );
 
         let observed = app.world().resource::<SemanticEdgeObserved>();
-        assert_eq!(observed.typed.len(), 1);
+        assert_eq!(observed.typed.len(), 2);
         assert_eq!(observed.typed[0].correlation_id, 300);
         assert_eq!(
             observed.typed[0].admission,
@@ -2941,6 +2988,17 @@ mod tests {
                 sequence: 1,
             })
         );
+        assert_eq!(observed.typed[1].correlation_id, 302);
+        assert_eq!(observed.typed[1].origin, None);
+        assert_eq!(observed.typed[1].producer_id, Some(9091));
+        assert_eq!(
+            observed.typed[1].admission,
+            Some(lunco_control_core::SimulationInputOrder {
+                scene_generation: generation,
+                effective_tick: 21,
+                sequence: 3,
+            })
+        );
         let edge_trace = app
             .world()
             .resource::<lunco_control_core::CausalTrace>()
@@ -2948,6 +3006,14 @@ mod tests {
             .expect("the admitted edge keeps its receipt-to-trace correlation");
         assert_eq!(edge_trace.admission, observed.typed[0].admission);
         assert_eq!(edge_trace.producer_id, Some(300));
+        let direct_trace = app
+            .world()
+            .resource::<lunco_control_core::CausalTrace>()
+            .find(target_gid, 302)
+            .expect("direct typed input keeps its producer trace");
+        assert_eq!(direct_trace.origin, None);
+        assert_eq!(direct_trace.producer_id, Some(9091));
+        assert_eq!(direct_trace.admission, observed.typed[1].admission);
         let edge_event = observed
             .telemetry
             .iter()
@@ -2963,6 +3029,30 @@ mod tests {
         assert_eq!(
             edge_data["producer_id"],
             lunco_telemetry_core::TelemetryValue::U64(300)
+        );
+        let direct_event = observed
+            .telemetry
+            .iter()
+            .find(|event| {
+                event.name == "intent.edge"
+                    && matches!(
+                        &event.data,
+                        lunco_telemetry_core::TelemetryValue::Map(data)
+                            if data.get("correlation_id")
+                                == Some(&lunco_telemetry_core::TelemetryValue::U64(302))
+                    )
+            })
+            .expect("direct typed input publishes its command provenance");
+        let lunco_telemetry_core::TelemetryValue::Map(direct_data) = &direct_event.data else {
+            panic!("direct semantic edge event must expose typed producer data");
+        };
+        assert_eq!(
+            direct_data["producer_kind"],
+            lunco_telemetry_core::TelemetryValue::String("direct_command".to_owned())
+        );
+        assert_eq!(
+            direct_data["producer_id"],
+            lunco_telemetry_core::TelemetryValue::U64(9091)
         );
 
         let hold_event = observed
@@ -3015,7 +3105,7 @@ mod tests {
         let stream = app
             .world()
             .resource::<lunco_core_session::SessionInputStream>();
-        assert_eq!(stream.records().len(), 2);
+        assert_eq!(stream.records().len(), 3);
         assert_eq!(
             stream.records()[0].producer,
             lunco_core_session::SessionInputProducer::ApiTransport { producer_id: 300 }
@@ -3038,6 +3128,18 @@ mod tests {
                 intent: "forward".to_owned(),
                 held: true,
                 correlation_id: 301,
+            }
+        );
+        assert_eq!(
+            stream.records()[2].producer,
+            lunco_core_session::SessionInputProducer::DirectCommand { producer_id: 9091 }
+        );
+        assert_eq!(
+            stream.records()[2].payload,
+            lunco_core_session::SessionInputPayload::SemanticIntentEdge {
+                intent: "action".to_owned(),
+                edge: "pulse".to_owned(),
+                correlation_id: 302,
             }
         );
     }

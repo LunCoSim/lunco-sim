@@ -359,9 +359,16 @@ typed queues before that is safe.
   port 4196 were confirmed gone. No Rust source changed, so the existing
   production binary was reused. The earlier requested checkout-local Cargo
   cleanup was already completed; it was not repeated.
-- Direct-command producer acceptance, other typed command payloads, durable
-  recording/playback, physical-frame playback, supported-profile divergence,
-  remaining cross-domain causal closure, and performance evidence remain open.
+- Focused owner test `cargo test -p lunco-controller
+  api_and_direct_command_inputs_commit_in_order_with_capture -j 4` passed.
+  An unclassified in-process `SimulateIntentEdge` with producer 9091 retained
+  acknowledgement 302 and `{scene_generation: 1, effective_tick: 21,
+  sequence: 3}` through causal trace, telemetry, and the captured
+  `direct_command` record. API and Rhai ingress classify origin, so this
+  owner path has no production Rhai/API scenario surface. Other typed
+  payloads, durable recording/playback, physical-frame playback,
+  supported-profile divergence, cross-domain causal closure, and
+  performance evidence remain open.
 
 ## Runtime and repository constraints
 
