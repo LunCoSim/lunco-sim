@@ -8,7 +8,7 @@
 //! visual-only consumers do not compile or install control behavior.
 
 use crate::program_runtime::{
-    modelica_network_members_for_stage, refresh_program_owner_with_network_members,
+    apply_program_owner_projection, modelica_network_members_for_stage, resolve_program_owner,
 };
 use bevy::asset::Assets;
 use bevy::prelude::{Add, ChildOf, Commands, Component, Entity, On, Query, With, Without, World};
@@ -62,13 +62,16 @@ pub(crate) fn has_pending_authored_runtime_projection(
 }
 
 /// Read the composed `Controls` scope belonging to `owner`.
-fn read_control_surface<R: UsdRead>(reader: &R, owner: &SdfPath) -> Option<AuthoredControlSurface> {
-    let controls = reader
-        .children(owner)
-        .into_iter()
+fn read_control_surface<R: UsdRead>(
+    reader: &R,
+    owner: &SdfPath,
+    owner_children: &[SdfPath],
+) -> Option<AuthoredControlSurface> {
+    let controls = owner_children
+        .iter()
         .find(|child| child.name() == Some("Controls"))?;
     let entries: Vec<(String, String, f64)> = reader
-        .children(&controls)
+        .children(controls)
         .into_iter()
         .filter_map(|binding| {
             let intent = binding.name()?.to_string();
@@ -121,7 +124,7 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         if lunco_usd_bevy_scene::is_preview_only_entity(world, entity) {
             continue;
         }
-        let surface = {
+        let (surface, prepared_program) = {
             let Some(stage_asset) = world
                 .get_resource::<Assets<UsdStageAsset>>()
                 .and_then(|assets| assets.get(stage_id))
@@ -142,7 +145,12 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
             };
             let instance = world.get::<UsdInstanceProjection>(entity);
             let (reader, _) = stages.reader_for_entity(stage_id, stage_asset, instance);
-            read_control_surface(&reader, &owner)
+            let owner_children = reader.children(&owner);
+            let surface = read_control_surface(&reader, &owner, &owner_children);
+            let prepared_program = network_members_by_stage.get(&stage_id).map(|members| {
+                resolve_program_owner(&reader, &owner, &owner_children, members.as_ref())
+            });
+            (surface, prepared_program)
         };
 
         let Ok(mut owner) = world.get_entity_mut(entity) else {
@@ -160,18 +168,9 @@ pub(crate) fn project_authored_runtime_components(world: &mut World) {
         }
         drop(owner);
 
-        // Generic executable programs use the same resolver for initial
-        // projection and live structural/source edits. This is the only owner
-        // path, so a visual refresh cannot create a second program attachment.
-        let Some(network_members) = network_members_by_stage.get(&stage_id) else {
-            continue;
-        };
-        refresh_program_owner_with_network_members(
-            world,
-            stage_id,
-            entity,
-            network_members.as_ref(),
-        );
+        if let Some(program) = prepared_program {
+            apply_program_owner_projection(world, entity, stage_id, program);
+        }
     }
 }
 

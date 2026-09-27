@@ -182,6 +182,11 @@ Temporary lookup indexes over immutable ECS queries should borrow path and port
 surface data instead of cloning those maps for a one-pass reconciliation.
 Build compatible per-entity indexes in one query traversal rather than running
 separate full-population passes for each index.
+When multiple runtime consumers inspect the same composed owner, acquire its
+canonical reader and child list once, derive owned typed facts for each
+consumer, then release the stage borrow before mutating ECS. Preserve the same
+typed resolution and commit helpers across initial and live projection paths;
+do not introduce a second fact cache.
 When multiple USD consumers need the same composed-stage fact, put its
 generation/instance-keyed cache at the shared fact owner and reuse that cache;
 clear it at the scene teardown boundary instead of keeping consumer-local copies.
