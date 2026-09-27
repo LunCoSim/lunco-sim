@@ -34,8 +34,10 @@ fn schema_checks(path, fields) {
         path + " was not classified as WGSL"));
     failures.push(t_true(report != () && report.ok == true,
         path + " failed standalone WGSL schema validation"));
+    // ValidateAsset exposes uniform_size as UInt; this bounded threshold keeps
+    // the <= 256 result exact after explicit conversion and avoids mixed types.
     failures.push(t_true(report != () && report.info.uniform_size != ()
-        && report.info.uniform_size <= 256,
+        && to_float(report.info.uniform_size) <= 256.0,
         path + " exceeds the 256-byte material uniform contract"));
     for field in fields {
         failures.push(t_true(has_param(report, field.name, field.type),
