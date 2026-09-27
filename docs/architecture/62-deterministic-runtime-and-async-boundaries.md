@@ -342,8 +342,15 @@ prepares covers synchronously at each captured frame.
 An active reference spawn on the mounted primary `UsdSceneRoot` acquires a
 `SceneReferences` operation key when the typed structural change is admitted.
 Its hold follows the prepared closure through live-stage authoring and ECS root
-projection. Preview and additive document references keep their own projection
-lifecycle and diagnostics; they do not hold or fault the primary simulation.
+projection. Queue admission reads the current prepared-asset store and load
+state as well as lifecycle messages, so an asset event consumed before the
+typed edit arrives cannot strand that operation. A recorded load failure wins
+over a retained older asset value, and an in-progress reload keeps that older
+value from committing before the replacement is ready. If the failure event
+was already consumed, admission retains the asset server's load error for the
+reference diagnostic. Preview and additive document references keep their own
+projection lifecycle and diagnostics; they do not hold or fault the primary
+simulation.
 Persistent edits to the mounted primary document also acquire a coalesced
 `UsdDocumentProjection` key as soon as the document registry revision changes.
 Change detection admits edits from UI/command cycles in the shared

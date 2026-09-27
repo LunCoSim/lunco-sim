@@ -548,6 +548,67 @@ impl PendingRefSpawns {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ReferenceAssetState {
+    Prepared,
+    Loading,
+    Failed(String),
+}
+
+/// Inspect the authoritative asset owners when a reference operation enters
+/// the queue. Asset events may already have been consumed before the authored
+/// edit is projected, so queue admission also observes the current store and
+/// load state.
+fn reference_asset_state(world: &World, id: AssetId<UsdStageAsset>) -> ReferenceAssetState {
+    let load_state = world.resource::<AssetServer>().get_load_state(id);
+    let failure = load_state.as_ref().and_then(|state| match state {
+        bevy::asset::LoadState::Failed(error) => Some(error.to_string()),
+        _ => None,
+    });
+    let loading = load_state.as_ref().is_some_and(|state| state.is_loading());
+    let prepared = world.resource::<Assets<UsdStageAsset>>().get(id).is_some();
+    classify_reference_asset_state(prepared, loading, failure)
+}
+
+fn classify_reference_asset_state(
+    prepared: bool,
+    loading: bool,
+    failure: Option<String>,
+) -> ReferenceAssetState {
+    if let Some(error) = failure {
+        ReferenceAssetState::Failed(error)
+    } else if loading {
+        ReferenceAssetState::Loading
+    } else if prepared {
+        ReferenceAssetState::Prepared
+    } else {
+        ReferenceAssetState::Loading
+    }
+}
+
+/// Admit a referenced spawn using the asset state that exists when its
+/// structural edit reaches the live-stage owner. Lifecycle messages can be
+/// consumed before this operation is queued, so the current store and load
+/// state determine its initial readiness or failure.
+fn enqueue_reference_spawn(world: &mut World, mut item: RefSpawn) {
+    let id = item.ref_handle.id();
+    let state = reference_asset_state(world, id);
+    let asset_ready = matches!(&state, ReferenceAssetState::Prepared);
+    item.asset_ready = asset_ready;
+    let failure = match state {
+        ReferenceAssetState::Failed(error) => Some(error),
+        ReferenceAssetState::Prepared | ReferenceAssetState::Loading => None,
+    };
+    world
+        .resource_mut::<PendingRefSpawns>()
+        .push(item, asset_ready);
+    if let Some(error) = failure {
+        world
+            .resource_mut::<PendingRefSpawns>()
+            .mark_failed(id, error);
+    }
+}
+
 fn is_authoritative_scene_stage(world: &World, scene_id: AssetId<UsdStageAsset>) -> bool {
     let Some(root) = world
         .get_resource::<lunco_core::SceneMountState>()
@@ -2890,18 +2951,10 @@ fn spawn_prim_op(
     let ref_handle = world
         .resource::<AssetServer>()
         .load::<UsdStageAsset>(bevy::asset::AssetPath::parse(&ref_id).into_owned());
-    let ref_id = ref_handle.id();
-    let ready = world
-        .resource::<Assets<UsdStageAsset>>()
-        .get(ref_id)
-        .is_some();
-    let failed = world
-        .resource::<AssetServer>()
-        .get_load_state(ref_id)
-        .is_some_and(|state| state.is_failed());
     let reason = format!("Preparing USD reference {prim_path} from `{asset_path}`");
     let held = acquire_reference_progress(world, progress_key, scene_id, reason);
-    world.resource_mut::<PendingRefSpawns>().push(
+    enqueue_reference_spawn(
+        world,
         RefSpawn {
             progress_key,
             scene_id,
@@ -2914,19 +2967,12 @@ fn spawn_prim_op(
             deferred_ops: Vec::new(),
             active: true,
             held,
-            asset_ready: ready,
+            asset_ready: false,
             failure: None,
             failure_reported: false,
             removed: false,
         },
-        ready,
     );
-    if failed {
-        world.resource_mut::<PendingRefSpawns>().mark_failed(
-            ref_id,
-            "the referenced asset had already failed to load".into(),
-        );
-    }
 }
 
 fn failed_ref_spawn(
@@ -4122,6 +4168,143 @@ mod tests {
     }
 
     #[test]
+    fn failed_reference_load_dominates_a_retained_prepared_asset() {
+        assert_eq!(
+            classify_reference_asset_state(true, false, Some("reload failed".to_owned())),
+            ReferenceAssetState::Failed("reload failed".to_owned()),
+            "a failed reload must not commit a stale retained asset"
+        );
+        assert_eq!(
+            classify_reference_asset_state(true, false, None),
+            ReferenceAssetState::Prepared
+        );
+        assert_eq!(
+            classify_reference_asset_state(false, false, None),
+            ReferenceAssetState::Loading
+        );
+    }
+
+    #[test]
+    fn loading_reference_reload_dominates_a_retained_prepared_asset() {
+        assert_eq!(
+            classify_reference_asset_state(true, true, None),
+            ReferenceAssetState::Loading,
+            "an in-progress reload must not commit a stale retained asset"
+        );
+    }
+
+    #[test]
+    fn prepared_reference_asset_survives_its_event_preceding_spawn_admission() {
+        use bevy::asset::AssetApp;
+        use bevy::prelude::*;
+        use lunco_usd_bevy_stage::canonical::CanonicalStages;
+        use lunco_usd_bevy_stage::read::UsdRead;
+        use openusd::sdf::Path as SdfPath;
+
+        const REFERENCE: &str =
+            "#usda 1.0\n(\n    defaultPrim = \"Vehicle\"\n)\ndef Xform \"Vehicle\"\n{\n}\n";
+
+        let scene_recipe = lunco_usd_compose::recipe::StageRecipe::from_source("scene.usda", TINY);
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>()
+            .init_non_send::<CanonicalStages>()
+            .init_resource::<PendingRefSpawns>()
+            .init_resource::<PendingInstanceProjections>()
+            .init_resource::<SimulationProgress>()
+            .add_systems(Update, mark_pending_ref_spawns);
+
+        let scene_handle = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset::from_recipe(scene_recipe.clone()).expect("prepare scene"));
+        let scene_id = scene_handle.id();
+        let reference_id = app
+            .world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .get_or_build(scene_id, &scene_recipe)
+            .expect("open the live scene stage")
+            .canonical_reference_id("vehicle.usda");
+        let reference_recipe =
+            lunco_usd_compose::recipe::StageRecipe::from_source(reference_id, REFERENCE);
+        let reference_handle = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset::from_recipe(reference_recipe).expect("prepare reference"));
+        let reference_asset_id = reference_handle.id();
+
+        // Assets publishes Added after insertion. Let the runtime consume that
+        // event while no authored spawn exists yet.
+        app.update();
+        app.update();
+        assert!(app.world().resource::<PendingRefSpawns>().ready.is_empty());
+
+        let progress_key = app
+            .world_mut()
+            .resource_mut::<PendingRefSpawns>()
+            .allocate_progress_key()
+            .expect("reference operation identity");
+        app.world_mut().resource_mut::<PendingRefSpawns>().push(
+            RefSpawn {
+                progress_key,
+                scene_id,
+                prim_path: "/World/Vehicle".to_owned(),
+                type_name: Some("Xform".to_owned()),
+                asset_path: "vehicle.usda".to_owned(),
+                reference_prim_path: None,
+                ref_handle: reference_handle,
+                translate: None,
+                deferred_ops: Vec::new(),
+                active: true,
+                held: false,
+                asset_ready: false,
+                failure: None,
+                failure_reported: false,
+                removed: false,
+            },
+            false,
+        );
+
+        // The event reader does not replay the old Added message for a later
+        // operation. Queue admission must recover readiness from asset state.
+        app.update();
+        assert!(app.world().resource::<PendingRefSpawns>().ready.is_empty());
+        let item = app
+            .world_mut()
+            .resource_mut::<PendingRefSpawns>()
+            .items
+            .remove(0);
+        enqueue_reference_spawn(app.world_mut(), item);
+        assert!(
+            app.world()
+                .resource::<PendingRefSpawns>()
+                .ready
+                .contains(&reference_asset_id)
+        );
+        assert!(app.world().resource::<PendingRefSpawns>().items[0].asset_ready);
+
+        drain_ref_spawns(app.world_mut());
+
+        let stage = app
+            .world()
+            .non_send::<CanonicalStages>()
+            .get(scene_id)
+            .expect("live scene stage remains open");
+        assert!(
+            stage
+                .view()
+                .has_prim(&SdfPath::new("/World/Vehicle").unwrap())
+        );
+        assert!(app.world().resource::<PendingRefSpawns>().items.is_empty());
+        assert!(
+            app.world()
+                .resource::<PendingInstanceProjections>()
+                .plans
+                .contains_key(&(scene_id, "/World/Vehicle".into()))
+        );
+    }
+
+    #[test]
     fn drain_ref_spawns_commits_a_ready_successor_after_its_unready_prefix() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
@@ -4141,7 +4324,8 @@ mod tests {
             .init_non_send::<CanonicalStages>()
             .init_resource::<PendingRefSpawns>()
             .init_resource::<PendingInstanceProjections>()
-            .init_resource::<SimulationProgress>();
+            .init_resource::<SimulationProgress>()
+            .add_systems(Update, mark_pending_ref_spawns);
 
         let scene_handle = app
             .world_mut()
@@ -4187,6 +4371,11 @@ mod tests {
         mounts.register_root(root, true);
         app.world_mut().insert_resource(mounts);
 
+        // Consume insertion events before either authored reference operation
+        // is admitted; the test below controls their completion order.
+        app.update();
+        app.update();
+
         let (first_key, second_key) = {
             let mut pending = app.world_mut().resource_mut::<PendingRefSpawns>();
             let first_key = pending
@@ -4231,10 +4420,29 @@ mod tests {
                 ),
                 false,
             );
-            // Force the later authored result to arrive first.
-            pending.ready.insert(second_handle.id());
             (first_key, second_key)
         };
+
+        // The later authored operation completes first through the same event
+        // reader used by the runtime.
+        app.world_mut()
+            .resource_mut::<Messages<bevy::asset::AssetEvent<UsdStageAsset>>>()
+            .write(bevy::asset::AssetEvent::LoadedWithDependencies {
+                id: second_handle.id(),
+            });
+        app.update();
+        assert!(
+            app.world()
+                .resource::<PendingRefSpawns>()
+                .ready
+                .contains(&second_handle.id())
+        );
+        assert!(
+            !app.world()
+                .resource::<PendingRefSpawns>()
+                .ready
+                .contains(&first_handle.id())
+        );
 
         drain_ref_spawns(app.world_mut());
 
@@ -4257,9 +4465,11 @@ mod tests {
         assert!(app.world().resource::<SimulationProgress>().is_held());
 
         app.world_mut()
-            .resource_mut::<PendingRefSpawns>()
-            .ready
-            .insert(first_handle.id());
+            .resource_mut::<Messages<bevy::asset::AssetEvent<UsdStageAsset>>>()
+            .write(bevy::asset::AssetEvent::LoadedWithDependencies {
+                id: first_handle.id(),
+            });
+        app.update();
         drain_ref_spawns(app.world_mut());
 
         let stage = app

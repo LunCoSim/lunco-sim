@@ -91,17 +91,17 @@ fn on_start(me, ctx) {
     this.archive_export_failure = "missing";
     this.archive_clear_after_completion = false;
     if this.archive_capture_completed {
-        let export = cmd("ExportSessionInputCapture", #{ file_stem: "task-contract" });
-        if export.ok && export.data["state"] == "pending" {
+        let export_result = cmd("ExportSessionInputCapture", #{ file_stem: "task-contract" });
+        if export_result.ok && export_result.data["state"] == "pending" {
             this.archive_export_pending = true;
-            this.archive_export_id = export.data["export_id"];
-            this.archive_export_capture_id = export.data["capture_id"];
-            this.archive_export_file_name = export.data["file_name"];
+            this.archive_export_id = export_result.data["export_id"];
+            this.archive_export_capture_id = export_result.data["capture_id"];
+            this.archive_export_file_name = export_result.data["file_name"];
             let cleared_while_pending = cmd("ClearSessionInputCapture", #{});
             this.archive_clear_rejected_while_pending = cleared_while_pending.ok == false
                 && cleared_while_pending.status == "rejected";
         } else {
-            this.archive_export_error = "archive export was not admitted: " + export;
+            this.archive_export_error = "archive export was not admitted: " + export_result;
         }
     } else {
         this.archive_export_error = "session input capture did not complete";
@@ -292,7 +292,7 @@ fn on_tick(me, ctx) {
             t_true(this.archive_unsafe_stem_rejected, "archive export rejects filename traversal"),
             t_true(this.archive_export_pending, "archive export reports its accepted pending operation"),
             t_true(this.archive_clear_rejected_while_pending, "capture clearing is rejected while an immutable export snapshot is pending"),
-            t_true(this.archive_export_state == "complete", "archive export completed after durable write and read-back"),
+            t_true(this.archive_state == "complete", "archive export completed after durable write and read-back"),
             t_true(this.archive_export_id.to_string() == this.archive_status_id.to_string(), "archive export status retained the exact request id"),
             t_true(this.archive_export_capture_id.to_string() == this.archive_status_capture_id.to_string(), "archive status retained the capture identity bound to the export"),
             t_true(this.archive_export_capture_id.to_string() == this.archive_capture_id.to_string(), "archive export references the capture returned by the control command"),

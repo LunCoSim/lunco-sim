@@ -19,6 +19,12 @@ session replay is not built. A completed capture can be exported as a bounded,
 versioned binary archive; baseline state, remaining command inputs, and a
 playback consumer are still absent.
 
+The networking-owned `ScenarioManifestMsg` carries a scenario Merkle revision
+and asset CIDs, but that resource is optional and exists only when networking
+is installed. Offline replay therefore needs a transport-neutral baseline
+assembled from the admitted simulation owners; capture must not depend on the
+network manifest.
+
 The Twin journal owns authored document mutations. A separate session replay
 input stream must own transient external inputs such as per-tick controls and
 runtime commands. Telemetry remains observational output, not an input source.
@@ -208,6 +214,37 @@ authoritative identity in the spawn action, while content-derived entities use
 their existing stable `GlobalEntityId`.
 Playback remains unimplemented until a baseline manifest and playback consumer
 satisfy the lifecycle, ordering, and failure requirements above.
+
+### Replay baseline ownership
+
+The baseline must be assembled from the owners that admitted the simulation,
+not inferred from networking state. `ScenarioManifestMsg` is optional and
+networking-owned; it can supply network scenario provenance but is absent from
+offline runs. Its Merkle revision cannot stand in for the local runtime
+baseline.
+
+The baseline contract needs stable identities and snapshots for the complete
+admitted owner closure:
+
+- The host's immutable build identity and the root USD composition closure,
+  including stable content identities for every composed dependency. The
+  `UsdStageRevision` counter is an invalidation signal, not a content identity.
+- Rhai and SysML source closures, keyed by canonical source identity and
+  stable source-content identity. Process-local registry counters alone cannot
+  identify the same sources across sessions.
+- Every live Modelica participant's model revision, resolved solver id,
+  capability profile, and effective solver parameters.
+- The fixed-step clock and physics execution profile, initial authoritative
+  runtime state, and every seed that can affect authoritative state.
+- The committed scene generation and the stable entity identities needed to
+  resolve input targets and runtime-spawn results.
+
+Each owner must expose its admitted snapshot through one typed capture boundary.
+If any required owner cannot freeze its snapshot, baseline capture must fail
+with that owner's diagnostic. The capture must not substitute a network
+manifest, a volatile revision counter, a guessed seed, or a partial state.
+Playback stays open until the same baseline can initialize the consumer and the
+consumer can submit archived records through their normal typed owner paths.
 
 The existing Twin journal remains the owner for authored document operations.
 It does not record transient controls, scene-time inputs, or physics state and
