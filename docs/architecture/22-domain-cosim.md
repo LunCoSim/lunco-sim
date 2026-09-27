@@ -650,6 +650,12 @@ Prim arrivals whose stage asset is not ready wait in a stage-keyed set and are
 requeued by that asset's readiness event, rather than being retried on stable
 frames.
 
+Generated-domain commits keep the authored telemetry index on the same read
+surface as synthesis. Generation-zero results use the worker-built cache keyed
+by prepared-plan identity, including ordinary stage plans and runtime-instance
+plans; later canonical generations use their own generation-keyed index. This
+keeps the initial full-stage telemetry scan off the app thread.
+
 Generated Modelica source documents use the same lifecycle discipline: source
 insert/replace queues only that wrapper for document synchronization, while a
 one-time bootstrap covers pre-existing wrappers. Source insertion/removal and

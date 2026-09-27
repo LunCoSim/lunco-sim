@@ -1641,7 +1641,8 @@ pub fn poll_domain_projection_tasks(
         };
         let (canonical_reader, commit_generation) =
             canonical.reader_for_entity(task.stage_id, stage_asset, instance_projection);
-        let view: &dyn ComposedReader = if task.instance_plan {
+        let prepared_plan = task.instance_plan || commit_generation == 0;
+        let view: &dyn ComposedReader = if prepared_plan {
             task.plan.as_ref()
         } else {
             &canonical_reader
@@ -1659,7 +1660,7 @@ pub fn poll_domain_projection_tasks(
             &task.model_name,
             synthesized,
             &mut telemetry_indexes,
-            if task.instance_plan {
+            if prepared_plan {
                 AuthoredTelemetryScope::PreparedPlan {
                     asset: task.stage_id,
                     identity: Arc::as_ptr(&task.plan) as usize,

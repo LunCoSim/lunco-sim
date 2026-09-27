@@ -125,6 +125,11 @@ steps such as wrapping a Modelica model into its shared port surface. Keep a
 single bootstrap discovery for entities predating plugin installation, and
 retry only work whose authoritative stage/readiness input is still pending.
 The idle run condition should inspect the owner set, not scan the population.
+When a worker prepares facts for a composed plan, result commit must use the
+same prepared-plan identity for any derived cache. Generation-zero ordinary
+and runtime-instance plans stay on that cached read surface; only later live
+canonical generations use generation-keyed main-thread extraction. Otherwise
+a cache-key mismatch can repeat a full-stage scan during result publication.
 When initial preparation already builds composed type or API-schema indexes,
 run one-time topology and vehicle-output extraction against the prepared reader
 on a worker and use its indexed candidate query. Combine overlapping schema
