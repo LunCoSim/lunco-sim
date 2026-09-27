@@ -374,6 +374,56 @@ fn extract_usd_policies_for_stage(
     (out, policy_prim_paths)
 }
 
+/// Reuse the worker-prepared policy facts through unrelated live-stage edits.
+/// The prepared plan is the generation-zero baseline; every intervening stage
+/// batch must be available and prove that no policy prim changed before the
+/// baseline can be promoted to the live generation.
+fn prepared_policy_baseline_for_current_generation(
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    stage_asset: &UsdStageAsset,
+    canonical: &lunco_usd_bevy_stage::canonical::CanonicalStages,
+    scene_changes: &[lunco_usd_bevy_scene::UsdSceneChangeBatch],
+) -> Option<(Vec<AuthoredPolicy>, std::collections::HashSet<String>)> {
+    let mut policies = Vec::new();
+    let mut policy_prim_paths = std::collections::HashSet::new();
+    append_prepared_usd_policies(
+        &stage_asset.projection_plan,
+        stage_id,
+        &mut policies,
+        &mut policy_prim_paths,
+    );
+
+    let generation = canonical.generation_for(stage_id);
+    if generation == 0 {
+        return Some((policies, policy_prim_paths));
+    }
+    let batches = stage_batches_cover_generations(stage_id, 0, generation, scene_changes)?;
+    let (reader, reader_generation) = canonical.reader_for(stage_id, stage_asset);
+    if reader_generation != generation {
+        return None;
+    }
+    let lunco_usd_bevy_stage::read::UsdReadSource::Live(reader) = reader else {
+        return Some((policies, policy_prim_paths));
+    };
+    if batches_affect_policy_facts(&reader, &batches, &policy_prim_paths) {
+        return None;
+    }
+
+    let _span =
+        bevy::log::info_span!("usd_policy_prepared_plan_generation_reuse", generation).entered();
+    Some((policies, policy_prim_paths))
+}
+
+fn extract_usd_policies_after_cache_miss(
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    stage_asset: &UsdStageAsset,
+    canonical: &lunco_usd_bevy_stage::canonical::CanonicalStages,
+    scene_changes: &[lunco_usd_bevy_scene::UsdSceneChangeBatch],
+) -> (Vec<AuthoredPolicy>, std::collections::HashSet<String>) {
+    prepared_policy_baseline_for_current_generation(stage_id, stage_asset, canonical, scene_changes)
+        .unwrap_or_else(|| extract_usd_policies_for_stage(stage_id, stage_asset, canonical))
+}
+
 fn path_is_at_or_below(path: &str, ancestor: &str) -> bool {
     path == ancestor
         || ancestor == "/"
@@ -681,10 +731,13 @@ fn project_usd_policies(
                     } else {
                         policy_facts_changed = true;
                         let _span =
-                            bevy::log::info_span!("usd_policy_authored_facts_cache_miss_scan")
-                                .entered();
-                        let (policies, policy_prim_paths) =
-                            extract_usd_policies_for_stage(*stage_id, stage_asset, &canonical);
+                            bevy::log::info_span!("usd_policy_authored_facts_cache_miss").entered();
+                        let (policies, policy_prim_paths) = extract_usd_policies_after_cache_miss(
+                            *stage_id,
+                            stage_asset,
+                            &canonical,
+                            &scene_changes,
+                        );
                         let policies = std::sync::Arc::from(policies);
                         authored_cache.insert(
                             *stage_id,
@@ -701,10 +754,14 @@ fn project_usd_policies(
                     }
                 } else {
                     policy_facts_changed = true;
-                    let _span = bevy::log::info_span!("usd_policy_authored_facts_cache_miss_scan")
-                        .entered();
-                    let (policies, policy_prim_paths) =
-                        extract_usd_policies_for_stage(*stage_id, stage_asset, &canonical);
+                    let _span =
+                        bevy::log::info_span!("usd_policy_authored_facts_cache_miss").entered();
+                    let (policies, policy_prim_paths) = extract_usd_policies_after_cache_miss(
+                        *stage_id,
+                        stage_asset,
+                        &canonical,
+                        &scene_changes,
+                    );
                     let policies = std::sync::Arc::from(policies);
                     authored_cache.insert(
                         *stage_id,

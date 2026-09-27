@@ -249,9 +249,10 @@ Measure serialization and plan preparation separately from the live-stage
 build, reset owners, and visual projection; do not move the thread-affine stage
 across the worker boundary or let completion order select a commit.
 
-For `project_usd_policies`, distinguish the initial prepared-plan lookup and
-live-stage traversal from generation-batch cache promotion. A promoted cache
-means every intervening `UsdSceneChangeBatch` was observed and the changed
-paths did not affect policy prims; a missing batch or changed policy subtree
-must remain a visible full extraction. Compare both startup and settled edit
-captures after changing this path.
+For `project_usd_policies`, a cold cache can use the worker-prepared plan as its
+baseline only when every `UsdSceneChangeBatch` from generation zero to the live
+generation is present and proves that no policy prim changed. Existing cached
+facts use the same complete-generation and affected-path checks when promoted.
+A missing batch, generation gap, plan replacement, or policy-affecting change
+must use full live extraction. Compare startup and settled edit captures after
+changing this path; compile evidence alone does not establish a timing gain.

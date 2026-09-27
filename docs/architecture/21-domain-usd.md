@@ -246,14 +246,16 @@ and instance-generation checks. Initial prepared-plan synthesis runs entirely on
 a worker. This dependency-recipe cache removes redundant snapshots while the
 domain pipeline keeps non-critical computation off the UI and physics cycles.
 The USD policy projector caches authored policy facts per stage asset, prepared
-projection-plan identity, and canonical generation. A source-asset revision
-reuses those facts. For live stage changes, contiguous
-`UsdSceneChangeBatch` generations let the projector promote unaffected cached
-facts when resynced subtrees and info-changed prims do not contain a policy.
-Relevant changes rescan only that stage; missing batches, plan replacement, or
-generation gaps use a full extraction. Unrelated stage edits also skip policy
-asset resolution and registry installation. Live canonical reads remain on
-their owning thread. The async-prepared projection plan indexes prims by
+projection-plan identity, and canonical generation. A cold cache starts from
+the worker-prepared plan and promotes those facts to the current live generation
+only when every intervening `UsdSceneChangeBatch` is present and proves that no
+policy prim changed. For later live stage changes, contiguous generations let
+the projector promote unaffected cached facts when resynced subtrees and
+info-changed prims do not contain a policy. Relevant changes trigger a full
+extraction for that stage; missing batches, plan replacement, or generation
+gaps also use that conservative path. Unrelated stage edits skip policy asset
+resolution and registry installation. Live canonical reads remain on their
+owning thread. The async-prepared projection plan indexes prims by
 composed schema type and applied API schema. Startup policy extraction visits
 only `LunCoPolicy` prims, and simulation topology extraction visits only
 physics joints, wheel attachments, and vehicle roots. Initial simulation
