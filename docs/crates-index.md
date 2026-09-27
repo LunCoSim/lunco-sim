@@ -345,7 +345,9 @@ through the shared `lunco-control-core::SimulationInputOrderAllocator`. Its
 fixed-step coordinator validates scene stamps and stable targets, captures
 admitted records, and publishes typed commit events in sequence order for the
 controller and scene-command owners to apply while the simulation clock is
-running. Hosts that need session behavior add
+running. It also validates and encodes record-only captures through a bounded,
+versioned binary archive codec; durable storage, a session baseline manifest,
+and playback remain separate work. Hosts that need session behavior add
 `LunCoCoreSessionPlugin` after `LunCoCoreRuntimePlugin` and install `TimePlugin`;
 headless consumers that only need core primitives do not compile this policy
 layer.
