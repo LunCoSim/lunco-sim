@@ -50,6 +50,34 @@ pub struct UsdPrimProjectionPlan {
     bound_materials: HashMap<MaterialPurpose, String>,
 }
 
+impl UsdPrimProjectionPlan {
+    /// Composed USD schema type name, when the prim has one.
+    pub fn type_name(&self) -> Option<&str> {
+        self.type_name.as_deref()
+    }
+
+    /// Borrow a composed string, token, or asset-path attribute value.
+    pub fn text_attribute(&self, name: &str) -> Option<&str> {
+        self.attributes.get(name).and_then(Value::as_str)
+    }
+
+    /// Borrow the authored path of a composed USD asset attribute.
+    pub fn asset_attribute(&self, name: &str) -> Option<&str> {
+        match self.attributes.get(name)? {
+            Value::AssetPath(path) => Some(path.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Read a composed boolean attribute.
+    pub fn boolean_attribute(&self, name: &str) -> Option<bool> {
+        match self.attributes.get(name)? {
+            Value::Bool(value) => Some(*value),
+            _ => None,
+        }
+    }
+}
+
 /// A Send-safe snapshot of the composed USD read surface for one asset.
 ///
 /// It is not a second source of truth: it is an immutable load transaction
@@ -64,6 +92,8 @@ pub struct UsdStageProjectionPlan {
     pub prims: Vec<UsdPrimProjectionPlan>,
     /// Parent path → direct child indices into [`Self::prims`].
     pub children: HashMap<String, Vec<usize>>,
+    /// Composed schema type → prim indices, built while the load is prepared.
+    type_indices: HashMap<String, Vec<usize>>,
     collections: HashMap<(String, String), Vec<String>>,
     prim_indices: HashMap<String, usize>,
     stage_metadata: HashMap<String, Value>,
@@ -234,7 +264,27 @@ impl UsdStageProjectionPlan {
                 }
             }
         }
+        for (index, prim) in plan.prims.iter().enumerate() {
+            if let Some(type_name) = &prim.type_name {
+                plan.type_indices
+                    .entry(type_name.clone())
+                    .or_default()
+                    .push(index);
+            }
+        }
         Ok(plan)
+    }
+
+    /// Iterate prims with one composed USD schema type.
+    pub fn prims_of_type(
+        &self,
+        type_name: &str,
+    ) -> impl Iterator<Item = &UsdPrimProjectionPlan> + '_ {
+        self.type_indices
+            .get(type_name)
+            .into_iter()
+            .flatten()
+            .filter_map(|index| self.prims.get(*index))
     }
 
     /// Return direct children in composed USD order.

@@ -260,6 +260,7 @@ pub fn run_headless() -> lunco_luncosim_core::AppExit {
 const LUNCO_POLICY_TYPE: &str = "LunCoPolicy";
 
 /// One authored `LunCoPolicy` prim before its Rhai source is resolved.
+#[derive(Clone)]
 struct AuthoredPolicy {
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     seam: String,
@@ -267,6 +268,31 @@ struct AuthoredPolicy {
     deterministic: bool,
     inline_source: Option<String>,
     source_path: Option<String>,
+}
+
+fn append_authored_policy(
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    seam: Option<String>,
+    entry: Option<String>,
+    deterministic: Option<bool>,
+    inline_source: Option<String>,
+    source_path: Option<String>,
+    out: &mut Vec<AuthoredPolicy>,
+) {
+    let seam = seam.unwrap_or_default();
+    let inline_source = inline_source.filter(|source| !source.is_empty());
+    let source_path = source_path.filter(|source| !source.is_empty());
+    if seam.is_empty() || (inline_source.is_none() && source_path.is_none()) {
+        return;
+    }
+    out.push(AuthoredPolicy {
+        stage_id,
+        seam,
+        entry: entry.unwrap_or_default(),
+        deterministic: deterministic.unwrap_or(true),
+        inline_source,
+        source_path,
+    });
 }
 
 fn append_usd_policies(
@@ -278,43 +304,60 @@ fn append_usd_policies(
         if reader.type_name(&prim).as_deref() != Some(LUNCO_POLICY_TYPE) {
             continue;
         }
-        let seam = reader.text(&prim, "lunco:policy:seam").unwrap_or_default();
-        let inline_source = reader
-            .text(&prim, "info:sourceCode")
-            .filter(|source| !source.is_empty());
-        let source_path = reader
-            .asset(&prim, "info:sourceAsset")
-            .filter(|source| !source.is_empty());
-        if seam.is_empty() || (inline_source.is_none() && source_path.is_none()) {
-            continue;
-        }
-        out.push(AuthoredPolicy {
+        append_authored_policy(
             stage_id,
-            seam,
-            entry: reader.text(&prim, "lunco:policy:entry").unwrap_or_default(),
-            deterministic: reader
-                .boolean(&prim, "lunco:policy:deterministic")
-                .unwrap_or(true),
-            inline_source,
-            source_path,
-        });
+            reader.text(&prim, "lunco:policy:seam"),
+            reader.text(&prim, "lunco:policy:entry"),
+            reader.boolean(&prim, "lunco:policy:deterministic"),
+            reader.text(&prim, "info:sourceCode"),
+            reader.asset(&prim, "info:sourceAsset"),
+            out,
+        );
     }
 }
 
-fn extract_active_usd_policies(
-    stages: &Assets<UsdStageAsset>,
+fn append_prepared_usd_policies(
+    plan: &lunco_usd_bevy_stage::UsdStageProjectionPlan,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    out: &mut Vec<AuthoredPolicy>,
+) {
+    for prim in plan.prims_of_type(LUNCO_POLICY_TYPE) {
+        append_authored_policy(
+            stage_id,
+            prim.text_attribute("lunco:policy:seam").map(str::to_owned),
+            prim.text_attribute("lunco:policy:entry").map(str::to_owned),
+            prim.boolean_attribute("lunco:policy:deterministic"),
+            prim.text_attribute("info:sourceCode").map(str::to_owned),
+            prim.asset_attribute("info:sourceAsset").map(str::to_owned),
+            out,
+        );
+    }
+}
+
+fn extract_usd_policies_for_stage(
+    stage_id: AssetId<UsdStageAsset>,
+    stage_asset: &UsdStageAsset,
     canonical: &lunco_usd_bevy_stage::canonical::CanonicalStages,
-    roots: impl IntoIterator<Item = AssetId<UsdStageAsset>>,
 ) -> Vec<AuthoredPolicy> {
     let mut out = Vec::new();
-    for stage_id in roots {
-        let Some(stage_asset) = stages.get(stage_id) else {
-            continue;
-        };
-        let (reader, _generation) = canonical.reader_for(stage_id, stage_asset);
-        append_usd_policies(&reader, stage_id, &mut out);
+    let (reader, _generation) = canonical.reader_for(stage_id, stage_asset);
+    match reader {
+        lunco_usd_bevy_stage::read::UsdReadSource::Prepared(plan) => {
+            let _span = bevy::log::info_span!("usd_policy_prepared_plan_lookup").entered();
+            append_prepared_usd_policies(plan, stage_id, &mut out);
+        }
+        lunco_usd_bevy_stage::read::UsdReadSource::Live(reader) => {
+            let _span = bevy::log::info_span!("usd_policy_live_stage_traversal").entered();
+            append_usd_policies(&reader, stage_id, &mut out);
+        }
     }
     out
+}
+
+struct CachedAuthoredPolicies {
+    projection_plan: std::sync::Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>,
+    generation: u64,
+    policies: std::sync::Arc<[AuthoredPolicy]>,
 }
 
 enum PolicySource {
@@ -383,7 +426,12 @@ fn project_usd_policies(
     mut source_failures: MessageReader<
         AssetLoadFailedEvent<lunco_scripting_rhai_world::source_asset::RhaiSource>,
     >,
-    mut last: Local<Option<(usize, usize, u64)>>,
+    mut authored_cache: Local<
+        std::collections::HashMap<AssetId<UsdStageAsset>, CachedAuthoredPolicies>,
+    >,
+    mut last: Local<
+        Option<std::collections::HashSet<(AssetId<UsdStageAsset>, Option<(usize, u64)>)>>,
+    >,
 ) {
     let failed_policy_source = source_failures.read().fold(false, |failed, event| {
         failed || pending.values().any(|handle| handle.id() == event.id)
@@ -393,71 +441,144 @@ fn project_usd_policies(
     if !stage_changed && !source_changed && !failed_policy_source {
         return;
     }
-    let root_ids: Vec<_> = roots.iter().map(|prim| prim.stage_handle.id()).collect();
-    let signal = (
-        root_ids.len(),
-        root_ids.iter().filter_map(|id| stages.get(*id)).count(),
-        root_ids
+    let (root_ids, signal) = {
+        let _span = bevy::log::info_span!("usd_policy_root_generation_scan").entered();
+        let root_ids: Vec<_> = roots.iter().map(|prim| prim.stage_handle.id()).collect();
+        let signal = root_ids
             .iter()
-            .filter_map(|id| stages.get(*id).map(|_| canonical.generation_for(*id)))
-            .sum::<u64>(),
-    );
-    if *last == Some(signal) && !source_changed && !failed_policy_source {
+            .map(|id| {
+                let state = stages.get(*id).map(|stage_asset| {
+                    (
+                        std::sync::Arc::as_ptr(&stage_asset.projection_plan) as usize,
+                        canonical.generation_for(*id),
+                    )
+                });
+                (*id, state)
+            })
+            .collect::<std::collections::HashSet<_>>();
+        (root_ids, signal)
+    };
+    if last.as_ref().is_some_and(|last| *last == signal) && !source_changed && !failed_policy_source
+    {
         return;
     }
     *last = Some(signal);
 
-    let authored = extract_active_usd_policies(&stages, &canonical, root_ids);
-    let live: std::collections::HashSet<String> = authored
-        .iter()
-        .filter_map(|a| {
-            a.source_path.as_deref().map(|path| {
-                lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
-                    &asset_server,
-                    a.stage_id,
-                    path,
-                )
+    let authored_by_stage = {
+        let _span = bevy::log::info_span!("usd_policy_extract_authored_facts").entered();
+        let loaded_roots = root_ids
+            .iter()
+            .copied()
+            .filter(|id| stages.get(*id).is_some())
+            .collect::<std::collections::HashSet<_>>();
+        authored_cache.retain(|id, _| loaded_roots.contains(id));
+
+        root_ids
+            .iter()
+            .filter_map(|stage_id| {
+                let stage_asset = stages.get(*stage_id)?;
+                let generation = canonical.generation_for(*stage_id);
+                let cached = authored_cache.get(stage_id).filter(|cached| {
+                    cached.generation == generation
+                        && std::sync::Arc::ptr_eq(
+                            &cached.projection_plan,
+                            &stage_asset.projection_plan,
+                        )
+                });
+                let policies = if let Some(cached) = cached {
+                    let _span =
+                        bevy::log::info_span!("usd_policy_authored_facts_cache_hit").entered();
+                    std::sync::Arc::clone(&cached.policies)
+                } else {
+                    let _span = bevy::log::info_span!("usd_policy_authored_facts_cache_miss_scan")
+                        .entered();
+                    let policies = std::sync::Arc::from(extract_usd_policies_for_stage(
+                        *stage_id,
+                        stage_asset,
+                        &canonical,
+                    ));
+                    authored_cache.insert(
+                        *stage_id,
+                        CachedAuthoredPolicies {
+                            projection_plan: std::sync::Arc::clone(&stage_asset.projection_plan),
+                            generation,
+                            policies: std::sync::Arc::clone(&policies),
+                        },
+                    );
+                    policies
+                };
+                Some(policies)
             })
-        })
-        .collect();
+            .collect::<Vec<_>>()
+    };
+    let live: std::collections::HashSet<String> = {
+        let _span = bevy::log::info_span!("usd_policy_index_live_source_paths").entered();
+        authored_by_stage
+            .iter()
+            .flat_map(|policies| policies.iter())
+            .filter_map(|authored| {
+                authored.source_path.as_deref().map(|path| {
+                    lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                        &asset_server,
+                        authored.stage_id,
+                        path,
+                    )
+                })
+            })
+            .collect()
+    };
     pending.retain(|p, _| live.contains(p.as_str()));
 
-    let mut desired = Vec::with_capacity(authored.len());
-    for a in &authored {
-        let source = if let Some(src) = &a.inline_source {
-            src.clone()
-        } else if let Some(path) = &a.source_path {
-            match resolve_policy_source_file(
-                path,
-                a.stage_id,
-                &asset_server,
-                sources.as_deref(),
-                &mut pending,
-            ) {
-                PolicySource::Ready(text) => text,
-                PolicySource::Loading => continue,
-                PolicySource::Failed => continue,
-            }
-        } else {
-            continue;
-        };
-        desired.push(lunco_scripting_rhai_world::policy::PolicyDef {
-            seam: a.seam.clone(),
-            entry: a.entry.clone(),
-            source,
-            deterministic: a.deterministic,
-        });
+    let mut desired = Vec::with_capacity(
+        authored_by_stage
+            .iter()
+            .map(|policies| policies.len())
+            .sum(),
+    );
+    {
+        let _span = bevy::log::info_span!("usd_policy_resolve_source_assets").entered();
+        for authored in authored_by_stage
+            .iter()
+            .flat_map(|policies| policies.iter())
+        {
+            let source = if let Some(source) = &authored.inline_source {
+                source.clone()
+            } else if let Some(path) = &authored.source_path {
+                match resolve_policy_source_file(
+                    path,
+                    authored.stage_id,
+                    &asset_server,
+                    sources.as_deref(),
+                    &mut pending,
+                ) {
+                    PolicySource::Ready(text) => text,
+                    PolicySource::Loading => continue,
+                    PolicySource::Failed => continue,
+                }
+            } else {
+                continue;
+            };
+            desired.push(lunco_scripting_rhai_world::policy::PolicyDef {
+                seam: authored.seam.clone(),
+                entry: authored.entry.clone(),
+                source,
+                deterministic: authored.deterministic,
+            });
+        }
     }
     let previous_synthesizers: std::collections::HashSet<String> = registry
         .policies
         .iter()
         .filter_map(|policy| policy.seam.strip_prefix("synth.").map(str::to_string))
         .collect();
-    lunco_scripting_rhai_world::policy::project_policies(
-        desired,
-        &mut registry,
-        journal.as_deref(),
-    );
+    {
+        let _span = bevy::log::info_span!("usd_policy_compile_and_install").entered();
+        lunco_scripting_rhai_world::policy::project_policies(
+            desired,
+            &mut registry,
+            journal.as_deref(),
+        );
+    }
     let active_synthesizers: std::collections::HashSet<String> = registry
         .policies
         .iter()

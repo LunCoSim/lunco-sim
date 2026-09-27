@@ -239,6 +239,13 @@ through `AsyncWorkAdmission`. Results commit in request order after Twin, stage,
 and instance-generation checks. Initial prepared-plan synthesis runs entirely on
 a worker. This dependency-recipe cache removes redundant snapshots while the
 domain pipeline keeps non-critical computation off the UI and physics cycles.
+The USD policy projector caches authored policy facts per stage asset, prepared
+projection-plan identity, and canonical generation. A source-asset revision
+reuses those facts, while a change to one stage rescans only that stage; live
+canonical reads remain on their owning thread. The async-prepared projection
+plan also indexes prims by composed schema type, so startup policy extraction
+visits only `LunCoPolicy` prims instead of rebuilding paths and type lookups
+across the entire prepared stage on the UI thread.
 
 A newly authored `SetAttribute` uses `RemoveAttribute` as its inverse, so adding
 attributes to a growing runtime layer does not serialize the entire layer into
