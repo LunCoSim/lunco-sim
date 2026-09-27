@@ -155,6 +155,15 @@ stable actor identity and omit the field. The fixed-step commit publishes
 and stamp. Local-embodiment interaction commands remain on the interaction
 cadence and have no fixed-tick admission.
 
+The typed command schema also exposes the source Editor's Twin-file workflow.
+Open a Twin-relative buffer with `OpenTwinSource`, then persist the edited text
+with `SaveSourceText`; saving is restricted to a registered Twin and a file
+already open in that Editor. Set `update = true` to reload the saved asset
+through its normal owner. `OpenTwinSource` also supports deliberate source-level
+editing of an authored USD layer. This preserves its layer text; ordinary USD
+document edits should continue to use typed USD operations and the document
+journal.
+
 An absent edge returns an API error. An edge with an incomplete downstream path
 returns an empty or explicitly pending/failed stage, so a trace never turns a
 missing actuator or measurement into a false success:

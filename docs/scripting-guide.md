@@ -129,6 +129,13 @@ direction, and USD type before returning `SetConnection` operations. Modelica
 and Rhai are classified from their authored source declarations; no vehicle
 specific port vocabulary is required.
 
+For a `LunCoProgramAPI` component, a Modelica class output becomes externally
+connectable only when the component prim declares the matching typed
+`outputs:<name>` USD property. An `outputs:` path mentioned only as a
+connection target is not a public component port. Declare every value consumed
+by another component, material, or light, then verify that the generated
+network exposes it and the composed source connection resolves to it.
+
 Use `publish_component(doc, root, edit_target, output, provenance)` only after
 the component contract passes. It validates a top-level `kind = "component"`
 root, `defaultPrim`, applied schemas, references, and caller-supplied
@@ -918,6 +925,16 @@ and one outward face-varying normal per face corner. The current kernel
 supports a simple strictly-convex profile and produces a closed prism; it is
 not a general BREP system and does not provide Boolean, fillet, or arbitrary
 concave-polygon operations.
+
+For a composed `UsdGeomMesh`, keep vertex and topology data as numeric Rhai
+arrays until the USD authoring boundary. Use
+`assembly_builder::mesh_points_update_plan(edit_target, path, points)` to
+replace only control points while retaining existing topology, or
+`assembly_builder::mesh_geometry_update_plan(edit_target, path, points,
+face_counts, face_indices)` to update all three standard mesh arrays together.
+Both return ordinary `SetAttribute` operations for the normal
+`assembly_edit::batch` or proposal/review flow, preserve material and physics
+metadata, and serialize values only into the canonical USD attribute literal.
 
 The generic `assembly_audit::oriented_box_clearance` helper accepts caller-
 supplied centers, dimensions, rotations, and policy clearance. It returns a

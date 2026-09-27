@@ -236,6 +236,15 @@ control cage).
 
 ### Mesh rules
 
+For Rhai-authored mesh updates, keep `points`, `faceVertexCounts`, and
+`faceVertexIndices` as numeric arrays and pass them to
+`assembly_builder::mesh_points_update_plan` (points only) or
+`assembly_builder::mesh_geometry_update_plan` (points plus topology). Review
+and apply the returned operations through `assembly_edit`; do not hand-build
+USD array literals in model-specific scripts. These helpers serialize only at
+the standard USD attribute boundary and leave material, purpose, and physics
+metadata untouched.
+
 - Output is unindexed triangles; n-gons are **fan-triangulated**, so author
   convex faces or triangulate yourself.
 - `orientation = "leftHanded"` flips winding; default is right-handed/CCW.
@@ -459,6 +468,15 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 - **Role is derived, never declared.** A program with `inputs:`/`outputs:` ports
   is a node in the port graph and is stepped; one without them runs for effects
   only. **Parameters are ports** — a gain is `float inputs:kv = 1.2`.
+- **A Modelica class output is not an external USD port by itself.** Declare
+  each value consumed outside the program as a typed `outputs:<name>` property
+  on its `LunCoProgramAPI` prim. Connections must target that declared endpoint;
+  check the generated network's public interface and the composed connection
+  source before relying on it in a material, light, or another program.
+- For a precise change to an existing authored `.usda` layer, use the explicit
+  Twin Source Editor workflow (`OpenTwinSource`, then `SaveSourceText`). It
+  saves the selected layer's authored text. Keep routine stage edits on the
+  typed USD operation and document-journal path.
 - Apply `LunCoProgramAPI` directly when the program *is* intrinsic to the thing
   (a vessel's flight control); apply it to a child `Scope` for a separable guidance
   law or patrol tree, so deleting that prim deletes the behaviour. Both placements

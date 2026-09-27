@@ -1021,6 +1021,28 @@ fn _mesh_tuple3_array(values, label) {
     literal + "]"
 }
 
+fn _mesh_points_value(points, label) {
+    if type_of(points) != "array" || points.is_empty() {
+        return plan_error(label + " must be a non-empty point array");
+    }
+    let values = [];
+    for point in points {
+        let parsed = vector3(point, label);
+        if !parsed.ok { return parsed; }
+        for component in parsed.value {
+            if type_of(component) == "f64" {
+                if !component.is_finite() {
+                    return plan_error(label + " must contain only finite coordinates");
+                }
+            } else if type_of(component) != "i64" {
+                return plan_error(label + " coordinates must be numeric");
+            }
+        }
+        values.push(parsed.value);
+    }
+    #{ok: true, value: _mesh_tuple3_array(values, label)}
+}
+
 fn _mesh_int_array(values, label) {
     let literal = "[";
     for index in 0..values.len() {
@@ -1032,18 +1054,13 @@ fn _mesh_int_array(values, label) {
     literal + "]"
 }
 
-fn _mesh_shape_attribute_ops(edit_target, shape, points, face_counts,
-                             face_indices, color, collision_enabled,
-                             collision_approximation) {
-    if points == () || points.len() == 0 || face_counts == () || face_counts.len() == 0
-        || face_indices == () || face_indices.len() == 0 {
+fn _mesh_geometry_attribute_ops(edit_target, shape, points, face_counts,
+                                face_indices) {
+    let point_value = _mesh_points_value(points, "mesh points");
+    if !point_value.ok { return point_value; }
+    if type_of(face_counts) != "array" || face_counts.is_empty()
+        || type_of(face_indices) != "array" || face_indices.is_empty() {
         return plan_error("mesh geometry requires non-empty points and face topology");
-    }
-    if color == () || color.len() != 3 {
-        return plan_error("mesh geometry color must have three components");
-    }
-    if type_of(collision_enabled) != "bool" {
-        return plan_error("mesh collision state must be boolean");
     }
     let index_count = 0;
     for count in face_counts {
@@ -1060,6 +1077,77 @@ fn _mesh_shape_attribute_ops(edit_target, shape, points, face_counts,
             return plan_error("mesh face index is outside the point array");
         }
     }
+    let ops = [#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "points",
+        type_name: "point3f[]", value: point_value.value,
+    }}];
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "faceVertexCounts",
+        type_name: "int[]", value: _mesh_int_array(face_counts, "face counts"),
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "faceVertexIndices",
+        type_name: "int[]", value: _mesh_int_array(face_indices, "face indices"),
+    }});
+    #{ok: true, ops: ops}
+}
+
+/// Update only the standard UsdGeomMesh points attribute from numeric Rhai
+/// vectors. The plan keeps coordinates typed until the schema-aware USD literal
+/// boundary and leaves the mesh's existing face topology unchanged.
+fn mesh_points_update_plan(edit_target, path, points) {
+    if edit_target == () || path == () || !path.starts_with("/")
+        || path == "/" || path.ends_with("/") {
+        return plan_error("mesh_points_update_plan requires an edit target and absolute mesh path");
+    }
+    let point_value = _mesh_points_value(points, "mesh points");
+    if !point_value.ok { return point_value; }
+    #{ok: true, kind: "mesh_points_update", path: path,
+      ops: [#{SetAttribute: #{
+          edit_target: edit_target, path: path, name: "points",
+          type_name: "point3f[]", value: point_value.value,
+      }}]}
+}
+
+/// Update a UsdGeomMesh point array and face topology together while preserving
+/// its material, purpose, and physics metadata.
+fn mesh_geometry_update_plan(edit_target, path, points, face_counts,
+                             face_indices) {
+    if edit_target == () || path == () || !path.starts_with("/")
+        || path == "/" || path.ends_with("/") {
+        return plan_error("mesh_geometry_update_plan requires an edit target and absolute mesh path");
+    }
+    let attributes = _mesh_geometry_attribute_ops(edit_target, path, points,
+        face_counts, face_indices);
+    if !attributes.ok { return attributes; }
+    #{ok: true, kind: "mesh_geometry_update", path: path, ops: attributes.ops}
+}
+
+fn _mesh_shape_attribute_ops(edit_target, shape, points, face_counts,
+                             face_indices, color, collision_enabled,
+                             collision_approximation) {
+    let geometry = _mesh_geometry_attribute_ops(edit_target, shape, points,
+        face_counts, face_indices);
+    if !geometry.ok { return geometry; }
+    if color == () || color.len() != 3 {
+        return plan_error("mesh geometry color must have three components");
+    }
+    if type_of(collision_enabled) != "bool" {
+        return plan_error("mesh collision state must be boolean");
+    }
+    let ops = geometry.ops;
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "subdivisionScheme",
+        type_name: "token", value: "\"none\"",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "purpose",
+        type_name: "token", value: "\"render\"",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "primvars:displayColor",
+        type_name: "color3f[]", value: "[" + _mesh_tuple3(color, "mesh color") + "]",
+    }});
     if collision_approximation != () {
         let capabilities = query("AvianMeshCollisionApproximations", #{});
         if !query_ok(capabilities) || capabilities.modes == () {
@@ -1073,30 +1161,6 @@ fn _mesh_shape_attribute_ops(edit_target, shape, points, face_counts,
             return plan_error("mesh collision approximation is not implemented by the active Avian USD adapter");
         }
     }
-    let ops = [#{ SetAttribute: #{
-        edit_target: edit_target, path: shape, name: "points",
-        type_name: "point3f[]", value: _mesh_tuple3_array(points, "mesh points"),
-    }}];
-    ops.push(#{ SetAttribute: #{
-        edit_target: edit_target, path: shape, name: "faceVertexCounts",
-        type_name: "int[]", value: _mesh_int_array(face_counts, "face counts"),
-    }});
-    ops.push(#{ SetAttribute: #{
-        edit_target: edit_target, path: shape, name: "faceVertexIndices",
-        type_name: "int[]", value: _mesh_int_array(face_indices, "face indices"),
-    }});
-    ops.push(#{ SetAttribute: #{
-        edit_target: edit_target, path: shape, name: "subdivisionScheme",
-        type_name: "token", value: "\"none\"",
-    }});
-    ops.push(#{ SetAttribute: #{
-        edit_target: edit_target, path: shape, name: "purpose",
-        type_name: "token", value: "\"render\"",
-    }});
-    ops.push(#{ SetAttribute: #{
-        edit_target: edit_target, path: shape, name: "primvars:displayColor",
-        type_name: "color3f[]", value: "[" + _mesh_tuple3(color, "mesh color") + "]",
-    }});
     ops.push(#{ SetApiSchemas: #{
         edit_target: edit_target, path: shape, schemas: ["PhysicsCollisionAPI"],
     }});
