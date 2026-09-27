@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**235 commands** across **53** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**241 commands** across **54** crates. 2 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -93,6 +93,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-cosim-core`](#lunco-cosim-core) (3 commands)
 - [`lunco-input-ui`](#lunco-input-ui) (1 command)
 - [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
+- [`lunco-luncosim-services`](#lunco-luncosim-services) (1 command)
 - [`lunco-luncosim-ui`](#lunco-luncosim-ui) (4 commands)
 - [`lunco-modelica-api`](#lunco-modelica-api) (10 commands)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
@@ -112,9 +113,9 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-usd-core`](#lunco-usd-core) (9 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
 - [`lunco-viz`](#lunco-viz) (1 command)
-- [`lunco-workbench-core`](#lunco-workbench-core) (5 commands)
+- [`lunco-workbench-core`](#lunco-workbench-core) (9 commands)
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
-- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (9 commands)
+- [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (10 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
 - [`lunco-workspace`](#lunco-workspace) (8 commands)
@@ -1953,6 +1954,22 @@ actually call, with the fields the deserializer actually accepts. See the
 | `source` | `String` |  The Rhai source defining `entry` and its helpers. |
 | `deterministic` | `bool` |  Whether the policy is deterministic. |
 
+### `lunco-luncosim-services` <a id="lunco-luncosim-services"></a>
+
+#### `ExportSessionInputCapture`
+
+ Request a durable archive for a completed session-input capture.
+
+ `file_stem` is a simple filename stem. The service adds a unique operation
+ suffix and `.lcsin`, and writes only under the application session-captures
+ directory.
+
+- *defined in:* `crates/lunco-luncosim-services/src/session_input_archive.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `file_stem` | `String` |  Filename stem containing only ASCII letters, digits, `_`, or `-`. |
+
 ### `lunco-luncosim-ui` <a id="lunco-luncosim-ui"></a>
 
 #### `DismissDatasetProvisioning`
@@ -3325,6 +3342,40 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `id` | `String` |  The singleton panel's stable id. |
 
+#### `OpenEphemeralSource`
+
+ Open an ephemeral generated document in the read-only source viewer.
+
+- *defined in:* `crates/lunco-workbench-core/src/source.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `uri` | `String` |  URI shown as the document identity. |
+| `text` | `String` |  Complete generated source text. |
+
+#### `OpenSourceView`
+
+ Open a registered asset as read-only text in the source viewer.
+
+- *defined in:* `crates/lunco-workbench-core/src/source.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `asset_path` | `String` |  Registered asset path. |
+
+#### `OpenTwinSource`
+
+ Open one file belonging to an open Twin in the editable source panel.
+
+- *defined in:* `crates/lunco-workbench-core/src/source.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `twin_root` | `String` |  Absolute root of the already-open Twin. |
+| `relative_path` | `String` |  File path relative to that root. |
+| `pinned` | `bool` |  Keep the file open when another preview is selected. |
+| `focus` | `Option < bool >` |  Whether opening the source should focus its tab. |
+
 #### `ResetToDefaultPerspective`
 
  Reset the shell to its required or first registered perspective.
@@ -3338,6 +3389,19 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - *defined in:* `crates/lunco-workbench-core/src/commands.rs`
 - *fields:* none — call with `ResetWorkspaceLayout` (no params)
+
+#### `SaveSourceText`
+
+ Persist an editable source buffer, optionally refreshing its owning domain.
+
+- *defined in:* `crates/lunco-workbench-core/src/source.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `twin_root` | `String` |  Absolute root of the already-open Twin. |
+| `relative_path` | `String` |  File path relative to that root. |
+| `text` | `String` |  Complete UTF-8 source text. |
+| `update` | `bool` |  Re-dispatch the owning document open operation after writing. |
 
 #### `SetRequiredPerspective`
 
@@ -3453,6 +3517,20 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
 - *fields:* none — call with `GuidedSkip` (no params)
+
+#### `SetGuidedHudActions`
+
+ Replace the HUD's authored action buttons. All buttons dispatch their id to
+ one registered one-argument Rhai tool hook; an empty `actions` list clears
+ the buttons.
+
+- *defined in:* `crates/lunco-workbench-guided-ui/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `tool` | `String` |  Registered Rhai tool namespace, e.g. `griffin_surface_ops`. |
+| `hook` | `String` |  One-argument function in that namespace, without `/1`. |
+| `actions` | `Vec < GuidedHudAction >` |  Current button set in display order. |
 
 #### `SetHint`
 
@@ -3660,7 +3738,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 235 commands from the runtime schema; scanned 952 .rs files for docs (0 parse failure(s) skipped).
+<!-- 241 commands from the runtime schema; scanned 955 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, OpenEphemeralSource, OpenSourceView, OpenTwinSource, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, SaveSourceText, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, PluginCommand, PromoteScenario, RecoverVessel, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestEcho
 -->

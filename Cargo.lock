@@ -10896,6 +10896,7 @@ dependencies = [
  "lunco-viewport-core",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
+ "serde",
 ]
 
 [[package]]

@@ -75,6 +75,15 @@ fn objectives_hud(list) {
 /// Clear the objectives checklist.
 fn clear_objectives()          { cmd("SetObjectives", #{ text: "" }) }
 
+/// Replace the guided HUD action row. Each `actions` entry has `id`, `label`,
+/// and `enabled`; button presses dispatch the id to one registered one-arg
+/// Rhai tool hook. An empty list removes the row.
+fn guided_hud_actions(tool, hook, actions) {
+    cmd("SetGuidedHudActions", #{ tool: tool, hook: hook, actions: actions })
+}
+/// Clear the guided HUD action row.
+fn clear_guided_hud_actions() { guided_hud_actions("", "", []) }
+
 /// Per-Twin runtime camera HUD policy. The surface is visible by default when
 /// the key is absent; projects and tutorials can opt out without a Rust field.
 fn camera_status_visible()     {

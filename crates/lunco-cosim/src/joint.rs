@@ -149,16 +149,22 @@ fn check_revolute_joint_structure(
     }
 }
 
-/// Measured angle (`Out`): the twist of `body2`'s orientation relative to
-/// `body1` about the hinge axis. Reads avian's authoritative [`Rotation`]
-/// (populated by `Writeback`), so during the next tick's propagation it reflects
-/// the physics step that just completed.
+/// Measured angle (`Out`): the twist between the two joint frames about the
+/// authored hinge axis. Applying both local bases is essential for mirrored or
+/// otherwise offset joints; comparing body rotations alone reports a false
+/// angle whenever the second joint frame has a static rotation. Reads avian's
+/// authoritative [`Rotation`] (populated by `Writeback`), so during the next
+/// tick's propagation it reflects the physics step that just completed.
 fn read_measured_angle(world: &World, entity: Entity) -> Option<f64> {
     let j = world.get::<RevoluteJoint>(entity)?;
     let r1 = world.get::<Rotation>(j.body1)?;
     let r2 = world.get::<Rotation>(j.body2)?;
-    let axis = j.local_hinge_axis1()?.as_vec3();
-    Some(twist_angle(dquat_to_quat(r1.0), dquat_to_quat(r2.0), axis) as f64)
+    let basis1 = j.local_basis1()?;
+    let basis2 = j.local_basis2()?;
+    let joint_frame1 = dquat_to_quat(r1.0 * basis1);
+    let joint_frame2 = dquat_to_quat(r2.0 * basis2);
+    let axis = j.hinge_axis.as_vec3();
+    Some(twist_angle(joint_frame1, joint_frame2, axis) as f64)
 }
 
 /// Commanded angle (`In`): drive the joint's angular motor to `value` via

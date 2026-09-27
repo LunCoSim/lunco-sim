@@ -136,6 +136,9 @@ App::new()
 
 Hosts that render authored guided scenarios also add
 `lunco_workbench_guided_ui::GuidedOverlayPlugin` after `WorkbenchPlugin`.
+Rhai can add persistent HUD buttons with `guided_hud_actions(tool, hook,
+actions)`; each `#{ id, label, enabled }` button dispatches its stable id to the
+registered one-argument Rhai hook. `clear_guided_hud_actions()` removes them.
 
 The workbench is embedded by the apps that use it — run one of them to see it live:
 

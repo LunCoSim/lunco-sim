@@ -66,8 +66,10 @@ perspective materialization live in the focused `src/layout.rs` module; menu,
 status, and viewport code consume that private shell boundary. The
 `lunco-workbench-widgets` crate owns reusable icons, text-editor builders, and
 hierarchy-row presentation without depending on the shell. The optional
-`lunco-workbench-guided-ui` crate owns guided HUD, spotlight, coach-mark, and
-recovery presentation without depending on the shell. The optional
+`lunco-workbench-guided-ui` crate owns guided HUD, authored action buttons,
+spotlight, coach-mark, and recovery presentation without depending on the shell.
+Action buttons dispatch a stable id to a registered Rhai tool hook through the
+windowed app's typed scripting adapter. The optional
 `lunco-workbench-file-dialog` crate owns native/wasm file-dialog and browser-download
 backends without depending on the shell. The
 `lunco-workbench-file-ops` crate owns the shell-level picker/document/workspace
