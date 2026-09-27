@@ -21,6 +21,11 @@ Runtime templates currently rely on:
   dimensions, spacing, borders, backgrounds, colors, text properties,
   `display`, custom properties, and `var(...)`.
 
+Every template, including a keyed collection row, must have one `<node>` root.
+Put buttons and text elements beneath that root: HUI reuses its scope entity
+while rebuilding the tree, and a root leaf element can reapply its Flair type
+name to retained selector metadata.
+
 HUI and Flair support additional features, but a feature outside this contract
 needs a real surface test before it becomes a shared interface convention.
 Forms, text inputs, DOM querying, JavaScript, accessibility semantics, and

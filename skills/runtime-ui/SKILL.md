@@ -329,6 +329,11 @@ nested component template reload may require reloading the top-level template
 again. Never manually write Bevy styling components under the surface from Rust;
 HUI/Flair owns those components.
 
+Use a single `<node>` as the root of every template, including collection-row
+templates. Keep `<button>` and `<text>` elements below that root because HUI
+reuses the scope entity during hot reload and Flair retains its selector type
+metadata there.
+
 Lifecycle invariant: when an exposure or presentation gate turns off, the
 bridge removes the retained root whenever any HUI state remains, even if its
 local mounted marker is stale after a deferred rebuild. A hidden surface must

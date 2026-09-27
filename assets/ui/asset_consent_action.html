@@ -4,5 +4,7 @@
   <property name="action">dismiss</property>
   <property name="scope">scope</property>
 
-  <button id="asset-consent-action" on_press="runtime_ui_authored_action" tag:action="{action}" tag:scope="{scope}"><text>{label}</text></button>
+  <node id="asset-consent-action-root">
+    <button id="asset-consent-action" on_press="runtime_ui_authored_action" tag:action="{action}" tag:scope="{scope}"><text>{label}</text></button>
+  </node>
 </template>

@@ -357,6 +357,11 @@ Use `<template>`, `<property>`, `<node>`, `<text>`, and `<button>` with stable
 button's visible caption must be a nested `<text>` node; raw text directly under
 `<button>` is not part of the retained HUI contract and can render as an empty
 control.
+Every template, including a keyed collection row, must use `<node>` as its
+single root and put `<button>` and `<text>` elements beneath it. HUI reuses the
+template scope entity during reload, while Flair retains selector metadata on
+that entity; a typed leaf element at the root can therefore panic when its type
+is applied again. Leaf controls below the root are recreated with the subtree.
 HUI supports more template features, but features outside this contract need a
 real surface test before they become a shared interface convention. A surface
 callback receives only the pressed entity. The manifest turns it into a
