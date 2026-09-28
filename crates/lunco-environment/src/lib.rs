@@ -354,11 +354,15 @@ pub fn sync_local_gravity_to_avian(
     mut removed_gravity: RemovedComponents<LocalGravity>,
     mut removed_bodies: RemovedComponents<RigidBody>,
 ) {
+    let mut accelerations = Vec::new();
     for (entity, gravity, existing) in &changed {
         let acceleration = ConstantLinearAcceleration(gravity.0);
         if existing.is_none_or(|current| current.0 != acceleration.0) {
-            commands.entity(entity).try_insert(acceleration);
+            accelerations.push((entity, acceleration));
         }
+    }
+    if !accelerations.is_empty() {
+        commands.try_insert_batch(accelerations);
     }
     for entity in removed_gravity.read().chain(removed_bodies.read()) {
         commands

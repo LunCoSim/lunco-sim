@@ -394,6 +394,11 @@ IDs. Relationship bundles such as `ChildOf` can use the same fallible batch:
 Bevy runs their relationship hooks per entity, in batch order, while continuing
 past stale entities.
 
+For `sync_local_gravity_to_avian`, keep the comparison against the existing
+`ConstantLinearAcceleration` component and batch only changed values in query
+order. Measure its `system_commands` flush separately; removals remain driven
+by the existing `RemovedComponents` streams.
+
 For `reconcile_frozen_subtrees`, profile readiness freeze and release flushes
 separately from the system body. Batch repeated joint, rigid-body, collider, and
 ownership-record inserts in held-root traversal order, with joint disables
