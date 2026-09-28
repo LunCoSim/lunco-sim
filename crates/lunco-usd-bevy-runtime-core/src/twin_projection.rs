@@ -1714,20 +1714,16 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
             .is_some_and(|stages| stages.get(scene_id).is_some());
         if has_work && !stage_ready {
-            let prepared = {
+            let recipe = {
                 let _span =
                     bevy::log::info_span!("usd_twin_projection_clone_stage_recipe").entered();
                 world
                     .resource::<Assets<UsdStageAsset>>()
                     .get(scene_id)
-                    .and_then(|asset| {
-                        asset
-                            .recipe
-                            .as_ref()
-                            .map(|recipe| (recipe.clone(), Arc::clone(&asset.projection_plan)))
-                    })
+                    .and_then(|asset| asset.recipe.as_ref())
+                    .cloned()
             };
-            let Some((recipe, projection_plan)) = prepared else {
+            let Some(recipe) = recipe else {
                 // The asset loader has not published the recipe yet. Keep the
                 // document generation pending until the asset boundary makes
                 // the canonical stage available.
@@ -1738,16 +1734,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     bevy::log::info_span!("usd_twin_projection_get_or_build_live_stage").entered();
                 world
                     .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-                    .is_some_and(|mut stages| {
-                        if stages.get_or_build(scene_id, &recipe).is_none() {
-                            return false;
-                        }
-                        // This live stage was opened from the same immutable
-                        // recipe that produced the worker plan. Read-only
-                        // projectors may use that exact snapshot until a live
-                        // edit advances the canonical generation.
-                        stages.mark_prepared_plan_snapshot(scene_id, projection_plan)
-                    })
+                    .is_some_and(|mut stages| stages.get_or_build(scene_id, &recipe).is_some())
             };
             if !built {
                 continue;
