@@ -201,6 +201,75 @@ struct PendingUsdSimPrimWork(PendingEntityWork, Vec<lunco_core::RuntimeDiagnosti
 // lowest authored paths while limiting selection and command work per UI frame.
 const MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE: usize = 32;
 
+/// Find the lowest-ranked simulation rows without charging preview rows to the
+/// bounded simulation-work prefix.
+fn select_bounded_sim_prim_work<T>(
+    mut candidates: Vec<T>,
+    maximum: usize,
+    mut entity_of: impl FnMut(&T) -> Entity,
+    mut compare: impl FnMut(&T, &T) -> std::cmp::Ordering,
+    mut is_preview: impl FnMut(Entity) -> bool,
+) -> (Vec<T>, Vec<Entity>, Vec<Entity>) {
+    if maximum == 0 {
+        return (
+            Vec::new(),
+            candidates.iter().map(&mut entity_of).collect(),
+            Vec::new(),
+        );
+    }
+
+    let candidate_count = candidates.len();
+    let mut prefix_count = maximum.min(candidate_count);
+    // Prefix expansion reuses membership so each candidate's hierarchy is
+    // checked at most once.
+    let mut checked = HashSet::new();
+    let mut preview_set = HashSet::new();
+    let mut previews = Vec::new();
+    loop {
+        if prefix_count < candidate_count {
+            candidates.select_nth_unstable_by(prefix_count, &mut compare);
+        }
+        let mut eligible_count = 0;
+        for candidate in candidates.iter().take(prefix_count) {
+            let entity = entity_of(candidate);
+            if checked.insert(entity) && is_preview(entity) {
+                preview_set.insert(entity);
+                previews.push(entity);
+            }
+            if !preview_set.contains(&entity) {
+                eligible_count += 1;
+            }
+        }
+        if eligible_count >= maximum || prefix_count == candidate_count {
+            break;
+        }
+        // Earlier authored paths were previews; widen the window to find the
+        // same bounded count of simulation-owned work.
+        prefix_count = prefix_count
+            .saturating_mul(2)
+            .max(prefix_count + 1)
+            .min(candidate_count);
+    }
+
+    let mut selected = Vec::with_capacity(maximum);
+    let mut deferred = Vec::new();
+    let mut prefix = candidates.drain(..prefix_count).collect::<Vec<_>>();
+    prefix.sort_by(&mut compare);
+    for candidate in prefix {
+        let entity = entity_of(&candidate);
+        if preview_set.contains(&entity) {
+            continue;
+        }
+        if selected.len() < maximum {
+            selected.push(candidate);
+        } else {
+            deferred.push(entity);
+        }
+    }
+    deferred.extend(candidates.iter().map(&mut entity_of));
+    (selected, deferred, previews)
+}
+
 impl Default for PendingUsdSimPrimWork {
     fn default() -> Self {
         Self(PendingEntityWork::with_initial_discovery(), Vec::new())
@@ -792,31 +861,27 @@ fn process_usd_sim_prims(
             // was installed. Normal arrivals are supplied by lifecycle observers.
             entities.extend(query.iter().map(|(entity, ..)| entity));
         }
-        let mut unprocessed: Vec<_> = entities
+        let candidates = entities
             .into_iter()
             .filter_map(|entity| query.get(entity).ok())
             .collect();
-        if unprocessed.len() > MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE {
-            unprocessed.select_nth_unstable_by(
-                MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE,
-                |left, right| {
-                    left.1
-                        .path
-                        .cmp(&right.1.path)
-                        .then_with(|| left.0.cmp(&right.0))
-                },
-            );
-            let remainder = unprocessed.split_off(MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE);
-            pending
-                .0
-                .extend(remainder.into_iter().map(|(entity, ..)| entity));
+        let (unprocessed, deferred, previews) = select_bounded_sim_prim_work(
+            candidates,
+            MAX_USD_SIM_PRIM_PROJECTIONS_PER_UPDATE,
+            |candidate| candidate.0,
+            |left, right| {
+                left.1
+                    .path
+                    .cmp(&right.1.path)
+                    .then_with(|| left.0.cmp(&right.0))
+            },
+            |entity| is_preview_only(entity, &q_child_of, &q_preview_only),
+        );
+        pending.0.extend(deferred);
+        // Preview prims have no simulation owner and need no stage topology.
+        for entity in previews {
+            commands.entity(entity).try_insert(UsdSimProcessed);
         }
-        unprocessed.sort_by(|left, right| {
-            left.1
-                .path
-                .cmp(&right.1.path)
-                .then_with(|| left.0.cmp(&right.0))
-        });
         unprocessed
     };
 
@@ -912,18 +977,6 @@ fn process_usd_sim_prims(
             commands.entity(entity).try_insert(UsdSimProcessed);
             continue;
         };
-
-        // Bail when this prim lives under a `UsdPreviewOnly` scene
-        // root. Preview viewports render geometry only — they must
-        // not spawn Embodiment Camera3d, actuator ports, or wheel raycasts
-        // into the main world. Walking up the `ChildOf` chain catches
-        // every prim because `sync_usd_visuals` parents each spawned
-        // prim entity to its USD-parent entity, which itself chains
-        // back to the workbench-owned scene_root.
-        if is_preview_only(entity, &q_child_of, &q_preview_only) {
-            commands.entity(entity).try_insert(UsdSimProcessed);
-            continue;
-        }
 
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
@@ -3653,6 +3706,68 @@ fn reset_usd_sim_prim_work(mut pending: ResMut<PendingUsdSimPrimWork>) {
 #[cfg(test)]
 mod pending_sim_work_tests {
     use super::*;
+
+    #[test]
+    fn preview_prims_do_not_consume_bounded_simulation_admission() {
+        let preview_entities = (0..40)
+            .map(|rank| Entity::from_bits(rank + 1))
+            .collect::<HashSet<_>>();
+        let candidates = (0..40)
+            .chain(100..105)
+            .map(|rank| (Entity::from_bits(rank + 1), rank as usize))
+            .collect();
+
+        let (selected, deferred, preview_only) = select_bounded_sim_prim_work(
+            candidates,
+            2,
+            |candidate| candidate.0,
+            |left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)),
+            |entity| preview_entities.contains(&entity),
+        );
+
+        assert_eq!(
+            selected
+                .into_iter()
+                .map(|(_, rank)| rank)
+                .collect::<Vec<_>>(),
+            [100, 101],
+        );
+        assert_eq!(deferred.len(), 3);
+        assert_eq!(preview_only.len(), 40);
+    }
+
+    #[test]
+    fn bounded_admission_does_not_inspect_preview_rows_after_full_prefix() {
+        let preview_entities = (2..42)
+            .map(|rank| Entity::from_bits(rank + 1))
+            .collect::<HashSet<_>>();
+        let candidates = (0..42)
+            .map(|rank| (Entity::from_bits(rank + 1), rank as usize))
+            .collect();
+        let preview_checks = std::cell::Cell::new(0);
+
+        let (selected, deferred, previews) = select_bounded_sim_prim_work(
+            candidates,
+            2,
+            |candidate| candidate.0,
+            |left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)),
+            |entity| {
+                preview_checks.set(preview_checks.get() + 1);
+                preview_entities.contains(&entity)
+            },
+        );
+
+        assert_eq!(
+            selected
+                .into_iter()
+                .map(|(_, rank)| rank)
+                .collect::<Vec<_>>(),
+            [0, 1],
+        );
+        assert_eq!(deferred.len(), 40);
+        assert!(previews.is_empty());
+        assert_eq!(preview_checks.get(), 2);
+    }
 
     #[test]
     fn simulation_projection_work_tracks_readiness_and_invalidation_edges() {
