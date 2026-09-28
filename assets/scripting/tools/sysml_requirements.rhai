@@ -486,7 +486,11 @@ fn _indexes(report) {
         }
     }
     #{requirements: requirements,
-      coverage_graph: report.requirement_coverage,
+      coverage_graph: if report.requirement_coverage != () {
+          report.requirement_coverage
+      } else if report.verification_records != () {
+          sysml_requirement_coverage(report.verification_records)
+      } else { () },
       requirement_identities: requirement_identities,
       verification_identities: verification_identities,
       requirement_handles: requirement_handles,
@@ -981,13 +985,38 @@ fn _failure(check, message) {
     #{ ok: false, id: check.id, component: check.component,
        requirement: check.requirement, verification: check.verification,
        kind: check.kind, path: check.path, doc_id: check.doc_id,
+       verdict: "fail",
        error: message }
+}
+
+fn _result_verdict(result) {
+    if result.verdict != () {
+        if result.verdict == "pass" || result.verdict == "fail"
+            || result.verdict == "inconclusive" || result.verdict == "error" {
+            return result.verdict;
+        }
+        return "error";
+    }
+    if result.ok == true { return "pass"; }
+    if result.ok == false { return "fail"; }
+    "error"
+}
+
+fn _merge_verdict(current, next) {
+    if current == "error" || next == "error" { return "error"; }
+    if current == "fail" || next == "fail" { return "fail"; }
+    if current == "inconclusive" || next == "inconclusive" {
+        return "inconclusive";
+    }
+    if current == "" { return next; }
+    "pass"
 }
 
 fn _check_one(report, check, indexes, model) {
     if check == () || check.id == () || check.requirement == ()
         || check.verification == () || check.kind == () {
-        return #{ok: false, id: "<invalid>", error: "check requires id, requirement, verification, and kind"};
+        return #{ok: false, id: "<invalid>", verdict: "error",
+            error: "check requires id, requirement, verification, and kind"};
     }
     if !_indexed_requirement(indexes, check.requirement) {
         return _failure(check, "SysML requirement usage is missing");
@@ -1052,9 +1081,8 @@ fn _check_one(report, check, indexes, model) {
         if resolved.record.value == () {
             return _failure(check, "SysML identity list is missing");
         }
-        // Use the native typed projection for every collection kind. It
-        // preserves the source-declared member type instead of forcing the
-        // values through a String/numeric-vector compatibility decoder.
+        // The native typed projection preserves the source-declared member
+        // type for every collection kind.
         let values = native_value(report, check.list_attr);
         if type_of(values) == "map" && values.ok == false {
             return _failure(check, values.error);
@@ -1272,19 +1300,23 @@ fn evaluate(source_report, checks) {
     let result_chunks = [];
     let result_chunk = [];
     let failures = [];
-    let failure_chunks = [];
-    let failure_chunk = [];
+    let non_pass_results = [];
     if type_of(source_report) != "map" || source_report.ok != true {
         let message = _report_error(source_report, "SysML source report is unavailable");
-        return #{ok: false, results: [], failures: [message], error: message};
+        return #{ok: false, verdict: "error", results: [], failures: [],
+            non_pass_results: [message], error: message, check_count: 0,
+            requirement_count: 0, pass_count: 0, failure_count: 0,
+            inconclusive_count: 0, error_count: 1, non_pass_count: 1};
     }
     let indexes = _indexes(source_report);
     let identities = _resolve_check_identities(checks, indexes);
     if identities.ok != true {
         let failure = #{ok: false, id: identities.check_id,
-            error: identities.error};
-        return #{ok: false, results: [failure], failures: [failure],
-            check_count: 0, requirement_count: 0, failure_count: 1};
+            verdict: "error", error: identities.error};
+        return #{ok: false, verdict: "error", results: [failure], failures: [],
+            non_pass_results: [failure], check_count: 0, requirement_count: 0,
+            pass_count: 0, failure_count: 0, inconclusive_count: 0,
+            error_count: 1, non_pass_count: 1};
     }
     let needs_model = false;
     for check in checks {
@@ -1295,13 +1327,21 @@ fn evaluate(source_report, checks) {
     let model = ();
     if needs_model {
         if source_report.path == () || source_report.path == "" {
-            let failure = #{ok: false,
+            let failure = #{ok: false, verdict: "error",
                 error: "SysML source report has no resolvable model path"};
-            return #{ok: false, results: [failure], failures: [failure],
-                check_count: 0, requirement_count: 0, failure_count: 1};
+            return #{ok: false, verdict: "error", results: [failure], failures: [],
+                non_pass_results: [failure], check_count: 0, requirement_count: 0,
+                pass_count: 0, failure_count: 0, inconclusive_count: 0,
+                error_count: 1, non_pass_count: 1};
         }
         model = sysml_model(source_report.path);
     }
+    let pass_count = 0;
+    let failure_count = 0;
+    let inconclusive_count = 0;
+    let error_count = 0;
+    let non_pass_count = 0;
+    let verdict = "";
     for check in checks {
         let result = _check_one(source_report, check, indexes, model);
         // Stamp canonical source identities only on emitted evidence.  The
@@ -1311,34 +1351,35 @@ fn evaluate(source_report, checks) {
         result.verification = indexes.verification_identities[check.verification];
         if result.component == () && check.component != () { result.component = check.component; }
         if result.kind == () { result.kind = check.kind; }
+        let result_verdict = _result_verdict(result);
+        result.verdict = result_verdict;
+        verdict = _merge_verdict(verdict, result_verdict);
+        if result_verdict == "pass" { pass_count += 1; }
+        else {
+            non_pass_count += 1;
+            if non_pass_results.len() < 64 { non_pass_results.push(result); }
+        }
+        if result_verdict == "fail" {
+            failure_count += 1;
+            if failures.len() < 64 { failures.push(result); }
+        } else if result_verdict == "inconclusive" {
+            inconclusive_count += 1;
+        } else if result_verdict == "error" {
+            error_count += 1;
+        }
         result_chunk.push(result);
         if result_chunk.len() >= 64 {
             result_chunks.push(result_chunk);
             result_chunk = [];
         }
-        if result.ok != true {
-            // Keep the compatibility array bounded while preserving every
-            // failure in chunked evidence.
-            if failures.len() < 64 { failures.push(result); }
-            failure_chunk.push(result);
-            if failure_chunk.len() >= 64 {
-                failure_chunks.push(failure_chunk);
-                failure_chunk = [];
-            }
-        }
     }
     if result_chunk.len() > 0 { result_chunks.push(result_chunk); }
-    if failure_chunk.len() > 0 { failure_chunks.push(failure_chunk); }
-    // Keep the flattened compatibility field only for small reports. Large
-    // failure sets use bounded chunks as well, avoiding a second oversized
-    // aggregate while retaining every failure record.
-    let total_failures = 0;
-    for chunk in failure_chunks { total_failures += chunk.len(); }
-    if total_failures <= 64 {
+    if checks.is_empty() { verdict = "inconclusive"; }
+    if checks.len() <= 64 {
         for chunk in result_chunks {
             for result in chunk { results.push(result); }
         }
-    } else { failures = []; }
+    }
     let verification = "";
     if checks.len() > 0 && checks[0].verification != () {
         verification = indexes.verification_identities[checks[0].verification];
@@ -1356,17 +1397,21 @@ fn evaluate(source_report, checks) {
             let requirement = result.requirement;
             if requirement == () || requirement == "" { continue; }
             if requirement_summary[requirement] == () {
-                requirement_summary[requirement] = #{checks: 0, failures: 0};
+                requirement_summary[requirement] = #{checks: 0, passes: 0,
+                    failures: 0, inconclusive: 0, errors: 0};
                 requirement_names.push(requirement);
             }
             requirement_summary[requirement].checks += 1;
-            if result.ok != true {
-                requirement_summary[requirement].failures += 1;
-            }
+            let check_verdict = _result_verdict(result);
+            if check_verdict == "pass" { requirement_summary[requirement].passes += 1; }
+            else if check_verdict == "fail" { requirement_summary[requirement].failures += 1; }
+            else if check_verdict == "inconclusive" {
+                requirement_summary[requirement].inconclusive += 1;
+            } else { requirement_summary[requirement].errors += 1; }
         }
     }
-    #{ok: total_failures == 0, results: results, failures: failures,
-      result_chunks: result_chunks, failure_chunks: failure_chunks,
+    #{ok: verdict == "pass", verdict: verdict, results: results, failures: failures,
+      non_pass_results: non_pass_results, result_chunks: result_chunks,
       // `check_count` is the number of concrete USD/source observations.
       check_count: checks.len(),
       // `requirement_count` is the number of unique SysML requirement usages
@@ -1374,7 +1419,9 @@ fn evaluate(source_report, checks) {
       requirement_count: requirement_names.len(),
       requirement_names: requirement_names,
       requirement_summary: requirement_summary,
-      failure_count: total_failures, verification: verification,
+      pass_count: pass_count, failure_count: failure_count,
+      inconclusive_count: inconclusive_count, error_count: error_count,
+      non_pass_count: non_pass_count, verification: verification,
       source_revision: source_report.source_revision,
       source_files: source_report.source_files}
 }
@@ -1386,30 +1433,38 @@ fn evaluate(source_report, checks) {
 fn evaluate_stream(source_report, checks, channel, title) {
     if type_of(source_report) != "map" || source_report.ok != true {
         let message = _report_error(source_report, "SysML source report is unavailable");
-        return #{ok: false, results: [], failures: [message], error: message,
-            check_count: 0, requirement_count: 0, failure_count: 1,
+        return #{ok: false, verdict: "error", results: [], failures: [],
+            non_pass_results: [message], error: message,
+            check_count: 0, requirement_count: 0, pass_count: 0, failure_count: 0,
+            inconclusive_count: 0, error_count: 1, non_pass_count: 1,
             streamed: true};
     }
     let indexes = _indexes(source_report);
     let identities = _resolve_check_identities(checks, indexes);
     if identities.ok != true {
-        let failure = #{ok: false, id: identities.check_id,
+        let failure = #{ok: false, id: identities.check_id, verdict: "error",
             error: identities.error};
-        return #{ok: false, results: [failure], failures: [failure],
-            check_count: 0, requirement_count: 0, failure_count: 1,
+        return #{ok: false, verdict: "error", results: [failure], failures: [],
+            non_pass_results: [failure], check_count: 0, requirement_count: 0,
+            pass_count: 0, failure_count: 0, inconclusive_count: 0, error_count: 1,
+            non_pass_count: 1,
             streamed: true};
     }
     let needs_model = false;
     for check in checks {
-        if check.kind == "constraint" { needs_model = true; }
+        if check.kind == "constraint" || check.kind == "required_constraints" {
+            needs_model = true;
+        }
     }
     let model = ();
     if needs_model {
         if source_report.path == () || source_report.path == "" {
-            let failure = #{ok: false,
+            let failure = #{ok: false, verdict: "error",
                 error: "SysML source report has no resolvable model path"};
-            return #{ok: false, results: [failure], failures: [failure],
-                check_count: 0, requirement_count: 0, failure_count: 1,
+            return #{ok: false, verdict: "error", results: [failure], failures: [],
+                non_pass_results: [failure], check_count: 0, requirement_count: 0,
+                pass_count: 0, failure_count: 0, inconclusive_count: 0, error_count: 1,
+                non_pass_count: 1,
                 streamed: true};
         }
         model = sysml_model(source_report.path);
@@ -1418,8 +1473,14 @@ fn evaluate_stream(source_report, checks, channel, title) {
     if checks.len() > 0 && checks[0].verification != () {
         verification = indexes.verification_identities[checks[0].verification];
     }
+    let pass_count = 0;
     let failure_count = 0;
+    let inconclusive_count = 0;
+    let error_count = 0;
+    let non_pass_count = 0;
+    let verdict = "";
     let failures = [];
+    let non_pass_results = [];
     let requirement_summary = #{};
     let requirement_names = [];
     let result_index = 0;
@@ -1429,42 +1490,65 @@ fn evaluate_stream(source_report, checks, channel, title) {
         result.verification = indexes.verification_identities[check.verification];
         if result.component == () && check.component != () { result.component = check.component; }
         if result.kind == () { result.kind = check.kind; }
+        let result_verdict = _result_verdict(result);
+        result.verdict = result_verdict;
+        verdict = _merge_verdict(verdict, result_verdict);
         if channel != () && channel != "" {
-            emit(channel + "_EVIDENCE_RESULT", #{schema_version: 1,
+            emit(channel + "_EVIDENCE_RESULT", #{schema_version: 2,
                 title: title, channel: channel, verification: verification,
                 source_revision: source_report.source_revision,
-                result_count: checks.len(), failure_count: (),
+                result_count: checks.len(), verdict: result_verdict,
                 result_index: result_index, result: result});
         }
         result_index += 1;
-        if result.ok != true {
+        if result_verdict == "pass" { pass_count += 1; }
+        else {
+            non_pass_count += 1;
+            if non_pass_results.len() < 64 { non_pass_results.push(result); }
+        }
+        if result_verdict == "fail" {
             failure_count += 1;
             if failures.len() < 64 { failures.push(result); }
+        } else if result_verdict == "inconclusive" {
+            inconclusive_count += 1;
+        } else if result_verdict == "error" {
+            error_count += 1;
         }
         let requirement = result.requirement;
         if requirement != () && requirement != "" {
             if requirement_summary[requirement] == () {
-                requirement_summary[requirement] = #{checks: 0, failures: 0};
+                requirement_summary[requirement] = #{checks: 0, passes: 0,
+                    failures: 0, inconclusive: 0, errors: 0};
                 requirement_names.push(requirement);
             }
             requirement_summary[requirement].checks += 1;
-            if result.ok != true { requirement_summary[requirement].failures += 1; }
+            if result_verdict == "pass" { requirement_summary[requirement].passes += 1; }
+            else if result_verdict == "fail" { requirement_summary[requirement].failures += 1; }
+            else if result_verdict == "inconclusive" {
+                requirement_summary[requirement].inconclusive += 1;
+            } else { requirement_summary[requirement].errors += 1; }
         }
     }
+    if checks.is_empty() { verdict = "inconclusive"; }
     if channel != () && channel != "" {
-        emit(channel + "_EVIDENCE_STREAM_SUMMARY", #{schema_version: 1,
+        emit(channel + "_EVIDENCE_STREAM_SUMMARY", #{schema_version: 2,
             title: title, channel: channel, verification: verification,
             source_revision: source_report.source_revision,
-            result_count: checks.len(), failure_count: failure_count,
+            result_count: checks.len(), verdict: verdict,
+            pass_count: pass_count, failure_count: failure_count,
+            inconclusive_count: inconclusive_count, error_count: error_count,
+            non_pass_count: non_pass_count,
             requirement_count: requirement_names.len(),
             requirement_names: requirement_names,
             requirement_summary: requirement_summary});
     }
-    #{ok: failure_count == 0, results: [], failures: failures,
-      result_chunks: [], failure_chunks: [], streamed: true,
+    #{ok: verdict == "pass", verdict: verdict, results: [], failures: failures,
+      non_pass_results: non_pass_results, result_chunks: [], streamed: true,
       check_count: checks.len(), requirement_count: requirement_names.len(),
       requirement_names: requirement_names, requirement_summary: requirement_summary,
-      failure_count: failure_count, verification: verification,
+      pass_count: pass_count, failure_count: failure_count,
+      inconclusive_count: inconclusive_count, error_count: error_count,
+      non_pass_count: non_pass_count, verification: verification,
       source_revision: source_report.source_revision,
       source_files: source_report.source_files}
 }
@@ -1489,9 +1573,12 @@ fn _document_checks(doc_id, checks) {
 /// no observer can accidentally read a different active stage.
 fn evaluate_document(source_report, doc_id, checks) {
     if doc_id == () {
-        return #{ok: false, results: [], failures: [
-            "document-scoped SysML evaluation requires an explicit doc_id"],
-            check_count: 0, requirement_count: 0, failure_count: 1};
+        let message = "document-scoped SysML evaluation requires an explicit doc_id";
+        return #{ok: false, verdict: "error", results: [], failures: [],
+            non_pass_results: [#{ok: false, verdict: "error", error: message}],
+            error: message, check_count: 0, requirement_count: 0,
+            pass_count: 0, failure_count: 0, inconclusive_count: 0,
+            error_count: 1, non_pass_count: 1};
     }
     evaluate(source_report, _document_checks(doc_id, checks))
 }
@@ -1499,10 +1586,12 @@ fn evaluate_document(source_report, doc_id, checks) {
 /// Streaming counterpart of `evaluate_document` for bounded Editor evidence.
 fn evaluate_document_stream(source_report, doc_id, checks, channel, title) {
     if doc_id == () {
-        let failure = #{ok: false,
+        let failure = #{ok: false, verdict: "error",
             error: "document-scoped SysML evaluation requires an explicit doc_id"};
-        return #{ok: false, results: [failure], failures: [failure],
-            check_count: 0, requirement_count: 0, failure_count: 1,
+        return #{ok: false, verdict: "error", results: [failure], failures: [],
+            non_pass_results: [failure], check_count: 0, requirement_count: 0,
+            pass_count: 0, failure_count: 0, inconclusive_count: 0, error_count: 1,
+            non_pass_count: 1,
             streamed: true};
     }
     evaluate_stream(source_report, _document_checks(doc_id, checks), channel, title)

@@ -3,6 +3,8 @@
 // native SysmlModel methods that Twin policies use, including Rumoca lowering
 // and the four-state provider evaluator.
 
+import "lunco://scripting/tools/sysml_requirements" as sysml_requirements;
+
 const VALID_PATH = "lunco://scripting/tests/fixtures/sysml_constraint_projection.sysml";
 const INVALID_PATH = "lunco://scripting/tests/fixtures/sysml_constraint_ir_invalid.sysml";
 const EVALUATION_PATH = "lunco://scripting/tests/fixtures/sysml_constraint_ir_evaluation.sysml";
@@ -12,9 +14,27 @@ fn finish(me, checks) {
     me.done = true;
 }
 
+fn requirement_result_summary(report) {
+    let summary = "verdict=" + report.verdict.to_string();
+    if report.error != () && report.error != "" {
+        return summary + " · " + report.error;
+    }
+    if report.non_pass_results != () && report.non_pass_results.len() > 0 {
+        let result = report.non_pass_results[0];
+        if type_of(result) == "map" {
+            if result.error != () { summary += " · " + result.error.to_string(); }
+            else if result.message != () { summary += " · " + result.message.to_string(); }
+        } else if result != () {
+            summary += " · " + result.to_string();
+        }
+    }
+    summary
+}
+
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["InspectSysmlDocument", "ListOpenDocuments"], required_inputs: [] }
+       query_reads: ["AnalyzeSysml", "InspectSysmlDocument", "ListOpenDocuments"],
+       required_inputs: [] }
 }
 
 fn on_start(me, ctx) {
@@ -150,10 +170,21 @@ fn on_tick(me, ctx) {
 
     let backend = model.modelica_constraint(
         "ConstraintProjection::CoincidentPointTranslation");
-    checks.push(t_true(backend.ok == true && backend.ir.valid == true
+    let binding_names = [];
+    for binding in backend.feature_bindings {
+        binding_names.push(binding.qualified_name);
+    }
+    let backend_lowered = backend.ok == true && backend.ir.valid == true
         && backend.model_name.starts_with("SysmlConstraint_")
         && backend.source.contains("equation")
-        && backend.source.contains("Real movingPoint[3]"),
+        && backend.source.contains("ISQBase::LengthValue")
+        && binding_names.contains(
+            "ConstraintProjection::CoincidentPointTranslation::movingPoint")
+            && binding_names.contains(
+                "ConstraintProjection::CoincidentPointTranslation::fixedPoint")
+            && binding_names.contains(
+                "ConstraintProjection::CoincidentPointTranslation::translation");
+    checks.push(t_true(backend_lowered,
         "valid IR lowers through the Rumoca-owned Modelica syntax boundary"));
 
     let invalid = invalid_model.constraint_ir("ConstraintIrDiagnostics::TypeMismatch");
@@ -217,8 +248,95 @@ fn on_tick(me, ctx) {
         && invalid_result.diagnostics.len() > 0,
         "provider-invalid observations are errors, not failed relations"));
 
+    let requirement_path = "lunco://scripting/tests/fixtures/sysml_requirement_constraint.sysml";
+    let analyzed_requirements = query("AnalyzeSysml", #{path: requirement_path,
+        tables: ["requirements", "verifications"]});
+    let requirement_source = if analyzed_requirements != ()
+        && analyzed_requirements.analysis != () {
+        #{ok: analyzed_requirements.ok, path: analyzed_requirements.path,
+          errors: analyzed_requirements.errors,
+          warnings: analyzed_requirements.warnings,
+          requirement_records: analyzed_requirements.analysis.requirements,
+          verification_records: analyzed_requirements.analysis.verifications,
+          source_revision: analyzed_requirements.analysis.source_revision,
+          source_files: analyzed_requirements.analysis.source_files}
+    } else { #{} };
+    checks.push(t_true(requirement_source.ok == true
+        && requirement_source.source_revision != ()
+        && requirement_source.requirement_records.len() == 2
+        && requirement_source.verification_records.len() == 1,
+        "the requirement evaluator received typed analysis facts: "
+            + analyzed_requirements.to_string()));
+    let constraint_name = "SysmlRequirementConstraint::PayloadWithinCapacity";
+    let verification_name = "SysmlRequirementConstraint::VerifyPayloadCapacity";
+    let pass_check = sysml_requirements::constraint_check("aggregate-pass",
+        "payload", "payloadCapacity", verification_name, constraint_name,
+        #{payloadKg: 625.0, capacityKg: 625.0}, "external", 0.0);
+    let requirement_pass = sysml_requirements::evaluate(
+        requirement_source, [pass_check]);
+    checks.push(t_true(requirement_pass.verdict == "pass"
+        && requirement_pass.pass_count == 1
+        && requirement_pass.non_pass_count == 0,
+        "the Rhai requirement evaluator aggregates a passing constraint as pass: "
+            + requirement_result_summary(requirement_pass)));
+
+    let fail_check = sysml_requirements::constraint_check("aggregate-fail",
+        "payload", "payloadCapacity", verification_name, constraint_name,
+        #{payloadKg: 625.001, capacityKg: 625.0}, "external", 0.0);
+    let requirement_fail = sysml_requirements::evaluate(
+        requirement_source, [fail_check]);
+    checks.push(t_true(requirement_fail.verdict == "fail"
+        && requirement_fail.failure_count == 1
+        && requirement_fail.error_count == 0,
+        "the Rhai requirement evaluator reports a false source predicate as fail: "
+            + requirement_result_summary(requirement_fail)));
+
+    let inconclusive_check = sysml_requirements::constraint_check("aggregate-inconclusive",
+        "payload", "payloadCapacity", verification_name, constraint_name,
+        #{payloadKg: 625.0}, "external", 0.0);
+    let requirement_inconclusive = sysml_requirements::evaluate(
+        requirement_source, [inconclusive_check]);
+    checks.push(t_true(requirement_inconclusive.verdict == "inconclusive"
+        && requirement_inconclusive.inconclusive_count == 1
+        && requirement_inconclusive.failure_count == 0,
+        "the Rhai requirement evaluator preserves missing provider data as inconclusive: "
+            + requirement_result_summary(requirement_inconclusive)));
+
+    let error_check = sysml_requirements::constraint_check("aggregate-error",
+        "payload", "payloadCapacity", verification_name,
+        "SysmlRequirementConstraint::UnrelatedCapacityCheck",
+        #{payloadKg: 10.0, capacityKg: 625.0}, "external", 0.0);
+    let requirement_error = sysml_requirements::evaluate(
+        requirement_source, [error_check]);
+    checks.push(t_true(requirement_error.verdict == "error"
+        && requirement_error.error_count == 1
+        && requirement_error.failure_count == 0,
+        "the Rhai requirement evaluator distinguishes invalid verification setup from a failed predicate: "
+            + requirement_result_summary(requirement_error)));
+
+    checks.push(t_true(structured_verdict(requirement_pass) == "pass"
+        && structured_verdict(requirement_fail) == "fail"
+        && structured_verdict(requirement_inconclusive) == "inconclusive"
+        && structured_verdict(requirement_error) == "error",
+        "the authored verdict adapter preserves all four requirement result states"));
+    checks.push(t_true(structured_verdict(#{verdict: "invalid", ok: true}) == "error"
+        && sysml_requirements::_result_verdict(#{verdict: "invalid", ok: true}) == "error",
+        "an invalid explicit verdict cannot be converted into a pass by its ok flag"));
+
+    let mixed_error = sysml_requirements::evaluate(
+        requirement_source, [fail_check, error_check]);
+    checks.push(t_true(mixed_error.verdict == "error"
+        && mixed_error.failure_count == 1
+        && mixed_error.error_count == 1,
+        "an evaluation error takes precedence in a mixed requirement result"));
+
+    let empty_requirement = sysml_requirements::evaluate(requirement_source, []);
+    checks.push(t_true(empty_requirement.verdict == "inconclusive"
+        && empty_requirement.non_pass_count == 0,
+        "an empty requirement evaluation is inconclusive rather than a vacuous pass"));
+
     let boolean_false = evaluation_model.evaluate_constraint(
-        "ConstraintIrEvaluation::BooleanFalse", #{}, 1.0e-9, 1.0e-9);
+        "ConstraintIrEvaluation::BooleanFalse", [], 1.0e-9, 1.0e-9);
     checks.push(t_true(boolean_false.verdict == "fail"
         && boolean_false.expression_results[0] == false,
         "a Boolean false body is a failure without external bindings"));

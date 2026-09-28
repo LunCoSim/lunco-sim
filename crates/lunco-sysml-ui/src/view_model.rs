@@ -8,8 +8,10 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_scene_runner::SceneTestRunReport;
 use lunco_sysml::{SysmlDocument, TwinSysmlAnalyses, TwinSysmlAnalysisState};
 use lunco_sysml_ast::{
-    SysmlAnalysis, SysmlElementHandle, SysmlRequirementConstraintKind, SysmlRequirementRecord,
+    SysmlAnalysis, SysmlDiagnosticKind, SysmlElementHandle, SysmlRequirementConstraintKind,
+    SysmlRequirementRecord,
 };
+use lunco_sysml_ir::VerificationVerdict;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 use lunco_twin::Twin;
 use lunco_workspace::{TwinClosed, TwinId, WorkspaceResource};
@@ -41,6 +43,7 @@ pub(crate) struct SourceFileView {
 pub(crate) struct RequirementView {
     pub qualified_name: String,
     pub display_name: String,
+    pub role: RequirementRole,
     pub documentation: Vec<String>,
     pub logical_uri: String,
     pub relative_path: Option<PathBuf>,
@@ -48,6 +51,12 @@ pub(crate) struct RequirementView {
     pub has_required_constraint: bool,
     pub verification_cases: Vec<String>,
     pub runtime_evidence: Vec<RuntimeRequirementEvidence>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RequirementRole {
+    Definition,
+    Usage,
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +68,7 @@ pub(crate) struct VerificationCaseView {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ParserDiagnosticView {
+    pub kind: SysmlDiagnosticKind,
     pub logical_uri: String,
     pub line: usize,
     pub message: String,
@@ -74,6 +84,8 @@ pub(crate) struct RuntimeRequirementEvidence {
     pub sim_tick: u64,
     pub checks: u64,
     pub failures: u64,
+    pub inconclusive: u64,
+    pub errors: u64,
     pub details: Vec<RuntimeEvidenceCheck>,
 }
 
@@ -84,7 +96,7 @@ pub(crate) struct RuntimeEvidenceCheck {
     pub component: Option<String>,
     pub kind: Option<String>,
     pub path: Option<String>,
-    pub passed: bool,
+    pub verdict: VerificationVerdict,
     pub error: Option<String>,
     pub actual: Option<String>,
     pub expected: Option<String>,
@@ -128,6 +140,7 @@ pub struct SysmlRequirementsViewModel {
     pub(crate) verification_cases: Vec<VerificationCaseView>,
     pub(crate) verification_setup_errors: Vec<String>,
     pub(crate) parser_diagnostics: Vec<ParserDiagnosticView>,
+    pub(crate) analysis_has_errors: bool,
     pub(crate) verification_revision: Option<u64>,
     pub(crate) verification_channel: Option<String>,
     pub(crate) verification_sim_tick: Option<u64>,
@@ -312,6 +325,7 @@ fn build_view_model(
             .diagnostics()
             .iter()
             .map(|diagnostic| ParserDiagnosticView {
+                kind: diagnostic.kind,
                 logical_uri: diagnostic.file.clone(),
                 line: line_for_offset(
                     analysis
@@ -324,6 +338,7 @@ fn build_view_model(
                 message: diagnostic.message.clone(),
             })
             .collect(),
+        analysis_has_errors: analysis.has_errors(),
         verification_revision,
         verification_channel: snapshot.map(|snapshot| snapshot.latest_channel.clone()),
         verification_sim_tick: snapshot.map(|snapshot| snapshot.latest_sim_tick),
@@ -350,7 +365,8 @@ fn requirement_evidence_for(
     for passed in [false, true] {
         for (record_index, record) in evidence.iter().enumerate() {
             for (detail_index, detail) in record.details.iter().enumerate() {
-                if detail.passed != passed || retained == MAX_EVIDENCE_DETAILS_PER_REQUIREMENT {
+                let is_pass = detail.verdict == VerificationVerdict::Pass;
+                if is_pass != passed || retained == MAX_EVIDENCE_DETAILS_PER_REQUIREMENT {
                     continue;
                 }
                 selected[record_index][detail_index] = true;
@@ -490,6 +506,10 @@ fn requirement_view(
             .short_name
             .clone()
             .unwrap_or_else(|| element.qualified_name.clone()),
+        role: match element.kind.as_str() {
+            "RequirementDefinition" => RequirementRole::Definition,
+            _ => RequirementRole::Usage,
+        },
         documentation: requirement.documentation.clone(),
         logical_uri: element.file.clone(),
         relative_path: source_paths
@@ -532,7 +552,7 @@ pub(crate) fn capture_verification_evidence(
     let TelemetryValue::Map(payload) = &event.data else {
         return;
     };
-    if telemetry_unsigned(payload.get("schema_version")) != Some(1) {
+    if telemetry_unsigned(payload.get("schema_version")) != Some(2) {
         return;
     }
     let Some(source_revision) = telemetry_unsigned(payload.get("source_revision")) else {
@@ -616,9 +636,11 @@ pub(crate) fn capture_verification_evidence(
         let TelemetryValue::Map(summary) = summary else {
             continue;
         };
-        let (Some(checks), Some(failures)) = (
+        let (Some(checks), Some(failures), Some(inconclusive), Some(errors)) = (
             telemetry_unsigned(summary.get("checks")),
             telemetry_unsigned(summary.get("failures")),
+            telemetry_unsigned(summary.get("inconclusive")),
+            telemetry_unsigned(summary.get("errors")),
         ) else {
             continue;
         };
@@ -633,6 +655,8 @@ pub(crate) fn capture_verification_evidence(
                 sim_tick: event.sim_tick,
                 checks: 0,
                 failures: 0,
+                inconclusive: 0,
+                errors: 0,
                 details: Vec::new(),
             });
         requirement.channel.clone_from(&channel);
@@ -641,6 +665,8 @@ pub(crate) fn capture_verification_evidence(
         requirement.sim_tick = event.sim_tick;
         requirement.checks = checks;
         requirement.failures = failures;
+        requirement.inconclusive = inconclusive;
+        requirement.errors = errors;
     }
 }
 
@@ -656,7 +682,7 @@ pub(crate) fn scene_test_requirement_evidence(
         let TelemetryValue::Map(payload) = &event.data else {
             continue;
         };
-        if telemetry_unsigned(payload.get("schema_version")) != Some(1) {
+        if telemetry_unsigned(payload.get("schema_version")) != Some(2) {
             continue;
         }
         let Some(source_revision) = telemetry_unsigned(payload.get("source_revision")) else {
@@ -674,9 +700,9 @@ pub(crate) fn scene_test_requirement_evidence(
             .filter(|results| !results.is_empty());
         let result_values = inline_results.or_else(|| {
             payload
-                .get("failures")
+                .get("non_pass_results")
                 .and_then(telemetry_array)
-                .filter(|failures| !failures.is_empty())
+                .filter(|results| !results.is_empty())
         });
         if let Some(results) = result_values {
             for result in results {
@@ -699,9 +725,11 @@ pub(crate) fn scene_test_requirement_evidence(
                 let TelemetryValue::Map(summary) = summary else {
                     continue;
                 };
-                let (Some(checks), Some(failures)) = (
+                let (Some(checks), Some(failures), Some(inconclusive), Some(errors)) = (
                     telemetry_unsigned(summary.get("checks")),
                     telemetry_unsigned(summary.get("failures")),
+                    telemetry_unsigned(summary.get("inconclusive")),
+                    telemetry_unsigned(summary.get("errors")),
                 ) else {
                     continue;
                 };
@@ -713,12 +741,14 @@ pub(crate) fn scene_test_requirement_evidence(
                     name.clone(),
                     checks,
                     failures,
+                    inconclusive,
+                    errors,
                 ));
             }
         }
     }
 
-    for event in &report.failed_checks {
+    for event in &report.non_pass_checks {
         let TelemetryValue::Map(payload) = &event.data else {
             continue;
         };
@@ -739,7 +769,9 @@ pub(crate) fn scene_test_requirement_evidence(
         );
     }
 
-    for (channel, verification, revision, sim_tick, name, checks, failures) in summaries {
+    for (channel, verification, revision, sim_tick, name, checks, failures, inconclusive, errors) in
+        summaries
+    {
         let requirement = evidence
             .entry((channel.clone(), name.clone()))
             .or_insert_with(|| RuntimeRequirementEvidence {
@@ -750,6 +782,8 @@ pub(crate) fn scene_test_requirement_evidence(
                 sim_tick,
                 checks: 0,
                 failures: 0,
+                inconclusive: 0,
+                errors: 0,
                 details: Vec::new(),
             });
         requirement.channel = channel;
@@ -758,6 +792,8 @@ pub(crate) fn scene_test_requirement_evidence(
         requirement.sim_tick = sim_tick;
         requirement.checks = checks;
         requirement.failures = failures;
+        requirement.inconclusive = inconclusive;
+        requirement.errors = errors;
     }
     evidence.into_values().collect()
 }
@@ -774,9 +810,12 @@ pub(crate) fn scene_test_report_diagnostics(report: &SceneTestRunReport) -> Vec<
         let results = payload
             .get("results")
             .and_then(telemetry_array)
-            .filter(|results| !results.is_empty())
-            .or_else(|| payload.get("failures").and_then(telemetry_array));
-        if let Some(results) = results {
+            .filter(|results| !results.is_empty());
+        let non_pass_results = payload
+            .get("non_pass_results")
+            .and_then(telemetry_array)
+            .filter(|results| !results.is_empty());
+        if let Some(results) = results.or(non_pass_results) {
             for result in results {
                 if diagnostics.len() == MAX_DIAGNOSTICS {
                     return diagnostics;
@@ -789,7 +828,7 @@ pub(crate) fn scene_test_report_diagnostics(report: &SceneTestRunReport) -> Vec<
             }
         }
     }
-    for event in &report.failed_checks {
+    for event in &report.non_pass_checks {
         if diagnostics.len() == MAX_DIAGNOSTICS {
             break;
         }
@@ -807,7 +846,7 @@ fn append_scene_test_failure_diagnostic(
     diagnostics: &mut Vec<String>,
     result: &BTreeMap<String, TelemetryValue>,
 ) {
-    if matches!(result.get("ok"), Some(TelemetryValue::Bool(true))) {
+    if evidence_verdict(result) == VerificationVerdict::Pass {
         return;
     }
     let mut parts = Vec::new();
@@ -854,7 +893,7 @@ fn append_report_evidence_detail(
     let Some(requirement_name) = result.get("requirement").and_then(telemetry_string) else {
         return;
     };
-    let passed = matches!(result.get("ok"), Some(TelemetryValue::Bool(true)));
+    let verdict = evidence_verdict(result);
     let requirement = evidence
         .entry((channel.to_owned(), requirement_name.clone()))
         .or_insert_with(|| RuntimeRequirementEvidence {
@@ -865,6 +904,8 @@ fn append_report_evidence_detail(
             sim_tick,
             checks: 0,
             failures: 0,
+            inconclusive: 0,
+            errors: 0,
             details: Vec::new(),
         });
     requirement.verification.clone_from(&verification);
@@ -875,7 +916,7 @@ fn append_report_evidence_detail(
         component: result.get("component").and_then(telemetry_string),
         kind: result.get("kind").and_then(telemetry_string),
         path: result.get("path").and_then(telemetry_string),
-        passed,
+        verdict,
         error: result
             .get("error")
             .or_else(|| result.get("message"))
@@ -887,13 +928,21 @@ fn append_report_evidence_detail(
         return;
     }
     requirement.checks = requirement.checks.saturating_add(1);
-    if !passed {
-        requirement.failures = requirement.failures.saturating_add(1);
+    match verdict {
+        VerificationVerdict::Pass => {}
+        VerificationVerdict::Fail => requirement.failures = requirement.failures.saturating_add(1),
+        VerificationVerdict::Inconclusive => {
+            requirement.inconclusive = requirement.inconclusive.saturating_add(1)
+        }
+        VerificationVerdict::Error => requirement.errors = requirement.errors.saturating_add(1),
     }
     if requirement.details.len() < MAX_EVIDENCE_DETAILS_PER_REQUIREMENT {
         requirement.details.push(detail);
-    } else if !detail.passed
-        && let Some(index) = requirement.details.iter().rposition(|item| item.passed)
+    } else if detail.verdict != VerificationVerdict::Pass
+        && let Some(index) = requirement
+            .details
+            .iter()
+            .rposition(|item| item.verdict == VerificationVerdict::Pass)
     {
         requirement.details.remove(index);
         requirement.details.push(detail);
@@ -912,7 +961,7 @@ fn append_evidence_check(
     let Some(requirement_name) = result.get("requirement").and_then(telemetry_string) else {
         return;
     };
-    let passed = matches!(result.get("ok"), Some(TelemetryValue::Bool(true)));
+    let verdict = evidence_verdict(result);
     let requirement = channel
         .requirements
         .entry(requirement_name.clone())
@@ -924,6 +973,8 @@ fn append_evidence_check(
             sim_tick,
             checks: 0,
             failures: 0,
+            inconclusive: 0,
+            errors: 0,
             details: Vec::new(),
         });
     requirement.channel = channel_name.to_owned();
@@ -931,8 +982,13 @@ fn append_evidence_check(
     requirement.source_revision = source_revision;
     requirement.sim_tick = sim_tick;
     requirement.checks = requirement.checks.saturating_add(1);
-    if !passed {
-        requirement.failures = requirement.failures.saturating_add(1);
+    match verdict {
+        VerificationVerdict::Pass => {}
+        VerificationVerdict::Fail => requirement.failures = requirement.failures.saturating_add(1),
+        VerificationVerdict::Inconclusive => {
+            requirement.inconclusive = requirement.inconclusive.saturating_add(1)
+        }
+        VerificationVerdict::Error => requirement.errors = requirement.errors.saturating_add(1),
     }
 
     let detail = RuntimeEvidenceCheck {
@@ -940,7 +996,7 @@ fn append_evidence_check(
         component: result.get("component").and_then(telemetry_string),
         kind: result.get("kind").and_then(telemetry_string),
         path: result.get("path").and_then(telemetry_string),
-        passed,
+        verdict,
         error: result
             .get("error")
             .or_else(|| result.get("message"))
@@ -950,11 +1006,28 @@ fn append_evidence_check(
     };
     if requirement.details.len() < MAX_EVIDENCE_DETAILS_PER_REQUIREMENT {
         requirement.details.push(detail);
-    } else if !detail.passed
-        && let Some(index) = requirement.details.iter().rposition(|item| item.passed)
+    } else if detail.verdict != VerificationVerdict::Pass
+        && let Some(index) = requirement
+            .details
+            .iter()
+            .rposition(|item| item.verdict == VerificationVerdict::Pass)
     {
         requirement.details.remove(index);
         requirement.details.push(detail);
+    }
+}
+
+fn evidence_verdict(result: &BTreeMap<String, TelemetryValue>) -> VerificationVerdict {
+    match result.get("verdict").and_then(telemetry_string).as_deref() {
+        Some("pass") => VerificationVerdict::Pass,
+        Some("fail") => VerificationVerdict::Fail,
+        Some("inconclusive") => VerificationVerdict::Inconclusive,
+        Some("error") => VerificationVerdict::Error,
+        Some(_) => VerificationVerdict::Error,
+        None if matches!(result.get("ok"), Some(TelemetryValue::Bool(true))) => {
+            VerificationVerdict::Pass
+        }
+        None => VerificationVerdict::Fail,
     }
 }
 

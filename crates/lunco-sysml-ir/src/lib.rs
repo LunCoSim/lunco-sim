@@ -2372,6 +2372,7 @@ impl EvaluationContext {
 
 /// Explicit verification outcome with four states suitable for reports and UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum VerificationVerdict {
     Pass,
     Fail,

@@ -4,6 +4,7 @@ use bevy_egui::egui;
 use lunco_doc::{Document, FileBacked};
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
 use lunco_sysml::{ApplySysmlOps, SaveSysmlDocument, SysmlApiOp, SysmlDocument};
+use lunco_sysml_ir::VerificationVerdict;
 use lunco_workbench_core::{
     Panel, PanelCtx, PanelId, PanelMenuGroup, PanelScrollPolicy, PanelSlot, PerspectiveId,
 };
@@ -13,8 +14,8 @@ use crate::verification::{
     RunSysmlVerificationSuite, SysmlVerificationRuns, VerificationRunOutcome,
 };
 use crate::view_model::{
-    AnalysisState, ParserDiagnosticView, RequirementView, RuntimeRequirementEvidence,
-    SourceFileView, SysmlRequirementsViewModel,
+    AnalysisState, ParserDiagnosticView, RequirementRole, RequirementView,
+    RuntimeRequirementEvidence, SourceFileView, SysmlRequirementsViewModel,
 };
 
 /// Canonical source view read from the SysML document owner.
@@ -282,6 +283,17 @@ impl SysmlRequirementsPanel {
             AnalysisState::Ready => {}
         }
 
+        if view_model.analysis_has_errors {
+            ui.colored_label(
+                theme.tokens.error,
+                format!(
+                    "INVALID MODEL · {} syntax, name-resolution, or package-collision diagnostic(s)",
+                    view_model.parser_diagnostics.len()
+                ),
+            );
+            ui.label("Fix the source diagnostics before trusting results or running verification.");
+        }
+
         if view_model.requirements.is_empty() {
             ui.label("No requirement declarations were found in the analyzed source set.");
             ui.separator();
@@ -530,6 +542,12 @@ impl SysmlRequirementsPanel {
         let evidence_counts = [
             (EvidenceState::Pass, "pass", theme.tokens.success),
             (EvidenceState::Fail, "fail", theme.tokens.error),
+            (
+                EvidenceState::Inconclusive,
+                "inconclusive",
+                theme.tokens.warning,
+            ),
+            (EvidenceState::Error, "error", theme.tokens.error),
             (EvidenceState::Stale, "stale", theme.tokens.warning),
             (
                 EvidenceState::NoEvidence,
@@ -548,6 +566,13 @@ impl SysmlRequirementsPanel {
         let execution_counts = [
             (ExecutionState::Pass, "pass", theme.tokens.success),
             (ExecutionState::Fail, "fail", theme.tokens.error),
+            (
+                ExecutionState::Inconclusive,
+                "inconclusive",
+                theme.tokens.warning,
+            ),
+            (ExecutionState::Error, "error", theme.tokens.error),
+            (ExecutionState::RunError, "run error", theme.tokens.error),
             (ExecutionState::Partial, "partial", theme.tokens.warning),
             (
                 ExecutionState::Running,
@@ -567,7 +592,6 @@ impl SysmlRequirementsPanel {
                 theme.tokens.warning,
             ),
             (ExecutionState::NoVerdict, "no verdict", theme.tokens.error),
-            (ExecutionState::RunError, "run error", theme.tokens.error),
             (
                 ExecutionState::Cancelled,
                 "cancelled",
@@ -608,7 +632,13 @@ impl SysmlRequirementsPanel {
             })
             .count();
         ui.horizontal_wrapped(|ui| {
-            ui.strong(format!("{} requirements", view_model.requirements.len()));
+            let definitions = view_model
+                .requirements
+                .iter()
+                .filter(|requirement| requirement.role == RequirementRole::Definition)
+                .count();
+            let usages = view_model.requirements.len() - definitions;
+            ui.strong(format!("{usages} usages · {definitions} definitions"));
             ui.separator();
             status_counts(ui, "Requirement evidence", &evidence_counts);
             ui.separator();
@@ -638,6 +668,22 @@ impl SysmlRequirementsPanel {
                 theme.tokens.success,
             ),
             (RequirementRollupState::Failed, "failed", theme.tokens.error),
+            (RequirementRollupState::Error, "error", theme.tokens.error),
+            (
+                RequirementRollupState::Inconclusive,
+                "inconclusive",
+                theme.tokens.warning,
+            ),
+            (
+                RequirementRollupState::RunError,
+                "run error",
+                theme.tokens.error,
+            ),
+            (
+                RequirementRollupState::InvalidModel,
+                "invalid model",
+                theme.tokens.error,
+            ),
             (RequirementRollupState::Stale, "stale", theme.tokens.warning),
             (
                 RequirementRollupState::Running,
@@ -695,6 +741,7 @@ impl SysmlRequirementsPanel {
                 let can_run = cfg!(not(target_arch = "wasm32"))
                     && !runs.is_some_and(SysmlVerificationRuns::has_active_run)
                     && !unsaved_source
+                    && !view_model.analysis_has_errors
                     && view_model.verification_setup_errors.is_empty();
                 let selected_names = self
                     .selected_requirement
@@ -779,15 +826,25 @@ impl SysmlRequirementsPanel {
                 .iter()
                 .filter(|case| case.outcome == VerificationRunOutcome::Failed)
                 .count();
-            let incomplete = suite
+            let inconclusive = suite
                 .cases
                 .iter()
-                .filter(|case| {
-                    matches!(
-                        case.outcome,
-                        VerificationRunOutcome::NoVerdict | VerificationRunOutcome::Error(_)
-                    )
-                })
+                .filter(|case| case.outcome == VerificationRunOutcome::Inconclusive)
+                .count();
+            let errors = suite
+                .cases
+                .iter()
+                .filter(|case| case.outcome == VerificationRunOutcome::Error)
+                .count();
+            let run_errors = suite
+                .cases
+                .iter()
+                .filter(|case| matches!(&case.outcome, VerificationRunOutcome::RunError(_)))
+                .count();
+            let no_verdict = suite
+                .cases
+                .iter()
+                .filter(|case| case.outcome == VerificationRunOutcome::NoVerdict)
                 .count();
             let cancelled = suite
                 .cases
@@ -810,6 +867,7 @@ impl SysmlRequirementsPanel {
             let can_run = cfg!(not(target_arch = "wasm32"))
                 && !runs.is_some_and(SysmlVerificationRuns::has_active_run)
                 && !unsaved_source
+                && !view_model.analysis_has_errors
                 && view_model.verification_setup_errors.is_empty();
             ui.horizontal_wrapped(|ui| {
                 ui.strong(if stale {
@@ -824,7 +882,7 @@ impl SysmlRequirementsPanel {
                     ui,
                     theme,
                     &format!(
-                        "revision {} · {passed} passed · {failed} failed · {incomplete} incomplete · {cancelled} cancelled{}",
+                        "revision {} · {passed} passed · {failed} failed · {inconclusive} inconclusive · {errors} errors · {run_errors} run errors · {no_verdict} no verdict · {cancelled} cancelled{}",
                         suite.source_revision,
                         if suite.stopped { " · stopped" } else { "" }
                     ),
@@ -882,8 +940,8 @@ impl SysmlRequirementsPanel {
         egui::CollapsingHeader::new("Status guide")
             .default_open(false)
             .show(ui, |ui| {
-                ui.label("Evidence is the structured result emitted by the Twin's requirement checks. PASS/FAIL summarizes checks; STALE means the evidence source revision differs from the analyzed revision; NO EVIDENCE means no check result is available.");
-                ui.label("Tests are the mapped scene-test runs. PASS means all linked runnable cases passed; FAIL means at least one failed; PARTIAL means results are mixed.");
+                ui.label("Evidence is the structured result emitted by the Twin's requirement checks: PASS, FAIL, INCONCLUSIVE, or ERROR. STALE means the source revision differs from the analyzed revision; NO EVIDENCE means no check result is available.");
+                ui.label("Case verdicts are PASS, FAIL, INCONCLUSIVE, or ERROR. NO VERDICT and RUN ERROR describe runner outcomes; PARTIAL means linked cases need a passing result.");
                 ui.label("VERIFIED requires a `require` criterion, mapped `verify` links, current passing requirement evidence, and passing linked tests. FAILED means a current check or test failed; STALE and INCOMPLETE identify out-of-date or missing proof. This does not claim full KerML constraint execution.");
                 ui.label("Failures from last suite follows the most recent suite report, including failures that are now marked STALE.");
                 ui.label("NOT RUN has no current result; RUNNING is active; QUEUED is waiting in a bulk run; CANCELLED ended without a verdict; STALE belongs to an older source revision.");
@@ -1002,7 +1060,7 @@ impl SysmlRequirementsPanel {
                     TestFilter::All => "Any test result",
                     TestFilter::Failed => "Tests: failed",
                     TestFilter::SuiteFailures => "Tests: last suite failures",
-                    TestFilter::NeedsResult => "Tests: needs result",
+                    TestFilter::NeedsResult => "Tests: needs a pass",
                     TestFilter::Stale => "Tests: stale",
                     TestFilter::Unmapped => "Tests: no runnable test",
                 })
@@ -1011,7 +1069,7 @@ impl SysmlRequirementsPanel {
                         (TestFilter::All, "Any test result"),
                         (TestFilter::Failed, "Failed tests"),
                         (TestFilter::SuiteFailures, "Failures from last suite"),
-                        (TestFilter::NeedsResult, "Needs a current result"),
+                        (TestFilter::NeedsResult, "Needs a passing result"),
                         (TestFilter::Stale, "Stale test results"),
                         (TestFilter::Unmapped, "No runnable test"),
                     ] {
@@ -1095,6 +1153,9 @@ impl SysmlRequirementsPanel {
                                 self.selected_requirement =
                                     Some(requirement.qualified_name.clone());
                             }
+                            let (role, role_color) =
+                                requirement_role_label(requirement.role, theme);
+                            ui.colored_label(role_color, role);
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -1163,6 +1224,8 @@ impl SysmlRequirementsPanel {
                 let mut selected_source = None;
                 let mut open_requirement_source = false;
                 ui.heading(&requirement.display_name);
+                let (role, role_color) = requirement_role_label(requirement.role, theme);
+                ui.colored_label(role_color, role);
                 muted(ui, theme, &requirement.qualified_name);
                 for text in &requirement.documentation {
                     ui.add_space(theme.spacing.item_spacing);
@@ -1270,13 +1333,19 @@ impl SysmlRequirementsPanel {
                                         VerificationRunOutcome::Failed => {
                                             ("FAIL", theme.tokens.error)
                                         }
+                                        VerificationRunOutcome::Inconclusive => {
+                                            ("INCONCLUSIVE", theme.tokens.warning)
+                                        }
+                                        VerificationRunOutcome::Error => {
+                                            ("ERROR", theme.tokens.error)
+                                        }
                                         VerificationRunOutcome::Cancelled => {
                                             ("CANCELLED", theme.tokens.text_subdued)
                                         }
                                         VerificationRunOutcome::NoVerdict => {
                                             ("NO VERDICT", theme.tokens.error)
                                         }
-                                        VerificationRunOutcome::Error(_) => {
+                                        VerificationRunOutcome::RunError(_) => {
                                             ("RUN ERROR", theme.tokens.error)
                                         }
                                     }
@@ -1309,10 +1378,13 @@ impl SysmlRequirementsPanel {
                                     let can_run = cfg!(not(target_arch = "wasm32"))
                                         && !runs.is_some_and(SysmlVerificationRuns::has_active_run)
                                         && !unsaved_source
+                                        && !view_model.analysis_has_errors
                                         && view_model.verification_setup_errors.is_empty();
                                     if ui
                                         .add_enabled(can_run, egui::Button::new("Run test"))
-                                        .on_hover_text(if unsaved_source {
+                                        .on_hover_text(if view_model.analysis_has_errors {
+                                            "Fix SysML syntax, name-resolution, and package-collision diagnostics before running."
+                                        } else if unsaved_source {
                                             "Save or discard SysML edits before running the saved Twin source."
                                         } else if cfg!(target_arch = "wasm32") {
                                             "Run tests from the desktop application."
@@ -1343,20 +1415,46 @@ impl SysmlRequirementsPanel {
                                     theme,
                                     &format!("{} · {:.1} s", result.summary, result.elapsed.as_secs_f32()),
                                 );
+                                if result.observed_source_revision.is_some()
+                                    && !result.source_revision_matches
+                                {
+                                    muted(
+                                        ui,
+                                        theme,
+                                        &format!(
+                                            "Source revision mismatch · requested {} · child observed {}",
+                                            result.source_revision,
+                                            result.observed_source_revision.map_or_else(
+                                                || "unavailable".to_owned(),
+                                                |revision| revision.to_string(),
+                                            ),
+                                        ),
+                                    );
+                                }
                                 if !result.diagnostics.is_empty() {
                                     ui.colored_label(
                                         if matches!(
                                             &result.outcome,
                                             VerificationRunOutcome::Failed
                                                 | VerificationRunOutcome::NoVerdict
-                                                | VerificationRunOutcome::Error(_)
+                                                | VerificationRunOutcome::Error
+                                                | VerificationRunOutcome::RunError(_)
                                         ) {
                                             theme.tokens.error
+                                        } else if matches!(
+                                            &result.outcome,
+                                            VerificationRunOutcome::Inconclusive
+                                        ) {
+                                            theme.tokens.warning
                                         } else {
                                             theme.tokens.text_subdued
                                         },
                                         if matches!(&result.outcome, VerificationRunOutcome::Failed) {
                                             "Why it failed"
+                                        } else if matches!(&result.outcome, VerificationRunOutcome::Error) {
+                                            "Verification error"
+                                        } else if matches!(&result.outcome, VerificationRunOutcome::Inconclusive) {
+                                            "Why it is inconclusive"
                                         } else {
                                             "Run details"
                                         },
@@ -1589,7 +1687,12 @@ impl SysmlRequirementsPanel {
             ui.collapsing(format!("Diagnostics ({})", file_diagnostics.len()), |ui| {
                 for diagnostic in &file_diagnostics {
                     if ui
-                        .button(format!("Line {} · {}", diagnostic.line, diagnostic.message))
+                        .button(format!(
+                            "{} · line {} · {}",
+                            diagnostic_kind_label(diagnostic.kind),
+                            diagnostic.line,
+                            diagnostic.message
+                        ))
                         .clicked()
                     {
                         editor.focus_line = Some(diagnostic.line);
@@ -1676,7 +1779,7 @@ impl SysmlRequirementsPanel {
         let mut jump_to = None;
         ui.collapsing(
             format!(
-                "Parser diagnostics ({})",
+                "SysML diagnostics ({})",
                 view_model.parser_diagnostics.len()
             ),
             |ui| {
@@ -1694,8 +1797,12 @@ impl SysmlRequirementsPanel {
                     if ui
                         .selectable_label(
                             false,
-                            egui::RichText::new(format!("{location} · {}", diagnostic.message))
-                                .color(theme.tokens.warning),
+                            egui::RichText::new(format!(
+                                "{} · {location} · {}",
+                                diagnostic_kind_label(diagnostic.kind),
+                                diagnostic.message
+                            ))
+                            .color(theme.tokens.error),
                         )
                         .clicked()
                         && let Some(source) = view_model
@@ -1783,6 +1890,9 @@ fn mapped_names_for_requirement(
 enum ExecutionState {
     Pass,
     Fail,
+    Inconclusive,
+    Error,
+    RunError,
     Partial,
     Running,
     NotRun,
@@ -1790,7 +1900,6 @@ enum ExecutionState {
     NoVerify,
     NoRunner,
     NoVerdict,
-    RunError,
     Cancelled,
 }
 
@@ -1801,6 +1910,8 @@ struct ExecutionSummary {
     passed: usize,
     running: usize,
     failed: usize,
+    inconclusive: usize,
+    error: usize,
     stale: usize,
     no_verdict: usize,
     run_error: usize,
@@ -1819,6 +1930,8 @@ fn execution_summary(
         passed: 0,
         running: 0,
         failed: 0,
+        inconclusive: 0,
+        error: 0,
         stale: 0,
         no_verdict: 0,
         run_error: 0,
@@ -1863,13 +1976,19 @@ fn execution_summary(
         match &result.outcome {
             VerificationRunOutcome::Passed => summary.passed += 1,
             VerificationRunOutcome::Failed => summary.failed += 1,
+            VerificationRunOutcome::Inconclusive => summary.inconclusive += 1,
+            VerificationRunOutcome::Error => summary.error += 1,
             VerificationRunOutcome::Cancelled => summary.cancelled += 1,
             VerificationRunOutcome::NoVerdict => summary.no_verdict += 1,
-            VerificationRunOutcome::Error(_) => summary.run_error += 1,
+            VerificationRunOutcome::RunError(_) => summary.run_error += 1,
         }
     }
     summary.state = if summary.failed > 0 {
         ExecutionState::Fail
+    } else if summary.error > 0 {
+        ExecutionState::Error
+    } else if summary.inconclusive > 0 {
+        ExecutionState::Inconclusive
     } else if summary.run_error > 0 {
         ExecutionState::RunError
     } else if summary.no_verdict > 0 {
@@ -1898,6 +2017,9 @@ fn execution_label(summary: &ExecutionSummary) -> String {
     match summary.state {
         ExecutionState::Pass => format!("PASS · {}/{}", summary.passed, summary.mapped),
         ExecutionState::Fail => format!("FAIL · {}/{} failed", summary.failed, summary.mapped),
+        ExecutionState::Inconclusive => format!("INCONCLUSIVE · {}", summary.inconclusive),
+        ExecutionState::Error => format!("ERROR · {}", summary.error),
+        ExecutionState::RunError => format!("RUN ERROR · {}", summary.run_error),
         ExecutionState::Partial => format!("PARTIAL · {}/{}", summary.passed, summary.mapped),
         ExecutionState::Running => format!("RUNNING · {}/{}", summary.passed, summary.mapped),
         ExecutionState::NotRun => "NOT RUN".to_owned(),
@@ -1905,7 +2027,6 @@ fn execution_label(summary: &ExecutionSummary) -> String {
         ExecutionState::NoVerify => "NO VERIFY".to_owned(),
         ExecutionState::NoRunner => "NO RUNNER".to_owned(),
         ExecutionState::NoVerdict => "NO VERDICT".to_owned(),
-        ExecutionState::RunError => "RUN ERROR".to_owned(),
         ExecutionState::Cancelled => "CANCELLED".to_owned(),
     }
 }
@@ -1913,10 +2034,12 @@ fn execution_label(summary: &ExecutionSummary) -> String {
 fn execution_color(state: ExecutionState, theme: &lunco_theme::Theme) -> egui::Color32 {
     match state {
         ExecutionState::Pass => theme.tokens.success,
-        ExecutionState::Fail | ExecutionState::NoVerdict | ExecutionState::RunError => {
-            theme.tokens.error
-        }
-        ExecutionState::Partial
+        ExecutionState::Fail
+        | ExecutionState::Error
+        | ExecutionState::NoVerdict
+        | ExecutionState::RunError => theme.tokens.error,
+        ExecutionState::Inconclusive
+        | ExecutionState::Partial
         | ExecutionState::Stale
         | ExecutionState::NoVerify
         | ExecutionState::NoRunner => theme.tokens.warning,
@@ -1930,6 +2053,15 @@ fn execution_explanation(state: ExecutionState) -> &'static str {
     match state {
         ExecutionState::Pass => "All runnable linked cases passed on the current source revision.",
         ExecutionState::Fail => "At least one linked scene test failed on the current revision.",
+        ExecutionState::Inconclusive => {
+            "At least one linked verification lacks enough evidence for a pass or fail."
+        }
+        ExecutionState::Error => {
+            "At least one linked verification encountered an evaluation error."
+        }
+        ExecutionState::RunError => {
+            "The runner could not establish a trustworthy result for at least one linked test."
+        }
         ExecutionState::Partial => {
             "Some linked cases passed; remaining cases need a current result."
         }
@@ -1938,8 +2070,7 @@ fn execution_explanation(state: ExecutionState) -> &'static str {
         ExecutionState::Stale => "The available test result belongs to an older source revision.",
         ExecutionState::NoVerify => "The requirement has no resolved SysML verify link.",
         ExecutionState::NoRunner => "At least one verify link has no runnable Twin test mapping.",
-        ExecutionState::NoVerdict => "A test ended without a PASS or FAIL verdict.",
-        ExecutionState::RunError => "The test runner could not start or be monitored.",
+        ExecutionState::NoVerdict => "A test ended without a standard verification verdict.",
         ExecutionState::Cancelled => "The test run was cancelled before it produced a verdict.",
     }
 }
@@ -1949,6 +2080,8 @@ fn execution_explanation(state: ExecutionState) -> &'static str {
 enum EvidenceState {
     Pass,
     Fail,
+    Inconclusive,
+    Error,
     Stale,
     NoEvidence,
 }
@@ -1961,17 +2094,25 @@ fn evidence_state(
 ) -> EvidenceState {
     let mut current_checks = 0_u64;
     let mut current_failures = 0_u64;
+    let mut current_inconclusive = 0_u64;
+    let mut current_errors = 0_u64;
     let mut has_stale_evidence = false;
     for evidence in requirement_evidence_records(requirement, view_model, runs) {
         if Some(evidence.source_revision) == view_model.source_revision {
             current_checks = current_checks.saturating_add(evidence.checks);
             current_failures = current_failures.saturating_add(evidence.failures);
+            current_inconclusive = current_inconclusive.saturating_add(evidence.inconclusive);
+            current_errors = current_errors.saturating_add(evidence.errors);
         } else if evidence.checks > 0 {
             has_stale_evidence = true;
         }
     }
-    if current_failures > 0 {
+    if current_errors > 0 {
+        EvidenceState::Error
+    } else if current_failures > 0 {
         EvidenceState::Fail
+    } else if current_inconclusive > 0 {
+        EvidenceState::Inconclusive
     } else if current_checks > 0 {
         EvidenceState::Pass
     } else if has_stale_evidence {
@@ -1998,6 +2139,16 @@ fn evidence_status(
             theme.tokens.error,
             "Current-revision requirement checks include failures.",
         ),
+        EvidenceState::Inconclusive => (
+            "INCONCLUSIVE",
+            theme.tokens.warning,
+            "Current-revision requirement evidence did not support a pass or fail.",
+        ),
+        EvidenceState::Error => (
+            "ERROR",
+            theme.tokens.error,
+            "Current-revision requirement evidence encountered an evaluation error.",
+        ),
         EvidenceState::Stale => (
             "STALE",
             theme.tokens.warning,
@@ -2022,23 +2173,25 @@ fn render_requirement_evidence(
 ) {
     for evidence in requirement_evidence_records(requirement, view_model, runs) {
         let stale = Some(evidence.source_revision) != view_model.source_revision;
-        let state = if stale {
-            "STALE"
+        let (state, color) = if stale {
+            ("STALE", theme.tokens.warning)
+        } else if evidence.errors > 0 {
+            ("ERROR", theme.tokens.error)
         } else if evidence.failures > 0 {
-            "FAIL"
+            ("FAIL", theme.tokens.error)
+        } else if evidence.inconclusive > 0 {
+            ("INCONCLUSIVE", theme.tokens.warning)
         } else {
-            "PASS"
-        };
-        let color = if stale {
-            theme.tokens.warning
-        } else if evidence.failures > 0 {
-            theme.tokens.error
-        } else {
-            theme.tokens.success
+            ("PASS", theme.tokens.success)
         };
         let label = format!(
-            "{} · {} checks · {} failures · {}",
-            evidence.channel, evidence.checks, evidence.failures, state
+            "{} · {} checks · {} fail · {} inconclusive · {} error · {}",
+            evidence.channel,
+            evidence.checks,
+            evidence.failures,
+            evidence.inconclusive,
+            evidence.errors,
+            state
         );
         ui.collapsing(egui::RichText::new(label).color(color), |ui| {
             let verification = evidence
@@ -2063,10 +2216,11 @@ fn render_requirement_evidence(
             }
             for check in &evidence.details {
                 ui.horizontal_wrapped(|ui| {
-                    let (label, color) = if check.passed {
-                        ("PASS", theme.tokens.success)
-                    } else {
-                        ("FAIL", theme.tokens.error)
+                    let (label, color) = match check.verdict {
+                        VerificationVerdict::Pass => ("PASS", theme.tokens.success),
+                        VerificationVerdict::Fail => ("FAIL", theme.tokens.error),
+                        VerificationVerdict::Inconclusive => ("INCONCLUSIVE", theme.tokens.warning),
+                        VerificationVerdict::Error => ("ERROR", theme.tokens.error),
                     };
                     ui.colored_label(color, label);
                     if let Some(id) = &check.id {
@@ -2081,7 +2235,9 @@ fn render_requirement_evidence(
                     if let Some(path) = &check.path {
                         muted(ui, theme, path);
                     }
-                    if !check.passed && ui.small_button("Open source").clicked() {
+                    if check.verdict != VerificationVerdict::Pass
+                        && ui.small_button("Open source").clicked()
+                    {
                         *open_requirement_source = true;
                     }
                 });
@@ -2129,19 +2285,24 @@ fn requirement_evidence_records(
         };
         existing.checks = existing.checks.max(incoming.checks);
         existing.failures = existing.failures.max(incoming.failures);
+        existing.inconclusive = existing.inconclusive.max(incoming.inconclusive);
+        existing.errors = existing.errors.max(incoming.errors);
         existing.sim_tick = existing.sim_tick.max(incoming.sim_tick);
         for detail in &incoming.details {
             if !existing.details.contains(detail)
                 && (existing.details.len() < 64
-                    || (!detail.passed
+                    || (detail.verdict != VerificationVerdict::Pass
                         && existing
                             .details
                             .iter()
-                            .rposition(|item| item.passed)
+                            .rposition(|item| item.verdict == VerificationVerdict::Pass)
                             .is_some()))
             {
                 if existing.details.len() >= 64
-                    && let Some(index) = existing.details.iter().rposition(|item| item.passed)
+                    && let Some(index) = existing
+                        .details
+                        .iter()
+                        .rposition(|item| item.verdict == VerificationVerdict::Pass)
                 {
                     existing.details.remove(index);
                 }
@@ -2172,6 +2333,10 @@ fn requirement_evidence_records(
 enum RequirementRollupState {
     Verified,
     Failed,
+    Inconclusive,
+    Error,
+    RunError,
+    InvalidModel,
     Stale,
     Running,
     Incomplete,
@@ -2191,6 +2356,26 @@ fn requirement_rollup_label(
             "FAILED",
             theme.tokens.error,
             "A current structured requirement check or linked scene test failed.",
+        ),
+        RequirementRollupState::Inconclusive => (
+            "INCONCLUSIVE",
+            theme.tokens.warning,
+            "Current evidence does not establish whether this requirement passed or failed.",
+        ),
+        RequirementRollupState::Error => (
+            "ERROR",
+            theme.tokens.error,
+            "A current requirement check or verification case encountered an evaluation error.",
+        ),
+        RequirementRollupState::RunError => (
+            "RUN ERROR",
+            theme.tokens.error,
+            "A linked run could not establish a trustworthy result.",
+        ),
+        RequirementRollupState::InvalidModel => (
+            "INVALID MODEL",
+            theme.tokens.error,
+            "Parser or resolver diagnostics prevent verification of this source snapshot.",
         ),
         RequirementRollupState::Stale => (
             "STALE",
@@ -2215,10 +2400,19 @@ fn requirement_rollup_state(
     view_model: &SysmlRequirementsViewModel,
     runs: Option<&SysmlVerificationRuns>,
 ) -> RequirementRollupState {
+    if view_model.analysis_has_errors {
+        return RequirementRollupState::InvalidModel;
+    }
     let evidence = evidence_state(requirement, view_model, runs);
     let execution = execution_summary(requirement, view_model, runs).state;
     if evidence == EvidenceState::Fail || execution == ExecutionState::Fail {
         RequirementRollupState::Failed
+    } else if evidence == EvidenceState::Error || execution == ExecutionState::Error {
+        RequirementRollupState::Error
+    } else if evidence == EvidenceState::Inconclusive || execution == ExecutionState::Inconclusive {
+        RequirementRollupState::Inconclusive
+    } else if execution == ExecutionState::RunError {
+        RequirementRollupState::RunError
     } else if execution == ExecutionState::Running {
         RequirementRollupState::Running
     } else if evidence == EvidenceState::Stale || execution == ExecutionState::Stale {
@@ -2329,6 +2523,8 @@ fn requirement_matches_filters(
             ExecutionState::Partial
                 | ExecutionState::NotRun
                 | ExecutionState::Cancelled
+                | ExecutionState::Inconclusive
+                | ExecutionState::Error
                 | ExecutionState::NoVerdict
                 | ExecutionState::RunError
         ),
@@ -2371,6 +2567,24 @@ fn status_counts(ui: &mut egui::Ui, category: &str, counts: &[(&str, usize, egui
 
 fn muted(ui: &mut egui::Ui, theme: &lunco_theme::Theme, text: &str) {
     ui.label(egui::RichText::new(text).color(theme.tokens.text_subdued));
+}
+
+fn requirement_role_label(
+    role: RequirementRole,
+    theme: &lunco_theme::Theme,
+) -> (&'static str, egui::Color32) {
+    match role {
+        RequirementRole::Definition => ("DEFINITION", theme.tokens.accent),
+        RequirementRole::Usage => ("USAGE", theme.tokens.text_subdued),
+    }
+}
+
+fn diagnostic_kind_label(kind: lunco_sysml_ast::SysmlDiagnosticKind) -> &'static str {
+    match kind {
+        lunco_sysml_ast::SysmlDiagnosticKind::Syntax => "Syntax error",
+        lunco_sysml_ast::SysmlDiagnosticKind::Name => "Unresolved name",
+        lunco_sysml_ast::SysmlDiagnosticKind::Collision => "Package collision",
+    }
 }
 
 fn line_to_char_offset(source: &str, line: usize) -> usize {

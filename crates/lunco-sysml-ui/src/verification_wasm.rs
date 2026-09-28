@@ -34,15 +34,19 @@ pub(crate) struct CancelSysmlVerificationSuite {
 pub(crate) enum VerificationRunOutcome {
     Passed,
     Failed,
+    Inconclusive,
+    Error,
     Cancelled,
     NoVerdict,
-    Error(String),
+    RunError(String),
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct VerificationRunResult {
     pub twin_id: TwinId,
     pub source_revision: u64,
+    pub observed_source_revision: Option<u64>,
+    pub source_revision_matches: bool,
     pub name: String,
     pub outcome: VerificationRunOutcome,
     pub summary: String,
