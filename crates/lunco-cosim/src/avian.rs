@@ -83,15 +83,25 @@ pub fn ensure_acceleration_samples(
         ),
     >,
 ) {
-    for (entity, velocity) in &query {
-        commands
-            .entity(entity)
-            .try_insert(SolvedLinearAcceleration {
-                previous_velocity: velocity.0,
-                value: DVec3::ZERO,
-                valid: false,
-            });
+    let samples = query
+        .iter()
+        .map(|(entity, velocity)| {
+            (
+                entity,
+                SolvedLinearAcceleration {
+                    previous_velocity: velocity.0,
+                    value: DVec3::ZERO,
+                    valid: false,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    if samples.is_empty() {
+        return;
     }
+    // Bodies become physics-ready in admission batches. Insert their identical
+    // initialization state in one fallible command while retaining query order.
+    commands.try_insert_batch(samples);
 }
 
 /// Capture solved acceleration after Avian has written back its state.
