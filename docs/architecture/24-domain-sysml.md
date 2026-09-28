@@ -95,10 +95,11 @@ fields, and the Rhai editor reports them as retryable instead of treating an
 unfinished parse as clean. Source edits themselves only validate and update
 text; they do not parse on the caller's schedule.
 
-The optional `lunco-sysml-ui` application adapter provides a focused
-requirements panel: it browses analyzed Twin sources, jumps from a failed check
-to its requirement declaration, and edits through the canonical
-`SysmlDocument` command/save lifecycle. Requirement evidence, per-case test
+The optional `lunco-sysml-ui` application adapter provides a SysML workspace
+with **Requirements**, **Traceability**, and **Structure** views. The
+requirements view browses analyzed Twin sources, jumps from a failed check to
+its requirement declaration, and edits through the canonical `SysmlDocument`
+command/save lifecycle. Requirement evidence, per-case test
 execution, and model coverage (`require` criteria and resolved `verify` links)
 remain separate status dimensions, with independent filters. Evidence detail
 shows channel, verification identity, source revision, simulation tick, and
@@ -129,6 +130,17 @@ resolved `verify` link or a Twin test mapping remain visible as coverage gaps
 and are skipped. Tests read saved Twin files, so running is disabled while an
 indexed SysML document or local source draft has unsaved edits.
 
+The traceability view maps one selected requirement across its declared subject
+types, explicit standard `satisfy` relationships, resolved `verify` cases, Twin
+test registrations, run outcomes, and revision-scoped evidence. It keeps
+subject type declarations distinct from `satisfy` relationships and shows a
+missing relationship as a gap instead of inferring one. Model elements and
+verification declarations open at their analyzed source lines; mapped tests can
+run from the map. The structure view presents the analyzed package, part, item,
+interface, port, and connection hierarchy with text filtering and source
+navigation. Both views use the same prepared analysis snapshot as the
+requirements panel.
+
 The requirement roll-up is intentionally strict: `VERIFIED` requires a valid
 analyzed model, a formal `require` criterion, all `verify` links mapped to Twin
 tests, current passing requirement evidence, and passing results for every
@@ -141,10 +153,10 @@ execution. A missing formal `require` criterion is a model-coverage issue, not a
 test failure.
 
 The panel belongs to the existing workbench Editor level, alongside native
-document tools; it does not add a Twin HUD surface or a new workspace. This is a
-requirements/source view, not full BDD, IBD, or general-purpose SysML editor
-support. The headless document and analysis owners remain usable without this
-UI crate.
+document tools; it does not add a Twin HUD surface or a new workspace. The
+structure view is a navigable hierarchy, not full BDD/IBD diagram editing or a
+general-purpose SysML editor. The headless document and analysis owners remain
+usable without this UI crate.
 
 ## 5. Parser strategy
 

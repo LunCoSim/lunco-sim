@@ -8,8 +8,8 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_scene_runner::SceneTestRunReport;
 use lunco_sysml::{SysmlDocument, TwinSysmlAnalyses, TwinSysmlAnalysisState};
 use lunco_sysml_ast::{
-    SysmlAnalysis, SysmlDiagnosticKind, SysmlElementHandle, SysmlRequirementConstraintKind,
-    SysmlRequirementRecord,
+    SysmlAnalysis, SysmlDiagnosticKind, SysmlElement, SysmlElementHandle,
+    SysmlRequirementConstraintKind, SysmlRequirementRecord,
 };
 use lunco_sysml_ir::VerificationVerdict;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
@@ -49,8 +49,36 @@ pub(crate) struct RequirementView {
     pub relative_path: Option<PathBuf>,
     pub line: Option<usize>,
     pub has_required_constraint: bool,
+    pub subjects: Vec<RequirementSubjectView>,
+    pub satisfied_by: Vec<ModelElementView>,
     pub verification_cases: Vec<String>,
     pub runtime_evidence: Vec<RuntimeRequirementEvidence>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RequirementSubjectView {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub target: Option<ModelElementView>,
+    pub ambiguous_target: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ModelElementView {
+    pub handle: SysmlElementHandle,
+    pub owner_handle: Option<SysmlElementHandle>,
+    pub display_name: String,
+    pub qualified_name: String,
+    pub kind: String,
+    pub logical_uri: String,
+    pub relative_path: Option<PathBuf>,
+    pub line: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ModelStructureNodeView {
+    pub element: ModelElementView,
+    pub children: Vec<ModelStructureNodeView>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +92,7 @@ pub(crate) struct VerificationCaseView {
     pub name: String,
     pub scene: PathBuf,
     pub verdict_channel: Option<String>,
+    pub source_element: Option<ModelElementView>,
 }
 
 #[derive(Clone, Debug)]
@@ -137,6 +166,8 @@ pub struct SysmlRequirementsViewModel {
     pub(crate) source_revision: Option<u64>,
     pub(crate) source_files: Vec<SourceFileView>,
     pub(crate) requirements: Vec<RequirementView>,
+    pub(crate) model_structure: Vec<ModelStructureNodeView>,
+    pub(crate) model_elements: Vec<ModelElementView>,
     pub(crate) verification_cases: Vec<VerificationCaseView>,
     pub(crate) verification_setup_errors: Vec<String>,
     pub(crate) parser_diagnostics: Vec<ParserDiagnosticView>,
@@ -290,7 +321,9 @@ fn build_view_model(
     }
 
     let source_files = build_source_file_views(twin, &name, &analysis, documents);
-    let requirements = build_requirement_views(&analysis, &source_files);
+    let model_elements = build_model_element_views(&analysis, &source_files);
+    let model_structure = build_model_structure(&model_elements);
+    let requirements = build_requirement_views(&analysis, &source_files, &model_elements);
     let verification_cases = twin
         .verification_cases()
         .iter()
@@ -298,6 +331,10 @@ fn build_view_model(
             name: case.name.clone(),
             scene: case.scene.clone(),
             verdict_channel: case.verdict_channel.clone(),
+            source_element: model_elements
+                .iter()
+                .find(|element| element.qualified_name == case.name)
+                .cloned(),
         })
         .collect();
     let mut verification_setup_errors = twin.verification_registry_errors();
@@ -319,6 +356,8 @@ fn build_view_model(
         source_revision: Some(analysis.source_revision()),
         source_files,
         requirements,
+        model_structure,
+        model_elements,
         verification_cases,
         verification_setup_errors,
         parser_diagnostics: analysis
@@ -447,6 +486,7 @@ fn build_source_file_views(
 fn build_requirement_views(
     analysis: &SysmlAnalysis,
     sources: &[SourceFileView],
+    model_elements: &[ModelElementView],
 ) -> Vec<RequirementView> {
     let source_paths: HashMap<_, _> = sources
         .iter()
@@ -466,12 +506,22 @@ fn build_requirement_views(
                 .push(verification.element.qualified_name.clone());
         }
     }
+    let satisfied_by = build_satisfaction_index(analysis, model_elements);
+    let subject_types = build_subject_type_index(analysis, model_elements);
 
     let mut requirements = analysis
         .requirements()
         .iter()
         .map(|requirement| {
-            requirement_view(requirement, &source_paths, &source_texts, &verified_by)
+            requirement_view(
+                requirement,
+                &source_paths,
+                &source_texts,
+                &verified_by,
+                &satisfied_by,
+                &subject_types,
+                model_elements,
+            )
         })
         .collect::<Vec<_>>();
     requirements.sort_by(|left, right| {
@@ -488,6 +538,9 @@ fn requirement_view(
     source_paths: &HashMap<&str, &Path>,
     source_texts: &HashMap<&str, &str>,
     verified_by: &HashMap<SysmlElementHandle, Vec<String>>,
+    satisfied_by: &HashMap<SysmlElementHandle, Vec<ModelElementView>>,
+    subject_types: &HashMap<SysmlElementHandle, Vec<ModelElementView>>,
+    model_elements: &[ModelElementView],
 ) -> RequirementView {
     let element = &requirement.element;
     let source = source_texts
@@ -500,12 +553,35 @@ fn requirement_view(
         .unwrap_or_default();
     verification_cases.sort();
     verification_cases.dedup();
+    let subjects = requirement
+        .subjects
+        .iter()
+        .map(|subject| {
+            let (target, ambiguous_target) = resolve_subject_type(
+                element.handle,
+                &subject.name,
+                subject.type_name.is_some(),
+                model_elements,
+                subject_types,
+            );
+            RequirementSubjectView {
+                name: subject.name.clone(),
+                type_name: subject.type_name.clone(),
+                target,
+                ambiguous_target,
+            }
+        })
+        .collect();
     RequirementView {
         qualified_name: element.qualified_name.clone(),
-        display_name: element
-            .short_name
-            .clone()
-            .unwrap_or_else(|| element.qualified_name.clone()),
+        display_name: element.short_name.clone().unwrap_or_else(|| {
+            element
+                .qualified_name
+                .rsplit("::")
+                .next()
+                .unwrap_or(&element.qualified_name)
+                .to_owned()
+        }),
         role: match element.kind.as_str() {
             "RequirementDefinition" => RequirementRole::Definition,
             _ => RequirementRole::Usage,
@@ -520,8 +596,304 @@ fn requirement_view(
             .constraints
             .iter()
             .any(|constraint| constraint.kind == SysmlRequirementConstraintKind::Require),
+        subjects,
+        satisfied_by: satisfied_by
+            .get(&element.handle)
+            .cloned()
+            .unwrap_or_default(),
         verification_cases,
         runtime_evidence: Vec::new(),
+    }
+}
+
+fn build_model_element_views(
+    analysis: &SysmlAnalysis,
+    sources: &[SourceFileView],
+) -> Vec<ModelElementView> {
+    let source_paths: HashMap<_, _> = sources
+        .iter()
+        .map(|source| (source.logical_uri.as_str(), source.relative_path.as_path()))
+        .collect();
+    let source_texts: HashMap<_, _> = analysis
+        .files()
+        .iter()
+        .map(|file| (file.name.as_str(), file.text.as_str()))
+        .collect();
+    let mut elements = analysis
+        .elements()
+        .iter()
+        .map(|element| model_element_view(element, &source_paths, &source_texts))
+        .collect::<Vec<_>>();
+    elements.sort_by(|left, right| left.qualified_name.cmp(&right.qualified_name));
+    elements
+}
+
+fn model_element_view(
+    element: &SysmlElement,
+    source_paths: &HashMap<&str, &Path>,
+    source_texts: &HashMap<&str, &str>,
+) -> ModelElementView {
+    let source = source_texts
+        .get(element.file.as_str())
+        .copied()
+        .unwrap_or("");
+    ModelElementView {
+        handle: element.handle,
+        owner_handle: element.owner_handle,
+        display_name: element.short_name.clone().unwrap_or_else(|| {
+            element
+                .qualified_name
+                .rsplit("::")
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        }),
+        qualified_name: element.qualified_name.clone(),
+        kind: element.kind.clone(),
+        logical_uri: element.file.clone(),
+        relative_path: source_paths
+            .get(element.file.as_str())
+            .map(|path| path.to_path_buf()),
+        line: line_for_offset(source, element.start),
+    }
+}
+
+fn build_model_structure(model_elements: &[ModelElementView]) -> Vec<ModelStructureNodeView> {
+    let structural_handles: std::collections::HashSet<_> = model_elements
+        .iter()
+        .filter(|element| is_structure_kind(&element.kind))
+        .map(|element| element.handle)
+        .collect();
+    let elements_by_handle: HashMap<_, _> = model_elements
+        .iter()
+        .map(|element| (element.handle, element))
+        .collect();
+    let mut children_by_parent = HashMap::<SysmlElementHandle, Vec<SysmlElementHandle>>::new();
+    let mut roots = Vec::new();
+
+    for element in model_elements
+        .iter()
+        .filter(|element| structural_handles.contains(&element.handle))
+    {
+        let parent = nearest_structure_owner(
+            element.owner_handle,
+            &elements_by_handle,
+            &structural_handles,
+        );
+        if let Some(parent) = parent {
+            children_by_parent
+                .entry(parent)
+                .or_default()
+                .push(element.handle);
+        } else {
+            roots.push(element.handle);
+        }
+    }
+
+    // `model_elements` is already sorted by qualified identity, so roots and
+    // each sibling list remain stable across entity and hash-map allocation.
+    let mut nodes_by_handle: HashMap<_, _> = model_elements
+        .iter()
+        .filter(|element| structural_handles.contains(&element.handle))
+        .map(|element| (element.handle, element.clone()))
+        .collect();
+    roots
+        .into_iter()
+        .filter_map(|handle| {
+            take_structure_node(handle, &mut nodes_by_handle, &mut children_by_parent)
+        })
+        .collect()
+}
+
+fn is_structure_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "Package"
+            | "PartDefinition"
+            | "PartUsage"
+            | "PortDefinition"
+            | "PortUsage"
+            | "ItemDefinition"
+            | "ItemUsage"
+            | "InterfaceDefinition"
+            | "InterfaceUsage"
+            | "ConnectionDefinition"
+            | "ConnectionUsage"
+    )
+}
+
+fn nearest_structure_owner(
+    mut owner: Option<SysmlElementHandle>,
+    elements_by_handle: &HashMap<SysmlElementHandle, &ModelElementView>,
+    structural_handles: &std::collections::HashSet<SysmlElementHandle>,
+) -> Option<SysmlElementHandle> {
+    let mut visited = std::collections::HashSet::new();
+    while let Some(handle) = owner {
+        if !visited.insert(handle) {
+            return None;
+        }
+        if structural_handles.contains(&handle) {
+            return Some(handle);
+        }
+        owner = elements_by_handle
+            .get(&handle)
+            .and_then(|element| element.owner_handle);
+    }
+    None
+}
+
+fn take_structure_node(
+    handle: SysmlElementHandle,
+    nodes_by_handle: &mut HashMap<SysmlElementHandle, ModelElementView>,
+    children_by_parent: &mut HashMap<SysmlElementHandle, Vec<SysmlElementHandle>>,
+) -> Option<ModelStructureNodeView> {
+    let element = nodes_by_handle.remove(&handle)?;
+    let children = children_by_parent
+        .remove(&handle)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|child| take_structure_node(child, nodes_by_handle, children_by_parent))
+        .collect();
+    Some(ModelStructureNodeView { element, children })
+}
+
+fn build_satisfaction_index(
+    analysis: &SysmlAnalysis,
+    model_elements: &[ModelElementView],
+) -> HashMap<SysmlElementHandle, Vec<ModelElementView>> {
+    let elements_by_handle: HashMap<_, _> = model_elements
+        .iter()
+        .map(|element| (element.handle, element))
+        .collect();
+    let structural_handles: std::collections::HashSet<_> = model_elements
+        .iter()
+        .filter(|element| is_structure_kind(&element.kind))
+        .map(|element| element.handle)
+        .collect();
+    let mut satisfying_by_requirement =
+        HashMap::<SysmlElementHandle, std::collections::BTreeMap<String, ModelElementView>>::new();
+
+    for relationship in analysis
+        .relationships()
+        .iter()
+        .filter(|relationship| relationship.element.kind == "SatisfyRequirementUsage")
+    {
+        let requirements = relationship
+            .properties
+            .iter()
+            .find(|property| property.name == "satisfiedRequirement")
+            .map(|property| property.targets.as_slice())
+            .unwrap_or_default();
+        let satisfying_features = relationship
+            .properties
+            .iter()
+            .find(|property| property.name == "satisfyingFeature")
+            .map(|property| property.targets.as_slice())
+            .unwrap_or_default();
+
+        for requirement in requirements {
+            for satisfying_feature in satisfying_features {
+                let Some(structure_handle) = nearest_structure_element(
+                    *satisfying_feature,
+                    &elements_by_handle,
+                    &structural_handles,
+                ) else {
+                    continue;
+                };
+                let Some(element) = elements_by_handle.get(&structure_handle) else {
+                    continue;
+                };
+                satisfying_by_requirement
+                    .entry(*requirement)
+                    .or_default()
+                    .insert(element.qualified_name.clone(), (*element).clone());
+            }
+        }
+    }
+
+    satisfying_by_requirement
+        .into_iter()
+        .map(|(requirement, elements)| (requirement, elements.into_values().collect()))
+        .collect()
+}
+
+fn resolve_subject_type(
+    requirement: SysmlElementHandle,
+    subject_name: &str,
+    has_type: bool,
+    model_elements: &[ModelElementView],
+    subject_types: &HashMap<SysmlElementHandle, Vec<ModelElementView>>,
+) -> (Option<ModelElementView>, bool) {
+    if !has_type {
+        return (None, false);
+    }
+    let subject_features: Vec<_> = model_elements
+        .iter()
+        .filter(|element| {
+            element.owner_handle == Some(requirement)
+                && element.kind == "ReferenceUsage"
+                && element.display_name == subject_name
+        })
+        .collect();
+    let feature = match subject_features.as_slice() {
+        [feature] => *feature,
+        [] => return (None, false),
+        _ => return (None, true),
+    };
+    match subject_types.get(&feature.handle).map(Vec::as_slice) {
+        Some([target]) => (Some(target.clone()), false),
+        Some([]) | None => (None, false),
+        _ => (None, true),
+    }
+}
+
+fn build_subject_type_index(
+    analysis: &SysmlAnalysis,
+    model_elements: &[ModelElementView],
+) -> HashMap<SysmlElementHandle, Vec<ModelElementView>> {
+    let elements_by_handle: HashMap<_, _> = model_elements
+        .iter()
+        .map(|element| (element.handle, element))
+        .collect();
+    let mut targets_by_feature =
+        HashMap::<SysmlElementHandle, std::collections::BTreeMap<String, ModelElementView>>::new();
+
+    for reference in analysis.references() {
+        let Some(feature) = elements_by_handle.get(&reference.from) else {
+            continue;
+        };
+        if feature.kind != "ReferenceUsage" {
+            continue;
+        }
+        let Some(target) = elements_by_handle.get(&reference.target) else {
+            continue;
+        };
+        targets_by_feature
+            .entry(feature.handle)
+            .or_default()
+            .insert(target.qualified_name.clone(), (*target).clone());
+    }
+
+    targets_by_feature
+        .into_iter()
+        .map(|(feature, targets)| (feature, targets.into_values().collect()))
+        .collect()
+}
+
+fn nearest_structure_element(
+    mut handle: SysmlElementHandle,
+    elements_by_handle: &HashMap<SysmlElementHandle, &ModelElementView>,
+    structural_handles: &std::collections::HashSet<SysmlElementHandle>,
+) -> Option<SysmlElementHandle> {
+    let mut visited = std::collections::HashSet::new();
+    loop {
+        if !visited.insert(handle) {
+            return None;
+        }
+        if structural_handles.contains(&handle) {
+            return Some(handle);
+        }
+        handle = elements_by_handle.get(&handle)?.owner_handle?;
     }
 }
 
@@ -1095,5 +1467,76 @@ impl SourceFileView {
             dirty: document.is_dirty(),
             writable: document.origin().is_writable(),
         })
+    }
+}
+
+#[cfg(test)]
+mod model_view_tests {
+    use super::*;
+
+    #[test]
+    fn model_views_preserve_requirement_links_and_nested_structure() {
+        let analysis = SysmlAnalysis::from_files([(
+            "model.sysml",
+            "requirement def PayloadRequirement;\n\
+             part def Rover;\n\
+             package Mission {\n\
+                 requirement payload : PayloadRequirement { subject rover : Rover; }\n\
+                 part rover : Rover;\n\
+                 satisfy payload by rover;\n\
+                 verification def VerifyPayload { verify payload; }\n\
+             }\n",
+        )]);
+        assert!(
+            analysis.diagnostics().is_empty(),
+            "analysis diagnostics: {:?}",
+            analysis.diagnostics()
+        );
+
+        let model_elements = build_model_element_views(&analysis, &[]);
+        let structure = build_model_structure(&model_elements);
+        let requirements = build_requirement_views(&analysis, &[], &model_elements);
+        let requirement = requirements
+            .iter()
+            .find(|requirement| requirement.display_name == "payload")
+            .expect("requirement usage is projected");
+
+        assert_eq!(requirement.subjects.len(), 1);
+        let rover = model_elements
+            .iter()
+            .find(|element| element.qualified_name == "Rover")
+            .expect("subject type is in the typed analysis snapshot");
+        assert_eq!(
+            requirement.subjects[0]
+                .target
+                .as_ref()
+                .map(|target| target.handle),
+            Some(rover.handle)
+        );
+        assert!(!requirement.subjects[0].ambiguous_target);
+        assert_eq!(
+            requirement
+                .satisfied_by
+                .iter()
+                .map(|element| element.display_name.as_str())
+                .collect::<Vec<_>>(),
+            ["rover"]
+        );
+        assert!(
+            requirement
+                .verification_cases
+                .iter()
+                .any(|name| name.ends_with("::VerifyPayload"))
+        );
+
+        let mission = structure
+            .iter()
+            .find(|node| node.element.display_name == "Mission")
+            .expect("package is a structure root");
+        assert!(
+            mission.children.iter().any(
+                |node| node.element.display_name == "rover" && node.element.kind == "PartUsage"
+            )
+        );
     }
 }

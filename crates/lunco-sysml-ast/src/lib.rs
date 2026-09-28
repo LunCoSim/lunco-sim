@@ -2143,7 +2143,10 @@ fn project_relationships(
     let mut relationships = Vec::new();
     for &file in project_files {
         for &id in workspace.file_elements(file) {
-            if !model.kind(id).is_a(ElementKind::Relationship) {
+            let kind = model.kind(id);
+            if !kind.is_a(ElementKind::Relationship)
+                && !kind.is_a(ElementKind::SatisfyRequirementUsage)
+            {
                 continue;
             }
             let Some(element) = elements
