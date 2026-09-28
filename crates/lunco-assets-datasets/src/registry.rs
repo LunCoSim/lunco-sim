@@ -377,6 +377,11 @@ impl DatasetRegistry {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn merge_prepared(&mut self, mut prepared: Self) -> usize {
         self.pending_failures.append(&mut prepared.pending_failures);
+        for scope in prepared.scanned_scopes.drain(..) {
+            if !self.is_scope_scanned(&scope) {
+                self.scanned_scopes.push(scope);
+            }
+        }
         let mut added = 0;
         for entry in prepared.entries.drain(..) {
             if self.entries.iter().any(|current| current.id == entry.id) {

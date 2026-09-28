@@ -80,7 +80,10 @@ Startup filesystem discovery is worker preparation too. Enumerating engine
 dataset manifests, reading and parsing their TOML, and checking artifact
 presence run on the async-compute pool; the app thread only merges the typed
 registry snapshot and publishes `DatasetScopeReady` when the task completes.
-Keep UI and physics responsive while that startup work is pending.
+Newly opened Twin manifests use the same worker boundary. Independent Twin
+scans may overlap, their typed results commit in open order, and closing a Twin
+retires its pending result. Keep UI and physics responsive while scans are
+pending.
 
 ### Application interaction clocks are separate
 

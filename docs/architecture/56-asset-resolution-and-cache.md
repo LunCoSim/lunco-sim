@@ -273,7 +273,9 @@ explicitly, while headless hosts can install only the registry contract.
 Engine manifest enumeration, file reads, TOML parsing, and installed-artifact
 checks run on Bevy's async-compute pool during startup. The main thread merges
 the prepared typed registry and emits `DatasetScopeReady` only after that scan
-finishes.
+finishes. Open Twin manifests use the same worker boundary. Independent scans
+can overlap; their typed registry results commit in discovery order, and
+`TwinClosed` discards any pending result owned by that root.
 
 **The app never reaches the network on its own.** Launch, scene load and twin
 open must not open a connection. `DatasetRegistry::request(key)` is the only
