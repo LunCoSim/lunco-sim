@@ -259,8 +259,10 @@ The same ownership rule applies to the measured presentation paths:
   domain-member index in a projection-owned resource. The projector is
   scheduled only while its lifecycle index is dirty, waits for stage admission
   and queued structural projection to settle, and runs after Wiring has
-  published that wrapper's `DeclaredOutputPorts`. One dirty interval clears
-  prior markers and channels once even when more prims arrive during admission.
+  published that wrapper's `DeclaredOutputPorts`. A resource-owned processed
+  entity set retains progress without inserting one ECS marker per prim; a dirty
+  interval clears that set and derived channels once even when more prims arrive
+  during admission, avoiding a large deferred marker-removal flush.
   Steady frames do not rebuild maps or clone authored path keys, and a wrapper
   becoming available cannot be mistaken for a missing telemetry port.
 - **Authored runtime projection** shares one canonical owner reader and one

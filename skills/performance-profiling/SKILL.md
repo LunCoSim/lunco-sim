@@ -211,8 +211,11 @@ the same `Added`/`Changed` population filters in both the run condition and the
 projector, and do not reproject until the index is invalidated. When structural
 projection arrives in bounded batches, keep the index dirty and coalesce further
 invalidations until the owning queue settles; clear derived outputs once for
-that dirty interval. Keep processed markers on entities without declarations
-so the next rebuild does not reread every non-declaration prim.
+that dirty interval. Keep processed entity identities in the owner's index so
+prim progress does not enqueue a deferred ECS marker command for every prim;
+clear the set with the stale outputs on invalidation. This still skips ordinary
+non-declaration prims on later projector passes without imposing marker insert
+and removal flushes on the app schedule.
 
 When a USD reader already exposes `has_authored_attribute`, use it to test one
 known property instead of enumerating every attribute name. If one enumeration

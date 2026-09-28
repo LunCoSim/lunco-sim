@@ -82,12 +82,6 @@ enum CosimUpdateSet {
     Wiring,
 }
 
-/// Marks a USD prim after its telemetry declaration (or lack of one) has been
-/// checked for the current index revision. A scene reload despawns the prim and
-/// therefore naturally rechecks its authored state.
-#[derive(Component)]
-struct UsdTelemetryProjected;
-
 /// Runtime channels are projection output, not scene identity. This marker
 /// lets a composed-stage revision remove stale sampling channels before the
 /// declarations are projected again.
@@ -117,6 +111,7 @@ struct UsdTelemetryProjectionIndex {
     entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     generated_entities_by_path: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), Entity>,
     diagnostics: HashMap<(bevy::asset::AssetId<UsdStageAsset>, String), RuntimeDiagnostic>,
+    processed_entities: HashSet<Entity>,
     observed_stage_revision: u64,
     invalidation_pending: bool,
     stale_outputs_cleared: bool,
@@ -130,6 +125,7 @@ impl Default for UsdTelemetryProjectionIndex {
             entities_by_path: HashMap::new(),
             generated_entities_by_path: HashMap::new(),
             diagnostics: HashMap::new(),
+            processed_entities: HashSet::new(),
             observed_stage_revision: 0,
             invalidation_pending: false,
             stale_outputs_cleared: false,
@@ -155,7 +151,6 @@ fn invalidate_usd_telemetry_projection_index_on_remove<T: Component>(
 fn mark_usd_telemetry_projection_index_dirty(
     mut index: ResMut<UsdTelemetryProjectionIndex>,
     stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
-    projected: Query<Entity, With<UsdTelemetryProjected>>,
     channels: Query<Entity, With<UsdTelemetryChannel>>,
     stage_assets: Option<Res<Assets<UsdStageAsset>>>,
     mut commands: Commands,
@@ -181,9 +176,7 @@ fn mark_usd_telemetry_projection_index_dirty(
 
     index.stale_outputs_cleared = true;
     index.diagnostics.clear();
-    for entity in &projected {
-        commands.entity(entity).remove::<UsdTelemetryProjected>();
-    }
+    index.processed_entities.clear();
     for entity in &channels {
         commands.entity(entity).try_despawn();
     }
@@ -221,6 +214,7 @@ fn reset_usd_telemetry_projection_index(mut index: ResMut<UsdTelemetryProjection
     index.entities_by_path.clear();
     index.generated_entities_by_path.clear();
     index.diagnostics.clear();
+    index.processed_entities.clear();
     index.observed_stage_revision = 0;
     index.invalidation_pending = false;
     index.stale_outputs_cleared = false;
@@ -695,17 +689,14 @@ fn project_usd_telemetry(
         Has<lunco_port_core::PortSurfacePending>,
     )>,
     pending_interface_query: Query<(), (With<UsdSourcedCosim>, Without<SimComponent>)>,
-    pending_query: Query<
-        (
-            Entity,
-            &UsdPrimPath,
-            Option<&lunco_core::Provenance>,
-            Option<&lunco_core::GlobalEntityId>,
-            Has<UsdInstanceRoot>,
-            Option<&UsdInstanceProjection>,
-        ),
-        Without<UsdTelemetryProjected>,
-    >,
+    pending_query: Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&lunco_core::Provenance>,
+        Option<&lunco_core::GlobalEntityId>,
+        Has<UsdInstanceRoot>,
+        Option<&UsdInstanceProjection>,
+    )>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     mut index: ResMut<UsdTelemetryProjectionIndex>,
@@ -768,6 +759,9 @@ fn project_usd_telemetry(
     }
 
     for (entity, prim_path, provenance, gid, is_root, instance_projection) in &pending_query {
+        if index.processed_entities.contains(&entity) {
+            continue;
+        }
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
         };
@@ -785,7 +779,7 @@ fn project_usd_telemetry(
                     message: "telemetry declaration has an invalid USD prim path".to_string(),
                 },
             );
-            commands.entity(entity).try_insert(UsdTelemetryProjected);
+            index.processed_entities.insert(entity);
             continue;
         };
         let authored = match read_authored_bool_strict(&reader, &path, "lunco:telemetry") {
@@ -836,7 +830,7 @@ fn project_usd_telemetry(
                                 message: "telemetry declaration has no target relationship and its prim has no runtime port surface; author exactly one lunco:telemetry:target or place the declaration on the measured prim".to_string(),
                             },
                         );
-                        commands.entity(entity).try_insert(UsdTelemetryProjected);
+                        index.processed_entities.insert(entity);
                         continue;
                     }
                 }
@@ -860,7 +854,7 @@ fn project_usd_telemetry(
                 }
             };
             if target_path.is_empty() {
-                commands.entity(entity).try_insert(UsdTelemetryProjected);
+                index.processed_entities.insert(entity);
                 continue;
             }
             let target_key = (id, target_path.clone());
@@ -882,7 +876,7 @@ fn project_usd_telemetry(
                         ),
                     },
                 );
-                commands.entity(entity).try_insert(UsdTelemetryProjected);
+                index.processed_entities.insert(entity);
                 continue;
             };
             let declaration = (|| {
@@ -1032,7 +1026,7 @@ fn project_usd_telemetry(
                 );
             }
         }
-        commands.entity(entity).try_insert(UsdTelemetryProjected);
+        index.processed_entities.insert(entity);
     }
 
     if let Some(mut diagnostics) = diagnostics {
@@ -2929,8 +2923,9 @@ mod tests {
             .dirty = false;
 
         app.world_mut()
-            .entity_mut(entity)
-            .insert(UsdTelemetryProjected);
+            .resource_mut::<UsdTelemetryProjectionIndex>()
+            .processed_entities
+            .insert(entity);
         app.update();
         assert_eq!(app.world().resource::<TelemetryProjectionRuns>().0, 2);
 
@@ -2940,20 +2935,26 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_stage_revision_removes_derived_channels_and_markers() {
+    fn telemetry_stage_revision_clears_projection_progress_and_channels() {
         let mut app = App::new();
         app.init_resource::<UsdTelemetryProjectionIndex>()
             .insert_resource(lunco_usd_bevy_scene::UsdStageRevision(1))
             .add_systems(Update, mark_usd_telemetry_projection_index_dirty);
-        let declaration = app.world_mut().spawn(UsdTelemetryProjected).id();
+        let declaration = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<UsdTelemetryProjectionIndex>()
+            .processed_entities
+            .insert(declaration);
         let channel = app.world_mut().spawn(UsdTelemetryChannel).id();
 
         app.update();
 
+        assert!(app.world().get_entity(declaration).is_ok());
         assert!(
             app.world()
-                .get::<UsdTelemetryProjected>(declaration)
-                .is_none()
+                .resource::<UsdTelemetryProjectionIndex>()
+                .processed_entities
+                .is_empty()
         );
         assert!(app.world().get_entity(channel).is_err());
         assert!(app.world().resource::<UsdTelemetryProjectionIndex>().dirty);
