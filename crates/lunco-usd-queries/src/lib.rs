@@ -1080,10 +1080,11 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
 ///
 /// Composed-only referenced and payloaded paths require the already-mounted
 /// canonical stage, whose OpenUSD PCP stack supplies the authoritative
-/// authored layer/path pairs. A path authored in this document remains
-/// resolvable from the document layer while the canonical stage catches up
-/// with that local edit; projection latency must not turn a valid authoring
-/// target into a user-visible missing-path error.
+/// authored layer/path pairs. When that stage is mounted, a path absent from
+/// its composition is returned with `status: "missing"`; callers can safely
+/// allocate a new child path without treating an ordinary absence as a query
+/// failure. A path authored in this document remains resolvable from the
+/// document layer while the canonical stage catches up with that local edit.
 pub struct ResolveUsdTargetProvider;
 
 impl ApiQueryProvider for ResolveUsdTargetProvider {
@@ -1232,10 +1233,19 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                 return document_layer_response();
             }
             if under_arc {
-                return query_error(
-                    ApiErrorCode::EntityNotFound,
-                    format!("OpenUSD composed stage does not contain referenced path `{raw_path}`"),
-                );
+                return query_ok(api_value!({
+                    "doc_id": doc.raw(),
+                    "path": raw_path,
+                    "edit_target": edit_target.as_str(),
+                    "status": "missing",
+                    "source": "canonical_stage",
+                    "composed_exists": false,
+                    "authored_here": false,
+                    "authored_in_document": false,
+                    "under_arc": true,
+                    "edit_scope": "missing",
+                    "prim_stack": [],
+                }));
             }
         } else if under_arc {
             if authored_here || authored_in_document {

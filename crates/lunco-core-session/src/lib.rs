@@ -110,12 +110,13 @@ fn assign_global_entity_ids(
     role: Res<NetworkRole>,
 ) {
     let is_authoritative = role.is_authoritative();
+    // Preserve identity allocation order while batching the common component
+    // insertion instead of queuing one deferred command per entity.
+    let mut assignments = Vec::new();
     for (entity, prov, runtime_instance) in q_new.iter() {
         if runtime_instance {
             if is_authoritative {
-                commands
-                    .entity(entity)
-                    .try_insert(lunco_core::GlobalEntityId::allocate_authoritative());
+                assignments.push((entity, lunco_core::GlobalEntityId::allocate_authoritative()));
             }
             continue;
         }
@@ -127,19 +128,19 @@ fn assign_global_entity_ids(
             p @ (lunco_core::Provenance::Content { .. }
             | lunco_core::Provenance::Derived { .. }) => {
                 if let Some(id) = lunco_core::identity::derive_id(p) {
-                    commands
-                        .entity(entity)
-                        .try_insert(lunco_core::GlobalEntityId::from_raw(id));
+                    assignments.push((entity, lunco_core::GlobalEntityId::from_raw(id)));
                 }
             }
             lunco_core::Provenance::Authoritative => {
                 if is_authoritative {
-                    commands
-                        .entity(entity)
-                        .try_insert(lunco_core::GlobalEntityId::allocate_authoritative());
+                    assignments
+                        .push((entity, lunco_core::GlobalEntityId::allocate_authoritative()));
                 }
             }
         }
+    }
+    if !assignments.is_empty() {
+        commands.try_insert_batch(assignments);
     }
 }
 

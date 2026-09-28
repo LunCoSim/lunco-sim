@@ -93,6 +93,18 @@ the app/UI schedule continues. Browser builds retain the WebStorage read path
 until a browser worker transport is available; see
 [`hook-policies.md`](hook-policies.md).
 
+Native application policy discovery, manifest/source reads, and Rhai hook
+compilation and installer-order selection are prepared as one fixed startup
+job on `AsyncComputeTaskPool` while the runtime finishes installing its
+plugins. This keeps the lifecycle commit deterministic while removing source
+I/O, Rhai compilation/evaluation, and source-text round trips through the
+startup script from the app thread. The authored function receives ordered
+hook identities while Rust retains the prepared definitions and callables.
+`PreStartup` validates the typed selection and commits hooks in that authored
+order before any `Startup` consumer. The one-shot job is bounded to one bundle;
+a missing pool or worker failure becomes an application policy diagnostic
+instead of a synchronous fallback.
+
 Modelica runtime telemetry is event-gated after worker responses and on document
 metadata or telemetry-settings changes. Unchanged render frames do not rescan its
 variables; each recorded sample still carries the solver's landed model time.
@@ -113,8 +125,10 @@ the identity owner assigns their stable IDs; then the API registry publishes
 path lookups for those identities. Only after those steps can the time spine
 release the next fixed tick. This makes newly admitted referenced entities
 visible through `find_path` on the first resumed tick, without a startup-only
-route or a second scene-ready signal. The production `route_lifecycle` Rhai
-gate exercises reference admission and verifies that first-tick observation.
+route or a second scene-ready signal. The identity owner collects assignments
+in query iteration order and commits the same-component IDs through Bevy's
+fallible batch command before `EntityIndex`. The production `route_lifecycle`
+Rhai gate exercises reference admission and verifies that first-tick observation.
 The owner-level `drain_ref_spawns` test makes a later reference ready before its
 authored predecessor, confirms neither prim is projected while the prefix is
 incomplete, and checks both live-stage commits follow authored order after the
@@ -908,6 +922,11 @@ ordering includes:
   recursive order over the typed payload;
 - USD-connected events: instance namespace, authored event prim path, source,
   and event name;
+- USD simulation projection and dynamic-body admission: stable logical stage
+  source, optional authored instance-root path, then authored prim path. Bounded
+  projection prefixes, topology-task ranks, and body promotion never use Bevy
+  entity bits or asset allocation ids; missing or ambiguous identity raises a
+  runtime fault and keeps projection queued or bodies kinematic;
 - serialized Modelica commands: `GlobalEntityId`, then the world-local entity
   key for local-only models;
 - API entity batches use ascending `GlobalEntityId`; scalar first-match
@@ -1107,8 +1126,10 @@ The whole-simulation guarantee remains open because:
    results retain input order before contact-graph insertion; narrow-phase
    status bitsets combine before serial graph/solver updates; the active
    collision filter is read-only. USD projection supplies `PhysicsOrderKey`
-   from the instance root and authored prim path. The physics owner validates
-   joint keys after Avian prepares solver data and before its substep loop;
+   from the stable logical stage source, instance root, and authored prim path.
+   Dynamic-body admission uses the same source/instance/path order and faults
+   before promoting bodies when identities are ambiguous. The physics owner
+   validates joint keys after Avian prepares solver data and before its substep loop;
    native joints, motor warm-start, custom prismatic correction, raycast
    suspension and tire forces, jointed tire forces, and raycast wheel
    mass-property folds use that key order. Missing, duplicate, or empty keys

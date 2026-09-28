@@ -63,6 +63,16 @@ open SysML edits before running because tests read saved Twin files. Results
 are cleared when their Twin closes. The panel lives in the existing workbench
 Editor alongside the other native document tools.
 
+The **Traceability** view maps one requirement's declared subject types,
+explicit standard `satisfy` relationships, resolved `verify` cases, Twin test
+registrations, run outcomes, and source-revision-scoped evidence. Do not treat a
+subject type as a satisfy link or infer missing relationships. Source-backed
+nodes navigate to their analyzed declarations, and a mapped test can run from
+the map. The **Structure** view presents a filterable package/part/item/
+interface/port/connection hierarchy from the same prepared analysis and opens
+selected elements at their source lines. It is a hierarchy navigator, not full
+BDD/IBD diagram authoring or a general-purpose SysML editor.
+
 ### Preserve declared collection shape
 
 Read model values through the typed `SysmlModel.value` projection. A structured
@@ -667,16 +677,21 @@ its explicit `expected` value. Do not copy a threshold into Rhai, TOML, a UI
 label, or a Rust constant. Do not infer a requirement from a screenshot or
 from an ambiguous short-name lookup.
 
-The result contains `ok`, `results`, `failures`, `check_count`,
-`requirement_count`, `requirement_names`, `requirement_summary`,
-`failure_count`, `verification`, `source_revision`, and `source_files`.
+The result contains `verdict` (`pass`, `fail`, `inconclusive`, or `error`),
+`ok`, typed `results`, `failures` for standard fail records, and
+`non_pass_results` for every non-pass record. It also carries `check_count`,
+`requirement_count`, `requirement_names`, `requirement_summary`, separate
+`pass_count`, `failure_count`, `inconclusive_count`, `error_count`,
+`non_pass_count`, `verification`, `source_revision`, and `source_files`.
 `check_count` is the number of concrete observations (for example, one
 transform or attribute on one repeated part); `requirement_count` is the
 number of unique SysML requirement usages represented by those observations.
-Use `requirement_summary` for a compact per-requirement `{ checks, failures }`
-view and keep the complete result table as evidence. A missing observation is a
-failure, not a passing empty set. The next performance seam is a native batch
-USD query; do not implement an ad-hoc Rhai cache that outlives one evaluation.
+Use `requirement_summary` for compact per-requirement `{ checks, passes,
+failures, inconclusive, errors }` counts and keep the complete result table as
+evidence. A missing observation is inconclusive when the source constraint
+evaluator cannot decide; an empty check set is inconclusive. Do not turn either
+case into a pass. The next performance seam is a native batch USD query; do not
+implement an ad-hoc Rhai cache that outlives one evaluation.
 
 ## Select and run a verification case
 
@@ -727,34 +742,39 @@ link or Twin test mapping remain visible as coverage gaps and are skipped. Save
 or discard open SysML edits before running; the runner reads the saved Twin
 source.
 
-The overall status is `VERIFIED` only when a formal `require` criterion exists,
-all `verify` links map to Twin tests, current structured requirement evidence
-passes, and every linked mapped test passes. `FAILED` indicates an observed
-current check or test failure. `STALE`, `RUNNING`, and `INCOMPLETE` keep old,
-active, and missing proof visible. The roll-up summarizes authored evidence; it
-does not imply full KerML constraint execution.
+The overall status is `VERIFIED` only when the analyzed model has no source
+diagnostics, a formal `require` criterion exists, all `verify` links map to Twin
+tests, current structured requirement evidence passes, and every linked mapped
+test passes. `FAILED` indicates a standard fail. `INCONCLUSIVE` means the
+evidence could not decide; `ERROR` means evaluation failed; `RUN ERROR` means
+the runner could not establish a trustworthy result. `INVALID MODEL`, `STALE`,
+`RUNNING`, and `INCOMPLETE` keep source diagnostics, old, active, and missing
+proof visible. The roll-up summarizes authored evidence; it does not imply full
+KerML constraint execution.
 
 Read the three status dimensions separately; they answer different questions:
 
-- **Requirement evidence** is `PASS`, `FAIL`, `STALE`, or `NO EVIDENCE`, based
-  on structured `<CHANNEL>_EVIDENCE` summaries and check-result events for the
+- **Requirement evidence** is `PASS`, `FAIL`, `INCONCLUSIVE`, `ERROR`, `STALE`,
+  or `NO EVIDENCE`, based on structured `<CHANNEL>_EVIDENCE` summaries and check-result events for the
   active Twin and source revision. `NO EVIDENCE` means no current checks were
   emitted.
-- **Test execution** is per linked scene test. `PASS` and `FAIL` are current
-  runner verdicts; `PARTIAL` means some linked tests passed while others still
+- **Test execution** is per linked scene test. `PASS`, `FAIL`, `INCONCLUSIVE`,
+  and `ERROR` are authored standard verdicts; `PARTIAL` means some linked tests passed while others still
   need results. `NOT RUN` means mapped tests have no current result; `RUNNING`
   includes elapsed time; `CANCELLED` has no verdict; `STALE` belongs to an older
   source revision; `NO VERDICT` means the runner finished without a verdict;
-  `RUN ERROR` means the runner could not start or be monitored.
+  `RUN ERROR` means the runner failed or the report/source revisions did not
+  agree. A runner error never becomes a standard `FAILED` verdict.
 - **NO VERIFY** means the source has no resolved `verify` link. **NO RUNNER**
   means a link exists without a Twin test mapping.
 - **Model coverage** reports whether a formal `require` criterion exists and
   how many `verify` links have Twin test mappings. A missing criterion or link
   is a model gap; it does not mean a test failed.
-- **Overall requirement status** combines coverage, current requirement
-  evidence, and mapped test results. Missing criteria, links, evidence, or test
-  results prevent `VERIFIED`; stale inputs remain `STALE` rather than being
-  treated as current.
+- **Overall requirement status** combines valid source analysis, coverage,
+  current requirement evidence, and mapped test results. Parser/resolver
+  diagnostics make the model `INVALID MODEL` and prevent verification runs.
+  Missing criteria, links, evidence, or test results prevent `VERIFIED`; stale
+  inputs remain `STALE` rather than being treated as current.
 - Panel results are in-session evidence for the source revision that was run.
   Rerun after edits; closing the Twin clears its result set.
 

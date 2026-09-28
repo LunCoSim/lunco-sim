@@ -29,7 +29,8 @@ fn positions_differ(left, right) {
 
 fn report(me, passed, message) {
     me.done = true;
-    report_verdict([t_true(passed, message)],
+    me.checks.push(t_true(passed, message));
+    report_verdict(me.checks,
         "ROUTE NATIVE WAYPOINT EDITING", "ROUTE_NATIVE_WAYPOINT_EDITING");
 }
 
@@ -46,6 +47,7 @@ fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.phase_elapsed = 0.0;
     this.done = false;
+    this.checks = [];
     this.doc = -1;
     this.subject = -1;
     this.point = -1;
@@ -62,6 +64,8 @@ fn on_start(me, ctx) {
     this.move_preview_entity = -1;
     this.move_preview_generation = -1;
     this.ghost_observed_move = false;
+    this.inserted_after = ();
+    this.inserted_before = ();
 }
 
 fn on_event(me, evt, ctx) {
@@ -87,13 +91,29 @@ fn on_tick(me, ctx) {
     }
 
     if this.phase == 0 {
-        let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
+        if this.doc == -1 {
+            let initial = query("QueryUsdPrim", #{ path: ROUTE, children: true });
+            if initial == () || initial.ok == false || initial.doc_id == () { return; }
+            this.doc = initial.doc_id;
+        }
+        let route = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: ROUTE,
+            children: true,
+        });
+        let unused = query("ResolveUsdTarget", #{
+            doc_id: this.doc,
+            path: ROUTE + "/P3",
+            edit_target: "@runtime@",
+        });
         let pointer_api = query("QueryUsdPrim", #{
+            doc_id: this.doc,
             path: ROUTE + "/P0/Dome",
             attrs: ["lunco:interaction:right"],
             schemas: true,
         });
         let ribbon_api = query("QueryUsdPrim", #{
+            doc_id: this.doc,
             path: ROUTE + "/RouteRibbon/Geometry",
             attrs: ["lunco:interaction:right"],
             schemas: true,
@@ -101,7 +121,16 @@ fn on_tick(me, ctx) {
         this.subject = find_path(ROOT + "/Subject");
         this.point = find_path(ROUTE + "/P0");
         this.marker = find_path(ROUTE + "/P0/Dome");
-        if route == () || route.ok == false || pointer_api == () || pointer_api.ok == false
+        if unused == () || unused.ok == false { return; }
+        if unused.status != "missing" || unused.under_arc != true
+            || unused.composed_exists != false {
+            this.done = true;
+            report(this, false,
+                "ResolveUsdTarget did not report an absent referenced child as missing");
+            return;
+        }
+        if route == () || route.ok == false
+            || pointer_api == () || pointer_api.ok == false
             || ribbon_api == () || ribbon_api.ok == false
             || pointer_api.api_schemas == ()
             || !pointer_api.api_schemas.contains("LunCoPointerInteractionAPI")
@@ -116,7 +145,7 @@ fn on_tick(me, ctx) {
             || route.children == () || !route.children.contains(ROUTE + "/P2") {
             return;
         }
-        this.doc = route.doc_id;
+        if route.doc_id != this.doc { return; }
         this.route_children_before_edit = route.children;
         let add = #{
             button: "primary",
@@ -145,6 +174,21 @@ fn on_tick(me, ctx) {
             return;
         }
         this.added_without_possession = added.path;
+        this.phase = 0.5;
+        this.phase_elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == 0.5 {
+        let trigger = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: this.added_without_possession + "/Trigger",
+            attrs: ["lunco:triggerZone"],
+        });
+        if trigger == () || trigger.ok == false || trigger.attrs == ()
+            || trigger.attrs["lunco:triggerZone"] == () {
+            return;
+        }
         let delete_context = #{
             doc_id: this.doc,
             selected_path: this.added_without_possession,
@@ -667,9 +711,93 @@ fn on_tick(me, ctx) {
                 "deleting a moved route point through the native context menu dropped rover possession");
             return;
         }
+        let context = #{
+            doc_id: this.doc,
+            route_path: ROUTE,
+            selected_path: ROUTE + "/P1",
+            target_path: ROUTE + "/P1",
+            hit_path: ROUTE + "/P1",
+            prim_paths: [ROUTE + "/P1"],
+        };
+        let inserted = waypoint_editor::on_insert_after(context);
+        if inserted == () || inserted.ok != true || inserted.path != ROUTE + "/P3" {
+            this.done = true;
+            report(this, false, "Add point after failed: " + inserted.to_string());
+            return;
+        }
+        this.inserted_after = inserted.path;
+        this.phase = 37;
+        this.phase_elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == 37 {
+        let read = waypoint_editor::route_positions(this.doc, ROUTE);
+        if read == () || read.ok != true || !read.paths.contains(this.inserted_after) { return; }
+        if read.paths.len() != 3 || read.paths[0] != ROUTE + "/P1"
+            || read.paths[1] != this.inserted_after || read.paths[2] != ROUTE + "/P2" {
+            this.done = true;
+            report(this, false, "Add point after produced unexpected route order: "
+                + read.paths.to_string());
+            return;
+        }
+        this.checks.push(t_true(true,
+            "Add point after orders the new direct point after its target"));
+        let deleted = waypoint_editor::on_delete(#{
+            doc_id: this.doc,
+            selected_path: ROUTE + "/P2",
+        });
+        if deleted == () || deleted.ok != true || deleted.path != ROUTE + "/P2" {
+            this.done = true;
+            report(this, false, "could not deactivate P2 before testing order against inactive points");
+            return;
+        }
+        this.phase = 38;
+        this.phase_elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == 38 {
+        let read = waypoint_editor::route_positions(this.doc, ROUTE);
+        if read == () || read.ok != true || read.paths.contains(ROUTE + "/P2")
+            || !read.paths.contains(this.inserted_after) { return; }
+        let context = #{
+            doc_id: this.doc,
+            route_path: ROUTE,
+            selected_path: ROUTE + "/P1",
+            target_path: ROUTE + "/P1",
+            hit_path: ROUTE + "/P1",
+            prim_paths: [ROUTE + "/P1"],
+        };
+        let inserted = waypoint_editor::on_insert_before(context);
+        if inserted == () || inserted.ok != true || inserted.path != ROUTE + "/P4" {
+            this.done = true;
+            report(this, false, "Add point before failed while P2 was inactive: "
+                + inserted.to_string());
+            return;
+        }
+        this.inserted_before = inserted.path;
+        this.phase = 39;
+        this.phase_elapsed = 0.0;
+        return;
+    }
+
+    if this.phase == 39 {
+        let read = waypoint_editor::route_positions(this.doc, ROUTE);
+        if read == () || read.ok != true || !read.paths.contains(this.inserted_before)
+            || read.paths.contains(ROUTE + "/P2") { return; }
+        if read.paths.len() != 3 || read.paths[0] != this.inserted_before
+            || read.paths[1] != ROUTE + "/P1" || read.paths[2] != this.inserted_after {
+            this.done = true;
+            report(this, false, "Add point before included an inactive route point or misordered children: "
+                + read.paths.to_string());
+            return;
+        }
+        this.checks.push(t_true(true,
+            "Add point before orders only the remaining composed points after P2 is deactivated"));
         this.done = true;
         report(this, true,
-            "unpossessed edit works; possessed native selection, explicit Move, ghost placement, right-click, and delete preserve route and rover state");
+            "unpossessed edit, possessed native selection, explicit Move, ghost placement, right-click, delete, and before/after insertion passed");
     }
 }
 

@@ -200,6 +200,7 @@ fn apply_view_ops(doc, label, ops) {
 // program; it is not a per-frame render update.
 fn sync_marker_states(doc, route, visited) {
     let points = query("QueryUsdPrim", #{
+        doc_id: doc,
         path: route,
         children: true,
     });
@@ -214,6 +215,7 @@ fn sync_marker_states(doc, route, visited) {
         let color = if marked == true { visited_marker_color() }
             else { unvisited_marker_color() };
         let marker = query("QueryUsdPrim", #{
+            doc_id: doc,
             path: point + "/Dome",
             attrs: ["primvars:displayColor"],
         });
@@ -327,6 +329,7 @@ fn route_parent_path(path) {
 fn is_route_program(doc, path, subject) {
     if path == () || path == "" { return false; }
     let record = query("QueryUsdPrim", #{
+        doc_id: doc,
         path: path,
         rels: ["inputs:subject"],
         schemas: true,
@@ -363,7 +366,7 @@ fn route_for_path(doc, path, subject) {
 
 fn is_route_scope(doc, path, subject) {
     if path == () || path == "" { return false; }
-    let result = query("QueryUsdPrim", #{ path: path, children: true });
+    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path, children: true });
     if result == () || result.ok == false || result.children == () {
         return false;
     }
@@ -386,6 +389,7 @@ fn discover_subject_programs(doc, scope, subject, depth) {
     let programs = [];
     if scope == () || scope == "" || depth > 32 { return programs; }
     let result = query("QueryUsdPrim", #{
+        doc_id: doc,
         path: scope,
         children: true,
     });
@@ -406,6 +410,7 @@ fn discover_subject_programs(doc, scope, subject, depth) {
 
 fn linked_routes(doc, subject, scene_root) {
     let result = query("QueryUsdPrim", #{
+        doc_id: doc,
         path: subject,
         rels: ["programs"],
     });
@@ -515,30 +520,27 @@ fn delete_route_point(context, route) {
     ()
 }
 
-fn next_point_name(doc, route) {
-    let children = query("QueryUsdPrim", #{
-        path: route,
-        children: true,
-    });
-    if children == () || children.ok == false || children.children == () {
-        return ();
-    }
+fn next_point_name(doc, route, read) {
+    if read == () || read.ok != true || read.children == () { return (); }
     let prefix = "P";
-    for child in children.children {
-        if is_route_point(doc, child) {
-            let parts = child.split("/");
-            let leaf = parts[parts.len() - 1];
-            if leaf.starts_with("W") { prefix = "W"; break; }
-        }
+    for child in read.paths {
+        let parts = child.split("/");
+        let leaf = parts[parts.len() - 1];
+        if leaf.starts_with("W") { prefix = "W"; break; }
     }
     let index = 0;
     while index < 100000 {
         let candidate = prefix + index.to_string();
-        let used = false;
-        for child in children.children {
-            if child == route + "/" + candidate { used = true; break; }
+        let path = route + "/" + candidate;
+        let used = read.children.contains(path);
+        if !used {
+            // Composed child enumeration omits inactive prims. Keep their
+            // names reserved as well: reusing one would inherit its inactive
+            // opinion, so the subsequent primOrder would name a non-child.
+            let target = target_record(doc, path, "@runtime@");
+            if !target.ok { return (); }
+            if !target.exists { return candidate; }
         }
-        if !used { return candidate; }
         index += 1;
     }
     ()
@@ -585,7 +587,7 @@ fn route_positions(doc, route) {
         positions.push(point.attrs["xformOp:translate"]);
         paths.push(child);
     }
-    #{ ok: true, paths: paths, points: positions }
+    #{ ok: true, paths: paths, points: positions, children: result.children }
 }
 
 // A route view depends on authored point identity and placement, not on the
@@ -995,13 +997,13 @@ fn ensure_ribbon(context) {
     apply_view_ops(context.doc_id, "Update route ribbon", plan.ops)
 }
 
-fn marker_ops(doc, route, position) {
+fn marker_ops(doc, route, position, read) {
     let route = canonical_route_path(doc, route, ());
     if route == () {
         return #{ ok: false,
             error: "selected path is not an authored route program scope" };
     }
-    let name = next_point_name(doc, route);
+    let name = next_point_name(doc, route, read);
     if name == () {
         return #{ ok: false,
             error: "route stage is not synchronized; retry after program selection settles" };
@@ -1059,9 +1061,8 @@ fn move_route_point(doc, route, point, position) {
     result
 }
 
-fn insertion_position(doc, route, target, before) {
-    let read = route_positions(doc, route);
-    if read.ok != true || read.paths.len() < 2 { return (); }
+fn insertion_position(read, target, before) {
+    if read == () || read.ok != true || read.paths.len() < 2 { return (); }
     let index = -1;
     for i in 0..read.paths.len() {
         if read.paths[i] == target { index = i; break; }
@@ -1109,25 +1110,23 @@ fn insert_route_point(context, before) {
     if route == () || target == () {
         return failure("insert target is not a direct route point");
     }
-    let position = insertion_position(context.doc_id, route, target, before);
+    // Use one document-scoped composed read for point placement, name
+    // allocation, and order. The order includes only active composed children;
+    // name allocation also reserves authored inactive children.
+    let read = route_positions(context.doc_id, route);
+    if read.ok != true || read.paths.len() < 2 {
+        return failure("before/after insertion needs an adjacent active route point");
+    }
+    let position = insertion_position(read, target, before);
     if position == () {
-        return failure("before/after insertion needs an adjacent route point");
+        return failure("insert target is not an active route point");
     }
-    let children = query("QueryUsdPrim", #{
-        doc_id: context.doc_id,
-        path: route,
-        children: true,
-    });
-    if children == () || children.ok == false || children.children == () {
-        return failure("route child order is not synchronized");
-    }
-    let marker = marker_ops(context.doc_id, route, position);
+    let marker = marker_ops(context.doc_id, route, position, read);
     if marker.ok != true { return failure(marker.error); }
     let name = child_name(marker.path);
     let order = [];
     let inserted = false;
-    for child in children.children {
-        if !is_route_point(context.doc_id, child) { continue; }
+    for child in read.paths {
         if child == target && before && !inserted {
             order.push(name);
             inserted = true;
@@ -1168,8 +1167,7 @@ fn move_is_armed(doc, route, point) {
 fn clear_move_preview(doc, route) {
     let path = preview_path(route);
     let target = target_record(doc, path, "@view@");
-    // ResolveUsdTarget has no successful record for an absent optional view
-    // prim; the idle editor has no preview to clear yet.
+    // A missing preview is the idle state; clearing it is idempotent.
     if !target.ok || !target.exists {
         return #{ ok: true, changed: false };
     }
@@ -1351,7 +1349,9 @@ fn on_add_here(context) {
         && heights[0].height != () {
         position[1] = heights[0].height;
     }
-    let marker = marker_ops(context.doc_id, route, position);
+    let read = route_positions(context.doc_id, route);
+    if read.ok != true { return failure("route stage is not synchronized"); }
+    let marker = marker_ops(context.doc_id, route, position, read);
     if marker.ok != true { return failure(marker.error); }
     let result = apply_ops(context.doc_id, "Add route point on ribbon", marker.ops);
     if result.ok { result.path = marker.path; }
@@ -1371,7 +1371,9 @@ fn on_click(context) {
     if route == () {
         return failure("select an authored route program before adding a point");
     }
-    let point = marker_ops(context.doc_id, route, point_values(pointer.point));
+    let read = route_positions(context.doc_id, route);
+    if read.ok != true { return failure("route stage is not synchronized"); }
+    let point = marker_ops(context.doc_id, route, point_values(pointer.point), read);
     if !point.ok { return failure(point.error); }
     let result = apply_ops(context.doc_id, "Append route point", point.ops);
     if result.ok { result.path = point.path; }

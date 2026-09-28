@@ -63,6 +63,18 @@ when their owning Twin closes. Reuse authored Rhai source classifications for
 the same manifest and policy revision; asset-content changes do not require a
 second classification pass.
 
+Application policy startup has separate Tracy spans for
+`application_policy_source_prepare_offthread`,
+`application_policy_compile_offthread`,
+`application_policy_prestartup_wait`, and
+`application_policy_activation`. Preparation starts during runtime plugin
+construction; the compile span includes authored installer-order selection.
+`PreStartup` validates that typed order and publishes the prepared hooks before
+Startup consumers. Keep source text and callables in the Rust preparation
+bundle; the application selector receives hook identities only. Attribute
+worker time and residual PreStartup wait separately before changing policy
+lifecycle ordering.
+
 Read-only USD projectors use `CanonicalStages::reader_for` or
 `reader_for_entity`: generation-zero reads consume the worker-prepared plan, and
 later authored generations consume the live canonical stage. Do not call
@@ -259,6 +271,9 @@ once per dirty metadata batch and resolve all variables through that borrowed
 lookup. Do not call the linear `find_component_by_leaf` scan once per variable;
 steady sample batches should use the session's cached metadata without walking
 the document index.
+Cache each runtime producer's stable `SignalRef` identity for the session and
+borrow it when recording an existing channel. Avoid reconstructing and cloning
+signal paths for every due sample.
 For burst channel publication, keep retention depth as a logical limit and let
 the history buffer grow with recorded samples. Do not reserve every channel's
 full retention window when most new channels contain only their initial sample.
@@ -364,6 +379,12 @@ Twin-open and readiness milestones: one startup outlier can stall UI even when
 the same system is nearly free on settled frames. If the outer system is hot,
 attribute time to its internal owner operations before choosing an async
 boundary or cache.
+
+When `system_commands` dominates after a producer, inspect the number and shape
+of its deferred writes. For a large set of entities receiving the same bundle,
+use Bevy's existing batch command when its fallible/overwrite semantics match
+the owner, and preserve the owner's iteration order when it determines stable
+IDs.
 
 For `process_queued_usd_visuals`, include queue preparation in the frame-budget
 review. Reuse its system-local child-key scratch set across updates, and keep

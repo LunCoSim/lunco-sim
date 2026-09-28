@@ -53,6 +53,14 @@ Unscoped `QueryUsdPrim` reads likewise select mounted scene roots by excluding
 `UsdPreviewOnly` hierarchies, so an Editor preview cannot make live scene queries
 ambiguous.
 
+`QueryUsdPrim` reads the worker-prepared composed plan before a canonical stage
+is mounted and reads the canonical stage as soon as it is mounted, including
+generation zero. A document-scoped query can observe the exact document
+generation once it is applied to that stage, even while the durable ECS cursor
+catches up; operations still pending at the stage boundary remain a
+projection-not-current error. Derived geometry requests use the canonical stage
+because their bounds and source-layer facts need its native USD reads.
+
 The complete ordered route remains visible while the route program separately
 owns enablement and progression. Waypoint labels remain a separate generic
 screen-space overlay. They wrap to a bounded width and stay inside the

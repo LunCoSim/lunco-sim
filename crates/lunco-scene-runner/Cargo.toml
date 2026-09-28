@@ -28,11 +28,14 @@ lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-physics = { workspace = true }
 lunco-readiness = { workspace = true }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
+lunco-sysml-ir = { path = "../lunco-sysml-ir" }
+lunco-sysml = { path = "../lunco-sysml", optional = true }
 lunco-scripting = { path = "../lunco-scripting", default-features = false, features = ["rhai"] }
 lunco-settings = { path = "../lunco-settings", optional = true }
 lunco-time = { path = "../lunco-time" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-twin = { path = "../lunco-twin" }
+lunco-workspace = { path = "../lunco-workspace", optional = true }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-avian-joints = { path = "../lunco-usd-avian-joints" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
@@ -51,7 +54,11 @@ ui = [
     "bevy/bevy_mesh",
     "bevy/bevy_light",
 ]
-sysml = ["lunco-luncosim-simulation/sysml"]
+sysml = [
+    "dep:lunco-sysml",
+    "dep:lunco-workspace",
+    "lunco-luncosim-simulation/sysml",
+]
 
 [lints]
 workspace = true

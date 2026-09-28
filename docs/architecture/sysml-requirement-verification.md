@@ -65,25 +65,28 @@ let result = sysml_requirements::evaluate(source, [
 report_structured_verdict(result, "VISUAL REQUIREMENTS", "VISUAL_REQUIREMENTS");
 ```
 
-`report_structured_verdict` emits the compatibility `TESTS_OK`/`TESTS_FAIL`
-envelope and a `<CHANNEL>_EVIDENCE` map with `schema_version: 1`. The evidence
-contains the verification key, requirement/check results and failures, the
-numeric source revision, the ordered `source_files` list, and optional observer
-`metrics`.
+`report_structured_verdict` emits a `<CHANNEL>_EVIDENCE` map with
+`schema_version: 2` and the standard `pass`, `fail`, `inconclusive`, or `error`
+verdict. Boolean-only checks map true/false to pass/fail; constraint checks
+retain the neutral evaluator's four states. Per-requirement summaries count
+passes, failures, inconclusive checks, and errors independently. The evidence
+contains the verification key, typed check results, numeric source revision,
+ordered `source_files`, and optional observer `metrics`. The telemetry verdict
+uses the same four states; generic scene tests may continue to emit PASS/FAIL.
 Component observers should put clock/root/package facts in `metrics`; they
 must not copy requirement thresholds there.
 
 The windowed **SysML Requirements** panel consumes inline check tables and
 bounded result events. It associates each retained check with its requirement,
 channel, verification, source revision, and simulation tick, then presents its
-ID, kind, component/path, failure message, and actual/expected values when
-present. It retains up to 64 display details per requirement, preferring
-failures; aggregate requirement counts remain the status source for larger
-reports. The production scene-test runner returns a versioned structured report
-to the parent UI with the verdict and bounded typed requirement evidence. The
-UI parses that process-boundary payload into the same requirement evidence
-model used for live Twin telemetry; it does not infer verdicts or check details
-from output text.
+ID, kind, component/path, status, explanation, and actual/expected values when
+present. It retains up to 64 display details per requirement, prioritizing
+non-pass checks; aggregate requirement counts remain the status source for
+larger reports. The production scene-test runner returns report schema 2 with
+the standard verdict, a separate runner status, and the source revision observed
+at run start and completion. The UI rejects mismatched source revisions and
+parses this process-boundary payload into the same evidence model used for live
+Twin telemetry; it does not infer verdicts or check details from output text.
 
 **Run selected requirement tests** executes the unique mapped cases linked from
 the selected requirement. **Run all mapped tests** executes each unique
@@ -96,13 +99,27 @@ for readiness failures, runtime faults, and exhausted limits. Bounded captured
 process output remains available for diagnostics. Unmapped links and
 requirements without `verify` links remain coverage gaps and are not executed.
 
-The panel's overall requirement roll-up is `VERIFIED` only when a formal
-`require` criterion exists, every `verify` link maps to a Twin test, current
-requirement evidence has no failures, and all mapped tests pass. `FAILED`
-represents an observed current check or scene-test failure. `STALE`, `RUNNING`,
-and `INCOMPLETE` identify old evidence, active work, and missing proof. This is
-a summary of authored criteria, emitted evidence, and linked tests; it is not
-full KerML constraint execution.
+The **Traceability** view maps one selected requirement through declared
+subject types, explicit standard `satisfy` relationships, resolved `verify`
+cases, Twin test registration, run status, and structured evidence. Subject
+types are displayed separately from satisfy relationships; missing links stay
+visible and are never inferred. Source-backed requirement, model, and
+verification nodes open at their analyzed lines, and mapped tests can run from
+the map. The **Structure** view provides a filterable, navigable hierarchy of
+packages, parts, items, interfaces, ports, and connections from the same
+analysis revision. It supports source navigation without claiming to provide
+full BDD/IBD diagram authoring.
+
+The panel's overall requirement roll-up is `VERIFIED` only when the analyzed
+source has no parser/resolver diagnostics, a formal `require` criterion exists,
+every `verify` link maps to a Twin test, current requirement evidence passes,
+and all mapped tests pass. `FAILED` is reserved for an observed standard fail;
+`INCONCLUSIVE` means evidence is insufficient, `ERROR` means evaluation failed,
+and `RUN ERROR` means the runner could not establish a trustworthy result.
+`INVALID MODEL`, `STALE`, `RUNNING`, and `INCOMPLETE` keep source diagnostics,
+old evidence, active work, and missing proof visible. This is a summary of
+authored criteria, emitted evidence, and linked tests; it is not full KerML
+constraint execution.
 
 For bounded generic inspection, `sysml_report(path)` exposes `AnalyzeSysml`
 facts as native Rhai values (no stringify/parse round trip). Twin-scale callers
