@@ -126,8 +126,11 @@ shares its immutable `StageRecipe` through `Arc`, so ordinary asset and
 pending-job snapshots do not copy the layer closure on the app thread.
 When the live stage and prepared plan were built from that same recipe, the
 canonical owner records the exact plan identity at the stage generation. The
-asset `Modified` notification then reuses the already-open stage instead of
-opening it again. Prepared topology facts can be committed at that nonzero
+Twin-overlay path opens its first live stage from the asset recipe and binds
+that asset's exact prepared projection plan immediately, so the initial
+read-only projectors can reuse the composed indexes. The asset `Modified`
+notification then reuses the already-open stage instead of opening it again.
+Prepared topology facts can be committed at that nonzero
 generation while it remains the recorded snapshot generation; any later live
 edit invalidates that equivalence, so consumers require complete change history
 or perform their normal live-stage reconciliation.
