@@ -50,15 +50,18 @@ the canonical `SysmlDocument` at the declaration or diagnostic location.
 `SaveSysmlDocument` commands. The text editor is read-only when the document is
 not writable or its source revision conflicts with the open draft.
 
-The panel presents three independent status dimensions: structured requirement
-evidence, linked scene-test execution, and source quality (`require` criteria
-and resolved `verify` links). Running a mapped case uses the same production
-headless scene-test runner as the CLI; the panel shows elapsed time and live
-output, supports cancellation, and retains the run summary and output for the
-Twin session. Save or discard open SysML edits before running because tests
-read saved Twin files. Results are cleared when their Twin closes. The panel
-lives in the existing workbench Editor alongside the other native document
-tools.
+The panel presents three independent status dimensions with separate filters:
+structured requirement evidence, linked scene-test execution, and model
+coverage (`require` criteria and resolved `verify` links). Requirement details
+show evidence channel, verification identity, source revision, simulation tick,
+and captured check results. Up to 64 check details are retained per requirement;
+aggregate check and failure counts remain available for larger reports.
+Running a mapped case uses the same production headless scene-test runner as
+the CLI; the panel shows elapsed time and live output, supports cancellation,
+and retains the run summary and output for the Twin session. Save or discard
+open SysML edits before running because tests read saved Twin files. Results
+are cleared when their Twin closes. The panel lives in the existing workbench
+Editor alongside the other native document tools.
 
 ### Preserve declared collection shape
 
@@ -715,8 +718,9 @@ running; the runner reads the saved Twin source.
 Read the three status dimensions separately; they answer different questions:
 
 - **Requirement evidence** is `PASS`, `FAIL`, `STALE`, or `NO EVIDENCE`, based
-  on structured `<CHANNEL>_EVIDENCE` telemetry for the active Twin and source
-  revision. `NO EVIDENCE` means no current checks were emitted.
+  on structured `<CHANNEL>_EVIDENCE` summaries and check-result events for the
+  active Twin and source revision. `NO EVIDENCE` means no current checks were
+  emitted.
 - **Test execution** is per linked scene test. `PASS` and `FAIL` are current
   runner verdicts; `PARTIAL` means some linked tests passed while others still
   need results. `NOT RUN` means mapped tests have no current result; `RUNNING`
@@ -725,7 +729,7 @@ Read the three status dimensions separately; they answer different questions:
   `RUN ERROR` means the runner could not start or be monitored.
 - **NO VERIFY** means the source has no resolved `verify` link. **NO RUNNER**
   means a link exists without a Twin test mapping.
-- **Source quality** reports whether a formal `require` criterion exists and
+- **Model coverage** reports whether a formal `require` criterion exists and
   how many `verify` links have Twin test mappings. A missing criterion or link
   is a model gap; it does not mean a test failed.
 - Panel results are in-session evidence for the source revision that was run.

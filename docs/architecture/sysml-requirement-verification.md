@@ -73,6 +73,14 @@ numeric source revision, the ordered `source_files` list, and optional observer
 Component observers should put clock/root/package facts in `metrics`; they
 must not copy requirement thresholds there.
 
+The windowed **SysML Requirements** panel consumes inline check tables and
+bounded result events. It associates each retained check with its requirement,
+channel, verification, source revision, and simulation tick, then presents its
+ID, kind, component/path, failure message, and actual/expected values when
+present. It retains up to 64 display details per requirement, preferring
+failures; aggregate requirement counts remain the status source for larger
+reports.
+
 For bounded generic inspection, `sysml_report(path)` exposes `AnalyzeSysml`
 facts as native Rhai values (no stringify/parse round trip). Twin-scale callers
 should request selected pages through the generic query:
