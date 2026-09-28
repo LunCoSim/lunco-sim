@@ -315,9 +315,10 @@ geometry; lesson lifecycle and scene composition remain outside the workbench.
 
 Panel landmarks use the registered panel id as their canonical anchor:
 `panel.<id>`. The Workbench publishes that exact rect for both docked and
-explicit side-panel rendering. Generic slot anchors (`panel.side_browser`,
-`panel.right_inspector`, and `panel.bottom`) remain only for lessons that name
-the whole slot; tutorial copy that names a panel must use the exact panel key.
+explicit side-panel rendering. Generic slot anchors (`panel.center`,
+`panel.side_browser`, `panel.right_inspector`, and `panel.bottom`) identify the
+viewport or whole dock slot in both docked and viewport-only layouts; tutorial
+copy that names a panel must use the exact panel key.
 
 ## 4. Workspaces
 

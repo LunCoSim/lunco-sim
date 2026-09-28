@@ -19,8 +19,8 @@
     },
     {
       "track": "Navigation",
-      "title": "View, Build & Lunica",
-      "blurb": "Choose the right workbench perspective for the job.",
+      "title": "View, Build, Editor & Lunica",
+      "blurb": "Choose a workbench perspective for the job.",
       "difficulty": "beginner",
       "source_asset": "lunco://tutorials/perspectives/overview.rhai"
     },
