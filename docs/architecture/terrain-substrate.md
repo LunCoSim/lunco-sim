@@ -344,6 +344,15 @@ The mission physics-admission mirror reports the exact mounted DEM request or
 dataset that holds activation; it excludes `UsdPreviewOnly` ancestry even if a
 preview request was already present when the hierarchy was tagged.
 
+The initial DEM bridge reads generation-zero facts through
+`CanonicalStages::reader_for_entity`, which selects the worker-prepared
+projection plan. It indexes candidate paths by terrain API schema and authored
+`lunco:` properties, then examines only changed or explicitly retrying prims.
+After a live stage generation advances, it classifies only each changed prim by
+the terrain API, `lunco:assetMode`, and `lunco:terrain:surfaceRole` facts the
+bridge consumes. Read-only startup projection does not open a live stage on the
+app thread or rescan the live stage during edits.
+
 An Editor preview shares composed USD paths with the mounted scene, but it is
 not a terrain simulation participant. Its DEM does not build collider rings,
 publish analytic query sources, or hold the mission physics transport. An
@@ -360,16 +369,7 @@ atomically. There is nothing to invalidate by hand. The *composition* is USD lay
 composition; the *rendering* is its downstream shadow — describe-don't-store
 carried to its conclusion.
 
-**Two hard couplings this forces (do them when terrain rebases onto networking):**
-
-- **Migrate terrain's USD read off flatten.** `bridge_usd_dem_terrain` and
-  `refresh_layered_terrain_layers` (`lunco-usd-terrain/src/lib.rs`) still read
-  `Res<Assets<UsdStageAsset>>` via `UsdDataExt` — the flatten path being deleted.
-  The read swap is mechanical (`reader.prim_attribute_value → view.value`, over the
-  `UsdRead` surface the other extractors already use), but it also **retires
-  terrain's private `AssetEvent<UsdStageAsset>::Modified` reload observer**: live
-  edits become a StageSink re-projection of `TerrainLayerStack` → `Changed<…>` →
-  rebake. Net *less* wiring.
+**One remaining hard coupling:**
 
 - **Regen must be a physics-atomic activation unit, not despawn+rebuild.** The
   collider ring already does the local half of this: on an oracle swap it marks

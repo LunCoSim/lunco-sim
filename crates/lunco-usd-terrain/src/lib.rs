@@ -23,13 +23,19 @@
 //! [`DemTerrainRequest`]: lunco_terrain_surface::DemTerrainRequest
 //! [`TerrainLayerStack`]: lunco_terrain_surface::TerrainLayerStack
 
+use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_terrain_globe::TerrainTile;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Weak};
 // Two read planes, two traits: `UsdRead` = the live COMPOSED stage (what the terrain
 // projects from); `UsdDataExt` = a raw authored `sdf::Data` layer, which is what the
 // document registry hands back for the authoring tier's child walks.
 use lunco_usd_bevy_scene::{ShapeDims, UsdGeomAxis, read_shape_dims};
-use lunco_usd_bevy_stage::{StageView, UsdRead, read_transform_from_usd};
+use lunco_usd_bevy_stage::{
+    StageView, UsdInstanceProjection, UsdRead, UsdStageAsset, UsdStageProjectionPlan,
+    read_transform_from_usd,
+};
 use lunco_usd_data::usd_data::UsdDataExt;
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
@@ -228,9 +234,67 @@ fn terrain_schema_is_valid(status: Res<TerrainSchemaStatus>) -> bool {
     status.is_valid()
 }
 
-/// Marks a USD prim already examined by the DEM bridge (one-shot per prim).
+/// Marks a terrain candidate resolved by the DEM bridge until its dataset retry.
 #[derive(Component)]
 struct DemBridged;
+
+/// Revisit a terrain candidate after its asset or dataset admission fact arrives.
+#[derive(Component)]
+struct DemBridgeRetry;
+
+#[derive(Default)]
+struct DemBridgeCandidateIndex(HashMap<(AssetId<UsdStageAsset>, usize), DemBridgeCandidateSet>);
+
+struct DemBridgeCandidateSet {
+    generation: u64,
+    plan: Weak<UsdStageProjectionPlan>,
+    paths: HashSet<String>,
+}
+
+impl DemBridgeCandidateIndex {
+    fn paths_for<R: UsdRead>(
+        &mut self,
+        asset: AssetId<UsdStageAsset>,
+        generation: u64,
+        plan: &Arc<UsdStageProjectionPlan>,
+        reader: &R,
+    ) -> &HashSet<String> {
+        let key = (asset, Arc::as_ptr(plan) as usize);
+        let current = self.0.get(&key).is_some_and(|cached| {
+            cached.generation == generation
+                && cached
+                    .plan
+                    .upgrade()
+                    .is_some_and(|cached_plan| Arc::ptr_eq(&cached_plan, plan))
+        });
+        if !current {
+            let paths = reader
+                .prim_schema_facts_matching(&[], &["LunCoTerrainAPI"], "lunco:")
+                .into_iter()
+                .map(|facts| facts.path.to_string())
+                .collect();
+            self.0.insert(
+                key,
+                DemBridgeCandidateSet {
+                    generation,
+                    plan: Arc::downgrade(plan),
+                    paths,
+                },
+            );
+        }
+        &self
+            .0
+            .get(&key)
+            .expect("terrain candidate index is populated before it is read")
+            .paths
+    }
+}
+
+fn is_dem_bridge_candidate<R: UsdRead>(reader: &R, prim: &openusd::sdf::Path) -> bool {
+    reader.has_api_schema(prim, "LunCoTerrainAPI")
+        || reader.has_authored_attribute(prim, "lunco:assetMode")
+        || reader.has_authored_attribute(prim, "lunco:terrain:surfaceRole")
+}
 
 /// A DEM prim whose declared delivered artifact is not installed yet.
 ///
@@ -270,14 +334,10 @@ impl DemDatasetPending {
 }
 
 /// USD-backed [`LayerAttrSource`](lunco_terrain_surface::LayerAttrSource): reads a
-/// child layer prim's attributes through the stage reader, so terrain-surface's layer
-/// parsers stay USD-free.
-///
-/// One lifetime, not two: `StageView` holds only shared references, so it is
-/// covariant in its own lifetime and a longer-lived `&'a StageView<'b>` coerces
-/// here freely.
-struct UsdLayerAttrs<'a> {
-    reader: &'a StageView<'a>,
+/// child layer prim's attributes through the selected prepared or live reader, so
+/// terrain-surface's layer parsers stay USD-free.
+struct UsdLayerAttrs<'a, R: UsdRead> {
+    reader: &'a R,
     sdf: openusd::sdf::Path,
     /// The USD namespace the logical names bind into: `lunco:layer:` for a layer
     /// prim's parameters (`LunCoTerrainLayerAPI`), `lunco:edit:` for an edit prim's
@@ -319,7 +379,7 @@ fn ns_attr(ns: &str, name: &str) -> String {
     full
 }
 
-impl UsdLayerAttrs<'_> {
+impl<R: UsdRead> UsdLayerAttrs<'_, R> {
     fn attr(&self, name: &str) -> String {
         ns_attr(self.ns, name)
     }
@@ -362,7 +422,7 @@ impl UsdLayerAttrs<'_> {
     }
 }
 
-impl lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_> {
+impl<R: UsdRead> lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_, R> {
     fn get_f32(&self, name: &str) -> Option<f32> {
         self.reader.real_f32(&self.sdf, &self.attr(name))
     }
@@ -402,8 +462,8 @@ impl lunco_terrain_surface::LayerAttrSource for UsdLayerAttrs<'_> {
 }
 
 /// The `dem` (ground) child layer prim of a layered terrain, if authored.
-fn find_dem_layer(
-    reader: &StageView<'_>,
+fn find_dem_layer<R: UsdRead>(
+    reader: &R,
     terrain: &openusd::sdf::Path,
 ) -> Option<openusd::sdf::Path> {
     sorted_terrain_children(reader, terrain)
@@ -414,8 +474,8 @@ fn find_dem_layer(
 /// Return terrain child prims in the one order used by both the runtime stack and
 /// the Inspector projection. `StageView::children` is backed by a map, so relying
 /// on its iteration order makes layer precedence and content keys process-dependent.
-fn sorted_terrain_children(
-    reader: &StageView<'_>,
+fn sorted_terrain_children<R: UsdRead>(
+    reader: &R,
     terrain: &openusd::sdf::Path,
 ) -> Vec<openusd::sdf::Path> {
     let mut children = reader.children(terrain).into_iter().collect::<Vec<_>>();
@@ -426,8 +486,8 @@ fn sorted_terrain_children(
 /// Parse the non-ground child layer prims (`craters`/`rocks`/…) into the
 /// composable [`TerrainLayerStack`](lunco_terrain_surface::TerrainLayerStack) via the
 /// registry. Shared by the bridge (initial build) and the live-edit refresh.
-fn parse_terrain_layer_stack(
-    reader: &StageView<'_>,
+fn parse_terrain_layer_stack<R: UsdRead>(
+    reader: &R,
     terrain: &openusd::sdf::Path,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
 ) -> lunco_terrain_surface::TerrainLayerStack {
@@ -512,7 +572,7 @@ fn first_layer_path(layers: &[(String, String)], layer_type: &str) -> Option<Str
 
 /// The one enabled-state predicate for overzoom. Keep the parser's semantic
 /// defaults authoritative; the bridge must not repeat their numeric defaults.
-fn overzoom_layer_is_enabled(reader: &StageView<'_>, path: &str) -> bool {
+fn overzoom_layer_is_enabled<R: UsdRead>(reader: &R, path: &str) -> bool {
     let Ok(layer_path) = openusd::sdf::Path::new(path) else {
         return false;
     };
@@ -529,8 +589,8 @@ fn overzoom_layer_is_enabled(reader: &StageView<'_>, path: &str) -> bool {
     enabled && (spec.relief_amp > 0.0 || spec.crater_mean > 0.0)
 }
 
-fn sync_obstacle_spec_from_usd(
-    reader: &StageView<'_>,
+fn sync_obstacle_spec_from_usd<R: UsdRead>(
+    reader: &R,
     terrain: &openusd::sdf::Path,
     spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
 ) {
@@ -1656,11 +1716,21 @@ fn on_obstacle_spec_authored(
 
 fn bridge_usd_dem_terrain(
     q: Query<
-        (Entity, &lunco_usd_bevy_scene::UsdPrimPath),
+        (
+            Entity,
+            &lunco_usd_bevy_scene::UsdPrimPath,
+            Option<&UsdInstanceProjection>,
+            Has<DemBridgeRetry>,
+        ),
         (
             Without<DemBridged>,
             Without<DemDatasetPending>,
             Without<DemDatasetScanPending>,
+            Or<(
+                Changed<lunco_usd_bevy_scene::UsdPrimPath>,
+                Changed<UsdInstanceProjection>,
+                With<DemBridgeRetry>,
+            )>,
         ),
     >,
     // Live terrains already realized from a PRIOR instantiation pass. A stage
@@ -1685,42 +1755,60 @@ fn bridge_usd_dem_terrain(
     datasets: Res<lunco_assets_datasets::DatasetRegistry>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
-    mut canonical: NonSendMut<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    mut candidate_index: Local<DemBridgeCandidateIndex>,
     mut commands: Commands,
 ) {
-    for (entity, prim_path) in &q {
+    candidate_index
+        .0
+        .retain(|_, cached| cached.plan.strong_count() > 0);
+    for (entity, prim_path, instance_projection, has_retry) in &q {
         // A document preview can compose the same authored paths as the live
         // scene, but it is not a terrain realization. Keep it out of the DEM
         // request, collider-ring, height-query, and global physics-readiness
         // paths. A future preview terrain product needs its own spatial and
         // render-only contract; a mission DEM request cannot serve both roles.
         if lunco_usd_bevy_scene::is_preview_only(entity, &parents, &preview_roots) {
-            commands.entity(entity).try_insert(DemBridged);
+            if has_retry {
+                commands.entity(entity).try_remove::<DemBridgeRetry>();
+            }
             continue;
         }
 
-        // Read the LIVE canonical stage (built on demand from a layer recipe
-        // when the asset carries one) — the source of truth. Wait until it is
-        // available before reading attrs.
         let id = prim_path.stage_handle.id();
-        if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim_path.stage_handle)
-                .and_then(|a| a.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
+            if !has_retry {
+                commands.entity(entity).try_insert(DemBridgeRetry);
             }
-        }
-        if canonical.get(id).is_none() {
-            // No live stage is available for this external asset — retry when
-            // its owning canonical stage is supplied.
-            continue;
-        }
-        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
-            commands.entity(entity).try_insert(DemBridged);
             continue;
         };
-        commands.entity(entity).try_insert(DemBridged); // examined — don't re-scan
+        // Initial projection reads the worker-prepared plan. Only a later live
+        // authored generation selects the canonical OpenUSD stage reader.
+        let (reader, generation) =
+            canonical.reader_for_entity(id, stage_asset, instance_projection);
+        let Ok(sdf) = openusd::sdf::Path::new(&prim_path.path) else {
+            commands.entity(entity).try_insert(DemBridged);
+            if has_retry {
+                commands.entity(entity).try_remove::<DemBridgeRetry>();
+            }
+            continue;
+        };
+        let is_candidate = if generation == 0 {
+            let candidate_plan = instance_projection
+                .map_or(&stage_asset.projection_plan, |projection| &projection.plan);
+            candidate_index
+                .paths_for(id, generation, candidate_plan, &reader)
+                .contains(&prim_path.path)
+        } else {
+            is_dem_bridge_candidate(&reader, &sdf)
+        };
+        if !is_candidate {
+            if has_retry {
+                commands.entity(entity).try_remove::<DemBridgeRetry>();
+            }
+            continue;
+        }
+        commands.entity(entity).try_insert(DemBridged);
         // Newest pass wins: retire any prior terrain realized for this same
         // authored prim (same path + same stage asset). Its LOD tiles, ring
         // tiles, and scatter are reaped by their respective orphan reapers.
@@ -1777,9 +1865,8 @@ fn bridge_usd_dem_terrain(
             // staged `assets/` tree) resolves against its own folder. That is the
             // scene's real location, not a guess about which twin is open.
             .or_else(|| scene_dir.clone());
-        let cs = canonical.get(id).expect("checked above");
         bridge_dem_prim_read(
-            &cs.view(),
+            &reader,
             entity,
             prim_path,
             &sdf,
@@ -1791,17 +1878,19 @@ fn bridge_usd_dem_terrain(
             obstacle_spec.bypass_change_detection(),
             &mut commands,
         );
+        if has_retry {
+            commands.entity(entity).try_remove::<DemBridgeRetry>();
+        }
     }
 }
 
-/// The DEM-bridge read body, over the composed read surface ([`UsdRead`]) — reads
-/// the authored `lunco:assetMode` / child-layer / anchor attributes off the live
-/// [`StageView`](lunco_usd_bevy_stage::StageView) and attaches the terrain request +
-/// composed stack + georef. Split out of `bridge_usd_dem_terrain` so the read
-/// body can be driven directly by tests.
+/// The DEM-bridge read body, over the selected composed read surface ([`UsdRead`]) —
+/// reads the authored `lunco:assetMode` / child-layer / anchor attributes and
+/// attaches the terrain request + composed stack + georef. Split out of
+/// `bridge_usd_dem_terrain` so the read body can be driven directly by tests.
 #[allow(clippy::too_many_arguments)]
-fn bridge_dem_prim_read(
-    reader: &StageView<'_>,
+fn bridge_dem_prim_read<R: UsdRead>(
+    reader: &R,
     entity: Entity,
     prim_path: &lunco_usd_bevy_scene::UsdPrimPath,
     sdf: &openusd::sdf::Path,
@@ -2176,8 +2265,8 @@ fn bridge_dem_prim_read(
 /// globe handoff and makes the physical horizon look like a straight tile edge.
 /// `UsdGeomPlane` supplies exactly the finite surface that is rendered and the
 /// terrain physics bridge gives it the corresponding zero-thickness collider.
-fn project_flat_site_surface(
-    reader: &StageView<'_>,
+fn project_flat_site_surface<R: UsdRead>(
+    reader: &R,
     entity: Entity,
     prim_path: &lunco_usd_bevy_scene::UsdPrimPath,
     sdf: &openusd::sdf::Path,
@@ -2277,6 +2366,7 @@ fn release_pending_dem_datasets(
             commands
                 .entity(entity)
                 .try_remove::<(DemDatasetScanPending, DemBridged)>();
+            commands.entity(entity).try_insert(DemBridgeRetry);
         }
     }
     for (entity, pending) in &pending {
@@ -2284,6 +2374,7 @@ fn release_pending_dem_datasets(
             commands
                 .entity(entity)
                 .try_remove::<(DemDatasetPending, DemBridged)>();
+            commands.entity(entity).try_insert(DemBridgeRetry);
         }
     }
 }

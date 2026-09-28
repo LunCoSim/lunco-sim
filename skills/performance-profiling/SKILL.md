@@ -63,6 +63,14 @@ when their owning Twin closes. Reuse authored Rhai source classifications for
 the same manifest and policy revision; asset-content changes do not require a
 second classification pass.
 
+Read-only USD projectors use `CanonicalStages::reader_for` or
+`reader_for_entity`: generation-zero reads consume the worker-prepared plan, and
+later authored generations consume the live canonical stage. Do not call
+`get_or_build` just to read startup facts. Use the prepared schema/path indexes to
+find initial candidates. For live generations, classify only changed candidates
+from the exact facts the owner consumes; do not rebuild a whole-stage index.
+Gate follow-up work on changed candidates or explicit retry state.
+
 For Twin-open stalls, profile the active Twin policy loader separately from
 policy activation. Native manifest and Rhai source reads should run through
 bounded `AsyncWorkAdmission`; `twin_policy_source_prepare_offthread` measures
