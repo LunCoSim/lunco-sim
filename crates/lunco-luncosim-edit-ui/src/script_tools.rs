@@ -742,28 +742,29 @@ pub(crate) fn on_scene_pointer_event(
     armed: Res<lunco_interaction_core::ArmedScriptTool>,
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
-    egui_focus: Res<lunco_control_core::EguiFocus>,
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,
     mut commands: Commands,
 ) {
+    // ScenePickGate emits a foreground capture hit for UI chrome. The pointer
+    // event's hit is the current scene-ownership decision; EguiFocus is
+    // published after picking and can still describe the previous cursor
+    // location when the pointer has just left a menu.
     if armed.armed()
         || !matches!(
             spawn_state.as_ref(),
             lunco_luncosim_edit_core::SpawnState::Idle
         )
         || terrain_active.0
-        || egui_focus.wants_pointer
     {
         return;
     }
     if click.hit.position.is_none() && world.q_prim.get(click.entity).is_err() {
         return;
     }
-    // Pass-through targets still emit their own Bevy event before lower hits.
-    // Stop that event's ancestor bubble before it can win the frame's
-    // deduplication key; Bevy then delivers the gesture to the lower blocking
-    // hit (for example, a waypoint behind a move-preview sphere).
+    // Pass-through targets still emit their own Bevy event. The picking map
+    // also contains eligible lower hits, so stop this event's ancestor bubble
+    // and return before it can win the shared de-duplication key.
     if inherited_pointer_interaction(
         click.entity,
         click.button,
@@ -834,27 +835,113 @@ pub(crate) fn on_scene_pointer_event(
 /// Pointer movement is presentation input: it only updates a disposable view
 /// ghost and never waits for a physics event or rebuilds route geometry.
 pub(crate) fn on_scene_pointer_move_event(
-    pointer_move: On<Pointer<Move>>,
+    mut pointer_move: On<Pointer<Move>>,
     armed: Res<lunco_interaction_core::ArmedScriptTool>,
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
-    egui_focus: Res<lunco_control_core::EguiFocus>,
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,
 ) {
+    // Like clicks, movement is admitted from the picked scene hit below. The
+    // EguiFocus snapshot is published after picking, so it can reject the only
+    // movement sample when a cursor leaves a popup for the viewport.
     if armed.armed()
         || !matches!(
             spawn_state.as_ref(),
             lunco_luncosim_edit_core::SpawnState::Idle
         )
         || terrain_active.0
-        || egui_focus.wants_pointer
     {
         return;
     }
-    let position = pointer_move.pointer_location.position;
+    if pointer_move.hit.position.is_none() && world.q_prim.get(pointer_move.entity).is_err() {
+        return;
+    }
+    // A pass-through preview still appears in Bevy's ordered hit stream. If
+    // it wins scene-pointer deduplication, the terrain beneath it never gets
+    // a chance to provide the placement point. Apply the same authored policy
+    // used by click routing before inserting the pointer into that stream.
+    if inherited_pointer_interaction(
+        pointer_move.entity,
+        PointerButton::Primary,
+        &world.q_pointer_policy,
+        &world.q_parents,
+    ) == Some(lunco_interaction_core::PointerInteraction::PassThrough)
+    {
+        pointer_move.propagate(false);
+        return;
+    }
+    queue_scene_pointer_move(
+        pointer_move.pointer_id,
+        pointer_move.entity,
+        pointer_move.pointer_location.position,
+        pointer_move.hit.position,
+        pointer_move
+            .hit
+            .extra_as::<lunco_terrain_surface::SurfaceHit>()
+            .and_then(|hit| world.surface.to_render(hit.point)),
+        &mut dispatch,
+        &world,
+    );
+}
+
+pub(crate) fn on_scene_pointer_enter_event(
+    mut pointer_enter: On<Pointer<Enter>>,
+    armed: Res<lunco_interaction_core::ArmedScriptTool>,
+    spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
+    terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
+    mut dispatch: ResMut<ScenePointerDispatch>,
+    world: SceneToolWorld,
+) {
+    // A cursor can cross from UI chrome into the viewport while the previous
+    // frame's capture hit is still being retired. The refreshed scene hit emits
+    // Enter even when the cursor did not move again; use that current hit as
+    // the first preview sample.
+    if armed.armed()
+        || !matches!(
+            spawn_state.as_ref(),
+            lunco_luncosim_edit_core::SpawnState::Idle
+        )
+        || terrain_active.0
+        || (pointer_enter.hit.position.is_none() && world.q_prim.get(pointer_enter.entity).is_err())
+    {
+        return;
+    }
+    if inherited_pointer_interaction(
+        pointer_enter.entity,
+        PointerButton::Primary,
+        &world.q_pointer_policy,
+        &world.q_parents,
+    ) == Some(lunco_interaction_core::PointerInteraction::PassThrough)
+    {
+        pointer_enter.propagate(false);
+        return;
+    }
+    queue_scene_pointer_move(
+        pointer_enter.pointer_id,
+        pointer_enter.entity,
+        pointer_enter.pointer_location.position,
+        pointer_enter.hit.position,
+        pointer_enter
+            .hit
+            .extra_as::<lunco_terrain_surface::SurfaceHit>()
+            .and_then(|hit| world.surface.to_render(hit.point)),
+        &mut dispatch,
+        &world,
+    );
+}
+
+fn queue_scene_pointer_move(
+    pointer: PointerId,
+    entity: Entity,
+    position: Vec2,
+    hit_position: Option<Vec3>,
+    direct_surface: Option<RenderPos>,
+    dispatch: &mut ScenePointerDispatch,
+    world: &SceneToolWorld,
+) {
     let key = ScenePointerMoveKey {
-        pointer: pointer_move.pointer_id,
+        pointer,
         screen_position: [position.x.to_bits(), position.y.to_bits()],
     };
     if !dispatch.seen_moves.insert(key) {
@@ -873,11 +960,7 @@ pub(crate) fn on_scene_pointer_move_event(
     ) else {
         return;
     };
-    let direct_surface = pointer_move
-        .hit
-        .extra_as::<lunco_terrain_surface::SurfaceHit>()
-        .and_then(|hit| world.surface.to_render(hit.point));
-    let hit_is_terrain = std::iter::successors(Some(pointer_move.entity), |entity| {
+    let hit_is_terrain = std::iter::successors(Some(entity), |entity| {
         world.q_parents.get(*entity).ok().map(|parent| parent.0)
     })
     .any(|entity| world.q_lod_tiles.get(entity).is_ok());
@@ -899,7 +982,7 @@ pub(crate) fn on_scene_pointer_move_event(
     let render_position = if let Some(surface_position) = surface_render_position {
         surface_position
     } else if !hit_is_terrain {
-        let Some(position) = pointer_move.hit.position else {
+        let Some(position) = hit_position else {
             return;
         };
         RenderPos(position.as_dvec3())
@@ -955,11 +1038,11 @@ pub(crate) fn on_scene_pointer_move_event(
     if let Some((_, pending)) = dispatch
         .pending_moves
         .iter_mut()
-        .find(|(pointer, _)| *pointer == pointer_move.pointer_id)
+        .find(|(pending_pointer, _)| *pending_pointer == pointer)
     {
         *pending = args;
     } else {
-        dispatch.pending_moves.push((pointer_move.pointer_id, args));
+        dispatch.pending_moves.push((pointer, args));
     }
 }
 

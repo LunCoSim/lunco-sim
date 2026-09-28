@@ -80,6 +80,19 @@ impl DocBackedTwinScenes {
         self.map.get(&doc).and_then(|scene| scene.synced_generation)
     }
 
+    /// Return the generation applied to the canonical stage for this stage id.
+    pub fn applied_stage_generation(
+        &self,
+        doc: DocumentId,
+        stage: AssetId<UsdStageAsset>,
+    ) -> Option<u64> {
+        self.map.get(&doc).and_then(|scene| {
+            (scene.stage_id == Some(stage))
+                .then_some(scene.applied_generation)
+                .flatten()
+        })
+    }
+
     /// Return the generation last serialized into the Twin overlay.
     pub fn overlay_synced_generation(&self, doc: DocumentId) -> Option<u64> {
         self.map
@@ -341,6 +354,19 @@ pub fn scene_document_for(
     backed.doc_for(name, rel)
 }
 
+/// Resolve the `UsdStageAsset` identity backing one Twin document.
+pub fn stage_asset_for_document(
+    backed: &DocBackedTwinScenes,
+    asset_server: &AssetServer,
+    doc: DocumentId,
+) -> Option<AssetId<UsdStageAsset>> {
+    let (name, rel) = backed.coords_of(doc)?;
+    let twin_path = lunco_assets_core::twin_uri(&name, &rel);
+    asset_server
+        .get_handle::<UsdStageAsset>(twin_path)
+        .map(|handle| handle.id())
+}
+
 /// Resolve a document-backed Twin scene to its already-mounted canonical USD
 /// stage.
 ///
@@ -348,14 +374,11 @@ pub fn scene_document_for(
 /// core owns canonical stage storage. This function only joins those existing
 /// owners; it does not load, compose, or project a stage.
 pub fn canonical_stage_for_document(world: &World, doc: DocumentId) -> Option<&CanonicalStage> {
-    let (name, rel) = world
-        .get_resource::<DocBackedTwinScenes>()?
-        .coords_of(doc)?;
-    let twin_path = lunco_assets_core::twin_uri(&name, &rel);
-    let stage_id = world
-        .get_resource::<AssetServer>()?
-        .get_handle::<UsdStageAsset>(twin_path)?
-        .id();
+    let stage_id = stage_asset_for_document(
+        world.get_resource::<DocBackedTwinScenes>()?,
+        world.get_resource::<AssetServer>()?,
+        doc,
+    )?;
     world.get_non_send::<CanonicalStages>()?.get(stage_id)
 }
 

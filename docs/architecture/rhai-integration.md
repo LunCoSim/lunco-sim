@@ -139,6 +139,12 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   contexts include `button` (`primary`, `secondary`, or `middle`) so the Rhai
   tool owns button-specific policy; adapters never build source snippets or
   JSON literals for tool arguments.
+  Scene-pointer observers determine ownership from the picked hit and the
+  viewport-aware chrome capture. `EguiFocus` is published after picking, so
+  its pointer bit can still describe the previous cursor location when the
+  cursor first leaves a popup; it must not reject a valid scene hit. A consumer
+  that needs the first position sample on scene entry handles `Pointer<Enter>`
+  as well as `Pointer<Move>`.
 - **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
   attach `ScriptedModel { language: Rhai, document_id }`.
 

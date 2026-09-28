@@ -573,9 +573,11 @@ the returned OpenUSD prim stack identifies the actual composed opinions. The
 disposable `@view@` layer is also resolvable by exact target identity so transient
 presentation tools can verify their own authored prims. A path authored in the
 current document remains an editable document-layer target while its canonical
-projection catches up; composed-only paths still require the mounted canonical
-stage. The query never guesses a composed-only target from a flat authored
-layer. `SyncUsdDocument` uses the document's bounded typed-op ring: a covered generation returns an
+projection catches up; a path absent from a mounted composition returns a
+`missing` record, including when its parent is referenced. Composed-only paths
+still require the mounted canonical stage. The query never guesses a
+composed-only target from a flat authored layer. `SyncUsdDocument` uses the
+document's bounded typed-op ring: a covered generation returns an
 ordered delta, while an expired cursor returns the complete base/runtime layer
 snapshot needed to resync. A future cursor is rejected. Neither query creates a
 second composition cache, resolver, or history log.
