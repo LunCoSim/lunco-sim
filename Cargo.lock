@@ -8706,6 +8706,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-modelica-ast",
  "lunco-modelica-document",
+ "lunco-modelica-index",
  "lunco-modelica-runtime",
  "lunco-signal",
  "lunco-telemetry",

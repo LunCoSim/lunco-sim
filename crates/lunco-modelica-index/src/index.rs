@@ -93,6 +93,22 @@ pub struct ModelicaIndex {
     pub has_errors: bool,
 }
 
+/// Borrowed name lookup for consumers that resolve many runtime names against
+/// one immutable document index. Duplicate names preserve the index's
+/// first-entry-wins lookup contract.
+pub struct ComponentNameLookup<'a> {
+    by_name: HashMap<&'a str, &'a ComponentEntry>,
+}
+
+impl<'a> ComponentNameLookup<'a> {
+    /// Find an exact component name first, then the leaf of a qualified name.
+    pub fn find_component_by_leaf(&self, name: &str) -> Option<&'a ComponentEntry> {
+        self.by_name.get(name).copied().or_else(|| {
+            component_leaf_fallback(name).and_then(|leaf| self.by_name.get(leaf).copied())
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ComponentEntry {
     pub key: ComponentKey,
@@ -681,11 +697,20 @@ impl ModelicaIndex {
         if let Some(c) = self.components.iter().find(|c| c.name == name) {
             return Some(c);
         }
-        let leaf = lunco_modelica_ast::ast_extract::short_name(name);
-        if leaf == name {
-            return None;
-        }
+        let leaf = component_leaf_fallback(name)?;
         self.components.iter().find(|c| c.name == leaf)
+    }
+
+    /// Build one borrowed name lookup for a batch of exact or qualified-name
+    /// queries. Use this when multiple runtime variables resolve against the
+    /// same document generation; the temporary index costs one component
+    /// traversal instead of one traversal per variable.
+    pub fn component_name_lookup(&self) -> ComponentNameLookup<'_> {
+        let mut by_name = HashMap::with_capacity(self.components.len());
+        for component in &self.components {
+            by_name.entry(component.name.as_str()).or_insert(component);
+        }
+        ComponentNameLookup { by_name }
     }
 
     /// Iterate components in `class` in declaration order.
@@ -787,6 +812,11 @@ impl ModelicaIndex {
             .flat_map(|keys| keys.iter())
             .filter_map(move |key| self.connections.iter().find(|c| c.key == *key))
     }
+}
+
+fn component_leaf_fallback(name: &str) -> Option<&str> {
+    let leaf = lunco_modelica_ast::ast_extract::short_name(name);
+    (leaf != name).then_some(leaf)
 }
 
 fn is_subcomponent(qualified: &str, used: &std::collections::HashSet<&str>) -> bool {

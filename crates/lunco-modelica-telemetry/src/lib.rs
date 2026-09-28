@@ -19,6 +19,7 @@ use lunco_doc_bevy::DocumentRegistry;
 #[cfg(test)]
 use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
 use lunco_modelica_document::ModelicaDocument;
+use lunco_modelica_index::index::ComponentNameLookup;
 #[cfg(test)]
 use lunco_modelica_runtime::ModelicaSignalProvenance;
 use lunco_modelica_runtime::{ModelicaModel, ModelicaSet, ModelicaSignalLayout};
@@ -125,11 +126,10 @@ pub fn retain_modelica_runtime_state(
     let mut channel_count = signals.scalar_count();
 
     for (entity, model, layout, global_owner) in &models {
-        let document = documents.as_ref().and_then(|documents| {
-            documents
-                .host(model.document)
-                .map(|host| (model.document, host.generation()))
-        });
+        let document_host = documents
+            .as_ref()
+            .and_then(|documents| documents.host(model.document));
+        let document = document_host.map(|host| (model.document, host.generation()));
         let session = sessions.sessions.entry(entity).or_default();
         if session.session_id != model.session_id {
             for signal in session.signals.drain() {
@@ -157,6 +157,15 @@ pub fn retain_modelica_runtime_state(
             continue;
         }
 
+        // Build the borrowed component-name lookup only for a metadata batch.
+        // Solver samples with settled metadata do not rebuild or walk the
+        // document index.
+        let mut component_names = if metadata_dirty {
+            document_host.map(|host| host.document().index().component_name_lookup())
+        } else {
+            None
+        };
+
         let mut retained_any = false;
         for (name, &value) in &model.variables {
             if !value.is_finite() || name.is_empty() {
@@ -182,7 +191,12 @@ pub fn retain_modelica_runtime_state(
             // authoritative document/layout inputs changed or this variable
             // has not been described in this session yet.
             if metadata_dirty || !session.metadata.contains_key(name) {
-                let meta = model_signal_meta(documents.as_deref(), model, layout.as_deref(), name);
+                if component_names.is_none() {
+                    component_names =
+                        document_host.map(|host| host.document().index().component_name_lookup());
+                }
+                let meta =
+                    model_signal_meta(component_names.as_ref(), model, layout.as_deref(), name);
                 if session.metadata.get(name) != Some(&meta) {
                     signals.update_meta(signal.clone(), meta.clone());
                 }
@@ -218,16 +232,14 @@ pub fn retain_modelica_runtime_state(
 }
 
 fn model_signal_meta(
-    documents: Option<&DocumentRegistry<ModelicaDocument>>,
+    component_names: Option<&ComponentNameLookup<'_>>,
     model: &ModelicaModel,
     layout: Option<&ModelicaSignalLayout>,
     name: &str,
 ) -> SignalMeta {
     let projected = layout.and_then(|layout| layout.metadata.get(name));
     let modelica_provenance = layout.and_then(|layout| layout.provenance(name));
-    let entry = documents
-        .and_then(|registry| registry.host(model.document))
-        .and_then(|host| host.document().index().find_component_by_leaf(name));
+    let entry = component_names.and_then(|lookup| lookup.find_component_by_leaf(name));
     let model_variable = modelica_provenance
         .as_ref()
         .and_then(|identity| identity.model_variable.clone())

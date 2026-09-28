@@ -441,6 +441,10 @@ mutation signal, so a stale completion cannot leave a changed document asleep.
 Runtime Modelica telemetry is sampled from solver model time at the configured
 rate; its cursor only avoids rebuilding the same batch between due samples, and
 the shared signal registry remains the sole channel-history authority.
+When document metadata needs refresh, telemetry builds one borrowed component
+name lookup for that model's metadata batch. This preserves exact-name then
+qualified-leaf resolution while avoiding a full document-component scan for
+each runtime variable; settled sample batches reuse cached metadata.
 Generated USD Modelica source metadata has a separate invalidation boundary in
 `lunco_modelica_runtime::generated_source`: the generated source projection and
 its document link/removal lifecycle. Live `ModelicaModel` output and clock

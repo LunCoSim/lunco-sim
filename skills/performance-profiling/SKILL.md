@@ -215,6 +215,11 @@ Temporary lookup indexes over immutable ECS queries should borrow path and port
 surface data instead of cloning those maps for a one-pass reconciliation.
 Build compatible per-entity indexes in one query traversal rather than running
 separate full-population passes for each index.
+For Modelica telemetry metadata, build `ModelicaIndex::component_name_lookup`
+once per dirty metadata batch and resolve all variables through that borrowed
+lookup. Do not call the linear `find_component_by_leaf` scan once per variable;
+steady sample batches should use the session's cached metadata without walking
+the document index.
 When multiple runtime consumers inspect the same composed owner, acquire its
 canonical reader and child list once, derive owned typed facts for each
 consumer, then release the stage borrow before mutating ECS. Preserve the same
