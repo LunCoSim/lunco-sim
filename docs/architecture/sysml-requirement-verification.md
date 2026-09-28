@@ -79,11 +79,30 @@ channel, verification, source revision, and simulation tick, then presents its
 ID, kind, component/path, failure message, and actual/expected values when
 present. It retains up to 64 display details per requirement, preferring
 failures; aggregate requirement counts remain the status source for larger
-reports. **Run all mapped tests** executes each unique Twin-mapped case linked
-from a requirement once, in sequence, and reports progress. Failed cases show
-the check identity and runner diagnostic, with full captured output available.
-Unmapped links and requirements without `verify` links remain coverage gaps and
-are not executed.
+reports. The production scene-test runner returns a versioned structured report
+to the parent UI with the verdict and bounded typed requirement evidence. The
+UI parses that process-boundary payload into the same requirement evidence
+model used for live Twin telemetry; it does not infer verdicts or check details
+from output text.
+
+**Run selected requirement tests** executes the unique mapped cases linked from
+the selected requirement. **Run all mapped tests** executes each unique
+Twin-mapped case linked from any requirement once, sequentially, and reports
+progress. Completed suite results retain their source revision and outcome
+counts; **Show failures** filters to failed requirements, and **Rerun failed**
+starts only failed cases. Each failed structured check can open its associated
+requirement declaration. The structured report includes runner-level reasons
+for readiness failures, runtime faults, and exhausted limits. Bounded captured
+process output remains available for diagnostics. Unmapped links and
+requirements without `verify` links remain coverage gaps and are not executed.
+
+The panel's overall requirement roll-up is `VERIFIED` only when a formal
+`require` criterion exists, every `verify` link maps to a Twin test, current
+requirement evidence has no failures, and all mapped tests pass. `FAILED`
+represents an observed current check or scene-test failure. `STALE`, `RUNNING`,
+and `INCOMPLETE` identify old evidence, active work, and missing proof. This is
+a summary of authored criteria, emitted evidence, and linked tests; it is not
+full KerML constraint execution.
 
 For bounded generic inspection, `sysml_report(path)` exposes `AnalyzeSysml`
 facts as native Rhai values (no stringify/parse round trip). Twin-scale callers

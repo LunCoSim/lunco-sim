@@ -41,6 +41,8 @@ lunco-usd-bevy-runtime-core = { path = "../lunco-usd-bevy-runtime-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
 ui = [

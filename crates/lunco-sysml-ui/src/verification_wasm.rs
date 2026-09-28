@@ -3,6 +3,8 @@ use std::time::Duration;
 use bevy::prelude::*;
 use lunco_workspace::{TwinClosed, TwinId};
 
+use crate::view_model::RuntimeRequirementEvidence;
+
 #[derive(Event, Clone, Debug)]
 pub(crate) struct RunSysmlVerification {
     pub twin_id: TwinId,
@@ -47,6 +49,7 @@ pub(crate) struct VerificationRunResult {
     pub diagnostics: Vec<String>,
     pub output: String,
     pub elapsed: Duration,
+    pub evidence: Vec<RuntimeRequirementEvidence>,
 }
 
 #[derive(Resource, Default)]

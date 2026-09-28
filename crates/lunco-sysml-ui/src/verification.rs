@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_scene_runner::{SceneTestVerdict, parse_scene_test_report};
 use lunco_sysml::SysmlDocument;
 use lunco_workspace::{TwinClosed, TwinId, WorkspaceResource};
 
-use crate::view_model::SysmlRequirementsViewModel;
+use crate::view_model::{RuntimeRequirementEvidence, SysmlRequirementsViewModel};
 
 #[derive(Event, Clone, Debug)]
 pub(crate) struct RunSysmlVerification {
@@ -56,6 +57,7 @@ pub(crate) struct VerificationRunResult {
     pub diagnostics: Vec<String>,
     pub output: String,
     pub elapsed: Duration,
+    pub evidence: Vec<RuntimeRequirementEvidence>,
 }
 
 #[derive(Resource, Default)]
@@ -63,15 +65,30 @@ pub(crate) struct SysmlVerificationRuns {
     active: Option<ActiveRun>,
     suite: Option<VerificationSuiteRun>,
     completed: HashMap<u64, HashMap<String, VerificationRunResult>>,
+    last_suite: HashMap<u64, VerificationSuiteReport>,
 }
 
 struct VerificationSuiteRun {
     twin_id: TwinId,
     source_revision: u64,
+    names: Vec<String>,
     pending: VecDeque<String>,
     total: usize,
     started: usize,
     stopping: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct VerificationSuiteReport {
+    pub source_revision: u64,
+    pub stopped: bool,
+    pub cases: Vec<VerificationSuiteCase>,
+}
+
+#[derive(Clone)]
+pub(crate) struct VerificationSuiteCase {
+    pub name: String,
+    pub outcome: VerificationRunOutcome,
 }
 
 struct ActiveRun {
@@ -158,6 +175,10 @@ impl SysmlVerificationRuns {
         (active.twin_id == twin_id && active.name == name)
             .then(|| (active.output_log.as_str(), active.started_at.elapsed()))
     }
+
+    pub(crate) fn last_suite(&self, twin_id: TwinId) -> Option<&VerificationSuiteReport> {
+        self.last_suite.get(&twin_id.raw())
+    }
 }
 
 pub(crate) fn start_sysml_verification(
@@ -200,6 +221,7 @@ pub(crate) fn start_sysml_verification_suite(
     runs.suite = Some(VerificationSuiteRun {
         twin_id: request.twin_id,
         source_revision: request.source_revision,
+        names: names.clone(),
         pending: names.into(),
         total,
         started: 0,
@@ -401,6 +423,7 @@ fn store_setup_error(
                 diagnostics: vec![message.to_owned()],
                 output: String::new(),
                 elapsed: Duration::ZERO,
+                evidence: Vec::new(),
             },
         );
 }
@@ -443,7 +466,7 @@ pub(crate) fn cancel_sysml_verification_suite(
     {
         active.cancel_requested = true;
     } else {
-        runs.suite = None;
+        finish_suite(&mut runs, twin_id);
     }
 }
 
@@ -465,6 +488,7 @@ fn store_cancelled_queued_case(
             diagnostics: vec![message],
             output: String::new(),
             elapsed: Duration::ZERO,
+            evidence: Vec::new(),
         },
     );
 }
@@ -516,6 +540,7 @@ fn poll_active_verification(
                 diagnostics: vec!["The scene-test output channel could not be read.".to_owned()],
                 output: active.output_log.clone(),
                 elapsed: active.started_at.elapsed(),
+                evidence: Vec::new(),
             };
             runs.active = None;
             store_result_if_twin_open(runs, workspace, result);
@@ -575,6 +600,7 @@ fn poll_active_verification(
                     diagnostics: vec![format!("Could not read scene-test process status: {error}")],
                     output: active.output_log.clone(),
                     elapsed: active.started_at.elapsed(),
+                    evidence: Vec::new(),
                 };
                 runs.active = None;
                 store_result_if_twin_open(runs, workspace, result);
@@ -606,7 +632,8 @@ fn start_next_suite_case(
         .as_ref()
         .is_some_and(|suite| suite.pending.is_empty())
     {
-        runs.suite = None;
+        let twin_id = runs.suite.as_ref().expect("suite was just checked").twin_id;
+        finish_suite(runs, twin_id);
         return;
     }
     let request = {
@@ -625,6 +652,33 @@ fn start_next_suite_case(
         }
     };
     start_verification(&request, workspace, view_model, documents, runs);
+}
+
+fn finish_suite(runs: &mut SysmlVerificationRuns, twin_id: TwinId) {
+    let Some(suite) = runs.suite.take().filter(|suite| suite.twin_id == twin_id) else {
+        return;
+    };
+    let completed = runs.completed.get(&twin_id.raw());
+    let cases = suite
+        .names
+        .into_iter()
+        .map(|name| VerificationSuiteCase {
+            outcome: completed
+                .and_then(|cases| cases.get(&name))
+                .map_or(VerificationRunOutcome::NoVerdict, |result| {
+                    result.outcome.clone()
+                }),
+            name,
+        })
+        .collect();
+    runs.last_suite.insert(
+        twin_id.raw(),
+        VerificationSuiteReport {
+            source_revision: suite.source_revision,
+            stopped: suite.stopping,
+            cases,
+        },
+    );
 }
 
 fn append_output_log(
@@ -680,31 +734,135 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
         .exit_status
         .as_ref()
         .expect("run result waits for process exit");
-    let stdout = stdout.unwrap_or_else(|error| format!("stdout capture failed: {error}"));
-    let stderr = stderr.unwrap_or_else(|error| format!("stderr capture failed: {error}"));
-    let (outcome, summary) = if active.cancelled {
+    let stderr_error = stderr.as_ref().err().cloned();
+    drop(stderr);
+    let (outcome, summary, diagnostics, report) = if active.cancelled {
         (
             VerificationRunOutcome::Cancelled,
             format!("Cancelled after {:.1} s", elapsed.as_secs_f32()),
+            Vec::new(),
+            None,
         )
     } else {
-        let outcome = match status.code() {
-            Some(0) => VerificationRunOutcome::Passed,
-            Some(1) => VerificationRunOutcome::Failed,
-            Some(_) | None => VerificationRunOutcome::NoVerdict,
+        let parsed_report = match stdout {
+            Ok(stdout) => parse_scene_test_report(&stdout),
+            Err(error) => Err(format!("scene-test stdout capture failed: {error}")),
         };
-        (outcome, test_summary(&stdout, &stderr, status))
-    };
-    let diagnostics = match &outcome {
-        VerificationRunOutcome::Failed | VerificationRunOutcome::NoVerdict => {
-            let mut diagnostics = failure_diagnostics(&stdout, &stderr);
-            if diagnostics.is_empty() {
-                diagnostics.push(summary.clone());
+        match parsed_report {
+            Err(error) => {
+                let summary = format!("The scene-test report could not be read: {error}");
+                (
+                    VerificationRunOutcome::Error(summary.clone()),
+                    summary.clone(),
+                    vec![summary],
+                    None,
+                )
             }
-            diagnostics
+            Ok(Some(report))
+                if report.schema_version != 1
+                    || report.verification != active.name
+                    || status.code() != Some(i32::from(report.process_exit_code)) =>
+            {
+                let message = format!(
+                    "The scene-test report did not match this run (schema {}, verification {}).",
+                    report.schema_version, report.verification
+                );
+                (
+                    VerificationRunOutcome::Error(message.clone()),
+                    message.clone(),
+                    vec![message],
+                    Some(report),
+                )
+            }
+            Ok(Some(report)) => {
+                let outcome = match report.process_exit_code {
+                    0 => VerificationRunOutcome::Passed,
+                    1 => VerificationRunOutcome::Failed,
+                    2 => VerificationRunOutcome::NoVerdict,
+                    code => VerificationRunOutcome::Error(format!(
+                        "The scene-test runner returned unsupported status {code}."
+                    )),
+                };
+                let channel = report
+                    .verdict_channel
+                    .as_deref()
+                    .map(|channel| format!(" · {channel}"))
+                    .unwrap_or_default();
+                let summary = match (report.process_exit_code, report.verdict) {
+                    (0, Some(SceneTestVerdict::Passed)) => format!("PASS{channel}"),
+                    (1, Some(SceneTestVerdict::Failed)) => format!("FAIL{channel}"),
+                    (1, Some(SceneTestVerdict::Passed)) => {
+                        format!("RUNNER FAIL · scenario reported PASS{channel}")
+                    }
+                    (1, None) => "RUNNER FAIL · no scenario verdict".to_owned(),
+                    (0, None) => "PASS".to_owned(),
+                    (0, Some(SceneTestVerdict::Failed)) => {
+                        format!(
+                            "RUNNER ERROR · exit status PASS but scenario reported FAIL{channel}"
+                        )
+                    }
+                    (2, Some(verdict)) => format!(
+                        "NO VERDICT · scenario reported {}{channel}",
+                        match verdict {
+                            SceneTestVerdict::Passed => "PASS",
+                            SceneTestVerdict::Failed => "FAIL",
+                        }
+                    ),
+                    (2, None) => "NO VERDICT".to_owned(),
+                    (code, _) => format!("RUNNER ERROR · unsupported status {code}"),
+                };
+                let mut diagnostics = Vec::new();
+                if let Some(diagnostic) = &report.runner_diagnostic {
+                    diagnostics.push(diagnostic.clone());
+                }
+                if report.details_truncated {
+                    diagnostics.push(
+                        "Some structured evidence or check details exceeded the report size limit."
+                            .to_owned(),
+                    );
+                }
+                (outcome, summary, diagnostics, Some(report))
+            }
+            Ok(None) => {
+                let summary = format!(
+                    "Scene-test process exited with status {:?} without a structured verification report.",
+                    status.code()
+                );
+                (
+                    VerificationRunOutcome::Error(summary.clone()),
+                    summary.clone(),
+                    vec![summary],
+                    None,
+                )
+            }
         }
-        _ => Vec::new(),
     };
+    let mut diagnostics = diagnostics;
+    if let Some(error) = stderr_error {
+        diagnostics.push(format!("Scene-test stderr capture failed: {error}"));
+    }
+    let evidence = report
+        .as_ref()
+        .map(crate::view_model::scene_test_requirement_evidence)
+        .unwrap_or_default();
+    let structured_diagnostics = report
+        .as_ref()
+        .map(crate::view_model::scene_test_report_diagnostics)
+        .unwrap_or_default();
+    for diagnostic in &structured_diagnostics {
+        if !diagnostics.contains(diagnostic) {
+            diagnostics.push(diagnostic.clone());
+        }
+    }
+    if matches!(outcome, VerificationRunOutcome::Failed)
+        && evidence.iter().all(|evidence| evidence.failures == 0)
+        && structured_diagnostics.is_empty()
+        && diagnostics.is_empty()
+    {
+        diagnostics.push(
+            "The scene test failed without a structured requirement check failure.".to_owned(),
+        );
+    }
     VerificationRunResult {
         twin_id: active.twin_id,
         source_revision: active.source_revision,
@@ -714,53 +872,7 @@ fn build_run_result(mut active: ActiveRun) -> VerificationRunResult {
         diagnostics,
         output: output_log,
         elapsed,
-    }
-}
-
-fn failure_diagnostics(stdout: &str, stderr: &str) -> Vec<String> {
-    const MAX_DIAGNOSTIC_LINES: usize = 12;
-    let mut diagnostics = Vec::new();
-    for line in stdout.lines().chain(stderr.lines()) {
-        let line = line.trim();
-        if line.is_empty()
-            || !(line.contains("FAIL:")
-                || line.contains("TESTS_FAIL")
-                || line.contains("luncosim test FAIL")
-                || line.contains("luncosim test NO-VERDICT")
-                || line.contains("verification selection failed"))
-        {
-            continue;
-        }
-        if diagnostics.last().is_none_or(|previous| previous != line) {
-            diagnostics.push(line.to_owned());
-        }
-        if diagnostics.len() == MAX_DIAGNOSTIC_LINES {
-            break;
-        }
-    }
-    diagnostics
-}
-
-fn test_summary(stdout: &str, stderr: &str, status: &ExitStatus) -> String {
-    let summary = stdout
-        .lines()
-        .chain(stderr.lines())
-        .rev()
-        .find(|line| line.trim_start().starts_with("luncosim test "));
-    if let Some(summary) = summary {
-        return summary.trim().to_owned();
-    }
-    let detail = stderr
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .or_else(|| stdout.lines().rev().find(|line| !line.trim().is_empty()));
-    match detail {
-        Some(detail) => format!("Process exit {:?}: {detail}", status.code()),
-        None => format!(
-            "Process exited with status {:?} without a test summary.",
-            status.code()
-        ),
+        evidence,
     }
 }
 
@@ -770,6 +882,7 @@ pub(crate) fn clear_sysml_verification_results(
 ) {
     let twin_id = trigger.event().twin;
     runs.completed.remove(&twin_id.raw());
+    runs.last_suite.remove(&twin_id.raw());
     if runs
         .suite
         .as_ref()

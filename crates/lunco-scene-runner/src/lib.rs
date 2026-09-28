@@ -169,6 +169,59 @@ const DEFAULT_READINESS_TIMEOUT_SECS: u64 = 420;
 /// whole value of jitter-mode is that a failure it finds can be replayed.
 const DEFAULT_SEED: u64 = 0x5EED_1EAF_C0FF_EE01;
 
+/// Prefix for the versioned process-boundary report consumed by the
+/// SysML Requirements panel. The JSON after this prefix is a wire payload;
+/// application code consumes the typed report returned by
+/// [`parse_scene_test_report`].
+pub const SCENE_TEST_REPORT_PREFIX: &str = "LUNCO_SCENE_TEST_REPORT ";
+
+/// Typed summary emitted by `luncosim test --verification` after a run.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SceneTestRunReport {
+    pub schema_version: u32,
+    pub verification: String,
+    pub process_exit_code: u8,
+    pub verdict: Option<SceneTestVerdict>,
+    pub verdict_channel: Option<String>,
+    pub evidence: Vec<SceneTestEvidenceEvent>,
+    pub failed_checks: Vec<SceneTestEvidenceEvent>,
+    pub runner_diagnostic: Option<String>,
+    pub details_truncated: bool,
+}
+
+/// Authored scene-test verdict captured from the telemetry bus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SceneTestVerdict {
+    Passed,
+    Failed,
+}
+
+/// Structured verification telemetry retained across the child-process
+/// boundary. The typed telemetry value remains intact for the UI adapter.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SceneTestEvidenceEvent {
+    pub name: String,
+    pub sim_tick: u64,
+    pub data: TelemetryValue,
+}
+
+/// Reads the last versioned scene-test report from captured stdout.
+pub fn parse_scene_test_report(stdout: &str) -> Result<Option<SceneTestRunReport>, String> {
+    let Some(line) = stdout
+        .lines()
+        .rev()
+        .find(|line| line.starts_with(SCENE_TEST_REPORT_PREFIX))
+    else {
+        return Ok(None);
+    };
+    let payload = line
+        .strip_prefix(SCENE_TEST_REPORT_PREFIX)
+        .expect("the report line was checked for its prefix");
+    serde_json::from_str(payload)
+        .map(Some)
+        .map_err(|error| format!("invalid scene-test report: {error}"))
+}
+
 #[derive(Clone)]
 struct Cli {
     /// USD scene path. Accepts an asset-root-relative path such as
@@ -247,6 +300,69 @@ struct Verdict {
     result: Option<(String, bool)>,
     /// Set from the CLI so the observer can filter by channel.
     want_channel: Option<String>,
+    /// Set for SysML panel runs so the child returns typed check evidence.
+    verification: Option<String>,
+    evidence: Vec<SceneTestEvidenceEvent>,
+    failed_checks: Vec<SceneTestEvidenceEvent>,
+    evidence_bytes: usize,
+    failed_check_bytes: usize,
+    details_truncated: bool,
+}
+
+const MAX_SCENE_TEST_FAILURE_DETAILS: usize = 256;
+const MAX_SCENE_TEST_FAILURE_BYTES: usize = 32 * 1024;
+const MAX_SCENE_TEST_EVIDENCE_BYTES: usize = 64 * 1024;
+
+fn capture_verification_evidence(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
+    if verdict.verification.is_none() {
+        return;
+    }
+    let event = trigger.event();
+    let is_summary =
+        event.name.ends_with("_EVIDENCE") || event.name.ends_with("_EVIDENCE_STREAM_SUMMARY");
+    let is_result = event.name.ends_with("_EVIDENCE_RESULT");
+    if !is_summary && !is_result {
+        return;
+    }
+
+    if is_result {
+        let failed = matches!(
+            &event.data,
+            TelemetryValue::Map(payload)
+                if matches!(payload.get("result"), Some(TelemetryValue::Map(result))
+                    if matches!(result.get("ok"), Some(TelemetryValue::Bool(false))))
+        );
+        if !failed {
+            return;
+        }
+        let encoded_size = serde_json::to_vec(&event.data).map_or(usize::MAX, |data| data.len());
+        if verdict.failed_checks.len() == MAX_SCENE_TEST_FAILURE_DETAILS
+            || verdict.failed_check_bytes.saturating_add(encoded_size)
+                > MAX_SCENE_TEST_FAILURE_BYTES
+        {
+            verdict.details_truncated = true;
+            return;
+        }
+        verdict.failed_check_bytes += encoded_size;
+        verdict.failed_checks.push(SceneTestEvidenceEvent {
+            name: event.name.clone(),
+            sim_tick: event.sim_tick,
+            data: event.data.clone(),
+        });
+        return;
+    }
+
+    let encoded_size = serde_json::to_vec(&event.data).map_or(usize::MAX, |data| data.len());
+    if verdict.evidence_bytes.saturating_add(encoded_size) > MAX_SCENE_TEST_EVIDENCE_BYTES {
+        verdict.details_truncated = true;
+        return;
+    }
+    verdict.evidence_bytes += encoded_size;
+    verdict.evidence.push(SceneTestEvidenceEvent {
+        name: event.name.clone(),
+        sim_tick: event.sim_tick,
+        data: event.data.clone(),
+    });
 }
 
 /// Fixed steps accumulated by this test process, independent of scene-local
@@ -700,6 +816,40 @@ fn catch_verdict(trigger: On<TelemetryEvent>, mut verdict: ResMut<Verdict>) {
     let name = evt.name.clone();
     info!("[luncosim test] verdict received on channel {name}: {payload}");
     verdict.result = Some((name, passed));
+}
+
+fn finish_scene_test(
+    app: &App,
+    cli: &Cli,
+    process_exit_code: u8,
+    runner_diagnostic: Option<String>,
+) -> u8 {
+    let Some(verification) = cli.verification.as_ref() else {
+        return process_exit_code;
+    };
+    let verdict = app.world().resource::<Verdict>();
+    let report = SceneTestRunReport {
+        schema_version: 1,
+        verification: verification.clone(),
+        process_exit_code,
+        verdict: verdict.result.as_ref().map(|(_, passed)| {
+            if *passed {
+                SceneTestVerdict::Passed
+            } else {
+                SceneTestVerdict::Failed
+            }
+        }),
+        verdict_channel: verdict.result.as_ref().map(|(channel, _)| channel.clone()),
+        evidence: verdict.evidence.clone(),
+        failed_checks: verdict.failed_checks.clone(),
+        runner_diagnostic,
+        details_truncated: verdict.details_truncated,
+    };
+    match serde_json::to_string(&report) {
+        Ok(encoded) => println!("{SCENE_TEST_REPORT_PREFIX}{encoded}"),
+        Err(error) => eprintln!("could not encode structured scene-test report: {error}"),
+    }
+    process_exit_code
 }
 
 /// Whether every Modelica source in the composed scene has reached a terminal
@@ -1221,8 +1371,15 @@ pub fn run() -> u8 {
     app.insert_resource(Verdict {
         result: None,
         want_channel: cli.verdict_channel.clone(),
+        verification: cli.verification.clone(),
+        evidence: Vec::new(),
+        failed_checks: Vec::new(),
+        evidence_bytes: 0,
+        failed_check_bytes: 0,
+        details_truncated: false,
     });
     app.add_observer(catch_verdict);
+    app.add_observer(capture_verification_evidence);
     app.init_resource::<ExpectedFaults>();
     app.add_observer(catch_expected_fault);
     app.init_resource::<ExpectedRuntimeFaults>();
@@ -1374,7 +1531,15 @@ pub fn run() -> u8 {
             cli.scene,
             cli.readiness_timeout.as_secs_f64()
         );
-        return 2;
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            Some(format!(
+                "Scene materialization did not complete within the {:.1}s readiness timeout.",
+                cli.readiness_timeout.as_secs_f64()
+            )),
+        );
     }
     // All source programs are terminal now, but physics admission still needs
     // fixed ticks to seed poses and validate support. Freeze the compiled
@@ -1385,7 +1550,7 @@ pub fn run() -> u8 {
     pause_modelica_participants(app.world_mut());
     if let Err(error) = set_scene_test_startup_hold(&mut app, true) {
         eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
-        return 2;
+        return finish_scene_test(&app, &cli, 2, Some(error.to_string()));
     }
     app.insert_resource(TimeUpdateStrategy::ManualDuration(dt));
 
@@ -1418,7 +1583,15 @@ pub fn run() -> u8 {
             cli.scene,
             cli.readiness_timeout.as_secs_f64()
         );
-        return 2;
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            Some(format!(
+                "Physics admission did not complete before the {:.1}s readiness timeout.",
+                cli.readiness_timeout.as_secs_f64()
+            )),
+        );
     }
 
     // Release all compiled participants together while the runner-owned
@@ -1466,7 +1639,7 @@ pub fn run() -> u8 {
     if participants_are_ready {
         if let Err(error) = set_scene_test_startup_hold(&mut app, false) {
             eprintln!("luncosim test NO-VERDICT  scene={}  — {error}", cli.scene);
-            return 2;
+            return finish_scene_test(&app, &cli, 2, Some(error.to_string()));
         }
         // The final worker response may have released the coupling barrier in
         // the same update that made the participant set ready.  Do not wait for
@@ -1491,7 +1664,15 @@ pub fn run() -> u8 {
             cli.scene,
             cli.readiness_timeout.as_secs_f64()
         );
-        return 2;
+        return finish_scene_test(
+            &app,
+            &cli,
+            2,
+            Some(format!(
+                "Participant readiness did not complete within the {:.1}s readiness timeout.",
+                cli.readiness_timeout.as_secs_f64()
+            )),
+        );
     }
 
     if let Some(dirty) = dirty_authored_scene_document(app.world()) {
@@ -1499,7 +1680,14 @@ pub fn run() -> u8 {
             "luncosim test FAIL scene={} — authored document was dirty before scenario start: {dirty}",
             cli.scene
         );
-        return 1;
+        return finish_scene_test(
+            &app,
+            &cli,
+            1,
+            Some(format!(
+                "Authored document was dirty before scenario start: {dirty}"
+            )),
+        );
     }
 
     // The scene and its asynchronous participants are ready now. Install the
@@ -1673,7 +1861,7 @@ pub fn run() -> u8 {
                 "luncosim test PASS  scene={}  expected terminal runtime fault kind={} subject={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene, fault.kind, fault.subject
             );
-            return 0;
+            return finish_scene_test(&app, &cli, 0, None);
         }
         println!(
             "luncosim test FAIL  scene={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
@@ -1683,7 +1871,15 @@ pub fn run() -> u8 {
             "  terminal runtime fault kind={} subject={} detail={}",
             fault.kind, fault.subject, fault.detail
         );
-        return 1;
+        return finish_scene_test(
+            &app,
+            &cli,
+            1,
+            Some(format!(
+                "Terminal runtime fault kind={} subject={} detail={}",
+                fault.kind, fault.subject, fault.detail
+            )),
+        );
     }
 
     if !expected_runtime.is_empty() {
@@ -1699,7 +1895,19 @@ pub fn run() -> u8 {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        return 1;
+        return finish_scene_test(
+            &app,
+            &cli,
+            1,
+            Some(format!(
+                "The scenario declared expect_runtime_fault({}) but no terminal runtime fault was raised.",
+                expected_runtime
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        );
     }
 
     // A PASS cannot stand while the engine is still reporting broken wires.
@@ -1769,10 +1977,23 @@ pub fn run() -> u8 {
              dangled — the fixture is no longer reproducing what it asserts",
             missing.join(", ")
         );
-        return 1;
+        return finish_scene_test(
+            &app,
+            &cli,
+            1,
+            Some(format!(
+                "The scenario declared expect_fault({}) but no such connection ever dangled.",
+                missing.join(", ")
+            )),
+        );
     }
 
-    match app.world().resource::<Verdict>().result.clone() {
+    let (process_exit_code, runner_diagnostic) = match app
+        .world()
+        .resource::<Verdict>()
+        .result
+        .clone()
+    {
         Some((channel, true)) if !broken.is_empty() => {
             println!(
                 "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
@@ -1787,21 +2008,31 @@ pub fn run() -> u8 {
                 "  a wire that targets a port the endpoint does not expose is an authoring \
                  error — the subsystem it feeds is dead, whatever the scenario measured"
             );
-            1
+            (
+                1,
+                Some(format!(
+                    "The scenario reported PASS, but {} connection(s) never landed: {}.",
+                    broken.len(),
+                    broken.join(", ")
+                )),
+            )
         }
         Some((channel, true)) => {
             println!(
                 "luncosim test PASS  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
-            0
+            (0, None)
         }
         Some((channel, false)) => {
             println!(
                 "luncosim test FAIL  scene={}  channel={channel}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}",
                 cli.scene
             );
-            1
+            (
+                1,
+                Some(format!("The scenario reported FAIL on channel {channel}.")),
+            )
         }
         None => {
             let why = if early_exit {
@@ -1813,9 +2044,18 @@ pub fn run() -> u8 {
                 "luncosim test NO-VERDICT  scene={}  ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}  — {why}",
                 cli.scene
             );
-            2
+            (
+                2,
+                Some(if early_exit {
+                    "The app exited before the scenario reported a verdict (scene load failure?)."
+                        .to_owned()
+                } else {
+                    "The maximum tick count was exhausted without a scenario verdict.".to_owned()
+                }),
+            )
         }
-    }
+    };
+    finish_scene_test(&app, &cli, process_exit_code, runner_diagnostic)
 }
 
 /// Print the authoritative scene-test catalog without constructing Bevy or a
