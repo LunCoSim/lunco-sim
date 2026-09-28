@@ -70,6 +70,19 @@ fn vector_close(actual, expected, tolerance) {
     true
 }
 
+fn read_authored_translation(path) {
+    try {
+        let prim = query("QueryUsdPrim", #{
+            path: path,
+            attrs: ["xformOp:translate"],
+        });
+        if prim != () && prim.ok != false && prim.attrs != () {
+            return prim.attrs["xformOp:translate"];
+        }
+    } catch (error) { }
+    ()
+}
+
 fn emit_modelica_state_blocks(tick, identity, variables) {
     let fields = variables.keys();
     fields.sort();
@@ -147,6 +160,8 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values) {
     for i in 0..rovers.len() {
         let path = rover_paths[i];
         let rover = rovers[i];
+        let lane_x = -2.5 * (rovers.len() - 1).to_float()
+            + 5.0 * i.to_float();
         let position = world_pos(rover);
         let rotation = world_rotation(rover);
         let local_x = ();
@@ -181,20 +196,11 @@ fn deterministic_state_sample(rover_paths, rovers, capture_modelica_values) {
         row += "|q=" + state_vector(rotation);
         row += "|localTf=" + state_scalar(local_x) + "," + state_scalar(local_y)
             + "," + state_scalar(local_z);
+        row += "|laneX=" + state_scalar(lane_x);
         if capture_modelica_values {
-            let authored_translation = ();
-            try {
-                let authored_prim = query("QueryUsdPrim", #{
-                    path: state.usd_prim_path,
-                    attrs: ["xformOp:translate"],
-                    topology: true,
-                });
-                authored_translation = authored_prim.attrs["xformOp:translate"];
-                let binding = authored_prim.topology.binding;
-                let bevy_entity = binding.entity;
-                if bevy_entity == () { valid = false; }
-                row += "|bevyEntity=" + state_scalar(bevy_entity);
-            } catch (error) { }
+            let authored_translation = read_authored_translation(path);
+            valid = valid && vector_close(
+                authored_translation, [lane_x, 1.6, 0.0], 0.0001);
             row += "|authoredTf=" + state_vector(authored_translation);
         }
         row += "|v=" + state_vector(state.linear_velocity_mps);
@@ -406,8 +412,7 @@ fn on_start(me, ctx) {
         return;
     }
 
-    let initial = deterministic_state_sample(this.rover_paths, this.rovers,
-        this.rovers.len() == 20);
+    let initial = deterministic_state_sample(this.rover_paths, this.rovers, true);
     this.deterministic_trace_valid = this.deterministic_trace_valid && initial.valid;
     this.deterministic_trace_ticks.push(sim_tick());
     print("D4_STATE_TRACE_V1|" + initial.row);
@@ -420,17 +425,17 @@ fn on_tick(me, ctx) {
 
     if !this.early_determinism_trace_captured {
         this.early_determinism_trace_captured = true;
-        let capture_modelica_values = this.rovers.len() == 20
-            && (sim_tick() < 10 || sim_tick() > 20);
+        let capture_modelica_values = sim_tick() < 10 || sim_tick() > 20;
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
             capture_modelica_values);
+        this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         print("D4_EARLY_STATE_TRACE_V1|" + sample.row);
     }
-    if this.rovers.len() == 20
-        && (sim_tick() <= 30 || (sim_tick() <= 150 && sim_tick() % 10 == 0)) {
+    if sim_tick() <= 30 || (sim_tick() <= 150 && sim_tick() % 10 == 0) {
         let capture_modelica_values = sim_tick() >= 10 && sim_tick() <= 20;
         let sample = deterministic_state_sample(this.rover_paths, this.rovers,
             capture_modelica_values);
+        this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         print("D4_TICK_STATE_TRACE_V1|" + sample.row);
     }
     if this.rovers.len() == 20 && (sim_tick() == 11 || sim_tick() == 80) {
@@ -445,8 +450,7 @@ fn on_tick(me, ctx) {
             for rover in this.rovers { brake(rover); }
             return;
         }
-        let sample = deterministic_state_sample(this.rover_paths, this.rovers,
-            this.rovers.len() == 20);
+        let sample = deterministic_state_sample(this.rover_paths, this.rovers, true);
         this.deterministic_trace_valid = this.deterministic_trace_valid && sample.valid;
         this.deterministic_trace_ticks.push(sim_tick());
         print("D4_STATE_TRACE_V1|" + sample.row);
@@ -523,13 +527,14 @@ fn on_tick(me, ctx) {
         "physics compute profile is available for deterministic-state comparison"));
     checks.push(t_true(this.deterministic_trace_valid
             && this.deterministic_trace_ticks.len() == 6,
-        "one initial and five complete, path-ordered physics snapshots were captured"));
-    checks.push(t_true(modelica_profile.participants.to_float() == 20.0
+        "initial, per-tick, and milestone physics traces remained valid"));
+    checks.push(t_true(modelica_profile.participants.to_float()
+                == this.rovers.len().to_float()
             && modelica_profile.entity_count.to_float()
                 >= modelica_profile.participants.to_float()
             && modelica_profile.samples > 0.0
             && modelica_profile.mean_worker_step_us > 0.0,
-        "CosimStatus did not expose diagnostics for all 20 Modelica participants"));
+        "CosimStatus did not expose diagnostics for every rover Modelica participant"));
     checks.push(t_true(modelica_profile.compact_values_omitted == true,
         "compact CosimStatus copied full Modelica input/output maps"));
     let backlog = "unavailable";

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Compare authored multi-rover physics snapshots across Compute pool widths."""
+"""Compare authored multi-rover snapshots across repeats, scene sizes, and Compute widths."""
 
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,13 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENE = "assets/scenes/tests/multi_rover_stress_20.usda"
+SCENES_BY_ROVER_COUNT = {
+    4: "assets/scenes/tests/multi_rover_stress_4.usda",
+    8: "assets/scenes/tests/multi_rover_stress_8.usda",
+    20: SCENE,
+}
+PROFILE_RUNS = 2
+EXPECTED_SHARED_ROVERS = 4
 TRACE_PATTERN = re.compile(r"D4_STATE_TRACE_V1\|([^\r\n]*)")
 EARLY_TRACE_PATTERN = re.compile(r"D4_EARLY_STATE_TRACE_V1\|([^\r\n]*)")
 TICK_TRACE_PATTERN = re.compile(r"D4_TICK_STATE_TRACE_V1\|([^\r\n]*)")
@@ -25,12 +33,66 @@ PROFILE_PATTERN = re.compile(r"D4_PROFILE_V1\|(\d+)")
 WARMUP_PATTERN = re.compile(r"\[test\] ([^\r\n]+?) held (\d+) updates")
 
 
-def run_profile(binary: str, threads: int) -> tuple[int, list[str], str, float]:
+def rover_state_records(trace: str) -> list[str]:
+    # The Modelica clock summary uses semicolons too, but is not a rover row.
+    rover_payload = trace.split("|modelica=", 1)[0]
+    return rover_payload.split(";")
+
+
+def scenario_start_tick(output: str) -> int:
+    traces = TRACE_PATTERN.findall(output)
+    if len(traces) != 6:
+        raise RuntimeError(
+            f"expected six Rhai lifecycle snapshots to establish scenario start, "
+            f"found {len(traces)}"
+        )
+    try:
+        return int(rover_state_records(traces[0])[0])
+    except ValueError as error:
+        raise RuntimeError("Rhai on_start snapshot has an invalid simulation tick") from error
+
+
+def scenario_tick(trace: str, start_tick: int) -> str:
+    try:
+        relative_tick = int(rover_state_records(trace)[0]) - start_tick
+    except ValueError as error:
+        raise RuntimeError("Rhai state trace has an invalid simulation tick") from error
+    if relative_tick <= 0:
+        raise RuntimeError(
+            f"Rhai per-step trace tick {relative_tick} is not after its on_start boundary"
+        )
+    return str(relative_tick)
+
+
+def canonical_scenario_physics_row(record: str) -> str:
+    fields = record.split("|")
+    for index, field in enumerate(fields):
+        if not field.startswith("avianContact="):
+            continue
+        values = field.partition("=")[2].split(",")
+        if len(values) != 7:
+            raise RuntimeError("Rhai contact snapshot has an invalid field count")
+        # Contact-pair, touching-pair, and manifold counts describe the entire
+        # fixture contact graph. Same-fixture checks still compare those counts.
+        fields[index] = "avianContactSolve=" + ",".join(values[3:])
+    return "|".join(fields)
+
+
+def run_profile(
+    binary: str,
+    threads: int,
+    scene: str = SCENE,
+) -> tuple[int, list[str], str, float]:
+    print(
+        f"Running production scene {Path(scene).stem} with Compute width "
+        f"{threads or 'default'}",
+        flush=True,
+    )
     command = [
         binary,
         "test",
         "--scene",
-        SCENE,
+        scene,
         "--max-ticks",
         "1200",
         "--threads",
@@ -40,10 +102,19 @@ def run_profile(binary: str, threads: int) -> tuple[int, list[str], str, float]:
         "--seed",
         "6840157149251759617",
     ]
+    config = ROOT / "target" / "scene-tests" / (
+        f"deterministic-{Path(scene).stem}-{threads}-{os.getpid()}-"
+        f"{time.monotonic_ns()}"
+    )
+    config.parent.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    environment["LUNCOSIM_CONFIG"] = str(config)
+    environment["LUNCO_ASSET_ROOT"] = str(ROOT / "assets")
     started = time.monotonic()
     result = subprocess.run(
         command,
         cwd=ROOT,
+        env=environment,
         check=False,
         capture_output=True,
         text=True,
@@ -52,12 +123,21 @@ def run_profile(binary: str, threads: int) -> tuple[int, list[str], str, float]:
     )
     elapsed = time.monotonic() - started
     output = result.stdout + result.stderr
-    if result.returncode != 0 or "TESTS_OK" not in output:
+    log_path = ROOT / "target" / "scene-tests" / (
+        f"{Path(scene).stem}-threads-{threads}-"
+        f"{os.getpid()}-{time.monotonic_ns()}.log"
+    )
+    log_path.write_text(output, encoding="utf-8")
+    if (
+        result.returncode != 0
+        or "TESTS_OK" not in output
+        or "MULTI-ROVER STRESS: PASS" not in output
+    ):
         relevant = [
             line
             for line in output.splitlines()
             if re.search(
-                r"(ERROR|NO-VERDICT|TESTS_|MULTI-ROVER|D4_|Failed to load asset|"
+                r"(ERROR|NO-VERDICT|TESTS_|MULTI-ROVER|D4_|FAIL:|Failed to load asset|"
                 r"on_start\(\) failed|on_tick\(\) failed)",
                 line,
                 re.IGNORECASE,
@@ -82,6 +162,292 @@ def run_profile(binary: str, threads: int) -> tuple[int, list[str], str, float]:
             f"found {len(traces)}"
         )
     return int(profiles[0]), traces, output, elapsed
+
+
+def authored_roster(trace: str, expected_rovers: int) -> dict[str, str]:
+    records = rover_state_records(trace)
+    if len(records) != expected_rovers + 1:
+        raise RuntimeError(
+            f"expected {expected_rovers} rover states in authored trace, "
+            f"found {len(records) - 1}"
+        )
+    path_positions: dict[str, str] = {}
+    positions: set[str] = set()
+    for record in records[1:]:
+        path, separator, state = record.partition("|")
+        if not separator or not path.startswith("/MultiRoverStress/Rovers/"):
+            raise RuntimeError(f"malformed authored rover state: {record[:160]!r}")
+        lane = re.search(r"(?:^|\|)laneX=([^|]+)", state)
+        authored = re.search(r"(?:^|\|)authoredTf=([^|]+)", state)
+        if lane is None or authored is None:
+            raise RuntimeError(
+                "Rhai snapshot omitted the authored lane identity needed to "
+                "match equivalent rovers across scene sizes"
+            )
+        coordinates = authored.group(1).split(",")
+        if len(coordinates) != 3:
+            raise RuntimeError(f"malformed authored transform for {path}")
+        try:
+            lane_position = float(lane.group(1))
+            authored_position = float(coordinates[0])
+        except ValueError as error:
+            raise RuntimeError(f"invalid authored lane for {path}") from error
+        if not math.isclose(
+            lane_position, authored_position, rel_tol=0.0, abs_tol=1e-9
+        ):
+            raise RuntimeError(f"authored lane does not match USD translation for {path}")
+        position = format(lane_position, ".17g")
+        if path in path_positions or position in positions:
+            raise RuntimeError("authored rover paths and start positions must be unique")
+        path_positions[path] = position
+        positions.add(position)
+    return path_positions
+
+
+def canonical_physics_trace(
+    output: str,
+    expected_rovers: int,
+    shared_positions: set[str],
+    expected_sample_ticks: set[str],
+    start_tick: int,
+) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    traces = TICK_TRACE_PATTERN.findall(output)
+    if len(traces) < len(expected_sample_ticks):
+        raise RuntimeError(
+            f"expected at least {len(expected_sample_ticks)} Rhai physics snapshots for "
+            f"the {expected_rovers}-rover scene, found {len(traces)}"
+        )
+    mapping_trace = next(
+        (trace for trace in traces if "authoredTf=" in trace), None
+    )
+    if mapping_trace is None:
+        raise RuntimeError("Rhai produced no snapshot with authored rover transforms")
+    path_positions = authored_roster(mapping_trace, expected_rovers)
+    if not shared_positions.issubset(set(path_positions.values())):
+        raise RuntimeError("scene did not contain every shared authored rover lane")
+
+    canonical_by_tick: dict[str, tuple[str, ...]] = {}
+    observed_ticks: list[str] = []
+    for trace in traces:
+        records = rover_state_records(trace)
+        tick = scenario_tick(trace, start_tick)
+        if tick not in expected_sample_ticks:
+            continue
+        observed_ticks.append(tick)
+        if len(records) != expected_rovers + 1:
+            raise RuntimeError(
+                f"physics tick {tick} has {len(records) - 1} of "
+                f"{expected_rovers} rover states"
+            )
+        selected: dict[str, str] = {}
+        for record in records[1:]:
+            path, separator, state = record.partition("|")
+            if not separator or path not in path_positions:
+                raise RuntimeError(f"physics tick {tick} contains an unknown rover")
+            if state == "invalid-state":
+                raise RuntimeError(f"physics tick {tick} contains an invalid rover state")
+            position = path_positions[path]
+            if position not in shared_positions:
+                continue
+            normalized = record
+            for source_path, source_position in sorted(
+                path_positions.items(), key=lambda item: len(item[0]), reverse=True
+            ):
+                normalized = normalized.replace(
+                    source_path, f"RoverAtX[{source_position}]"
+                )
+            normalized = re.sub(r"\|bevyEntity=[^|]*", "", normalized)
+            selected[position] = canonical_scenario_physics_row(normalized)
+        if set(selected) != shared_positions:
+            raise RuntimeError(
+                f"physics tick {tick} did not contain all shared rover states"
+            )
+        canonical_by_tick[tick] = tuple(
+            selected[position] for position in sorted(shared_positions, key=float)
+        )
+    if len(set(observed_ticks)) != len(observed_ticks):
+        raise RuntimeError("Rhai physics trace repeated a comparison simulation tick")
+    if set(observed_ticks) != expected_sample_ticks:
+        missing = sorted(expected_sample_ticks - set(observed_ticks), key=int)
+        raise RuntimeError(f"Rhai physics trace omitted comparison ticks {missing}")
+    return path_positions, canonical_by_tick
+
+
+def canonical_modelica_trace(
+    output: str,
+    path_positions: dict[str, str],
+    shared_positions: set[str],
+    physics_ticks: set[str],
+    start_tick: int,
+) -> dict[tuple[str, str, str], str]:
+    groups: dict[tuple[str, str, str], tuple[int, dict[int, str]]] = {}
+    for payload in MODEL_TRACE_PATTERN.findall(output):
+        parts = payload.split("|", 4)
+        if len(parts) != 5:
+            raise RuntimeError("malformed authored Modelica state trace")
+        absolute_tick, identity, field_count_text, block_text, fields = parts
+        try:
+            tick = str(int(absolute_tick) - start_tick)
+        except ValueError as error:
+            raise RuntimeError("Modelica trace has an invalid simulation tick") from error
+        if tick not in physics_ticks:
+            continue
+        owners = [
+            path for path in path_positions if identity.startswith(path + "/")
+        ]
+        if not owners:
+            raise RuntimeError(f"Modelica trace has no authored rover owner: {identity}")
+        owner = max(owners, key=len)
+        position = path_positions[owner]
+        if position not in shared_positions:
+            continue
+        owner_name = owner.rsplit("/", 1)[-1]
+        suffix = identity[len(owner):]
+        if owner_name not in suffix:
+            raise RuntimeError(
+                f"Modelica system identity does not retain its USD rover name: {identity}"
+            )
+        suffix = suffix.replace(owner_name, f"RoverAtX[{position}]")
+        try:
+            field_count = int(field_count_text)
+            block = int(block_text)
+        except ValueError as error:
+            raise RuntimeError("Modelica trace has a non-numeric block header") from error
+        key = (tick, position, suffix)
+        previous_count, blocks = groups.setdefault(key, (field_count, {}))
+        if previous_count != field_count or block in blocks:
+            raise RuntimeError(f"inconsistent Modelica trace chunks for {identity}")
+        blocks[block] = fields
+
+    canonical: dict[tuple[str, str, str], str] = {}
+    for key, (field_count, blocks) in groups.items():
+        block_count = (field_count + 31) // 32
+        if sorted(blocks) != list(range(block_count)):
+            raise RuntimeError(f"incomplete Modelica state chunks for {key}")
+        fields = []
+        for block in range(block_count):
+            if blocks[block]:
+                fields.extend(blocks[block].split(";"))
+        if len(fields) != field_count:
+            raise RuntimeError(f"incomplete Modelica field list for {key}")
+        canonical[key] = ";".join(fields)
+
+    fine_ticks: set[str] = set()
+    for trace in TICK_TRACE_PATTERN.findall(output):
+        if "authoredTf=" not in trace:
+            continue
+        tick = scenario_tick(trace, start_tick)
+        if tick in physics_ticks:
+            fine_ticks.add(tick)
+    expected = {
+        (tick, position)
+        for tick in fine_ticks
+        for position in shared_positions
+    }
+    actual = {(tick, position) for tick, position, _ in canonical}
+    if not fine_ticks or not expected.issubset(actual):
+        raise RuntimeError(
+            "Rhai Modelica trace did not capture every shared rover at the "
+            "fine-grained physics sample ticks"
+        )
+    return canonical
+
+
+def compare_scenario_matrix(
+    runs: dict[int, list[tuple[str, int, list[str], str, float]]],
+) -> tuple[int, int]:
+    reference_traces = TICK_TRACE_PATTERN.findall(runs[20][0][3])
+    reference_start_tick = scenario_start_tick(runs[20][0][3])
+    reference_ticks = [
+        scenario_tick(trace, reference_start_tick) for trace in reference_traces
+    ]
+    if len(reference_ticks) < 32 or len(set(reference_ticks)) != len(reference_ticks):
+        raise RuntimeError(
+            "the 20-rover Rhai scenario did not emit at least 32 unique "
+            f"comparison ticks (found {reference_ticks})"
+        )
+    expected_sample_ticks = set(reference_ticks)
+    roster_by_run: dict[tuple[int, str], dict[str, str]] = {}
+    first_trace_by_scene: dict[int, dict[str, str]] = {}
+    for rover_count, scene_runs in runs.items():
+        for label, _, _, output, _ in scene_runs:
+            traces = TICK_TRACE_PATTERN.findall(output)
+            mapping_trace = next(
+                (trace for trace in traces if "authoredTf=" in trace), None
+            )
+            if mapping_trace is None:
+                raise RuntimeError(f"{label}: missing authored rover transforms")
+            roster = authored_roster(mapping_trace, rover_count)
+            roster_by_run[(rover_count, label)] = roster
+        first_trace_by_scene[rover_count] = roster_by_run[
+            (rover_count, scene_runs[0][0])
+        ]
+
+    shared_positions = set.intersection(
+        *(set(roster.values()) for roster in first_trace_by_scene.values())
+    )
+    if len(shared_positions) != EXPECTED_SHARED_ROVERS:
+        raise RuntimeError(
+            f"expected {EXPECTED_SHARED_ROVERS} authored rover lanes shared by "
+            f"the 4/8/20 scenes, found {sorted(shared_positions, key=float)}"
+        )
+
+    reference_physics = None
+    reference_models = None
+    reference_label = None
+    compared_runs = 0
+    for rover_count, scene_runs in runs.items():
+        for label, _, _, output, _ in scene_runs:
+            start_tick = scenario_start_tick(output)
+            path_positions, physics = canonical_physics_trace(
+                output, rover_count, shared_positions, expected_sample_ticks,
+                start_tick,
+            )
+            if path_positions != roster_by_run[(rover_count, label)]:
+                raise RuntimeError(f"{label}: authored rover roster changed between samples")
+            models = canonical_modelica_trace(
+                output,
+                path_positions,
+                shared_positions,
+                set(physics),
+                start_tick,
+            )
+            if reference_physics is None:
+                reference_physics = physics
+                reference_models = models
+                reference_label = label
+            else:
+                if physics != reference_physics:
+                    changed_ticks = [
+                        tick
+                        for tick in sorted(set(physics) | set(reference_physics), key=int)
+                        if physics.get(tick) != reference_physics.get(tick)
+                    ]
+                    raise RuntimeError(
+                        f"shared rover physics differs between {reference_label} and "
+                        f"{label}; first changed tick: "
+                        f"{changed_ticks[0] if changed_ticks else 'unknown'}"
+                    )
+                if models != reference_models:
+                    changed = next(
+                        (
+                            key
+                            for key in sorted(
+                                set(models) | set(reference_models),
+                                key=lambda item: (
+                                    int(item[0]), float(item[1]), item[2]
+                                ),
+                            )
+                            if models.get(key) != reference_models.get(key)
+                        ),
+                        None,
+                    )
+                    raise RuntimeError(
+                        f"shared rover Modelica state differs between {reference_label} "
+                        f"and {label} at {changed}"
+                    )
+            compared_runs += 1
+    return len(shared_positions), compared_runs
 
 
 def report_divergence(
@@ -129,8 +495,8 @@ def report_divergence(
                 f"{first_tick} and {second_tick}",
                 file=sys.stderr,
             )
-            first_rows = first.split(";")
-            second_rows = second.split(";")
+            first_rows = rover_state_records(first)
+            second_rows = rover_state_records(second)
             for row_index, (first_row, second_row) in enumerate(
                 zip(first_rows, second_rows)
             ):
@@ -338,6 +704,45 @@ def main() -> int:
             f"expected {default_width}"
         )
 
+    scene_runs = {
+        20: [
+            ("20 serial 1", serial_width, serial_trace, serial_output, serial_elapsed),
+            ("20 serial 2", repeat_width, repeat_trace, repeat_output, repeat_elapsed),
+            ("20 default 1", default_width, default_trace, default_output, default_elapsed),
+            ("20 default 2", default_repeat_width, default_repeat_trace,
+             default_repeat_output, default_repeat_elapsed),
+        ]
+    }
+    for rover_count in (4, 8):
+        scene_runs[rover_count] = []
+        scene = SCENES_BY_ROVER_COUNT[rover_count]
+        for label, threads in (("serial", 1), ("default", 0)):
+            for repeat in range(1, PROFILE_RUNS + 1):
+                width, traces, output, elapsed = run_profile(binary, threads, scene)
+                scene_runs[rover_count].append(
+                    (f"{rover_count} {label} {repeat}", width, traces, output, elapsed)
+                )
+        widths = [run[1] for run in scene_runs[rover_count]]
+        serial_widths = widths[:PROFILE_RUNS]
+        default_widths = widths[PROFILE_RUNS:]
+        if (
+            serial_widths != [1] * PROFILE_RUNS
+            or not default_widths
+            or default_widths[0] <= 1
+            or any(width != default_widths[0] for width in default_widths)
+        ):
+            raise RuntimeError(
+                f"{rover_count}-rover scene did not establish repeated serial and "
+                f"default Compute profiles: {widths}"
+            )
+    shared_rovers, compared_runs = compare_scenario_matrix(scene_runs)
+    print(
+        "DETERMINISTIC_SCENARIO_MATRIX_OK "
+        f"scene_sizes=4,8,20 shared_rovers={shared_rovers} "
+        f"runs={compared_runs} compared=physics,Modelica",
+        flush=True,
+    )
+
     report_warmup("serial run 1", serial_output)
     report_warmup("serial run 2", repeat_output)
     report_warmup("default run", default_output)
@@ -368,11 +773,10 @@ def main() -> int:
             default_repeat_output,
         )
     ]
-    if any(len(traces) != 32 for traces in tick_traces):
+    if not tick_traces[0] or len(tick_traces[0]) < 32:
         counts = ", ".join(str(len(traces)) for traces in tick_traces)
         raise RuntimeError(
-            f"expected 32 authored physics snapshots per run for ticks 11-30 and "
-            f"40-150 every 10 ticks "
+            f"expected at least 32 authored physics snapshots in the 20-rover runs "
             f"({counts})"
         )
     tick_numbers = [
@@ -475,9 +879,11 @@ def main() -> int:
     digest = hashlib.sha256("\n".join(serial_trace + serial_models).encode()).hexdigest()
     print(
         "DETERMINISTIC_PHYSICS_PROFILES_OK "
+        f"scene_sizes=4,8,20 shared_rovers={shared_rovers} "
+        f"matrix_runs={compared_runs} "
         f"compute_widths={serial_width},{default_width} "
         f"snapshots={len(serial_trace)} "
-        f"rover_states_per_snapshot={len(serial_trace[0].split(';')) - 1} "
+        f"rover_states_per_snapshot={len(rover_state_records(serial_trace[0])) - 1} "
         f"modelica_systems={len(serial_models)} "
         f"sha256={digest} "
         "wall_seconds="
@@ -490,6 +896,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, subprocess.TimeoutExpired, RuntimeError) as error:
+    except (OSError, subprocess.TimeoutExpired, RuntimeError, ValueError) as error:
         print(error, file=sys.stderr)
         raise SystemExit(1)

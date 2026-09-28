@@ -110,6 +110,16 @@ non-empty footprint.
    terminal errors. Keep public command behavior assertions in authored Rhai;
    test only the generic batch and FIFO seam in Rust.
 
+For cross-run determinism, each production scene test must emit its sampled
+state from Rhai through public queries and reach its own authored verdict. A
+narrow production harness may launch separate scene-test processes with the
+same explicit seed and controlled execution profiles, then compare the Rhai
+traces at matching fixed steps after each scenario's first `on_start` snapshot.
+That callback may run after the scene clock has advanced through readiness;
+retain its global tick and derive a scenario-relative step for cross-scene
+alignment. Match equivalent authored subjects by their USD-owned stable facts,
+and omit ECS allocation and wall-clock timing from the comparison.
+
 For observable multi-actor ordering, attach scenarios to distinct authored
 hosts and assert the same-pass handoff in Rhai. Keep Rust coverage for the
 generic identity key and reverse-completion commit mechanism; a Rust assertion
