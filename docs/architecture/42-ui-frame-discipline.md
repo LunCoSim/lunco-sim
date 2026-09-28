@@ -249,6 +249,10 @@ package — none of these belong on the UI thread every frame. Patterns:
   the query that already visits its population: marker membership for named
   tree candidates comes from `Has<T>` fields on that named query, rather than
   separate whole-population scans whose results are only read for named nodes.
+  Build the hierarchy snapshot from each named candidate's ancestor closure
+  with indexed entity lookups, and collect grid membership along those same
+  paths; do not materialize `ChildOf` and `Grid` facts for unrelated scene
+  entities. Validate the selected active grid with a direct entity lookup.
 - **Generation-gated recompute**: the canvas diagram only
   reprojects when the document generation moves; the panel advances
   its `last_seen_gen` to skip echo rebuilds of its own ops.

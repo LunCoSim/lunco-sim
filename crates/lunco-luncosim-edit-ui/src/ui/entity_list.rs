@@ -469,7 +469,7 @@ pub(crate) fn populate_entity_tree_view(
         Has<lunco_core::SelectableRoot>,
         Has<Mesh3d>,
     )>,
-    child_q: Query<(Entity, &ChildOf)>,
+    child_q: Query<(Option<&ChildOf>, Has<big_space::prelude::Grid>)>,
     grid_q: Query<Entity, With<big_space::prelude::Grid>>,
 ) {
     if build.task.is_some() {
@@ -482,19 +482,12 @@ pub(crate) fn populate_entity_tree_view(
         let _span = bevy::log::info_span!("entity_tree_view_snapshot").entered();
         // System-owned churn is excluded before the immutable snapshot leaves the
         // ECS thread. The hierarchy derivation below uses only owned values.
-        let grids: HashSet<Entity> = grid_q.iter().collect();
-        let (scope_state, scope_error) = grid_scope_state(
-            workspace.as_deref(),
-            active_frame
-                .as_ref()
-                .map(|frame| frame.0)
-                .filter(|grid| grids.contains(grid)),
-            active_frame.is_some(),
-        );
-        let child_of: HashMap<Entity, Entity> = child_q
-            .iter()
-            .map(|(entity, child)| (entity, child.parent()))
-            .collect();
+        let current_grid = active_frame
+            .as_ref()
+            .map(|frame| frame.0)
+            .filter(|grid| grid_q.contains(*grid));
+        let (scope_state, scope_error) =
+            grid_scope_state(workspace.as_deref(), current_grid, active_frame.is_some());
         let named_candidates: Vec<_> = named_q
             .iter()
             .filter_map(
@@ -526,6 +519,37 @@ pub(crate) fn populate_entity_tree_view(
                 },
             )
             .collect();
+        // The tree only reads hierarchy and grid scope along named entities'
+        // ancestry. Harvest those paths through indexed Query::get lookups
+        // instead of scanning every internal wrapper in the scene.
+        let mut child_of = HashMap::new();
+        let mut grids = HashSet::new();
+        let mut visited = HashSet::new();
+        for candidate in &named_candidates {
+            let mut current = candidate.entity;
+            for _ in 0..64 {
+                if visited.contains(&current) {
+                    let Some(parent) = child_of.get(&current).copied() else {
+                        break;
+                    };
+                    current = parent;
+                    continue;
+                }
+                visited.insert(current);
+                let Ok((parent, is_grid)) = child_q.get(current) else {
+                    break;
+                };
+                if is_grid {
+                    grids.insert(current);
+                }
+                let Some(parent) = parent else {
+                    break;
+                };
+                let parent = parent.parent();
+                child_of.insert(current, parent);
+                current = parent;
+            }
+        }
         EntityTreeBuildInput {
             show_system: settings.show_system,
             scope_state,

@@ -42,6 +42,9 @@ population, combine compatible marker reads into the existing query and avoid
 another full-population traversal for each marker set. Keep queries over
 different populations separate unless measurements show that a broader scan
 costs less.
+For the entity tree, derive parent and grid facts through indexed lookups along
+named candidates' deduplicated ancestor closure instead of copying every scene
+entity's `ChildOf` and `Grid` membership into the snapshot.
 
 For startup asset graphs, separate asynchronous source reads from discovery,
 composition, and UI/physics admission. Read all known dependencies in each
