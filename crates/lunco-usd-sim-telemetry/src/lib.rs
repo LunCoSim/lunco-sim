@@ -765,34 +765,31 @@ fn retain_samples(
             continue;
         }
         let key = (entity, sample.name);
-        if let Entry::Vacant(entry) = metadata.entry(key) {
-            let signal = SignalRef::new(entity, sample.name.as_path().into_owned());
-            let known = signals.scalar_history(&signal).is_some();
-            if !known && *channel_count >= settings.max_channels {
-                warn_once!(
-                    "physics telemetry: max_channels ({}) reached; additional state is not retained",
-                    settings.max_channels
-                );
-                continue;
+        let (cached, known) = match metadata.entry(key) {
+            Entry::Occupied(entry) => {
+                let cached = entry.into_mut();
+                let known = signals.scalar_history(&cached.signal).is_some();
+                if !physics_channel_allowed(known, *channel_count, settings) {
+                    continue;
+                }
+                (cached, known)
             }
-            entry.insert(CachedPhysicsSignal {
-                signal,
-                metadata: None,
-            });
-        }
-        let Some(cached) = metadata.get_mut(&key) else {
-            warn_once!("physics telemetry channel cache entry is unavailable");
-            continue;
+            Entry::Vacant(entry) => {
+                let signal = SignalRef::new(entity, sample.name.as_path().into_owned());
+                let known = signals.scalar_history(&signal).is_some();
+                if !physics_channel_allowed(known, *channel_count, settings) {
+                    continue;
+                }
+                (
+                    entry.insert(CachedPhysicsSignal {
+                        signal,
+                        metadata: None,
+                    }),
+                    known,
+                )
+            }
         };
         let signal = &cached.signal;
-        let known = signals.scalar_history(signal).is_some();
-        if !known && *channel_count >= settings.max_channels {
-            warn_once!(
-                "physics telemetry: max_channels ({}) reached; additional state is not retained",
-                settings.max_channels
-            );
-            continue;
-        }
         if let Some(owner) = global_owner {
             signals.associate_global_owner(signal, owner);
         }
@@ -823,6 +820,22 @@ fn retain_samples(
         }
     }
     retained
+}
+
+#[inline]
+fn physics_channel_allowed(
+    known: bool,
+    channel_count: usize,
+    settings: &TelemetrySettings,
+) -> bool {
+    if !known && channel_count >= settings.max_channels {
+        warn_once!(
+            "physics telemetry: max_channels ({}) reached; additional state is not retained",
+            settings.max_channels
+        );
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]

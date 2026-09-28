@@ -367,6 +367,8 @@ registry remains the single metadata owner.
 
 Physics and Modelica producers add `SignalSource` when an entity first retains a sample. The
 marker owns history cleanup on source removal; later sample batches do not rewrite it.
+The physics producer uses one cached `HashMap::entry` lookup per signal sample, reusing the
+same entry for both cache lookup and mutation.
 
 Its transient per-entity cursors follow the same lifecycle boundary: `RemovedComponents` retires
 state when the last physical source leaves an entity, while the shared registry deliberately keeps
