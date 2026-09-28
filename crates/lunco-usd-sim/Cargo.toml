@@ -32,6 +32,7 @@ lunco-materials = { path = "../lunco-materials" }
 lunco-render = { path = "../lunco-render" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-core = { path = "../lunco-core" }
+lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }

@@ -67,9 +67,18 @@ Read-only USD projectors use `CanonicalStages::reader_for` or
 `reader_for_entity`: generation-zero reads consume the worker-prepared plan, and
 later authored generations consume the live canonical stage. Do not call
 `get_or_build` just to read startup facts. Use the prepared schema/path indexes to
-find initial candidates. For live generations, classify only changed candidates
-from the exact facts the owner consumes; do not rebuild a whole-stage index.
-Gate follow-up work on changed candidates or explicit retry state.
+find initial candidates. Change batches should advance unrelated edits and
+invalidate only owners whose consumed paths changed. If a live generation has
+no exact worker-prepared plan, snapshot the canonical stage recipe on its owner
+thread and submit replacement facts through shared bounded `AsyncWorkAdmission`;
+cap this owner's pending stages, then commit only when asset-plan identity and
+canonical generation still match. Hold startup progress only until the first
+topology index commits. For later generations retain the last committed facts
+so current simulation continues, while new or reprojected prim admission stays
+queued until replacement facts commit. A required preparation failure,
+including a host without worker transport, must be visible through the scene
+fault owner. Do not run a whole-stage topology traversal synchronously in
+`Update`.
 
 For Twin-open stalls, profile the active Twin policy loader separately from
 policy activation. Native manifest and Rhai source reads should run through

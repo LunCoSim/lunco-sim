@@ -283,16 +283,27 @@ topology, per-prim candidate sets, and authored vehicle output ports are
 prepared from the immutable plan on `AsyncComputeTaskPool`; one indexed query
 finds joint, attachment, vehicle-root, simulation-schema, and `lunco:` property
 candidates and carries their composed type, API-schema, and property-prefix
-facts into topology classification. A live refresh uses one composed traversal
-for the same union query. The per-prim projector skips entities without a
-simulation API or authored `lunco:` property, while still marking them complete
-for readiness accounting. `UsdSceneChangeBatch`
-keeps topology current: resynced paths that match an indexed source or
-currently carry a joint, attachment, or vehicle-root schema, and info changes
-on indexed sources, require a refresh. Unrelated resyncs and info changes only
-advance the cached generation. A prepared result is accepted only after
-checking intervening changes; qualifying live-stage changes use the canonical
-owner thread.
+facts into topology classification. The per-prim projector skips entities
+without a simulation API or authored `lunco:` property, while still marking
+them complete for readiness accounting. `UsdSceneChangeBatch` keeps topology
+current: resynced paths that match an indexed source or currently carry a joint,
+attachment, or vehicle-root schema, and info changes on indexed sources,
+invalidate the cache. Unrelated resyncs and info changes only advance the
+cached generation. If an exact worker-prepared plan is not available for a live
+generation, the simulation owner snapshots the canonical stage recipe on its
+owning thread and prepares a replacement projection plan and topology through
+shared bounded `AsyncWorkAdmission`. At most four stage preparations are
+pending. Before the first topology index is committed, the mounted primary root
+holds its `UsdSimulationTopology` progress key so the scene cannot start
+simulation against missing facts. Later generations retain the last committed
+topology while a replacement is prepared, allowing existing simulation to keep
+advancing; new or reprojected simulation prim admission stays queued until the
+replacement commits. The owner commits only when both the asset-plan identity
+and canonical generation still match; stale results are discarded. A
+preparation failure records a scene runtime fault and safety hold instead of
+admitting physics against incomplete facts. Hosts without worker transport
+report that failure at the same owner boundary. No whole-stage topology
+traversal runs synchronously in the simulation `Update` path.
 
 A newly authored `SetAttribute` uses `RemoveAttribute` as its inverse, so adding
 attributes to a growing runtime layer does not serialize the entire layer into

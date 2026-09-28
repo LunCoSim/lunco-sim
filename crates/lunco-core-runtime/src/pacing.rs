@@ -499,6 +499,8 @@ pub enum SimulationProgressOwner {
     UsdDocumentProjection,
     /// Preparation and replacement of an authored dependent USD stage.
     UsdDependentStageProjection,
+    /// Preparation of current USD simulation topology facts.
+    UsdSimulationTopology,
     /// Authored terrain data and collider preparation.
     TerrainPreparation,
     /// USD document source preparation and revision admission.
@@ -561,6 +563,14 @@ impl SimulationProgressKey {
         Self {
             owner: SimulationProgressOwner::UsdDocumentProjection,
             operation_id: document_id,
+        }
+    }
+
+    /// Key live USD simulation-topology preparation to its mounted stage root.
+    pub const fn usd_simulation_topology(stage_root: Entity) -> Self {
+        Self {
+            owner: SimulationProgressOwner::UsdSimulationTopology,
+            operation_id: stage_root.to_bits(),
         }
     }
 

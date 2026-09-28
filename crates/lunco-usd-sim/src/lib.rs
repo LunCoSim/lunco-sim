@@ -46,9 +46,9 @@
 //! products remain owned by the render pipeline and are not a simulation prerequisite.
 
 use avian3d::prelude::*;
+use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian_contracts::{
     AuthoredInitialVelocity, PendingJointAdmission, PendingUsdJoint, ScenePhysicsOwned,
@@ -92,7 +92,7 @@ use lunco_usd_sim_core::{
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
 mod wheel_runtime;
 
@@ -176,22 +176,109 @@ struct StageJointTopology {
 #[derive(Resource, Default)]
 struct JointTopologyIndex {
     by_stage: HashMap<bevy::asset::AssetId<UsdStageAsset>, StageJointTopology>,
+    refresh_pending: HashSet<bevy::asset::AssetId<UsdStageAsset>>,
 }
 
 #[derive(Resource, Default)]
-struct PreparedJointTopologyTasks(
-    HashMap<bevy::asset::AssetId<UsdStageAsset>, PreparedJointTopologyTask>,
-);
+struct PreparedJointTopologyTasks {
+    pending: HashMap<bevy::asset::AssetId<UsdStageAsset>, PreparedJointTopologyTask>,
+    failed: HashMap<bevy::asset::AssetId<UsdStageAsset>, FailedJointTopologyPreparation>,
+    next_operation: u64,
+    capacity_wait_revision: Option<u64>,
+}
+
+#[derive(SystemParam)]
+struct JointTopologyPreparationParams<'w> {
+    index: ResMut<'w, JointTopologyIndex>,
+    tasks: ResMut<'w, PreparedJointTopologyTasks>,
+    admission: ResMut<'w, lunco_core_runtime::AsyncWorkAdmission>,
+}
+
+struct FailedJointTopologyPreparation {
+    generation: u64,
+    error: String,
+}
 
 struct PreparedJointTopologyTask {
-    plan: Arc<UsdStageProjectionPlan>,
-    task: Task<StageJointTopology>,
+    source: PreparedJointTopologySource,
+    work_key: Option<lunco_core_runtime::AsyncWorkKey>,
+    completion: Arc<Mutex<Option<Result<StageJointTopology, String>>>>,
 }
 
-#[derive(Resource, Default)]
-struct PendingJointTopologyChanges(
-    HashMap<bevy::asset::AssetId<UsdStageAsset>, JointTopologyChangeHistory>,
-);
+#[derive(Clone)]
+enum PreparedJointTopologySource {
+    AssetPlan {
+        plan: Arc<UsdStageProjectionPlan>,
+        generation: u64,
+    },
+    CanonicalSnapshot {
+        asset_plan: Arc<UsdStageProjectionPlan>,
+        generation: u64,
+    },
+}
+
+impl PreparedJointTopologySource {
+    fn generation(&self) -> u64 {
+        match self {
+            Self::AssetPlan { generation, .. } | Self::CanonicalSnapshot { generation, .. } => {
+                *generation
+            }
+        }
+    }
+
+    fn asset_plan(&self) -> &Arc<UsdStageProjectionPlan> {
+        match self {
+            Self::AssetPlan { plan, .. } => plan,
+            Self::CanonicalSnapshot { asset_plan, .. } => asset_plan,
+        }
+    }
+
+    fn is_current(
+        &self,
+        stage: bevy::asset::AssetId<UsdStageAsset>,
+        stage_asset: &UsdStageAsset,
+        canonical: &CanonicalStages,
+    ) -> bool {
+        if self.generation() != canonical.generation_for(stage)
+            || !Arc::ptr_eq(self.asset_plan(), &stage_asset.projection_plan)
+        {
+            return false;
+        }
+        match self {
+            Self::AssetPlan { plan, generation } => {
+                *generation == 0 || canonical.prepared_plan_is_current(stage, plan)
+            }
+            Self::CanonicalSnapshot { .. } => true,
+        }
+    }
+}
+
+impl PreparedJointTopologyTasks {
+    fn failed_for_generation(
+        &self,
+        stage: bevy::asset::AssetId<UsdStageAsset>,
+        generation: u64,
+    ) -> bool {
+        self.failed
+            .get(&stage)
+            .is_some_and(|failure| failure.generation == generation)
+    }
+
+    fn allocate_work_key(&mut self, generation: u64) -> Option<lunco_core_runtime::AsyncWorkKey> {
+        let operation = self.next_operation;
+        self.next_operation = operation.checked_add(1)?;
+        Some(lunco_core_runtime::AsyncWorkKey::new(
+            lunco_core_runtime::AsyncWorkKind::UsdPreparation,
+            0,
+            u128::from_be_bytes(*b"usd-sim-topology"),
+            generation,
+            operation,
+        ))
+    }
+}
+
+// Keep this owner's requests bounded before they enter shared CPU admission.
+const MAX_PREPARED_JOINT_TOPOLOGY_TASKS: usize = 4;
 
 /// Lifecycle-queued USD prims awaiting simulation projection.
 #[derive(Resource)]
@@ -277,41 +364,6 @@ impl Default for PendingUsdSimPrimWork {
 }
 
 impl JointTopologyIndex {
-    fn refresh_if_stale(
-        &mut self,
-        stage: bevy::asset::AssetId<UsdStageAsset>,
-        generation: u64,
-        reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
-    ) {
-        let topology = self.by_stage.entry(stage).or_default();
-        if !topology.dirty && topology.canonical_generation == Some(generation) {
-            return;
-        }
-        let rebuild_simulation_candidates = !topology.simulation_candidates_ready
-            || (!topology.dirty
-                && topology.canonical_generation.is_some()
-                && topology.canonical_generation != Some(generation));
-        topology.joint_targets.clear();
-        topology.physical_wheel_bodies.clear();
-        topology.authored_joints.clear();
-        topology.articulation_roots.clear();
-        topology.wheel_attachment_targets.clear();
-        topology.wheel_attachment_tires.clear();
-        topology.wheel_attachment_indices.clear();
-        topology.invalid_wheel_attachments.clear();
-        topology.vehicle_output_ports.clear();
-        topology.source_paths.clear();
-        let candidates = collect_stage_candidate_paths(reader);
-        collect_joint_scan_read(reader, topology, &candidates);
-        if rebuild_simulation_candidates {
-            topology.simulation_candidates.clear();
-            collect_simulation_candidate_paths(&candidates, &mut topology.simulation_candidates);
-            topology.simulation_candidates_ready = true;
-        }
-        topology.canonical_generation = Some(generation);
-        topology.dirty = false;
-    }
-
     fn observe_scene_change(
         &mut self,
         change: &UsdSceneChangeBatch,
@@ -330,30 +382,55 @@ impl JointTopologyIndex {
         }
         if invalidates {
             topology.dirty = true;
+            self.refresh_pending.insert(change.stage_id);
         } else if !topology.dirty {
             topology.canonical_generation = Some(change.stage_generation);
         }
         true
     }
 
-    fn needs_refresh(&self, stage: bevy::asset::AssetId<UsdStageAsset>, generation: u64) -> bool {
+    fn is_current(&self, stage: bevy::asset::AssetId<UsdStageAsset>, generation: u64) -> bool {
         self.by_stage.get(&stage).is_some_and(|topology| {
-            topology.dirty || topology.canonical_generation != Some(generation)
+            !topology.dirty
+                && topology.simulation_candidates_ready
+                && topology.canonical_generation == Some(generation)
         })
     }
 
-    fn seed_simulation_candidates(
+    fn has_committed(&self, stage: bevy::asset::AssetId<UsdStageAsset>) -> bool {
+        self.by_stage.get(&stage).is_some_and(|topology| {
+            topology.simulation_candidates_ready && topology.canonical_generation.is_some()
+        })
+    }
+
+    fn commit_prepared(
         &mut self,
         stage: bevy::asset::AssetId<UsdStageAsset>,
-        candidates: HashSet<String>,
+        generation: u64,
+        mut topology: StageJointTopology,
     ) {
-        let topology = self.by_stage.entry(stage).or_default();
-        topology.simulation_candidates = candidates;
-        topology.simulation_candidates_ready = true;
+        topology.canonical_generation = Some(generation);
+        topology.dirty = false;
+        self.by_stage.insert(stage, topology);
+        self.refresh_pending.remove(&stage);
     }
 
     fn invalidate_stage(&mut self, stage: bevy::asset::AssetId<UsdStageAsset>) {
         self.by_stage.remove(&stage);
+        self.refresh_pending.remove(&stage);
+    }
+
+    fn mark_stale(&mut self, stage: bevy::asset::AssetId<UsdStageAsset>) {
+        self.by_stage.entry(stage).or_default().dirty = true;
+        self.refresh_pending.insert(stage);
+    }
+
+    fn request_refresh(&mut self, stage: bevy::asset::AssetId<UsdStageAsset>) {
+        self.refresh_pending.insert(stage);
+    }
+
+    fn stop_refresh(&mut self, stage: bevy::asset::AssetId<UsdStageAsset>) {
+        self.refresh_pending.remove(&stage);
     }
 
     fn get(&self, stage: bevy::asset::AssetId<UsdStageAsset>) -> Option<&StageJointTopology> {
@@ -361,38 +438,30 @@ impl JointTopologyIndex {
     }
 }
 
-#[derive(Default)]
-struct JointTopologyChangeHistory {
-    latest_generation: u64,
-    resynced_paths: HashSet<String>,
-    info_paths: HashSet<String>,
-}
-
 fn track_joint_topology_changes(
     mut changes: MessageReader<UsdSceneChangeBatch>,
     mut topology: ResMut<JointTopologyIndex>,
-    mut history: ResMut<PendingJointTopologyChanges>,
+    mut tasks: ResMut<PreparedJointTopologyTasks>,
+    mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
 ) {
     for change in changes.read() {
-        if let Some(stage_asset) = stages.get(change.stage_id) {
-            let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
-            if topology.observe_scene_change(change, &reader) {
-                continue;
-            }
-        }
-        if topology.get(change.stage_id).is_some() {
+        if topology.get(change.stage_id).is_none() {
             continue;
         }
-        let pending = history.0.entry(change.stage_id).or_default();
-        pending.latest_generation = pending.latest_generation.max(change.stage_generation);
-        pending
-            .resynced_paths
-            .extend(change.resynced_prim_paths.iter().cloned());
-        pending
-            .info_paths
-            .extend(change.info_prim_paths.iter().cloned());
+        let Some(stage_asset) = stages.get(change.stage_id) else {
+            continue;
+        };
+        let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
+        topology.observe_scene_change(change, &reader);
+        if tasks
+            .pending
+            .get(&change.stage_id)
+            .is_some_and(|pending| pending.source.generation() != change.stage_generation)
+        {
+            retire_joint_topology_task(change.stage_id, &mut tasks, &mut admission);
+        }
     }
 }
 
@@ -400,60 +469,249 @@ fn invalidate_joint_topology_on_stage_asset_event(
     mut events: MessageReader<AssetEvent<UsdStageAsset>>,
     mut topology: ResMut<JointTopologyIndex>,
     mut tasks: ResMut<PreparedJointTopologyTasks>,
-    mut changes: ResMut<PendingJointTopologyChanges>,
+    mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
+    let mut failures_changed = false;
     for event in events.read() {
-        let stage = match event {
+        let (stage, invalidate) = match event {
             AssetEvent::Added { id }
             | AssetEvent::Modified { id }
-            | AssetEvent::Removed { id }
-            | AssetEvent::LoadedWithDependencies { id } => *id,
-            AssetEvent::Unused { id } => {
-                tasks.0.remove(id);
-                changes.0.remove(id);
-                continue;
-            }
+            | AssetEvent::LoadedWithDependencies { id } => (*id, false),
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => (*id, true),
         };
-        topology.invalidate_stage(stage);
-        tasks.0.remove(&stage);
-        changes.0.remove(&stage);
+        if invalidate {
+            topology.invalidate_stage(stage);
+        } else {
+            // Keep the last committed facts available to already-admitted
+            // simulation while the replacement generation is prepared.
+            topology.mark_stale(stage);
+        }
+        retire_joint_topology_task(stage, &mut tasks, &mut admission);
+        failures_changed |= tasks.failed.remove(&stage).is_some();
+    }
+    if failures_changed && let Some(diagnostics) = diagnostics.as_deref_mut() {
+        publish_topology_preparation_diagnostics(&tasks, diagnostics);
     }
 }
 
 fn reset_joint_topology_state(
     mut topology: ResMut<JointTopologyIndex>,
     mut tasks: ResMut<PreparedJointTopologyTasks>,
-    mut changes: ResMut<PendingJointTopologyChanges>,
+    mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    mut progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
 ) {
     topology.by_stage.clear();
-    tasks.0.clear();
-    changes.0.clear();
+    topology.refresh_pending.clear();
+    for task in tasks.pending.values() {
+        if let Some(key) = task.work_key {
+            admission.cancel_queued(key);
+        }
+    }
+    tasks.pending.clear();
+    tasks.failed.clear();
+    tasks.capacity_wait_revision = None;
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        diagnostics.replace_producer("usd-sim-topology", std::iter::empty());
+    }
+    if let Some(progress) = progress.as_deref_mut() {
+        release_usd_simulation_topology_progress(progress, None);
+    }
 }
 
-fn request_prepared_joint_topology(
+fn retire_joint_topology_task(
     stage: bevy::asset::AssetId<UsdStageAsset>,
-    plan: Arc<UsdStageProjectionPlan>,
     tasks: &mut PreparedJointTopologyTasks,
+    admission: &mut lunco_core_runtime::AsyncWorkAdmission,
 ) {
-    if tasks
-        .0
-        .get(&stage)
-        .is_some_and(|pending| Arc::ptr_eq(&pending.plan, &plan))
+    let mut capacity_changed = false;
+    if let Some(task) = tasks.pending.remove(&stage)
+        && let Some(key) = task.work_key
+    {
+        capacity_changed = admission.cancel_queued(key);
+    }
+    if capacity_changed {
+        tasks.capacity_wait_revision = None;
+    }
+}
+
+fn release_usd_simulation_topology_progress(
+    progress: &mut lunco_core_runtime::SimulationProgress,
+    keep: Option<lunco_core_runtime::SimulationProgressKey>,
+) {
+    let stale: Vec<_> = progress
+        .blockers()
+        .filter(|blocker| {
+            blocker.key.owner == lunco_core_runtime::SimulationProgressOwner::UsdSimulationTopology
+                && Some(blocker.key) != keep
+        })
+        .map(|blocker| blocker.key)
+        .collect();
+    for key in stale {
+        progress.release(key);
+    }
+}
+
+fn sync_joint_topology_progress(
+    mount: Option<Res<lunco_core::SceneMountState>>,
+    primary_roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
+    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
+    mut topology: ResMut<JointTopologyIndex>,
+    tasks: Res<PreparedJointTopologyTasks>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
+    mut previous: Local<Option<(lunco_core_runtime::SimulationProgressKey, &'static str)>>,
+) {
+    let desired = mount
+        .as_deref()
+        .and_then(lunco_core::SceneMountState::active_root)
+        .and_then(|root| {
+            let primary = primary_roots.get(root).ok()?;
+            let stage = primary.stage_handle.id();
+            let generation = canonical.generation_for(stage);
+            let stage_is_loaded = stages.get(&primary.stage_handle).is_some();
+            if stage_is_loaded {
+                if topology.is_current(stage, generation) {
+                    if topology.refresh_pending.contains(&stage) {
+                        topology.stop_refresh(stage);
+                    }
+                    return None;
+                }
+                if topology.has_committed(stage) {
+                    if !topology.refresh_pending.contains(&stage)
+                        && !tasks.failed_for_generation(stage, generation)
+                    {
+                        topology.request_refresh(stage);
+                    }
+                    return None;
+                }
+                if tasks.failed_for_generation(stage, generation) {
+                    if topology.refresh_pending.contains(&stage) {
+                        topology.stop_refresh(stage);
+                    }
+                } else if !topology.refresh_pending.contains(&stage) {
+                    topology.request_refresh(stage);
+                }
+            } else if !topology.has_committed(stage) {
+                if topology.refresh_pending.contains(&stage) {
+                    topology.stop_refresh(stage);
+                }
+            } else {
+                return None;
+            }
+            Some((
+                lunco_core_runtime::SimulationProgressKey::usd_simulation_topology(root),
+                if !stage_is_loaded {
+                    "Waiting for the mounted USD stage needed by simulation topology"
+                } else if tasks.failed_for_generation(stage, generation) {
+                    "USD simulation topology preparation failed; scene simulation is held"
+                } else {
+                    "Preparing current USD simulation topology"
+                },
+            ))
+        });
+    if *previous != desired || desired.is_some_and(|(key, _)| !progress.contains(key)) {
+        if let Some((previous_key, _)) = *previous
+            && desired.is_none_or(|(key, _)| key != previous_key)
+        {
+            progress.release(previous_key);
+        }
+        if let Some((key, reason)) = desired {
+            if progress.contains(key) {
+                progress.update_reason(key, reason);
+            } else {
+                progress.acquire(key, reason);
+            }
+        }
+        *previous = desired;
+    }
+}
+
+fn submit_joint_topology_preparation(
+    stage: bevy::asset::AssetId<UsdStageAsset>,
+    source: PreparedJointTopologySource,
+    generation: u64,
+    priority: lunco_core_runtime::AsyncWorkPriority,
+    order: u64,
+    work: impl FnOnce() -> Result<StageJointTopology, String> + Send + 'static,
+    tasks: &mut PreparedJointTopologyTasks,
+    admission: &mut lunco_core_runtime::AsyncWorkAdmission,
+) {
+    if tasks.pending.contains_key(&stage)
+        || tasks.failed_for_generation(stage, generation)
+        || tasks.pending.len() >= MAX_PREPARED_JOINT_TOPOLOGY_TASKS
+        || tasks.capacity_wait_revision.is_some()
     {
         return;
     }
-    let worker_plan = plan.clone();
-    let task = AsyncComputeTaskPool::get().spawn(async move {
-        let mut topology = StageJointTopology::default();
-        let candidates = collect_stage_candidate_paths(worker_plan.as_ref());
-        collect_joint_scan_read(worker_plan.as_ref(), &mut topology, &candidates);
-        collect_simulation_candidate_paths(&candidates, &mut topology.simulation_candidates);
-        topology.simulation_candidates_ready = true;
-        topology
-    });
-    tasks
-        .0
-        .insert(stage, PreparedJointTopologyTask { plan, task });
+    let completion = Arc::new(Mutex::new(None));
+    let worker_completion = Arc::clone(&completion);
+    let job = move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+            .unwrap_or_else(|_| Err("USD simulation topology worker panicked".to_owned()));
+        *worker_completion
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(result);
+    };
+    let capacity_revision = admission.capacity_revision();
+    let work_key = tasks.allocate_work_key(generation);
+    let mut admitted_key = None;
+    if let Some(work_key) = work_key {
+        match admission.submit_ordered(priority, work_key, order, job) {
+            Ok(()) => admitted_key = Some(work_key),
+            Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+                tasks.capacity_wait_revision = Some(capacity_revision);
+                return;
+            }
+            Err(rejection) => {
+                let detail = match rejection {
+                    lunco_core_runtime::AsyncWorkRejection::DuplicateKey => {
+                        "shared USD topology admission rejected a duplicate operation key"
+                    }
+                    lunco_core_runtime::AsyncWorkRejection::NativeDispatcherUnavailable => {
+                        "USD simulation topology preparation requires a native worker transport"
+                    }
+                    lunco_core_runtime::AsyncWorkRejection::QueueFull => unreachable!(),
+                };
+                *completion.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some(Err(detail.to_owned()));
+            }
+        }
+    } else {
+        *completion.lock().unwrap_or_else(PoisonError::into_inner) = Some(Err(
+            "USD simulation topology operation id exhausted".to_owned(),
+        ));
+    }
+    tasks.pending.insert(
+        stage,
+        PreparedJointTopologyTask {
+            source,
+            work_key: admitted_key,
+            completion,
+        },
+    );
+}
+
+fn try_take_topology_completion(
+    completion: &Mutex<Option<Result<StageJointTopology, String>>>,
+) -> Option<Result<StageJointTopology, String>> {
+    match completion.try_lock() {
+        Ok(mut completion) => completion.take(),
+        Err(TryLockError::Poisoned(error)) => error.into_inner().take(),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
+fn build_joint_topology(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+) -> StageJointTopology {
+    let mut topology = StageJointTopology::default();
+    let candidates = collect_stage_candidate_paths(reader);
+    collect_joint_scan_read(reader, &mut topology, &candidates);
+    collect_simulation_candidate_paths(&candidates, &mut topology.simulation_candidates);
+    topology.simulation_candidates_ready = true;
+    topology
 }
 
 fn poll_prepared_joint_topology(
@@ -461,114 +719,87 @@ fn poll_prepared_joint_topology(
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     topology_index: &mut JointTopologyIndex,
-    changes: &mut PendingJointTopologyChanges,
+    primary_stages: &HashSet<bevy::asset::AssetId<UsdStageAsset>>,
+    mut faults: Option<&mut lunco_core::RuntimeFaults>,
+    mut holds: Option<&mut lunco_physics::PhysicsHolds>,
+    mut diagnostics: Option<&mut lunco_core::RuntimeDiagnostics>,
 ) {
     let mut completed = Vec::new();
-    tasks.0.retain(|stage, pending| {
-        if let Some(topology) = block_on(future::poll_once(&mut pending.task)) {
-            completed.push((*stage, pending.plan.clone(), topology));
-            false
-        } else {
-            true
-        }
-    });
-
-    for (stage, plan, mut prepared) in completed {
-        let Some(stage_asset) = stages.get(stage) else {
-            changes.0.remove(&stage);
-            continue;
-        };
-        if !Arc::ptr_eq(&stage_asset.projection_plan, &plan) {
-            continue;
-        }
-
-        let (reader, generation) = canonical.reader_for(stage, stage_asset);
-        let cache_is_current = topology_index.get(stage).is_some_and(|current| {
-            !current.dirty
-                && current.simulation_candidates_ready
-                && current.canonical_generation == Some(generation)
-        });
-        let prepared_plan_is_current = canonical.prepared_plan_is_current(stage, &plan);
-        let cache_span = bevy::log::info_span!(
-            "usd_sim_prepared_topology_cache",
-            generation,
-            cache_current = cache_is_current,
-            prepared_plan_current = prepared_plan_is_current
-        )
-        .entered();
-        if cache_is_current {
-            // A live read or change observer may have already advanced the
-            // authoritative cache while this prepared-plan task was running.
-            // Its completion must not trigger a duplicate whole-stage scan.
-            changes.0.remove(&stage);
-            continue;
-        }
-        drop(cache_span);
-        let change_history = changes.0.remove(&stage);
-        let relevant_resyncs = change_history.as_ref().map_or(0, |history| {
-            history
-                .resynced_paths
-                .iter()
-                .filter(|path| topology_change_affects_path(path, &prepared.source_paths, &reader))
-                .count()
-        });
-        let relevant_info_changes = change_history.as_ref().map_or(0, |history| {
-            history
-                .info_paths
-                .iter()
-                .filter(|path| prepared.source_paths.contains(*path))
-                .count()
-        });
-        let generation_without_history =
-            generation > 0 && change_history.is_none() && !prepared_plan_is_current;
-        let stale = relevant_resyncs > 0 || relevant_info_changes > 0 || generation_without_history;
-        let _validation_span = bevy::log::info_span!(
-            "usd_sim_prepared_topology_reconcile",
-            generation,
-            history_present = change_history.is_some(),
-            relevant_resyncs,
-            relevant_info_changes,
-            generation_without_history,
-            prepared_plan_current = prepared_plan_is_current
-        )
-        .entered();
-        if stale {
-            if let Some(history) = &change_history {
-                for path in history
-                    .resynced_paths
-                    .iter()
-                    .chain(history.info_paths.iter())
-                {
-                    update_simulation_candidate(&reader, path, &mut prepared.simulation_candidates);
-                }
-                topology_index.seed_simulation_candidates(
-                    stage,
-                    std::mem::take(&mut prepared.simulation_candidates),
-                );
-            }
-            topology_index.refresh_if_stale(stage, generation, &reader);
-        } else {
-            if let Some(history) = &change_history {
-                for path in history
-                    .resynced_paths
-                    .iter()
-                    .chain(history.info_paths.iter())
-                {
-                    update_simulation_candidate(&reader, path, &mut prepared.simulation_candidates);
-                }
-            }
-            prepared.canonical_generation = Some(
-                generation.max(
-                    change_history
-                        .as_ref()
-                        .map_or(0, |history| history.latest_generation),
-                ),
-            );
-            prepared.dirty = false;
-            prepared.simulation_candidates_ready = true;
-            topology_index.by_stage.insert(stage, prepared);
+    for (stage, pending) in &tasks.pending {
+        if let Some(result) = try_take_topology_completion(&pending.completion) {
+            completed.push((*stage, pending.source.clone(), result));
         }
     }
+
+    let mut failures_changed = false;
+    for (stage, source, result) in completed {
+        tasks.pending.remove(&stage);
+        let Some(stage_asset) = stages.get(stage) else {
+            continue;
+        };
+        if !source.is_current(stage, stage_asset, canonical) {
+            continue;
+        }
+
+        let generation = source.generation();
+        if topology_index.is_current(stage, generation) {
+            continue;
+        }
+        match result {
+            Ok(prepared) => topology_index.commit_prepared(stage, generation, prepared),
+            Err(error) => {
+                if tasks
+                    .failed
+                    .insert(
+                        stage,
+                        FailedJointTopologyPreparation {
+                            generation,
+                            error: error.clone(),
+                        },
+                    )
+                    .is_none_or(|previous| previous.generation != generation)
+                {
+                    failures_changed = true;
+                    if primary_stages.contains(&stage) {
+                        if let Some(faults) = faults.as_deref_mut() {
+                            faults.raise(
+                                "usd-sim-topology-preparation",
+                                None,
+                                format!("{stage:?}"),
+                                error,
+                            );
+                        }
+                        if let Some(holds) = holds.as_deref_mut() {
+                            holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                        }
+                    }
+                }
+                topology_index.stop_refresh(stage);
+            }
+        }
+    }
+    if failures_changed && let Some(diagnostics) = diagnostics.as_deref_mut() {
+        publish_topology_preparation_diagnostics(tasks, diagnostics);
+    }
+}
+
+fn publish_topology_preparation_diagnostics(
+    tasks: &PreparedJointTopologyTasks,
+    diagnostics: &mut lunco_core::RuntimeDiagnostics,
+) {
+    diagnostics.replace_producer(
+        "usd-sim-topology",
+        tasks
+            .failed
+            .iter()
+            .map(|(stage, failure)| lunco_core::RuntimeDiagnostic {
+                code: "usd-sim-topology-preparation".to_owned(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "usd-sim-topology".to_owned(),
+                subject: format!("{stage:?}"),
+                message: failure.error.clone(),
+            }),
+    );
 }
 
 /// Retire authored cameras at the shared scene-teardown boundary. The scene
@@ -678,6 +909,9 @@ mod runtime_safety_tests {
 
 impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
+            app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+        }
         app.init_resource::<UsdLiveEditRegistry>();
         app.world_mut()
             .resource_mut::<UsdLiveEditRegistry>()
@@ -726,7 +960,7 @@ impl Plugin for UsdSimPlugin {
         .init_resource::<GroundColliderPending>()
         .init_resource::<JointTopologyIndex>()
         .init_resource::<PreparedJointTopologyTasks>()
-        .init_resource::<PendingJointTopologyChanges>()
+        .init_resource::<lunco_core_runtime::SimulationProgress>()
         .add_systems(
             PreUpdate,
             (
@@ -735,6 +969,12 @@ impl Plugin for UsdSimPlugin {
             )
                 .chain()
                 .after(lunco_core::RuntimeCycleSet::Lifecycle),
+        )
+        .add_systems(
+            PreUpdate,
+            sync_joint_topology_progress
+                .after(track_joint_topology_changes)
+                .before(lunco_core_runtime::SimulationProgressAdmissionSet),
         )
         .add_systems(
             Update,
@@ -804,8 +1044,11 @@ pub mod marker;
 ///
 /// The observer-fed set makes settled-scene admission constant-time. The
 /// bootstrap flag covers entities that predate plugin installation.
-fn any_pending_usd_sim(pending: Res<PendingUsdSimPrimWork>) -> bool {
-    pending.0.has_work()
+fn any_pending_usd_sim(
+    pending: Res<PendingUsdSimPrimWork>,
+    topology: Res<JointTopologyIndex>,
+) -> bool {
+    pending.0.has_work() || !topology.refresh_pending.is_empty()
 }
 
 fn process_usd_sim_prims(
@@ -841,18 +1084,33 @@ fn process_usd_sim_prims(
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
+    primary_roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
+    mount: Option<Res<lunco_core::SceneMountState>>,
     stages: Res<Assets<UsdStageAsset>>,
     // Initial reads use the worker-produced plan; later authored generations
     // use the live canonical stage selected by the shared reader boundary.
     canonical: NonSend<CanonicalStages>,
-    mut topology_index: ResMut<JointTopologyIndex>,
-    mut topology_tasks: ResMut<PreparedJointTopologyTasks>,
-    mut topology_changes: ResMut<PendingJointTopologyChanges>,
+    topology_work: JointTopologyPreparationParams,
+    mut runtime_faults: ResMut<lunco_core::RuntimeFaults>,
+    mut physics_holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut runtime_diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
+    let JointTopologyPreparationParams {
+        index: mut topology_index,
+        tasks: mut topology_tasks,
+        admission: mut async_work,
+    } = topology_work;
     let started = web_time::Instant::now();
     let mut processed = 0usize;
     let mut authored_diagnostics = Vec::new();
+    let mut topology_failures_changed = false;
+    let primary_stages: HashSet<_> = mount
+        .as_deref()
+        .and_then(lunco_core::SceneMountState::active_root)
+        .and_then(|root| primary_roots.get(root).ok())
+        .map(|prim| prim.stage_handle.id())
+        .into_iter()
+        .collect();
     let unprocessed = {
         let _span = bevy::log::info_span!("usd_sim_pending_collect_sort").entered();
         let mut entities = pending.0.take_queued();
@@ -885,53 +1143,134 @@ fn process_usd_sim_prims(
         unprocessed
     };
 
-    // Initial topology reads use the immutable prepared plan on workers. Scene
-    // changes are reconciled by the typed change observer below; only structural
-    // edits or changes to topology source prims require a live-stage refresh.
+    // Initial topology uses the immutable asset plan. For later generations,
+    // topology is prepared from a recipe snapshot of the exact canonical stage
+    // through shared bounded admission; live OpenUSD traversal stays off Update.
     {
         let _span = bevy::log::info_span!("usd_sim_topology_refresh").entered();
-        let mut seen_stages = HashSet::new();
-        let mut stage_ids = Vec::new();
+        if topology_tasks
+            .capacity_wait_revision
+            .is_some_and(|revision| revision != async_work.capacity_revision())
+        {
+            topology_tasks.capacity_wait_revision = None;
+        }
+        let mut seen_stages = topology_index.refresh_pending.clone();
+        let mut stage_ids: Vec<_> = seen_stages.iter().copied().collect();
         for (_, prim_path, ..) in &unprocessed {
             let id = prim_path.stage_handle.id();
-            if !seen_stages.insert(id) {
+            if seen_stages.insert(id) {
+                stage_ids.push(id);
+            }
+        }
+        stage_ids.sort_by_key(|stage| (!primary_stages.contains(stage), format!("{stage:?}")));
+        for (stage_order, id) in stage_ids.iter().copied().enumerate() {
+            let Some(stage_asset) = stages.get(id) else {
+                continue;
+            };
+            let generation = canonical.generation_for(id);
+            if topology_tasks
+                .failed
+                .get(&id)
+                .is_some_and(|failure| failure.generation != generation)
+            {
+                topology_tasks.failed.remove(&id);
+                topology_failures_changed = true;
+            }
+            if topology_index.is_current(id, generation)
+                || topology_tasks.pending.contains_key(&id)
+                || topology_tasks.failed_for_generation(id, generation)
+                || topology_tasks.pending.len() >= MAX_PREPARED_JOINT_TOPOLOGY_TASKS
+                || topology_tasks.capacity_wait_revision.is_some()
+            {
                 continue;
             }
-            if let Some(stage_asset) = stages.get(&prim_path.stage_handle) {
-                stage_ids.push(id);
-                if topology_index.get(id).is_none() {
-                    request_prepared_joint_topology(
-                        id,
-                        stage_asset.projection_plan.clone(),
-                        &mut topology_tasks,
-                    );
-                }
+            let priority = if primary_stages.contains(&id) {
+                lunco_core_runtime::AsyncWorkPriority::SimulationRequired
+            } else {
+                lunco_core_runtime::AsyncWorkPriority::Interactive
+            };
+            if generation > 0
+                && !canonical.prepared_plan_is_current(id, &stage_asset.projection_plan)
+            {
+                let source = PreparedJointTopologySource::CanonicalSnapshot {
+                    asset_plan: stage_asset.projection_plan.clone(),
+                    generation,
+                };
+                let snapshot = if let Some(stage) = canonical.get(id) {
+                    {
+                        let _span = bevy::log::info_span!(
+                            "usd_sim_canonical_topology_snapshot",
+                            generation
+                        )
+                        .entered();
+                        stage.recipe_snapshot().map_err(|error| error.to_string())
+                    }
+                } else {
+                    Err(
+                        "canonical stage is unavailable for its nonzero topology generation"
+                            .to_owned(),
+                    )
+                };
+                submit_joint_topology_preparation(
+                    id,
+                    source,
+                    generation,
+                    priority,
+                    stage_order as u64,
+                    move || {
+                        let _span =
+                            bevy::log::info_span!("usd_sim_canonical_topology_prepare", generation)
+                                .entered();
+                        let snapshot = snapshot.map_err(|error| {
+                            format!("cannot snapshot current canonical stage layers: {error}")
+                        })?;
+                        let plan = snapshot.prepare_projection_plan().map_err(|error| {
+                            format!("cannot prepare current canonical stage facts: {error}")
+                        })?;
+                        Ok(build_joint_topology(&plan))
+                    },
+                    &mut topology_tasks,
+                    &mut async_work,
+                );
+            } else {
+                let plan = stage_asset.projection_plan.clone();
+                submit_joint_topology_preparation(
+                    id,
+                    PreparedJointTopologySource::AssetPlan {
+                        plan: plan.clone(),
+                        generation,
+                    },
+                    generation,
+                    priority,
+                    stage_order as u64,
+                    move || Ok(build_joint_topology(plan.as_ref())),
+                    &mut topology_tasks,
+                    &mut async_work,
+                );
             }
+        }
+        if topology_failures_changed {
+            publish_topology_preparation_diagnostics(&topology_tasks, &mut runtime_diagnostics);
         }
         poll_prepared_joint_topology(
             &mut topology_tasks,
             &stages,
             &canonical,
             &mut topology_index,
-            &mut topology_changes,
+            &primary_stages,
+            Some(&mut runtime_faults),
+            physics_holds.as_deref_mut(),
+            Some(&mut runtime_diagnostics),
         );
-        for id in stage_ids {
-            if !topology_index.needs_refresh(id, canonical.generation_for(id)) {
-                continue;
-            }
-            let Some(stage_asset) = stages.get(id) else {
-                continue;
-            };
-            let (reader, generation) = canonical.reader_for(id, stage_asset);
-            topology_index.refresh_if_stale(id, generation, &reader);
-            topology_changes.0.remove(&id);
-        }
-        if unprocessed
+        if stage_ids
             .iter()
-            .any(|(_, prim_path, ..)| topology_index.get(prim_path.stage_handle.id()).is_none())
+            .any(|id| !topology_index.is_current(*id, canonical.generation_for(*id)))
         {
-            for (entity, ..) in &unprocessed {
-                pending.0.queue(*entity);
+            for (entity, path, ..) in &unprocessed {
+                let stage = path.stage_handle.id();
+                if !topology_tasks.failed_for_generation(stage, canonical.generation_for(stage)) {
+                    pending.0.queue(*entity);
+                }
             }
             return;
         }
@@ -4184,7 +4523,7 @@ def Xform "Rover" {
         let id = Handle::<UsdStageAsset>::default().id();
         let mut index = JointTopologyIndex::default();
 
-        index.refresh_if_stale(id, stage.generation(), &stage.view());
+        index.commit_prepared(id, stage.generation(), build_joint_topology(&stage.view()));
         let topology = index.get(id).expect("first generation is indexed");
         assert_eq!(
             topology.joint_targets.get("/Rover/Wheel"),
@@ -4218,7 +4557,7 @@ def Xform "Rover" {
             .expect("indexed stage")
             .joint_targets
             .clear();
-        index.refresh_if_stale(id, stage.generation(), &stage.view());
+        assert!(index.is_current(id, stage.generation()));
         assert!(
             index
                 .get(id)
@@ -4229,7 +4568,7 @@ def Xform "Rover" {
         );
 
         index.invalidate_stage(id);
-        index.refresh_if_stale(id, stage.generation(), &stage.view());
+        index.commit_prepared(id, stage.generation(), build_joint_topology(&stage.view()));
         assert_eq!(
             index
                 .get(id)
@@ -4259,7 +4598,7 @@ def Xform "Wheel" (prepend apiSchemas = [
         .expect("direct attachment fixture composes");
         let id = Handle::<UsdStageAsset>::default().id();
         let mut index = JointTopologyIndex::default();
-        index.refresh_if_stale(id, stage.generation(), &stage.view());
+        index.commit_prepared(id, stage.generation(), build_joint_topology(&stage.view()));
         let topology = index.get(id).expect("direct attachment is indexed");
 
         assert_eq!(
@@ -4294,7 +4633,7 @@ def Xform "Attachment" (prepend apiSchemas = ["PhysxVehicleWheelAttachmentAPI"])
         .expect("ambiguous attachment fixture composes");
         let id = Handle::<UsdStageAsset>::default().id();
         let mut index = JointTopologyIndex::default();
-        index.refresh_if_stale(id, stage.generation(), &stage.view());
+        index.commit_prepared(id, stage.generation(), build_joint_topology(&stage.view()));
         let topology = index.get(id).expect("ambiguous attachment is indexed");
 
         assert!(topology.invalid_wheel_attachments.contains("/Wheel"));
