@@ -33,6 +33,7 @@ struct ProceduralRockBundle {
     procedural_rock: ProceduralRock,
     scatter_entity: TerrainScatterEntity,
     scatter_owner: TerrainScatterOwner,
+    child_of: ChildOf,
     name: Name,
     system_managed: lunco_core::SystemManaged,
     transform: Transform,
@@ -43,6 +44,7 @@ struct ProceduralRockBundle {
 
 #[derive(Bundle)]
 struct ProceduralRockVisualBundle {
+    rock: ProceduralRockBundle,
     mesh: Mesh3d,
     look: lunco_render::PbrLook,
     #[cfg(not(target_arch = "wasm32"))]
@@ -300,79 +302,97 @@ impl TerrainLayer for RockScatterLayer {
 
         let mut reused = 0usize;
         let mut spawned = 0usize;
-        let mut rock_updates = Vec::with_capacity(placements.len());
-        let mut visual_updates = Vec::with_capacity(placements.len());
-        let mut parent_updates = Vec::with_capacity(placements.len());
+        #[cfg(not(target_arch = "wasm32"))]
+        let reused_capacity = placements.len().min(cx.rock_pool.len());
+        #[cfg(target_arch = "wasm32")]
+        let reused_capacity = 0;
+        let spawn_capacity = placements.len() - reused_capacity;
+        let has_visuals = bucket_handles.is_some();
+        let mut rock_updates = Vec::with_capacity(if has_visuals { 0 } else { reused_capacity });
+        let mut visual_updates = Vec::with_capacity(if has_visuals { reused_capacity } else { 0 });
+        let mut rock_spawns = Vec::with_capacity(if has_visuals { 0 } else { spawn_capacity });
+        let mut visual_spawns = Vec::with_capacity(if has_visuals { spawn_capacity } else { 0 });
         for p in placements.iter() {
             let y =
                 lunco_terrain_core::HeightSource::height_at(oracle, p.pos.x as f64, p.pos.y as f64)
                     as f32;
             let r_vis = bucket_radius(bucket_of(p.size)).max(0.05);
             #[cfg(not(target_arch = "wasm32"))]
-            let entity = if let Some(entity) = cx.rock_pool.pop() {
+            let recycled = cx.rock_pool.pop();
+            #[cfg(not(target_arch = "wasm32"))]
+            if recycled.is_some() {
                 reused += 1;
-                entity
             } else {
                 spawned += 1;
-                cx.commands.spawn_empty().id()
-            };
+            }
             #[cfg(target_arch = "wasm32")]
-            let entity = {
+            let recycled: Option<Entity> = {
                 spawned += 1;
-                cx.commands.spawn_empty().id()
+                None
             };
             let bucket = bucket_of(p.size);
-            rock_updates.push((
-                entity,
-                ProceduralRockBundle {
-                    terrain_rock: TerrainRock,
-                    procedural_rock: ProceduralRock,
-                    scatter_entity: TerrainScatterEntity,
-                    scatter_owner: TerrainScatterOwner(cx.terrain),
-                    name: Name::new("TerrainRock"),
-                    // Procedural scatter, re-spawned as the field restreams — runtime
-                    // detail, not authored content. (The *placed* rock below is
-                    // authored and stays visible.)
-                    system_managed: lunco_core::SystemManaged,
-                    transform: Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
-                        .with_rotation(Quat::from_rotation_y(p.yaw)),
-                    visibility: Visibility::Inherited,
-                    rigid_body: RigidBody::Static,
-                    collider: Collider::sphere((r_vis * 0.6) as f64),
-                },
-            ));
+            let rock = ProceduralRockBundle {
+                terrain_rock: TerrainRock,
+                procedural_rock: ProceduralRock,
+                scatter_entity: TerrainScatterEntity,
+                scatter_owner: TerrainScatterOwner(cx.terrain),
+                child_of: ChildOf(cx.terrain),
+                name: Name::new("TerrainRock"),
+                // Procedural scatter, re-spawned as the field restreams — runtime
+                // detail, not authored content. (The *placed* rock below is
+                // authored and stays visible.)
+                system_managed: lunco_core::SystemManaged,
+                transform: Transform::from_xyz(p.pos.x, y - r_vis * 0.25, p.pos.y)
+                    .with_rotation(Quat::from_rotation_y(p.yaw)),
+                visibility: Visibility::Inherited,
+                rigid_body: RigidBody::Static,
+                collider: Collider::sphere((r_vis * 0.6) as f64),
+            };
             if let Some(handles) = &bucket_handles {
-                visual_updates.push((
-                    entity,
-                    ProceduralRockVisualBundle {
-                        mesh: Mesh3d(handles[bucket].clone()),
-                        // `no_shadow_cast` rides on the look — `lunco-render-bevy`
-                        // inserts `NotShadowCaster` for it. Cloning the look does NOT
-                        // clone a material: every clone keys to the same cached one.
-                        look: look.clone(),
-                        #[cfg(not(target_arch = "wasm32"))]
-                        // Native visibility range is a culling optimization. Web keeps
-                        // the authored population and uses the explicit instance cap.
-                        visibility_range: rock_visibility_range(
-                            cx.quality.terrain_rock_lod_start_distance,
-                            cx.quality.terrain_rock_lod_fade_distance,
-                        ),
-                    },
-                ));
+                let bundle = ProceduralRockVisualBundle {
+                    rock,
+                    mesh: Mesh3d(handles[bucket].clone()),
+                    // `no_shadow_cast` rides on the look — `lunco-render-bevy`
+                    // inserts `NotShadowCaster` for it. Cloning the look does NOT
+                    // clone a material: every clone keys to the same cached one.
+                    look: look.clone(),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    // Native visibility range is a culling optimization. Web keeps
+                    // the authored population and uses the explicit instance cap.
+                    visibility_range: rock_visibility_range(
+                        cx.quality.terrain_rock_lod_start_distance,
+                        cx.quality.terrain_rock_lod_fade_distance,
+                    ),
+                };
+                if let Some(entity) = recycled {
+                    visual_updates.push((entity, bundle));
+                } else {
+                    visual_spawns.push(bundle);
+                }
+            } else if let Some(entity) = recycled {
+                rock_updates.push((entity, rock));
+            } else {
+                rock_spawns.push(rock);
             }
-            // Reassert parenting for recycled rocks because presentation may
-            // reparent them. Batch insertion runs ChildOf's relationship hooks
-            // in placement order while keeping the deferred command queue compact.
-            parent_updates.push((entity, ChildOf(cx.terrain)));
         }
         if !rock_updates.is_empty() {
             // A doc-backed terrain can disappear before deferred commands apply;
             // the fallible batch reports any stale target without panicking.
-            cx.commands.try_insert_batch(parent_updates);
             cx.commands.try_insert_batch(rock_updates);
-            if !visual_updates.is_empty() {
-                cx.commands.try_insert_batch(visual_updates);
-            }
+        }
+        if !visual_updates.is_empty() {
+            // Parent, collider, transform, and visual components enter through one
+            // ordered bundle batch, so each rock makes one archetype transition.
+            // ChildOf relationship hooks still run in placement order.
+            cx.commands.try_insert_batch(visual_updates);
+        }
+        if !rock_spawns.is_empty() {
+            cx.commands.spawn_batch(rock_spawns);
+        }
+        if !visual_spawns.is_empty() {
+            // New rocks enter their final archetype directly instead of being
+            // spawned empty and migrated by a later deferred insert batch.
+            cx.commands.spawn_batch(visual_spawns);
         }
 
         debug!(
