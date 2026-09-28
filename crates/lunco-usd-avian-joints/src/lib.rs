@@ -139,6 +139,18 @@ struct JointAdmissionBatch {
     ready: bool,
 }
 
+/// Whether the readiness scan can affect a joint admission decision.
+///
+/// The shared admission marker covers every native joint type; authored joints
+/// waiting for resolution use `PendingUsdJoint`. When neither exists, there is
+/// no candidate to admit, so per-update scene-projection and endpoint checks
+/// can sleep until a candidate arrives.
+fn joint_admission_work_pending(
+    pending: Query<(), Or<(With<PendingUsdJoint>, With<PendingJointAdmission>)>>,
+) -> bool {
+    !pending.is_empty()
+}
+
 /// Plugin that owns native joint admission and solver-safe detach.
 pub struct JointAttachPlugin;
 
@@ -156,6 +168,7 @@ impl Plugin for JointAttachPlugin {
         app.add_systems(
             Update,
             synchronize_joint_admission_batch
+                .run_if(joint_admission_work_pending)
                 .in_set(JointAdmission)
                 .before(JointAdmissionCommit),
         );

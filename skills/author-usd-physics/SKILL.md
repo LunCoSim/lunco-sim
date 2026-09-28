@@ -59,6 +59,10 @@ boundary and performs one transaction in this order:
 
 The retirement owner only runs when a `PhysicsJointDetachRequested` marker is
 present. Idle updates skip its exclusive graph transaction and world query.
+Joint admission readiness is also gated by one combined query over the existing
+`PendingUsdJoint` and `PendingJointAdmission` markers. The owner rechecks the
+scene projection and endpoint readiness before each pending batch is admitted,
+while settled updates with no pending joint skip that scan.
 
 Scene teardown uses the same graph-retirement helper. This shared owner is what
 prevents a component-removal observer and a recursive despawn from unlinking one
