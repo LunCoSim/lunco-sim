@@ -122,7 +122,8 @@ remove a spec from a layer that does not own it. Durable changes are journaled
 and feed the same route revision/ribbon refresh. Runtime-layer snapshots are
 serialized and written asynchronously, with newer revisions coalesced while a
 write is in flight; no whole-scene serialization or file I/O runs in the
-pointer handler.
+pointer handler. Ribbon point readback comparison respects USD `point3f`
+precision, so a stable f32 value does not trigger repeated geometry writes.
 For a point below a reference, payload, or selected variant, the canonical
 composed path is the edit identity: the stronger local layer authors an `over`
 and the transform opinion there, and undo/redo removes or restores only that
@@ -136,8 +137,13 @@ current canonical stage even at generation zero, so it observes inactive
 referenced points and live `@view@` previews instead of the loader's initial
 snapshot. A document-scoped query can observe an exact generation after it has
 reached the mounted stage, even while the ECS projection cursor is catching up;
-operations still pending at the stage boundary remain retryable. Once the live
-entity exists, the same canonical path is used for selection and menu dispatch.
+operations still pending at the stage boundary remain retryable. Synchronous
+document preflight composes base, runtime, and view at their actual USD layer
+strengths against the loaded dependency closure. It sees children from the
+selected variant when validating a move or route `primOrder` edit, including for
+document-scoped queries before the canonical live stage mounts by using the
+loaded stage recipe. Once the live entity exists, the same canonical path is
+used for selection and menu dispatch.
 
 ## Progression
 

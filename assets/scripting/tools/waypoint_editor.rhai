@@ -747,7 +747,18 @@ fn vector_equal(a, b) {
 fn points_equal(a, b) {
     if a == () || b == () || a.len() != b.len() { return false; }
     for i in 0..a.len() {
-        if !vector_equal(a[i], b[i]) { return false; }
+        if a[i] == () || b[i] == () || a[i].len() != b[i].len() { return false; }
+        for axis in 0..a[i].len() {
+            let magnitude = a[i][axis].abs();
+            if b[i][axis].abs() > magnitude { magnitude = b[i][axis].abs(); }
+            // USD point3f readback is narrowed to f32 at the schema boundary.
+            // Compare within half an f32 ULP so a stable point does not cause
+            // every presentation refresh to rewrite the whole ribbon.
+            let tolerance = magnitude * 0.000000059604644775390625;
+            if (a[i][axis] - b[i][axis]).abs() > tolerance.max(0.000001) {
+                return false;
+            }
+        }
     }
     true
 }

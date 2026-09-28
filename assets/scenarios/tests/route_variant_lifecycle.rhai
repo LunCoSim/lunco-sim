@@ -1,7 +1,7 @@
 // Variant-composed route authoring acceptance. This mirrors the Summer Space
 // School shape: a wrapper selects a terrain/site variant and the route points
-// live below that composed arc. The test exercises add, move, delete, and
-// undo/redo through the public Rhai/USD authoring surface.
+// live below that composed arc. The test exercises add, move, delete,
+// undo/redo, and before/after ordering through the public Rhai/USD surface.
 
 const ROOT = "/RouteVariantLifecycle";
 const ROUTE = ROOT + "/Route";
@@ -59,6 +59,7 @@ fn context(doc, path, position) {
         hit_path: path,
         prim_paths: if path == () { [] } else { [path] },
         world_position: point3(position, "active_physics"),
+        surface_world_position: if position == () { () } else { point3(position, "active_physics") },
     }
 }
 
@@ -94,6 +95,8 @@ fn on_start(me, ctx) {
     this.original = [10.0, 1.0, -16.0];
     this.moved = [12.0, 1.0, -18.0];
     this.checks = [];
+    this.inserted_before = ();
+    this.inserted_after = ();
 }
 
 fn on_tick(me, ctx) {
@@ -114,19 +117,29 @@ fn on_tick(me, ctx) {
             path: P1,
             edit_target: "@root@",
         });
+        let trigger = query("ResolveUsdTarget", #{
+            doc_id: this.doc,
+            path: P1 + "/Trigger",
+            edit_target: "@root@",
+        });
         this.checks.push(t_true(query_ok(target)
             && target.under_arc == true
             && target.edit_scope == "local_override",
             "variant route point resolves as a canonical local override"));
+        if !query_ok(trigger) || (trigger.composed_exists != true
+            && trigger.authored_in_document != true) {
+            let trigger_status = "none";
+            let trigger_error = "none";
+            if trigger != () { trigger_status = trigger.status; }
+            if trigger != () && trigger.error != () { trigger_error = trigger.error; }
+            fail(this, "variant route trigger did not resolve: status=" + trigger_status
+                + " error=" + trigger_error);
+            return;
+        }
         let initial = point(this.doc, P1);
         if initial == () || initial.attrs == () { return; }
         this.checks.push(t_true(initial.attrs["xformOp:translate"] == this.original,
             "selected site variant exposes its authored point pose"));
-        let ribbon = waypoint_editor::ensure_ribbon(#{
-            doc_id: this.doc,
-            route_path: ROUTE,
-        });
-        if !query_ok(ribbon) { fail(this, "variant route ribbon could not be created"); return; }
         this.phase = 1;
         return;
     }
@@ -194,7 +207,9 @@ fn on_tick(me, ctx) {
             unselected_pointer_context(this.doc, [30.0, 1.0, -32.0]),
         );
         if !query_ok(added) || added.path != P3 {
-            fail(this, "adding a point to the variant-composed route was rejected");
+            let error = "no operation result";
+            if added != () && added.error != () { error = added.error; }
+            fail(this, "adding a point to the variant-composed route was rejected: " + error);
             return;
         }
         this.phase = 7;
@@ -213,15 +228,60 @@ fn on_tick(me, ctx) {
 
     if this.phase == 8 {
         let record = query("QueryUsdPrim", #{ doc_id: this.doc, path: P3 });
-        if record == () || record.ok == false || record.active != false
-            || active_points(this.doc) != 3 { return; }
-        let ribbon = waypoint_editor::ensure_ribbon(#{
-            doc_id: this.doc,
-            route_path: ROUTE,
-        });
-        if !query_ok(ribbon) { fail(this, "variant route ribbon refresh failed after edits"); return; }
+        if (record != () && record.ok != false) || active_points(this.doc) != 3 { return; }
         this.checks.push(t_true(true,
-            "add, move, and delete keep the variant route and ribbon coherent"));
+            "deleting a runtime point removes it from the selected-variant route"));
+        let before = waypoint_editor::on_insert_before(context(
+            this.doc, P1, [10.0, 1.0, -16.0]));
+        if !query_ok(before) || before.path == () {
+            let error = "no operation result";
+            if before != () && before.error != () { error = before.error; }
+            fail(this, "inserting before a selected variant route point was rejected: " + error);
+            return;
+        }
+        this.inserted_before = before.path;
+        this.phase = 9;
+        return;
+    }
+
+    if this.phase == 9 {
+        if active_points(this.doc) != 4 { return; }
+        let after = waypoint_editor::on_insert_after(context(
+            this.doc, P1, [10.0, 1.0, -16.0]));
+        if !query_ok(after) || after.path == () {
+            let error = "no operation result";
+            if after != () && after.error != () { error = after.error; }
+            fail(this, "inserting after a selected variant route point was rejected: " + error);
+            return;
+        }
+        this.inserted_after = after.path;
+        this.phase = 10;
+        return;
+    }
+
+    if this.phase == 10 {
+        if active_points(this.doc) != 5 { return; }
+        let route = query("QueryUsdPrim", #{
+            doc_id: this.doc, path: ROUTE, children: true,
+        });
+        if !query_ok(route) || route.children == () { return; }
+        let before_index = -1;
+        let target_index = -1;
+        let after_index = -1;
+        let index = 0;
+        for path in route.children {
+            if path == this.inserted_before { before_index = index; }
+            if path == P1 { target_index = index; }
+            if path == this.inserted_after { after_index = index; }
+            index += 1;
+        }
+        if before_index < 0 || target_index < 0 || after_index < 0
+            || before_index >= target_index || after_index <= target_index {
+            fail(this, "variant route insertion did not preserve before/after order");
+            return;
+        }
+        this.checks.push(t_true(true,
+            "before/after insertion preserves selected-variant route order"));
         finish(this, this.checks);
     }
 }

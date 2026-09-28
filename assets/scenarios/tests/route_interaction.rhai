@@ -95,6 +95,21 @@ fn on_tick(me, ctx) {
             let initial = query("QueryUsdPrim", #{ path: ROUTE, children: true });
             if initial == () || initial.ok == false || initial.doc_id == () { return; }
             this.doc = initial.doc_id;
+            let float_readback = waypoint_editor::points_equal(
+                [[550.069, 0.0, 0.0]],
+                [[550.0689697265625, 0.0, 0.0]],
+            );
+            let millimeter_change_stays_visible = !waypoint_editor::points_equal(
+                [[550.069, 0.0, 0.0]],
+                [[550.068, 0.0, 0.0]],
+            );
+            if !float_readback || !millimeter_change_stays_visible {
+                report(this, false,
+                    "ribbon point comparison did not respect USD point3f precision");
+                return;
+            }
+            this.checks.push(t_true(true,
+                "ribbon comparison accepts point3f readback and detects a millimeter edit"));
         }
         let route = query("QueryUsdPrim", #{
             doc_id: this.doc,

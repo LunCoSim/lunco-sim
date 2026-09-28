@@ -93,6 +93,7 @@ use lunco_usd_compose::recipe::StageRecipe;
 use lunco_usd_data::units::{ConventionTransform, StageMetadataReader, StageMetrics, UpAxis};
 use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecType};
+use openusd::usd::Stage;
 
 /// How many recent changes to keep in the per-document ring buffer.
 ///
@@ -1707,6 +1708,33 @@ impl UsdDocument {
         self.authoring_recipe.as_deref()
     }
 
+    /// Open the current document as a fully composed authoring stage.
+    ///
+    /// Keep base, runtime, and view as separate USD layers so variant and
+    /// reference composition sees the same opinion strength as the document.
+    /// The flattened `composed_arc` remains a local authored-data view and is
+    /// not a substitute for this stage when a loaded dependency closure exists.
+    pub fn open_composed_stage(&self) -> Result<Stage, DocumentError> {
+        match &self.authoring_recipe {
+            Some(recipe) => self.open_composed_stage_with_recipe(recipe),
+            None => {
+                let composed = self.composed_arc();
+                open_doc_stage(&composed).map_err(author_err)
+            }
+        }
+    }
+
+    /// Open this document's current layers over the scene's resolved dependency
+    /// closure. The caller supplies the recipe when the document is queried
+    /// before its authoring context has been refreshed by a command.
+    pub fn open_composed_stage_with_recipe(
+        &self,
+        recipe: &StageRecipe,
+    ) -> Result<Stage, DocumentError> {
+        author::open_doc_stage_with_layers(&self.base, &self.runtime, &self.view, recipe)
+            .map_err(author_err)
+    }
+
     /// Validate against real composition and preserve its inherited operation
     /// order. No dependency data is copied into the authored layer.
     fn transform_edit_context(
@@ -1715,12 +1743,7 @@ impl UsdDocument {
         op_name: &str,
     ) -> Result<(SdfPath, Vec<String>, bool), DocumentError> {
         let prim_path = parse_prim_path(path)?;
-        let data = self.composed_arc();
-        let stage = match &self.authoring_recipe {
-            Some(recipe) => author::open_doc_stage_with_recipe(&data, recipe),
-            None => open_doc_stage(&data),
-        }
-        .map_err(author_err)?;
+        let stage = self.open_composed_stage()?;
         let prim = stage.prim(prim_path.clone());
         if !prim.is_valid().map_err(author_err)? {
             // A referenced descendant is editable only when the loaded
@@ -4154,12 +4177,7 @@ impl Document for UsdDocument {
                         "SetPrimOrder target {path} must name a prim, not a property"
                     )));
                 }
-                let data = self.composed_arc();
-                let composed_stage = match &self.authoring_recipe {
-                    Some(recipe) => author::open_doc_stage_with_recipe(&data, recipe),
-                    None => open_doc_stage(&data),
-                }
-                .map_err(author_err)?;
+                let composed_stage = self.open_composed_stage()?;
                 let composed_parent = composed_stage.prim(prim_sdf.clone());
                 if !composed_parent.is_valid().map_err(author_err)? {
                     return Err(DocumentError::ValidationFailed(format!(
