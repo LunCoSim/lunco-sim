@@ -78,6 +78,11 @@ key after the source despawns. Session-local producers remain keyed by their liv
 `Entity::to_bits()` identity. Producers must associate the owner at the retention boundary;
 consumers must not reconstruct archived ownership from a missing entity or a display label.
 
+Modelica runtime telemetry caches each session's `SignalRef` by solver variable name. Its
+`record_scalar_at_rate` path borrows that identity for existing channels, so steady samples do
+not rebuild or clone an owned signal path. The registry clones the key only when it first
+creates the channel; a new solver session clears the prior histories and cached identities.
+
 ### Archived history is not automatically stale
 
 An archived row means that its publisher was removed during this process (for example, a

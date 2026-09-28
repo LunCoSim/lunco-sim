@@ -23,6 +23,7 @@
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 
 pub mod sim;
@@ -413,13 +414,14 @@ impl SignalRegistry {
 
     fn push_scalar_sample(
         &mut self,
-        sig: SignalRef,
+        sig: Cow<'_, SignalRef>,
         sample: ScalarSample,
         capacity: usize,
         resize_existing: bool,
     ) {
-        let was_inactive = self.inactive.remove(&sig);
-        if let Some(history) = self.scalar_history.get_mut(&sig) {
+        let key = sig.as_ref();
+        let was_inactive = self.inactive.remove(key);
+        if let Some(history) = self.scalar_history.get_mut(key) {
             if resize_existing && history.capacity != capacity.max(1) {
                 history.set_capacity(capacity);
             }
@@ -430,9 +432,10 @@ impl SignalRegistry {
             return;
         }
 
-        let was_known = self.types.contains_key(&sig);
+        let was_known = self.types.contains_key(key);
         let mut history = ScalarHistory::new(capacity);
         history.push(sample);
+        let sig = sig.into_owned();
         self.scalar_history.insert(sig.clone(), history);
         self.types.entry(sig).or_insert(SignalType::Scalar);
         if !was_known || was_inactive {
@@ -447,7 +450,7 @@ impl SignalRegistry {
             return;
         }
         self.push_scalar_sample(
-            sig,
+            Cow::Owned(sig),
             ScalarSample { time, value },
             self.capacity_default(),
             false,
@@ -468,7 +471,12 @@ impl SignalRegistry {
         if !value.is_finite() {
             return;
         }
-        self.push_scalar_sample(sig, ScalarSample { time, value }, capacity, true);
+        self.push_scalar_sample(
+            Cow::Owned(sig),
+            ScalarSample { time, value },
+            capacity,
+            true,
+        );
     }
 
     /// Retain a scalar sample when the shared runtime sampling policy says it is
@@ -527,10 +535,11 @@ impl SignalRegistry {
     /// therefore must advance with the simulation clock even when the value is
     /// steady. Operator notification policy belongs to the producer/event lane,
     /// not to this recording primitive. A backwards time jump starts a new
-    /// history segment instead of appending out-of-order points.
+    /// history segment instead of appending out-of-order points. Borrow the
+    /// identity so a producer can reuse it without cloning its path each sample.
     pub fn record_scalar_at_rate(
         &mut self,
-        sig: SignalRef,
+        sig: &SignalRef,
         time: f64,
         value: f64,
         rate_hz: f64,
@@ -541,18 +550,23 @@ impl SignalRegistry {
         }
 
         let previous = self
-            .scalar_history(&sig)
+            .scalar_history(sig)
             .and_then(|history| history.samples.back())
             .copied();
         if let Some(previous) = previous {
             if time < previous.time {
-                self.clear_history(&sig);
+                self.clear_history(sig);
             } else if time - previous.time < 1.0 / rate_hz {
                 return false;
             }
         }
 
-        self.push_scalar_with_capacity(sig, time, value, capacity);
+        self.push_scalar_sample(
+            Cow::Borrowed(sig),
+            ScalarSample { time, value },
+            capacity,
+            true,
+        );
         true
     }
 
@@ -942,9 +956,9 @@ mod tests {
     fn recording_keeps_simulation_time_when_value_is_steady() {
         let mut reg = SignalRegistry::default();
         let signal = SignalRef::global("steady");
-        assert!(reg.record_scalar_at_rate(signal.clone(), 0.0, 1.0, 10.0, 8));
-        assert!(!reg.record_scalar_at_rate(signal.clone(), 0.05, 1.0, 10.0, 8));
-        assert!(reg.record_scalar_at_rate(signal.clone(), 0.11, 1.0, 10.0, 8));
+        assert!(reg.record_scalar_at_rate(&signal, 0.0, 1.0, 10.0, 8));
+        assert!(!reg.record_scalar_at_rate(&signal, 0.05, 1.0, 10.0, 8));
+        assert!(reg.record_scalar_at_rate(&signal, 0.11, 1.0, 10.0, 8));
         let history = reg.scalar_history(&signal).unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(history.samples.back().unwrap().time, 0.11);
