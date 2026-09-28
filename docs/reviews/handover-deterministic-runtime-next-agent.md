@@ -831,3 +831,37 @@ enough to promise same-state continuation from an arbitrary capture tick.
 - Current source still uses `@peer host|client|both` for process-role routing;
   `2ec8aaa3f` is the later contract after the earlier `@run-on` rename. Keep
   process role distinct from Rust runtime scope, cycle, and clock.
+
+## Domain-network startup admission continuation (2026-09-29)
+
+- Commit `d2f7de95c` adds a root-scoped `UsdDomainProjection` progress hold for
+  initial USD Modelica network discovery. The hold covers member-source
+  resolution, synthesis, and generated `SimComponent` publication; the binding
+  epoch stays open while its port surface is unknown. At the
+  `SimulationProgressAdmissionSet` boundary the domain hold releases only once
+  the component is present, while the existing Modelica compile hold overlaps
+  it. This fixes the 4-rover startup case that previously emitted unresolved
+  connection-binding warnings before its generated interfaces existed.
+- `cargo check --locked -j 4 -p lunco-usd-sim-domain -p lunco-usd-sim-cosim`
+  passed. `cargo build --locked -j 4 -p lunco-luncosim --bin luncosim
+  --no-default-features --features api-transport` passed; it reported the
+  pre-existing unused `ApiResponse` import in `lunco-api-transport`.
+- `python3 scripts/compare_deterministic_physics_profiles.py` passed both
+  production gates across the 4-, 8-, and 20-rover fixtures: 12 runs,
+  Compute widths 1 and 24, matching physics and Modelica traces, digest
+  `c0b6cfc74ed7a8b33c7fa4b00dfd3ba1e1637d585cf6a16f0c117acdc9473dc6`.
+  The 4-rover startup no longer logged connection-binding failures.
+- `python3 scripts/compare_deterministic_startup_dependencies.py` passed twice
+  after the change: four production runs, first behavior tick 1, matching
+  actor and sensor/physics snapshot across Compute widths 1 and 24, digest
+  `92753352336a37dd97ed30837833bba97c64db68ef0649b8f1e29727583999da`.
+- The task commit was fast-forwarded to local `main` at `d2f7de95c`; nothing was
+  pushed. Main's 20 non-overlapping staged user edits are restored. Ten
+  overlapping edits targeted the superseded `ControlSafeStop` value-writing
+  contract; they remain recoverable in `stash@{0}` (`2da31eca2c86f3a6861245516888e072cb590c63`)
+  rather than reintroducing that API. The separate untracked `scripts/perf/`
+  work remains untouched.
+- The task checkout's `cargo clean` removed 7.3 GiB; rebuild its production
+  binary before another runtime check. The next broad replay gap remains a
+  truthful genesis-only capture boundary or owner-supported solver snapshots;
+  the current Modelica worker does not expose portable solver checkpoints.
