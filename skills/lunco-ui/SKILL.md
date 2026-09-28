@@ -175,13 +175,12 @@ For the missing-asset consent flow, the popup's unchecked negative checkbox
 means "show next time" and persists through `twin.toml [downloads]`; do not
 add a second global settings key for it.
 
-The Entity list follows the same rule for `ui.entity_list.grid_scope`: `current`
-reads the authoritative `ActivePhysicsFrame`, `all` includes every mounted
-BigSpace grid, and an omitted key uses the documented `current` default. The
-Settings menu emits the existing generic `SetTwinSetting` command. Invalid
-values are visible errors, and the derived tree is cleared on active
-`TwinClosed`; do not cache this choice in a global UI resource or keep it across
-Twin replacement.
+The Entities panel follows `SceneMountState::active_root` through the shared
+`UsdSceneRoot` ancestry helper. Membership follows scene hierarchy through
+nested grids and remains independent of physics frames. Additive mounts and
+render-only previews are excluded. Membership is an application-owned scene
+fact, not a Twin preference. Clear the derived tree on active `TwinClosed` so
+outgoing rows cannot linger.
 
 The native Updates submenu is content-sized by the workbench's shared menu
 container. Keep its identity block explicit (`Version`, `GitHub Actions build`,

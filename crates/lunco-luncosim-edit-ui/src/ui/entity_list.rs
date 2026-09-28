@@ -6,6 +6,8 @@
 //! wires, ports, empty transform wrappers) is hidden — only entities that are
 //! selectable or mesh-bearing, plus their ancestors, appear. Clicking a node
 //! selects it.
+//! Membership follows the active scene mount's `UsdSceneRoot` hierarchy, so
+//! nested BigSpace grids do not split one scene into separate browser scopes.
 //!
 //! **Reactive shape (WP-8):** the panel is a pure *view*. The scene-graph
 //! harvest — flatten, parent-collapse, visibility prune, sort — runs in
@@ -28,70 +30,6 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workspace::{SetTwinSetting, TwinClosed, TwinSettingInput, WorkspaceResource};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-
-/// Generic Twin setting key for the entity tree's grid visibility.
-pub const ENTITY_LIST_GRID_SCOPE_SETTING: &str = "ui.entity_list.grid_scope";
-
-/// Which BigSpace grid the entity tree includes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum EntityGridScope {
-    /// Only entities under the live [`lunco_spatial::ActivePhysicsFrame`].
-    #[default]
-    Current,
-    /// Entities from every grid in the mounted scene.
-    All,
-}
-
-impl EntityGridScope {
-    fn setting_value(self) -> &'static str {
-        match self {
-            Self::Current => "current",
-            Self::All => "all",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Current => "Current grid only",
-            Self::All => "All grids",
-        }
-    }
-}
-
-fn parse_entity_grid_scope(
-    value: &lunco_workspace::TwinSettingValue,
-) -> Result<EntityGridScope, String> {
-    match value {
-        lunco_workspace::TwinSettingValue::Text(value) => match value.as_str() {
-            "current" => Ok(EntityGridScope::Current),
-            "all" => Ok(EntityGridScope::All),
-            _ => Err(format!(
-                "`{ENTITY_LIST_GRID_SCOPE_SETTING}` must be `current` or `all`, got `{value}`"
-            )),
-        },
-        other => Err(format!(
-            "`{ENTITY_LIST_GRID_SCOPE_SETTING}` must be text (`current` or `all`), got {other:?}"
-        )),
-    }
-}
-
-fn entity_grid_scope(workspace: Option<&WorkspaceResource>) -> Result<EntityGridScope, String> {
-    let Some(workspace) = workspace else {
-        return Ok(EntityGridScope::Current);
-    };
-    let Some(twin_id) = workspace.active_twin else {
-        return Ok(EntityGridScope::Current);
-    };
-    let Some(twin) = workspace.twin(twin_id) else {
-        return Err(format!("active Twin {twin_id:?} is no longer registered"));
-    };
-    let Some(manifest) = twin.manifest.as_ref() else {
-        return Ok(EntityGridScope::Current);
-    };
-    manifest
-        .setting(ENTITY_LIST_GRID_SCOPE_SETTING)
-        .map_or(Ok(EntityGridScope::Current), parse_entity_grid_scope)
-}
 
 /// Persisted view prefs for the Entity list.
 #[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
@@ -129,53 +67,6 @@ pub(crate) fn register_settings_submenu(world: &mut World) {
             );
         if next != current {
             ctx.set_resource(EntityListSettings { show_system: next });
-        }
-
-        ui.separator();
-        ui.label(
-            egui::RichText::new("Grid scope (active Twin)")
-                .weak()
-                .small(),
-        );
-        let Some((scope_result, can_persist)) =
-            ctx.resource::<WorkspaceResource>().map(|workspace| {
-                let can_persist = workspace
-                    .active_twin
-                    .and_then(|id| workspace.twin(id))
-                    .is_some_and(|twin| twin.manifest.is_some());
-                (entity_grid_scope(Some(workspace)), can_persist)
-            })
-        else {
-            ui.label("No workspace session is available.");
-            return;
-        };
-        match scope_result {
-            Ok(current_scope) => {
-                let mut next_scope = current_scope;
-                ui.add_enabled_ui(can_persist, |ui| {
-                    ui.radio_value(
-                        &mut next_scope,
-                        EntityGridScope::Current,
-                        EntityGridScope::Current.label(),
-                    );
-                    ui.radio_value(
-                        &mut next_scope,
-                        EntityGridScope::All,
-                        EntityGridScope::All.label(),
-                    );
-                });
-                if !can_persist {
-                    ui.weak("Open a manifest-backed Twin to persist this choice.");
-                } else if next_scope != current_scope {
-                    ctx.trigger(SetTwinSetting {
-                        key: ENTITY_LIST_GRID_SCOPE_SETTING.into(),
-                        value: TwinSettingInput::Text(next_scope.setting_value().into()),
-                    });
-                }
-            }
-            Err(error) => {
-                ui.label(format!("Grid scope error: {error}"));
-            }
         }
 
         ui.separator();
@@ -254,30 +145,17 @@ pub struct EntityTreeView {
     /// this value rather than trusting a `Changed<ChildOf>` tick: grid and
     /// celestial systems may re-stamp an identical parent every frame.
     parents: HashMap<Entity, Entity>,
-    /// The filter value used for the cached tree.
     show_system: bool,
-    /// The active Twin's grid-scope choice used for the cached tree.
-    grid_scope: EntityGridScope,
-    /// The active Twin that supplied [`grid_scope`](Self::grid_scope).
-    active_twin: Option<lunco_workspace::TwinId>,
-    /// The live physics grid when one was available during the build.
-    current_grid: Option<Entity>,
-    /// An invalid setting or missing current frame prevents a misleading tree.
-    scope_error: Option<String>,
-    /// Named entities eligible for the current system-entity preference. This
-    /// lets the gate notice a hidden entity moving into the current grid.
-    scope_entities: HashSet<Entity>,
-    /// Unnamed ancestors whose reparenting can change an entity's grid scope.
-    scope_ancestors: HashSet<Entity>,
+    /// Primary scene mount used for the cached tree.
+    active_scene_root: Option<Entity>,
+    /// Invalid scene ownership prevents a misleading tree.
+    scene_error: Option<String>,
+    /// Active-scene ancestry whose parent or scene-root changes can alter the tree.
+    candidate_hierarchy_entities: HashSet<Entity>,
+    /// Parent links at the time the active-scene ancestry was harvested.
+    candidate_hierarchy_parents: HashMap<Entity, Entity>,
     /// Set once the first build runs, so the change-gate forces an initial fill.
     built: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct GridScopeState {
-    scope: EntityGridScope,
-    active_twin: Option<lunco_workspace::TwinId>,
-    current_grid: Option<Entity>,
 }
 
 struct NamedTreeCandidate {
@@ -291,11 +169,44 @@ struct NamedTreeCandidate {
 
 struct EntityTreeBuildInput {
     show_system: bool,
-    scope_state: GridScopeState,
-    scope_error: Option<String>,
+    active_scene_root: Option<Entity>,
+    scene_error: Option<String>,
     child_of: HashMap<Entity, Entity>,
-    grids: HashSet<Entity>,
     named_candidates: Vec<NamedTreeCandidate>,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct EntityTreeSceneQueries<'w, 's> {
+    mount: Option<Res<'w, lunco_core::SceneMountState>>,
+    roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+    preview_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    parent_changes: Query<'w, 's, (Entity, &'static ChildOf), Changed<ChildOf>>,
+    boundary_changes: Query<
+        'w,
+        's,
+        Entity,
+        Or<(
+            Changed<lunco_usd_bevy_scene::UsdSceneRoot>,
+            Changed<lunco_usd_bevy_scene::UsdPreviewOnly>,
+        )>,
+    >,
+    entities: Query<'w, 's, Entity>,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct EntityTreeRemovals<'w, 's> {
+    names: RemovedComponents<'w, 's, Name>,
+    children: RemovedComponents<'w, 's, ChildOf>,
+    meshes: RemovedComponents<'w, 's, Mesh3d>,
+    selectables: RemovedComponents<'w, 's, lunco_core::SelectableRoot>,
+    callsigns: RemovedComponents<'w, 's, lunco_core::markers::Callsign>,
+    catalog_ids: RemovedComponents<'w, 's, lunco_core::CatalogEntryId>,
+    usd_paths: RemovedComponents<'w, 's, lunco_usd_bevy_scene::UsdPrimPath>,
+    scene_roots: RemovedComponents<'w, 's, lunco_usd_bevy_scene::UsdSceneRoot>,
+    preview_roots: RemovedComponents<'w, 's, lunco_usd_bevy_scene::UsdPreviewOnly>,
+    system_managed: RemovedComponents<'w, 's, lunco_core::SystemManaged>,
+    cameras: RemovedComponents<'w, 's, SceneCamera>,
 }
 
 #[derive(Resource, Default)]
@@ -312,81 +223,73 @@ impl EntityTreeBuildState {
     }
 }
 
-fn grid_scope_state(
-    workspace: Option<&WorkspaceResource>,
-    current_grid: Option<Entity>,
-    active_frame_bound: bool,
-) -> (GridScopeState, Option<String>) {
-    let scope_result = entity_grid_scope(workspace);
-    let scope = scope_result.as_ref().copied().unwrap_or_default();
-    let active_twin = workspace.and_then(|workspace| workspace.active_twin);
-    let error = scope_result.err().or_else(|| {
-        if scope == EntityGridScope::Current {
-            match current_grid {
-                None if !active_frame_bound => {
-                    Some("current grid is unavailable: no ActivePhysicsFrame is bound".into())
-                }
-                None => Some(
-                    "current grid is unavailable: ActivePhysicsFrame is not a live Grid".into(),
-                ),
-                Some(_) => None,
-            }
-        } else {
-            None
-        }
-    });
-    (
-        GridScopeState {
-            scope,
-            active_twin,
-            current_grid,
-        },
-        error,
-    )
-}
-
-fn nearest_grid(
-    entity: Entity,
-    child_of: &HashMap<Entity, Entity>,
-    grids: &HashSet<Entity>,
-) -> Option<Entity> {
-    let mut current = entity;
-    for _ in 0..64 {
-        if grids.contains(&current) {
-            return Some(current);
-        }
-        let parent = child_of.get(&current).copied()?;
-        current = parent;
+fn active_scene_root_state(
+    scene_mount: Option<&lunco_core::SceneMountState>,
+    scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+) -> (Option<Entity>, Option<String>) {
+    let Some(scene_mount) = scene_mount else {
+        return (None, Some("scene mount state is unavailable".into()));
+    };
+    match scene_mount.active_root() {
+        None => (None, None),
+        Some(root) if scene_roots.contains(root) => (Some(root), None),
+        Some(root) => (
+            None,
+            Some(format!(
+                "active scene root {root:?} is not a live USD scene root"
+            )),
+        ),
     }
-    None
 }
 
-fn collect_scope_ancestors(
+fn belongs_to_active_scene(
     entity: Entity,
+    active_scene_root: Option<Entity>,
+    scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+    preview_roots: &Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
+    parents: &Query<&ChildOf>,
+    entities: &Query<Entity>,
+) -> Result<bool, String> {
+    let Some(active_root) = active_scene_root else {
+        return Ok(false);
+    };
+    match lunco_usd_bevy_scene::scene_root_ancestor(entity, scene_roots, parents, entities) {
+        Ok(root) if root == Some(active_root) => Ok(!lunco_usd_bevy_scene::is_preview_only(
+            entity,
+            parents,
+            preview_roots,
+        )),
+        Ok(_) => Ok(false),
+        Err(lunco_usd_bevy_scene::SceneRootAncestorError::MissingParentEntity) => Err(format!(
+            "entity {entity:?} has a missing parent while resolving scene ownership"
+        )),
+        Err(lunco_usd_bevy_scene::SceneRootAncestorError::DepthExceeded) => Err(format!(
+            "entity {entity:?} scene hierarchy exceeds {} ancestors",
+            lunco_usd_bevy_scene::MAX_SCENE_HIERARCHY_DEPTH
+        )),
+    }
+}
+
+fn collect_candidate_hierarchy(
+    entity: Entity,
+    active_scene_root: Entity,
     child_of: &HashMap<Entity, Entity>,
     ancestors: &mut HashSet<Entity>,
+    hierarchy_parents: &mut HashMap<Entity, Entity>,
 ) {
     let mut current = entity;
-    for _ in 0..64 {
+    for _ in 0..lunco_usd_bevy_scene::MAX_SCENE_HIERARCHY_DEPTH {
         if !ancestors.insert(current) {
+            return;
+        }
+        if current == active_scene_root {
             return;
         }
         let Some(parent) = child_of.get(&current).copied() else {
             return;
         };
+        hierarchy_parents.insert(current, parent);
         current = parent;
-    }
-}
-
-fn in_scope(
-    entity: Entity,
-    state: GridScopeState,
-    child_of: &HashMap<Entity, Entity>,
-    grids: &HashSet<Entity>,
-) -> bool {
-    match state.scope {
-        EntityGridScope::All => true,
-        EntityGridScope::Current => nearest_grid(entity, child_of, grids) == state.current_grid,
     }
 }
 
@@ -456,8 +359,11 @@ fn compute_shown(
 pub(crate) fn populate_entity_tree_view(
     mut build: ResMut<EntityTreeBuildState>,
     settings: Res<EntityListSettings>,
-    workspace: Option<Res<WorkspaceResource>>,
-    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    scene_mount: Option<Res<lunco_core::SceneMountState>>,
+    scene_roots: Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+    preview_roots: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
+    parents: Query<&ChildOf>,
+    entities: Query<Entity>,
     named_q: Query<(
         Entity,
         &Name,
@@ -469,8 +375,6 @@ pub(crate) fn populate_entity_tree_view(
         Has<lunco_core::SelectableRoot>,
         Has<Mesh3d>,
     )>,
-    child_q: Query<(Option<&ChildOf>, Has<big_space::prelude::Grid>)>,
-    grid_q: Query<Entity, With<big_space::prelude::Grid>>,
 ) {
     if build.task.is_some() {
         build.invalidate();
@@ -482,12 +386,8 @@ pub(crate) fn populate_entity_tree_view(
         let _span = bevy::log::info_span!("entity_tree_view_snapshot").entered();
         // System-owned churn is excluded before the immutable snapshot leaves the
         // ECS thread. The hierarchy derivation below uses only owned values.
-        let current_grid = active_frame
-            .as_ref()
-            .map(|frame| frame.0)
-            .filter(|grid| grid_q.contains(*grid));
-        let (scope_state, scope_error) =
-            grid_scope_state(workspace.as_deref(), current_grid, active_frame.is_some());
+        let (active_scene_root, mut scene_error) =
+            active_scene_root_state(scene_mount.as_deref(), &scene_roots);
         let named_candidates: Vec<_> = named_q
             .iter()
             .filter_map(
@@ -502,8 +402,23 @@ pub(crate) fn populate_entity_tree_view(
                     selectable,
                     has_mesh,
                 )| {
-                    if !settings.show_system && is_system {
+                    if Some(entity) == active_scene_root || (!settings.show_system && is_system) {
                         return None;
+                    }
+                    match belongs_to_active_scene(
+                        entity,
+                        active_scene_root,
+                        &scene_roots,
+                        &preview_roots,
+                        &parents,
+                        &entities,
+                    ) {
+                        Ok(true) => {}
+                        Ok(false) => return None,
+                        Err(error) => {
+                            scene_error.get_or_insert(error);
+                            return None;
+                        }
                     }
                     Some(NamedTreeCandidate {
                         entity,
@@ -519,30 +434,22 @@ pub(crate) fn populate_entity_tree_view(
                 },
             )
             .collect();
-        // The tree only reads hierarchy and grid scope along named entities'
-        // ancestry. Harvest those paths through indexed Query::get lookups
+        // The tree only reads hierarchy along named entities' ancestry. Harvest
+        // those paths through indexed Query::get lookups
         // instead of scanning every internal wrapper in the scene.
         let mut child_of = HashMap::new();
-        let mut grids = HashSet::new();
         let mut visited = HashSet::new();
         for candidate in &named_candidates {
             let mut current = candidate.entity;
-            for _ in 0..64 {
+            for _ in 0..lunco_usd_bevy_scene::MAX_SCENE_HIERARCHY_DEPTH {
+                if Some(current) == active_scene_root {
+                    break;
+                }
                 if visited.contains(&current) {
-                    let Some(parent) = child_of.get(&current).copied() else {
-                        break;
-                    };
-                    current = parent;
-                    continue;
+                    break;
                 }
                 visited.insert(current);
-                let Ok((parent, is_grid)) = child_q.get(current) else {
-                    break;
-                };
-                if is_grid {
-                    grids.insert(current);
-                }
-                let Some(parent) = parent else {
+                let Ok(parent) = parents.get(current) else {
                     break;
                 };
                 let parent = parent.parent();
@@ -552,10 +459,9 @@ pub(crate) fn populate_entity_tree_view(
         }
         EntityTreeBuildInput {
             show_system: settings.show_system,
-            scope_state,
-            scope_error,
+            active_scene_root,
+            scene_error,
             child_of,
-            grids,
             named_candidates,
         }
     };
@@ -596,14 +502,13 @@ pub(crate) fn poll_entity_tree_view_build(
 fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
     let EntityTreeBuildInput {
         show_system,
-        scope_state,
-        scope_error,
+        active_scene_root,
+        scene_error,
         child_of,
-        grids,
         named_candidates,
     } = input;
-    let mut scope_entities = HashSet::new();
-    let mut scope_ancestors = HashSet::new();
+    let mut candidate_hierarchy_entities = HashSet::new();
+    let mut candidate_hierarchy_parents = HashMap::new();
     let mut named: Vec<(Entity, String, String)> = Vec::with_capacity(named_candidates.len());
     let mut camera_identities = Vec::new();
     let mut selectable = HashSet::new();
@@ -623,11 +528,16 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
         if has_mesh_marker {
             has_mesh.insert(entity);
         }
-        scope_entities.insert(entity);
-        collect_scope_ancestors(entity, &child_of, &mut scope_ancestors);
-        if scope_error.is_some() || !in_scope(entity, scope_state, &child_of, &grids) {
+        let Some(active_scene_root) = active_scene_root.filter(|_| scene_error.is_none()) else {
             continue;
-        }
+        };
+        collect_candidate_hierarchy(
+            entity,
+            active_scene_root,
+            &child_of,
+            &mut candidate_hierarchy_entities,
+            &mut candidate_hierarchy_parents,
+        );
         if let Some(identity) = camera_identity {
             camera_identities.push((entity, identity));
         }
@@ -649,7 +559,7 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
 
     let display_parent = |entity: Entity| -> Option<Entity> {
         let mut current = entity;
-        for _ in 0..64 {
+        for _ in 0..lunco_usd_bevy_scene::MAX_SCENE_HIERARCHY_DEPTH {
             let parent = *child_of.get(&current)?;
             if named_set.contains(&parent) {
                 return Some(parent);
@@ -741,12 +651,10 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
         })
         .collect();
     view.show_system = show_system;
-    view.grid_scope = scope_state.scope;
-    view.active_twin = scope_state.active_twin;
-    view.current_grid = scope_state.current_grid;
-    view.scope_error = scope_error;
-    view.scope_entities = scope_entities;
-    view.scope_ancestors = scope_ancestors;
+    view.active_scene_root = active_scene_root;
+    view.scene_error = scene_error;
+    view.candidate_hierarchy_entities = candidate_hierarchy_entities;
+    view.candidate_hierarchy_parents = candidate_hierarchy_parents;
     view.built = true;
     view
 }
@@ -771,10 +679,7 @@ pub(crate) fn scene_topology_changed(
     mut first: Local<bool>,
     settings: Res<EntityListSettings>,
     view: Res<EntityTreeView>,
-    workspace: Option<Res<WorkspaceResource>>,
-    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
-    grids: Query<Entity, With<big_space::prelude::Grid>>,
-    changed_unnamed_parents: Query<Entity, (Changed<ChildOf>, Without<Name>)>,
+    scene: EntityTreeSceneQueries,
     changed: Query<
         (
             Entity,
@@ -792,35 +697,24 @@ pub(crate) fn scene_topology_changed(
             With<Name>,
             Or<(
                 Changed<Name>,
-                Changed<ChildOf>,
                 Changed<lunco_core::markers::Callsign>,
                 Changed<lunco_core::CatalogEntryId>,
                 Changed<lunco_usd_bevy_scene::UsdPrimPath>,
+                Changed<lunco_core::SystemManaged>,
                 Added<Mesh3d>,
                 Added<lunco_core::SelectableRoot>,
                 Added<SceneCamera>,
             )>,
         ),
     >,
-    mut rm_name: RemovedComponents<Name>,
-    mut rm_child: RemovedComponents<ChildOf>,
-    mut rm_mesh: RemovedComponents<Mesh3d>,
-    mut rm_sel: RemovedComponents<lunco_core::SelectableRoot>,
-    mut rm_callsign: RemovedComponents<lunco_core::markers::Callsign>,
-    mut rm_catalog: RemovedComponents<lunco_core::CatalogEntryId>,
-    mut rm_usd_path: RemovedComponents<lunco_usd_bevy_scene::UsdPrimPath>,
-    mut rm_camera: RemovedComponents<SceneCamera>,
+    mut removals: EntityTreeRemovals,
 ) -> bool {
-    let current_grid = active_frame
-        .as_ref()
-        .map(|frame| frame.0)
-        .filter(|grid| grids.get(*grid).is_ok());
-    let (scope_state, scope_error) =
-        grid_scope_state(workspace.as_deref(), current_grid, active_frame.is_some());
-    let scope_changed = view.grid_scope != scope_state.scope
-        || view.active_twin != scope_state.active_twin
-        || view.current_grid != scope_state.current_grid
-        || view.scope_error != scope_error;
+    let (active_scene_root, scene_error) =
+        active_scene_root_state(scene.mount.as_deref(), &scene.roots);
+    let active_scene_changed =
+        view.active_scene_root != active_scene_root || view.scene_error != scene_error;
+    let removed_scene_boundary =
+        removals.scene_roots.read().count() > 0 || removals.preview_roots.read().count() > 0;
 
     // Drain removal buffers every frame (keeps them from accumulating) and note
     // whether anything relevant was removed. A removed entity can no longer be
@@ -831,21 +725,40 @@ pub(crate) fn scene_topology_changed(
     let drained = |it: &mut dyn Iterator<Item = Entity>| {
         it.fold(false, |acc, e| acc | view.labels.contains_key(&e))
     };
-    let removed = drained(&mut rm_name.read())
-        | drained(&mut rm_child.read())
-        | drained(&mut rm_mesh.read())
-        | drained(&mut rm_sel.read())
-        | drained(&mut rm_callsign.read())
-        | drained(&mut rm_catalog.read())
-        | drained(&mut rm_usd_path.read())
-        | rm_camera.read().fold(false, |acc, entity| {
+    let removed_child = removals.children.read().fold(false, |acc, entity| {
+        acc | (Some(entity) != active_scene_root
+            && view.candidate_hierarchy_entities.contains(&entity))
+    });
+    let removed_system_managed = removals.system_managed.read().fold(false, |acc, entity| {
+        acc | (!settings.show_system
+            && match belongs_to_active_scene(
+                entity,
+                active_scene_root,
+                &scene.roots,
+                &scene.preview_roots,
+                &scene.parents,
+                &scene.entities,
+            ) {
+                Ok(belongs) => belongs,
+                Err(_) => true,
+            })
+    });
+    let removed = drained(&mut removals.names.read())
+        | removed_child
+        | drained(&mut removals.meshes.read())
+        | drained(&mut removals.selectables.read())
+        | drained(&mut removals.callsigns.read())
+        | drained(&mut removals.catalog_ids.read())
+        | drained(&mut removals.usd_paths.read())
+        | removed_scene_boundary
+        | removed_system_managed
+        | removals.cameras.read().fold(false, |acc, entity| {
             acc | view.camera_entities.contains(&entity)
         });
     // The raw ECS graph contains many named but visibility-pruned implementation
     // entities (telemetry channel holders, transform wrappers, etc.). A change
-    // to an entity outside the cached scope is ignored unless it is a newly
-    // eligible named entity. Unnamed ancestors are handled separately below,
-    // because their reparenting can change a descendant's grid membership.
+    // outside the active scene is ignored unless it moves a candidate into that
+    // scene or changes a visible candidate's source data.
     let value_changed = |(entity, name, callsign, catalog_id, path, parent): (
         Entity,
         &Name,
@@ -877,32 +790,68 @@ pub(crate) fn scene_topology_changed(
             has_selectable,
             has_camera,
         )| {
-            let eligible =
-                view.scope_entities.contains(&entity) || system.is_none() || settings.show_system;
-            let newly_visible = !view.base_labels.contains_key(&entity)
+            let was_visible = view.base_labels.contains_key(&entity);
+            let newly_visible = !was_visible
+                && (settings.show_system || system.is_none())
                 && (has_mesh || has_selectable || has_camera);
-            eligible
-                && (newly_visible
-                    || view.scope_entities.contains(&entity)
-                    || value_changed((entity, name, callsign, catalog_id, path, parent)))
+            let entered_active_scene = newly_visible
+                && match belongs_to_active_scene(
+                    entity,
+                    active_scene_root,
+                    &scene.roots,
+                    &scene.preview_roots,
+                    &scene.parents,
+                    &scene.entities,
+                ) {
+                    Ok(belongs) => belongs,
+                    Err(_) => true,
+                };
+            let system_filter_changed = was_visible && !settings.show_system && system.is_some();
+            let camera_changed =
+                was_visible && has_camera != view.camera_entities.contains(&entity);
+            entered_active_scene
+                || system_filter_changed
+                || camera_changed
+                || value_changed((entity, name, callsign, catalog_id, path, parent))
         },
     );
-    let unnamed_parent_changed = changed_unnamed_parents
+    let scene_hierarchy_changed = scene.parent_changes.iter().any(|(entity, parent)| {
+        if Some(entity) == active_scene_root {
+            return false;
+        }
+        if view.candidate_hierarchy_entities.contains(&entity) {
+            view.candidate_hierarchy_parents.get(&entity).copied() != Some(parent.parent())
+        } else {
+            match belongs_to_active_scene(
+                entity,
+                active_scene_root,
+                &scene.roots,
+                &scene.preview_roots,
+                &scene.parents,
+                &scene.entities,
+            ) {
+                Ok(belongs) => belongs,
+                Err(_) => true,
+            }
+        }
+    });
+    let scene_boundary_changed = scene
+        .boundary_changes
         .iter()
-        .any(|entity| view.scope_ancestors.contains(&entity));
+        .any(|entity| view.candidate_hierarchy_entities.contains(&entity));
     let invalidated = !*first
         || view.show_system != settings.show_system
-        || scope_changed
+        || active_scene_changed
         || named_changed
-        || unnamed_parent_changed
+        || scene_hierarchy_changed
+        || scene_boundary_changed
         || removed;
     *first = true;
     invalidated
 }
 
-/// Retire the derived tree as soon as its active Twin closes. The next Twin's
-/// scene repopulates it from its own manifest and grid frame; no old scope or
-/// rows remain visible during the transition.
+/// Retire the derived tree as soon as its active Twin closes. The next scene
+/// mount repopulates it from the new active root; outgoing rows do not linger.
 pub(crate) fn on_twin_closed(
     trigger: On<TwinClosed>,
     mut view: ResMut<EntityTreeView>,
@@ -1053,13 +1002,14 @@ fn select_label(
 
 fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.label("Click to select. Expand > to reach sub-parts (wheels, body).");
-    if let Some((scope, error)) = ctx
+    if let Some((active_scene_root, error)) = ctx
         .resource::<EntityTreeView>()
-        .map(|view| (view.grid_scope, view.scope_error.clone()))
+        .map(|view| (view.active_scene_root, view.scene_error.clone()))
     {
         match error {
-            Some(error) => ui.label(format!("Grid scope error: {error}")),
-            None => ui.label(format!("Grid scope: {}", scope.label())),
+            Some(error) => ui.label(format!("Scene ownership error: {error}")),
+            None if active_scene_root.is_some() => ui.label("Scene scope: Active scene"),
+            None => ui.label("No active scene mounted."),
         };
     }
     ui.separator();
@@ -1097,7 +1047,7 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .iter()
             .any(|entity| !view.labels.contains_key(entity))
         {
-            ui.label("A selected entity is outside the current tree scope.");
+            ui.label("A selected entity is outside the active scene tree.");
         }
     }
 
@@ -1145,21 +1095,92 @@ mod tests {
     }
 
     #[test]
-    fn topology_gate_rebuilds_when_a_named_selectable_arrives_after_initial_fill() {
+    fn topology_gate_tracks_only_entities_in_the_active_scene() {
         let mut app = App::new();
         app.init_resource::<EntityListSettings>()
             .init_resource::<EntityTreeView>()
+            .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<GateRuns>()
             .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+        let active_root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(active_root, true);
+
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+        app.world_mut()
+            .resource_mut::<EntityTreeView>()
+            .active_scene_root = Some(active_root);
+
+        let additive_root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+            .id();
+        app.world_mut().spawn((
+            Name::new("Additive Entity"),
+            lunco_core::SelectableRoot,
+            ChildOf(additive_root),
+        ));
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+
+        app.world_mut().spawn((
+            Name::new("Rover"),
+            lunco_core::SelectableRoot,
+            ChildOf(active_root),
+        ));
+        app.update();
+
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+    }
+
+    #[test]
+    fn unchanged_parent_ticks_do_not_rebuild_the_active_tree() {
+        let mut app = App::new();
+        app.init_resource::<EntityListSettings>()
+            .init_resource::<EntityTreeView>()
+            .init_resource::<lunco_core::SceneMountState>()
+            .init_resource::<GateRuns>()
+            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+        let active_root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+            .id();
+        let rover = app
+            .world_mut()
+            .spawn((
+                Name::new("Rover"),
+                lunco_core::SelectableRoot,
+                ChildOf(active_root),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(active_root, true);
+        {
+            let mut view = app.world_mut().resource_mut::<EntityTreeView>();
+            view.active_scene_root = Some(active_root);
+            view.labels.insert(rover, "Rover".into());
+            view.base_labels.insert(rover, "Rover".into());
+            view.stable_keys.insert(rover, "Rover".into());
+            view.parents.insert(rover, active_root);
+            view.candidate_hierarchy_entities = HashSet::from([active_root, rover]);
+            view.candidate_hierarchy_parents.insert(rover, active_root);
+        }
 
         app.update();
         assert_eq!(app.world().resource::<GateRuns>().0, 1);
 
         app.world_mut()
-            .spawn((Name::new("Rover"), lunco_core::SelectableRoot));
+            .entity_mut(rover)
+            .insert(ChildOf(active_root));
         app.update();
 
-        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
     }
 
     #[test]
@@ -1195,81 +1216,104 @@ mod tests {
     }
 
     #[test]
-    fn missing_grid_scope_uses_the_documented_current_default() {
-        assert_eq!(entity_grid_scope(None), Ok(EntityGridScope::Current));
-    }
+    fn active_scene_membership_follows_the_mount_through_nested_hierarchy() {
+        let mut world = World::new();
+        let outer_grid = world.spawn(big_space::prelude::Grid::new(2000.0, 0.0)).id();
+        let active_root = world
+            .spawn((
+                lunco_usd_bevy_scene::UsdSceneRoot,
+                big_space::prelude::Grid::new(2000.0, 0.0),
+                ChildOf(outer_grid),
+            ))
+            .id();
+        let wrapper = world.spawn(ChildOf(active_root)).id();
+        let rover = world.spawn(ChildOf(wrapper)).id();
+        let preview_root = world
+            .spawn((lunco_usd_bevy_scene::UsdPreviewOnly, ChildOf(active_root)))
+            .id();
+        let preview_prim = world.spawn(ChildOf(preview_root)).id();
+        let additive_root = world.spawn(lunco_usd_bevy_scene::UsdSceneRoot).id();
+        let additive_prim = world.spawn(ChildOf(additive_root)).id();
+        let mut queries = bevy::ecs::system::SystemState::<(
+            Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+            Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
+            Query<&ChildOf>,
+            Query<Entity>,
+        )>::new(&mut world);
+        let (scene_roots, preview_roots, parents, entities) = queries.get(&world).unwrap();
 
-    #[test]
-    fn grid_scope_accepts_only_the_canonical_values() {
         assert_eq!(
-            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("current".into())),
-            Ok(EntityGridScope::Current)
+            belongs_to_active_scene(
+                rover,
+                Some(active_root),
+                &scene_roots,
+                &preview_roots,
+                &parents,
+                &entities,
+            ),
+            Ok(true)
         );
         assert_eq!(
-            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("all".into())),
-            Ok(EntityGridScope::All)
+            belongs_to_active_scene(
+                additive_prim,
+                Some(active_root),
+                &scene_roots,
+                &preview_roots,
+                &parents,
+                &entities,
+            ),
+            Ok(false)
         );
-        assert!(parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Bool(true)).is_err());
-        assert!(
-            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("other".into()))
-                .is_err()
+        assert_eq!(
+            belongs_to_active_scene(
+                preview_prim,
+                Some(active_root),
+                &scene_roots,
+                &preview_roots,
+                &parents,
+                &entities,
+            ),
+            Ok(false)
         );
     }
 
     #[test]
-    fn nearest_grid_walks_through_unnamed_wrappers() {
-        let grid = Entity::from_raw_u32(1).unwrap();
-        let other_grid = Entity::from_raw_u32(4).unwrap();
-        let wrapper = Entity::from_raw_u32(2).unwrap();
-        let entity = Entity::from_raw_u32(3).unwrap();
-        let other_entity = Entity::from_raw_u32(5).unwrap();
-        let parents = HashMap::from([(wrapper, grid), (entity, wrapper)]);
-        let other_parents = HashMap::from([(other_entity, other_grid)]);
-        let grids = HashSet::from([grid, other_grid]);
+    fn candidate_hierarchy_snapshot_reaches_the_active_scene_root() {
+        let root = Entity::from_raw_u32(1).unwrap();
+        let mut child_of = HashMap::new();
+        let mut parent = root;
+        for raw in 2..=80 {
+            let child = Entity::from_raw_u32(raw).unwrap();
+            child_of.insert(child, parent);
+            parent = child;
+        }
+        let mut ancestors = HashSet::new();
+        let mut hierarchy_parents = HashMap::new();
 
-        assert_eq!(nearest_grid(entity, &parents, &grids), Some(grid));
-        assert!(in_scope(
-            entity,
-            GridScopeState {
-                scope: EntityGridScope::Current,
-                active_twin: None,
-                current_grid: Some(grid),
-            },
-            &parents,
-            &grids,
-        ));
-        assert!(!in_scope(
-            other_entity,
-            GridScopeState {
-                scope: EntityGridScope::Current,
-                active_twin: None,
-                current_grid: Some(grid),
-            },
-            &other_parents,
-            &grids,
-        ));
-        assert!(in_scope(
-            other_entity,
-            GridScopeState {
-                scope: EntityGridScope::All,
-                active_twin: None,
-                current_grid: Some(grid),
-            },
-            &other_parents,
-            &grids,
-        ));
+        collect_candidate_hierarchy(
+            parent,
+            root,
+            &child_of,
+            &mut ancestors,
+            &mut hierarchy_parents,
+        );
+
+        assert_eq!(ancestors.len(), 80);
+        assert_eq!(hierarchy_parents.len(), 79);
+        assert!(ancestors.contains(&root));
     }
 
     #[test]
-    fn active_twin_close_clears_derived_scope_state() {
+    fn active_twin_close_clears_the_derived_scene_tree() {
         let mut app = App::new();
         app.init_resource::<EntityTreeView>()
+            .init_resource::<EntityTreeBuildState>()
             .add_observer(on_twin_closed);
         {
             let mut view = app.world_mut().resource_mut::<EntityTreeView>();
             view.built = true;
-            view.active_twin = Some(lunco_workspace::TwinId::new(7));
-            view.scope_error = Some("stale".into());
+            view.active_scene_root = Some(Entity::from_raw_u32(1).unwrap());
+            view.scene_error = Some("stale".into());
         }
 
         app.world_mut().trigger(TwinClosed {
@@ -1280,7 +1324,7 @@ mod tests {
 
         let view = app.world().resource::<EntityTreeView>();
         assert!(!view.built);
-        assert_eq!(view.active_twin, None);
-        assert_eq!(view.scope_error, None);
+        assert_eq!(view.active_scene_root, None);
+        assert_eq!(view.scene_error, None);
     }
 }

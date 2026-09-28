@@ -310,6 +310,9 @@ pub struct UsdSceneRoot;
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct UsdPreviewOnly;
 
+/// Maximum number of parent links inspected by scene hierarchy queries.
+pub const MAX_SCENE_HIERARCHY_DEPTH: usize = 1024;
+
 /// Returns whether an entity belongs to a preview hierarchy.
 pub fn is_preview_only(
     entity: Entity,
@@ -317,7 +320,7 @@ pub fn is_preview_only(
     preview_roots: &Query<(), With<UsdPreviewOnly>>,
 ) -> bool {
     let mut current = entity;
-    for _ in 0..1024 {
+    for _ in 0..MAX_SCENE_HIERARCHY_DEPTH {
         if preview_roots.contains(current) {
             return true;
         }
@@ -336,7 +339,7 @@ pub fn is_preview_only(
 /// World-query variant of [`is_preview_only`].
 pub fn is_preview_only_entity(world: &World, entity: Entity) -> bool {
     let mut current = entity;
-    for _ in 0..1024 {
+    for _ in 0..MAX_SCENE_HIERARCHY_DEPTH {
         if world.get::<UsdPreviewOnly>(current).is_some() {
             return true;
         }
@@ -362,7 +365,7 @@ pub fn is_preview_entity(entity: Entity, root: Entity, parents: &Query<&ChildOf>
         return true;
     }
     let mut current = entity;
-    for _ in 0..1024 {
+    for _ in 0..MAX_SCENE_HIERARCHY_DEPTH {
         let Ok(parent) = parents.get(current) else {
             return false;
         };
@@ -394,7 +397,7 @@ pub fn scene_root_ancestor(
     entities: &Query<Entity>,
 ) -> Result<Option<Entity>, SceneRootAncestorError> {
     let mut current = entity;
-    for _ in 0..1024 {
+    for _ in 0..MAX_SCENE_HIERARCHY_DEPTH {
         if scene_roots.contains(current) {
             return Ok(Some(current));
         }

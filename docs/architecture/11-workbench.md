@@ -863,7 +863,7 @@ crates):
 | `download` | `lunco-settings` | Shared download concurrency, attempt budget, exponential backoff, and delay cap |
 | `journal` | `lunco-twin-journal` | Retention, blob commit policy (`twin.toml` may override) |
 | `input_bindings` | `lunco-input-core` | Resolved keyboard and pointer bindings shared by avatar control, help, input injection, and Rhai tutorials |
-| `ui.entity_list.grid_scope` | `lunco-luncosim-edit-ui` | Active-Twin entity-tree visibility: `current` for the active `ActivePhysicsFrame`, or `all` for every mounted BigSpace grid |
+| `entity_list` | `lunco-luncosim-edit-ui` | User display preference for system-managed rows; tree membership follows the active scene mount |
 
 #### 9b.3 Per-Twin overrides
 
@@ -886,14 +886,10 @@ Twin is the only reader/writer scope; closing it removes that scope before the
 next Twin can become active. Omitted keys preserve the authored surface's
 declared default.
 
-The entity tree uses this generic boundary for its grid scope. The key
-`ui.entity_list.grid_scope` accepts the text values `current` and `all`; an
-omitted key means `current`. `current` resolves only the live
-`ActivePhysicsFrame`, while `all` includes named entities from every mounted
-BigSpace grid. The workbench Settings menu writes the active Twin's manifest
-through `SetTwinSetting`, so the selection follows the Twin and is not a
-global UI preference. An invalid value is shown as a tree error rather than
-silently selecting a different grid.
+The Entities tree follows `SceneMountState::active_root` and the shared
+`UsdSceneRoot` ancestry contract. Its membership is independent of nested
+BigSpace grids and physics frames; additive mounts and render-only previews are
+outside the active scene tree. No Twin setting changes that ownership boundary.
 
 For example, the shipped camera-status surface is on by default:
 
