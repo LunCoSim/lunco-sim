@@ -710,28 +710,20 @@ discovery and connection derivation remain separate owners in the parent
 package. Scene admission and mounting are owned by
 `lunco-usd-bevy-runtime-core`.
 
-It used to wait for `variables`. For the few hundred milliseconds until the
-worker answered, the prim existed with **no ports at all** — so every wire into
-it hit `write_port → false` and the propagation master reported a *dangling
-wire*: a diagnostic that means "your wiring is wrong", raised for wiring that was
-correct. On older solar-rover scenes that included `sun_azimuth`, `panel_yaw`
-and `vehicle_throttle` on every load. The solar-rover scene has no
-Modelica-to-light wire: celestial systems own body position and irradiance,
-while the rover's `SunTracker` consumes a generic target vector selected by
-its `EnvironmentProbe` wires.
+An initially discovered USD domain network owns a `UsdDomainProjection`
+progress key through member-source resolution, synthesis, and generated
+`SimComponent` publication. The shared fixed clock cannot advance while a
+network's endpoint surface is unknown, and the binding epoch remains open until
+that surface is published. The Modelica participant's compile key overlaps the
+domain admission boundary before simulation resumes. For live edits, the
+installed network remains authoritative while its replacement is prepared and
+the new interface is admitted at the ordinary simulation boundary.
 
-Two lessons generalise beyond Modelica:
-
-- **A not-yet-ready participant must not look like a misconfigured one.** The
-  composer defers an edge until its target contract exists; the propagation
-  master classifies a compiling endpoint as `pending`, not failed. Once the
-  contract is running or errored, an unknown input becomes one terminal fault.
-  This keeps load ordering out of both logs and test verdicts without swallowing
-  a real typo.
-- **A deduplicated diagnostic must be scoped to what it describes.** That report
-  is deduped per port NAME in a `Local`, so one load-time false positive
-  silenced the genuine report for that name for the rest of the process. It now
-  clears whenever the fabric rewires.
+`SimComponent` publishes the declared input interface as soon as the parsed
+Modelica declaration is available, with `SimStatus::Compiling` until the solver
+has produced its initial state. A connection to an endpoint whose interface is
+still pending remains pending; once that interface is terminal, an unknown
+input is reported against the authored connection.
 
 A **Python** program has the same explicit USD interface contract as a Modelica
 program. `lunco-usd-sim` derives the declared scalar ports from the program prim

@@ -389,6 +389,7 @@ pub(super) fn settle_binding_epoch(
     // (`PendingUsdJoint`, wheel wiring, and differential wiring), so omitting
     // them here does not weaken the binding transaction.
     models: Query<(Option<&ModelicaModel>, Option<&SimComponent>), With<UsdSourcedCosim>>,
+    domain_projections: Query<(), With<lunco_usd_sim_domain::DomainNetworkProjectionPending>>,
     connections: Query<(), With<SimConnection>>,
     mut dirty: ResMut<BindingEpochDirty>,
     mut revision: ResMut<lunco_cosim_core::BindingRevision>,
@@ -397,8 +398,11 @@ pub(super) fn settle_binding_epoch(
     mut commands: Commands,
 ) {
     let models_terminal = modelica_models_terminal(models.iter());
-    let settled =
-        awaiting.is_empty() && joints.is_empty() && differentials.is_empty() && models_terminal;
+    let settled = awaiting.is_empty()
+        && joints.is_empty()
+        && differentials.is_empty()
+        && domain_projections.is_empty()
+        && models_terminal;
     if settled {
         dirty.0 = false;
     } else {

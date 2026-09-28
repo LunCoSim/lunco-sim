@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use bevy::asset::AssetId;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lunco_cosim_core::UsdSourcedCosim;
 use lunco_modelica_ast::ast_extract::{
@@ -124,6 +125,69 @@ fn queue_retire_generated_document(commands: &mut Commands, document: lunco_doc:
 #[derive(Component)]
 pub struct DomainProjectionState {
     fingerprint: u64,
+}
+
+/// A newly discovered domain network is part of the initial simulation state
+/// until its Modelica port surface has been published. It owns both the
+/// binding-epoch wait and the shared fixed-clock admission hold.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct DomainNetworkProjectionPending;
+
+#[derive(SystemParam)]
+#[doc(hidden)]
+pub struct DomainDiscoveryAdmission<'w, 's> {
+    commands: Commands<'w, 's>,
+    progress: ResMut<'w, lunco_core_runtime::SimulationProgress>,
+}
+
+#[derive(SystemParam)]
+#[doc(hidden)]
+pub struct DomainProjectionAdmission<'w, 's> {
+    commands: Commands<'w, 's>,
+}
+
+#[derive(SystemParam)]
+#[doc(hidden)]
+pub struct DomainProjectionOwner<'w> {
+    synthesizers: Res<'w, SynthesizerRegistry>,
+    coordinator: Option<Res<'w, lunco_core::SceneTransitionCoordinator>>,
+    modelica_channels: Option<Res<'w, ModelicaChannels>>,
+}
+
+fn clear_pending_domain_projection(entity: Entity, pending: bool, commands: &mut Commands) {
+    if pending {
+        commands.entity(entity).remove::<(
+            DomainNetworkProjectionPending,
+            lunco_port_core::PortSurfacePending,
+        )>();
+    }
+}
+
+/// Transfer initial domain-network admission to the Modelica participant once
+/// its complete endpoint surface has been published. Modelica source
+/// compilation has its own progress owner and keeps the shared clock held
+/// until the participant is ready to run.
+pub fn reconcile_domain_projection_progress(
+    pending: Query<
+        (Entity, Option<&lunco_cosim_core::SimComponent>),
+        With<DomainNetworkProjectionPending>,
+    >,
+    mut removed: RemovedComponents<DomainNetworkProjectionPending>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
+    mut commands: Commands,
+) {
+    for (entity, component) in &pending {
+        if component.is_some() {
+            progress
+                .release(lunco_core_runtime::SimulationProgressKey::usd_domain_projection(entity));
+            commands
+                .entity(entity)
+                .try_remove::<DomainNetworkProjectionPending>();
+        }
+    }
+    for entity in removed.read() {
+        progress.release(lunco_core_runtime::SimulationProgressKey::usd_domain_projection(entity));
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -750,6 +814,7 @@ pub fn reset_scene_projection_work(
     pending_synthesis: Option<ResMut<PendingDomainProjections>>,
     admission: Option<ResMut<lunco_core_runtime::AsyncWorkAdmission>>,
     telemetry_indexes: Option<ResMut<AuthoredTelemetryIndexes>>,
+    progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
 ) {
     users.clear();
     candidates.reset_for_scene();
@@ -767,6 +832,19 @@ pub fn reset_scene_projection_work(
     }
     if let Some(mut telemetry_indexes) = telemetry_indexes {
         telemetry_indexes.clear();
+    }
+    if let Some(mut progress) = progress {
+        let keys: Vec<_> = progress
+            .blockers()
+            .filter(|blocker| {
+                blocker.key.owner
+                    == lunco_core_runtime::SimulationProgressOwner::UsdDomainProjection
+            })
+            .map(|blocker| blocker.key)
+            .collect();
+        for key in keys {
+            progress.release(key);
+        }
     }
 }
 
@@ -1144,6 +1222,10 @@ fn commit_domain_projection(
                 GeneratedModelicaSource,
             )>();
         }
+        commands.entity(entity).remove::<(
+            DomainNetworkProjectionPending,
+            lunco_port_core::PortSurfacePending,
+        )>();
         return false;
     };
 
@@ -1251,11 +1333,17 @@ fn commit_domain_projection(
 /// Reactively compile every prim containing a standard component collection of
 /// Modelica program facets. The generated source is runtime projection only.
 pub fn project_domain_islands(
+    mut projection_admission: DomainProjectionAdmission,
     preview: (
         Query<&ChildOf>,
         Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     ),
-    prims: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>)>,
+    prims: Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&UsdInstanceProjection>,
+        Has<DomainNetworkProjectionPending>,
+    )>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
     q_instance_root: Query<(), With<lunco_usd_bevy_stage::UsdInstanceRoot>>,
@@ -1272,13 +1360,9 @@ pub fn project_domain_islands(
     mut telemetry_indexes: ResMut<AuthoredTelemetryIndexes>,
     class_users: Res<DomainClassUsers>,
     classes: Res<MemberClasses>,
-    synthesis_owner: (
-        Res<SynthesizerRegistry>,
-        Option<Res<lunco_core::SceneTransitionCoordinator>>,
-    ),
-    modelica_channels: Option<Res<ModelicaChannels>>,
+    domain_owner: DomainProjectionOwner,
 ) {
-    if modelica_channels.is_none() {
+    if domain_owner.modelica_channels.is_none() {
         return;
     }
     let capacity_revision = admission.capacity_revision();
@@ -1286,7 +1370,7 @@ pub fn project_domain_islands(
         return;
     }
     let (runtime_context, scene_generation) =
-        match modelica_synthesis_context(synthesis_owner.1.as_deref()) {
+        match modelica_synthesis_context(domain_owner.coordinator.as_deref()) {
             Ok(context) => context,
             Err(message) => {
                 bevy::log::error_once!(
@@ -1317,10 +1401,15 @@ pub fn project_domain_islands(
         admission.cancel_queued(work_key);
     }
     for entity in candidate_entities {
-        let Ok((entity, prim, instance_projection)) = prims.get(entity) else {
+        let Ok((entity, prim, instance_projection, projection_pending)) = prims.get(entity) else {
             continue;
         };
         if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
+            clear_pending_domain_projection(
+                entity,
+                projection_pending,
+                &mut projection_admission.commands,
+            );
             continue;
         }
         // Source asset arrivals invalidate their dependent roots individually.
@@ -1367,6 +1456,11 @@ pub fn project_domain_islands(
             &canonical_reader
         };
         let Ok(root_path) = SdfPath::new(&prim.path) else {
+            clear_pending_domain_projection(
+                entity,
+                projection_pending,
+                &mut projection_admission.commands,
+            );
             continue;
         };
         if stage_generation == 0 {
@@ -1389,11 +1483,24 @@ pub fn project_domain_islands(
                         .clone()
                 });
             if !is_runtime_domain_network_root(reader, &root_path) {
+                clear_pending_domain_projection(
+                    entity,
+                    projection_pending,
+                    &mut projection_admission.commands,
+                );
                 continue;
             }
-            let Some((requested, synthesizer)) =
-                resolve_domain_synthesizer(&class_users, entity, &prim.path, &synthesis_owner.0)
-            else {
+            let Some((requested, synthesizer)) = resolve_domain_synthesizer(
+                &class_users,
+                entity,
+                &prim.path,
+                &domain_owner.synthesizers,
+            ) else {
+                clear_pending_domain_projection(
+                    entity,
+                    projection_pending,
+                    &mut projection_admission.commands,
+                );
                 continue;
             };
             let model_name = network_model_name(&prim.path, instance_id);
@@ -1443,11 +1550,24 @@ pub fn project_domain_islands(
             }
             let plan = stage_asset.projection_plan.clone();
             if !is_runtime_domain_network_root(plan.as_ref(), &root_path) {
+                clear_pending_domain_projection(
+                    entity,
+                    projection_pending,
+                    &mut projection_admission.commands,
+                );
                 continue;
             }
-            let Some((requested, synthesizer)) =
-                resolve_domain_synthesizer(&class_users, entity, &prim.path, &synthesis_owner.0)
-            else {
+            let Some((requested, synthesizer)) = resolve_domain_synthesizer(
+                &class_users,
+                entity,
+                &prim.path,
+                &domain_owner.synthesizers,
+            ) else {
+                clear_pending_domain_projection(
+                    entity,
+                    projection_pending,
+                    &mut projection_admission.commands,
+                );
                 continue;
             };
             let model_name = network_model_name(&prim.path, instance_id);
@@ -1486,6 +1606,11 @@ pub fn project_domain_islands(
         // selection: deriving ownership for an ordinary prim would walk its
         // collection metadata even though it cannot be a network root.
         if !is_runtime_domain_network_root(reader, &root_path) {
+            clear_pending_domain_projection(
+                entity,
+                projection_pending,
+                &mut projection_admission.commands,
+            );
             continue;
         }
         // Domain ownership is derived from the typed member role schemas. A
@@ -1493,9 +1618,17 @@ pub fn project_domain_islands(
         // policy for a generic Modelica collection; physical actuator
         // collections have no exposed selector and are classified from their
         // `LunCoForceActuatorAPI` members.
-        let Some((requested, synthesizer)) =
-            resolve_domain_synthesizer(&class_users, entity, &prim.path, &synthesis_owner.0)
-        else {
+        let Some((requested, synthesizer)) = resolve_domain_synthesizer(
+            &class_users,
+            entity,
+            &prim.path,
+            &domain_owner.synthesizers,
+        ) else {
+            clear_pending_domain_projection(
+                entity,
+                projection_pending,
+                &mut projection_admission.commands,
+            );
             continue;
         };
         if live_snapshots >= MAX_LIVE_DOMAIN_FACT_SNAPSHOTS_PER_UPDATE {
@@ -2304,7 +2437,13 @@ impl MemberClasses {
 /// and does not compile an incomplete model. Completion and failure are driven
 /// by the Modelica asset events; there is no time-based give-up path.
 pub fn resolve_member_classes(
-    prims: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>)>,
+    prims: Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&UsdInstanceProjection>,
+        Option<&DomainProjectionState>,
+        Has<DomainNetworkProjectionPending>,
+    )>,
     preview: (
         Query<&ChildOf>,
         Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
@@ -2312,6 +2451,7 @@ pub fn resolve_member_classes(
     mut classes: ResMut<MemberClasses>,
     mut class_users: ResMut<DomainClassUsers>,
     mut candidates: ResMut<PendingDomainProjectionCandidates>,
+    mut admission: DomainDiscoveryAdmission,
     mut telemetry_indexes: Option<ResMut<AuthoredTelemetryIndexes>>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
@@ -2319,9 +2459,13 @@ pub fn resolve_member_classes(
     mut stage_asset_events: MessageReader<AssetEvent<UsdStageAsset>>,
     asset_server: Res<AssetServer>,
     sources: Res<Assets<ModelicaSource>>,
+    modelica_channels: Option<Res<ModelicaChannels>>,
     mut source_events: MessageReader<AssetEvent<ModelicaSource>>,
     mut source_failures: MessageReader<bevy::asset::AssetLoadFailedEvent<ModelicaSource>>,
 ) {
+    if modelica_channels.is_none() {
+        return;
+    }
     const MAX_DOMAIN_CLASS_DISCOVERY_PER_UPDATE: usize = 64;
 
     let mut loaded = HashSet::new();
@@ -2425,7 +2569,7 @@ pub fn resolve_member_classes(
         );
         candidates
             .discovery
-            .extend(prims.iter().map(|(entity, _, _)| entity));
+            .extend(prims.iter().map(|(entity, ..)| entity));
     }
     let discover = !candidates.discovery.is_empty();
     if !discover && loaded.is_empty() && modified.is_empty() && failed.is_empty() {
@@ -2452,9 +2596,21 @@ pub fn resolve_member_classes(
             .take_discovery_batch(MAX_DOMAIN_CLASS_DISCOVERY_PER_UPDATE)
             .into_iter()
             .filter_map(|entity| prims.get(entity).ok());
-        for (entity, prim, instance_projection) in discovery_entities {
+        for (entity, prim, instance_projection, projection_state, projection_pending) in
+            discovery_entities
+        {
             if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
                 class_users.remove_root(entity);
+                if projection_pending {
+                    admission.progress.release(
+                        lunco_core_runtime::SimulationProgressKey::usd_domain_projection(entity),
+                    );
+                    clear_pending_domain_projection(
+                        entity,
+                        projection_pending,
+                        &mut admission.commands,
+                    );
+                }
                 continue;
             }
             let id = prim.stage_handle.id();
@@ -2466,14 +2622,55 @@ pub fn resolve_member_classes(
                 canonical.reader_for_entity(id, stage_asset, instance_projection);
             let view: &dyn ComposedReader = &reader;
             let Ok(root) = SdfPath::new(&prim.path) else {
+                if projection_pending {
+                    admission.progress.release(
+                        lunco_core_runtime::SimulationProgressKey::usd_domain_projection(entity),
+                    );
+                    clear_pending_domain_projection(
+                        entity,
+                        projection_pending,
+                        &mut admission.commands,
+                    );
+                }
                 continue;
             };
             if !is_runtime_domain_network_root(view, &root) {
                 class_users.remove_root(entity);
+                if projection_pending {
+                    admission.progress.release(
+                        lunco_core_runtime::SimulationProgressKey::usd_domain_projection(entity),
+                    );
+                    clear_pending_domain_projection(
+                        entity,
+                        projection_pending,
+                        &mut admission.commands,
+                    );
+                }
                 continue;
+            }
+            let newly_pending = projection_state.is_none();
+            if newly_pending {
+                admission.progress.acquire(
+                    lunco_core_runtime::SimulationProgressKey::usd_domain_projection(entity),
+                    format!("Project USD Modelica domain network `{}`", prim.path),
+                );
+                admission.commands.entity(entity).try_insert((
+                    DomainNetworkProjectionPending,
+                    lunco_port_core::PortSurfacePending,
+                ));
             }
             let Ok(members) = view.collection_members(&root, "components") else {
                 class_users.remove_root(entity);
+                if projection_pending || newly_pending {
+                    admission.progress.release(
+                        lunco_core_runtime::SimulationProgressKey::usd_domain_projection(entity),
+                    );
+                    clear_pending_domain_projection(
+                        entity,
+                        projection_pending || newly_pending,
+                        &mut admission.commands,
+                    );
+                }
                 continue;
             };
             let mut source_assets = HashSet::new();

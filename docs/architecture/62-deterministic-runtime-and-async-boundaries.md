@@ -436,6 +436,16 @@ co-simulation step remains governed by the per-step barrier after activation.
 A terminal Modelica error also releases the preparation key, while the
 readiness owner keeps the failure visible as `program_failed` and applies its
 configured failed-participant action.
+An initially discovered USD Modelica component network owns a separate
+`UsdDomainProjection` key from root discovery through source-class resolution,
+synthesis, and publication of its `SimComponent` port surface. Its binding
+epoch remains open for that interval. The key is released at the same
+`SimulationProgressAdmissionSet` boundary where the Modelica participant's
+`ModelicaPreparation` key is admitted, so `Time<Virtual>`, `SimTick`, Modelica,
+Rhai, and physics resume together only after the generated interface exists and
+any causally required Modelica compile has settled. Live replacement keeps the
+installed interface active while preparing its replacement; it does not reopen
+initial-scene admission.
 The causal transaction follows explicit owner phases:
 
 1. Capture external commands and events as typed inputs with their authoritative

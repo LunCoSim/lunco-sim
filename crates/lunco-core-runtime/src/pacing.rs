@@ -499,6 +499,8 @@ pub enum SimulationProgressOwner {
     UsdDocumentProjection,
     /// Preparation and replacement of an authored dependent USD stage.
     UsdDependentStageProjection,
+    /// Preparation of an authored USD Modelica domain network.
+    UsdDomainProjection,
     /// Preparation of current USD simulation topology facts.
     UsdSimulationTopology,
     /// Admission of the mounted scene's physical bodies and joints.
@@ -573,6 +575,14 @@ impl SimulationProgressKey {
         Self {
             owner: SimulationProgressOwner::UsdSimulationTopology,
             operation_id: stage_root.to_bits(),
+        }
+    }
+
+    /// Key initial USD Modelica domain projection to its network-root entity.
+    pub fn usd_domain_projection(root: Entity) -> Self {
+        Self {
+            owner: SimulationProgressOwner::UsdDomainProjection,
+            operation_id: root.to_bits(),
         }
     }
 

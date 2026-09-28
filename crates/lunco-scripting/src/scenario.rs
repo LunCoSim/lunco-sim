@@ -922,10 +922,12 @@ impl ScenarioPreparationAdmissions {
 }
 
 fn cancel_scenario_preparation_admission(world: &mut World, entity: Entity) {
-    world.resource_scope(|world, mut admissions: Mut<ScenarioPreparationAdmissions>| {
-        let mut progress = world.get_resource_mut::<lunco_core_runtime::SimulationProgress>();
-        admissions.cancel_entity(entity, progress.as_deref_mut());
-    });
+    world.resource_scope(
+        |world, mut admissions: Mut<ScenarioPreparationAdmissions>| {
+            let mut progress = world.get_resource_mut::<lunco_core_runtime::SimulationProgress>();
+            admissions.cancel_entity(entity, progress.as_deref_mut());
+        },
+    );
 }
 
 struct CompileCompletion<P> {
@@ -1121,10 +1123,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         };
         models.sort_unstable_by_key(|model| scenario_actor_order_key(world, model.0));
         let live: HashSet<Entity> = models.iter().map(|model| model.0).collect();
-        world.resource_scope(|world, mut admissions: Mut<ScenarioPreparationAdmissions>| {
-            let mut progress = world.get_resource_mut::<lunco_core_runtime::SimulationProgress>();
-            admissions.retain_entities(&live, progress.as_deref_mut());
-        });
+        world.resource_scope(
+            |world, mut admissions: Mut<ScenarioPreparationAdmissions>| {
+                let mut progress =
+                    world.get_resource_mut::<lunco_core_runtime::SimulationProgress>();
+                admissions.retain_entities(&live, progress.as_deref_mut());
+            },
+        );
 
         world.resource_scope(|world, mut driver: Mut<ScenarioDriver<R>>| {
             driver.runtime.maintain();
@@ -1384,7 +1389,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                                 None,
                                 None,
                             )),
-                    });
+                        });
                     continue;
                 };
                 drop(progress);
@@ -1544,10 +1549,13 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
     /// completions are ignored because the exact pending key has been removed.
     pub fn cancel_pending_compiles(world: &mut World) {
         world.init_resource::<ScenarioPreparationAdmissions>();
-        world.resource_scope(|world, mut admissions: Mut<ScenarioPreparationAdmissions>| {
-            let mut progress = world.get_resource_mut::<lunco_core_runtime::SimulationProgress>();
-            admissions.cancel_all(progress.as_deref_mut());
-        });
+        world.resource_scope(
+            |world, mut admissions: Mut<ScenarioPreparationAdmissions>| {
+                let mut progress =
+                    world.get_resource_mut::<lunco_core_runtime::SimulationProgress>();
+                admissions.cancel_all(progress.as_deref_mut());
+            },
+        );
         if !world.contains_resource::<Self>() {
             return;
         }
@@ -1706,6 +1714,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         lunco_core_runtime::SimulationProgressOwner::SceneLifecycle
                             | lunco_core_runtime::SimulationProgressOwner::SceneReferences
                             | lunco_core_runtime::SimulationProgressOwner::UsdSimulationTopology
+                            | lunco_core_runtime::SimulationProgressOwner::UsdDomainProjection
                             | lunco_core_runtime::SimulationProgressOwner::TerrainPreparation
                             | lunco_core_runtime::SimulationProgressOwner::DocumentPreparation
                             | lunco_core_runtime::SimulationProgressOwner::TwinPolicyPreparation
@@ -2105,9 +2114,9 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                             .pending
                             .iter()
                             .take_while(|event| {
-                                lunco_core_runtime::SimTick(current_tick)
-                                    .wrapping_diff(lunco_core_runtime::SimTick(event.event.sim_tick))
-                                    > 0
+                                lunco_core_runtime::SimTick(current_tick).wrapping_diff(
+                                    lunco_core_runtime::SimTick(event.event.sim_tick),
+                                ) > 0
                             })
                             .count();
                         if ready_count == 0 {
@@ -2136,9 +2145,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             // No scenario can consume this batch. Preserve the allocation for
             // the next pass, but intentionally discard the events themselves.
             events.clear();
-            if !startup_pass
-                && let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>()
-            {
+            if !startup_pass && let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
                 inbox.pending = events;
             }
             return;
@@ -3872,7 +3879,9 @@ mod lifecycle_readiness_tests {
         });
         world.insert_resource(lunco_readiness::ReadinessState::default());
         world.init_resource::<lunco_core_runtime::SimulationProgress>();
-        world.resource_mut::<ScriptEventInbox>().enqueue(event("before_start", 0));
+        world
+            .resource_mut::<ScriptEventInbox>()
+            .enqueue(event("before_start", 0));
         world.spawn(ScriptedModel {
             document_id: Some(81),
             language: Some(ScriptLanguage::Rhai),
@@ -3885,12 +3894,10 @@ mod lifecycle_readiness_tests {
             contexts.clone(),
             Arc::new(Mutex::new(false)),
         )));
-        world
-            .resource_mut::<ScriptRegistry>()
-            .insert_document(
-                DocumentId::new(81),
-                ScriptDocument::new(81, ScriptLanguage::Rhai, "scenario"),
-            );
+        world.resource_mut::<ScriptRegistry>().insert_document(
+            DocumentId::new(81),
+            ScriptDocument::new(81, ScriptLanguage::Rhai, "scenario"),
+        );
 
         ScenarioDriver::<RecordingRuntime>::prepare_compiles(&mut world, ScriptLanguage::Rhai);
         ScenarioDriver::<RecordingRuntime>::run_startup(&mut world, ScriptLanguage::Rhai);
@@ -3903,7 +3910,9 @@ mod lifecycle_readiness_tests {
         assert_eq!(start.clock, lunco_core::RuntimeClock::Simulation);
         assert_eq!(start.sequence, Some(0));
 
-        world.resource_mut::<ScriptEventInbox>().enqueue(event("after_start", 0));
+        world
+            .resource_mut::<ScriptEventInbox>()
+            .enqueue(event("after_start", 0));
         world.resource_mut::<lunco_core_runtime::SimTick>().0 = 1;
         ScenarioDriver::<RecordingRuntime>::run(&mut world, ScriptLanguage::Rhai);
 
@@ -3916,10 +3925,12 @@ mod lifecycle_readiness_tests {
                 RecordedCall::Tick,
             ]
         );
-        assert!(!calls
-            .lock()
-            .unwrap()
-            .contains(&RecordedCall::Event("before_start".into())));
+        assert!(
+            !calls
+                .lock()
+                .unwrap()
+                .contains(&RecordedCall::Event("before_start".into()))
+        );
         let contexts = contexts.lock().unwrap();
         assert!(contexts.iter().any(|context| {
             context.phase == lunco_core::RuntimePhase::Behavior

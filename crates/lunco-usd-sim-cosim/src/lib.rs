@@ -2256,6 +2256,7 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .init_resource::<lunco_cosim_core::BindingRevision>()
             .init_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+            .init_resource::<lunco_core_runtime::SimulationProgress>()
             .init_resource::<lunco_scripting::ScriptRegistry>()
             .init_resource::<UsdWiringDirty>()
             .init_resource::<BindingEpochDirty>()
@@ -2272,6 +2273,11 @@ impl Plugin for UsdSimCosimPlugin {
             .init_resource::<WiringFactsCache>()
             .init_resource::<lunco_usd_sim_domain::synthesis::SynthesizerRegistry>()
             .init_resource::<UsdTelemetryProjectionIndex>();
+        app.add_systems(
+            PreUpdate,
+            lunco_usd_sim_domain::reconcile_domain_projection_progress
+                .in_set(lunco_core_runtime::SimulationProgressAdmissionSet),
+        );
         app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
         app.world_mut()
             .resource_mut::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
@@ -2335,6 +2341,14 @@ impl Plugin for UsdSimCosimPlugin {
             .add_observer(request_binding_epoch_on_remove::<lunco_celestial_spatial_core::LinkNode>)
             .add_observer(request_binding_epoch::<ModelicaModel>)
             .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
+            .add_observer(
+                request_binding_epoch::<lunco_usd_sim_domain::DomainNetworkProjectionPending>,
+            )
+            .add_observer(
+                request_binding_epoch_on_remove::<
+                    lunco_usd_sim_domain::DomainNetworkProjectionPending,
+                >,
+            )
             .add_observer(lunco_usd_sim_domain::on_remove_generated_source)
             .add_observer(request_binding_epoch::<SimComponent>)
             .add_observer(forget_binding_model_status)

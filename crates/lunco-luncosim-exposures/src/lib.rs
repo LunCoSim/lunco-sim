@@ -643,6 +643,9 @@ fn simulation_progress_facts(
                     lunco_core_runtime::SimulationProgressOwner::UsdDependentStageProjection => {
                         "UsdDependentStageProjection"
                     }
+                    lunco_core_runtime::SimulationProgressOwner::UsdDomainProjection => {
+                        "UsdDomainProjection"
+                    }
                     lunco_core_runtime::SimulationProgressOwner::UsdSimulationTopology => {
                         "UsdSimulationTopology"
                     }
