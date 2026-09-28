@@ -194,6 +194,12 @@ canonical reader and child list once, derive owned typed facts for each
 consumer, then release the stage borrow before mutating ECS. Preserve the same
 typed resolution and commit helpers across initial and live projection paths;
 do not introduce a second fact cache.
+The presentation `project_env_settings` owner retains authored exposure and
+bloom facts with the exact stage-plan `Arc` and the matching environment prim
+paths. Reuse them across transform-only batches and info edits outside those
+paths; environment-path edits, resyncs, generation gaps, or plan replacement
+require a fresh composed read. Compare the stage signal without allocating a
+replacement vector on steady updates.
 When multiple USD consumers need the same composed-stage fact, put its
 generation/instance-keyed cache at the shared fact owner and reuse that cache;
 clear it at the scene teardown boundary instead of keeping consumer-local copies.

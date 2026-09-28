@@ -71,14 +71,15 @@ pub(crate) fn register(app: &mut App) {
 /// **Environment-settings projection** — the read half of persisting
 /// `SetEnvironmentLight` render knobs (exposure / bloom / ambient / earthshine)
 /// onto the `LunCoEnvironment` settings prim (see
-/// [`lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE`]). On any composed-stage
-/// change, read that prim's `lunco:env:*` attrs and apply them **directly** to
-/// the live render state — never by re-triggering `SetEnvironmentLight`, which
-/// would re-persist and loop. So a persisted render tweak round-trips on reload
-/// and syncs to peers (the prim rides the USD journal → each peer recomposes →
-/// each peer's projector applies) with no bespoke broadcast. Change-gated on
-/// total stage generation + count, like the runtime policy projector. UI-gated: the
-/// knobs are render/camera state; the headless server has no cameras to apply to.
+/// [`lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE`]). Read that prim's
+/// `lunco:env:*` attrs and apply them **directly** to the live render state —
+/// never by re-triggering `SetEnvironmentLight`, which would re-persist and
+/// loop. So a persisted render tweak round-trips on reload and syncs to peers
+/// (the prim rides the USD journal → each peer recomposes → each peer's
+/// projector applies) with no bespoke broadcast. Authored facts are cached by
+/// stage plan and reused across transform-only changes.
+/// UI-gated: the knobs are render/camera state; the headless server has no
+/// cameras to apply to.
 /// What the scene AUTHORED, held independently of what currently exists to
 /// apply it to.
 ///
@@ -103,6 +104,28 @@ pub(crate) struct AuthoredEnv {
 /// replacement value.
 fn reset_authored_env(mut authored: ResMut<AuthoredEnv>) {
     *authored = AuthoredEnv::default();
+}
+
+#[derive(Default)]
+struct CachedEnvironmentProjection {
+    projection_plan: Option<std::sync::Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>>,
+    observed_generation: u64,
+    valid: bool,
+    environment_paths: std::collections::HashSet<String>,
+    exposure_ev100: Option<f32>,
+    bloom_intensity: Option<f32>,
+}
+
+fn usd_paths_overlap(left: &str, right: &str) -> bool {
+    fn is_at_or_below(path: &str, ancestor: &str) -> bool {
+        path == ancestor
+            || ancestor == "/"
+            || path
+                .strip_prefix(ancestor)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    }
+
+    is_at_or_below(left, right) || is_at_or_below(right, left)
 }
 
 /// Apply the authored environment exposure when the authored value or a camera
@@ -145,27 +168,120 @@ fn project_env_settings(
     // light prim, loaded like every other. See the note below.
     // The exposure single-source-of-truth — see the `exposureEv100` branch.
     mut lunar_sun: Option<ResMut<lunco_environment::LunarSun>>,
-    mut last: Local<Option<(usize, usize, u64)>>,
+    mut scene_changes: Option<MessageReader<lunco_usd_bevy_scene::UsdSceneChangeBatch>>,
+    mut cached: Local<
+        std::collections::HashMap<bevy::asset::AssetId<UsdStageAsset>, CachedEnvironmentProjection>,
+    >,
+    mut last: Local<Option<Vec<(bevy::asset::AssetId<UsdStageAsset>, Option<usize>, u64)>>>,
 ) {
-    let root_ids: Vec<_> = roots.iter().map(|prim| prim.stage_handle.id()).collect();
-    let signal = (
-        root_ids.len(),
-        root_ids.iter().filter_map(|id| stages.get(*id)).count(),
-        root_ids
-            .iter()
-            .filter_map(|id| stages.get(*id).map(|_| canonical.generation_for(*id)))
-            .sum::<u64>(),
-    );
-    if *last == Some(signal) {
+    if let Some(changes) = scene_changes.as_mut() {
+        for change in changes.read() {
+            let Some(snapshot) = cached.get_mut(&change.stage_id) else {
+                continue;
+            };
+            if change.stage_generation == snapshot.observed_generation {
+                continue;
+            }
+            if snapshot.observed_generation.checked_add(1) != Some(change.stage_generation)
+                || !change.resynced_prim_paths.is_empty()
+                || change
+                    .info_prim_paths
+                    .iter()
+                    .filter(|path| !change.transform_only_prim_paths.contains(path))
+                    .any(|changed_path| {
+                        snapshot.environment_paths.iter().any(|environment_path| {
+                            usd_paths_overlap(changed_path, environment_path)
+                        })
+                    })
+            {
+                snapshot.valid = false;
+            }
+            snapshot.observed_generation = change.stage_generation;
+        }
+    }
+
+    let previous_signal = last.as_ref();
+    let mut signal_matches = previous_signal.is_some();
+    let mut cache_needs_refresh = false;
+    let mut root_count = 0;
+    for prim in roots.iter() {
+        let stage_id = prim.stage_handle.id();
+        let plan_identity = stages
+            .get(stage_id)
+            .map(|asset| std::sync::Arc::as_ptr(&asset.projection_plan) as usize);
+        let generation = canonical.generation_for(stage_id);
+        let signal_entry = (stage_id, plan_identity, generation);
+        if previous_signal.and_then(|signal| signal.get(root_count)) != Some(&signal_entry) {
+            signal_matches = false;
+        }
+        root_count += 1;
+
+        let Some(plan_identity) = plan_identity else {
+            continue;
+        };
+        cache_needs_refresh |= cached.get(&stage_id).is_none_or(|snapshot| {
+            !snapshot.valid
+                || snapshot
+                    .projection_plan
+                    .as_ref()
+                    .is_none_or(|plan| std::sync::Arc::as_ptr(plan) as usize != plan_identity)
+                || snapshot.observed_generation != generation
+        });
+    }
+    if previous_signal.is_some_and(|signal| signal.len() != root_count) {
+        signal_matches = false;
+    }
+    if !signal_matches {
+        *last = Some(
+            roots
+                .iter()
+                .map(|prim| {
+                    let stage_id = prim.stage_handle.id();
+                    let plan_identity = stages
+                        .get(stage_id)
+                        .map(|asset| std::sync::Arc::as_ptr(&asset.projection_plan) as usize);
+                    (stage_id, plan_identity, canonical.generation_for(stage_id))
+                })
+                .collect(),
+        );
+        cached.retain(|stage_id, _| roots.iter().any(|prim| prim.stage_handle.id() == *stage_id));
+    }
+    if signal_matches && !cache_needs_refresh {
         return;
     }
-    *last = Some(signal);
 
     let mut scene_bloom = None;
-    for stage_id in root_ids {
+    for prim in roots.iter() {
+        let stage_id = prim.stage_handle.id();
         let Some(stage_asset) = stages.get(stage_id) else {
             continue;
         };
+        let plan_identity = std::sync::Arc::as_ptr(&stage_asset.projection_plan) as usize;
+        let generation = canonical.generation_for(stage_id);
+        let reusable = cached.get(&stage_id).and_then(|snapshot| {
+            (snapshot.valid
+                && snapshot
+                    .projection_plan
+                    .as_ref()
+                    .is_some_and(|plan| std::sync::Arc::as_ptr(plan) as usize == plan_identity)
+                && snapshot.observed_generation == generation)
+                .then_some((snapshot.exposure_ev100, snapshot.bloom_intensity))
+        });
+        if let Some((exposure_ev100, bloom_intensity)) = reusable {
+            let _span =
+                bevy::log::info_span!("usd_environment_cached_facts_reuse", generation).entered();
+            if let Some(ev) = exposure_ev100 {
+                authored.exposure_ev100 = Some(ev);
+                if let Some(sun) = lunar_sun.as_mut() {
+                    sun.exposure_ev100 = Some(ev);
+                }
+            }
+            if bloom_intensity.is_some() {
+                scene_bloom = bloom_intensity;
+            }
+            continue;
+        }
+
         let (reader, _generation) =
             if canonical.prepared_plan_is_current(stage_id, &stage_asset.projection_plan) {
                 let _span = bevy::log::info_span!("usd_environment_prepared_plan_reuse").entered();
@@ -178,11 +294,18 @@ fn project_env_settings(
             } else {
                 canonical.reader_for(stage_id, stage_asset)
             };
+        let mut snapshot = CachedEnvironmentProjection {
+            projection_plan: Some(stage_asset.projection_plan.clone()),
+            observed_generation: generation,
+            valid: true,
+            ..Default::default()
+        };
         let environment_prims = {
             let _span = bevy::log::info_span!("usd_environment_type_lookup").entered();
             reader.prim_paths_matching(&[lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE], &[])
         };
         for prim in environment_prims {
+            snapshot.environment_paths.insert(prim.to_string());
             if reader.has_authored_attribute(&prim, "lunco:env:exposureEv100") {
                 if let Some(ev) = reader
                     .real_f32(&prim, "lunco:env:exposureEv100")
@@ -195,6 +318,7 @@ fn project_env_settings(
                     // celestial hierarchy ramps toward the authored value instead of
                     // the studio default.
                     authored.exposure_ev100 = Some(ev);
+                    snapshot.exposure_ev100 = Some(ev);
                     if let Some(sun) = lunar_sun.as_mut() {
                         sun.exposure_ev100 = Some(ev);
                     }
@@ -208,6 +332,7 @@ fn project_env_settings(
                     && bi >= 0.0
                 {
                     scene_bloom = Some(bi);
+                    snapshot.bloom_intensity = Some(bi);
                 } else if reader.has_authored_attribute(&prim, "lunco:env:bloomIntensity") {
                     warn!("ignoring invalid authored lunco:env:bloomIntensity on {prim}");
                 }
@@ -225,6 +350,7 @@ fn project_env_settings(
             // and tint are `inputs:intensity` / `inputs:color` on that prim,
             // read by the standard light loader.
         }
+        cached.insert(stage_id, snapshot);
     }
     if let Some(mut override_value) = bloom_override {
         if override_value.intensity != scene_bloom {

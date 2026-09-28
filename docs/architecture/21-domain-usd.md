@@ -262,7 +262,12 @@ info-changed prims do not contain a policy. Relevant changes trigger a full
 extraction for that stage; missing batches, plan replacement, or generation
 gaps also use that conservative path. Unrelated stage edits skip policy asset
 resolution and registry installation. Live canonical reads remain on their
-owning thread. When the canonical owner confirms that the exact prepared plan
+owning thread. The presentation environment-settings owner also retains its
+authored EV and bloom facts and environment prim paths with the exact stage
+plan. Transform-only batches and info edits outside those prim paths advance
+the cached generation without rereading the composed stage; relevant info edits,
+resyncs, generation gaps, and plan replacement require a fresh composed read.
+When the canonical owner confirms that the exact prepared plan
 is still the current live-stage snapshot, read-only projections reuse its
 composed schema indexes instead of traversing the live stage. The async-prepared
 projection plan indexes prims by composed schema type and applied API schema.
